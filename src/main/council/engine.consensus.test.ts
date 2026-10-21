@@ -77,6 +77,7 @@ function harness(c: CouncilConfig, script: Script = () => undefined, over: Parti
     seatDeps: { providers: {}, env: {} },
     seatResumed: () => false,
     append: (_ws, _sid, m) => appended.push(m),
+    readMessages: () => [...appended],
     emitChat: e => { events.push(e) },
     emitState: s => states.push(s),
     materialsText: async () => '',

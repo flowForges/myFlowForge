@@ -9,12 +9,19 @@ import { councilFileName, parseCouncilResult, parseVote, renderCouncilMarkdown }
 import type { runSeat, SeatRunDeps } from './seatRunner'
 import { logError } from '../log/appLog'
 
-/** 落盘的共商快照(Task 8 的 store 读写它)。 */
+/** 主循环的进度游标:暂停 / 换领导者 / 重启后从这里接着跑。 */
+export type CouncilPhase = 'answer' | 'critique' | 'summary' | 'consensus-draft' | 'consensus-vote' | 'final'
+
+/** 落盘的共商快照(store 读写它);restored 引擎从它接着跑。 */
 export type PersistedCouncil = {
   state: CouncilState
   transcript: ReturnType<Transcript['toJSON']>
   failures: Record<string, number>
   dropped: string[]
+  phase: CouncilPhase
+  spokenThisRound: string[]
+  /** 领导者消息 id 的继续次数后缀;重启后接着这个数往上加,不和重启前的 id 撞 */
+  resumes: number
 }
 
 export type EngineDeps = {
@@ -27,6 +34,8 @@ export type EngineDeps = {
    */
   seatResumed: (seatId: string) => boolean
   append: (ws: string, sid: string, msg: ChatMessage) => void
+  /** 读会话已落盘的消息(生产里 = chatStore.readMessages);只在恢复时读一次,用来跳过崩溃前已经写进会话的发言。 */
+  readMessages: (ws: string, sid: string) => ChatMessage[]
   emitChat: (e: ChatEvent) => void
   emitState: (s: CouncilState) => void
   materialsText: (cfg: CouncilConfig) => Promise<string>
@@ -39,8 +48,6 @@ export type EngineDeps = {
 const DROP_AFTER_FAILURES = 2
 
 type Spoken = { ok: true; text: string } | { ok: false; cancelled: boolean }
-/** 主循环的进度游标:暂停 / 换领导者后从这里接着跑。 */
-type Phase = 'answer' | 'critique' | 'summary' | 'consensus-draft' | 'consensus-vote' | 'final'
 type Inflight = { cancelled: boolean; cancel(): void }
 
 export class CouncilEngine {
@@ -49,8 +56,9 @@ export class CouncilEngine {
   private failures: Record<string, number> = {}
   private dropped: string[] = []
   private materials = ''
+  private materialsLoaded = false
   private prepared = false
-  private phase: Phase = 'answer'
+  private phase: CouncilPhase = 'answer'
   // 本轮(第 2 轮起)已经发过言的席位;暂停后继续时跳过他们
   private spokenThisRound: string[] = []
   private pauseRequested = false
@@ -61,6 +69,11 @@ export class CouncilEngine {
   private followingUp = false
   // ★每次继续都 +1,拼进领导者消息 id:暂停前失败的那条已经落盘,继续后重跑同一阶段不能和它撞 id
   private resumes = 0
+  // app 退出时被挂起:正在收尾的这次 run 不能再推进游标或记账(见 suspend())
+  private suspended = false
+  // ★已经写进会话、却还没进 transcript 的发言(第 1 轮 / 投票是整批结束才记账;崩溃或挂起时整批作废),按消息 id 索引。
+  //  重跑到同一个 id 时直接取它的结果,不再叫席位、也不再落盘 —— 会话里不会出现重复消息
+  private replay = new Map<string, Spoken>()
 
   constructor(
     private readonly id: string,
@@ -68,16 +81,49 @@ export class CouncilEngine {
     private readonly sid: string,
     private cfg: CouncilConfig,
     private readonly deps: EngineDeps,
+    restored?: PersistedCouncil,
   ) {
     const totalRounds = cfg.mode.kind === 'rounds' ? cfg.mode.rounds : null
     this.st = {
       id, workspacePath: ws, sessionId: sid, status: 'running', round: 0, totalRounds,
       speaking: [], startedAt: deps.now(), elapsedMs: 0, config: cfg,
     }
+    if (restored) this.restore(restored)
+  }
+
+  /**
+   * 从快照接着跑:进行中的一律转成「已暂停」(重启后不自动继续,§7.2 #10)。
+   * ★当前轮次只认快照里的 state.round —— transcript 里可能有归到下一轮的插话,不能从它推轮次。
+   *  材料不落盘,继续时由 run() 重新取。
+   */
+  private restore(p: PersistedCouncil): void {
+    const live = p.state.status === 'running' || p.state.status === 'finalizing'
+    this.st = {
+      ...p.state, id: this.id, workspacePath: this.ws, sessionId: this.sid, config: this.cfg,
+      status: live ? 'paused' : p.state.status, speaking: [],
+    }
+    this.transcript = Transcript.fromJSON(p.transcript)
+    this.failures = { ...p.failures }
+    this.dropped = [...p.dropped]
+    this.phase = p.phase
+    this.spokenThisRound = [...p.spokenThisRound]
+    this.resumes = p.resumes
+    this.prepared = p.state.round > 0
+    for (const m of this.deps.readMessages(this.ws, this.sid)) {
+      if (m.who !== 'ai' || m.council?.id !== this.id) continue
+      this.replay.set(m.id, m.council.stage === 'failed' ? { ok: false, cancelled: false } : { ok: true, text: m.text })
+    }
   }
 
   get state(): CouncilState {
     return { ...this.st, speaking: [...this.st.speaking] }
+  }
+
+  snapshot(): PersistedCouncil {
+    return {
+      state: this.state, transcript: this.transcript.toJSON(), failures: { ...this.failures }, dropped: [...this.dropped],
+      phase: this.phase, spokenThisRound: [...this.spokenThisRound], resumes: this.resumes,
+    }
   }
 
   /** 跑到 done / aborted / paused 为止;从不 reject。 */
@@ -110,6 +156,21 @@ export class CouncilEngine {
     this.resumes++
     this.st.status = 'running'
     await this.drive()
+  }
+
+  /**
+   * app 退出:立即取消正在进行的发言并以「已暂停」落盘(不是 aborted —— 重开后可继续)。
+   * ★游标停在当前阶段:被取消的这批(第 1 轮 / 投票)不记账、不进下一阶段,继续时整批重跑,
+   *  已经落盘的那几条由 replay 接上。
+   */
+  suspend(): void {
+    if (this.st.status !== 'running' && this.st.status !== 'finalizing') return
+    this.suspended = true
+    this.pauseRequested = false
+    this.st.status = 'paused'
+    this.cancelInflight()
+    this.st.speaking = []
+    this.changed()
   }
 
   /**
@@ -235,10 +296,15 @@ export class CouncilEngine {
   }
 
   private async run(): Promise<void> {
+    // ★在这里而不是 resume() 里清:挂起前那次 run 可能还没退栈,它得一直看到 suspended 才不会接着推进
+    this.suspended = false
     this.changed()
-    if (!this.prepared) {
+    if (!this.materialsLoaded) {
       this.materials = await this.deps.materialsText(this.cfg)
-      if (this.stopMode === 'abort') return
+      this.materialsLoaded = true
+      if (this.stopMode === 'abort' || this.suspended) return
+    }
+    if (!this.prepared) {
       const topic: ChatMessage = {
         id: `${this.id}:topic`, who: 'user', text: this.cfg.topic,
         files: this.cfg.attachments.length ? this.cfg.attachments : undefined,
@@ -252,7 +318,8 @@ export class CouncilEngine {
     }
 
     for (;;) {
-      if (this.stopMode === 'abort') return
+      // 挂起时状态已经是 paused 并落过盘,直接退出
+      if (this.stopMode === 'abort' || this.suspended) return
       if (this.stopMode === 'finalize') this.phase = 'final'
       else if (this.pauseRequested) {
         this.pauseRequested = false
@@ -261,7 +328,7 @@ export class CouncilEngine {
       switch (this.phase) {
         case 'answer':
           await this.answerRound()
-          this.endRound()
+          if (!this.suspended) this.endRound()
           break
         case 'critique': {
           const next = this.active().find(s => !this.spokenThisRound.includes(s.id))
@@ -315,6 +382,7 @@ export class CouncilEngine {
   private async answerRound(): Promise<void> {
     const seats = this.active()
     const results = await Promise.all(seats.map(s => this.speak(s, 1, 'answer', answerPrompt(this.cfg, this.materials, s))))
+    if (this.suspended) return this.keepForReplay(seats, 1, 'answer', results)
     // ★结束后再按配置顺序写进 transcript,而不是按完成先后 —— 顺序稳定,后续轮次喂给大家的增量一致
     seats.forEach((s, i) => this.record(s, 1, 'answer', results[i]))
   }
@@ -329,8 +397,9 @@ export class CouncilEngine {
       this.deps.seatResumed(s.id), this.materials,
     )
     const r = await this.speak(s, round, 'critique', prompt)
-    this.record(s, round, 'critique', r)
+    // ★先标记再记账:record 里的落盘必须已经带上他,否则崩溃后重启会让他把这一轮再说一遍
     if (r.ok || !r.cancelled) this.spokenThisRound.push(s.id)
+    this.record(s, round, 'critique', r)
   }
 
   /** 领导者总结本轮;失败重试一次。 */
@@ -363,6 +432,7 @@ export class CouncilEngine {
     const draft = this.transcript.toJSON().items.filter(u => u.round === round && u.stage === 'consensus-draft').at(-1)
     const seats = this.active()
     const results = await Promise.all(seats.map(s => this.speak(s, round, 'consensus-vote', consensusVotePrompt(s, draft?.text ?? ''))))
+    if (this.suspended) return this.keepForReplay(seats, round, 'consensus-vote', results)
     seats.forEach((s, i) => this.record(s, round, 'consensus-vote', results[i]))
     // 被「结束」取消的投票:主循环顶部会转去出结果,这里不判定
     if (this.stopMode) return
@@ -437,7 +507,12 @@ export class CouncilEngine {
     seat: CouncilSeat, round: number, stage: CouncilStage, prompt: string, suffix = '',
     shape?: (text: string) => Pick<ChatMessage, 'text' | 'councilResult'>,
   ): Promise<Spoken> {
-    const id = `${this.id}:${round}:${seat.id}:${stage}${suffix}`
+    const id = this.msgId(seat, round, stage, suffix)
+    const prior = this.replay.get(id)
+    if (prior) {
+      this.replay.delete(id)
+      return prior
+    }
     let think = ''
     let started = false
     // ★runSeat 在超时/失败 settle 之后仍可能漏出回调;结果一到就关门,之后的一律丢弃
@@ -479,6 +554,14 @@ export class CouncilEngine {
     return r.ok ? { ok: true, text: r.text } : { ok: false, cancelled: false }
   }
 
+  /** 挂起时作废的一批并行发言里,已经落盘的(成功或失败)留给继续后的重跑直接取用。 */
+  private keepForReplay(seats: CouncilSeat[], round: number, stage: CouncilStage, results: Spoken[]): void {
+    seats.forEach((s, i) => {
+      const r = results[i]
+      if (r.ok || !r.cancelled) this.replay.set(this.msgId(s, round, stage), r)
+    })
+  }
+
   /** 席位发言结果记进 transcript / 失败计数;连续失败到上限即本场除名。被取消的不算失败。 */
   private record(seat: CouncilSeat, round: number, stage: CouncilStage, r: Spoken): void {
     if (!r.ok && r.cancelled) return
@@ -493,6 +576,10 @@ export class CouncilEngine {
   }
 
   // ---- 工具 ----
+
+  private msgId(seat: CouncilSeat, round: number, stage: CouncilStage, suffix = ''): string {
+    return `${this.id}:${round}:${seat.id}:${stage}${suffix}`
+  }
 
   private active(): CouncilSeat[] {
     return this.cfg.seats.filter(s => !this.dropped.includes(s.id))
@@ -535,9 +622,9 @@ export class CouncilEngine {
   /** 状态有变:刷新用时,广播并落盘。 */
   private changed(): void {
     this.st.elapsedMs = this.deps.now() - this.st.startedAt
-    const state = this.state
-    this.deps.emitState(state)
-    this.deps.persist({ state, transcript: this.transcript.toJSON(), failures: { ...this.failures }, dropped: [...this.dropped] })
+    const snap = this.snapshot()
+    this.deps.emitState(snap.state)
+    this.deps.persist(snap)
   }
 }
 
