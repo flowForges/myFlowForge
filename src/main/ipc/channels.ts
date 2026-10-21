@@ -146,6 +146,19 @@ export const CH = {
   sessionSetBrowserUse: 'session:set-browser-use',
   // codex 快速档:同上,会话级设置(见 setSessionFast)。
   sessionSetFast: 'session:set-fast',
+  // AI 共商:多个(CLI+模型)席位围绕一个议题讨论。只能由用户在 UI 上显式发起。
+  councilStart: 'council:start',
+  councilPause: 'council:pause',
+  councilResume: 'council:resume',
+  councilStop: 'council:stop',
+  councilInterject: 'council:interject',
+  councilFollowup: 'council:followup',
+  councilChoose: 'council:choose',
+  councilList: 'council:list',
+  councilLastConfig: 'council:last-config',
+  councilProjects: 'council:projects',
+  // 事件(广播,非方法)
+  councilState: 'council:state',
   chatSwitchSummary: 'chat:switch-summary',
   chatSummarizeRequirement: 'chat:summarize-requirement',
   // P1-5: persist a confirmed launch-gate's frozen record onto the session (synthetic ChatMessage

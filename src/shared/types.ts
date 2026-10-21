@@ -1,6 +1,7 @@
 import type { AgentState, LogLine } from '../main/agents/types'
 import type { ArtifactRef } from '../main/run/runTypes'
 import type { Plugin } from './plugin'
+import type { CouncilTag, CouncilResult } from './council'
 
 export type { AgentState, LogLine }
 export type { Plugin }
@@ -294,6 +295,9 @@ export interface ChatMessage {
    *  这条约束有测试钉着(见 `chatVia.test.ts`),别改成拼进 text 里。
    */
   via?: string
+  // AI 共商:这条消息在共商里的位置(席位/轮次/阶段);councilResult 是主持人最终的结构化结论。
+  council?: CouncilTag
+  councilResult?: CouncilResult
   model?: string
   // Agent id (claude/codex/cursor/...) that produced this ai message. Used to detect provider
   // switches (timeline divider) and to attribute per-provider watermark progress.
