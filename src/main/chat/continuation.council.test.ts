@@ -8,6 +8,7 @@ import type { PersistedCouncil } from '../council/engine'
 import { saveCouncil } from '../council/store'
 import { appendMessage } from './chatStore'
 import { buildLocalHistoryPreamble } from './continuation'
+import { modelVisibleHistory } from './contextRebuild'
 import { distillSession } from './memory/distiller'
 
 let ws: string
@@ -84,5 +85,12 @@ describe('council context isolation', () => {
     expect(prompt).toContain('Q1')
     expect(prompt).toContain('结论CONCLUSION')
     expect(prompt).not.toContain('ANSWER')
+  })
+  it('modelVisibleHistory (switch-summary / requirement-summary / conversation-doc input) excludes transcript', () => {
+    persist('c1', '方案甲')
+    appendMessage(ws, sid, normal('user', 'Q1'))
+    seed('c1')
+    const h = modelVisibleHistory(ws, sid)
+    expect(h.map(m => m.text)).toEqual(['Q1', '【AI 共商结果】结论CONCLUSION(用户选定:方案甲)'])
   })
 })

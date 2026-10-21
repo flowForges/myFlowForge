@@ -45,6 +45,7 @@ import { readHomeStats } from '../workspace/homeStats'
 import { sendTurn, history, addTurnAnswer } from '../chat/chatService'
 import { ChatQueue } from '../chat/chatQueue'
 import { appendMessage, readMessages } from '../chat/chatStore'
+import { modelVisibleHistory } from '../chat/contextRebuild'
 import { withLastMessageAt } from '../chat/sessionsView'
 import { mergeLive } from '../chat/liveTurns'
 import { readSessions, newSession, switchSession, closeSession, renameSession, setSessionMode, setSessionPermission, setSessionModel, setSessionBrowserUse, setSessionFast, continueFrom, getSession, setSessionWorkflow, autoNameIfDefault } from '../chat/sessionStore'
@@ -1318,7 +1319,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // 执行 lane 将拿不到任何上下文——它是全新的 CLI 会话,只读 forge-docs/*.md。把这次对话原文落一份
     // 进去,让它照走「读整份文档」那条既有的路。有方案阶段时不写:那份产出才是契约。
     if (needsConversationDoc(plan.stages)) {
-      const md = buildConversationDoc(history(p.workspacePath, p.sessionId).map(m => ({ who: m.who, text: m.text ?? '' })))
+      const md = buildConversationDoc(modelVisibleHistory(p.workspacePath, p.sessionId))
       if (md) {
         const docPath = join(p.workspacePath, CONVERSATION_DOC_REL)
         try {
@@ -1590,7 +1591,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   on(CH.chatSwitchSummary, async (_e, a: { workspacePath: string; sessionId: string; toAgent: string; model: string }) => {
     const provider = providers[a.toAgent] ?? providers['claude']
     if (!provider?.chat) return
-    const msgs = history(a.workspacePath, a.sessionId).filter(m => m.text?.trim())
+    const msgs = modelVisibleHistory(a.workspacePath, a.sessionId).filter(m => m.text?.trim())
     if (!msgs.length) return
     const env = buildAgentEnv({ proxy: readSettings().agentProxy })
     const model = distillModelFor(a.toAgent) ?? a.model
@@ -1638,14 +1639,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   on(CH.chatSummarizeRequirement, async (_e, a: { workspacePath: string; sessionId: string; agent: string; model: string }): Promise<string> => {
     const provider = providers[a.agent] ?? providers['claude']
     if (!provider?.chat) return ''
-    const msgs = history(a.workspacePath, a.sessionId).filter(m => m.text?.trim())
+    const msgs = modelVisibleHistory(a.workspacePath, a.sessionId).filter(m => m.text?.trim())
     if (!msgs.length) return ''
     const env = buildAgentEnv({ proxy: readSettings().agentProxy })
     const model = distillModelFor(a.agent) ?? a.model
     const id = `req-sum-${Date.now()}`
     // 超时/出错 → null(不是「已经流出来的半截」)。半截需求会被当成「需求原文」发给每个阶段的 agent,
     // 比回退到啰嗦但完整的原始对话摘录糟得多。见 requirementSummary.ts 顶部。
-    return summarizeRequirement(msgs.map(m => ({ who: m.who === 'user' ? '用户' : '助手', text: inlineAnswers(m.text, m.answers) })), {
+    return summarizeRequirement(msgs.map(m => ({ who: m.who === 'user' ? '用户' : '助手', text: m.text })), {
       summarize: (prompt) => new Promise<string | null>((resolve) => {
         let acc = ''
         let done = false

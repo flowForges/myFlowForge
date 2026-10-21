@@ -1,4 +1,4 @@
-import type { ChatSession, ImportedMessage } from '@shared/types'
+import type { ChatMessage, ChatSession, ImportedMessage } from '@shared/types'
 import { readSessions } from './sessionStore'
 import { readSession as readImported } from '../sessionImport/sources'
 import { readMessages } from './chatStore'
@@ -46,9 +46,9 @@ export function buildLocalHistoryPreamble(
   // fromIndex slices to only the messages a provider hasn't natively seen yet (incremental catch-up
   // on a provider switch-back). fromIndex omitted/0 renders the full history (unchanged behavior).
   // ★先按原始下标切,再过滤共商消息(见 toModelVisibleHistory)。
-  const msgs = deps.read
-    ? (opts.fromIndex ? deps.read(wsPath, sessionId).slice(opts.fromIndex) : deps.read(wsPath, sessionId))
-    : toModelVisibleHistory(wsPath, sessionId, opts.fromIndex ? readMessages(wsPath, sessionId).slice(opts.fromIndex) : readMessages(wsPath, sessionId))
+  const all = deps.read ? deps.read(wsPath, sessionId) : readMessages(wsPath, sessionId)
+  const sliced = opts.fromIndex ? all.slice(opts.fromIndex) : all
+  const msgs = deps.read ? (sliced as ImportedMessage[]) : toModelVisibleHistory(wsPath, sessionId, sliced as ChatMessage[])
   const { kept, omitted } = clampHistory(msgs)
   return renderHistoryPreamble(kept, omitted, { incremental: !!opts.fromIndex })
 }

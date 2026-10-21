@@ -1,5 +1,6 @@
 import type { ChatMessage, ImportedMessage } from '@shared/types'
 import { inlineAnswers } from '@shared/chat/answerSegments'
+import { readMessages } from './chatStore'
 import { loadCouncils } from '../council/store'
 
 const DEFAULT_TURNS = 30
@@ -76,4 +77,9 @@ export function toModelVisibleHistory(ws: string, sid: string, msgs: ChatMessage
     out.push({ who: 'ai', text: `【AI 共商结果】${conclusion}${chosen ? `(用户选定:${chosen})` : ''}`, ts: m.ts })
   }
   return out
+}
+
+/** 整个会话给模型看的历史(已滤掉共商过程、answers 已内联)。IPC 里凡是把会话喂给模型的路径都走这里。 */
+export function modelVisibleHistory(ws: string, sid: string): ImportedMessage[] {
+  return toModelVisibleHistory(ws, sid, readMessages(ws, sid))
 }
