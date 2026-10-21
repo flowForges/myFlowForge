@@ -39,3 +39,13 @@ describe('Transcript', () => {
     expect(t2.unseenFor('d').map(x => x.text)).toEqual(['A1', 'B1'])
   })
 })
+
+describe('Transcript own items', () => {
+  it('unseenFor never returns the seat own items but advances past them', () => {
+    const t = new Transcript()
+    t.add(u('a', 1, 'answer', 'A1'))
+    t.add(u('b', 1, 'answer', 'B1'))
+    expect(t.unseenFor('a').map(x => x.text)).toEqual(['B1'])
+    expect(t.unseenFor('a')).toEqual([])
+  })
+})

@@ -19,7 +19,8 @@ export class Transcript {
   unseenFor(seatId: string): Utterance[] {
     const from = this.seen[seatId] ?? 0
     this.seen[seatId] = this.items.length
-    return this.items.slice(from)
+    // ★自己的发言自己已经知道,不再当作「别人的发言」回喂;水位照常越过它们
+    return this.items.slice(from).filter(u => u.seat !== seatId)
   }
 
   latestSummary(): Utterance | undefined {

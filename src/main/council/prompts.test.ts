@@ -90,3 +90,26 @@ describe('prompts', () => {
     expect(p).toContain('DELTA')
   })
 })
+
+describe('critiquePrompt with a real Transcript', () => {
+  it('seat B sees A round-2 text and the summary once, no round-1 answers, no own text', async () => {
+    const { Transcript } = await import('./transcript')
+    const s3: CouncilSeat = { id: 's3', provider: 'gemini', model: 'x', label: 'Gemini · x' }
+    const t = new Transcript()
+    t.add(u(s1, 1, 'answer', 'R1_A'))
+    t.add(u(s2, 1, 'answer', 'R1_B_OWN'))
+    t.add(u(s3, 1, 'answer', 'R1_C'))
+    t.add(u(s1, 1, 'summary', 'SUM_ONCE'))
+    t.add(u(s1, 2, 'critique', 'R2_A'))
+    const delta = t.unseenFor('s2')
+    const p = critiquePrompt(cfg, s2, 2, t.latestSummary(), delta, true, '')
+    expect(p).toContain('R2_A')
+    expect(p.split('SUM_ONCE').length - 1).toBe(1)
+    for (const x of ['R1_A', 'R1_B_OWN', 'R1_C']) expect(p).not.toContain(x)
+  })
+
+  it('keeps earlier-round interjects', () => {
+    const p = critiquePrompt(cfg, s1, 3, undefined, [u(s2, 2, 'interject', 'USER_SAYS')], true, '')
+    expect(p).toContain('USER_SAYS')
+  })
+})

@@ -43,6 +43,9 @@ export function critiquePrompt(
   delta: Utterance[], resumed: boolean, materialsText: string,
 ): string {
   void seat
+  // ★§5.1:第 2 轮起只看「上一轮总结 + 本轮前面的发言 + 插话」。总结由 summary 参数单独给(delta 里的去掉,免得出现两次),
+  //  更早轮次的发言已被总结代表,丢掉;插话不受轮次限制,必须保留。
+  delta = delta.filter(u => u.stage !== 'summary' && (u.round >= round || u.stage === 'interject'))
   const parts: string[] = []
   // ★没有原生续会话的席位(如 ACP)每次是新会话,必须把议题和材料再带一遍
   if (resumed) parts.push(`现在是第 ${round} 轮讨论。`)
