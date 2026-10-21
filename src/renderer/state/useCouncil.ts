@@ -25,25 +25,29 @@ export type CouncilApi = {
 
 const ACTION_ERRORS: Record<string, string> = {
   'not-done': '共商尚未结束',
-  busy: '正在回答上一个追问',
+  busy: '当前会话正忙',
   'target-invalid': '配置无效',
 }
+// ★同一个 busy 因动作而异:追问的 busy = 上一问还在答;继续的 busy = 会话被普通对话 / 另一场共商占着(R9/R10)
+const FOLLOWUP_ERRORS: Record<string, string> = { busy: '正在回答上一个追问' }
+
+export type CouncilAction = 'followup' | 'resume' | 'control'
 
 /**
  * 控制类 IPC 失败时给用户看的一句话。invoke 的错误长这样:
  * "Error invoking remote method 'council:followup': Error: not-done" —— 取最后那段当错误码。
  */
-export function councilActionError(e: unknown): string {
+export function councilActionError(e: unknown, action: CouncilAction = 'control'): string {
   const raw = e instanceof Error ? e.message : String(e)
   const msg = raw.replace(/^Error invoking remote method '[^']*': (?:Error: )?/, '').trim()
-  return ACTION_ERRORS[msg] ?? '操作失败'
+  return (action === 'followup' ? FOLLOWUP_ERRORS[msg] : undefined) ?? ACTION_ERRORS[msg] ?? '操作失败'
 }
 
 // ★控制调用一律兜住:原来是 `void invoke(...)`,主进程一抛就成了未处理的 rejection,用户什么也看不到
-function settle(call: () => Promise<unknown>): Promise<boolean> {
+function settle(call: () => Promise<unknown>, action: CouncilAction = 'control'): Promise<boolean> {
   let p: Promise<unknown>
   try { p = Promise.resolve(call()) } catch (e) { p = Promise.reject(e) }
-  return p.then(() => true, (e: unknown) => { flashToast(councilActionError(e)); return false })
+  return p.then(() => true, (e: unknown) => { flashToast(councilActionError(e, action)); return false })
 }
 
 // 占着会话的(R9):同一会话同一时间只能有一场在跑;暂停的不占
@@ -96,11 +100,11 @@ export function useCouncil(workspacePath?: string, sessionId?: string): CouncilA
 
   const pause = useCallback((id: string) => settle(() => api.current.councilPause({ councilId: id })), [])
   const resume = useCallback((id: string, newLeader?: CouncilSeat) =>
-    settle(() => api.current.councilResume(newLeader ? { councilId: id, newLeader } : { councilId: id })), [])
+    settle(() => api.current.councilResume(newLeader ? { councilId: id, newLeader } : { councilId: id }), 'resume'), [])
   const stop = useCallback((id: string, mode: 'finalize' | 'abort') => settle(() => api.current.councilStop({ councilId: id, mode })), [])
   const interject = useCallback((id: string, text: string) => settle(() => api.current.councilInterject({ councilId: id, text })), [])
   const followup = useCallback((id: string, q: string, target: 'all' | string) =>
-    settle(() => api.current.councilFollowup({ councilId: id, question: q, target })), [])
+    settle(() => api.current.councilFollowup({ councilId: id, question: q, target }), 'followup'), [])
   const choose = useCallback((id: string, name: string) => settle(() => api.current.councilChoose({ councilId: id, candidate: name })), [])
   const projects = useCallback(async () => {
     if (!workspacePath) return []

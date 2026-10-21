@@ -66,7 +66,8 @@ describe('submitTarget —— 输入框提交走哪条路', () => {
 describe('councilActionError', () => {
   it('认得的错误码给一句话,其余统一「操作失败」', () => {
     expect(councilActionError(new Error('not-done'))).toBe('共商尚未结束')
-    expect(councilActionError(new Error("Error invoking remote method 'council:pause': Error: busy"))).toBe('正在回答上一个追问')
+    expect(councilActionError(new Error("Error invoking remote method 'council:resume': Error: busy"), 'resume')).toBe('当前会话正忙')
+    expect(councilActionError(new Error('busy'), 'followup')).toBe('正在回答上一个追问')
     expect(councilActionError(new Error('Error: target-invalid'))).toBe('配置无效')
     expect(councilActionError('boom')).toBe('操作失败')
   })

@@ -46,15 +46,19 @@ export function submitTarget(status?: CouncilStatus): 'interject' | 'send' {
 
 const ACTION_ERRORS: Record<string, string> = {
   'not-done': '共商尚未结束',
-  busy: '正在回答上一个追问',
+  busy: '当前会话正忙',
   'target-invalid': '配置无效',
 }
+// ★同电脑端:busy 因动作而异 —— 追问的 busy = 上一问还在答;继续的 busy = 会话被占着(R9/R10)
+const FOLLOWUP_ERRORS: Record<string, string> = { busy: '正在回答上一个追问' }
+
+export type CouncilAction = 'followup' | 'resume' | 'control'
 
 /** 控制调用失败时给人看的一句话。同电脑端 `councilActionError`:剥掉前缀取错误码。 */
-export function councilActionError(e: unknown): string {
+export function councilActionError(e: unknown, action: CouncilAction = 'control'): string {
   const raw = e instanceof Error ? e.message : String(e)
   const code = raw.replace(/^Error invoking remote method '[^']*': /, '').replace(/^Error: /, '').trim()
-  return ACTION_ERRORS[code] ?? '操作失败'
+  return (action === 'followup' ? FOLLOWUP_ERRORS[code] : undefined) ?? ACTION_ERRORS[code] ?? '操作失败'
 }
 
 export type CouncilControls = {
@@ -114,7 +118,7 @@ export function useCouncil(
       invoke(ch, [arg]).then(
         () => true,
         (e: unknown) => {
-          errRef.current(councilActionError(e))
+          errRef.current(councilActionError(e, ch === CH.councilResume ? 'resume' : ch === CH.councilFollowup ? 'followup' : 'control'))
           return false
         },
       ),
