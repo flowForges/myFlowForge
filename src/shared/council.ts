@@ -85,6 +85,23 @@ const MAX_SEATS = 6
 const MIN_ROUNDS = 1
 const MAX_ROUNDS = 5
 
+const TITLE_MAX = 60
+
+/**
+ * 议题的一行标题(结果 Markdown 的 H1 等):空白折叠成一个空格,超长按码点截断加「…」。
+ * ★议题就是整段输入框文本,多行是常态;直接当 H1 只有第一行进标题,其余行会变成游离的正文 / 标题 / 列表。
+ */
+export function councilTitle(topic: string): string {
+  const one = topic.replace(/\s+/g, ' ').trim()
+  const cps = Array.from(one)
+  return cps.length > TITLE_MAX ? `${cps.slice(0, TITLE_MAX).join('')}…` : one
+}
+
+/** 议题全文的 Markdown 引用块:原文里的 # / - / 1. 都留在引用里,不会冒成文档的结构。 */
+export function councilTopicQuote(topic: string): string {
+  return topic.trim().split('\n').map(l => (l.trim() ? `> ${l}` : '>')).join('\n')
+}
+
 export function isCouncilProvider(id: string): boolean {
   return (COUNCIL_PROVIDERS as readonly string[]).includes(id)
 }

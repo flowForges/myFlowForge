@@ -1,6 +1,6 @@
 import { memo, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChatMessage } from '@shared/types'
-import type { CouncilCandidate, CouncilResult } from '@shared/council'
+import { councilTitle, councilTopicQuote, type CouncilCandidate, type CouncilResult } from '@shared/council'
 import { Markdown } from '../markdown'
 import { OpenFileCtx } from '../openFile'
 import './council.css'
@@ -37,7 +37,12 @@ export function councilResultMarkdown(
   seatLabel: (id: string) => string,
 ): string {
   const out: string[] = []
-  if (topic?.trim()) out.push(`# AI 共商:${topic.trim()}`, '')
+  if (topic?.trim()) {
+    const title = councilTitle(topic)
+    out.push(`# AI 共商:${title}`, '')
+    // 同结果文件:标题装不下原文(多行 / 截断)时,原文放进引用块
+    if (title !== topic.trim()) out.push(councilTopicQuote(topic), '')
+  }
   if (!result) return [...out, fallback].join('\n').trim() + '\n'
   out.push(result.conclusion, '')
   if (result.candidates.length) {

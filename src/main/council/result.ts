@@ -1,4 +1,4 @@
-import type { CouncilCandidate, CouncilResult, CouncilState } from '@shared/council'
+import { councilTitle, councilTopicQuote, type CouncilCandidate, type CouncilResult, type CouncilState } from '@shared/council'
 import { COUNCIL_RESULT_FENCE } from './prompts'
 import type { Utterance } from './transcript'
 
@@ -87,9 +87,11 @@ export function renderCouncilMarkdown(
   followups: Utterance[],
 ): string {
   const { config } = state
-  const out: string[] = [
-    `# AI 共商:${config.topic.trim()}`,
-    '',
+  const title = councilTitle(config.topic)
+  const out: string[] = [`# AI 共商:${title}`, '']
+  // 标题装不下原文(多行 / 截断)时,原文放进「议题」引用块
+  if (title !== config.topic.trim()) out.push('## 议题', '', councilTopicQuote(config.topic), '')
+  out.push(
     '## 讨论方',
     '',
     ...config.seats.map(s => `- ${s.label}`),
@@ -97,7 +99,7 @@ export function renderCouncilMarkdown(
     '',
     '## 最终结果',
     '',
-  ]
+  )
   if (result) {
     out.push(result.conclusion, '')
     if (result.candidates.length) {

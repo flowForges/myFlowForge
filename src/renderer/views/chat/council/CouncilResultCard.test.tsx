@@ -56,6 +56,11 @@ describe('CouncilResultCard', () => {
     expect(screen.queryByRole('tab')).toBeNull()
   })
 
+  it('复制 Markdown: a multi-line topic gets a one-line H1 and the full text quoted', () => {
+    const md = councilResultMarkdown('第一行\n# 背景\n- 一点', result, '原文', undefined, seatLabel)
+    expect(md.startsWith('# AI 共商:第一行 # 背景 - 一点\n\n> 第一行\n> # 背景\n> - 一点\n\n')).toBe(true)
+  })
+
   it('复制 Markdown copies the result as markdown', async () => {
     const writeText = vi.fn(async (_t: string) => {})
     Object.assign(navigator, { clipboard: { writeText } })

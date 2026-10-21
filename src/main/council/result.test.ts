@@ -101,6 +101,19 @@ describe('renderCouncilMarkdown', () => {
     expect(md).not.toContain('追问')
   })
 
+  it('a multi-line topic gets a one-line H1 and the full text in a quoted 议题 section', () => {
+    const topic = '帮我审查这个方案\n# 背景\n- 第一点\n1. 第二点'
+    const md = renderCouncilMarkdown(state({ config: { ...state().config, topic } }), [], result, '', [])
+    const lines = md.split('\n')
+    expect(lines[0]).toBe('# AI 共商:帮我审查这个方案 # 背景 - 第一点 1. 第二点')
+    // 议题原文只出现在引用块里,不会变成游离的标题 / 列表
+    expect(lines.filter(l => l.startsWith('# '))).toHaveLength(1)
+    expect(lines).not.toContain('- 第一点')
+    expect(lines).not.toContain('1. 第二点')
+    expect(md).toContain('## 议题\n\n> 帮我审查这个方案\n> # 背景\n> - 第一点\n> 1. 第二点\n')
+    expect(md.indexOf('## 议题')).toBeLessThan(md.indexOf('## 讨论方'))
+  })
+
   it('records the chosen candidate', () => {
     const md = renderCouncilMarkdown(state({ chosen: '方案甲' }), [], result, '', [])
     expect(md).toContain('选定')

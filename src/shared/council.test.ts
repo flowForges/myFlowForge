@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  COUNCIL_PROVIDERS, validateCouncilConfig, estimateCouncilMinutes, isCouncilProvider,
+  COUNCIL_PROVIDERS, councilTitle, validateCouncilConfig, estimateCouncilMinutes, isCouncilProvider,
   type CouncilConfig, type CouncilSeat,
 } from './council'
 
@@ -71,5 +71,16 @@ describe('estimateCouncilMinutes', () => {
     const [lo, hi] = estimateCouncilMinutes(cfg({ mode: { kind: 'consensus', maxRounds: 5, maxMinutes: 10 } }))
     expect(hi).toBeLessThanOrEqual(10)
     expect(lo).toBeLessThanOrEqual(hi)
+  })
+})
+
+describe('councilTitle', () => {
+  it('collapses a multi-line topic into one line', () => {
+    expect(councilTitle('  第一行\n\n  第二行\t三  ')).toBe('第一行 第二行 三')
+  })
+  it('truncates long topics by code point with an ellipsis', () => {
+    const t = '😀'.repeat(70)
+    expect(Array.from(councilTitle(t))).toHaveLength(61)
+    expect(councilTitle(t).endsWith('😀…')).toBe(true)
   })
 })
