@@ -39,7 +39,7 @@ function kindOf(prompt: string): Call['kind'] {
   return 'critique'
 }
 
-function harness(c: CouncilConfig, script: Script = () => undefined) {
+function harness(c: CouncilConfig, script: Script = () => undefined, over: Partial<EngineDeps> = {}) {
   const calls: Call[] = []
   const log: string[] = []
   const appended: ChatMessage[] = []
@@ -85,6 +85,7 @@ function harness(c: CouncilConfig, script: Script = () => undefined) {
     writeFile: (path, text) => files.push({ path, text }),
     persist: p => persisted.push(p),
     now: () => T0,
+    ...over,
   }
   const engine = new CouncilEngine(CID, WS, SID, c, deps)
   return {
@@ -127,11 +128,11 @@ describe('CouncilEngine rounds mode', () => {
     expect(r2[0].prompt).toContain('<<L#1>>')
   })
 
-  it('leader is called once per round plus once for final; final carries councilResult; markdown is written', async () => {
+  it('leader summarises every round but the last, then writes the final; final carries councilResult; markdown is written', async () => {
     const h = harness(cfg(['A', 'B'], 3))
     await h.engine.start()
     const leader = h.calls.filter(c => c.seat === 'L').map(c => c.kind)
-    expect(leader).toEqual(['summary', 'summary', 'summary', 'final'])
+    expect(leader).toEqual(['summary', 'summary', 'final'])
     const final = h.appended.find(m => m.council?.stage === 'final')!
     expect(final.who).toBe('ai')
     expect(final.council).toMatchObject({ id: CID, seat: 'L' })
@@ -154,6 +155,31 @@ describe('CouncilEngine rounds mode', () => {
     expect(forId.map(e => e.type)).toEqual(['assistant-start', 'think-delta', 'assistant-delta', 'done'])
     const ids = h.appended.map(m => m.id)
     expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  it('with a single round the leader goes from answers straight to final', async () => {
+    const h = harness(cfg(['A', 'B'], 1))
+    await h.engine.start()
+    expect(h.calls.filter(c => c.seat === 'L').map(c => c.kind)).toEqual(['final'])
+    expect(h.engine.state.status).toBe('done')
+  })
+
+  it('materialsText rejecting pauses the council instead of leaving it running', async () => {
+    const h = harness(cfg(['A', 'B']), undefined, { materialsText: async () => { throw new Error('git failed') } })
+    await expect(h.engine.start()).resolves.toBeUndefined()
+    expect(h.engine.state.status).toBe('paused')
+    expect(h.persisted.at(-1)!.state.status).toBe('paused')
+    expect(h.states.at(-1)!.status).toBe('paused')
+    expect(h.calls).toHaveLength(0)
+  })
+
+  it('writeFile throwing during final pauses the council', async () => {
+    const h = harness(cfg(['A', 'B']), undefined, { writeFile: () => { throw new Error('EACCES') } })
+    await expect(h.engine.start()).resolves.toBeUndefined()
+    expect(h.engine.state.status).toBe('paused')
+    expect(h.engine.state.resultFile).toBeUndefined()
+    expect(h.persisted.at(-1)!.state.status).toBe('paused')
+    expect(h.states.at(-1)!.speaking).toEqual([])
   })
 
   it('round completes when one seat errors', async () => {

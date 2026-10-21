@@ -62,8 +62,19 @@ export class CouncilEngine {
     return { ...this.st, speaking: [...this.st.speaking] }
   }
 
-  /** 跑到 done / aborted / paused 为止。 */
+  /** 跑到 done / aborted / paused 为止;从不 reject。 */
   async start(): Promise<void> {
+    try {
+      await this.run()
+    } catch {
+      // ★任何依赖意外抛错(取材料、落盘、写文件…)都不能把状态卡在 running/finalizing:
+      //  转为暂停并落盘,用户可以继续;start() 本身只 resolve。
+      this.st.speaking = []
+      this.pause()
+    }
+  }
+
+  private async run(): Promise<void> {
     this.changed()
     this.materials = await this.deps.materialsText(this.cfg)
     const topic: ChatMessage = {
@@ -82,8 +93,9 @@ export class CouncilEngine {
       if (round === 1) await this.answerRound()
       else await this.critiqueRound(round)
       last = round
-      // ★§7.3:讨论方只剩 1 个就不再讨论,也不必再总结,直接出最终结果
-      if (this.active().length <= 1) break
+      // ★最后一轮不再总结,由最终结果代替(只有 1 轮 = 各自作答后直接出结果,§5.1)。
+      //  §7.3:讨论方只剩 1 个也不再讨论,直接出最终结果
+      if (round === rounds || this.active().length <= 1) break
       if (!(await this.leaderSummary(round))) return this.pause()
     }
     await this.finalize(last)
@@ -134,8 +146,8 @@ export class CouncilEngine {
     this.transcript.add({ seat: leader.id, label: leader.label, round: lastRound, stage: 'final', text: r.text })
     const { result, body } = parseCouncilResult(r.text)
     const path = join(this.ws, '.forge', 'council', councilFileName(this.st.startedAt, this.cfg.topic))
-    this.st.resultFile = path
     this.deps.writeFile(path, renderCouncilMarkdown(this.state, summaries, result, body, []))
+    this.st.resultFile = path
     this.st.status = 'done'
     this.changed()
   }
@@ -168,7 +180,6 @@ export class CouncilEngine {
     shape?: (text: string) => Pick<ChatMessage, 'text' | 'councilResult'>,
   ): Promise<Spoken> {
     const id = `${this.id}:${round}:${seat.id}:${stage}${suffix}`
-    let text = ''
     let think = ''
     // ★runSeat 在超时/失败 settle 之后仍可能漏出回调;结果一到就关门,之后的一律丢弃
     let live = true
@@ -176,9 +187,9 @@ export class CouncilEngine {
     this.changed()
     const run = this.deps.runSeat(this.id, seat, prompt, { ...this.deps.seatDeps, workspacePath: this.ws, sessionId: this.sid, cwd: this.cwd() }, {
       onStart: () => { if (live) this.emit({ type: 'assistant-start', id, model: seat.label }) },
-      onDelta: (_m, t) => { if (!live) return; text += t; this.emit({ type: 'assistant-delta', id, text: t }) },
+      onDelta: (_m, t) => { if (!live) return; this.emit({ type: 'assistant-delta', id, text: t }) },
       onThink: (_m, t) => { if (!live) return; think += t; this.emit({ type: 'think-delta', id, text: t }) },
-      onReplace: (_m, t) => { if (!live) return; text = t; this.emit({ type: 'assistant-replace', id, text: t }) },
+      onReplace: (_m, t) => { if (!live) return; this.emit({ type: 'assistant-replace', id, text: t }) },
     })
     const r = await run.done
     live = false

@@ -68,6 +68,7 @@ describe('门的覆盖率', () => {
     'agents/providers/qwen.ts': '透传层:同 gemini',
     'agents/providers/copilot.ts': '透传层:同 gemini',
     'agents/providers/kimi.ts': '透传层:同 gemini',
+    'council/seatRunner.ts': '只读策略:读放行、写拒;讨论期间不打断用户(spec §7.2 #5)',
   }
 
   /**
