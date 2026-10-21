@@ -188,6 +188,15 @@ describe('council:start', () => {
     await expect(call(CH.councilStart, { workspacePath: ws, sessionId: 's2', config: cfg() })).resolves.toEqual(expect.any(String))
   })
 
+  it('rejects with busy while a workflow run is active or queued in the workspace (R13)', async () => {
+    const { Run2Manager } = await import('../run/manager')
+    const spy = vi.spyOn(Run2Manager.prototype, 'isActive').mockImplementation((w: string) => w === ws)
+    try {
+      await expect(call(CH.councilStart, { workspacePath: ws, sessionId: 's1', config: cfg() })).rejects.toThrow('busy')
+    } finally { spy.mockRestore() }
+    await expect(call(CH.councilStart, { workspacePath: ws, sessionId: 's1', config: cfg() })).resolves.toEqual(expect.any(String))
+  })
+
   it('starts without waiting for the council, list shows it running, state is broadcast, last config is saved', async () => {
     const config = cfg({ materials: { projectCwd: PROJECT } })
     const id = await call(CH.councilStart, { workspacePath: ws, sessionId: 's1', config }) as string
@@ -205,6 +214,21 @@ describe('council:start', () => {
     expect(last.topic).toBeUndefined()
     // 同一会话再开 → busy
     await expect(call(CH.councilStart, { workspacePath: ws, sessionId: 's1', config })).rejects.toThrow('busy')
+  })
+})
+
+describe('chat:send while a council runs (M2)', () => {
+  const send = (sessionId: string) =>
+    call(CH.chatSend, { workspacePath: ws, sessionId, agent: 'codex', agentLabel: 'Codex', model: 'x', text: 'hi', attachments: [] })
+
+  it('rejects busy in the session of a running council; other sessions and paused councils are fine', async () => {
+    const id = await call(CH.councilStart, { workspacePath: ws, sessionId: 's1', config: cfg() })
+    await flush()
+    await expect(send('s1')).rejects.toThrow('busy')
+    await expect(send('s2')).resolves.toBeUndefined()
+    await call(CH.councilPause, { councilId: id })
+    await releaseAll()
+    await expect(send('s1')).resolves.toBeUndefined()
   })
 })
 

@@ -1172,6 +1172,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   const chatQueue = new ChatQueue(runTurn, broadcast)
   on(CH.chatSend, (_e, payload: ChatSendPayload, source?: string) => {
     if (isArchivedWorkspace(payload.workspacePath)) throw new Error('工作区已归档，恢复后才能继续。')
+    // ★共商进行中(running / finalizing)这个会话不收普通对话:界面会把输入转成插话,这里兜住老客户端和竞态,
+    //  免得普通回合和共商在同一个会话里交错。暂停的不占(R9)
+    if (councils.hasLive(payload.workspacePath, payload.sessionId)) throw new Error('busy')
     /**
      * 这一轮是从哪台设备发的。
      *
@@ -1276,6 +1279,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     }
     // ★普通对话的回合还在跑 / 排队:共商不能和它同时用这个会话(§7.2 #9)
     if (chatQueue.sessionBusy(a.workspacePath, a.sessionId)) throw new Error('busy')
+    // R13:工作流在跑 / 排队时也不开(和界面上的 runQueued 同口径:工作区级;排队的 run 只在有 run 在跑时存在)
+    if (run2Manager.isActive(a.workspacePath)) throw new Error('busy')
     ensureCouncilsRestored(a.workspacePath)
     // registry.start 不等共商结束,只回 id;同会话已有进行中的会抛 'busy'
     const id = councils.start(a.workspacePath, a.sessionId, a.config)
