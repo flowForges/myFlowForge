@@ -52,6 +52,24 @@ describe('collectMaterials', () => {
     expect(t).not.toContain('@@')
   })
 
+  it('diff exceeding the process buffer falls back to stat plus file list', async () => {
+    const t = await collectMaterials({ projectCwd: repo, diff: { range: `${c1}..${c2}` }, files: ['f.ts'] }, 1_000_000, 10)
+    expect(t).toContain('a.txt')
+    expect(t).not.toContain('@@')
+    expect(t).toContain('f.ts')
+  })
+
+  it('appends the file list when the diff is over cap', async () => {
+    const t = await collectMaterials({ projectCwd: repo, diff: { range: `${c1}..${c2}` }, files: ['f.ts'] }, 100)
+    expect(t).not.toContain('@@')
+    expect(t).toContain('f.ts')
+  })
+
+  it('uses a fence longer than backtick runs in content', async () => {
+    const t = await collectMaterials({ files: ['a```b.ts'] })
+    expect(t).toContain('````\na```b.ts\n````')
+  })
+
   it('rejects an invalid range', async () => {
     await expect(collectMaterials({ projectCwd: repo, diff: { range: 'a..b; rm -rf /' } })).rejects.toThrow()
     await expect(collectMaterials({ projectCwd: repo, diff: { range: '--output=x..b' } })).rejects.toThrow()
@@ -71,6 +89,13 @@ describe('collectMaterials', () => {
 })
 
 describe('listCouncilProjects', () => {
+  it('returns [] when the workspace is missing', async () => {
+    const store = await import('../config/store')
+    const spy = vi.spyOn(store, 'readWorkspace').mockReturnValueOnce(null)
+    expect(listCouncilProjects('/nope')).toEqual([])
+    spy.mockRestore()
+  })
+
   it('maps workspace projects to name + cwd', () => {
     expect(listCouncilProjects('/w/ws')).toEqual([
       { name: 'api', cwd: '/w/ws/api' },

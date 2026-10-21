@@ -11,15 +11,25 @@ export function listCouncilProjects(ws: string): { name: string; cwd: string }[]
   return workspaceToStartRunOpts(w).developProjects.map(p => ({ name: p.name, cwd: p.cwd }))
 }
 
-async function git(cwd: string, args: string[]): Promise<string> {
-  // ★ 只用 args 数组、不经 shell:range 来自用户输入;maxBuffer 放大以便超限判断由我们按字节数做
-  const r = await execa('git', args, { cwd, maxBuffer: 64 * 1024 * 1024 })
+const DEFAULT_MAX_BUFFER = 64 * 1024 * 1024
+
+async function git(cwd: string, args: string[], maxBuffer = DEFAULT_MAX_BUFFER): Promise<string> {
+  // ★ 只用 args 数组、不经 shell:range 来自用户输入
+  const r = await execa('git', args, { cwd, maxBuffer })
   return r.stdout
 }
 
-const fence = (lang: string, body: string) => '```' + lang + '\n' + body + '\n```'
+const isMaxBuffer = (e: unknown) =>
+  !!e && typeof e === 'object' && ((e as { isMaxBuffer?: boolean }).isMaxBuffer === true || /maxBuffer/i.test(String((e as { message?: unknown }).message)))
 
-export async function collectMaterials(m: CouncilMaterials | undefined, capBytes = COUNCIL_DIFF_CAP_BYTES): Promise<string> {
+// ★ 围栏比内容里最长的连续反引号多一个(至少 3),diff 里的 ``` 不会提前闭合围栏
+function fence(lang: string, body: string): string {
+  const longest = Math.max(0, ...(body.match(/`+/g) ?? []).map(r => r.length))
+  const f = '`'.repeat(Math.max(3, longest + 1))
+  return `${f}${lang}\n${body}\n${f}`
+}
+
+export async function collectMaterials(m: CouncilMaterials | undefined, capBytes = COUNCIL_DIFF_CAP_BYTES, maxBuffer = DEFAULT_MAX_BUFFER): Promise<string> {
   if (!m) return ''
   const sections: string[] = []
   if (m.diff) {
@@ -31,8 +41,10 @@ export async function collectMaterials(m: CouncilMaterials | undefined, capBytes
       return [r]
     })()
     const title = m.diff === 'uncommitted' ? 'Uncommitted changes (git diff HEAD)' : `Commit range diff (${m.diff.range})`
-    const diff = await git(m.projectCwd, ['diff', ...spec, '--'])
-    if (Buffer.byteLength(diff) > capBytes) {
+    // ★ diff 超过 maxBuffer 时 execa 会抛错:同样按"过大"处理,退回只给统计
+    let diff: string | null = null
+    try { diff = await git(m.projectCwd, ['diff', ...spec, '--'], maxBuffer) } catch (e) { if (!isMaxBuffer(e)) throw e }
+    if (diff === null || Buffer.byteLength(diff) > capBytes) {
       // ★ 过大时只给统计,不截断 diff 正文(截断会造成误判),让讨论方自己去读
       const stat = await git(m.projectCwd, ['diff', '--stat', ...spec, '--'])
       sections.push(`## ${title} — too large, stat only; read the files yourself\n${fence('', stat)}`)
