@@ -75,6 +75,8 @@ describe('方法表', () => {
     //   handler 紧挨着 sessionSetPermission 放:写的是**主机上**那个会话的开关状态,跟权限档
     //   同一个道理,所以是 host 方法。
     // 216 → 217:session:set-fast —— codex 快速档的会话级设置,同 set-browser-use ⇒ host 方法。
-    expect(Object.keys(table).length).toBe(217)
+    // 217 → 227:AI 共商十条(council:start / pause / resume / stop / interject / followup / choose /
+    //   list / last-config / projects),全是 host 方法;council:state 是广播,不进表。
+    expect(Object.keys(table).length).toBe(227)
   })
 })

@@ -15,7 +15,7 @@ import { listDevices, pairingToken, revokeDevice, revokeAll, onDevicesChanged } 
 import { createRelayController } from './host/relayController'
 import { openSshTunnel } from './remote/sshTunnel'
 import { readHosts, upsertHost, removeHost, markConnected, exportHosts, importHosts, type RemoteHost } from './remote/hostStore'
-import { registerIpc } from './ipc/handlers'
+import { registerIpc, shutdownCouncils } from './ipc/handlers'
 import { killAllAgentTrees } from './agents/procGroup'
 import { botBridge } from './bot/botBridge'
 import { showOsNotification, osNotificationsSupported } from './notify/osNotify'
@@ -902,6 +902,8 @@ app.whenReady().then(() => {
   // 「父进程退出时杀子进程」在 detached 下直接 return —— 不在这里补一刀,退出 app 就会把正在跑的 CLI
   // 连同它派生的 shell 命令一起留在后台。
   app.on('before-quit', () => {
+    // ★共商先于 killAllAgentTrees:引擎先把自己标成「已暂停」并落盘,随后席位进程被杀时它不会再记失败、推进度
+    shutdownCouncils()
     quitting = true; termService.killAll(); killAllAgentTrees(); scheduler.stop(); unregisterGlobalShortcuts(); stopMemoryLog()
     // ★远程连接也要收:SSH 隧道是我们自己 spawn 的子进程,不杀就变成孤儿留在系统里
     //   (每连一次留一个)。同一类坑在 agent 进程上已经栽过两次,不能在这儿再来一遍。

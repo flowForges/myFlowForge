@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { CH } from '../main/ipc/channels'
 import type { AskAnswers, ChatEvent, ChangesEvent, ChatGateSnapshot, ChatQueueEvent, SetupEvent, UpdateInfo, UpdateEvent } from '@shared/types'
 import type { PluginSnapshot } from '@shared/plugins'
+import type { CouncilConfig, CouncilSeat, CouncilState } from '@shared/council'
 import type { HostInput, HostStatusView, RemoteHostView } from '@shared/remote/hostView'
 
 const api = {
@@ -156,6 +157,22 @@ const api = {
     const listener = (_: unknown, e: ChatEvent) => cb(e)
     ipcRenderer.on(CH.chatEvent, listener)
     return () => ipcRenderer.removeListener(CH.chatEvent, listener)
+  },
+  // AI 共商:控制都按 councilId;发言流走 onChatEvent(带 council 标记),进度走 onCouncilState。
+  councilStart: (a: { workspacePath: string; sessionId: string; config: CouncilConfig }): Promise<string> => ipcRenderer.invoke(CH.councilStart, a),
+  councilPause: (a: { councilId: string }): Promise<void> => ipcRenderer.invoke(CH.councilPause, a),
+  councilResume: (a: { councilId: string; newLeader?: CouncilSeat }): Promise<void> => ipcRenderer.invoke(CH.councilResume, a),
+  councilStop: (a: { councilId: string; mode: 'finalize' | 'abort' }): Promise<void> => ipcRenderer.invoke(CH.councilStop, a),
+  councilInterject: (a: { councilId: string; text: string }): Promise<void> => ipcRenderer.invoke(CH.councilInterject, a),
+  councilFollowup: (a: { councilId: string; question: string; target: 'all' | string }): Promise<void> => ipcRenderer.invoke(CH.councilFollowup, a),
+  councilChoose: (a: { councilId: string; candidate: string }): Promise<void> => ipcRenderer.invoke(CH.councilChoose, a),
+  councilList: (a: { workspacePath: string; sessionId: string }): Promise<CouncilState[]> => ipcRenderer.invoke(CH.councilList, a),
+  councilLastConfig: (a: { workspacePath: string }): Promise<Omit<CouncilConfig, 'topic' | 'attachments'> | null> => ipcRenderer.invoke(CH.councilLastConfig, a),
+  councilProjects: (a: { workspacePath: string }): Promise<{ name: string; cwd: string }[]> => ipcRenderer.invoke(CH.councilProjects, a),
+  onCouncilState: (cb: (s: CouncilState) => void) => {
+    const listener = (_: unknown, s: CouncilState) => cb(s)
+    ipcRenderer.on(CH.councilState, listener)
+    return () => ipcRenderer.removeListener(CH.councilState, listener)
   },
   // 跨设备未读:打开一条会话时说一声,主进程广播给所有客户端(含连着的手机)。
   markChatSeen: (a: { workspacePath: string; sessionId: string }): Promise<void> =>

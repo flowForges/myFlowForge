@@ -85,6 +85,12 @@ export class ChatQueue {
     return out
   }
 
+  /** 该会话有正在跑或排着队的轮次。共商「开始」要等它空下来(§7.2 #9)。 */
+  sessionBusy(ws: string, sessionId: string): boolean {
+    const lane = this.map.get(ws)?.get(sessionId)
+    return !!lane && (lane.busy || lane.queue.length > 0)
+  }
+
   runningProvider(ws: string, sessionId: string): string | null {
     return this.map.get(ws)?.get(sessionId)?.running?.provider ?? null
   }

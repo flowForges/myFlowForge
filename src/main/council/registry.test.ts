@@ -9,6 +9,9 @@ import { COUNCIL_RESULT_FENCE } from './prompts'
 import type { SeatRunCallbacks, SeatRunResult } from './seatRunner'
 import type { CouncilConfig, CouncilSeat, CouncilState } from '@shared/council'
 import { appendMessage, readMessages } from '../chat/chatStore'
+import { logError } from '../log/appLog'
+
+vi.mock('../log/appLog', async (orig) => ({ ...(await orig<typeof import('../log/appLog')>()), logError: vi.fn() }))
 
 const T0 = new Date(2026, 9, 21, 9, 5).getTime()
 const seat = (id: string, provider = 'codex'): CouncilSeat => ({ id, provider, model: `m-${id}`, label: `${provider} · ${id}` })
@@ -82,7 +85,7 @@ function world(ws: string) {
     new CouncilEngine(id, w, sid, c, { ...deps }, restored)
 
   return {
-    calls, cancelled, states,
+    calls, cancelled, states, make,
     setScript: (f: (c: Call) => Reply | undefined) => { script = f },
     registry: () => new CouncilRegistry(make),
     stored: (id: string) => loadCouncils(ws).find(p => p.state.id === id)!,
@@ -335,5 +338,35 @@ describe('CouncilRegistry', () => {
     expect(w.calls.filter(c => c.kind === 'answer').map(c => c.seat)).toEqual(['A', 'B', 'B'])
     const answers = w.stored(id).transcript.items.filter(u => u.stage === 'answer')
     expect(answers.map(u => u.seat)).toEqual(['A', 'B'])
+  })
+  it('restore: one council that fails to load is logged and skipped, the others still come back', async () => {
+    const w = world(ws)
+    const reg1 = w.registry()
+    w.setScript(() => 'hang')
+    const a = reg1.start(ws, 's1', cfg(['A', 'B']))
+    const b = reg1.start(ws, 's2', cfg(['A', 'B']))
+    await tick()
+    reg1.shutdown()
+
+    const reg2 = new CouncilRegistry((id, ww, sid, c, p) => {
+      if (id === a) throw new Error('malformed')
+      return w.make(id, ww, sid, c, p)
+    })
+    expect(() => reg2.restore(ws)).not.toThrow()
+    expect(vi.mocked(logError)).toHaveBeenCalledWith('council', expect.stringContaining(a), expect.anything())
+    expect(reg2.get(a)).toBeUndefined()
+    expect(reg2.get(b)!.state.status).toBe('paused')
+  })
+
+  it('hasLive: running / finalizing in the session count, paused and other sessions do not', async () => {
+    const w = world(ws)
+    w.setScript(() => 'hang')
+    const reg = w.registry()
+    const id = reg.start(ws, 's1', cfg(['A', 'B']))
+    expect(reg.hasLive(ws, 's1')).toBe(true)
+    expect(reg.hasLive(ws, 's1', id)).toBe(false)
+    expect(reg.hasLive(ws, 's2')).toBe(false)
+    reg.shutdown()
+    expect(reg.hasLive(ws, 's1')).toBe(false)
   })
 })

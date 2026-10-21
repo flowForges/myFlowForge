@@ -44,7 +44,13 @@ import { listWorkspaces } from '../workspace/workspaceList'
 import { readHomeStats } from '../workspace/homeStats'
 import { sendTurn, history, addTurnAnswer } from '../chat/chatService'
 import { ChatQueue } from '../chat/chatQueue'
-import { appendMessage, readMessages } from '../chat/chatStore'
+import { appendMessage, readMessages, readSession as readChatSession } from '../chat/chatStore'
+import { CouncilRegistry } from '../council/registry'
+import { CouncilEngine } from '../council/engine'
+import { runSeat, seatResumeKey } from '../council/seatRunner'
+import { collectMaterials, listCouncilProjects } from '../council/materials'
+import { saveCouncil, saveLastConfig, loadLastConfig } from '../council/store'
+import { validateCouncilConfig, type CouncilConfig, type CouncilSeat } from '@shared/council'
 import { modelVisibleHistory } from '../chat/contextRebuild'
 import { withLastMessageAt } from '../chat/sessionsView'
 import { mergeLive } from '../chat/liveTurns'
@@ -149,6 +155,14 @@ export function uniqueAttachmentName(dir: string, name: string): string {
     if (!existsSync(join(dir, cand))) return cand
   }
   return `${base}-${Date.now()}${ext}`
+}
+
+// 最近一次 registerIpc 建的共商注册表;app 退出时由 shutdownCouncils() 统一暂停落盘。
+let activeCouncils: CouncilRegistry | null = null
+
+/** app 退出:取消所有正在进行的共商发言,以「已暂停」落盘(重开后可继续)。 */
+export function shutdownCouncils(): void {
+  activeCouncils?.shutdown()
 }
 
 export function registerIpc(broadcast: (channel: string, payload: unknown) => void, providers: Record<string, AgentProvider>, caps: HostCapabilities, onSettings?: (s: Settings) => void, terminal?: TerminalService): MethodTable {
@@ -1208,6 +1222,92 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     chatQueue.stop(a.workspacePath, sid); cancelWorkspaceDelegates(a.workspacePath, sid)
     drainChatGates(a.workspacePath, sid ? { sessionId: sid } : {})
   })
+
+  // ---- AI 共商(§7.2 #2/#8/#9)----
+  // ★不走 ChatQueue:引擎自己调度席位;发言流复用 chatEmit,进度另走 council:state。
+  const councils = new CouncilRegistry((id, ws, sid, cfg, restored) => new CouncilEngine(id, ws, sid, cfg, {
+    // ★时区按席位的 provider 现取(和聊天轮次一样),所以 env 在每次发言时重建;seatDeps.env 只是兜底
+    runSeat: (cid, seat, prompt, deps, cb) =>
+      runSeat(cid, seat, prompt, { ...deps, env: buildAgentEnv({ proxy: readSettings().agentProxy, timezone: providerTimezone(seat.provider) }) }, cb),
+    seatDeps: { providers, env: buildAgentEnv({ proxy: readSettings().agentProxy }) },
+    seatResumed: (seatId) => readChatSession(ws, sid, seatResumeKey(id, seatId)) !== undefined,
+    append: appendMessage,
+    readMessages,
+    emitChat: chatEmit,
+    emitState: (st) => broadcast(CH.councilState, st),
+    materialsText: (c) => collectMaterials(c.materials),
+    writeFile: (path, text) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text) },
+    persist: (p) => saveCouncil(p.state.workspacePath, p),
+    now: Date.now,
+  }, restored))
+  activeCouncils = councils
+  // 每个工作区第一次 list / start 时才把落盘的共商装回内存(进行中的转为已暂停)
+  const restoredCouncilWs = new Set<string>()
+  const ensureCouncilsRestored = (ws: string) => {
+    if (restoredCouncilWs.has(ws)) return
+    restoredCouncilWs.add(ws)
+    councils.restore(ws)
+  }
+  const councilOf = (id: string) => {
+    const e = councils.get(id)
+    if (!e) throw new Error('council-not-found')
+    return e
+  }
+  /** 席位 / 领导者的 CLI 本机装了(和 agents:detect 同一份检测缓存);是不是共商可用的 CLI 由 validateCouncilConfig 管。 */
+  const assertCouncilSeatsInstalled = async (seats: CouncilSeat[]) => {
+    const list = await cachedDetectProviders(providers, buildAgentEnv({ proxy: readSettings().agentProxy }), { trustPersisted: true })
+    const installed = new Set(list.filter(p => p.installed).map(p => p.id))
+    if (seats.some(s => !installed.has(s.provider))) throw new Error('provider-not-installed')
+  }
+  on(CH.councilStart, async (_e, a: { workspacePath: string; sessionId: string; config: CouncilConfig }) => {
+    if (isArchivedWorkspace(a.workspacePath)) throw new Error('工作区已归档，恢复后才能继续。')
+    const invalid = validateCouncilConfig(a.config)
+    if (invalid) throw new Error(invalid)
+    await assertCouncilSeatsInstalled([...a.config.seats, a.config.leader])
+    const projectCwd = a.config.materials?.projectCwd
+    if (projectCwd !== undefined && !listCouncilProjects(a.workspacePath).some(p => p.cwd === projectCwd)) throw new Error('project-invalid')
+    // ★普通对话的回合还在跑 / 排队:共商不能和它同时用这个会话(§7.2 #9)
+    if (chatQueue.sessionBusy(a.workspacePath, a.sessionId)) throw new Error('busy')
+    ensureCouncilsRestored(a.workspacePath)
+    // registry.start 不等共商结束,只回 id;同会话已有进行中的会抛 'busy'
+    const id = councils.start(a.workspacePath, a.sessionId, a.config)
+    saveLastConfig(a.workspacePath, a.config)
+    return id
+  })
+  on(CH.councilPause, (_e, a: { councilId: string }) => { councilOf(a.councilId).pause() })
+  on(CH.councilResume, async (_e, a: { councilId: string; newLeader?: CouncilSeat }) => {
+    const engine = councilOf(a.councilId)
+    const { workspacePath, sessionId, config } = engine.state
+    if (a.newLeader) {
+      const invalid = validateCouncilConfig({ ...config, leader: a.newLeader })
+      if (invalid) throw new Error(invalid)
+      await assertCouncilSeatsInstalled([a.newLeader])
+    }
+    // ★同一会话同一时间只能有一场在跑(R9);继续 = 重新占用会话,和开始一样也要等普通对话空下来
+    if (councils.hasLive(workspacePath, sessionId, a.councilId) || chatQueue.sessionBusy(workspacePath, sessionId)) throw new Error('busy')
+    // 不等:resume 会一直跑到下一次暂停 / 结束
+    void engine.resume(a.newLeader)
+  })
+  on(CH.councilStop, (_e, a: { councilId: string; mode: 'finalize' | 'abort' }) => { councilOf(a.councilId).stop(a.mode) })
+  on(CH.councilInterject, (_e, a: { councilId: string; text: string }) => {
+    // via 同 chat:send:由这里按连接填,不信客户端自报;本机不填
+    const via = _e?.client && _e.client.id !== 'local' ? _e.client.label : undefined
+    councilOf(a.councilId).interject(a.text, via)
+  })
+  on(CH.councilFollowup, (_e, a: { councilId: string; question: string; target: 'all' | string }) => {
+    const engine = councilOf(a.councilId)
+    if (engine.state.status !== 'done') throw new Error('not-done')
+    // 不等:各席位依次回答可能要好几分钟,结果走 chat:event
+    engine.followup(a.question, a.target).catch((err) =>
+      logError('council', `council ${a.councilId} followup failed`, err instanceof Error ? (err.stack ?? err.message) : String(err)))
+  })
+  on(CH.councilChoose, (_e, a: { councilId: string; candidate: string }) => { councilOf(a.councilId).choose(a.candidate) })
+  on(CH.councilList, (_e, a: { workspacePath: string; sessionId: string }) => {
+    ensureCouncilsRestored(a.workspacePath)
+    return councils.listForSession(a.workspacePath, a.sessionId)
+  })
+  on(CH.councilLastConfig, (_e, a: { workspacePath: string }) => loadLastConfig(a.workspacePath))
+  on(CH.councilProjects, (_e, a: { workspacePath: string }) => listCouncilProjects(a.workspacePath))
   // 给每个会话附加派生的 lastMessageAt(消息文件 mtime),供侧栏会话列表显示「最后对话时间」而非首次开始时间。
   // 不写回 sessions.json(保持存储干净;每次读时按文件重新派生)。
   //

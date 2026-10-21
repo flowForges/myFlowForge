@@ -184,4 +184,20 @@ describe('ChatQueue', () => {
     q.enqueue(mkS('/w', 's1', 'A'), '你')
     expect(calls).toEqual(['A'])   // runs immediately even if a workflow is active in /w
   })
+  it('sessionBusy: true while the session has a running or queued turn, per session', async () => {
+    const releases: Array<() => void> = []
+    const q = new ChatQueue(() => new Promise<void>(res => { releases.push(res) }), () => {})
+    expect(q.sessionBusy('/a', 's1')).toBe(false)
+    q.enqueue(mkS('/a', 's1', 'A1'), '你')
+    q.enqueue(mkS('/a', 's1', 'A2'), '你')
+    expect(q.sessionBusy('/a', 's1')).toBe(true)
+    expect(q.sessionBusy('/a', 's2')).toBe(false)
+    expect(q.sessionBusy('/b', 's1')).toBe(false)
+    releases[0]()
+    await Promise.resolve(); await Promise.resolve()
+    expect(q.sessionBusy('/a', 's1')).toBe(true)   // A2 now running
+    releases[1]()
+    await Promise.resolve(); await Promise.resolve()
+    expect(q.sessionBusy('/a', 's1')).toBe(false)
+  })
 })

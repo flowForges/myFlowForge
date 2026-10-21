@@ -56,7 +56,10 @@ describe('频道分类', () => {
     //   handler 紧挨着 sessionSetPermission 放,改的是**主机上**那个会话的开关状态,和权限档
     //   同一类,路由也该和它一样。
     // 169 → 170:session:set-fast(codex 快速档,会话级设置)。同 set-browser-use ⇒ host。
-    expect(host.length).toBe(170)
+    // 170 → 180:AI 共商十条(council:start / pause / resume / stop / interject / followup / choose /
+    //   list / last-config / projects)。引擎、状态文件、会话都在主机上 ⇒ host。
+    //   council:state 是广播不是方法,不在这张表里。
+    expect(host.length).toBe(180)
     expect(client.length + host.length).toBe(keys.length)
   })
 

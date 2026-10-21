@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { CouncilConfig, CouncilState, CouncilStatus } from '@shared/council'
 import type { CouncilEngine, PersistedCouncil } from './engine'
 import { loadCouncils, saveCouncil } from './store'
+import { logError } from '../log/appLog'
 
 // 占着会话的状态:同一会话同一时间只能有一场(§7.2 #9)。暂停中的不占
 const LIVE: CouncilStatus[] = ['running', 'finalizing']
@@ -16,12 +17,17 @@ export class CouncilRegistry {
 
   /** 开一场新的共商(后台跑,不等它结束);该会话已有进行中的 → 抛 'busy'。 */
   start(ws: string, sid: string, cfg: CouncilConfig): string {
-    if (this.forSession(ws, sid).some(e => LIVE.includes(e.state.status))) throw new Error('busy')
+    if (this.hasLive(ws, sid)) throw new Error('busy')
     const id = randomUUID()
     const engine = this.makeEngine(id, ws, sid, cfg)
     this.engines.set(id, engine)
     void engine.start()
     return id
+  }
+
+  /** 该会话里有没有(除 exceptId 以外)正在运行 / 出结果的共商。 */
+  hasLive(ws: string, sid: string, exceptId?: string): boolean {
+    return this.forSession(ws, sid).some(e => e.state.id !== exceptId && LIVE.includes(e.state.status))
   }
 
   get(id: string): CouncilEngine | undefined {
@@ -46,9 +52,14 @@ export class CouncilRegistry {
     for (const p of loadCouncils(ws)) {
       const { id, sessionId, config, status } = p.state
       if (this.engines.has(id)) continue
-      const engine = this.makeEngine(id, ws, sessionId, config, p)
-      this.engines.set(id, engine)
-      if (engine.state.status !== status) saveCouncil(ws, engine.snapshot())
+      // ★逐个兜底:一个状态文件形状不对(构造 / 落盘抛错)只跳过它自己,不能让其余的都恢复不了
+      try {
+        const engine = this.makeEngine(id, ws, sessionId, config, p)
+        this.engines.set(id, engine)
+        if (engine.state.status !== status) saveCouncil(ws, engine.snapshot())
+      } catch (e) {
+        logError('council', `council ${id} could not be restored`, e instanceof Error ? (e.stack ?? e.message) : String(e))
+      }
     }
   }
 

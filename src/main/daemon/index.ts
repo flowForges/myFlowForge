@@ -16,7 +16,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { hostname, networkInterfaces } from 'node:os'
-import { registerIpc } from '../ipc/handlers'
+import { registerIpc, shutdownCouncils } from '../ipc/handlers'
 import { createTerminalService } from '../terminal/terminalService'
 import { createBroadcastHub } from '../ipc/broadcastHub'
 import { daemonTable } from '../ipc/channelRouting'
@@ -131,6 +131,8 @@ export async function startDaemon(
     port: gw.port,
     host: gw.host,
     async close() {
+      // 共商先暂停落盘(同步),再去等网关关闭 —— 重启 daemon 后它们以「已暂停」出现,可继续
+      shutdownCouncils()
       await relay?.close()
       await gw.close()
       term.killAll()
