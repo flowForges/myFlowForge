@@ -55,6 +55,7 @@ export class CouncilEngine {
   private stopMode: 'finalize' | 'abort' | null = null
   private inflight = new Set<Inflight>()
   private driving = false
+  private redrive = false
   private followingUp = false
   // ★每次继续都 +1,拼进领导者消息 id:暂停前失败的那条已经落盘,继续后重跑同一阶段不能和它撞 id
   private resumes = 0
@@ -92,15 +93,17 @@ export class CouncilEngine {
 
   /** 从暂停处接着跑;给了 newLeader 就先换领导者(§7.3:领导者失败暂停后可换人继续)。 */
   async resume(newLeader?: CouncilSeat): Promise<void> {
-    // 暂停还没生效(当前发言没跑完)就点了继续:撤销暂停即可
-    if (this.st.status === 'running' && this.pauseRequested) {
-      this.pauseRequested = false
-      return
-    }
-    if (this.st.status !== 'paused') return
+    const pending = this.st.status === 'running' && this.pauseRequested
+    if (this.st.status !== 'paused' && !pending) return
     if (newLeader) {
       this.cfg = { ...this.cfg, leader: newLeader }
       this.st.config = this.cfg
+    }
+    // 暂停还没生效(当前发言没跑完)就点了继续:撤销暂停即可
+    if (pending) {
+      this.pauseRequested = false
+      this.changed()
+      return
     }
     this.resumes++
     this.st.status = 'running'
@@ -137,14 +140,17 @@ export class CouncilEngine {
   interject(text: string, via?: string): void {
     if (this.st.status !== 'running' || this.stopMode || !this.prepared || !text.trim()) return
     const n = this.count(u => u.stage === 'interject') + 1
+    // ★领导者正在写本轮总结时插话:总结的输入已经定了,这条归到下一轮 —— 下一轮的席位(插话不受轮次过滤)
+    //  和下一轮的总结 / 最终结果(按轮次取发言)才都看得到它
+    const round = this.phase === 'summary' ? this.st.round + 1 : this.st.round
     const msg: ChatMessage = {
       id: `${this.id}:interject:${n}`, who: 'user', text, ...(via ? { via } : {}),
-      council: { id: this.id, round: this.st.round, stage: 'interject' },
+      council: { id: this.id, round, stage: 'interject' },
       ts: new Date(this.deps.now()).toISOString(),
     }
     this.deps.append(this.ws, this.sid, msg)
     this.emit({ type: 'user', message: msg })
-    this.transcript.add({ seat: 'user', label: '用户', round: this.st.round, stage: 'interject', text })
+    this.transcript.add({ seat: 'user', label: '用户', round, stage: 'interject', text })
     this.changed()
   }
 
@@ -187,24 +193,39 @@ export class CouncilEngine {
   choose(candidateName: string): void {
     if (this.st.status !== 'done') return
     this.st.chosen = candidateName
-    this.writeResult()
+    // ★先落盘选择,再重写文件:写文件失败也不能丢掉用户的选定
     this.changed()
+    try {
+      this.writeResult()
+    } catch (e) {
+      logError('council', `council ${this.id} could not rewrite the result file`, e instanceof Error ? (e.stack ?? e.message) : String(e))
+    }
   }
 
   // ---- 主循环 ----
 
   private async drive(): Promise<void> {
-    if (this.driving) return
+    // ★暂停时的 changed() 会同步通知监听方,监听方若立刻 resume / stop('finalize'),此时上一次 run 还没退栈:
+    //  记一笔,由正在跑的这次 drive 在 run 返回后接着再跑,而不是直接丢掉
+    if (this.driving) {
+      this.redrive = true
+      return
+    }
     this.driving = true
     try {
-      await this.run()
-    } catch (e) {
-      logError('council', `council ${this.id} stopped on an unexpected error`, e instanceof Error ? (e.stack ?? e.message) : String(e))
-      // ★任何依赖意外抛错(取材料、落盘、写文件…)都不能把状态卡在 running/finalizing:
-      //  转为暂停并落盘,用户可以继续;start() 本身只 resolve。已经 aborted 的不能被改回暂停。
-      this.st.speaking = []
-      if (this.st.status === 'running' || this.st.status === 'finalizing') this.halt()
-      else this.changed()
+      do {
+        this.redrive = false
+        try {
+          await this.run()
+        } catch (e) {
+          logError('council', `council ${this.id} stopped on an unexpected error`, e instanceof Error ? (e.stack ?? e.message) : String(e))
+          // ★任何依赖意外抛错(取材料、落盘、写文件…)都不能把状态卡在 running/finalizing:
+          //  转为暂停并落盘,用户可以继续;start() 本身只 resolve。已经 aborted 的不能被改回暂停。
+          this.st.speaking = []
+          if (this.st.status === 'running' || this.st.status === 'finalizing') this.halt()
+          else this.changed()
+        }
+      } while (this.redrive && this.st.status === 'running')
     } finally {
       this.driving = false
     }
@@ -305,7 +326,9 @@ export class CouncilEngine {
     this.st.status = 'finalizing'
     this.changed()
     const summaries = this.summaries()
-    const lastItems = this.transcript.round(lastRound).filter(u => u.stage !== 'summary')
+    // 总结途中被「结束」时,归到下一轮的插话也要给最终结果看到
+    const lastItems = this.transcript.toJSON().items.filter(u =>
+      (u.round === lastRound && u.stage !== 'summary') || (u.round > lastRound && u.stage === 'interject'))
     const leader = this.cfg.leader
     const r = await this.leader(lastRound, 'final', finalPrompt(this.cfg, summaries, lastItems, []), (text) => {
       const { result, body } = parseCouncilResult(text)
@@ -355,12 +378,13 @@ export class CouncilEngine {
   ): Promise<Spoken> {
     const id = `${this.id}:${round}:${seat.id}:${stage}${suffix}`
     let think = ''
+    let started = false
     // ★runSeat 在超时/失败 settle 之后仍可能漏出回调;结果一到就关门,之后的一律丢弃
     let live = true
     this.st.speaking = [...this.st.speaking, seat.id]
     this.changed()
     const run = this.deps.runSeat(this.id, seat, prompt, { ...this.deps.seatDeps, workspacePath: this.ws, sessionId: this.sid, cwd: this.cwd() }, {
-      onStart: () => { if (live) this.emit({ type: 'assistant-start', id, model: seat.label }) },
+      onStart: () => { if (!live) return; started = true; this.emit({ type: 'assistant-start', id, model: seat.label }) },
       onDelta: (_m, t) => { if (!live) return; this.emit({ type: 'assistant-delta', id, text: t }) },
       onThink: (_m, t) => { if (!live) return; think += t; this.emit({ type: 'think-delta', id, text: t }) },
       onReplace: (_m, t) => { if (!live) return; this.emit({ type: 'assistant-replace', id, text: t }) },
@@ -372,6 +396,9 @@ export class CouncilEngine {
     live = false
     this.st.speaking = this.st.speaking.filter(x => x !== seat.id)
     if (!r.ok && handle.cancelled) {
+      // ★已经广播过 assistant-start 的流必须有终结事件,否则全局的流式状态(宠物忙碌、streamingIds)永远不清;
+      //  只广播不落盘 —— 被取消不算失败,不留 failed 消息
+      if (started) this.emit({ type: 'error', id, error: 'cancelled' })
       this.changed()
       return { ok: false, cancelled: true }
     }

@@ -95,6 +95,11 @@ function harness(c: CouncilConfig, script: Script = () => undefined, over: Parti
 
 const tick = () => new Promise(r => setTimeout(r, 5))
 const uniqueIds = (ms: ChatMessage[]) => new Set(ms.map(m => m.id)).size === ms.length
+/** 每个 assistant-start 都有 done 或 error 收尾(否则全局流式状态永远不清)。 */
+function unclosedStreams(events: ChatEvent[]): string[] {
+  const closed = new Set(events.flatMap(e => (e.type === 'done' ? [e.message.id] : e.type === 'error' ? [e.id] : [])))
+  return events.flatMap(e => (e.type === 'assistant-start' && !closed.has(e.id) ? [e.id] : []))
+}
 
 describe('CouncilEngine controls', () => {
   beforeEach(() => clearAppLog())
@@ -176,6 +181,64 @@ describe('CouncilEngine controls', () => {
     expect(h.engine.state.status).toBe('done')
   })
 
+  it('interjection during the round-1 summary reaches round-2 seats and the round-2 summary', async () => {
+    let h!: ReturnType<typeof harness>
+    h = harness(cfg(['A', 'B'], 3), c => {
+      if (c.seat === 'L' && c.n === 1) h.engine.interject('考虑多机')
+      return undefined
+    })
+    await h.engine.start()
+    expect(h.calls.find(c => c.seat === 'L' && c.n === 1)!.prompt).not.toContain('考虑多机')
+    const r2 = h.calls.filter(c => c.kind === 'critique' && c.prompt.includes('现在是第 2 轮'))
+    expect(r2.map(c => c.seat)).toEqual(['A', 'B'])
+    for (const c of r2) expect(c.prompt).toContain('考虑多机')
+    const sum2 = h.calls.find(c => c.seat === 'L' && c.kind === 'summary' && c.n === 2)!
+    expect(sum2.prompt).toContain('考虑多机')
+    expect(h.appended.find(m => m.council?.stage === 'interject')!.council!.round).toBe(2)
+  })
+
+  it('interjection during the round-1 summary reaches the final when round 2 is the last', async () => {
+    let h!: ReturnType<typeof harness>
+    h = harness(cfg(['A', 'B'], 2), c => {
+      if (c.seat === 'L' && c.n === 1) h.engine.interject('考虑多机')
+      return undefined
+    })
+    await h.engine.start()
+    expect(h.calls.find(c => c.kind === 'final')!.prompt).toContain('考虑多机')
+  })
+
+  it('resume(newLeader) while the pause is still pending swaps the leader', async () => {
+    let h!: ReturnType<typeof harness>
+    h = harness(cfg(['A', 'B', 'C']), c => {
+      if (c.seat === 'A' && c.kind === 'critique') {
+        h.engine.pause()
+        void h.engine.resume(seat('M', 'gemini'))
+      }
+      return undefined
+    })
+    await h.engine.start()
+    expect(h.engine.state.status).toBe('done')
+    expect(h.calls.at(-1)).toMatchObject({ seat: 'M', kind: 'final' })
+    expect(h.engine.state.config.leader.id).toBe('M')
+  })
+
+  it('a state listener resuming synchronously on pause does not stall the council', async () => {
+    let resumed = false
+    let h!: ReturnType<typeof harness>
+    h = harness(cfg(['A', 'B', 'C']), c => {
+      if (c.seat === 'A' && c.kind === 'critique') h.engine.pause()
+      return undefined
+    }, {
+      emitState: s => {
+        if (s.status === 'paused' && !resumed) { resumed = true; void h.engine.resume() }
+      },
+    })
+    await h.engine.start()
+    for (let i = 0; i < 10 && h.engine.state.status !== 'done'; i++) await tick()
+    expect(resumed).toBe(true)
+    expect(h.engine.state.status).toBe('done')
+  })
+
   it("stop('finalize') mid-round cancels the running seat, then the leader writes the final", async () => {
     let h!: ReturnType<typeof harness>
     h = harness(cfg(['A', 'B', 'C']), c => {
@@ -192,6 +255,10 @@ describe('CouncilEngine controls', () => {
     expect(h.persisted.at(-1)!.failures.B ?? 0).toBe(0)
     expect(h.engine.state.status).toBe('done')
     expect(h.files).toHaveLength(1)
+    expect(unclosedStreams(h.events)).toEqual([])
+    const err = h.events.find(e => e.type === 'error')
+    expect(err).toMatchObject({ type: 'error', error: 'cancelled', workspacePath: WS, sessionId: SID })
+    expect(h.appended.some(m => err?.type === 'error' && m.id === err.id)).toBe(false)
     // 最后一轮发言里有 A 的第 2 轮内容
     expect(h.calls.at(-1)!.prompt).toContain('<<A#2>>')
   })
@@ -213,6 +280,7 @@ describe('CouncilEngine controls', () => {
     expect(h.files).toHaveLength(0)
     expect(h.persisted.at(-1)!.state.status).toBe('aborted')
     expect(h.engine.state.speaking).toEqual([])
+    expect(unclosedStreams(h.events)).toEqual([])
   })
 
   it("stop('abort') during round 1 cancels every running seat", async () => {
@@ -227,6 +295,7 @@ describe('CouncilEngine controls', () => {
     await h.engine.start()
     expect(h.engine.state.status).toBe('aborted')
     expect(h.calls.map(c => c.seat)).toEqual(['A', 'B'])
+    expect(unclosedStreams(h.events)).toEqual([])
   })
 
   it("a second stop('abort') while finalizing ends as aborted, not paused", async () => {
@@ -241,6 +310,7 @@ describe('CouncilEngine controls', () => {
     await h.engine.start()
     expect(h.engine.state.status).toBe('aborted')
     expect(h.files).toHaveLength(0)
+    expect(unclosedStreams(h.events)).toEqual([])
   })
 
   it("stop('finalize') while paused runs the final; stop('abort') while paused aborts", async () => {
@@ -315,6 +385,16 @@ describe('CouncilEngine controls', () => {
     expect(file.path).toBe(h.engine.state.resultFile)
     expect(file.text).toContain('用户选定:B')
     expect(file.text).toContain('## 追问')
+  })
+
+  it('choose persists the choice even if rewriting the file fails', async () => {
+    let fail = false
+    const h = harness(cfg(['A', 'B']), undefined, { writeFile: () => { if (fail) throw new Error('EACCES') } })
+    await h.engine.start()
+    fail = true
+    expect(() => h.engine.choose('B')).not.toThrow()
+    expect(h.persisted.at(-1)!.state.chosen).toBe('B')
+    expect(getAppLog().some(e => e.level === 'error' && (e.detail ?? '').includes('EACCES'))).toBe(true)
   })
 
   it('an unexpected error is logged before pausing', async () => {
