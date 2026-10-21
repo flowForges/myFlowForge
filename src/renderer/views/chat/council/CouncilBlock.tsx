@@ -149,7 +149,11 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
 
   // 席位信息:优先用配置(颜色按配置顺序),消息里自带的 provider / model(= 席位 label)兜底。
   // ★只在出现新席位时重算 —— 流式增量每次都换 messages,SeatInfo 跟着换会让 memo 过的每一行都重渲染
+  // ★状态推送每次都是新对象:按席位内容(而不是 state.config 引用)判断要不要重算
   const seatKey = [...new Set(messages.map(m => m.council?.seat).filter(Boolean))].join('|')
+  const cfgKey = state
+    ? [...state.config.seats, state.config.leader].map(s => `${s.id}\u0001${s.provider}\u0001${s.label}`).join('|')
+    : ''
   const seats = useMemo(() => {
     const map = new Map<string, SeatInfo>()
     state?.config.seats.forEach((s, i) => map.set(s.id, { provider: s.provider, label: s.label, color: SEAT_COLORS[i % SEAT_COLORS.length] }))
@@ -162,7 +166,7 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
     }
     return map
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state?.config, seatKey])
+  }, [cfgKey, seatKey])
   const seatOf = (m: ChatMessage): SeatInfo =>
     seats.get(m.council?.seat ?? '') ?? { provider: m.provider ?? '', label: m.model ?? '', color: SEAT_COLORS[0] }
   const seatLabel = useCallback((sid: string) => seats.get(sid)?.label ?? sid, [seats])
@@ -203,7 +207,7 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
   const topic = state?.config.topic ?? topicMsg?.text ?? ''
   const seatCount = state?.config.seats.length ?? new Set(messages.map(m => m.council?.seat).filter(s => s && !isLeader(s))).size
   const roundsSoFar = state?.round || Math.max(0, ...messages.map(m => m.council?.round ?? 0))
-  const header = `AI 共商 · ${chars(topic, 20)} · ${seatCount} 方 · ${roundsSoFar} 轮 · ${Math.round(elapsed / 60_000)} 分钟`
+  const header = `AI 共商 · ${chars(topic, 20)} · ${seatCount} 方 · ${roundsSoFar} 轮 · ${elapsed > 0 ? Math.max(1, Math.round(elapsed / 60_000)) : 0} 分钟`
 
   // 领导者失败后暂停:最后一条 AI 发言是领导者的 failed —— 「继续」旁边可以换一位领导者
   const lastAi = [...messages].reverse().find(m => m.who === 'ai')
@@ -217,10 +221,35 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
 
   const [q, setQ] = useState('')
   const [target, setTarget] = useState<'all' | string>('all')
-  const ask = () => {
+  // 本次提交的追问:提交时已有几条追问 + 问的是谁。用来判断「这一问还没答完」。
+  const [asked, setAsked] = useState<{ before: number; target: string } | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+  const busy = useMemo(() => {
+    if (submitting || followups.some(m => streamingIds.has(m.id))) return true
+    if (status === 'done' && (state?.speaking.length ?? 0) > 0) return true
+    if (!asked) return false
+    const questions = followups.filter(m => m.who === 'user')
+    if (questions.length <= asked.before) return true   // 问题还没回到消息里
+    const last = questions[questions.length - 1]
+    const answers = followups.slice(followups.indexOf(last) + 1).filter(m => m.who === 'ai').length
+    // ★问全体 = 依次问还在场的席位;连续失败两次被淘汰的(主讨论里最后两条都是 failed)不会再答
+    const inPlay = (state?.config.seats ?? []).filter(s => {
+      const own = messages.filter(m => m.who === 'ai' && m.council?.seat === s.id && !followups.includes(m))
+      return !(own.length >= 2 && own.slice(-2).every(m => m.council?.stage === 'failed'))
+    }).length
+    return answers < (asked.target === 'all' ? inPlay : 1)
+  }, [submitting, followups, streamingIds, status, state, asked, messages])
+
+  const ask = async () => {
     const text = q.trim()
-    if (!text) return
-    controls.followup(id, text, target)
+    if (!text || busy) return
+    setSubmitting(true)
+    const before = followups.filter(m => m.who === 'user').length
+    const ok = await controls.followup(id, text, target)
+    setSubmitting(false)
+    // ★失败(已弹提示)不清空,问题留在框里可以再发
+    if (ok === false) return
+    setAsked({ before, target })
     setQ('')
     setUserOpen(true)   // 追问的问答在区块里,收着就看不到
   }
@@ -304,16 +333,17 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
 
       {status === 'done' && state && (
         <div className="council-followup">
-          <select value={target} onChange={e => setTarget(e.target.value)}>
+          <select value={target} disabled={busy} onChange={e => setTarget(e.target.value)}>
             <option value="all">全体</option>
             {state.config.seats.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
           </select>
           <input
             value={q}
+            disabled={busy}
             onChange={e => setQ(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); ask() } }}
+            onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void ask() } }}
           />
-          <button type="button" className="council-ctl" disabled={!q.trim()} onClick={ask}>追问</button>
+          <button type="button" className="council-ctl" disabled={busy || !q.trim()} onClick={() => void ask()}>追问</button>
         </div>
       )}
     </section>

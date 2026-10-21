@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { useCouncil } from './useCouncil'
+import { flashToast } from '../components/flashToast'
+
+vi.mock('../components/flashToast', () => ({ flashToast: vi.fn() }))
 import type { CouncilConfig, CouncilSeat, CouncilState, CouncilStatus } from '@shared/council'
 
 const seat = (id: string, provider = 'codex'): CouncilSeat => ({ id, provider, model: `m-${id}`, label: `${provider} · ${id}` })
@@ -76,6 +79,19 @@ describe('useCouncil', () => {
     await act(async () => { resolveList([state('c1', 'running'), state('c0', 'done')]) })
     expect(result.current.states.find(s => s.id === 'c1')).toMatchObject({ status: 'paused', round: 2 })
     expect(result.current.states.map(s => s.id).sort()).toEqual(['c0', 'c1'])
+  })
+
+  it('a rejected control call shows a toast and resolves false instead of rejecting', async () => {
+    vi.mocked(flashToast).mockClear()
+    forge.councilFollowup.mockRejectedValueOnce(new Error("Error invoking remote method 'council:followup': Error: not-done"))
+    forge.councilPause.mockRejectedValueOnce(new Error('boom'))
+    const { result } = renderHook(() => useCouncil('/ws', 's1'))
+    await expect(result.current.followup('c1', '再说说', 'all')).resolves.toBe(false)
+    await expect(result.current.pause('c1')).resolves.toBe(false)
+    await expect(result.current.choose('c1', 'x')).resolves.toBe(true)
+    expect(flashToast).toHaveBeenNthCalledWith(1, '共商尚未结束')
+    expect(flashToast).toHaveBeenNthCalledWith(2, '操作失败')
+    expect(flashToast).toHaveBeenCalledTimes(2)
   })
 
   it('controls call the bridge with the council id', async () => {

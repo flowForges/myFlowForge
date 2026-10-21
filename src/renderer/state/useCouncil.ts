@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CouncilConfig, CouncilSeat, CouncilState } from '@shared/council'
+import { flashToast } from '../components/flashToast'
 
 export type CouncilLastConfig = Omit<CouncilConfig, 'topic' | 'attachments'>
 
@@ -10,15 +11,37 @@ export type CouncilApi = {
   active: CouncilState | undefined
   lastConfig: CouncilLastConfig | null
   start(cfg: CouncilConfig): Promise<void>
-  pause(id: string): void
+  // 控制类调用:失败时弹一句提示,resolve 成 false(从不 reject);成功 resolve 成 true。
+  pause(id: string): Promise<boolean>
   /** newLeader:领导者失败暂停后换一位接着跑(§7.3)。 */
-  resume(id: string, newLeader?: CouncilSeat): void
-  stop(id: string, mode: 'finalize' | 'abort'): void
-  interject(id: string, text: string): void
-  followup(id: string, q: string, target: 'all' | string): void
-  choose(id: string, name: string): void
+  resume(id: string, newLeader?: CouncilSeat): Promise<boolean>
+  stop(id: string, mode: 'finalize' | 'abort'): Promise<boolean>
+  interject(id: string, text: string): Promise<boolean>
+  followup(id: string, q: string, target: 'all' | string): Promise<boolean>
+  choose(id: string, name: string): Promise<boolean>
   /** 当前工作区里可选作参考材料的项目。 */
   projects(): Promise<{ name: string; cwd: string }[]>
+}
+
+const ACTION_ERRORS: Record<string, string> = {
+  'not-done': '共商尚未结束',
+}
+
+/**
+ * 控制类 IPC 失败时给用户看的一句话。invoke 的错误长这样:
+ * "Error invoking remote method 'council:followup': Error: not-done" —— 取最后那段当错误码。
+ */
+export function councilActionError(e: unknown): string {
+  const raw = e instanceof Error ? e.message : String(e)
+  const msg = raw.replace(/^Error invoking remote method '[^']*': (?:Error: )?/, '').trim()
+  return ACTION_ERRORS[msg] ?? '操作失败'
+}
+
+// ★控制调用一律兜住:原来是 `void invoke(...)`,主进程一抛就成了未处理的 rejection,用户什么也看不到
+function settle(call: () => Promise<unknown>): Promise<boolean> {
+  let p: Promise<unknown>
+  try { p = Promise.resolve(call()) } catch (e) { p = Promise.reject(e) }
+  return p.then(() => true, (e: unknown) => { flashToast(councilActionError(e)); return false })
 }
 
 const LIVE = new Set<CouncilState['status']>(['running', 'paused', 'finalizing'])
@@ -68,16 +91,14 @@ export function useCouncil(workspacePath?: string, sessionId?: string): CouncilA
     setLastConfig(rest)
   }, [workspacePath, sessionId])
 
-  const pause = useCallback((id: string) => { void api.current.councilPause({ councilId: id }) }, [])
-  const resume = useCallback((id: string, newLeader?: CouncilSeat) => {
-    void api.current.councilResume(newLeader ? { councilId: id, newLeader } : { councilId: id })
-  }, [])
-  const stop = useCallback((id: string, mode: 'finalize' | 'abort') => { void api.current.councilStop({ councilId: id, mode }) }, [])
-  const interject = useCallback((id: string, text: string) => { void api.current.councilInterject({ councilId: id, text }) }, [])
-  const followup = useCallback((id: string, q: string, target: 'all' | string) => {
-    void api.current.councilFollowup({ councilId: id, question: q, target })
-  }, [])
-  const choose = useCallback((id: string, name: string) => { void api.current.councilChoose({ councilId: id, candidate: name }) }, [])
+  const pause = useCallback((id: string) => settle(() => api.current.councilPause({ councilId: id })), [])
+  const resume = useCallback((id: string, newLeader?: CouncilSeat) =>
+    settle(() => api.current.councilResume(newLeader ? { councilId: id, newLeader } : { councilId: id })), [])
+  const stop = useCallback((id: string, mode: 'finalize' | 'abort') => settle(() => api.current.councilStop({ councilId: id, mode })), [])
+  const interject = useCallback((id: string, text: string) => settle(() => api.current.councilInterject({ councilId: id, text })), [])
+  const followup = useCallback((id: string, q: string, target: 'all' | string) =>
+    settle(() => api.current.councilFollowup({ councilId: id, question: q, target })), [])
+  const choose = useCallback((id: string, name: string) => settle(() => api.current.councilChoose({ councilId: id, candidate: name })), [])
   const projects = useCallback(async () => {
     if (!workspacePath) return []
     return api.current.councilProjects({ workspacePath })

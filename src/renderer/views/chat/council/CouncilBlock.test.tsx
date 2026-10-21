@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent, act } from '@testing-library/react'
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import { CouncilBlock, type CouncilControls } from './CouncilBlock'
 import type { ChatMessage, ProviderInfo } from '@shared/types'
 import type { CouncilSeat, CouncilState, CouncilStatus, CouncilStage } from '@shared/council'
@@ -177,6 +177,50 @@ describe('CouncilBlock', () => {
     fireEvent.change(input, { target: { value: '再说说风险' } })
     fireEvent.click(screen.getByRole('button', { name: '追问' }))
     expect(ctl.followup).toHaveBeenCalledWith('c1', '再说说风险', 'all')
+  })
+
+  it('header shows at least 1 minute once time has elapsed', () => {
+    renderBlock([topic], state('paused', { elapsedMs: 20_000 }))
+    expect(toggle().textContent).toContain('· 1 分钟')
+  })
+
+  const fuQ = (n: number): ChatMessage => ({ id: `c1:followup:${n}`, who: 'user', text: `问${n}`, ts: '2026-10-21T10:05:00Z', council: { id: 'c1', round: 2, stage: 'followup' } })
+  const fuA = (seat: CouncilSeat, n: number): ChatMessage => ({ ...ai(seat, 2, 'followup', `答${n}`), id: `c1:2:${seat.id}:followup:${n}` })
+  const doneBase = [topic, ai(A, 1, 'answer', 'x'), ai(B, 1, 'answer', 'y'), finalMsg]
+  const fuInput = () => document.querySelector('.council-followup input') as HTMLInputElement
+  const fuBtn = () => screen.getByRole('button', { name: '追问' }) as HTMLButtonElement
+
+  it('follow-up input is disabled while an answer is streaming', () => {
+    const a = fuA(A, 1)
+    renderBlock([...doneBase, fuQ(1), a], state('done', { round: 2, speaking: [A.id] }), [a.id])
+    expect(fuInput().disabled).toBe(true)
+    expect(fuBtn().disabled).toBe(true)
+  })
+
+  it('after asking 全体, stays disabled until every seat has answered', async () => {
+    const ctl = controls()
+    ;(ctl.followup as ReturnType<typeof vi.fn>).mockResolvedValue(true)
+    const st = state('done', { round: 2 })
+    const { rerender } = render(<CouncilBlock id="c1" messages={doneBase} state={st} streamingIds={new Set()} providers={providers} controls={ctl} />)
+    fireEvent.change(fuInput(), { target: { value: '问1' } })
+    fireEvent.click(fuBtn())
+    await waitFor(() => expect(fuInput().value).toBe(''))
+    expect(fuInput().disabled).toBe(true)
+    rerender(<CouncilBlock id="c1" messages={[...doneBase, fuQ(1), fuA(A, 1)]} state={st} streamingIds={new Set()} providers={providers} controls={ctl} />)
+    expect(fuInput().disabled).toBe(true)
+    rerender(<CouncilBlock id="c1" messages={[...doneBase, fuQ(1), fuA(A, 1), fuA(B, 1)]} state={st} streamingIds={new Set()} providers={providers} controls={ctl} />)
+    expect(fuInput().disabled).toBe(false)
+  })
+
+  it('a rejected follow-up keeps the typed question', async () => {
+    const ctl = controls()
+    ;(ctl.followup as ReturnType<typeof vi.fn>).mockResolvedValue(false)
+    renderBlock(doneBase, state('done', { round: 2 }), [], ctl)
+    fireEvent.change(fuInput(), { target: { value: '再说说风险' } })
+    fireEvent.click(fuBtn())
+    await waitFor(() => expect(ctl.followup).toHaveBeenCalled())
+    await waitFor(() => expect(fuInput().disabled).toBe(false))
+    expect(fuInput().value).toBe('再说说风险')
   })
 
   it('no follow-up input while running', () => {

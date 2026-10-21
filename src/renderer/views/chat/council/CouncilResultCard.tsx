@@ -1,4 +1,4 @@
-import { memo, useContext, useMemo, useState } from 'react'
+import { memo, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChatMessage } from '@shared/types'
 import type { CouncilCandidate, CouncilResult } from '@shared/council'
 import { Markdown } from '../markdown'
@@ -92,13 +92,16 @@ function CouncilResultCardImpl({ final, topic, chosen, resultFile, seatLabel, on
   const [tab, setTab] = useState(0)
   const [copied, setCopied] = useState(false)
   const opener = useContext(OpenFileCtx)
+  const copiedTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  useEffect(() => () => clearTimeout(copiedTimer.current), [])
   const cur = candidates[Math.min(tab, candidates.length - 1)]
 
   const copy = () => {
     const md = councilResultMarkdown(topic, result, final.text, chosen, seatLabel)
     navigator.clipboard?.writeText(md).then(() => {
       setCopied(true)
-      setTimeout(() => setCopied(false), 1600)
+      clearTimeout(copiedTimer.current)
+      copiedTimer.current = setTimeout(() => setCopied(false), 1600)
     }).catch(() => { /* clipboard unavailable */ })
   }
 
