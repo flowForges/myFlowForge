@@ -132,7 +132,6 @@ import { resolveFileRef } from '../fs/fileRef'
 import { readImageRef } from '../fs/imageRef'
 import { listDir, defaultRoots } from '../fs/browse'
 import { askAnswerNote } from '@shared/chat/askAnswerNote'
-import { inlineAnswers } from '@shared/chat/answerSegments'
 
 /**
  * 附件落盘时避开重名:`image.png` 已存在就依次试 `image-2.png`、`image-3.png`……返回真正能用的名字。
