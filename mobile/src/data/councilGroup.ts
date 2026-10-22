@@ -17,6 +17,15 @@ export function isCouncilGroup<M>(e: M | CouncilGroup<M>): e is CouncilGroup<M> 
 }
 
 /**
+ * 流式事件(assistant-delta / think-delta / assistant-replace)带的 council 标记落到消息上。
+ * ★同电脑端 useChat 的 `withCouncil`:assistant-start 丢了或晚到时,消息由 delta 新建 —— 不补标记的话
+ *  这条发言整段画进普通对话,直到 done 才跳回区块。已有的标记不覆盖。
+ */
+export function withCouncil<M extends { council?: CouncilTag }>(m: M, council?: CouncilTag): M {
+  return council && !m.council ? { ...m, council } : m
+}
+
+/**
  * 同一场共商(council.id 相同)的全部消息收成一个区块,落在它第一条消息的位置(§6.4)。
  * ★之后才到的追问也归进这个区块,不在普通对话里另起一段。
  */

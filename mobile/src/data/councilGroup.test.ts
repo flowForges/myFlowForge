@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { CouncilTag } from '../../../src/shared/council'
-import { councilHeader, groupCouncil, isCouncilGroup, splitCouncil } from './councilGroup'
+import { councilHeader, groupCouncil, isCouncilGroup, splitCouncil, withCouncil } from './councilGroup'
 
 type M = { id: string; who: 'user' | 'ai'; text: string; council?: CouncilTag }
 const plain = (id: string, who: 'user' | 'ai' = 'ai'): M => ({ id, who, text: id })
@@ -59,5 +59,18 @@ describe('councilHeader —— 和电脑端同一行字', () => {
       .toBe('AI 共商 · 一二三四五六七八九十一二三四五六七八九十 · 4 方 · 2 轮 · 18 分钟')
     expect(councilHeader({ topic: 'x', seats: 2, rounds: 1, elapsedMs: 5_000 })).toBe('AI 共商 · x · 2 方 · 1 轮 · 1 分钟')
     expect(councilHeader({ topic: 'x', seats: 2, rounds: 0, elapsedMs: 0 })).toBe('AI 共商 · x · 2 方 · 0 轮 · 0 分钟')
+  })
+})
+
+describe('withCouncil —— 流式事件带的 council 落到消息上', () => {
+  const tag: CouncilTag = { id: 'c1', stage: 'answer', round: 1, seat: 's1' }
+  it('没有标记的消息(delta / think-delta / replace 先到)补上标记', () => {
+    expect(withCouncil(plain('a'), tag).council).toEqual(tag)
+  })
+  it('已经有标记的不覆盖;事件没带标记原样返回同一个对象', () => {
+    const m = cm('a', 'c0', 'answer', 1)
+    expect(withCouncil(m, tag)).toBe(m)
+    const p = plain('b')
+    expect(withCouncil(p, undefined)).toBe(p)
   })
 })

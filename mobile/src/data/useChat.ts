@@ -5,6 +5,7 @@ import type { Attachment, ChatAnswerAnchor, ChatMessage, DelegateBatch, Subagent
 import type { CouncilResult, CouncilTag } from '../../../src/shared/council'
 import { useConn } from '../net/conn'
 import { queuedFor, type QueuedItem } from './queueLane'
+import { withCouncil } from './councilGroup'
 
 /**
  * 一个会话的消息流:先拉历史,再跟着 `chat:event` 往下长。
@@ -125,6 +126,8 @@ export function useChat(wsPath: string | null, sessionId: string | null) {
       const e = payload as Evt
       const k = keyRef.current
       if (!e || e.workspacePath !== k.wsPath || e.sessionId !== k.sessionId) return
+      // ★assistant-start 丢了时,共商发言的 error 也得认得出来、不去碰 busy(理由见 assistant-start)
+      if (e.council && e.id && e.type !== 'done' && e.type !== 'error') councilIds.current.add(e.id)
       switch (e.type) {
         case 'user':
           if (e.message) setMsgs((p) => [...p, fromHistory(e.message!)])
@@ -150,9 +153,7 @@ export function useChat(wsPath: string | null, sessionId: string | null) {
                   ],
             )
           // ★共商发言不是「这个会话在跑一轮」:那样停止键会亮,而按下去停的是普通对话,共商照跑。
-          if (e.council) {
-            if (e.id) councilIds.current.add(e.id)
-          } else setBusy(true)
+          if (!e.council) setBusy(true)
           break
         // 工具卡。`e.id` 是**这条回复**的 id,`e.tool.id` 才是具体那次调用 —— 按后者原地替换,
         // 因为同一次调用会来两趟:phase 'start' 只有标题(status 'run'),phase 'done' 才带输出和结果。
@@ -234,7 +235,7 @@ export function useChat(wsPath: string | null, sessionId: string | null) {
           break
         case 'assistant-delta':
           if (e.id)
-            upsert(e.id, (m) => ({ ...m, text: m.text + (e.text ?? ''), streaming: true }), {
+            upsert(e.id, (m) => ({ ...withCouncil(m, e.council), text: m.text + (e.text ?? ''), streaming: true }), {
               id: e.id,
               who: 'ai',
               text: '',
@@ -243,7 +244,14 @@ export function useChat(wsPath: string | null, sessionId: string | null) {
             })
           break
         case 'assistant-replace':
-          if (e.id) upsert(e.id, (m) => ({ ...m, text: e.text ?? '', streaming: true }))
+          if (e.id)
+            upsert(e.id, (m) => ({ ...withCouncil(m, e.council), text: e.text ?? '', streaming: true }), {
+              id: e.id,
+              who: 'ai',
+              text: '',
+              think: '',
+              streaming: true,
+            })
           break
         // 「你的选择」锚在这条在途回复里答的那个位置 —— 之后流进来的字都画在它下面。
         case 'answer-note': {
@@ -258,7 +266,7 @@ export function useChat(wsPath: string | null, sessionId: string | null) {
         }
         case 'think-delta':
           if (e.id)
-            upsert(e.id, (m) => ({ ...m, think: m.think + (e.text ?? '') }), {
+            upsert(e.id, (m) => ({ ...withCouncil(m, e.council), think: m.think + (e.text ?? '') }), {
               id: e.id,
               who: 'ai',
               text: '',
