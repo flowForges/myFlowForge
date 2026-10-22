@@ -9,7 +9,7 @@ import { Logo, SeatPicker, makeSeat, asLeader, CHEV } from './CouncilSetup'
 import { CouncilResultCard } from './CouncilResultCard'
 import './council.css'
 
-export type CouncilControls = Pick<CouncilApi, 'pause' | 'resume' | 'stop' | 'followup' | 'choose'>
+export type CouncilControls = Pick<CouncilApi, 'pause' | 'resume' | 'stop' | 'followup' | 'choose' | 'interject'>
 
 type Props = {
   id: string
@@ -78,8 +78,9 @@ function useFollow(text: string, streaming: boolean) {
 /**
  * 网格里的一格 = 一位席位在一轮里的一次发言(回答 / 点评 / 投票 / 失败)。
  * ★全文直接画出来,格子内部滚动(不再截断再「展开」)—— 用户要逐轮看全每个 AI 的输出。
+ * ★全屏时格子不限高、不自己滚(scroll=false):滚轮落在哪都滚整个正文,不会卡在某一格里。
  */
-const Cell = memo(function Cell({ msg, seat, streaming, onFocus }: { msg: ChatMessage; seat: SeatInfo; streaming: boolean; onFocus: (id: string) => void }) {
+const Cell = memo(function Cell({ msg, seat, streaming, scroll, onFocus }: { msg: ChatMessage; seat: SeatInfo; streaming: boolean; scroll: boolean; onFocus: (id: string) => void }) {
   const stage = msg.council?.stage
   const follow = useFollow(msg.text, streaming)
   if (stage === 'failed') {
@@ -94,7 +95,7 @@ const Cell = memo(function Cell({ msg, seat, streaming, onFocus }: { msg: ChatMe
         <button type="button" className="council-more council-zoom" aria-label="放大" onClick={() => onFocus(msg.id)}>{ZOOM}</button>
       </div>
       <UtteranceThink msg={msg} streaming={streaming} />
-      <div ref={follow.ref} onScroll={follow.onScroll} className="council-cell-body msg-body ans">
+      <div ref={follow.ref} onScroll={follow.onScroll} className={`council-cell-body msg-body ans${scroll ? ' council-cell-scroll' : ''}`}>
         <Markdown text={msg.text} streaming={streaming} />{streaming && <span className="pending" />}
       </div>
     </div>
@@ -102,7 +103,7 @@ const Cell = memo(function Cell({ msg, seat, streaming, onFocus }: { msg: ChatMe
 })
 
 /** 领导者(总结 / 共识草稿 / 流式中的最终结果):整行宽,挂在那一轮的格子下面。 */
-const LeaderCard = memo(function LeaderCard({ msg, seat, streaming, onFocus }: { msg: ChatMessage; seat: SeatInfo; streaming: boolean; onFocus: (id: string) => void }) {
+const LeaderCard = memo(function LeaderCard({ msg, seat, streaming, scroll, onFocus }: { msg: ChatMessage; seat: SeatInfo; streaming: boolean; scroll: boolean; onFocus: (id: string) => void }) {
   const follow = useFollow(msg.text, streaming)
   if (msg.council?.stage === 'failed') {
     return <div className="council-failed-row" data-seat={msg.council?.seat}><FailedChip msg={msg} seat={seat} /></div>
@@ -114,7 +115,7 @@ const LeaderCard = memo(function LeaderCard({ msg, seat, streaming, onFocus }: {
         <button type="button" className="council-more council-zoom" aria-label="放大" onClick={() => onFocus(msg.id)}>{ZOOM}</button>
       </div>
       <UtteranceThink msg={msg} streaming={streaming} />
-      <div ref={follow.ref} onScroll={follow.onScroll} className="council-cell-body msg-body ans">
+      <div ref={follow.ref} onScroll={follow.onScroll} className={`council-cell-body msg-body ans${scroll ? ' council-cell-scroll' : ''}`}>
         <Markdown text={msg.text} streaming={streaming} />{streaming && <span className="pending" />}
       </div>
     </div>
@@ -200,6 +201,13 @@ const isVote = (m: ChatMessage) =>
 /** 这一轮没有这位席位的发言(已除名 / 没轮到):占住列位,各轮的列才对得齐。 */
 function EmptyCell({ sid }: { sid: string }) {
   return <div className="council-cell empty" data-seat={sid}>—</div>
+}
+
+/** 多行输入框:回车提交,⇧回车换行;输入法组字中的回车不算。 */
+const enterSubmits = (submit: () => unknown) => (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+  if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return
+  e.preventDefault()
+  void submit()
 }
 
 // ---- 区块 ----
@@ -337,144 +345,197 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
     setUserOpen(true)   // 追问的问答在区块里,收着就看不到
   }
 
+  // 全屏底栏:进行中 = 插话;轮间等用户 = 补充给下一轮(同样走 interject)
+  const atBreak = status === 'paused' && !!state?.waitingForUser
+  const showBar = fullscreen && (status === 'running' || atBreak)
+  const [say, setSay] = useState('')
+  const [saying, setSaying] = useState(false)
+  const interject = async () => {
+    const text = say.trim()
+    if (!text || saying) return
+    setSaying(true)
+    const ok = await controls.interject(id, text)
+    setSaying(false)
+    if (ok === false) return   // ★失败(已弹提示)不清空
+    setSay('')
+  }
+
+  // 全屏顶栏的跳转:只滚正文这一个容器
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const jumpTo = (sel: string) => scrollRef.current?.querySelector(sel)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  const toTop = () => {
+    const el = scrollRef.current
+    if (!el) return
+    if (typeof el.scrollTo === 'function') el.scrollTo({ top: 0, behavior: 'smooth' })
+    else el.scrollTop = 0
+  }
+
   return (
     <section className={`council-block${open ? ' open' : ''}${fullscreen ? ' fullscreen' : ''}`} data-council={id} data-status={status}>
-      <div className="council-headbar">
-        <button type="button" className="council-head" aria-expanded={open} onClick={() => (fullscreen ? setFullscreen(false) : setUserOpen(!open))}>
-          <span className="council-title">{header}</span>
-          <span className="council-chev" aria-hidden="true">{EXPAND_ICON}</span>
-        </button>
-        <button
-          type="button"
-          className="council-more council-full"
-          aria-label={fullscreen ? '退出全屏' : '全屏'}
-          aria-pressed={fullscreen}
-          onClick={() => setFullscreen(f => !f)}
-        >{ZOOM}</button>
+      {/* ★全屏 = 固定顶栏 + 唯一滚动的正文 + 固定底栏(不用 sticky:滚动容器只有正文一个,顶栏永远在)。
+          非全屏时这两层包装是 display:contents,布局和以前一样;包装一直在,切换全屏不会重建里面的格子 */}
+      <div className="council-fs-top">
+        <div className="council-headbar">
+          <button type="button" className="council-head" aria-expanded={open} onClick={() => (fullscreen ? setFullscreen(false) : setUserOpen(!open))}>
+            <span className="council-title">{header}</span>
+            <span className="council-chev" aria-hidden="true">{EXPAND_ICON}</span>
+          </button>
+          {fullscreen
+            ? <button type="button" className="council-ctl council-full" onClick={() => setFullscreen(false)}>退出全屏</button>
+            : <button type="button" className="council-more council-full" aria-label="全屏" aria-pressed="false" onClick={() => setFullscreen(true)}>{ZOOM}</button>}
+        </div>
+
+        {live && state && (
+          <div className="council-status">
+            <span className="council-round">{
+              // ★轮间等用户时引擎已把 round 推到下一轮;这里说的是刚结束的那一轮
+              breakAfter ? `第 ${breakAfter} 轮结束`
+                : state.totalRounds ? `第 ${state.round} / ${state.totalRounds} 轮` : `第 ${state.round} 轮`
+            }</span>
+            <span className="council-speaking">
+              {state.speaking.map(sid => (
+                <span key={sid} data-speaking={sid}><Logo id={seats.get(sid)?.provider ?? ''} /></span>
+              ))}
+            </span>
+            <span className="council-elapsed">{mmss(elapsed)}</span>
+            <span className="council-spacer" />
+            {leaderFailed && (
+              <SeatPicker
+                className="council-leader"
+                label={`👑 ${newLeader?.label ?? ''}`.trim()}
+                trigger={<>👑{newLeader && <><Logo id={newLeader.provider} /><span>{newLeader.label}</span></>}{CHEV}</>}
+                providers={pickable}
+                onPick={(p, m) => setNewLeader(asLeader(makeSeat(p, m)))}
+              />
+            )}
+            {status === 'running' && <button type="button" className="council-ctl" onClick={() => controls.pause(id)}>暂停</button>}
+            {status === 'paused' && (breakAfter
+              ? <button type="button" className="council-ctl primary" onClick={() => controls.resume(id)}>继续下一轮</button>
+              : <button type="button" className="council-ctl" onClick={() => controls.resume(id, newLeader)}>继续</button>)}
+            <button
+              type="button"
+              className="council-ctl council-end"
+              onClick={() => controls.stop(id, status === 'finalizing' ? 'abort' : 'finalize')}
+            >结束</button>
+          </div>
+        )}
+
+        {fullscreen && (
+          <nav className="council-fs-nav">
+            {roundList.map(r => (
+              <button key={r} type="button" className="council-chip" onClick={() => jumpTo(`.council-round-sec[data-round="${r}"] > .council-divider`)}>第 {r} 轮</button>
+            ))}
+            {final && <button type="button" className="council-chip" onClick={() => jumpTo('.council-result, .council-leader-card[data-stage="final"]')}>结果</button>}
+            <span className="council-spacer" />
+            <button type="button" className="council-chip" onClick={toTop}>回到顶部</button>
+          </nav>
+        )}
       </div>
 
-      {live && state && (
-        <div className="council-status">
-          <span className="council-round">{
-            // ★轮间等用户时引擎已把 round 推到下一轮;这里说的是刚结束的那一轮
-            breakAfter ? `第 ${breakAfter} 轮结束`
-              : state.totalRounds ? `第 ${state.round} / ${state.totalRounds} 轮` : `第 ${state.round} 轮`
-          }</span>
-          <span className="council-speaking">
-            {state.speaking.map(sid => (
-              <span key={sid} data-speaking={sid}><Logo id={seats.get(sid)?.provider ?? ''} /></span>
-            ))}
-          </span>
-          <span className="council-elapsed">{mmss(elapsed)}</span>
-          <span className="council-spacer" />
-          {leaderFailed && (
-            <SeatPicker
-              className="council-leader"
-              label={`👑 ${newLeader?.label ?? ''}`.trim()}
-              trigger={<>👑{newLeader && <><Logo id={newLeader.provider} /><span>{newLeader.label}</span></>}{CHEV}</>}
-              providers={pickable}
-              onPick={(p, m) => setNewLeader(asLeader(makeSeat(p, m)))}
-            />
-          )}
-          {status === 'running' && <button type="button" className="council-ctl" onClick={() => controls.pause(id)}>暂停</button>}
-          {status === 'paused' && (breakAfter
-            ? <button type="button" className="council-ctl primary" onClick={() => controls.resume(id)}>继续下一轮</button>
-            : <button type="button" className="council-ctl" onClick={() => controls.resume(id, newLeader)}>继续</button>)}
-          <button
-            type="button"
-            className="council-ctl council-end"
-            onClick={() => controls.stop(id, status === 'finalizing' ? 'abort' : 'finalize')}
-          >结束</button>
-        </div>
-      )}
-
-      {open && (
-        <div className="council-body">
-          {topicMsg && <UserRow msg={topicMsg} className="council-topic" />}
-          {/* ★全部轮次放进同一个网格、同一个横向滚动容器:列宽一致、各轮的列上下对齐、一起滚 */}
-          {columns.length > 0 && roundList.length > 0 && (
-            <div className="council-grid-scroll">
-              <div className="council-grid" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(260px, 1fr))` }}>
-                {roundList.map(r => {
-                  const list = rounds.get(r) ?? []
-                  const inter = list.filter(m => m.who === 'user')
-                  const leader = list.filter(m => m.who === 'ai' && isLeader(m.council?.seat))
-                  const said = new Map<string, ChatMessage[]>()
-                  const votes = new Map<string, ChatMessage[]>()
-                  for (const m of list) {
-                    const sid = m.council?.seat
-                    if (m.who !== 'ai' || !sid || isLeader(sid)) continue
-                    const into = isVote(m) ? votes : said
-                    into.set(sid, [...(into.get(sid) ?? []), m])
-                  }
-                  const current = r === placeholderRound
-                  const row = (by: Map<string, ChatMessage[]>, kind: string) => columns.map(sid => {
-                    const own = by.get(sid)
-                    const seat = seats.get(sid) ?? FALLBACK_SEAT
+      <div className="council-fs-body" ref={scrollRef}>
+        {open && (
+          <div className="council-body">
+            {topicMsg && <UserRow msg={topicMsg} className="council-topic" />}
+            {/* ★全部轮次放进同一个网格、同一个横向滚动容器:列宽一致、各轮的列上下对齐、一起滚 */}
+            {columns.length > 0 && roundList.length > 0 && (
+              <div className="council-grid-scroll">
+                <div className="council-grid" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(260px, 1fr))` }}>
+                  {roundList.map(r => {
+                    const list = rounds.get(r) ?? []
+                    const inter = list.filter(m => m.who === 'user')
+                    const leader = list.filter(m => m.who === 'ai' && isLeader(m.council?.seat))
+                    const said = new Map<string, ChatMessage[]>()
+                    const votes = new Map<string, ChatMessage[]>()
+                    for (const m of list) {
+                      const sid = m.council?.seat
+                      if (m.who !== 'ai' || !sid || isLeader(sid)) continue
+                      const into = isVote(m) ? votes : said
+                      into.set(sid, [...(into.get(sid) ?? []), m])
+                    }
+                    const current = r === placeholderRound
+                    const row = (by: Map<string, ChatMessage[]>, kind: string) => columns.map(sid => {
+                      const own = by.get(sid)
+                      const seat = seats.get(sid) ?? FALLBACK_SEAT
+                      return (
+                        <div className={`council-col ${kind}`} key={`${kind}-${sid}`} data-seat={sid}>
+                          {own
+                            ? own.map(m => <Cell key={m.id} msg={m} seat={seat} streaming={streamingIds.has(m.id)} scroll={!fullscreen} onFocus={setFocusId} />)
+                            : current && !dropped.has(sid) ? <WaitingCell sid={sid} seat={seat} /> : <EmptyCell sid={sid} />}
+                        </div>
+                      )
+                    })
                     return (
-                      <div className={`council-col ${kind}`} key={`${kind}-${sid}`} data-seat={sid}>
-                        {own
-                          ? own.map(m => <Cell key={m.id} msg={m} seat={seat} streaming={streamingIds.has(m.id)} onFocus={setFocusId} />)
-                          : current && !dropped.has(sid) ? <WaitingCell sid={sid} seat={seat} /> : <EmptyCell sid={sid} />}
+                      <div className="council-round-sec" key={r} data-round={r}>
+                        <div className="council-divider council-span" role="separator"><span className="line" /><span className="lbl">第 {r} 轮</span><span className="line" /></div>
+                        {inter.map(m => <div className="council-span" key={m.id}><UserRow msg={m} className="council-interject" /></div>)}
+                        {(said.size > 0 || current) && row(said, 'speech')}
+                        {leader.map(m => (
+                          <div className="council-span" key={m.id}>
+                            <LeaderCard msg={m} seat={seatOf(m)} streaming={streamingIds.has(m.id)} scroll={!fullscreen} onFocus={setFocusId} />
+                          </div>
+                        ))}
+                        {/* ★投票是对上面那份草稿的表态,排在草稿下面,按席位列对齐 */}
+                        {votes.size > 0 && row(votes, 'votes')}
                       </div>
                     )
-                  })
-                  return (
-                    <div className="council-round-sec" key={r} data-round={r}>
-                      <div className="council-divider council-span" role="separator"><span className="line" /><span className="lbl">第 {r} 轮</span><span className="line" /></div>
-                      {inter.map(m => <div className="council-span" key={m.id}><UserRow msg={m} className="council-interject" /></div>)}
-                      {(said.size > 0 || current) && row(said, 'speech')}
-                      {leader.map(m => (
-                        <div className="council-span" key={m.id}>
-                          <LeaderCard msg={m} seat={seatOf(m)} streaming={streamingIds.has(m.id)} onFocus={setFocusId} />
-                        </div>
-                      ))}
-                      {/* ★投票是对上面那份草稿的表态,排在草稿下面,按席位列对齐 */}
-                      {votes.size > 0 && row(votes, 'votes')}
-                    </div>
-                  )
-                })}
+                  })}
+                </div>
               </div>
-            </div>
-          )}
-          {final && finalStreaming && <LeaderCard msg={final} seat={seatOf(final)} streaming onFocus={setFocusId} />}
+            )}
+            {final && finalStreaming && <LeaderCard msg={final} seat={seatOf(final)} streaming scroll={!fullscreen} onFocus={setFocusId} />}
+          </div>
+        )}
+
+        {final && !finalStreaming && (
+          <CouncilResultCard
+            final={final}
+            topic={topic}
+            chosen={state?.chosen}
+            resultFile={state?.resultFile}
+            seatLabel={seatLabel}
+            onChoose={onChoose}
+          />
+        )}
+
+        {open && followups.length > 0 && (
+          <div className="council-body council-followups">
+            <Followups list={followups} seatOf={seatOf} streamingIds={streamingIds} />
+          </div>
+        )}
+
+        {status === 'done' && state && (
+          <div className="council-followup">
+            <select value={target} disabled={busy} onChange={e => setTarget(e.target.value)}>
+              <option value="all">全体</option>
+              {state.config.seats.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+            </select>
+            <textarea
+              rows={3}
+              value={q}
+              disabled={busy}
+              placeholder="追问全体或某个讨论方…"
+              onChange={e => setQ(e.target.value)}
+              onKeyDown={enterSubmits(ask)}
+            />
+            <button type="button" className="council-ctl primary" disabled={busy || !q.trim()} onClick={() => void ask()}>追问</button>
+          </div>
+        )}
+      </div>
+
+      {showBar && (
+        <div className="council-fs-bottom">
+          <textarea
+            rows={2}
+            value={say}
+            placeholder={atBreak ? '补充给下一轮的内容(可选)' : '插话'}
+            onChange={e => setSay(e.target.value)}
+            onKeyDown={enterSubmits(interject)}
+          />
+          {atBreak && <button type="button" className="council-ctl primary" onClick={() => controls.resume(id)}>继续下一轮</button>}
         </div>
       )}
 
       {focusMsg && <FocusOverlay msg={focusMsg} seat={seatOf(focusMsg)} streaming={streamingIds.has(focusMsg.id)} onClose={closeFocus} />}
-
-      {final && !finalStreaming && (
-        <CouncilResultCard
-          final={final}
-          topic={topic}
-          chosen={state?.chosen}
-          resultFile={state?.resultFile}
-          seatLabel={seatLabel}
-          onChoose={onChoose}
-        />
-      )}
-
-      {open && followups.length > 0 && (
-        <div className="council-body council-followups">
-          <Followups list={followups} seatOf={seatOf} streamingIds={streamingIds} />
-        </div>
-      )}
-
-      {status === 'done' && state && (
-        <div className="council-followup">
-          <select value={target} disabled={busy} onChange={e => setTarget(e.target.value)}>
-            <option value="all">全体</option>
-            {state.config.seats.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
-          </select>
-          <input
-            value={q}
-            disabled={busy}
-            onChange={e => setQ(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void ask() } }}
-          />
-          <button type="button" className="council-ctl" disabled={busy || !q.trim()} onClick={() => void ask()}>追问</button>
-        </div>
-      )}
     </section>
   )
 }

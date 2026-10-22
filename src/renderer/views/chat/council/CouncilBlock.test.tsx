@@ -31,7 +31,7 @@ function ai(seat: CouncilSeat, round: number, stage: CouncilStage, text: string,
 }
 
 function controls(): CouncilControls {
-  return { pause: vi.fn(), resume: vi.fn(), stop: vi.fn(), followup: vi.fn(), choose: vi.fn() }
+  return { pause: vi.fn(), resume: vi.fn(), stop: vi.fn(), followup: vi.fn(), choose: vi.fn(), interject: vi.fn() }
 }
 
 const finalMsg = ai(L, 2, 'final', '结论正文', {
@@ -185,7 +185,7 @@ describe('CouncilBlock', () => {
     const ctl = renderBlock([topic, ai(A, 1, 'answer', 'x'), ai(B, 1, 'answer', 'y'), finalMsg], state('done', { round: 2 }))
     const select = document.querySelector('.council-followup select') as HTMLSelectElement
     expect(Array.from(select.options).map(o => o.value)).toEqual(['all', A.id, B.id])
-    const input = document.querySelector('.council-followup textarea, .council-followup input') as HTMLInputElement
+    const input = document.querySelector('.council-followup textarea') as HTMLTextAreaElement
     fireEvent.change(input, { target: { value: '再说说风险' } })
     fireEvent.click(screen.getByRole('button', { name: '追问' }))
     expect(ctl.followup).toHaveBeenCalledWith('c1', '再说说风险', 'all')
@@ -199,7 +199,7 @@ describe('CouncilBlock', () => {
   const fuQ = (n: number): ChatMessage => ({ id: `c1:followup:${n}`, who: 'user', text: `问${n}`, ts: '2026-10-21T10:05:00Z', council: { id: 'c1', round: 2, stage: 'followup' } })
   const fuA = (seat: CouncilSeat, n: number): ChatMessage => ({ ...ai(seat, 2, 'followup', `答${n}`), id: `c1:2:${seat.id}:followup:${n}` })
   const doneBase = [topic, ai(A, 1, 'answer', 'x'), ai(B, 1, 'answer', 'y'), finalMsg]
-  const fuInput = () => document.querySelector('.council-followup input') as HTMLInputElement
+  const fuInput = () => document.querySelector('.council-followup textarea') as HTMLTextAreaElement
   const fuBtn = () => screen.getByRole('button', { name: '追问' }) as HTMLButtonElement
 
   it('follow-up input is disabled while an answer is streaming', () => {

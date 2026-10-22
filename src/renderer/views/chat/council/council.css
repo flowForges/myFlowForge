@@ -153,7 +153,9 @@
 .council-cell.empty { background: transparent; border: 1px dashed transparent; color: var(--faint); text-align: center; font-size: 12px; padding: 6px 10px; }
 .council-who-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .council-who-line .council-zoom { margin-left: auto; font-size: 13px; line-height: 1; }
-.council-cell-body { max-height: 420px; overflow: auto; font-size: 13px; overscroll-behavior: contain; }
+.council-cell-body { font-size: 13px; }
+/* 普通模式格子自己滚;全屏时不加这个类,整列内容全高,只滚正文 */
+.council-cell-scroll { max-height: 420px; overflow: auto; overscroll-behavior: contain; }
 .council-cell .think-body, .council-leader-card .think-body, .council-focus .think-body { max-height: 180px; overflow: auto; }
 
 .council-more { width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; color: var(--muted); }
@@ -182,11 +184,38 @@
 .council-headbar .council-head { flex: 1; min-width: 0; }
 .council-full { font-size: 14px; line-height: 1; }
 .council-full[aria-pressed="true"] { color: var(--accent); }
+/* 非全屏:两层包装不参与布局 */
+.council-block:not(.fullscreen) > .council-fs-top, .council-block:not(.fullscreen) > .council-fs-body { display: contents; }
 .council-block.fullscreen {
   -webkit-app-region: no-drag;
   position: fixed; inset: 0; z-index: 150; margin: 0; border-radius: 0; border-width: 0;
-  display: flex; flex-direction: column; overflow: auto;
+  display: flex; flex-direction: column; overflow: hidden;
 }
+.council-block.fullscreen > .council-fs-top { flex: none; border-bottom: 1px solid var(--border-2); background: var(--bg-2); }
+.council-block.fullscreen > .council-fs-body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.council-block.fullscreen > .council-fs-body > .council-body:first-child { border-top: 0; }
+.council-block.fullscreen > .council-fs-body > .council-result { margin-top: 10px; }
+.council-block.fullscreen .council-full { margin-left: 6px; }
+.council-fs-nav { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; padding: 6px 12px; border-top: 1px solid var(--border-2); }
+.council-chip {
+  height: 24px; padding: 0 10px; border-radius: 12px; font-size: 12px; color: var(--fg-2);
+  background: var(--surface); border: 1px solid var(--border-2);
+}
+.council-chip:hover { color: var(--fg); border-color: var(--accent); }
+.council-block.fullscreen > .council-fs-bottom {
+  flex: none; display: flex; align-items: flex-end; gap: 8px; padding: 10px 12px;
+  border-top: 1px solid var(--border-2); background: var(--bg-2);
+}
+/* ★多行输入随内容长高(Chromium field-sizing),到上限后框内滚动 */
+.council-fs-bottom textarea, .council-followup textarea {
+  flex: 1; min-width: 0; resize: none; field-sizing: content; padding: 6px 10px; border-radius: 8px;
+  font: inherit; font-size: 13px; line-height: 20px; color: var(--fg);
+  background: var(--surface); border: 1px solid var(--border-2); outline: none;
+}
+.council-fs-bottom textarea { min-height: calc(2 * 20px + 14px); max-height: calc(6 * 20px + 14px); }
+.council-followup textarea { min-height: calc(3 * 20px + 14px); max-height: calc(8 * 20px + 14px); }
+.council-fs-bottom textarea:focus, .council-followup textarea:focus { border-color: var(--accent); }
+.council-fs-bottom .council-ctl, .council-followup .council-ctl { height: 30px; flex: none; }
 
 .council-failed {
   display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; border-radius: 7px;
@@ -211,7 +240,7 @@
   margin: 0 12px 10px; padding: 10px 12px; border-radius: 12px; background: var(--surface);
   border: 1px solid color-mix(in oklab, var(--accent) 35%, var(--border-2));
 }
-.council-block:not(.open) .council-result, .council-status + .council-result { margin-top: 0; }
+.council-block:not(.open) .council-result { margin-top: 0; }
 .council-conclusion { position: relative; }
 .council-conclusion.clamped .msg-body { max-height: 14em; overflow: hidden; mask-image: linear-gradient(to bottom, #000 70%, transparent); }
 .council-conclusion .council-more { margin: 2px auto 0; }
@@ -254,10 +283,14 @@
 
 .council-result-actions { display: flex; gap: 6px; margin-top: 10px; }
 
-.council-followup { display: flex; align-items: center; gap: 6px; padding: 0 12px 10px; }
-.council-followup select, .council-followup input {
-  height: 28px; padding: 0 8px; border-radius: 7px; font-size: 12.5px; color: var(--fg);
+.council-followup {
+  display: flex; align-items: flex-start; gap: 8px; margin: 0 12px 10px; padding: 10px 12px; border-radius: 12px;
+  background: var(--bg-2); border: 1px solid var(--border-2);
+}
+.council-followup:focus-within { border-color: color-mix(in oklab, var(--accent) 45%, var(--border-2)); }
+.council-followup select {
+  flex: none; height: 30px; padding: 0 8px; border-radius: 7px; font-size: 12.5px; color: var(--fg);
   background: var(--surface); border: 1px solid var(--border-2); outline: none;
 }
-.council-followup input { flex: 1; min-width: 0; }
-.council-followup select:focus, .council-followup input:focus { border-color: var(--accent); }
+.council-followup select:focus { border-color: var(--accent); }
+.council-followup .council-ctl { align-self: flex-end; }

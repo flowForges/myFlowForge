@@ -41,7 +41,7 @@ function ai(seat: CouncilSeat, round: number, stage: CouncilStage, text: string,
     ts: '2026-10-21T10:01:00Z', council: { id: 'c1', seat: seat.id, round, stage }, ...extra,
   }
 }
-const controls = (): CouncilControls => ({ pause: vi.fn(), resume: vi.fn(), stop: vi.fn(), followup: vi.fn(), choose: vi.fn() })
+const controls = (): CouncilControls => ({ pause: vi.fn(), resume: vi.fn(), stop: vi.fn(), followup: vi.fn(), choose: vi.fn(), interject: vi.fn() })
 const el = (props: { messages: ChatMessage[]; st?: CouncilState; streaming?: string[] }) => (
   <CouncilBlock id="c1" messages={props.messages} state={props.st} streamingIds={new Set(props.streaming ?? [])} providers={providers} controls={controls()} />
 )
