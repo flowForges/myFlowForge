@@ -141,6 +141,8 @@ export function CouncilSetup({ ref, onCanStartChange, providers, lastConfig, pro
   const [range, setRange] = useState('')
   const [files, setFiles] = useState('')
   const [projectList, setProjectList] = useState<{ name: string; cwd: string }[]>([])
+  // ★参考材料默认收起:没选材料时界面上看不到任何「项目」相关的东西(用户反馈 2026-10-22)
+  const [materialsOpen, setMaterialsOpen] = useState(false)
 
   // ★上次的选择(按工作区)是异步到的;用户在它到之前已经动过设置区,就不拿旧值覆盖。
   const touched = useRef(false)
@@ -156,6 +158,7 @@ export function CouncilSetup({ ref, onCanStartChange, providers, lastConfig, pro
     setPauseBetween(lastConfig.pauseBetweenRounds !== false)
     const mt = lastConfig.materials
     if (mt?.projectCwd) {
+      setMaterialsOpen(true)
       setProjectCwd(mt.projectCwd)
       if (mt.diff === 'uncommitted') setKind('uncommitted')
       else if (mt.diff) { setKind('range'); setRange(mt.diff.range) }
@@ -199,8 +202,16 @@ export function CouncilSetup({ ref, onCanStartChange, providers, lastConfig, pro
     })
   }
 
+  // ★收起 = 不带材料:materials 只在展开时才算;收起时把材料选择清回默认(单项目仍自动选中)
+  function closeMaterials() {
+    touch()
+    setMaterialsOpen(false)
+    setKind('none'); setRange(''); setFiles('')
+    setProjectCwd(projectList.length === 1 ? projectList[0].cwd : '')
+  }
+
   const fileList = files.split(',').map(f => f.trim()).filter(Boolean)
-  const materials: CouncilMaterials | undefined = projectCwd
+  const materials: CouncilMaterials | undefined = materialsOpen && projectCwd
     ? {
         projectCwd,
         ...(kind === 'uncommitted' ? { diff: 'uncommitted' as const } : {}),
@@ -208,7 +219,7 @@ export function CouncilSetup({ ref, onCanStartChange, providers, lastConfig, pro
         ...(kind === 'files' ? { files: fileList } : {}),
       }
     : undefined
-  const materialsOk = !projectCwd || (kind === 'range' ? !!range.trim() : kind === 'files' ? fileList.length > 0 : true)
+  const materialsOk = !materials || (kind === 'range' ? !!range.trim() : kind === 'files' ? fileList.length > 0 : true)
 
   const cfg: CouncilConfig = { topic: topic.trim(), attachments, seats, leader: leader as CouncilSeat, mode, pauseBetweenRounds: pauseBetween, ...(materials ? { materials } : {}) }
   const canStart = !blocked && materialsOk && validateCouncilConfig(cfg) === null
@@ -223,6 +234,7 @@ export function CouncilSetup({ ref, onCanStartChange, providers, lastConfig, pro
 
   return (
     <div className="council-setup" hidden={hidden}>
+      <span className="council-label">方式</span>
       <div className="council-row">
         <div className="council-seg" role="group">
           <button type="button" aria-pressed={mode.kind === 'rounds'} className={mode.kind === 'rounds' ? 'on' : ''} onClick={() => setRounds(rounds)}>按轮次</button>
@@ -237,18 +249,26 @@ export function CouncilSetup({ ref, onCanStartChange, providers, lastConfig, pro
           <div className="council-stepper">
             <button type="button" disabled={rounds <= MIN_ROUNDS} onClick={() => setRounds(rounds - 1)}>−</button>
             <span className="council-rounds">{rounds}</span>
-            <button type="button" disabled={rounds >= MAX_ROUNDS} onClick={() => setRounds(rounds + 1)}>+</button>
+            <button type="button" disabled={rounds >= MAX_ROUNDS} onClick={() => setRounds(rounds + 1)}>＋</button>
+            <span className="council-unit">轮</span>
           </div>
         )}
+        <div className="council-spacer" />
+        {/* ★开关而不是药丸按钮:用户看不出药丸是开是关(2026-10-22) */}
         <button
           type="button"
-          className={`council-toggle${pauseBetween ? ' on' : ''}`}
-          aria-pressed={pauseBetween}
+          role="switch"
+          aria-checked={pauseBetween}
+          className={`council-switch${pauseBetween ? ' on' : ''}`}
           onClick={() => { touch(); setPauseBetween(v => !v) }}
-        >每轮结束后等我</button>
+        >
+          <span className="council-switch-text">每轮结束后等我</span>
+          <span className="council-switch-track" aria-hidden="true"><span className="council-switch-thumb" /></span>
+        </button>
       </div>
 
-      <div className="council-row council-seats">
+      <span className="council-label">讨论方</span>
+      <div className="council-seats">
         {seats.map((s, i) => (
           <span
             key={s.id}
@@ -269,37 +289,48 @@ export function CouncilSetup({ ref, onCanStartChange, providers, lastConfig, pro
           </span>
         ))}
         {seats.length < 6 && (
-          <SeatPicker className="council-add" label="添加讨论方" trigger="＋" providers={pickable} taken={taken} onPick={addSeat} />
+          <SeatPicker className="council-add" label="添加讨论方" trigger="＋ 添加" providers={pickable} taken={taken} onPick={addSeat} />
         )}
-        {/* ★领导者单独一格、和席位分开:用户分不清谁是领导者(2026-10-21)。说明只放悬停提示,不写在界面上 */}
+      </div>
+
+      {/* ★领导者单独一行、琥珀色:用户分不清谁是领导者(2026-10-21/22)。说明只放悬停提示,不写在界面上 */}
+      <span className="council-label council-label-leader">👑 领导者</span>
+      <div className="council-row">
         <div className="council-leader-slot" title="领导者:每轮只做总结,不参与提方案;最后输出共识结果">
           <SeatPicker
             className="council-leader"
             label={`👑 ${leader?.label ?? ''}`.trim()}
-            trigger={<>👑{leader && <><Logo id={leader.provider} /><span>{leader.label}</span></>}{CHEV}</>}
+            trigger={<>{leader && <><Logo id={leader.provider} /><span className="council-leader-label">{leader.label}</span></>}{CHEV}</>}
             providers={pickable}
             onPick={(p, m) => { touch(); setLeader(asLeader(makeSeat(p, m))) }}
           />
         </div>
       </div>
 
-      <div className="council-row">
-        <select className="council-project" value={projectCwd} onChange={e => { touch(); setProjectCwd(e.target.value) }}>
-          <option value="">—</option>
-          {projectList.map(p => <option key={p.cwd} value={p.cwd}>{p.name}</option>)}
-        </select>
-        {projectCwd && (
-          <div className="council-seg" role="group">
-            {MATERIAL_KINDS.map(k => (
-              <button key={k.id} type="button" aria-pressed={kind === k.id} className={kind === k.id ? 'on' : ''} onClick={() => { touch(); setKind(k.id) }}>{k.label}</button>
-            ))}
+      <div className="council-row council-foot">
+        {materialsOpen ? (
+          <div className="council-materials">
+            <select className="council-project" aria-label="项目" value={projectCwd} onChange={e => { touch(); setProjectCwd(e.target.value) }}>
+              <option value="">选择项目</option>
+              {projectList.map(p => <option key={p.cwd} value={p.cwd}>{p.name}</option>)}
+            </select>
+            {projectCwd && (
+              <div className="council-seg" role="group">
+                {MATERIAL_KINDS.map(k => (
+                  <button key={k.id} type="button" aria-pressed={kind === k.id} className={kind === k.id ? 'on' : ''} onClick={() => { touch(); setKind(k.id) }}>{k.label}</button>
+                ))}
+              </div>
+            )}
+            {projectCwd && kind === 'range' && (
+              <input className="council-input council-range" value={range} placeholder="a..b" onChange={e => { touch(); setRange(e.target.value) }} />
+            )}
+            {projectCwd && kind === 'files' && (
+              <input className="council-input council-files" value={files} placeholder="src/a.ts, src/b.ts" onChange={e => { touch(); setFiles(e.target.value) }} />
+            )}
+            <button type="button" className="council-materials-close" aria-label="移除代码改动" onClick={closeMaterials}>✕</button>
           </div>
-        )}
-        {projectCwd && kind === 'range' && (
-          <input className="council-input council-range" value={range} placeholder="a..b" onChange={e => { touch(); setRange(e.target.value) }} />
-        )}
-        {projectCwd && kind === 'files' && (
-          <input className="council-input council-files" value={files} placeholder="src/a.ts, src/b.ts" onChange={e => { touch(); setFiles(e.target.value) }} />
+        ) : (
+          <button type="button" className="council-text-btn" onClick={() => { touch(); setMaterialsOpen(true) }}>＋ 附加代码改动</button>
         )}
         <div className="council-spacer" />
         <span className="council-eta">约 {minutes} 分钟</span>

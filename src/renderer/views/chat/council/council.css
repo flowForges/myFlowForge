@@ -1,9 +1,12 @@
 /* AI 共商设置区:贴在输入框上方,和输入框同宽同底色。只有控件、数字、图标,不放说明文字。 */
 .council-setup {
-  margin-bottom: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 8px;
+  margin-bottom: 8px; padding: 10px 12px; display: grid; grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 12px; row-gap: 10px; align-items: center;
   background: var(--bg-2); border: 1px solid var(--border-2); border-radius: 12px;
 }
 .council-setup[hidden] { display: none; }
+.council-label { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.council-label-leader { color: var(--warn); font-weight: 600; }
 .council-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .council-spacer { flex: 1; }
 
@@ -16,38 +19,58 @@
 .council-stepper > button { width: 24px; height: 24px; border-radius: 6px; font-size: 14px; color: var(--fg-2); }
 .council-stepper > button:hover:not(:disabled) { background: var(--surface-2); }
 .council-stepper > button:disabled { opacity: .35; cursor: default; }
-.council-toggle {
-  height: 26px; padding: 0 10px; border-radius: 7px; font-size: 12px; font-weight: 500;
-  color: var(--muted); background: var(--surface); border: 1px solid var(--border-2);
-}
-.council-toggle:hover { color: var(--fg-2); }
-.council-toggle.on { color: var(--accent); border-color: color-mix(in oklab, var(--accent) 45%, var(--border-2)); background: color-mix(in oklab, var(--accent) 10%, var(--surface)); }
 .council-rounds { min-width: 16px; text-align: center; font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--fg); }
+.council-unit { margin-left: 2px; font-size: 12px; color: var(--muted); }
 
-.council-seats { gap: 6px; }
+.council-switch { display: inline-flex; align-items: center; gap: 8px; height: 26px; font-size: 12px; color: var(--fg-2); }
+.council-switch-track {
+  position: relative; width: 30px; height: 18px; border-radius: 9px; flex: none;
+  background: var(--surface-2); border: 1px solid var(--border-2); transition: background .14s, border-color .14s;
+}
+.council-switch-thumb {
+  position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--muted); transition: transform .14s, background .14s;
+}
+.council-switch.on .council-switch-track { background: var(--accent); border-color: var(--accent); }
+.council-switch.on .council-switch-thumb { transform: translateX(12px); background: var(--on-accent); }
+.council-switch:focus-visible .council-switch-track { box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 45%, transparent); }
+
+/* ★等宽格子:三列、换行整齐;「＋ 添加」是同尺寸的虚线格 */
+.council-seats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; min-width: 0; }
 .council-seat {
-  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 4px 0 6px;
+  display: flex; align-items: center; gap: 6px; min-width: 0; height: 30px; padding: 0 4px 0 6px;
   border-radius: 8px; background: var(--surface); border: 1px solid var(--border-2);
   font-size: 12.5px; color: var(--fg-2); cursor: grab; user-select: none;
 }
 .council-seat:active { cursor: grabbing; }
-.council-seat .mc-logo-sm, .council-leader-slot .mc-logo-sm { width: 16px; height: 16px; border-radius: 4px; display: grid; place-items: center; font-size: 10px; }
-.council-seat-label { white-space: nowrap; }
-.council-seat > button { width: 18px; height: 18px; border-radius: 5px; font-size: 10px; color: var(--faint); display: grid; place-items: center; }
+.council-seat .mc-logo-sm, .council-leader-slot .mc-logo-sm { flex: none; width: 16px; height: 16px; border-radius: 4px; display: grid; place-items: center; font-size: 10px; }
+.council-seat-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.council-seat > button { flex: none; width: 18px; height: 18px; border-radius: 5px; font-size: 10px; color: var(--faint); display: grid; place-items: center; }
 .council-seat > button:hover { background: var(--surface-2); color: var(--err); }
+.council-add { min-width: 0; }
+.council-add > .cb-btn {
+  width: 100%; height: 30px; justify-content: center; border-radius: 8px;
+  font-size: 12.5px; color: var(--muted); border: 1px dashed var(--border-2);
+}
+.council-add > .cb-btn:hover { color: var(--fg); border-color: var(--accent); }
 
-.council-leader-slot {
-  margin-left: 6px; padding-left: 10px; border-left: 1px solid var(--border-2);
-}
+.council-leader-slot { min-width: 0; max-width: 100%; }
 .council-leader-slot .council-leader > .cb-btn {
-  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border-radius: 8px;
+  max-width: 100%; height: 30px; padding: 0 8px; border-radius: 8px;
   font-size: 12.5px; font-weight: 600; color: var(--fg);
-  background: color-mix(in oklab, var(--accent) 10%, var(--surface)); border: 1.5px solid color-mix(in oklab, var(--accent) 55%, var(--border-2));
+  background: color-mix(in oklab, var(--warn) 10%, var(--surface)); border: 2px solid var(--warn);
 }
-.council-leader-slot .council-leader > .cb-btn:hover { border-color: var(--accent); }
+.council-leader-slot .council-leader > .cb-btn:hover { background: color-mix(in oklab, var(--warn) 18%, var(--surface)); }
+.council-leader-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .council-setup .menu-pop { bottom: auto; top: calc(100% + 6px); }
 .council-back { color: var(--muted); }
 
+.council-foot { grid-column: 1 / -1; }
+.council-text-btn { height: 26px; padding: 0 6px; border-radius: 6px; font-size: 12px; color: var(--muted); }
+.council-text-btn:hover { color: var(--fg); background: var(--surface); }
+.council-materials { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.council-materials-close { width: 22px; height: 22px; border-radius: 6px; font-size: 11px; color: var(--faint); display: grid; place-items: center; }
+.council-materials-close:hover { background: var(--surface-2); color: var(--err); }
 .council-project, .council-input {
   height: 28px; padding: 0 8px; border-radius: 7px; font-size: 12.5px; color: var(--fg);
   background: var(--surface); border: 1px solid var(--border-2); outline: none;

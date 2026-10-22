@@ -673,7 +673,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
           ref={taRef}
           id="composerInput"
           rows={1}
-          placeholder={councilBreak ? '补充' : interjecting ? '插话' : runQueued ? lockedReason : archived ? '工作区已归档，只能查看历史。恢复后才能继续会话。' : readOnly ? '只读会话 · 请点击上方「基于此历史继续」按钮开始新对话' : busy ? '当前任务执行中… 继续输入将排队,依次发送' : '给主代理下达任务…  ↩ 发送 · ⇧↩ 换行 · 可粘贴 / 拖入文件、截图'}
+          placeholder={councilBreak ? '补充' : interjecting ? '插话' : runQueued ? lockedReason : archived ? '工作区已归档，只能查看历史。恢复后才能继续会话。' : readOnly ? '只读会话 · 请点击上方「基于此历史继续」按钮开始新对话' : council && councilOpen ? '议题' : busy ? '当前任务执行中… 继续输入将排队,依次发送' : '给主代理下达任务…  ↩ 发送 · ⇧↩ 换行 · 可粘贴 / 拖入文件、截图'}
           value={text}
           disabled={effectiveDisabled || readOnly}
           onChange={e => {

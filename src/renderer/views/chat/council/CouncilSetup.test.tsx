@@ -136,7 +136,7 @@ describe('CouncilSetup', () => {
     fireEvent.click(screen.getByRole('button', { name: /👑/ }))
     fireEvent.click(document.querySelector('.council-leader [data-cprov="claude"]')!)
     fireEvent.click(document.querySelector('.council-leader [data-cmodel="opus"]')!)
-    fireEvent.click(screen.getByRole('button', { name: '+' }))
+    fireEvent.click(screen.getByRole('button', { name: '＋' }))
     start()
     expect(onStart.mock.calls[0][0].leader).toMatchObject({ id: 'leader:claude:opus', provider: 'claude', model: 'opus', label: 'Claude Code · Opus' })
     expect(onStart.mock.calls[0][0].mode).toEqual({ kind: 'rounds', rounds: 3 })
@@ -166,6 +166,7 @@ describe('CouncilSetup', () => {
     const { onStart } = setup({ projects: async () => [{ name: 'app', cwd: '/ws/app' }] })
     addSeat('claude', 'opus')
     addSeat('codex', 'gpt-6')
+    fireEvent.click(screen.getByRole('button', { name: '＋ 附加代码改动' }))
     await waitFor(() => expect((document.querySelector('.council-project') as HTMLSelectElement).value).toBe('/ws/app'))
     fireEvent.click(screen.getByRole('button', { name: '提交区间' }))
     expect(canStart()).toBe(false)
@@ -202,12 +203,12 @@ describe('CouncilSetup', () => {
     const { onStart } = setup()
     addSeat('claude', 'opus')
     addSeat('codex', 'gpt-6')
-    const wait = screen.getByRole('button', { name: '每轮结束后等我' })
-    expect(wait.getAttribute('aria-pressed')).toBe('true')
+    const wait = screen.getByRole('switch', { name: '每轮结束后等我' })
+    expect(wait.getAttribute('aria-checked')).toBe('true')
     start()
     expect(onStart.mock.calls[0][0].pauseBetweenRounds).toBe(true)
     fireEvent.click(wait)
-    expect(wait.getAttribute('aria-pressed')).toBe('false')
+    expect(wait.getAttribute('aria-checked')).toBe('false')
     start()
     expect(onStart.mock.calls[1][0].pauseBetweenRounds).toBe(false)
   })
@@ -219,11 +220,11 @@ describe('CouncilSetup', () => {
     ]
     const last: CouncilLastConfig = { seats, leader: { ...seats[1], id: 'leader:claude:opus' }, mode: { kind: 'rounds', rounds: 2 }, pauseBetweenRounds: false }
     const { unmount } = setup({ lastConfig: last })
-    expect(screen.getByRole('button', { name: '每轮结束后等我' }).getAttribute('aria-pressed')).toBe('false')
+    expect(screen.getByRole('switch', { name: '每轮结束后等我' }).getAttribute('aria-checked')).toBe('false')
     unmount()
     const { pauseBetweenRounds: _p, ...old } = last
     setup({ lastConfig: old })
-    expect(screen.getByRole('button', { name: '每轮结束后等我' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('switch', { name: '每轮结束后等我' }).getAttribute('aria-checked')).toBe('true')
   })
 
   it('councilStartError maps IPC error codes', () => {
@@ -242,19 +243,100 @@ describe('CouncilSetup', () => {
     expect(screen.getByText('约 12 分钟')).toBeTruthy()
   })
 
-  it('leader is its own slot after the seat chips, with a hover tooltip and no caption', () => {
+  it('leader is its own row (amber label), not inside the seat grid, with a hover tooltip and no caption', () => {
     setup()
     addSeat('claude', 'opus')
     addSeat('codex', 'gpt-6')
     const slot = document.querySelector('.council-leader-slot') as HTMLElement
     expect(slot).not.toBeNull()
     expect(slot.getAttribute('title')).toBe('领导者:每轮只做总结,不参与提方案;最后输出共识结果')
-    expect(slot.closest('.council-seats')).not.toBeNull()
-    const chips = document.querySelectorAll('.council-seat')
-    expect(chips[chips.length - 1].compareDocumentPosition(slot) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(slot.textContent).toContain('👑')
+    expect(slot.closest('.council-seats')).toBeNull()
+    const label = screen.getByText('👑 领导者')
+    expect(label.classList.contains('council-label-leader')).toBe(true)
+    expect(label.compareDocumentPosition(slot) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(slot.textContent).toContain('Claude Code · Opus')
     expect(slot.textContent).not.toContain('总结')
+  })
+
+  it('rows are labelled 方式 / 讨论方 / 👑 领导者', () => {
+    setup()
+    for (const t of ['方式', '讨论方', '👑 领导者']) expect(screen.getByText(t).classList.contains('council-label')).toBe(true)
+    expect(screen.getByText('轮')).toBeTruthy()
+  })
+
+  it('「每轮结束后等我」 is a switch that toggles pauseBetweenRounds', () => {
+    const { onStart } = setup()
+    addSeat('claude', 'opus')
+    addSeat('codex', 'gpt-6')
+    const sw = screen.getByRole('switch', { name: '每轮结束后等我' })
+    expect(sw.classList.contains('on')).toBe(true)
+    fireEvent.click(sw)
+    expect(sw.getAttribute('aria-checked')).toBe('false')
+    expect(sw.classList.contains('on')).toBe(false)
+    start()
+    expect(onStart.mock.calls[0][0].pauseBetweenRounds).toBe(false)
+    fireEvent.click(sw)
+    start()
+    expect(onStart.mock.calls[1][0].pauseBetweenRounds).toBe(true)
+  })
+
+  it('seat grid ends with a same-size 「＋ 添加」 cell, hidden at 6 seats', () => {
+    setup({ providers: [{ id: 'claude', displayName: 'Claude Code', installed: true, models: Array.from({ length: 7 }, (_, i) => ({ id: `m${i}`, label: `M${i}` })) }] })
+    const grid = document.querySelector('.council-seats')!
+    expect(grid.lastElementChild!.classList.contains('council-add')).toBe(true)
+    expect(screen.getByRole('button', { name: '添加讨论方' }).textContent).toBe('＋ 添加')
+    for (let i = 0; i < 5; i++) addSeat('claude', `m${i}`)
+    expect(grid.lastElementChild!.classList.contains('council-add')).toBe(true)
+    addSeat('claude', 'm5')
+    expect(seatIds()).toHaveLength(6)
+    expect(screen.queryByRole('button', { name: '添加讨论方' })).toBeNull()
+  })
+
+  it('materials are hidden by default; 「＋ 附加代码改动」 expands them, ✕ collapses and clears them', async () => {
+    const { onStart } = setup({ projects: async () => [{ name: 'app', cwd: '/ws/app' }, { name: 'web', cwd: '/ws/web' }] })
+    addSeat('claude', 'opus')
+    addSeat('codex', 'gpt-6')
+    expect(document.querySelector('.council-project')).toBeNull()
+    expect(screen.queryByText('未提交的改动')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '＋ 附加代码改动' }))
+    const sel = document.querySelector('.council-project') as HTMLSelectElement
+    expect(sel.options[0].textContent).toBe('选择项目')
+    await waitFor(() => expect(sel.options).toHaveLength(3))
+    fireEvent.change(sel, { target: { value: '/ws/web' } })
+    fireEvent.click(screen.getByRole('button', { name: '未提交的改动' }))
+    start()
+    expect(onStart.mock.calls[0][0].materials).toEqual({ projectCwd: '/ws/web', diff: 'uncommitted' })
+    fireEvent.click(screen.getByRole('button', { name: '移除代码改动' }))
+    expect(document.querySelector('.council-project')).toBeNull()
+    start()
+    expect(onStart.mock.calls[1][0].materials).toBeUndefined()
+    fireEvent.click(screen.getByRole('button', { name: '＋ 附加代码改动' }))
+    expect((document.querySelector('.council-project') as HTMLSelectElement).value).toBe('')
+  })
+
+  it('a single project auto-selected while collapsed does not send materials', async () => {
+    const { onStart } = setup({ projects: async () => [{ name: 'app', cwd: '/ws/app' }] })
+    addSeat('claude', 'opus')
+    addSeat('codex', 'gpt-6')
+    fireEvent.click(screen.getByRole('button', { name: '＋ 附加代码改动' }))
+    await waitFor(() => expect((document.querySelector('.council-project') as HTMLSelectElement).value).toBe('/ws/app'))
+    fireEvent.click(screen.getByRole('button', { name: '移除代码改动' }))
+    start()
+    expect(onStart.mock.calls[0][0].materials).toBeUndefined()
+  })
+
+  it('materials start expanded when lastConfig has them', async () => {
+    const seats = [
+      { id: 'codex:gpt-6', provider: 'codex', model: 'gpt-6', label: 'Codex · GPT-6' },
+      { id: 'claude:opus', provider: 'claude', model: 'opus', label: 'Claude Code · Opus' },
+    ]
+    const last: CouncilLastConfig = { seats, leader: { ...seats[1], id: 'leader:claude:opus' }, mode: { kind: 'rounds', rounds: 2 }, materials: { projectCwd: '/ws/app', diff: { range: 'a..b' } } }
+    const { onStart } = setup({ lastConfig: last, projects: async () => [{ name: 'app', cwd: '/ws/app' }, { name: 'web', cwd: '/ws/web' }] })
+    expect(document.querySelector('.council-project')).not.toBeNull()
+    await waitFor(() => expect((document.querySelector('.council-project') as HTMLSelectElement).value).toBe('/ws/app'))
+    expect((document.querySelector('.council-range') as HTMLInputElement).value).toBe('a..b')
+    start()
+    expect(onStart.mock.calls[0][0].materials).toEqual({ projectCwd: '/ws/app', diff: { range: 'a..b' } })
   })
 
   it('contains no hint text elements', () => {

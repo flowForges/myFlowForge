@@ -114,6 +114,16 @@ describe('Composer · AI 共商', () => {
     expect((screen.getByRole('button', { name: /开始讨论/ }) as HTMLButtonElement).disabled).toBe(true)
   })
 
+  it('placeholder is 议题 while the setup panel is open, normal task placeholder when closed', () => {
+    const { ta } = renderComposer(councilApi())
+    const normal = ta.getAttribute('placeholder')
+    expect(normal).not.toBe('议题')
+    fireEvent.click(toggle())
+    expect(ta.getAttribute('placeholder')).toBe('议题')
+    fireEvent.click(toggle())
+    expect(ta.getAttribute('placeholder')).toBe(normal)
+  })
+
   it('closing and reopening the panel keeps the picked seats', () => {
     renderComposer(councilApi())
     fireEvent.click(toggle())
