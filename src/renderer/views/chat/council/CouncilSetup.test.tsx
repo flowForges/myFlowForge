@@ -242,6 +242,21 @@ describe('CouncilSetup', () => {
     expect(screen.getByText('约 12 分钟')).toBeTruthy()
   })
 
+  it('leader is its own slot after the seat chips, with a hover tooltip and no caption', () => {
+    setup()
+    addSeat('claude', 'opus')
+    addSeat('codex', 'gpt-6')
+    const slot = document.querySelector('.council-leader-slot') as HTMLElement
+    expect(slot).not.toBeNull()
+    expect(slot.getAttribute('title')).toBe('领导者:每轮只做总结,不参与提方案;最后输出共识结果')
+    expect(slot.closest('.council-seats')).not.toBeNull()
+    const chips = document.querySelectorAll('.council-seat')
+    expect(chips[chips.length - 1].compareDocumentPosition(slot) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(slot.textContent).toContain('👑')
+    expect(slot.textContent).toContain('Claude Code · Opus')
+    expect(slot.textContent).not.toContain('总结')
+  })
+
   it('contains no hint text elements', () => {
     const { container } = setup({ projects: async () => [{ name: 'app', cwd: '/ws/app' }] })
     addSeat('claude', 'opus')

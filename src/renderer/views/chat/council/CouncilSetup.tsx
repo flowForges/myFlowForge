@@ -246,13 +246,6 @@ export function CouncilSetup({ ref, onCanStartChange, providers, lastConfig, pro
           aria-pressed={pauseBetween}
           onClick={() => { touch(); setPauseBetween(v => !v) }}
         >每轮结束后等我</button>
-        <SeatPicker
-          className="council-leader"
-          label={`👑 ${leader?.label ?? ''}`.trim()}
-          trigger={<>👑{leader && <><Logo id={leader.provider} /><span>{leader.label}</span></>}{CHEV}</>}
-          providers={pickable}
-          onPick={(p, m) => { touch(); setLeader(asLeader(makeSeat(p, m))) }}
-        />
       </div>
 
       <div className="council-row council-seats">
@@ -278,6 +271,16 @@ export function CouncilSetup({ ref, onCanStartChange, providers, lastConfig, pro
         {seats.length < 6 && (
           <SeatPicker className="council-add" label="添加讨论方" trigger="＋" providers={pickable} taken={taken} onPick={addSeat} />
         )}
+        {/* ★领导者单独一格、和席位分开:用户分不清谁是领导者(2026-10-21)。说明只放悬停提示,不写在界面上 */}
+        <div className="council-leader-slot" title="领导者:每轮只做总结,不参与提方案;最后输出共识结果">
+          <SeatPicker
+            className="council-leader"
+            label={`👑 ${leader?.label ?? ''}`.trim()}
+            trigger={<>👑{leader && <><Logo id={leader.provider} /><span>{leader.label}</span></>}{CHEV}</>}
+            providers={pickable}
+            onPick={(p, m) => { touch(); setLeader(asLeader(makeSeat(p, m))) }}
+          />
+        </div>
       </div>
 
       <div className="council-row">

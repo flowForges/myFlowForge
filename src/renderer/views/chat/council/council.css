@@ -31,11 +31,20 @@
   font-size: 12.5px; color: var(--fg-2); cursor: grab; user-select: none;
 }
 .council-seat:active { cursor: grabbing; }
-.council-seat .mc-logo-sm { width: 16px; height: 16px; border-radius: 4px; display: grid; place-items: center; font-size: 10px; }
+.council-seat .mc-logo-sm, .council-leader-slot .mc-logo-sm { width: 16px; height: 16px; border-radius: 4px; display: grid; place-items: center; font-size: 10px; }
 .council-seat-label { white-space: nowrap; }
 .council-seat > button { width: 18px; height: 18px; border-radius: 5px; font-size: 10px; color: var(--faint); display: grid; place-items: center; }
 .council-seat > button:hover { background: var(--surface-2); color: var(--err); }
 
+.council-leader-slot {
+  margin-left: 6px; padding-left: 10px; border-left: 1px solid var(--border-2);
+}
+.council-leader-slot .council-leader > .cb-btn {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border-radius: 8px;
+  font-size: 12.5px; font-weight: 600; color: var(--fg);
+  background: color-mix(in oklab, var(--accent) 10%, var(--surface)); border: 1.5px solid color-mix(in oklab, var(--accent) 55%, var(--border-2));
+}
+.council-leader-slot .council-leader > .cb-btn:hover { border-color: var(--accent); }
 .council-setup .menu-pop { bottom: auto; top: calc(100% + 6px); }
 .council-back { color: var(--muted); }
 
