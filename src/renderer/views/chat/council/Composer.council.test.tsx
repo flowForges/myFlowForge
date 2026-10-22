@@ -157,22 +157,49 @@ describe('Composer · AI 共商', () => {
     await waitFor(() => expect(panel()).toBeNull())
   })
 
-  it('start disabled while chat is busy', () => {
-    const { ta } = renderComposer(councilApi(), vi.fn(), true)
-    fireEvent.change(ta, { target: { value: 'topic' } })
+  it('busy chat turn with the panel open: no 开始讨论, Enter queues the message normally', () => {
+    const council = councilApi()
+    const { ta, onSend } = renderComposer(council, vi.fn(), true)
     fireEvent.click(toggle())
-    addSeat('codex', 'gpt-6')
-    addSeat('claude', 'opus')
-    expect((screen.getByRole('button', { name: /开始讨论/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect(panel()).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '开始讨论' })).toBeNull()
+    fireEvent.change(ta, { target: { value: '排队这条' } })
+    fireEvent.keyDown(ta, { key: 'Enter' })
+    expect(onSend).toHaveBeenCalledWith(expect.objectContaining({ text: '排队这条' }))
+    expect(council.start).not.toHaveBeenCalled()
   })
 
-  it.each(['running', 'finalizing'] as const)('start disabled while a council is %s in this session', (status) => {
-    const { ta } = renderComposer(councilApi(status))
-    fireEvent.change(ta, { target: { value: 'topic' } })
+  it.each(['running', 'finalizing'] as const)('the AI 共商 toggle is disabled while a council is %s', (status) => {
+    renderComposer(councilApi(status))
+    expect((toggle() as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it.each([
+    ['running', {}, '插话'],
+    ['paused', { waitingForUser: true }, '补充'],
+  ] as const)('panel open when a council turns %s → panel closes, toggle disabled, Enter interjects', (status, over, ph) => {
+    const onSend = vi.fn()
+    const idle = councilApi()
+    const { ta, rerender } = renderComposer(idle, onSend)
     fireEvent.click(toggle())
-    addSeat('codex', 'gpt-6')
-    addSeat('claude', 'opus')
-    expect((screen.getByRole('button', { name: /开始讨论/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect(panel()).toBeTruthy()
+    const live = councilApi(status, over)
+    rerender(<Composer providers={providers} disabled={false} busy={false} onSend={onSend} selection={sel} onSelectionChange={() => {}} council={live} />)
+    expect(panel()).toBeNull()
+    expect((toggle() as HTMLButtonElement).disabled).toBe(true)
+    expect(ta.getAttribute('placeholder')).toBe(ph)
+    fireEvent.change(ta, { target: { value: '补一句' } })
+    fireEvent.keyDown(ta, { key: 'Enter' })
+    expect(live.interject).toHaveBeenCalledWith('c1', '补一句')
+    expect(live.start).not.toHaveBeenCalled()
+    expect(onSend).not.toHaveBeenCalled()
+  })
+
+  it('开始讨论 has the 回车 tooltip', () => {
+    const { ta } = renderComposer(councilApi())
+    fireEvent.change(ta, { target: { value: 't' } })
+    fireEvent.click(toggle())
+    expect(screen.getByRole('button', { name: '开始讨论' }).getAttribute('title')).toBe('开始讨论 (回车)')
   })
 
   it('a paused council does not block starting a new one (R9)', () => {

@@ -167,7 +167,12 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
   // ★面板开着时发送键 = 「开始讨论」(B4):能否开始由面板报上来,开始也交给面板(配置在它那儿)
   const councilSetupRef = useRef<CouncilSetupHandle>(null)
   const [councilCanStart, setCouncilCanStart] = useState(false)
-  const councilGo = !!council && councilOpen
+  // ★共商在跑 / 轮间等用户 / 收尾时:面板关掉、按钮禁用 —— 回车只能是插话 / 补充,不能被「开始讨论」吞掉。
+  //  普通暂停(用户暂停 / 领导者失败)不算:那时可以另开一场(R9)。
+  const councilLive = !!councilActive && (councilActive.status !== 'paused' || !!councilActive.waitingForUser)
+  // ★普通对话正忙时回车照常排队 —— 只有「能开始」的那条路换成开始讨论
+  const councilGo = !!council && councilOpen && !councilLive && !busy
+  useEffect(() => { if (councilLive) setCouncilOpen(false) }, [councilLive])
   const effectiveDisabled = disabled || councilFinalizing
   const dk = draftKey ?? ''
   const [text, setText] = useState(() => (dk ? draftStore[dk]?.text : '') ?? '')
@@ -878,6 +883,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
             <button
               className={'cb-btn cb-council' + (councilOpen ? ' on' : '')}
               aria-pressed={councilOpen}
+              disabled={councilLive}
               onClick={() => { setCouncilMounted(true); setCouncilOpen(o => !o) }}
             >
               <span>AI 共商</span>
@@ -894,7 +900,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
           {running && !text.trim() ? (
             <button className="send stop" id="stopBtn" title="停止 (Esc)" onClick={handleStop}>{STOP_ICON}</button>
           ) : councilGo ? (
-            <button className="send council-go" id="sendBtn" disabled={!councilCanStart} onClick={send}>开始讨论</button>
+            <button className="send council-go" id="sendBtn" title="开始讨论 (回车)" disabled={!councilCanStart} onClick={send}>开始讨论</button>
           ) : (
             <button className={`send${queueing ? ' queueing' : ''}`} id="sendBtn" title={browserConflict ?? (runQueued ? lockedReason : busy ? '执行中 · 发送将进入队列' : '发送 (回车)')} disabled={effectiveDisabled || readOnly || (browserBlocked && !interjecting)} onClick={send}>{SEND_ARROW}</button>
           )}
