@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach, onTestFinished } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { CouncilBlock, type CouncilControls } from './CouncilBlock'
 import { readFileSync } from 'node:fs'
@@ -170,6 +170,23 @@ describe('CouncilBlock fullscreen bottom bar', () => {
     expect(area().value).toBe('补一句')
   })
 
+  it('in flight: textarea and 继续下一轮 are disabled; text cleared on success', async () => {
+    const ctl = renderBlock([topic, ...r1], state('paused', { round: 2, waitingForUser: true }))
+    let resolve!: (v: boolean) => void
+    ;(ctl.interject as ReturnType<typeof vi.fn>).mockReturnValue(new Promise<boolean>(r => { resolve = r }))
+    goFullscreen()
+    fireEvent.change(area(), { target: { value: '补一句' } })
+    fireEvent.keyDown(area(), { key: 'Enter' })
+    const next = bottom()!.querySelector('button.council-ctl.primary') as HTMLButtonElement
+    expect(area().disabled).toBe(true)
+    expect(next.disabled).toBe(true)
+    await act(async () => { resolve(true) })
+    expect(area().disabled).toBe(false)
+    expect(next.disabled).toBe(false)
+    expect(area().value).toBe('')
+    expect(ctl.resume).not.toHaveBeenCalled()
+  })
+
   it('round break: 继续下一轮 with blank text resumes without interjecting', () => {
     const ctl = renderBlock([topic, ...r1], state('paused', { round: 2, waitingForUser: true }))
     goFullscreen()
@@ -225,23 +242,64 @@ describe('CouncilBlock fullscreen scrolling', () => {
     expect(ruleBody('.council-cell-body')).not.toMatch(/max-height/)
   })
 
-  it('jump chips scroll the body to each round divider and to the result card; 回到顶部 scrolls to 0', () => {
-    const spy = vi.fn()
-    const orig = Element.prototype.scrollIntoView
-    Element.prototype.scrollIntoView = spy
-    onTestFinished(() => { Element.prototype.scrollIntoView = orig })
+  /** jsdom 没有布局:给正文一个可控的几何(scrollTop 可读写、scrollHeight / clientHeight 固定)和 scrollTo 探针。 */
+  function fakeScroller(el: HTMLElement, geo: { scrollHeight: number; clientHeight: number; scrollTop: number }) {
+    Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => geo.scrollHeight })
+    Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => geo.clientHeight })
+    Object.defineProperty(el, 'scrollTop', { configurable: true, get: () => geo.scrollTop, set: v => { geo.scrollTop = v } })
+    const scrollTo = vi.fn()
+    el.scrollTo = scrollTo as unknown as typeof el.scrollTo
+    return scrollTo
+  }
+  const rectTop = (el: Element, top: number) => {
+    vi.spyOn(el, 'getBoundingClientRect').mockReturnValue({ top } as DOMRect)
+  }
+
+  it('jump chips scroll the body itself to each round divider and to the result card; 回到顶部 scrolls to 0', () => {
     renderBlock([topic, ...r1, ...r2, finalMsg], state('done', { round: 2 }))
     goFullscreen()
     const nav = document.querySelector('.council-fs-top .council-fs-nav') as HTMLElement
     const chips = Array.from(nav.querySelectorAll('button')).map(b => b.textContent)
     expect(chips).toEqual(['第 1 轮', '第 2 轮', '结果', '回到顶部'])
+    const scrollTo = fakeScroller(body(), { scrollHeight: 3000, clientHeight: 500, scrollTop: 200 })
+    rectTop(body(), 100)
+    rectTop(document.querySelector('.council-round-sec[data-round="2"] > .council-divider')!, 700)
+    rectTop(document.querySelector('.council-result')!, 1500)
     fireEvent.click(screen.getByRole('button', { name: '第 2 轮' }))
-    expect(spy.mock.contexts.at(-1)).toBe(document.querySelector('.council-round-sec[data-round="2"] > .council-divider'))
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: 700 - 100 + 200, behavior: 'smooth' })
     fireEvent.click(screen.getByRole('button', { name: '结果' }))
-    expect(spy.mock.contexts.at(-1)).toBe(document.querySelector('.council-result'))
-    body().scrollTop = 500
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: 1500 - 100 + 200, behavior: 'smooth' })
     fireEvent.click(screen.getByRole('button', { name: '回到顶部' }))
-    expect(body().scrollTop).toBe(0)
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: 0 })
+  })
+
+  const streamingMsgs = (text: string) => [topic, ai(A, 1, 'answer', text)]
+  const streamEl = (text: string, ctl: CouncilControls) => (
+    <CouncilBlock id="c1" messages={streamingMsgs(text)} state={state('running', { speaking: [A.id] })} streamingIds={new Set([`c1:1:${A.id}:answer`])} providers={providers} controls={ctl} />
+  )
+
+  it('streaming keeps the body pinned to the bottom when the reader was near it', () => {
+    const ctl = controls()
+    const { rerender } = render(streamEl('一', ctl))
+    goFullscreen()
+    const geo = { scrollHeight: 2000, clientHeight: 500, scrollTop: 1440 }   // 离底 60px
+    fakeScroller(body(), geo)
+    fireEvent.scroll(body())
+    geo.scrollHeight = 2400
+    rerender(streamEl('一二', ctl))
+    expect(geo.scrollTop).toBe(2400)
+  })
+
+  it('streaming does not yank the reader who scrolled up', () => {
+    const ctl = controls()
+    const { rerender } = render(streamEl('一', ctl))
+    goFullscreen()
+    const geo = { scrollHeight: 2000, clientHeight: 500, scrollTop: 300 }
+    fakeScroller(body(), geo)
+    fireEvent.scroll(body())
+    geo.scrollHeight = 2400
+    rerender(streamEl('一二', ctl))
+    expect(geo.scrollTop).toBe(300)
   })
 
   it('no 结果 chip before a result exists', () => {

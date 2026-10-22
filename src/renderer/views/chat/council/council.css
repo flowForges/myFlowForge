@@ -183,7 +183,6 @@
 .council-headbar { display: flex; align-items: center; padding-right: 8px; }
 .council-headbar .council-head { flex: 1; min-width: 0; }
 .council-full { font-size: 14px; line-height: 1; }
-.council-full[aria-pressed="true"] { color: var(--accent); }
 /* 非全屏:两层包装不参与布局 */
 .council-block:not(.fullscreen) > .council-fs-top, .council-block:not(.fullscreen) > .council-fs-body { display: contents; }
 .council-block.fullscreen {

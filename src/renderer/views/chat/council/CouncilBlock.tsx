@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { ChatMessage, ProviderInfo } from '@shared/types'
 import { isCouncilProvider, type CouncilSeat, type CouncilState } from '@shared/council'
@@ -346,7 +346,7 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
   }
 
   // 全屏底栏:进行中 = 插话;轮间等用户 = 补充给下一轮(同样走 interject)
-  const atBreak = status === 'paused' && !!state?.waitingForUser
+  const atBreak = !!breakAfter   // ★和顶栏「第 N 轮结束」同一个判据,两条栏不会说法不一
   const showBar = fullscreen && (status === 'running' || atBreak)
   const [say, setSay] = useState('')
   const [saying, setSaying] = useState(false)
@@ -355,11 +355,12 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
     const text = say.trim()
     if (!text) return true
     if (saying) return false
+    const sent = say
     setSaying(true)
     const ok = await controls.interject(id, text)
     setSaying(false)
     if (ok === false) return false   // ★失败(已弹提示)不清空
-    setSay('')
+    setSay(cur => (cur === sent ? '' : cur))   // 只清掉送出去的那段;万一期间改过就留着
     return true
   }
   // ★框里写了补充却直接点「继续下一轮」:先把补充送出去,送成功才继续;失败就停在轮间,字留着
@@ -368,15 +369,29 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
     if (await interject()) controls.resume(id)
   }
 
-  // 全屏顶栏的跳转:只滚正文这一个容器
+  // 全屏顶栏的跳转:★直接滚正文这一个容器(不用 scrollIntoView —— 它会顺带滚外面的聊天列表)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const jumpTo = (sel: string) => scrollRef.current?.querySelector(sel)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
-  const toTop = () => {
-    const el = scrollRef.current
-    if (!el) return
-    if (typeof el.scrollTo === 'function') el.scrollTo({ top: 0, behavior: 'smooth' })
-    else el.scrollTop = 0
+  const jumpTo = (sel: string) => {
+    const b = scrollRef.current
+    const t = b?.querySelector(sel)
+    if (!b || !t) return
+    b.scrollTo({ top: t.getBoundingClientRect().top - b.getBoundingClientRect().top + b.scrollTop, behavior: 'smooth' })
   }
+  const toTop = () => scrollRef.current?.scrollTo({ top: 0 })
+
+  // ★全屏流式时贴底:读者本来就在底部附近(80px 内)才跟着滚;往上翻过就不抢
+  const pinnedRef = useRef(false)
+  const onBodyScroll = () => {
+    const b = scrollRef.current
+    if (fullscreen && b) pinnedRef.current = b.scrollHeight - b.scrollTop - b.clientHeight < 80
+  }
+  // 进 / 出全屏都从「没贴底」开始(在贴底那个 effect 前面声明,先跑)
+  useLayoutEffect(() => { pinnedRef.current = false }, [fullscreen])
+  const streamingHere = messages.some(m => streamingIds.has(m.id))
+  useLayoutEffect(() => {
+    const b = scrollRef.current
+    if (fullscreen && streamingHere && b && pinnedRef.current) b.scrollTop = b.scrollHeight
+  }, [messages, fullscreen, streamingHere])
 
   return (
     <section className={`council-block${open ? ' open' : ''}${fullscreen ? ' fullscreen' : ''}`} data-council={id} data-status={status}>
@@ -390,7 +405,7 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
           </button>
           {fullscreen
             ? <button type="button" className="council-ctl council-full" onClick={() => setFullscreen(false)}>退出全屏</button>
-            : <button type="button" className="council-more council-full" aria-label="全屏" aria-pressed="false" onClick={() => setFullscreen(true)}>{ZOOM}</button>}
+            : <button type="button" className="council-more council-full" aria-label="全屏" onClick={() => setFullscreen(true)}>{ZOOM}</button>}
         </div>
 
         {live && state && (
@@ -441,7 +456,7 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
         )}
       </div>
 
-      <div className="council-fs-body" ref={scrollRef}>
+      <div className="council-fs-body" ref={scrollRef} onScroll={onBodyScroll}>
         {open && (
           <div className="council-body">
             {topicMsg && <UserRow msg={topicMsg} className="council-topic" />}
@@ -536,11 +551,12 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
           <textarea
             rows={2}
             value={say}
+            disabled={saying}
             placeholder={atBreak ? '补充给下一轮的内容(可选)' : '插话'}
             onChange={e => setSay(e.target.value)}
             onKeyDown={enterSubmits(interject)}
           />
-          {atBreak && <button type="button" className="council-ctl primary" onClick={() => void nextRound()}>继续下一轮</button>}
+          {atBreak && <button type="button" className="council-ctl primary" disabled={saying} onClick={() => void nextRound()}>继续下一轮</button>}
         </div>
       )}
 
