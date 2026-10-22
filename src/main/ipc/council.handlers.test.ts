@@ -242,6 +242,31 @@ describe('council controls', () => {
     expect(inter.map(m => [m.text, m.via])).toEqual([['手机上插一句', 'iPhone'], ['本机插一句', undefined]])
   })
 
+  it('interject is accepted while waiting between rounds and lands in the next round; resume clears the wait', async () => {
+    const id = await call(CH.councilStart, { workspacePath: ws, sessionId: 's1', config: cfg() })
+    await flush()
+    await releaseAll()   // 第 1 轮 A、B 说完 → 领导者总结
+    await releaseAll()   // 总结完 → 轮间等用户
+    let st = (await call(CH.councilList, { workspacePath: ws, sessionId: 's1' }) as CouncilState[]).find(s => s.id === id)!
+    expect(st).toMatchObject({ status: 'paused', waitingForUser: true, round: 2 })
+    await call(CH.councilInterject, { councilId: id, text: '补一句' })
+    expect(appended.filter(m => m.council?.stage === 'interject').map(m => [m.text, m.council!.round])).toEqual([['补一句', 2]])
+    await call(CH.councilResume, { councilId: id })
+    await flush()
+    st = (await call(CH.councilList, { workspacePath: ws, sessionId: 's1' }) as CouncilState[]).find(s => s.id === id)!
+    expect(st.status).toBe('running')
+    expect(st.waitingForUser).toBeFalsy()
+  })
+
+  it('interject is still ignored while paused by the user', async () => {
+    const id = await call(CH.councilStart, { workspacePath: ws, sessionId: 's1', config: cfg() })
+    await flush()
+    await call(CH.councilPause, { councilId: id })
+    await releaseAll()
+    await call(CH.councilInterject, { councilId: id, text: '暂停中' })
+    expect(appended.some(m => m.council?.stage === 'interject')).toBe(false)
+  })
+
   it('unknown council id → rejects', async () => {
     await expect(call(CH.councilPause, { councilId: 'nope' })).rejects.toThrow('council-not-found')
   })

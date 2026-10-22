@@ -33,6 +33,8 @@ export type CouncilConfig = {
   leader: CouncilSeat
   mode: CouncilMode
   materials?: CouncilMaterials
+  /** 每轮结束后停下等用户(补充 / 继续下一轮);没填 = 开 */
+  pauseBetweenRounds?: boolean
 }
 
 export type CouncilStage =
@@ -73,6 +75,8 @@ export type CouncilState = {
   chosen?: string
   resultFile?: string
   config: CouncilConfig
+  /** 只在「每轮结束后等我」的轮间暂停时为 true;用户暂停 / 领导者失败的暂停不设 */
+  waitingForUser?: boolean
 }
 
 export const COUNCIL_TURN_TIMEOUT_MS = 300_000

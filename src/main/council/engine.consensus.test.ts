@@ -18,6 +18,7 @@ const cfg = (seatIds: string[], maxRounds = 5, maxMinutes = 30): CouncilConfig =
   seats: seatIds.map(id => seat(id)),
   leader: seat('L', 'claude'),
   mode: { kind: 'consensus', maxRounds, maxMinutes },
+  pauseBetweenRounds: false,
 })
 
 const FINAL_TEXT = [

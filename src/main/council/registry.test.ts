@@ -21,6 +21,7 @@ const cfg = (seatIds: string[], rounds = 2): CouncilConfig => ({
   seats: seatIds.map(id => seat(id)),
   leader: seat('L', 'claude'),
   mode: { kind: 'rounds', rounds },
+  pauseBetweenRounds: false,
 })
 const FINAL_TEXT = ['最终结论', COUNCIL_RESULT_FENCE, JSON.stringify({ conclusion: 'x', candidates: [], disagreements: [] }), '```'].join('\n')
 

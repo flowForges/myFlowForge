@@ -163,6 +163,7 @@ export class CouncilEngine {
     }
     this.resumes++
     this.st.status = 'running'
+    delete this.st.waitingForUser
     await this.drive()
   }
 
@@ -191,6 +192,7 @@ export class CouncilEngine {
     if (mode === 'abort') {
       this.stopMode = 'abort'
       this.st.status = 'aborted'
+      delete this.st.waitingForUser
       this.cancelInflight()
       this.changed()
       return
@@ -201,15 +203,20 @@ export class CouncilEngine {
     this.pauseRequested = false
     if (status === 'paused') {
       this.st.status = 'running'
+      delete this.st.waitingForUser
       void this.drive()
       return
     }
     this.cancelInflight()
   }
 
-  /** 插话:立即落盘并进 transcript —— 下一位开始发言时的增量里就有它;正在发言的人这次看不到。 */
+  /**
+   * 插话:立即落盘并进 transcript —— 下一位开始发言时的增量里就有它;正在发言的人这次看不到。
+   * 轮间等用户时也收(那就是用户的补充):轮次已经进到下一轮,自然归到下一轮。
+   */
   interject(text: string, via?: string): void {
-    if (this.st.status !== 'running' || this.stopMode || !this.prepared || !text.trim()) return
+    const accepting = this.st.status === 'running' || (this.st.status === 'paused' && this.st.waitingForUser)
+    if (!accepting || this.stopMode || !this.prepared || !text.trim()) return
     const n = this.count(u => u.stage === 'interject') + 1
     // ★领导者正在写本轮总结时插话:总结的输入已经定了,这条归到下一轮 —— 下一轮的席位(插话不受轮次过滤)
     //  和下一轮的总结 / 最终结果(按轮次取发言)才都看得到它。共识模式的草稿 / 投票同理(它们在总结之后)
@@ -340,6 +347,8 @@ export class CouncilEngine {
     for (;;) {
       // 挂起时状态已经是 paused 并落过盘,直接退出
       if (this.stopMode === 'abort' || this.suspended) return
+      // 轮间等用户(nextRound 里停下的);同步监听方当场继续的话这里已经是 running,接着跑
+      if (this.st.status === 'paused') return
       if (this.stopMode === 'finalize') this.phase = 'final'
       else if (this.pauseRequested) {
         this.pauseRequested = false
@@ -393,6 +402,14 @@ export class CouncilEngine {
     this.st.round++
     this.spokenThisRound = []
     this.phase = 'critique'
+    // ★「每轮结束后等我」:游标先进到下一轮再停 —— 等待期间的补充按当前轮次落进下一轮,下一轮的席位和总结都看得到。
+    //  最后一轮之后没有总结、直接出结果,也就走不到这里。用户先点的暂停由这次停顿兑现。
+    //  已经点了「结束」(总结恰好在取消前跑完)就不停,直接去出结果
+    if (this.cfg.pauseBetweenRounds !== false && !this.stopMode) {
+      this.pauseRequested = false
+      this.st.status = 'paused'
+      this.st.waitingForUser = true
+    }
     this.changed()
   }
 
@@ -546,15 +563,17 @@ export class CouncilEngine {
     }
     let think = ''
     let started = false
+    const council = { id: this.id, seat: seat.id, round, stage }
     // ★runSeat 在超时/失败 settle 之后仍可能漏出回调;结果一到就关门,之后的一律丢弃
     let live = true
     this.st.speaking = [...this.st.speaking, seat.id]
     this.changed()
     const run = this.deps.runSeat(this.id, seat, prompt, { ...this.deps.seatDeps, workspacePath: this.ws, sessionId: this.sid, cwd: this.cwd() }, {
-      onStart: () => { if (!live) return; started = true; this.emit({ type: 'assistant-start', id, model: seat.label, council: { id: this.id, seat: seat.id, round, stage } }) },
-      onDelta: (_m, t) => { if (!live) return; this.emit({ type: 'assistant-delta', id, text: t }) },
-      onThink: (_m, t) => { if (!live) return; think += t; this.emit({ type: 'think-delta', id, text: t }) },
-      onReplace: (_m, t) => { if (!live) return; this.emit({ type: 'assistant-replace', id, text: t }) },
+      // ★每个流式事件都带 council:渲染端重拉历史会丢掉在途的共商发言,之后的增量要能把它重建回共商块里
+      onStart: () => { if (!live) return; started = true; this.emit({ type: 'assistant-start', id, model: seat.label, council }) },
+      onDelta: (_m, t) => { if (!live) return; this.emit({ type: 'assistant-delta', id, text: t, council }) },
+      onThink: (_m, t) => { if (!live) return; think += t; this.emit({ type: 'think-delta', id, text: t, council }) },
+      onReplace: (_m, t) => { if (!live) return; this.emit({ type: 'assistant-replace', id, text: t, council }) },
     }, attachments)
     const handle: Inflight = { cancelled: false, cancel: () => { handle.cancelled = true; run.cancel() } }
     this.inflight.add(handle)

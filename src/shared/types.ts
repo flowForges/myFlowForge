@@ -452,10 +452,11 @@ export type ChatEvent = { workspacePath: string; sessionId: string } & (
   | { type: 'user'; message: ChatMessage }
   // council:共商发言带上它在共商里的位置,渲染端在流式阶段就能把它归进共商区块(落盘后 done 的 message 里也有)。
   | { type: 'assistant-start'; id: string; model: string; context?: AgentContextMeta; council?: CouncilTag }
-  | { type: 'assistant-delta'; id: string; text: string }
+  // ★流式事件也带 council:历史重拉会丢掉还没落盘的共商发言,之后的增量重建它时得知道它属于共商
+  | { type: 'assistant-delta'; id: string; text: string; council?: CouncilTag }
   // Replace (not append) the reply body with an authoritative full text — see ChatCallbacks.onAssistantReplace.
-  | { type: 'assistant-replace'; id: string; text: string }
-  | { type: 'think-delta'; id: string; text: string; context?: AgentContextMeta }
+  | { type: 'assistant-replace'; id: string; text: string; council?: CouncilTag }
+  | { type: 'think-delta'; id: string; text: string; context?: AgentContextMeta; council?: CouncilTag }
   // 这一轮换了阶段(在想 ↔ 在压缩)。只在轮次进行中广播,不落盘。
   | { type: 'phase'; id: string; phase: TurnPhase }
   // questions 非空 = 这不是「批准执行」而是「请回答」(claude AskUserQuestion),渲染成可点的选项卡片。

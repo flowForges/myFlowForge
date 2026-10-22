@@ -19,6 +19,7 @@ const cfg = (seatIds: string[], rounds = 2): CouncilConfig => ({
   seats: seatIds.map(id => seat(id)),
   leader: seat('L', 'claude'),
   mode: { kind: 'rounds', rounds },
+  pauseBetweenRounds: false,
 })
 
 const FINAL_TEXT = [
