@@ -77,6 +77,8 @@ export type CouncilState = {
   config: CouncilConfig
   /** 只在「每轮结束后等我」的轮间暂停时为 true;用户暂停 / 领导者失败的暂停不设 */
   waitingForUser?: boolean
+  /** 连续失败被本场除名的席位(引擎为准;渲染端不再自己推)。老快照没有 = [] */
+  dropped?: string[]
 }
 
 export const COUNCIL_TURN_TIMEOUT_MS = 300_000

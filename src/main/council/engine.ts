@@ -50,6 +50,8 @@ export type EngineDeps = {
 
 // 连续失败到这个次数,本场不再叫该席位(§7.3)。
 const DROP_AFTER_FAILURES = 2
+/** 思考用时(秒,至少 1):从第一段思考到落盘。渲染端「思考」折叠块的秒数就是它。 */
+const thinkElapsed = (since: number, now: number) => Math.max(1, Math.round((now - since) / 1000))
 
 type Spoken = { ok: true; text: string } | { ok: false; cancelled: boolean }
 type Inflight = { cancelled: boolean; cancel(): void }
@@ -119,7 +121,8 @@ export class CouncilEngine {
     }
     this.transcript = Transcript.fromJSON(p.transcript)
     this.failures = { ...p.failures }
-    this.dropped = [...p.dropped]
+    // ★老快照没有 dropped
+    this.dropped = [...(p.dropped ?? [])]
     this.phase = p.phase
     this.spokenThisRound = [...p.spokenThisRound]
     this.resumes = p.resumes
@@ -134,7 +137,7 @@ export class CouncilEngine {
   }
 
   get state(): CouncilState {
-    return { ...this.st, speaking: [...this.st.speaking] }
+    return { ...this.st, speaking: [...this.st.speaking], dropped: [...this.dropped] }
   }
 
   snapshot(): PersistedCouncil {
@@ -596,6 +599,7 @@ export class CouncilEngine {
       return prior
     }
     let think = ''
+    let thinkSince: number | null = null
     let started = false
     const council = { id: this.id, seat: seat.id, round, stage }
     // ★runSeat 在超时/失败 settle 之后仍可能漏出回调;结果一到就关门,之后的一律丢弃
@@ -606,7 +610,7 @@ export class CouncilEngine {
       // ★每个流式事件都带 council:渲染端重拉历史会丢掉在途的共商发言,之后的增量要能把它重建回共商块里
       onStart: () => { if (!live) return; started = true; this.emit({ type: 'assistant-start', id, model: seat.label, council }) },
       onDelta: (_m, t) => { if (!live) return; this.emit({ type: 'assistant-delta', id, text: t, council }) },
-      onThink: (_m, t) => { if (!live) return; think += t; this.emit({ type: 'think-delta', id, text: t, council }) },
+      onThink: (_m, t) => { if (!live) return; think += t; thinkSince ??= this.deps.now(); this.emit({ type: 'think-delta', id, text: t, council }) },
       onReplace: (_m, t) => { if (!live) return; this.emit({ type: 'assistant-replace', id, text: t, council }) },
     }, attachments)
     const handle: Inflight = { cancelled: false, cancel: () => { handle.cancelled = true; run.cancel() } }
@@ -630,7 +634,7 @@ export class CouncilEngine {
       ts: new Date(this.deps.now()).toISOString(),
     }
     const msg: ChatMessage = r.ok
-      ? { ...base, ...(shape ? shape(r.text) : { text: r.text }), ...(steps.length ? { think: { label: '已思考', steps } } : {}) }
+      ? { ...base, ...(shape ? shape(r.text) : { text: r.text }), ...(steps.length ? { think: { label: '已思考', steps, ...(thinkSince !== null ? { elapsed: thinkElapsed(thinkSince, this.deps.now()) } : {}) } } : {}) }
       : base
     this.deps.append(this.ws, this.sid, msg)
     this.emit({ type: 'done', message: msg })

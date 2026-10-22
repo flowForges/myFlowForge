@@ -243,6 +243,36 @@ describe('CouncilEngine rounds mode', () => {
     expect(h.persisted.at(-1)!.dropped).toEqual(['B'])
   })
 
+  it('state exposes dropped seats', async () => {
+    const h = harness(cfg(['A', 'B', 'C'], 3), c => (c.seat === 'B' && c.n <= 2 ? { ok: false } : undefined))
+    expect(h.engine.state.dropped).toEqual([])
+    await h.engine.start()
+    expect(h.engine.state.dropped).toEqual(['B'])
+    expect(h.states.at(-1)!.dropped).toEqual(['B'])
+  })
+
+  it('restoring a snapshot without dropped defaults it to []', () => {
+    const h = harness(cfg(['A', 'B']))
+    const snap = h.engine.snapshot() as Partial<PersistedCouncil>
+    delete snap.dropped
+    const again = new CouncilEngine(CID, WS, SID, cfg(['A', 'B']), {
+      runSeat: () => { throw new Error('unused') }, seatDeps: { providers: {}, env: {} }, seatResumed: () => false,
+      append: () => {}, readMessages: () => [], emitChat: () => {}, emitState: () => {}, materialsText: async () => '',
+      writeFile: () => {}, persist: () => {}, now: () => T0,
+    }, snap as PersistedCouncil)
+    expect(again.state.dropped).toEqual([])
+  })
+
+  it('seat and leader messages carry think.elapsed (seconds from first think to done)', async () => {
+    let t = T0
+    const h = harness(cfg(['A', 'B'], 1), undefined, { now: () => (t += 1000) })
+    await h.engine.start()
+    const spoken = h.appended.filter(m => m.who === 'ai' && m.think)
+    expect(spoken.some(m => m.council?.seat === 'L')).toBe(true)
+    expect(spoken.some(m => m.council?.seat === 'A')).toBe(true)
+    for (const m of spoken) expect(m.think!.elapsed).toBeGreaterThanOrEqual(1)
+  })
+
   it('with only one seat left the leader goes straight to final', async () => {
     const h = harness(cfg(['A', 'B'], 4), c => (c.seat === 'B' && c.n <= 2 ? { ok: false } : undefined))
     await h.engine.start()
