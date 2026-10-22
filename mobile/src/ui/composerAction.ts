@@ -15,11 +15,11 @@ export function composerAction(a: { busy: boolean; hasText: boolean }): Composer
   return a.busy && !a.hasText ? 'stop' : 'send'
 }
 
-export function composerPlaceholder(a: { online: boolean; busy: boolean; interjecting?: boolean }): string {
+export function composerPlaceholder(a: { online: boolean; busy: boolean; interjecting?: boolean; councilBreak?: boolean }): string {
   // 离线最优先:连不上的时候谈排队没有意义。
   if (!a.online) return '未连接 · 发不出去'
-  // AI 共商进行中:提交的是插话(同电脑端那两个字)。
-  if (a.interjecting) return '插话'
+  // AI 共商进行中:提交的是插话;轮间等用户时是「补充」(引擎把它归到下一轮)。同电脑端。
+  if (a.interjecting) return a.councilBreak ? '补充' : '插话'
   // ★这句话必须在场:不说的话,用户按下发送看到的是「这一轮还在跑」,很容易以为自己那条没发出去。
   if (a.busy) return '当前任务执行中… 继续输入将排队'
   return '给代理下达任务…'

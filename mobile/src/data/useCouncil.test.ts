@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { CouncilState } from '../../../src/shared/council'
-import { activeCouncil, applyCouncilState, councilActionError, mergeCouncilSnapshot, submitTarget } from './useCouncil'
+import { activeCouncil, applyCouncilState, councilActionError, councilRoundLabel, isCouncilBreak, mergeCouncilSnapshot, submitTarget } from './useCouncil'
 
 const st = (id: string, p: Partial<CouncilState> = {}): CouncilState => ({
   id,
@@ -57,9 +57,29 @@ describe('activeCouncil', () => {
 })
 
 describe('submitTarget —— 输入框提交走哪条路', () => {
-  it("只有 running 才是插话", () => {
-    expect(submitTarget('running')).toBe('interject')
-    for (const s of ['paused', 'finalizing', 'done', 'aborted', undefined] as const) expect(submitTarget(s)).toBe('send')
+  it('running 是插话;轮间等用户(paused + waitingForUser)也是插话(补充给下一轮)', () => {
+    expect(submitTarget({ status: 'running' })).toBe('interject')
+    expect(submitTarget({ status: 'paused', waitingForUser: true })).toBe('interject')
+  })
+  it('普通暂停 / 收尾 / 结束 / 没有共商:普通发送', () => {
+    for (const s of ['paused', 'finalizing', 'done', 'aborted'] as const) expect(submitTarget({ status: s })).toBe('send')
+    expect(submitTarget(undefined)).toBe('send')
+  })
+})
+
+describe('councilRoundLabel —— 状态行的轮次', () => {
+  it('轮间等用户:引擎已把 round 推到下一轮,说的是刚结束的那一轮', () => {
+    expect(councilRoundLabel(st('a', { status: 'paused', waitingForUser: true, round: 2, totalRounds: 3 }))).toBe('第 1 轮结束')
+  })
+  it('其余:第 k / N 轮,不限轮数时第 k 轮', () => {
+    expect(councilRoundLabel(st('a', { round: 2, totalRounds: 3 }))).toBe('第 2 / 3 轮')
+    expect(councilRoundLabel(st('a', { status: 'paused', round: 2, totalRounds: null }))).toBe('第 2 轮')
+  })
+  it('isCouncilBreak 只认 paused + waitingForUser', () => {
+    expect(isCouncilBreak(st('a', { status: 'paused', waitingForUser: true }))).toBe(true)
+    expect(isCouncilBreak(st('a', { status: 'paused' }))).toBe(false)
+    expect(isCouncilBreak(st('a', { status: 'running', waitingForUser: true }))).toBe(false)
+    expect(isCouncilBreak(undefined)).toBe(false)
   })
 })
 

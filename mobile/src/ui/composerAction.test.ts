@@ -43,4 +43,9 @@ describe('composerPlaceholder —— 得让人知道这条会排队,而不是以
     expect(composerPlaceholder({ online: true, busy: true, interjecting: true })).toBe('插话')
     expect(composerPlaceholder({ online: false, busy: false, interjecting: true })).toContain('未连接')
   })
+
+  it('AI 共商轮间等用户:补充', () => {
+    expect(composerPlaceholder({ online: true, busy: false, interjecting: true, councilBreak: true })).toBe('补充')
+    expect(composerPlaceholder({ online: false, busy: false, interjecting: true, councilBreak: true })).toContain('未连接')
+  })
 })

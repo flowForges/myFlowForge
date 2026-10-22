@@ -43,7 +43,7 @@ import { describeHostState } from '../src/net/hostStatusText'
 import { useStore } from '../src/data/store'
 import { canPeekGate } from '../src/data/gatePeek'
 import { useChat, type Msg } from '../src/data/useChat'
-import { submitTarget, useCouncil } from '../src/data/useCouncil'
+import { isCouncilBreak, submitTarget, useCouncil } from '../src/data/useCouncil'
 import { groupCouncil, isCouncilGroup } from '../src/data/councilGroup'
 import { CouncilBlock } from '../src/ui/CouncilBlock'
 import { draftKey, getDraft, loadDrafts, setDraft } from '../src/data/drafts'
@@ -152,7 +152,8 @@ export default function Chat() {
     setNotice(m)
   })
   const councilStatus = council.active?.status
-  const interjecting = submitTarget(councilStatus) === 'interject'
+  const interjecting = submitTarget(council.active) === 'interject'
+  const councilBreak = isCouncilBreak(council.active)
   // ★领导者在出最终结果:插话已经没人听了,普通发送又会和它抢同一个会话 —— 输入框整个停用。
   const councilFinalizing = councilStatus === 'finalizing'
   const [advanceSheet, setAdvanceSheet] = useState(false)
@@ -1233,7 +1234,7 @@ export default function Chat() {
                 if (sel) setSel(undefined)
               }}
               onFocus={() => fire('tapField')}
-              placeholder={composerPlaceholder({ online, busy, interjecting })}
+              placeholder={composerPlaceholder({ online, busy, interjecting, councilBreak })}
               multiline
               editable={online && !!selected && !councilFinalizing}
               style={{ flex: 1, minWidth: 0, minHeight: 44, maxHeight: 108 }}
@@ -1278,7 +1279,7 @@ export default function Chat() {
               const off = stopping ? !online : !online || !selected || !text.trim() || sending || councilFinalizing
               return (
                 <Pressable
-                  accessibilityLabel={stopping ? '停止' : interjecting ? '插话' : busy ? '排队发送' : '发送'}
+                  accessibilityLabel={stopping ? '停止' : interjecting ? (councilBreak ? '补充' : '插话') : busy ? '排队发送' : '发送'}
                   onPress={stopping ? () => void stop() : doSend}
                   disabled={off}
                   style={({ pressed }) => [

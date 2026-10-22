@@ -39,9 +39,23 @@ export function activeCouncil(states: CouncilState[]): CouncilState | undefined 
   return states.find((s) => HOLDING.has(s.status)) ?? states.find((s) => s.status === 'paused')
 }
 
-/** 输入框提交走插话还是普通发送。★只有 running 才插话:暂停时插话没人听,finalizing 时输入框整个禁用。 */
-export function submitTarget(status?: CouncilStatus): 'interject' | 'send' {
-  return status === 'running' ? 'interject' : 'send'
+/** 轮间等用户(「每轮结束后等我」):引擎停在两轮之间,等人补充或「继续下一轮」。用户暂停 / 领导者失败的暂停不算。 */
+export function isCouncilBreak(s?: Pick<CouncilState, 'status' | 'waitingForUser'>): boolean {
+  return s?.status === 'paused' && !!s.waitingForUser
+}
+
+/**
+ * 输入框提交走插话还是普通发送。running 和轮间等用户时插话(引擎只在这两种时候收)。
+ * ★普通暂停时插话没人听,finalizing 时输入框整个禁用 —— 都走普通发送。
+ */
+export function submitTarget(s?: Pick<CouncilState, 'status' | 'waitingForUser'>): 'interject' | 'send' {
+  return s?.status === 'running' || isCouncilBreak(s) ? 'interject' : 'send'
+}
+
+/** 状态行的轮次。★轮间等用户时引擎已把 round 推到下一轮;这里说的是刚结束的那一轮(同电脑端)。 */
+export function councilRoundLabel(s: CouncilState): string {
+  if (isCouncilBreak(s)) return `第 ${s.round - 1} 轮结束`
+  return s.totalRounds ? `第 ${s.round} / ${s.totalRounds} 轮` : `第 ${s.round} 轮`
 }
 
 const ACTION_ERRORS: Record<string, string> = {

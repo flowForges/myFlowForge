@@ -2,7 +2,7 @@ import React, { memo, useEffect, useMemo, useState } from 'react'
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native'
 import type { CouncilState, CouncilStatus } from '../../../src/shared/council'
 import type { Msg } from '../data/useChat'
-import type { CouncilControls } from '../data/useCouncil'
+import { councilRoundLabel, isCouncilBreak, type CouncilControls } from '../data/useCouncil'
 import { councilHeader, isLeaderSeat, mmss, orderCandidates, splitCouncil, voteOf } from '../data/councilGroup'
 import { useC } from '../theme/theme'
 import { RADIUS } from '../theme/tokens'
@@ -303,6 +303,7 @@ export function CouncilBlock({
   const c = useC()
   const status = state?.status
   const live = !!status && LIVE.has(status)
+  const atBreak = isCouncilBreak(state)
 
   // 席位信息:优先用配置(颜色按配置顺序),消息里自带的 provider / model 兜底。
   // ★只在出现新席位时重算 —— 流式每一片都换 messages,SeatInfo 跟着换会让 memo 过的每一行都重渲染
@@ -367,7 +368,7 @@ export function CouncilBlock({
       {live && state ? (
         <View style={[st.status, { borderTopColor: c.border }]}>
           <T mono style={{ fontSize: 11, color: c.muted }}>
-            {state.totalRounds ? `第 ${state.round} / ${state.totalRounds} 轮` : `第 ${state.round} 轮`}
+            {councilRoundLabel(state)}
           </T>
           <View style={{ flexDirection: 'row', gap: 3 }}>
             {state.speaking.map((sid) => (
@@ -384,8 +385,8 @@ export function CouncilBlock({
             </Btn>
           ) : null}
           {status === 'paused' ? (
-            <Btn size="sm" disabled={!online} onPress={() => void controls.resume(id)}>
-              继续
+            <Btn size="sm" kind={atBreak ? 'pri' : 'default'} disabled={!online} onPress={() => void controls.resume(id)}>
+              {atBreak ? '继续下一轮' : '继续'}
             </Btn>
           ) : null}
           {/* ★再点一次「结束」(已在 finalizing)= 不出结果直接终止 */}
