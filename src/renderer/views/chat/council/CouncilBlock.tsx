@@ -303,6 +303,8 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
   const roundsSoFar = state?.round || Math.max(0, ...messages.map(m => m.council?.round ?? 0))
   const header = `AI 共商 · ${chars(topic, 20)} · ${seatCount} 方 · ${roundsSoFar} 轮 · ${elapsed > 0 ? Math.max(1, Math.round(elapsed / 60_000)) : 0} 分钟`
 
+  const breakAfter = status === 'paused' && state?.waitingForUser ? state.round - 1 : 0
+
   // 领导者失败后暂停:最后一条 AI 发言是领导者的 failed —— 「继续」旁边可以换一位领导者
   const lastAi = [...messages].reverse().find(m => m.who === 'ai')
   const leaderFailed = status === 'paused' && lastAi?.council?.stage === 'failed' && isLeader(lastAi.council.seat)
@@ -350,7 +352,11 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
 
       {live && state && (
         <div className="council-status">
-          <span className="council-round">{state.totalRounds ? `第 ${state.round} / ${state.totalRounds} 轮` : `第 ${state.round} 轮`}</span>
+          <span className="council-round">{
+            // ★轮间等用户时引擎已把 round 推到下一轮;这里说的是刚结束的那一轮
+            breakAfter ? `第 ${breakAfter} 轮结束`
+              : state.totalRounds ? `第 ${state.round} / ${state.totalRounds} 轮` : `第 ${state.round} 轮`
+          }</span>
           <span className="council-speaking">
             {state.speaking.map(sid => (
               <span key={sid} data-speaking={sid}><Logo id={seats.get(sid)?.provider ?? ''} /></span>
@@ -368,7 +374,9 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
             />
           )}
           {status === 'running' && <button type="button" className="council-ctl" onClick={() => controls.pause(id)}>暂停</button>}
-          {status === 'paused' && <button type="button" className="council-ctl" onClick={() => controls.resume(id, newLeader)}>继续</button>}
+          {status === 'paused' && (breakAfter
+            ? <button type="button" className="council-ctl primary" onClick={() => controls.resume(id)}>继续下一轮</button>
+            : <button type="button" className="council-ctl" onClick={() => controls.resume(id, newLeader)}>继续</button>)}
           <button
             type="button"
             className="council-ctl council-end"

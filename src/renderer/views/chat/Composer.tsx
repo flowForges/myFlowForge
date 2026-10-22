@@ -154,7 +154,9 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
   const queueing = !!busy || runQueued
   // ★共商进行中(running)回车 = 插话;暂停 / 结束后恢复普通发送。收尾(finalizing)时插话会被丢掉,干脆禁用输入。
   const councilActive = council?.active
-  const interjecting = councilActive?.status === 'running'
+  // ★轮间等用户(waitingForUser)时输入框是「补充」:提交同样走 interject,引擎把它归到下一轮
+  const councilBreak = councilActive?.status === 'paused' && !!councilActive.waitingForUser
+  const interjecting = councilActive?.status === 'running' || councilBreak
   const councilFinalizing = councilActive?.status === 'finalizing'
   const [councilOpen, setCouncilOpen] = useState(false)
   // ★设置区第一次打开才挂载(拉项目列表等),之后收起只是隐藏 —— 选好的席位不因收起而丢。
@@ -659,7 +661,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
           ref={taRef}
           id="composerInput"
           rows={1}
-          placeholder={interjecting ? '插话' : runQueued ? lockedReason : archived ? '工作区已归档，只能查看历史。恢复后才能继续会话。' : readOnly ? '只读会话 · 请点击上方「基于此历史继续」按钮开始新对话' : busy ? '当前任务执行中… 继续输入将排队,依次发送' : '给主代理下达任务…  ↩ 发送 · ⇧↩ 换行 · 可粘贴 / 拖入文件、截图'}
+          placeholder={councilBreak ? '补充' : interjecting ? '插话' : runQueued ? lockedReason : archived ? '工作区已归档，只能查看历史。恢复后才能继续会话。' : readOnly ? '只读会话 · 请点击上方「基于此历史继续」按钮开始新对话' : busy ? '当前任务执行中… 继续输入将排队,依次发送' : '给主代理下达任务…  ↩ 发送 · ⇧↩ 换行 · 可粘贴 / 拖入文件、截图'}
           value={text}
           disabled={effectiveDisabled || readOnly}
           onChange={e => {

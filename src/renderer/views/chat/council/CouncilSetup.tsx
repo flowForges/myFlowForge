@@ -129,6 +129,7 @@ export function CouncilSetup({ providers, lastConfig, projects, topic, attachmen
   const [seats, setSeats] = useState<CouncilSeat[]>([])
   const [leader, setLeader] = useState<CouncilSeat | null>(null)
   const [mode, setMode] = useState<CouncilMode>({ kind: 'rounds', rounds: COUNCIL_DEFAULT_ROUNDS })
+  const [pauseBetween, setPauseBetween] = useState(true)
   const [projectCwd, setProjectCwd] = useState('')
   const [kind, setKind] = useState<MaterialKind>('none')
   const [range, setRange] = useState('')
@@ -146,6 +147,7 @@ export function CouncilSetup({ providers, lastConfig, projects, topic, attachmen
     setSeats(kept)
     setLeader(usable(lastConfig.leader) ? lastConfig.leader : kept[0] ? asLeader(kept[0]) : null)
     setMode(lastConfig.mode)
+    setPauseBetween(lastConfig.pauseBetweenRounds !== false)
     const mt = lastConfig.materials
     if (mt?.projectCwd) {
       setProjectCwd(mt.projectCwd)
@@ -202,7 +204,7 @@ export function CouncilSetup({ providers, lastConfig, projects, topic, attachmen
     : undefined
   const materialsOk = !projectCwd || (kind === 'range' ? !!range.trim() : kind === 'files' ? fileList.length > 0 : true)
 
-  const cfg = { topic: topic.trim(), attachments, seats, leader: leader as CouncilSeat, mode, ...(materials ? { materials } : {}) }
+  const cfg: CouncilConfig = { topic: topic.trim(), attachments, seats, leader: leader as CouncilSeat, mode, pauseBetweenRounds: pauseBetween, ...(materials ? { materials } : {}) }
   const canStart = !blocked && materialsOk && validateCouncilConfig(cfg) === null
   const minutes = Math.ceil(estimateCouncilMinutes(cfg)[1])
 
@@ -229,6 +231,12 @@ export function CouncilSetup({ providers, lastConfig, projects, topic, attachmen
             <button type="button" disabled={rounds >= MAX_ROUNDS} onClick={() => setRounds(rounds + 1)}>+</button>
           </div>
         )}
+        <button
+          type="button"
+          className={`council-toggle${pauseBetween ? ' on' : ''}`}
+          aria-pressed={pauseBetween}
+          onClick={() => { touch(); setPauseBetween(v => !v) }}
+        >每轮结束后等我</button>
         <SeatPicker
           className="council-leader"
           label={`👑 ${leader?.label ?? ''}`.trim()}

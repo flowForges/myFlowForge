@@ -15,8 +15,8 @@ const providers: ProviderInfo[] = [
 
 beforeEach(() => { (window as any).forge = { openFiles: vi.fn(async () => []) }; vi.mocked(flashToast).mockClear() })
 
-function councilApi(status?: CouncilStatus): CouncilApi {
-  const active = status ? ({ id: 'c1', status } as CouncilState) : undefined
+function councilApi(status?: CouncilStatus, over: Partial<CouncilState> = {}): CouncilApi {
+  const active = status ? ({ id: 'c1', status, ...over } as CouncilState) : undefined
   return {
     states: active ? [active] : [], active, lastConfig: null,
     start: vi.fn(async () => {}), pause: vi.fn(), resume: vi.fn(), stop: vi.fn(),
@@ -169,6 +169,17 @@ describe('Composer · AI 共商', () => {
     fireEvent.keyDown(ta, { key: 'Enter' })
     expect(onSend).toHaveBeenCalledWith(expect.objectContaining({ text: 'hello' }))
     expect(council.interject).not.toHaveBeenCalled()
+  })
+
+  it('round break (waitingForUser) → placeholder 补充, Enter interjects instead of sending', () => {
+    const council = councilApi('paused', { waitingForUser: true })
+    const { ta, onSend } = renderComposer(council)
+    expect(ta.getAttribute('placeholder')).toBe('补充')
+    fireEvent.change(ta, { target: { value: '再考虑下成本' } })
+    fireEvent.keyDown(ta, { key: 'Enter' })
+    expect(council.interject).toHaveBeenCalledWith('c1', '再考虑下成本')
+    expect(onSend).not.toHaveBeenCalled()
+    expect(ta.value).toBe('')
   })
 
   it('finalizing council → input disabled', () => {

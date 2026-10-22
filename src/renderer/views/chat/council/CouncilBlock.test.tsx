@@ -83,6 +83,19 @@ describe('CouncilBlock', () => {
     expect(ctl.resume).toHaveBeenCalledWith('c1', undefined)
   })
 
+  it('round break: 第 k 轮结束 with a primary 继续下一轮 that resumes; no plain 继续', () => {
+    const ctl = renderBlock([topic, ai(A, 1, 'answer', 'a'), ai(B, 1, 'answer', 'b'), ai(L, 1, 'summary', 's')], state('paused', { round: 2, waitingForUser: true }))
+    const bar = document.querySelector('.council-status')!
+    expect(bar.querySelector('.council-round')!.textContent).toBe('第 1 轮结束')
+    expect(screen.queryByRole('button', { name: '继续' })).toBeNull()
+    const next = screen.getByRole('button', { name: '继续下一轮' })
+    expect(next.className).toContain('primary')
+    fireEvent.click(next)
+    expect(ctl.resume).toHaveBeenCalledWith('c1')
+    fireEvent.click(screen.getByRole('button', { name: '结束' }))
+    expect(ctl.stop).toHaveBeenCalledWith('c1', 'finalize')
+  })
+
   it('finalizing: 结束 aborts', () => {
     const ctl = renderBlock([topic], state('finalizing'))
     expect(screen.queryByRole('button', { name: '暂停' })).toBeNull()

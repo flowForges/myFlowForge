@@ -179,6 +179,34 @@ describe('CouncilSetup', () => {
     expect(onStart.mock.calls[0][0].leader).toMatchObject({ id: 'leader:codex:gpt-6', provider: 'codex', model: 'gpt-6' })
   })
 
+  it('「每轮结束后等我」 defaults on and is sent as pauseBetweenRounds; turning it off sends false', () => {
+    const { onStart } = setup()
+    addSeat('claude', 'opus')
+    addSeat('codex', 'gpt-6')
+    const wait = screen.getByRole('button', { name: '每轮结束后等我' })
+    expect(wait.getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(startBtn())
+    expect(onStart.mock.calls[0][0].pauseBetweenRounds).toBe(true)
+    fireEvent.click(wait)
+    expect(wait.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(startBtn())
+    expect(onStart.mock.calls[1][0].pauseBetweenRounds).toBe(false)
+  })
+
+  it('「每轮结束后等我」 restores from lastConfig (missing = on)', () => {
+    const seats = [
+      { id: 'codex:gpt-6', provider: 'codex', model: 'gpt-6', label: 'Codex · GPT-6' },
+      { id: 'claude:opus', provider: 'claude', model: 'opus', label: 'Claude Code · Opus' },
+    ]
+    const last: CouncilLastConfig = { seats, leader: { ...seats[1], id: 'leader:claude:opus' }, mode: { kind: 'rounds', rounds: 2 }, pauseBetweenRounds: false }
+    const { unmount } = setup({ lastConfig: last })
+    expect(screen.getByRole('button', { name: '每轮结束后等我' }).getAttribute('aria-pressed')).toBe('false')
+    unmount()
+    const { pauseBetweenRounds: _p, ...old } = last
+    setup({ lastConfig: old })
+    expect(screen.getByRole('button', { name: '每轮结束后等我' }).getAttribute('aria-pressed')).toBe('true')
+  })
+
   it('councilStartError maps IPC error codes', () => {
     expect(councilStartError(new Error("Error invoking remote method 'council:start': Error: busy"))).toBe('当前会话正忙')
     expect(councilStartError(new Error("Error invoking remote method 'council:start': Error: provider-not-installed"))).toBe('配置无效')

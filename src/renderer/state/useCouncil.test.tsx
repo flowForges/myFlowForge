@@ -116,6 +116,14 @@ describe('useCouncil', () => {
     expect(flashToast).toHaveBeenNthCalledWith(2, '当前会话正忙')
   })
 
+  it('finalize on a busy paused council → 当前会话正忙', async () => {
+    vi.mocked(flashToast).mockClear()
+    forge.councilStop.mockRejectedValueOnce(new Error("Error invoking remote method 'council:stop': Error: busy"))
+    const { result } = renderHook(() => useCouncil('/ws', 's1'))
+    await expect(result.current.stop('c1', 'finalize')).resolves.toBe(false)
+    expect(flashToast).toHaveBeenCalledWith('当前会话正忙')
+  })
+
   it('controls call the bridge with the council id', async () => {
     const { result } = renderHook(() => useCouncil('/ws', 's1'))
     await act(async () => { await result.current.start(config) })

@@ -16,6 +16,12 @@
 .council-stepper > button { width: 24px; height: 24px; border-radius: 6px; font-size: 14px; color: var(--fg-2); }
 .council-stepper > button:hover:not(:disabled) { background: var(--surface-2); }
 .council-stepper > button:disabled { opacity: .35; cursor: default; }
+.council-toggle {
+  height: 26px; padding: 0 10px; border-radius: 7px; font-size: 12px; font-weight: 500;
+  color: var(--muted); background: var(--surface); border: 1px solid var(--border-2);
+}
+.council-toggle:hover { color: var(--fg-2); }
+.council-toggle.on { color: var(--accent); border-color: color-mix(in oklab, var(--accent) 45%, var(--border-2)); background: color-mix(in oklab, var(--accent) 10%, var(--surface)); }
 .council-rounds { min-width: 16px; text-align: center; font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--fg); }
 
 .council-seats { gap: 6px; }
@@ -79,6 +85,8 @@
 .council-ctl:hover:not(:disabled) { color: var(--fg); background: var(--surface-2); }
 .council-ctl:disabled { opacity: .4; cursor: default; }
 .council-end:hover:not(:disabled) { color: var(--err); }
+.council-ctl.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+.council-ctl.primary:hover:not(:disabled) { background: var(--accent); color: var(--on-accent); filter: brightness(1.08); }
 
 .council-block .mc-logo-sm, .council-focus .mc-logo-sm {
   width: 16px; height: 16px; border-radius: 4px; display: inline-grid; place-items: center; font-size: 10px; flex: none;
