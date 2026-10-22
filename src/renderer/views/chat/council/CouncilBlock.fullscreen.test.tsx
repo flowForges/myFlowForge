@@ -145,6 +145,49 @@ describe('CouncilBlock fullscreen bottom bar', () => {
     expect(ctl.resume).toHaveBeenCalledWith('c1')
   })
 
+  it('round break: 继续下一轮 with typed text interjects first, then clears and resumes', async () => {
+    const ctl = renderBlock([topic, ...r1], state('paused', { round: 2, waitingForUser: true }))
+    ;(ctl.interject as ReturnType<typeof vi.fn>).mockResolvedValue(true)
+    goFullscreen()
+    fireEvent.change(area(), { target: { value: '补一句' } })
+    fireEvent.click(bottom()!.querySelector('button.council-ctl.primary')!)
+    await waitFor(() => expect(ctl.resume).toHaveBeenCalledWith('c1'))
+    expect(ctl.interject).toHaveBeenCalledWith('c1', '补一句')
+    expect((ctl.interject as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0])
+      .toBeLessThan((ctl.resume as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0])
+    expect(area().value).toBe('')
+  })
+
+  it('round break: 继续下一轮 keeps the text and does not resume when the interjection fails', async () => {
+    const ctl = renderBlock([topic, ...r1], state('paused', { round: 2, waitingForUser: true }))
+    ;(ctl.interject as ReturnType<typeof vi.fn>).mockResolvedValue(false)
+    goFullscreen()
+    fireEvent.change(area(), { target: { value: '补一句' } })
+    fireEvent.click(bottom()!.querySelector('button.council-ctl.primary')!)
+    await waitFor(() => expect(ctl.interject).toHaveBeenCalled())
+    await act(async () => {})
+    expect(ctl.resume).not.toHaveBeenCalled()
+    expect(area().value).toBe('补一句')
+  })
+
+  it('round break: 继续下一轮 with blank text resumes without interjecting', () => {
+    const ctl = renderBlock([topic, ...r1], state('paused', { round: 2, waitingForUser: true }))
+    goFullscreen()
+    fireEvent.change(area(), { target: { value: '   ' } })
+    fireEvent.click(bottom()!.querySelector('button.council-ctl.primary')!)
+    expect(ctl.interject).not.toHaveBeenCalled()
+    expect(ctl.resume).toHaveBeenCalledWith('c1')
+  })
+
+  it('round break: 继续下一轮 lives only in the bottom bar in fullscreen; normal mode keeps it in the status bar', () => {
+    renderBlock([topic, ...r1], state('paused', { round: 2, waitingForUser: true }))
+    expect(document.querySelector('.council-status')!.textContent).toContain('继续下一轮')
+    goFullscreen()
+    expect(document.querySelector('.council-status')!.textContent).not.toContain('继续下一轮')
+    expect(screen.getAllByRole('button', { name: '继续下一轮' })).toHaveLength(1)
+    expect(bottom()!.contains(screen.getByRole('button', { name: '继续下一轮' }))).toBe(true)
+  })
+
   it('round break: supplement submit → interject', () => {
     const ctl = renderBlock([topic, ...r1], state('paused', { round: 2, waitingForUser: true }))
     ;(ctl.interject as ReturnType<typeof vi.fn>).mockResolvedValue(true)

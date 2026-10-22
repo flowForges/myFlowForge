@@ -350,14 +350,22 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
   const showBar = fullscreen && (status === 'running' || atBreak)
   const [say, setSay] = useState('')
   const [saying, setSaying] = useState(false)
-  const interject = async () => {
+  /** 送出框里的插话 / 补充;框是空的算成功(没什么要送)。 */
+  const interject = async (): Promise<boolean> => {
     const text = say.trim()
-    if (!text || saying) return
+    if (!text) return true
+    if (saying) return false
     setSaying(true)
     const ok = await controls.interject(id, text)
     setSaying(false)
-    if (ok === false) return   // ★失败(已弹提示)不清空
+    if (ok === false) return false   // ★失败(已弹提示)不清空
     setSay('')
+    return true
+  }
+  // ★框里写了补充却直接点「继续下一轮」:先把补充送出去,送成功才继续;失败就停在轮间,字留着
+  const nextRound = async () => {
+    if (!say.trim()) { controls.resume(id); return }
+    if (await interject()) controls.resume(id)
   }
 
   // 全屏顶栏的跳转:只滚正文这一个容器
@@ -409,8 +417,9 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
               />
             )}
             {status === 'running' && <button type="button" className="council-ctl" onClick={() => controls.pause(id)}>暂停</button>}
+            {/* ★全屏时轮间的「继续下一轮」只放底栏(挨着补充框),顶栏不重复 */}
             {status === 'paused' && (breakAfter
-              ? <button type="button" className="council-ctl primary" onClick={() => controls.resume(id)}>继续下一轮</button>
+              ? !fullscreen && <button type="button" className="council-ctl primary" onClick={() => controls.resume(id)}>继续下一轮</button>
               : <button type="button" className="council-ctl" onClick={() => controls.resume(id, newLeader)}>继续</button>)}
             <button
               type="button"
@@ -531,7 +540,7 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
             onChange={e => setSay(e.target.value)}
             onKeyDown={enterSubmits(interject)}
           />
-          {atBreak && <button type="button" className="council-ctl primary" onClick={() => controls.resume(id)}>继续下一轮</button>}
+          {atBreak && <button type="button" className="council-ctl primary" onClick={() => void nextRound()}>继续下一轮</button>}
         </div>
       )}
 
