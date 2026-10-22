@@ -1301,7 +1301,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // 不等:resume 会一直跑到下一次暂停 / 结束
     void engine.resume(a.newLeader)
   })
-  on(CH.councilStop, (_e, a: { councilId: string; mode: 'finalize' | 'abort' }) => { councilOf(a.councilId).stop(a.mode) })
+  on(CH.councilStop, (_e, a: { councilId: string; mode: 'finalize' | 'abort' }) => {
+    const engine = councilOf(a.councilId)
+    const { workspacePath, sessionId, status } = engine.state
+    // ★暂停中点「结束并出结果」= 领导者重新开跑,和继续一样要占会话(R9);abort 不跑任何东西,不拦
+    if (a.mode === 'finalize' && status === 'paused'
+      && (councils.hasLive(workspacePath, sessionId, a.councilId) || chatQueue.sessionBusy(workspacePath, sessionId))) throw new Error('busy')
+    engine.stop(a.mode)
+  })
   on(CH.councilInterject, (_e, a: { councilId: string; text: string }) => {
     // via 同 chat:send:由这里按连接填,不信客户端自报;本机不填
     const via = _e?.client && _e.client.id !== 'local' ? _e.client.label : undefined

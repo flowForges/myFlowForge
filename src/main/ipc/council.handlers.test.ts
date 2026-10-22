@@ -267,6 +267,22 @@ describe('council controls', () => {
     expect(appended.some(m => m.council?.stage === 'interject')).toBe(false)
   })
 
+  it("stop('finalize') on a paused council is busy like resume; abort is not", async () => {
+    const a = await call(CH.councilStart, { workspacePath: ws, sessionId: 's1', config: cfg() })
+    await flush()
+    await call(CH.councilPause, { councilId: a })
+    await releaseAll()
+    const b = await call(CH.councilStart, { workspacePath: ws, sessionId: 's1', config: cfg() })
+    await flush()
+    await expect(call(CH.councilStop, { councilId: a, mode: 'finalize' })).rejects.toThrow('busy')
+    let list = await call(CH.councilList, { workspacePath: ws, sessionId: 's1' }) as CouncilState[]
+    expect(list.find(s => s.id === a)!.status).toBe('paused')
+    await call(CH.councilStop, { councilId: a, mode: 'abort' })
+    list = await call(CH.councilList, { workspacePath: ws, sessionId: 's1' }) as CouncilState[]
+    expect(list.find(s => s.id === a)!.status).toBe('aborted')
+    await call(CH.councilStop, { councilId: b, mode: 'abort' })
+  })
+
   it('unknown council id → rejects', async () => {
     await expect(call(CH.councilPause, { councilId: 'nope' })).rejects.toThrow('council-not-found')
   })

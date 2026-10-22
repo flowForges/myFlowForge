@@ -232,6 +232,64 @@ describe('CouncilEngine round break (pauseBetweenRounds)', () => {
   })
 })
 
+describe('CouncilEngine round break: review fixes', () => {
+  it('consensus time cap excludes time spent waiting in the break', async () => {
+    let t = T0
+    const h = harness(cfg(['A', 'B'], { kind: 'consensus', maxRounds: 5, maxMinutes: 10 }), c =>
+      (c.kind === 'vote' && c.seat === 'A' ? { ok: true, text: '不同意' } : undefined), { now: () => t })
+    await h.engine.start()
+    expect(h.engine.state).toMatchObject({ status: 'paused', waitingForUser: true, round: 2 })
+    t += 60 * 60_000   // 用户离开一小时
+    await h.engine.resume()
+    // 第 2 轮 A 仍不同意:没到上限 → 又停在第 3 轮前,而不是因「超时」直接出结果
+    expect(h.engine.state).toMatchObject({ status: 'paused', waitingForUser: true, round: 3 })
+    expect(h.persisted.at(-1)!.pausedMs).toBe(60 * 60_000)
+  })
+
+  it('a user pause does not count toward the time cap either, and the paused time survives restore', async () => {
+    let t = T0
+    let h!: ReturnType<typeof harness>
+    h = harness(cfg(['A', 'B'], { kind: 'consensus', maxRounds: 5, maxMinutes: 10 }, { pauseBetweenRounds: false }), c => {
+      if (c.kind === 'answer' && c.seat === 'A') h.engine.pause()
+      return c.kind === 'vote' && c.seat === 'A' && c.n === 2 ? { ok: true, text: '不同意' } : undefined
+    }, { now: () => t })
+    await h.engine.start()
+    expect(h.engine.state.status).toBe('paused')
+    t += 30 * 60_000
+    const snap = JSON.parse(JSON.stringify(h.persisted.at(-1)!))
+    const appended = [...h.appended]
+    const r = harness(cfg(['A', 'B'], { kind: 'consensus', maxRounds: 5, maxMinutes: 10 }, { pauseBetweenRounds: false }), c =>
+      (c.kind === 'vote' && c.seat === 'A' && c.n === 1 ? { ok: true, text: '不同意' } : undefined), { now: () => t, readMessages: () => appended }, snap)
+    await r.engine.resume()
+    expect(r.engine.state.status).toBe('done')
+    // 第 1 轮投了不同意且没超时 → 进了第 2 轮
+    expect(r.engine.state.round).toBe(2)
+  })
+
+  it("stop('finalize') during the break finalizes the round that ran, with the break's interjections", async () => {
+    const h = harness(cfg(['A', 'B']))
+    await h.engine.start()
+    h.engine.interject('补充一句')
+    h.engine.stop('finalize')
+    for (let i = 0; i < 20 && h.engine.state.status !== 'done'; i++) await new Promise(r => setTimeout(r, 5))
+    expect(h.engine.state).toMatchObject({ status: 'done', round: 1 })
+    const final = h.calls.at(-1)!
+    expect(final.kind).toBe('final')
+    expect(final.prompt).toContain('<<A#1>>')
+    expect(final.prompt).toContain('补充一句')
+    expect(h.appended.find(m => m.council?.stage === 'final')!.council!.round).toBe(1)
+  })
+
+  it('pause() during the break is a no-op and keeps waitingForUser', async () => {
+    const h = harness(cfg(['A', 'B']))
+    await h.engine.start()
+    h.engine.pause()
+    expect(h.engine.state).toMatchObject({ status: 'paused', waitingForUser: true, round: 2 })
+    await h.engine.resume()
+    expect(h.calls.filter(c => c.kind === 'critique').map(c => c.seat)).toEqual(['A', 'B'])
+  })
+})
+
 describe('CouncilEngine streaming events', () => {
   it('every streaming event carries the same council tag as its assistant-start', async () => {
     const h = harness(cfg(['A', 'B'], { kind: 'rounds', rounds: 2 }, { pauseBetweenRounds: false }))

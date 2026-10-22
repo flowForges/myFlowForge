@@ -22,6 +22,10 @@ export type PersistedCouncil = {
   spokenThisRound: string[]
   /** 领导者消息 id 的继续次数后缀;重启后接着这个数往上加,不和重启前的 id 撞 */
   resumes: number
+  /** 累计停着的时长(轮间等用户 + 用户暂停 + 失败暂停),共识模式的时间上限不算它;老快照没有 = 0 */
+  pausedMs?: number
+  /** 这次停下的时刻;没停 = 不填 */
+  pausedSince?: number
 }
 
 export type EngineDeps = {
@@ -77,6 +81,9 @@ export class CouncilEngine {
   private followingUp = false
   // ★每次继续都 +1,拼进领导者消息 id:暂停前失败的那条已经落盘,继续后重跑同一阶段不能和它撞 id
   private resumes = 0
+  // ★共识的时间上限只算讨论真正在跑的时间:停着等用户(轮间 / 暂停)的时间累计在这里,判上限时扣掉
+  private pausedMs = 0
+  private pausedSince: number | null = null
   // app 退出时被挂起:正在收尾的这次 run 不能再推进游标或记账(见 suspend())
   private suspended = false
   // ★已经写进会话、却还没进 transcript 的发言(第 1 轮 / 投票是整批结束才记账;崩溃或挂起时整批作废),按消息 id 索引。
@@ -116,6 +123,9 @@ export class CouncilEngine {
     this.phase = p.phase
     this.spokenThisRound = [...p.spokenThisRound]
     this.resumes = p.resumes
+    this.pausedMs = p.pausedMs ?? 0
+    // 进行中被恢复(崩溃)的也是从现在起算停着
+    this.pausedSince = this.st.status === 'paused' ? (p.pausedSince ?? this.deps.now()) : null
     this.prepared = p.state.round > 0
     for (const m of this.deps.readMessages(this.ws, this.sid)) {
       if (m.who !== 'ai' || m.council?.id !== this.id) continue
@@ -131,6 +141,7 @@ export class CouncilEngine {
     return {
       state: this.state, transcript: this.transcript.toJSON(), failures: { ...this.failures }, dropped: [...this.dropped],
       phase: this.phase, spokenThisRound: [...this.spokenThisRound], resumes: this.resumes,
+      pausedMs: this.pausedMs, ...(this.pausedSince !== null ? { pausedSince: this.pausedSince } : {}),
     }
   }
 
@@ -164,6 +175,7 @@ export class CouncilEngine {
     this.resumes++
     this.st.status = 'running'
     delete this.st.waitingForUser
+    this.leavePause()
     await this.drive()
   }
 
@@ -177,6 +189,7 @@ export class CouncilEngine {
     this.suspended = true
     this.pauseRequested = false
     this.st.status = 'paused'
+    this.enterPause()
     this.cancelInflight()
     this.st.speaking = []
     this.changed()
@@ -202,8 +215,11 @@ export class CouncilEngine {
     this.stopMode = 'finalize'
     this.pauseRequested = false
     if (status === 'paused') {
+      // ★轮间等用户时下一轮还没开始:最终结果按刚跑完的那一轮出(等待期间的补充归在下一轮,finalize 照样带上)
+      if (this.st.waitingForUser) this.st.round--
       this.st.status = 'running'
       delete this.st.waitingForUser
+      this.leavePause()
       void this.drive()
       return
     }
@@ -409,6 +425,7 @@ export class CouncilEngine {
       this.pauseRequested = false
       this.st.status = 'paused'
       this.st.waitingForUser = true
+      this.enterPause()
     }
     this.changed()
   }
@@ -478,7 +495,7 @@ export class CouncilEngine {
     const agreed = results.every(r => r.ok && parseVote(r.text) === 'agree')
     const mode = this.cfg.mode
     const capped = mode.kind === 'consensus'
-      && (round >= mode.maxRounds || this.deps.now() - this.st.startedAt >= mode.maxMinutes * 60_000)
+      && (round >= mode.maxRounds || this.activeMs() >= mode.maxMinutes * 60_000)
     if (agreed || capped || this.active().length <= 1) this.phase = 'final'
     else this.nextRound()
   }
@@ -528,7 +545,24 @@ export class CouncilEngine {
     // 领导者失败等原因先停下时,用户之前点的暂停已经兑现,不能留到继续之后再停一次
     this.pauseRequested = false
     this.st.status = 'paused'
+    this.enterPause()
     this.changed()
+  }
+
+  private enterPause(): void {
+    if (this.pausedSince === null) this.pausedSince = this.deps.now()
+  }
+
+  private leavePause(): void {
+    if (this.pausedSince === null) return
+    this.pausedMs += this.deps.now() - this.pausedSince
+    this.pausedSince = null
+  }
+
+  /** 讨论真正在跑的时长:墙钟减去停着的时间。 */
+  private activeMs(): number {
+    const pausedNow = this.pausedSince !== null ? this.deps.now() - this.pausedSince : 0
+    return this.deps.now() - this.st.startedAt - this.pausedMs - pausedNow
   }
 
   // ---- 发言 ----
