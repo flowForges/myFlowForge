@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { CouncilBlock, type CouncilControls } from './CouncilBlock'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+// ★css 在测试里被处理成空串,直接读源文件
+const councilCss = readFileSync(join(__dirname, 'council.css'), 'utf8')
 import type { ChatMessage, ProviderInfo } from '@shared/types'
 import type { CouncilSeat, CouncilState, CouncilStatus, CouncilStage } from '@shared/council'
 
@@ -51,19 +56,55 @@ describe('CouncilBlock grid', () => {
       ],
       st: state('running', { round: 3 }),
     }))
+    // ★所有轮次共用一个网格 / 一个横向滚动容器:列在各轮之间对齐、一起滚
+    const grids = document.querySelectorAll('.council-grid')
+    expect(grids).toHaveLength(1)
+    expect((grids[0] as HTMLElement).style.gridTemplateColumns).toBe('repeat(2, minmax(260px, 1fr))')
+    expect(grids[0].parentElement!.className).toContain('council-grid-scroll')
     for (const r of [1, 2]) {
-      const grid = roundSec(r).querySelector('.council-grid') as HTMLElement
-      expect(grid.style.gridTemplateColumns).toBe('repeat(2, minmax(260px, 1fr))')
-      const cols = Array.from(grid.querySelectorAll(':scope > .council-col'))
+      const cols = Array.from(roundSec(r).querySelectorAll(':scope > .council-col'))
       expect(cols.map(c => c.getAttribute('data-seat'))).toEqual([B.id, A.id])
       const leader = roundSec(r).querySelector('.council-leader-card') as HTMLElement
       expect(leader.textContent).toContain('👑')
       expect(leader.textContent).toContain(r === 1 ? '第一轮小结' : '第二轮小结')
-      // 领导者卡在这一行的下面,不在列里
-      expect(grid.contains(leader)).toBe(false)
-      expect(grid.compareDocumentPosition(leader) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(leader.parentElement!.className).toContain('council-span')
+      expect(cols.at(-1)!.compareDocumentPosition(leader) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     }
     expect(roundSec(2).querySelector(`.council-col[data-seat="${A.id}"]`)!.textContent).toContain('甲二')
+  })
+
+  it('a dropped seat keeps its column position in later rounds with a muted — cell', () => {
+    render(el({
+      messages: [topic, ai(A, 1, 'answer', 'a'), ai(B, 1, 'failed', ''), ai(B, 2, 'failed', ''), ai(A, 2, 'critique', 'a2'), ai(A, 3, 'critique', 'a3')],
+      st: state('running', { round: 3, dropped: [B.id] }),
+    }))
+    for (const r of [1, 2, 3]) {
+      const cols = Array.from(roundSec(r).querySelectorAll(':scope > .council-col'))
+      expect(cols.map(c => c.getAttribute('data-seat'))).toEqual([B.id, A.id])
+    }
+    expect(roundSec(1).querySelector(`.council-col[data-seat="${B.id}"] .council-failed`)).not.toBeNull()
+    const empty = roundSec(3).querySelector(`.council-col[data-seat="${B.id}"] .council-cell.empty`)!
+    expect(empty.textContent).toBe('—')
+    expect(roundSec(3).querySelector('.council-cell.waiting')).toBeNull()
+  })
+
+  it('consensus: votes render below the draft they vote on, seat-aligned', () => {
+    render(el({
+      messages: [
+        topic, ai(A, 1, 'answer', 'a'), ai(B, 1, 'answer', 'b'),
+        ai(L, 1, 'consensus-draft', '草稿一'),
+        ai(B, 1, 'consensus-vote', '同意'), ai(A, 1, 'consensus-vote', '不同意,风险'),
+      ],
+      st: state('running', { totalRounds: null, round: 2, config: { ...state('running').config, mode: { kind: 'consensus', maxRounds: 5, maxMinutes: 30 } } }),
+    }))
+    const sec = roundSec(1)
+    const draft = sec.querySelector('.council-leader-card[data-stage="consensus-draft"]')!
+    const answer = sec.querySelector('.council-cell[data-stage="answer"]')!
+    const votes = Array.from(sec.querySelectorAll('.council-cell[data-stage="consensus-vote"]'))
+    expect(votes.map(v => v.getAttribute('data-seat'))).toEqual([B.id, A.id])
+    expect(answer.compareDocumentPosition(draft) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    for (const v of votes) expect(draft.compareDocumentPosition(v) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(votes[0].querySelector('.council-vote')!.getAttribute('data-vote')).toBe('agree')
   })
 
   it('cells show the full text (no clamp) in a scrollable body', () => {
@@ -128,7 +169,7 @@ describe('CouncilBlock grid', () => {
   })
 
   it('a seat dropped after two failures gets no placeholder', () => {
-    render(el({ messages: [topic, ai(A, 1, 'answer', 'a'), ai(B, 1, 'failed', ''), ai(B, 2, 'failed', ''), ai(A, 2, 'critique', 'a2')], st: state('running', { round: 3 }) }))
+    render(el({ messages: [topic, ai(A, 1, 'answer', 'a'), ai(B, 1, 'failed', ''), ai(B, 2, 'failed', ''), ai(A, 2, 'critique', 'a2')], st: state('running', { round: 3, dropped: [B.id] }) }))
     expect(roundSec(3).querySelector(`.council-cell.waiting[data-seat="${B.id}"]`)).toBeNull()
     expect(roundSec(3).querySelector(`.council-cell.waiting[data-seat="${A.id}"]`)).not.toBeNull()
   })
@@ -138,7 +179,8 @@ describe('CouncilBlock grid', () => {
     render(el({ messages: [topic, ai(A, 1, 'answer', 'a'), ai(B, 1, 'answer', 'b'), inter, ai(A, 2, 'critique', 'a2')], st: state('running', { round: 2 }) }))
     const row = roundSec(2).querySelector('.council-interject') as HTMLElement
     expect(row.textContent).toContain('补充一句')
-    expect(row.closest('.council-grid')).toBeNull()
+    expect(row.closest('.council-span')).not.toBeNull()   // 整行宽,不在某一列里
+    expect(row.closest('.council-col')).toBeNull()
     expect(roundSec(1).querySelector('.council-interject')).toBeNull()
   })
 
@@ -148,6 +190,31 @@ describe('CouncilBlock grid', () => {
     expect(document.querySelector('.council-block')!.className).toContain('fullscreen')
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(document.querySelector('.council-block')!.className).not.toContain('fullscreen')
+  })
+
+  it('focus overlay takes focus and gives it back to the ⤢ button on close', () => {
+    render(el({ messages: [topic, ai(A, 1, 'answer', '甲'), ai(B, 1, 'answer', '乙')], st: state('running') }))
+    const zoom = document.querySelector(`.council-cell[data-seat="${A.id}"] .council-zoom`) as HTMLButtonElement
+    zoom.focus()
+    fireEvent.click(zoom)
+    expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(document.activeElement).toBe(zoom)
+  })
+
+  it('header click in fullscreen exits fullscreen instead of collapsing the block', () => {
+    render(el({ messages: [topic, ai(A, 1, 'answer', 'a')], st: state('running') }))
+    fireEvent.click(screen.getByRole('button', { name: '全屏' }))
+    fireEvent.click(document.querySelector('.council-head')!)
+    const block = document.querySelector('.council-block')!
+    expect(block.className).not.toContain('fullscreen')
+    expect(block.className).toContain('open')
+  })
+
+  it('fullscreen block and focus overlay opt out of the titlebar drag region (needs a real-app check too)', () => {
+    const rule = (sel: string) => new RegExp(sel.replace(/\./g, '\\.') + '[^{]*\\{[^}]*-webkit-app-region:\\s*no-drag')
+    expect(councilCss).toMatch(rule('.council-block.fullscreen'))
+    expect(councilCss).toMatch(rule('.council-focus-backdrop'))
   })
 
   it('a delta in one cell does not re-render the other cells', () => {

@@ -133,12 +133,19 @@ function WaitingCell({ sid, seat }: { sid: string; seat: SeatInfo }) {
 /** ⤢ 放大:单条发言全尺寸。挂到 body 上 —— 不受区块的滚动 / 裁剪影响。 */
 function FocusOverlay({ msg, seat, streaming, onClose }: { msg: ChatMessage; seat: SeatInfo; streaming: boolean; onClose: () => void }) {
   const leader = isLeader(msg.council?.seat)
+  const closeBtn = useRef<HTMLButtonElement>(null)
+  // 焦点移进来;关掉时还给打开它的那个 ⤢
+  useEffect(() => {
+    const prev = document.activeElement as HTMLElement | null
+    closeBtn.current?.focus()
+    return () => { prev?.focus?.() }
+  }, [])
   return createPortal(
     <div className="council-focus-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}>
       <div className="council-focus" role="dialog" aria-modal="true" aria-label={seat.label} style={{ '--seat': seat.color } as React.CSSProperties}>
         <div className="council-who-line">
           {leader && <span aria-hidden="true">👑</span>}<Logo id={seat.provider} /><span className="council-who-label">{seat.label}</span>
-          <button type="button" className="council-more council-zoom" aria-label="关闭" onClick={onClose}>✕</button>
+          <button ref={closeBtn} type="button" className="council-more council-zoom" aria-label="关闭" onClick={onClose}>✕</button>
         </div>
         <UtteranceThink msg={msg} streaming={streaming} />
         <div className="council-focus-body msg-body ans"><Markdown text={msg.text} streaming={streaming} />{streaming && <span className="pending" />}</div>
@@ -186,19 +193,13 @@ function Followups({ list, seatOf, streamingIds }: {
       : <SeatRow key={m.id} msg={m} seat={seatOf(m)} streaming={streamingIds.has(m.id)} />)}</>
 }
 
-/** 和引擎同一判法:连续失败两次即本场除名 —— 除名的席位当前轮不再画等待占位。 */
-const DROP_AFTER_FAILURES = 2
-function droppedSeats(messages: ChatMessage[]): Set<string> {
-  const streak = new Map<string, number>()
-  const out = new Set<string>()
-  for (const m of messages) {
-    const sid = m.council?.seat
-    if (m.who !== 'ai' || !sid) continue
-    const n = m.council?.stage === 'failed' ? (streak.get(sid) ?? 0) + 1 : 0
-    streak.set(sid, n)
-    if (n >= DROP_AFTER_FAILURES) out.add(sid)
-  }
-  return out
+/** 投票(含投票时失败的那条:failed 消息的 id 里还留着原阶段)—— 投票排在领导者草稿下面那一排。 */
+const isVote = (m: ChatMessage) =>
+  m.council?.stage === 'consensus-vote' || (m.council?.stage === 'failed' && m.id.includes(':consensus-vote'))
+
+/** 这一轮没有这位席位的发言(已除名 / 没轮到):占住列位,各轮的列才对得齐。 */
+function EmptyCell({ sid }: { sid: string }) {
+  return <div className="council-cell empty" data-seat={sid}>—</div>
 }
 
 // ---- 区块 ----
@@ -259,7 +260,9 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
 
   // ★当前轮还没开口的席位画虚线占位。轮间等用户时 state.round 已经是下一轮,那一轮还没开始 —— 不画
   const placeholderRound = state && !state.waitingForUser && (status === 'running' || status === 'paused') && !final ? state.round : 0
-  const dropped = useMemo(() => droppedSeats(messages), [messages])
+  // ★除名以引擎为准(state.dropped);状态推送每次都是新对象,按内容判断
+  const droppedKey = state?.dropped?.join('|') ?? ''
+  const dropped = useMemo(() => new Set(droppedKey ? droppedKey.split('|') : []), [droppedKey])
   const roundList = useMemo(() => {
     const list = [...rounds.keys()]
     if (placeholderRound && !rounds.has(placeholderRound)) list.push(placeholderRound)
@@ -337,7 +340,7 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
   return (
     <section className={`council-block${open ? ' open' : ''}${fullscreen ? ' fullscreen' : ''}`} data-council={id} data-status={status}>
       <div className="council-headbar">
-        <button type="button" className="council-head" aria-expanded={open} onClick={() => setUserOpen(!open)}>
+        <button type="button" className="council-head" aria-expanded={open} onClick={() => (fullscreen ? setFullscreen(false) : setUserOpen(!open))}>
           <span className="council-title">{header}</span>
           <span className="council-chev" aria-hidden="true">{EXPAND_ICON}</span>
         </button>
@@ -388,42 +391,52 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
       {open && (
         <div className="council-body">
           {topicMsg && <UserRow msg={topicMsg} className="council-topic" />}
-          {roundList.map(r => {
-            const list = rounds.get(r) ?? []
-            const inter = list.filter(m => m.who === 'user')
-            const leader = list.filter(m => m.who === 'ai' && isLeader(m.council?.seat))
-            const bySeat = new Map<string, ChatMessage[]>()
-            for (const m of list) {
-              const sid = m.council?.seat
-              if (m.who !== 'ai' || !sid || isLeader(sid)) continue
-              bySeat.set(sid, [...(bySeat.get(sid) ?? []), m])
-            }
-            const cols = columns.filter(sid => bySeat.has(sid) || (r === placeholderRound && !dropped.has(sid)))
-            return (
-              <div className="council-round-sec" key={r} data-round={r}>
-                <div className="council-divider" role="separator"><span className="line" /><span className="lbl">第 {r} 轮</span><span className="line" /></div>
-                {inter.map(m => <UserRow key={m.id} msg={m} className="council-interject" />)}
-                {cols.length > 0 && (
-                  <div className="council-grid-scroll">
-                    <div className="council-grid" style={{ gridTemplateColumns: `repeat(${cols.length}, minmax(260px, 1fr))` }}>
-                      {cols.map(sid => {
-                        const said = bySeat.get(sid)
-                        const seat = seats.get(sid) ?? FALLBACK_SEAT
-                        return (
-                          <div className="council-col" key={sid} data-seat={sid}>
-                            {said
-                              ? said.map(m => <Cell key={m.id} msg={m} seat={seat} streaming={streamingIds.has(m.id)} onFocus={setFocusId} />)
-                              : <WaitingCell sid={sid} seat={seat} />}
-                          </div>
-                        )
-                      })}
+          {/* ★全部轮次放进同一个网格、同一个横向滚动容器:列宽一致、各轮的列上下对齐、一起滚 */}
+          {columns.length > 0 && roundList.length > 0 && (
+            <div className="council-grid-scroll">
+              <div className="council-grid" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(260px, 1fr))` }}>
+                {roundList.map(r => {
+                  const list = rounds.get(r) ?? []
+                  const inter = list.filter(m => m.who === 'user')
+                  const leader = list.filter(m => m.who === 'ai' && isLeader(m.council?.seat))
+                  const said = new Map<string, ChatMessage[]>()
+                  const votes = new Map<string, ChatMessage[]>()
+                  for (const m of list) {
+                    const sid = m.council?.seat
+                    if (m.who !== 'ai' || !sid || isLeader(sid)) continue
+                    const into = isVote(m) ? votes : said
+                    into.set(sid, [...(into.get(sid) ?? []), m])
+                  }
+                  const current = r === placeholderRound
+                  const row = (by: Map<string, ChatMessage[]>, kind: string) => columns.map(sid => {
+                    const own = by.get(sid)
+                    const seat = seats.get(sid) ?? FALLBACK_SEAT
+                    return (
+                      <div className={`council-col ${kind}`} key={`${kind}-${sid}`} data-seat={sid}>
+                        {own
+                          ? own.map(m => <Cell key={m.id} msg={m} seat={seat} streaming={streamingIds.has(m.id)} onFocus={setFocusId} />)
+                          : current && !dropped.has(sid) ? <WaitingCell sid={sid} seat={seat} /> : <EmptyCell sid={sid} />}
+                      </div>
+                    )
+                  })
+                  return (
+                    <div className="council-round-sec" key={r} data-round={r}>
+                      <div className="council-divider council-span" role="separator"><span className="line" /><span className="lbl">第 {r} 轮</span><span className="line" /></div>
+                      {inter.map(m => <div className="council-span" key={m.id}><UserRow msg={m} className="council-interject" /></div>)}
+                      {(said.size > 0 || current) && row(said, 'speech')}
+                      {leader.map(m => (
+                        <div className="council-span" key={m.id}>
+                          <LeaderCard msg={m} seat={seatOf(m)} streaming={streamingIds.has(m.id)} onFocus={setFocusId} />
+                        </div>
+                      ))}
+                      {/* ★投票是对上面那份草稿的表态,排在草稿下面,按席位列对齐 */}
+                      {votes.size > 0 && row(votes, 'votes')}
                     </div>
-                  </div>
-                )}
-                {leader.map(m => <LeaderCard key={m.id} msg={m} seat={seatOf(m)} streaming={streamingIds.has(m.id)} onFocus={setFocusId} />)}
+                  )
+                })}
               </div>
-            )
-          })}
+            </div>
+          )}
           {final && finalStreaming && <LeaderCard msg={final} seat={seatOf(final)} streaming onFocus={setFocusId} />}
         </div>
       )}

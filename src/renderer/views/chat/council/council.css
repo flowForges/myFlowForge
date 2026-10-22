@@ -107,6 +107,10 @@
 /* 每轮一行、每位席位一列;窄了横向滚动,不压缩列宽 */
 .council-grid-scroll { overflow-x: auto; margin: 0 -2px; padding: 0 2px 2px; }
 .council-grid { display: grid; gap: 8px; align-items: start; }
+.council-round-sec { display: contents; }
+.council-span { grid-column: 1 / -1; min-width: 0; }
+.council-grid > .council-round-sec > .council-divider { margin: 4px 0 0; }
+.council-span > .council-summary, .council-span > .council-failed-row, .council-span > .msg.user { margin: 0; }
 .council-col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .council-cell {
   padding: 8px 10px; border-radius: 10px; background: var(--surface);
@@ -116,6 +120,7 @@
 .council-cell.waiting { background: transparent; border: 1px dashed var(--border-2); border-top: 2px dashed var(--seat, var(--border-2)); opacity: .7; }
 .council-cell.waiting .council-who-line { margin-bottom: 0; }
 .council-cell.failed { display: flex; align-items: center; }
+.council-cell.empty { background: transparent; border: 1px dashed transparent; color: var(--faint); text-align: center; font-size: 12px; padding: 6px 10px; }
 .council-who-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .council-who-line .council-zoom { margin-left: auto; font-size: 13px; line-height: 1; }
 .council-cell-body { max-height: 420px; overflow: auto; font-size: 13px; overscroll-behavior: contain; }
@@ -134,7 +139,8 @@
 .council-summary.live { border-color: var(--accent); }
 
 /* ⤢ 放大:单条发言 */
-.council-focus-backdrop { position: fixed; inset: 0; z-index: 160; background: rgba(0,0,0,.4); display: grid; place-items: center; padding: 32px; }
+/* ★无边框窗口顶部是拖拽区:铺满窗口的浮层必须退出拖拽,否则顶部那条点不动(要真机确认) */
+.council-focus-backdrop { -webkit-app-region: no-drag; position: fixed; inset: 0; z-index: 160; background: rgba(0,0,0,.4); display: grid; place-items: center; padding: 32px; }
 .council-focus {
   width: min(960px, 100%); max-height: 100%; display: flex; flex-direction: column; padding: 12px 16px; border-radius: 14px;
   background: var(--bg-2); border: 1px solid var(--border-2); border-top: 3px solid var(--seat, var(--accent));
@@ -147,6 +153,7 @@
 .council-full { font-size: 14px; line-height: 1; }
 .council-full[aria-pressed="true"] { color: var(--accent); }
 .council-block.fullscreen {
+  -webkit-app-region: no-drag;
   position: fixed; inset: 0; z-index: 150; margin: 0; border-radius: 0; border-width: 0;
   display: flex; flex-direction: column; overflow: auto;
 }
