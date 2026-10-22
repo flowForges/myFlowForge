@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import type { Attachment, ProviderInfo } from '@shared/types'
 import { getBuiltinProvider } from '@shared/providerCatalog'
 import {
@@ -103,7 +103,13 @@ export function SeatPicker({ className, label, trigger, providers, taken, onPick
   )
 }
 
+/** 面板没有自己的「开始讨论」按钮(B4):输入框的发送键 / 回车经它开始。 */
+export type CouncilSetupHandle = { start(): void }
+
 type Props = {
+  ref?: React.Ref<CouncilSetupHandle>
+  /** 能否开始变了就报上去 —— 输入框的「开始讨论」按钮跟着它启用 / 禁用。 */
+  onCanStartChange?: (ok: boolean) => void
   providers: ProviderInfo[]
   lastConfig: CouncilLastConfig | null
   projects: () => Promise<{ name: string; cwd: string }[]>
@@ -117,7 +123,7 @@ type Props = {
   onStart: (cfg: CouncilConfig) => void | Promise<void>
 }
 
-export function CouncilSetup({ providers, lastConfig, projects, topic, attachments, blocked, hidden, onStart }: Props) {
+export function CouncilSetup({ ref, onCanStartChange, providers, lastConfig, projects, topic, attachments, blocked, hidden, onStart }: Props) {
   // 只列本机装了、且第一期开放的 CLI;没有模型列表的选不出席位,也不列。
   const pickable = useMemo(
     () => providers.filter(p => p.installed && isCouncilProvider(p.id) && p.models.length > 0),
@@ -207,6 +213,9 @@ export function CouncilSetup({ providers, lastConfig, projects, topic, attachmen
   const cfg: CouncilConfig = { topic: topic.trim(), attachments, seats, leader: leader as CouncilSeat, mode, pauseBetweenRounds: pauseBetween, ...(materials ? { materials } : {}) }
   const canStart = !blocked && materialsOk && validateCouncilConfig(cfg) === null
   const minutes = Math.ceil(estimateCouncilMinutes(cfg)[1])
+  // ★不带依赖:每次渲染都换成拿着最新 cfg 的那个 start
+  useImperativeHandle(ref, () => ({ start: () => { if (canStart) void onStart(cfg) } }))
+  useEffect(() => { onCanStartChange?.(canStart) }, [canStart, onCanStartChange])
 
   const taken = useMemo(() => new Set(seats.map(s => s.id)), [seats])
   const rounds = mode.kind === 'rounds' ? mode.rounds : COUNCIL_DEFAULT_ROUNDS
@@ -291,12 +300,6 @@ export function CouncilSetup({ providers, lastConfig, projects, topic, attachmen
         )}
         <div className="council-spacer" />
         <span className="council-eta">约 {minutes} 分钟</span>
-        <button
-          type="button"
-          className="council-start"
-          disabled={!canStart}
-          onClick={() => { if (canStart) void onStart(cfg) }}
-        >开始讨论</button>
       </div>
     </div>
   )

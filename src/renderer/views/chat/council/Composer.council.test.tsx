@@ -71,6 +71,40 @@ describe('Composer · AI 共商', () => {
     expect(ta.value).toBe('')
   })
 
+  it('with the panel open the send button becomes 开始讨论 and Enter starts; closing restores normal send', async () => {
+    const council = councilApi()
+    const { ta, onSend } = renderComposer(council)
+    fireEvent.change(ta, { target: { value: '议题' } })
+    fireEvent.click(toggle())
+    // 面板里没有自己的开始按钮:唯一的「开始讨论」就是输入框的发送键
+    expect(document.querySelector('.council-setup')!.textContent).not.toContain('开始讨论')
+    const go = screen.getByRole('button', { name: '开始讨论' }) as HTMLButtonElement
+    expect(go.id).toBe('sendBtn')
+    expect(go.disabled).toBe(true)
+    addSeat('codex', 'gpt-6')
+    addSeat('claude', 'opus')
+    expect(go.disabled).toBe(false)
+    fireEvent.keyDown(ta, { key: 'Enter' })
+    await waitFor(() => expect(council.start).toHaveBeenCalledTimes(1))
+    expect((council.start as ReturnType<typeof vi.fn>).mock.calls[0][0].topic).toBe('议题')
+    expect(onSend).not.toHaveBeenCalled()
+    await waitFor(() => expect(panel()).toBeNull())
+    expect(screen.queryByRole('button', { name: '开始讨论' })).toBeNull()
+    fireEvent.change(ta, { target: { value: 'hi' } })
+    fireEvent.keyDown(ta, { key: 'Enter' })
+    expect(onSend).toHaveBeenCalledWith(expect.objectContaining({ text: 'hi' }))
+  })
+
+  it('Enter with the panel open and nothing startable does not send a chat message', () => {
+    const council = councilApi()
+    const { ta, onSend } = renderComposer(council)
+    fireEvent.change(ta, { target: { value: '议题' } })
+    fireEvent.click(toggle())
+    fireEvent.keyDown(ta, { key: 'Enter' })
+    expect(onSend).not.toHaveBeenCalled()
+    expect(council.start).not.toHaveBeenCalled()
+  })
+
   it('start disabled while a workflow run is active/queued in this session (R13)', () => {
     const { ta } = renderComposer(councilApi(), vi.fn(), false, '工作流运行中')
     fireEvent.change(ta, { target: { value: 'topic' } })

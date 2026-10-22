@@ -10,7 +10,7 @@ import { shouldOffloadPaste, pastedFileName, pastedFileNameForFile, base64OfUtf8
 import { agentIcon } from '../../components/AgentLogo'
 import type { CouncilApi } from '../../state/useCouncil'
 import type { CouncilConfig } from '@shared/council'
-import { CouncilSetup, councilStartError } from './council/CouncilSetup'
+import { CouncilSetup, councilStartError, type CouncilSetupHandle } from './council/CouncilSetup'
 import { flashToast } from '../../components/flashToast'
 
 // ---- module-level SVG consts (1:1 with the prototype markup) ----
@@ -164,6 +164,10 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
   // 开始请求在路上时按钮禁用,双击不会发两次 council:start。
   const [councilStarting, setCouncilStarting] = useState(false)
   const councilStartingRef = useRef(false)
+  // ★面板开着时发送键 = 「开始讨论」(B4):能否开始由面板报上来,开始也交给面板(配置在它那儿)
+  const councilSetupRef = useRef<CouncilSetupHandle>(null)
+  const [councilCanStart, setCouncilCanStart] = useState(false)
+  const councilGo = !!council && councilOpen
   const effectiveDisabled = disabled || councilFinalizing
   const dk = draftKey ?? ''
   const [text, setText] = useState(() => (dk ? draftStore[dk]?.text : '') ?? '')
@@ -360,6 +364,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
   }
 
   function send() {
+    if (councilGo) { councilSetupRef.current?.start(); return }
     const t = text.trim()
     if (!t || effectiveDisabled) return
     if (interjecting && council && councilActive) {
@@ -592,6 +597,8 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
           已有一场共商未结束、输入框本身不可用。 */}
       {council && councilMounted && (
         <CouncilSetup
+          ref={councilSetupRef}
+          onCanStartChange={setCouncilCanStart}
           hidden={!councilOpen}
           providers={providers}
           lastConfig={council.lastConfig}
@@ -883,8 +890,11 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
             {expanded ? COLLAPSE_ICON : EXPAND_ICON}
           </button>
           <div className="spacer" />
+          {/* ★停止键优先:正在跑时它是唯一能停下当前回复的地方;那时也开始不了共商 */}
           {running && !text.trim() ? (
             <button className="send stop" id="stopBtn" title="停止 (Esc)" onClick={handleStop}>{STOP_ICON}</button>
+          ) : councilGo ? (
+            <button className="send council-go" id="sendBtn" disabled={!councilCanStart} onClick={send}>开始讨论</button>
           ) : (
             <button className={`send${queueing ? ' queueing' : ''}`} id="sendBtn" title={browserConflict ?? (runQueued ? lockedReason : busy ? '执行中 · 发送将进入队列' : '发送 (回车)')} disabled={effectiveDisabled || readOnly || (browserBlocked && !interjecting)} onClick={send}>{SEND_ARROW}</button>
           )}
