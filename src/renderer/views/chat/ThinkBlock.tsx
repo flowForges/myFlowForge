@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ChatThink } from '@shared/types'
 import { ThinkSpinner } from './Spinners'
 
@@ -17,11 +17,15 @@ const GLYPH = (
 interface Props {
   think: ChatThink
   streaming: boolean
+  /** 覆盖 think.label(共商单元格统一叫「思考」)。 */
+  label?: string
+  /** 流式时步骤区跟着滚到底 —— 只在外面给步骤区限了高(共商单元格)时才有意义。 */
+  follow?: boolean
 }
 
 // Auto-open while streaming (watch reasoning live), auto-collapse when done; a manual click
 // overrides thereafter.
-export function ThinkBlock({ think, streaming }: Props) {
+export function ThinkBlock({ think, streaming, label, follow }: Props) {
   const [override, setOverride] = useState<boolean | null>(null)
   const open = override ?? streaming
   // Live elapsed while streaming. The agent's first token can lag many seconds behind the spinner
@@ -34,16 +38,20 @@ export function ThinkBlock({ think, streaming }: Props) {
     const id = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(id)
   }, [streaming])
+  const body = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (follow && streaming && open && body.current) body.current.scrollTop = body.current.scrollHeight
+  }, [follow, streaming, open, think.steps.length])
   const elapsed = streaming ? Math.max(0, Math.floor((now - startedAt) / 1000)) : think.elapsed
   return (
     <div className={`think${streaming ? ' live' : ''}${open ? ' open' : ''}`}>
       <button className="think-h" onClick={() => setOverride(o => !(o ?? streaming))}>
         {!streaming && CHEV}
         {streaming ? SPIN : GLYPH}
-        <span className="label">{think.label}</span>
+        <span className="label">{label ?? think.label}</span>
         {elapsed != null && <span className="t">{elapsed}s</span>}
       </button>
-      <div className="think-body">
+      <div ref={body} className="think-body">
         <div className="think-steps">
           {think.steps.map((s, i) => (
             <div className="think-step" key={i}>{s}</div>

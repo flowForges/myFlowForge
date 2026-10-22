@@ -1,0 +1,163 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
+import { CouncilBlock, type CouncilControls } from './CouncilBlock'
+import type { ChatMessage, ProviderInfo } from '@shared/types'
+import type { CouncilSeat, CouncilState, CouncilStatus, CouncilStage } from '@shared/council'
+
+// B2:每一轮一行、每位席位一列;单元格全文可滚动、⤢ 放大、思考折叠、等待占位、全屏。
+
+const mdRenders: string[] = []
+vi.mock('../markdown', () => ({
+  Markdown: ({ text }: { text: string }) => { mdRenders.push(text); return <div className="md">{text}</div> },
+}))
+beforeEach(() => { mdRenders.length = 0 })
+
+const providers: ProviderInfo[] = [
+  { id: 'claude', displayName: 'Claude Code', installed: true, models: [{ id: 'opus', label: 'Opus' }] },
+  { id: 'codex', displayName: 'Codex', installed: true, models: [{ id: 'gpt-6', label: 'GPT-6' }] },
+]
+const A: CouncilSeat = { id: 'claude:opus', provider: 'claude', model: 'opus', label: 'Claude Code · Opus' }
+const B: CouncilSeat = { id: 'codex:gpt-6', provider: 'codex', model: 'gpt-6', label: 'Codex · GPT-6' }
+const L: CouncilSeat = { ...A, id: 'leader:claude:opus' }
+
+function state(status: CouncilStatus, over: Partial<CouncilState> = {}): CouncilState {
+  return {
+    id: 'c1', workspacePath: '/ws', sessionId: 's1', status, round: 1, totalRounds: 3, speaking: [],
+    startedAt: Date.now() - 60_000, elapsedMs: 60_000,
+    // ★配置顺序 B 在前:列序以配置为准,不是发言先后
+    config: { topic: '议题', attachments: [], seats: [B, A], leader: L, mode: { kind: 'rounds', rounds: 3 } },
+    ...over,
+  }
+}
+const topic: ChatMessage = { id: 'c1:topic', who: 'user', text: '议题', ts: '2026-10-21T10:00:00Z', council: { id: 'c1', stage: 'topic' } }
+function ai(seat: CouncilSeat, round: number, stage: CouncilStage, text: string, extra: Partial<ChatMessage> = {}): ChatMessage {
+  return {
+    id: `c1:${round}:${seat.id}:${stage}`, who: 'ai', text, provider: seat.provider, model: seat.label,
+    ts: '2026-10-21T10:01:00Z', council: { id: 'c1', seat: seat.id, round, stage }, ...extra,
+  }
+}
+const controls = (): CouncilControls => ({ pause: vi.fn(), resume: vi.fn(), stop: vi.fn(), followup: vi.fn(), choose: vi.fn() })
+const el = (props: { messages: ChatMessage[]; st?: CouncilState; streaming?: string[] }) => (
+  <CouncilBlock id="c1" messages={props.messages} state={props.st} streamingIds={new Set(props.streaming ?? [])} providers={providers} controls={controls()} />
+)
+const roundSec = (r: number) => document.querySelector(`.council-round-sec[data-round="${r}"]`) as HTMLElement
+
+describe('CouncilBlock grid', () => {
+  it('every round is a row with one column per seat in config order; leader summary full-width below the row', () => {
+    render(el({
+      messages: [
+        topic, ai(A, 1, 'answer', '甲一'), ai(B, 1, 'answer', '乙一'), ai(L, 1, 'summary', '第一轮小结'),
+        ai(A, 2, 'critique', '甲二'), ai(B, 2, 'critique', '乙二'), ai(L, 2, 'summary', '第二轮小结'),
+      ],
+      st: state('running', { round: 3 }),
+    }))
+    for (const r of [1, 2]) {
+      const grid = roundSec(r).querySelector('.council-grid') as HTMLElement
+      expect(grid.style.gridTemplateColumns).toBe('repeat(2, minmax(260px, 1fr))')
+      const cols = Array.from(grid.querySelectorAll(':scope > .council-col'))
+      expect(cols.map(c => c.getAttribute('data-seat'))).toEqual([B.id, A.id])
+      const leader = roundSec(r).querySelector('.council-leader-card') as HTMLElement
+      expect(leader.textContent).toContain('👑')
+      expect(leader.textContent).toContain(r === 1 ? '第一轮小结' : '第二轮小结')
+      // 领导者卡在这一行的下面,不在列里
+      expect(grid.contains(leader)).toBe(false)
+      expect(grid.compareDocumentPosition(leader) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    }
+    expect(roundSec(2).querySelector(`.council-col[data-seat="${A.id}"]`)!.textContent).toContain('甲二')
+  })
+
+  it('cells show the full text (no clamp) in a scrollable body', () => {
+    const long = '很长的回答。'.repeat(400)
+    render(el({ messages: [topic, ai(A, 1, 'answer', long), ai(B, 1, 'answer', '乙')], st: state('running') }))
+    const body = document.querySelector(`.council-cell[data-seat="${A.id}"] .council-cell-body`)!
+    expect(body.textContent).toContain(long)
+    expect(document.querySelector('.council-cell.open, .council-more[aria-expanded]')).toBeNull()
+  })
+
+  it('⤢ opens a focus overlay with that utterance; Esc and a click outside close it', () => {
+    render(el({ messages: [topic, ai(A, 1, 'answer', '甲的全文'), ai(B, 1, 'answer', '乙的全文')], st: state('running') }))
+    const zoom = document.querySelector(`.council-cell[data-seat="${A.id}"] .council-zoom`) as HTMLButtonElement
+    fireEvent.click(zoom)
+    const dlg = screen.getByRole('dialog')
+    expect(dlg.textContent).toContain('甲的全文')
+    expect(dlg.textContent).not.toContain('乙的全文')
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    fireEvent.click(zoom)
+    fireEvent.mouseDown(document.querySelector('.council-focus-backdrop')!)
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('thinking: collapsed 「思考」 with elapsed when done; open while streaming, and the streaming cell is accented', () => {
+    const done = ai(A, 1, 'answer', '甲', { think: { label: '已思考', steps: ['想了想'], elapsed: 7 } })
+    const live = ai(B, 1, 'answer', '乙半句', { think: { label: '主代理思考中…', steps: ['正在想'] } })
+    render(el({ messages: [topic, done, live], st: state('running', { speaking: [B.id] }), streaming: [live.id] }))
+    const doneCell = document.querySelector(`.council-cell[data-seat="${A.id}"]`)!
+    const doneThink = doneCell.querySelector('.think')!
+    expect(doneThink.querySelector('.label')!.textContent).toBe('思考')
+    expect(doneThink.querySelector('.t')!.textContent).toBe('7s')
+    expect(doneThink.className).not.toContain('open')
+    const liveCell = document.querySelector(`.council-cell[data-seat="${B.id}"]`)!
+    expect(liveCell.className).toContain('live')
+    expect(liveCell.querySelector('.think')!.className).toContain('open')
+    expect(doneCell.className).not.toContain('live')
+  })
+
+  it('leader card has its own 思考 section', () => {
+    render(el({ messages: [topic, ai(A, 1, 'answer', 'a'), ai(B, 1, 'answer', 'b'), ai(L, 1, 'summary', '小结', { think: { label: '已思考', steps: ['归纳'] } })], st: state('running', { round: 2 }) }))
+    expect(document.querySelector('.council-leader-card .think .label')!.textContent).toBe('思考')
+  })
+
+  it('seats not yet heard from in the current round get a dashed placeholder with the seat name', () => {
+    const live = ai(A, 2, 'critique', '甲在写')
+    render(el({ messages: [topic, ai(A, 1, 'answer', 'a'), ai(B, 1, 'answer', 'b'), live], st: state('running', { round: 2, speaking: [A.id, B.id] }), streaming: [live.id] }))
+    const waiting = roundSec(2).querySelector(`.council-cell.waiting[data-seat="${B.id}"]`)!
+    expect(waiting.textContent).toContain(B.label)
+    expect(roundSec(2).querySelector(`.council-cell.waiting[data-seat="${A.id}"]`)).toBeNull()
+    expect(roundSec(1).querySelector('.council-cell.waiting')).toBeNull()
+  })
+
+  it('a fresh round with no speech yet already shows its placeholders', () => {
+    render(el({ messages: [topic, ai(A, 1, 'answer', 'a'), ai(B, 1, 'answer', 'b'), ai(L, 1, 'summary', 's')], st: state('running', { round: 2 }) }))
+    expect(roundSec(2).querySelectorAll('.council-cell.waiting')).toHaveLength(2)
+  })
+
+  it('no placeholders during a round break', () => {
+    render(el({ messages: [topic, ai(A, 1, 'answer', 'a'), ai(B, 1, 'answer', 'b'), ai(L, 1, 'summary', 's')], st: state('paused', { round: 2, waitingForUser: true }) }))
+    expect(document.querySelector('.council-cell.waiting')).toBeNull()
+  })
+
+  it('a seat dropped after two failures gets no placeholder', () => {
+    render(el({ messages: [topic, ai(A, 1, 'answer', 'a'), ai(B, 1, 'failed', ''), ai(B, 2, 'failed', ''), ai(A, 2, 'critique', 'a2')], st: state('running', { round: 3 }) }))
+    expect(roundSec(3).querySelector(`.council-cell.waiting[data-seat="${B.id}"]`)).toBeNull()
+    expect(roundSec(3).querySelector(`.council-cell.waiting[data-seat="${A.id}"]`)).not.toBeNull()
+  })
+
+  it('an interjection is a full-width user row in the round it belongs to', () => {
+    const inter: ChatMessage = { id: 'c1:interject:1', who: 'user', text: '补充一句', ts: '2026-10-21T10:02:00Z', council: { id: 'c1', round: 2, stage: 'interject' } }
+    render(el({ messages: [topic, ai(A, 1, 'answer', 'a'), ai(B, 1, 'answer', 'b'), inter, ai(A, 2, 'critique', 'a2')], st: state('running', { round: 2 }) }))
+    const row = roundSec(2).querySelector('.council-interject') as HTMLElement
+    expect(row.textContent).toContain('补充一句')
+    expect(row.closest('.council-grid')).toBeNull()
+    expect(roundSec(1).querySelector('.council-interject')).toBeNull()
+  })
+
+  it('header ⤢ 全屏 puts the block in a full-window overlay; Esc leaves it', () => {
+    render(el({ messages: [topic, ai(A, 1, 'answer', 'a')], st: state('running') }))
+    fireEvent.click(screen.getByRole('button', { name: '全屏' }))
+    expect(document.querySelector('.council-block')!.className).toContain('fullscreen')
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(document.querySelector('.council-block')!.className).not.toContain('fullscreen')
+  })
+
+  it('a delta in one cell does not re-render the other cells', () => {
+    const a = ai(A, 1, 'answer', '甲稳定')
+    const b1 = ai(B, 1, 'answer', '乙一')
+    const st = state('running', { speaking: [B.id] })
+    const { rerender } = render(el({ messages: [topic, a, b1], st, streaming: [b1.id] }))
+    mdRenders.length = 0
+    rerender(el({ messages: [topic, a, { ...b1, text: '乙一二' }], st, streaming: [b1.id] }))
+    expect(mdRenders).toContain('乙一二')
+    expect(mdRenders).not.toContain('甲稳定')
+  })
+})

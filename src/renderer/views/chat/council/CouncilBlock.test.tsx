@@ -130,17 +130,16 @@ describe('CouncilBlock', () => {
     expect(screen.getByText('甲的回答')).toBeTruthy()
   })
 
-  it('round 1: one grid card per seat; later rounds as rows; dividers per round; leader summary card', () => {
+  it('every round is a seat grid with a divider; leader summary card below it', () => {
     renderBlock([
       topic, ai(A, 1, 'answer', '甲一'), ai(B, 1, 'answer', '乙一'), ai(L, 1, 'summary', '第一轮小结'),
       ai(A, 2, 'critique', '甲二'),
     ], state('running', { round: 2 }))
-    const cards = document.querySelectorAll('.council-grid .council-card')
-    expect(cards).toHaveLength(2)
-    expect(Array.from(cards).map(c => c.getAttribute('data-seat'))).toEqual([A.id, B.id])
+    const cols = document.querySelectorAll('.council-round-sec[data-round="1"] .council-col')
+    expect(Array.from(cols).map(c => c.getAttribute('data-seat'))).toEqual([A.id, B.id])
     expect(document.querySelectorAll('.council-divider')).toHaveLength(2)
     expect(document.querySelector('.council-summary')!.textContent).toContain('第一轮小结')
-    expect(document.querySelector(`.council-row[data-seat="${A.id}"]`)!.textContent).toContain('甲二')
+    expect(document.querySelector(`.council-round-sec[data-round="2"] .council-col[data-seat="${A.id}"]`)!.textContent).toContain('甲二')
   })
 
   it('a failed seat shows a muted chip with no body text', () => {
