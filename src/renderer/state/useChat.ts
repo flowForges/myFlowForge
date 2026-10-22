@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useHostReadySeq, useToolOutputFetchable } from './useHostKey'
 import type { AgentContextMeta, AgentContextRef, AskAnswers, ChatConfirm, ChatEvent, ChatMessage, ChatSendPayload } from '@shared/types'
 import { phaseLabel } from '@shared/types'
+import type { CouncilTag } from '@shared/council'
 import type { PlanReq } from '../components/PlanCard'
 import { DESKTOP_TOOL_OUTPUT_CAP, omitLargeToolOutput, omitLargeToolOutputs } from '../views/chat/toolOutput'
 
@@ -52,7 +53,13 @@ function mergeContext(a?: AgentContextMeta, b?: AgentContextMeta): AgentContextM
 }
 
 /** 一条消息在这一帧里攒下的流式增量(assistant-delta 的正文 + think-delta 的步骤/上下文)。 */
-interface PendingDelta { text: string; steps: string[]; context?: AgentContextMeta; touchedThink: boolean }
+interface PendingDelta { text: string; steps: string[]; context?: AgentContextMeta; touchedThink: boolean; council?: CouncilTag }
+
+/**
+ * ★共商标签只补不改:历史重拉会丢掉引擎还没落盘的在途共商发言,之后的增量用 blankAi 重建它 —— 不补标签
+ *  它就被当成普通消息画在共商区块外面。已有标签的消息原样返回(同一引用,不触发重渲)。
+ */
+const withCouncil = (x: ChatMessage, council?: CouncilTag): ChatMessage => council && !x.council ? { ...x, council } : x
 
 /**
  * 增量的落地节拍:下一动画帧;★再挂一个 100ms 的兜底计时器,先到先刷。
@@ -227,7 +234,9 @@ export function useChat(
       pending.clear()
       setStreamingIds(s => batch.every(([id]) => s.has(id)) ? s : batch.reduce((n, [id]) => n.add(id), new Set(s)))
       setMessages(m => batch.reduce((acc, [id, d]) => {
-        const apply = (x: ChatMessage): ChatMessage => d.touchedThink
+        const apply = (x0: ChatMessage): ChatMessage => {
+          const x = withCouncil(x0, d.council)
+          return d.touchedThink
           ? {
               ...x,
               text: x.text + d.text,
@@ -235,6 +244,7 @@ export function useChat(
               think: { label: x.think?.label ?? '主代理思考中…', steps: [...(x.think?.steps ?? []), ...d.steps] },
             }
           : { ...x, text: x.text + d.text }
+        }
         return upsertMsg(acc, id, apply, () => apply(blankAi(id)))
       }, m))
     }
@@ -251,9 +261,9 @@ export function useChat(
       // unmounted — e.g. a command sent from the pet while the app is on the home view. When the view then
       // opens mid-turn it never saw assistant-start, so a plain `.map` would drop every delta/done and the
       // reply would never appear. Creating the message on first sight of any of its events fixes that.
-      if (e.type === 'assistant-delta') { queueDelta(e.id, d => { d.text += e.text }); return }
+      if (e.type === 'assistant-delta') { queueDelta(e.id, d => { d.text += e.text; d.council ??= e.council }); return }
       if (e.type === 'think-delta') {
-        queueDelta(e.id, d => { d.touchedThink = true; d.steps.push(e.text); d.context = mergeContext(d.context, e.context) })
+        queueDelta(e.id, d => { d.touchedThink = true; d.steps.push(e.text); d.context = mergeContext(d.context, e.context); d.council ??= e.council })
         return
       }
       flushDeltas()
@@ -265,7 +275,7 @@ export function useChat(
       else if (e.type === 'assistant-replace') {
         // Overwrite (not append) — the provider sent the authoritative full reply with real newlines.
         setStreamingIds(s => s.has(e.id) ? s : new Set(s).add(e.id))
-        setMessages(m => upsertMsg(m, e.id, x => ({ ...x, text: e.text }), () => ({ ...blankAi(e.id), text: e.text })))
+        setMessages(m => upsertMsg(m, e.id, x => ({ ...withCouncil(x, e.council), text: e.text }), () => withCouncil({ ...blankAi(e.id), text: e.text }, e.council)))
       }
       // 「你的选择」锚在这条在途回复里答的那个位置(ChatMessage.answers)。上面的 flushDeltas() 已经把
       // 攒着的增量先落进正文 —— `at` 是主进程那边的正文长度,两边必须对得上。
