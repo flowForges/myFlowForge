@@ -13,8 +13,9 @@ import { MessageBody } from './MessageBody'
 /**
  * 一场 AI 共商在手机对话流里的独立区块(§6.4 / §6.6)。照电脑端 `council/CouncilBlock.tsx` 的行为:
  * 标题行 + 进行中的状态行(暂停 / 继续 / 结束)+ 各轮发言 + 共识结果卡片(候选 + 选定)。
- * ★和电脑端的差别只有这几处:第 1 轮答案上下排列(不是并排网格);没有追问输入、没有换领导者
- *  (继续 = 原样接着跑);没有复制 / 打开文件。
+ * ★每条发言都是全文(不截断),各轮上下排列,每条带席位徽标;席位和领导者的发言各自带一段可折叠的「思考」。
+ * ★和电脑端的差别只有这几处:各轮上下排列(不是并排网格);没有追问输入、没有换领导者
+ *  (继续 = 原样接着跑);没有复制 / 打开 / 放大。
  * ★纯 JS:颜色走主题、图标走 `AgentBadge` 字形,不引任何原生依赖。
  */
 
@@ -23,11 +24,6 @@ type SeatInfo = { provider: string; label: string; color: string }
 // 席位左侧色条:按席位在配置里的顺序取色。值对着电脑端那组 oklch 换成 hex(RN 不认 oklch)。领导者用强调色。
 const SEAT_COLORS = ['#4f95e0', '#4fb06e', '#d39a3c', '#df6458', '#a27ad6', '#3fb0bf']
 const LIVE = new Set<CouncilStatus>(['running', 'paused', 'finalizing'])
-// 第 1 轮答案卡片收起时露出的高度(约 6 行正文)。
-const CARD_CLAMP = 150
-// 结论收起时露出的高度。
-const CONCLUSION_CLAMP = 260
-const LONG_CHARS = 600
 
 const Chev = ({ open, color }: { open: boolean; color: string }) => (
   <View style={{ transform: [{ rotate: open ? '180deg' : '0deg' }] }}>
@@ -49,45 +45,61 @@ function WhoLine({ seat, leader, right }: { seat: SeatInfo; leader?: boolean; ri
   )
 }
 
+/** 发言自带的思考过程:统一叫「思考」。流式时展开,结束后收起;点过一次就以用户为准(同电脑端 ThinkBlock)。 */
+function UtteranceThink({ msg }: { msg: Msg }) {
+  const c = useC()
+  const streaming = !!msg.streaming
+  const [override, setOverride] = useState<boolean | null>(null)
+  if (!msg.think) return null
+  const open = override ?? streaming
+  return (
+    <View style={{ marginBottom: 4 }}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        hitSlop={6}
+        onPress={() => setOverride(!open)}
+        style={st.thinkHead}
+      >
+        <T style={{ fontSize: 12, color: c.faint }}>
+          {open ? '▾ ' : '▸ '}思考{!streaming && msg.thinkElapsed != null ? ` · ${msg.thinkElapsed}s` : ''}
+        </T>
+      </Pressable>
+      {open ? <T style={[st.think, { color: c.muted, borderLeftColor: c.border2 }]}>{msg.think}</T> : null}
+    </View>
+  )
+}
+
+const VOTE_MARK = { agree: '✓', disagree: '✕', unknown: '…' } as const
+
+/** 席位的一条发言(回答 / 点评 / 投票):全文,不截断。投票在席位名右边带 ✓ / ✕。 */
 const SeatRow = memo(function SeatRow({ msg, seat }: { msg: Msg; seat: SeatInfo }) {
+  const c = useC()
+  const vote = msg.council?.stage === 'consensus-vote' ? (msg.streaming ? 'unknown' : voteOf(msg.text)) : null
   return (
     <View style={[st.row, { borderLeftColor: seat.color }]}>
-      <WhoLine seat={seat} />
+      <WhoLine
+        seat={seat}
+        right={
+          vote ? (
+            <T style={{ fontSize: 12, color: vote === 'agree' ? c.ok : vote === 'disagree' ? c.err : c.faint }}>{VOTE_MARK[vote]}</T>
+          ) : null
+        }
+      />
+      <UtteranceThink msg={msg} />
       <MessageBody text={msg.text} streaming={msg.streaming} indent={0} />
     </View>
   )
 })
 
+/** 领导者的发言(总结 / 共识草稿 / 流式中的最终结果):👑 卡片,全文。 */
 const SummaryCard = memo(function SummaryCard({ msg, seat }: { msg: Msg; seat: SeatInfo }) {
   const c = useC()
   return (
     <View style={[st.card, { borderColor: c.border2, backgroundColor: c.bg2 }]}>
       <WhoLine seat={seat} leader />
+      <UtteranceThink msg={msg} />
       <MessageBody text={msg.text} streaming={msg.streaming} indent={0} />
-    </View>
-  )
-})
-
-/** 第 1 轮的答案卡片:默认只露开头(流式时露正在写的那几行),点 ⌄ 看全文。 */
-const AnswerCard = memo(function AnswerCard({ msg, seat }: { msg: Msg; seat: SeatInfo }) {
-  const c = useC()
-  const [open, setOpen] = useState(false)
-  return (
-    <View style={[st.card, { borderColor: c.border2, borderLeftColor: seat.color, borderLeftWidth: 3 }]}>
-      <WhoLine
-        seat={seat}
-        right={
-          <Pressable accessibilityLabel={open ? '收起' : '展开'} hitSlop={10} onPress={() => setOpen((o) => !o)}>
-            <Chev open={open} color={c.faint} />
-          </Pressable>
-        }
-      />
-      {/* ★流式时贴底对齐:收起状态下看到的是正在写的那几行,而不是一直停在开头(电脑端是卡片内滚到底) */}
-      <View style={open ? null : [st.clamp, { maxHeight: CARD_CLAMP }, msg.streaming && { justifyContent: 'flex-end' }]}>
-        <View style={{ flexShrink: 0 }}>
-          <MessageBody text={msg.text} streaming={msg.streaming} indent={0} />
-        </View>
-      </View>
     </View>
   )
 })
@@ -123,58 +135,19 @@ function Divider({ round }: { round: number }) {
   )
 }
 
-/** 一轮里的发言(第 1 轮答案卡片之外):逐条按出现顺序画,连续的投票收成一排徽标。 */
+/** 一轮里的发言:逐条按出现顺序画。 */
 function Utterances({ list, seatOf }: { list: Msg[]; seatOf: (m: Msg) => SeatInfo }) {
-  const c = useC()
-  const out: React.ReactNode[] = []
-  for (let i = 0; i < list.length; i++) {
-    const m = list[i]
-    const stage = m.council?.stage
-    if (stage === 'consensus-vote') {
-      const votes: Msg[] = []
-      while (i < list.length && list[i].council?.stage === 'consensus-vote') votes.push(list[i++])
-      i--
-      out.push(
-        <View key={`v-${m.id}`} style={st.votes}>
-          {votes.map((v) => {
-            const vote = v.streaming ? 'unknown' : voteOf(v.text)
-            return (
-              <View key={v.id} style={[st.vote, { borderColor: c.border2 }]}>
-                <AgentBadge id={seatOf(v).provider} size={14} />
-                <T style={{ fontSize: 12, color: vote === 'agree' ? c.ok : vote === 'disagree' ? c.err : c.faint }}>
-                  {vote === 'agree' ? '✓' : vote === 'disagree' ? '✕' : '…'}
-                </T>
-              </View>
-            )
-          })}
-        </View>,
-      )
-      continue
-    }
-    if (m.who === 'user') out.push(<UserRow key={m.id} msg={m} />)
-    else if (stage === 'failed') out.push(<FailedChip key={m.id} seat={seatOf(m)} />)
-    else if (stage === 'summary' || stage === 'consensus-draft' || stage === 'final')
-      out.push(<SummaryCard key={m.id} msg={m} seat={seatOf(m)} />)
-    else out.push(<SeatRow key={m.id} msg={m} seat={seatOf(m)} />)
-  }
-  return <>{out}</>
-}
-
-function Conclusion({ text }: { text: string }) {
-  const c = useC()
-  const long = text.length > LONG_CHARS || text.split('\n').length > 12
-  const [open, setOpen] = useState(false)
   return (
-    <View>
-      <View style={long && !open ? [st.clamp, { maxHeight: CONCLUSION_CLAMP }] : null}>
-        <MessageBody text={text} indent={0} />
-      </View>
-      {long ? (
-        <Pressable accessibilityLabel={open ? '收起' : '展开'} hitSlop={8} onPress={() => setOpen((o) => !o)} style={st.more}>
-          <Chev open={open} color={c.faint} />
-        </Pressable>
-      ) : null}
-    </View>
+    <>
+      {list.map((m) => {
+        const stage = m.council?.stage
+        if (m.who === 'user') return <UserRow key={m.id} msg={m} />
+        if (stage === 'failed') return <FailedChip key={m.id} seat={seatOf(m)} />
+        if (stage === 'summary' || stage === 'consensus-draft' || stage === 'final' || isLeaderSeat(m.council?.seat))
+          return <SummaryCard key={m.id} msg={m} seat={seatOf(m)} />
+        return <SeatRow key={m.id} msg={m} seat={seatOf(m)} />
+      })}
+    </>
   )
 }
 
@@ -199,7 +172,7 @@ function ResultCard({
   const rec = result?.recommended?.name
   return (
     <View style={[st.result, { borderColor: c.border2, backgroundColor: c.bg2 }]}>
-      <Conclusion text={result ? result.conclusion : final.text} />
+      <MessageBody text={result ? result.conclusion : final.text} indent={0} />
 
       {cur ? (
         <View style={{ marginTop: 10 }}>
@@ -399,28 +372,12 @@ export function CouncilBlock({
       {open ? (
         <View style={st.body}>
           {topicMsg ? <UserRow msg={topicMsg} /> : null}
-          {rounds.map(([r, list]) => {
-            const answers =
-              r === 1
-                ? list.filter(
-                    (m) => m.who === 'ai' && !isLeaderSeat(m.council?.seat) && (m.council?.stage === 'answer' || m.council?.stage === 'failed'),
-                  )
-                : []
-            const rest = answers.length ? list.filter((m) => !answers.includes(m)) : list
-            return (
-              <View key={r}>
-                <Divider round={r} />
-                {answers.map((m) =>
-                  m.council?.stage === 'failed' ? (
-                    <FailedChip key={m.id} seat={seatOf(m)} />
-                  ) : (
-                    <AnswerCard key={m.id} msg={m} seat={seatOf(m)} />
-                  ),
-                )}
-                <Utterances list={rest} seatOf={seatOf} />
-              </View>
-            )
-          })}
+          {rounds.map(([r, list]) => (
+            <View key={r}>
+              <Divider round={r} />
+              <Utterances list={list} seatOf={seatOf} />
+            </View>
+          ))}
           {final && finalStreaming ? <SummaryCard msg={final} seat={seatOf(final)} /> : null}
         </View>
       ) : null}
@@ -461,7 +418,8 @@ const st = StyleSheet.create({
   who: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
   row: { marginTop: 10, paddingLeft: 9, borderLeftWidth: 3 },
   card: { marginTop: 8, padding: 10, borderWidth: StyleSheet.hairlineWidth, borderRadius: RADIUS.card },
-  clamp: { overflow: 'hidden' },
+  thinkHead: { alignSelf: 'flex-start', paddingVertical: 2 },
+  think: { marginTop: 4, paddingLeft: 10, borderLeftWidth: 2, fontSize: 12.5, lineHeight: 20 },
   failed: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -484,17 +442,6 @@ const st = StyleSheet.create({
   },
   divider: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14 },
   line: { flex: 1, height: StyleSheet.hairlineWidth },
-  votes: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
-  vote: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 6,
-    paddingVertical: 3,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: RADIUS.chip,
-  },
-  more: { alignSelf: 'center', paddingTop: 6 },
   result: { marginTop: 4, padding: 11, borderWidth: 1, borderRadius: RADIUS.card },
   tab: { paddingHorizontal: 10, paddingVertical: 6, borderWidth: 1, borderRadius: RADIUS.chip },
   pc: { flexDirection: 'row', alignItems: 'flex-start' },

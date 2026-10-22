@@ -20,6 +20,8 @@ export type Msg = {
   who: 'user' | 'ai'
   text: string
   think: string
+  /** 思考用了几秒(落档那份才有)。共商发言的「思考」标题上显示。 */
+  thinkElapsed?: number
   model?: string
   /** 产出这条回复的代理 id(claude / codex / …)。用来推「换代理」提示,和 `model` 不是一回事:
    *  `model` 是显示名(「Claude Code · Opus」),换个模型不算换代理。 */
@@ -59,7 +61,9 @@ const fromHistory = (m: ChatMessage): Msg => ({
   text: m.text ?? '',
   // 历史里的 think 是结构化的(label + steps),流式来的 think-delta 是散字。
   // 手机端只画一段文本,所以落档那份在这里压平。
-  think: m.think ? [m.think.label, ...(m.think.steps ?? [])].filter(Boolean).join('\n') : '',
+  // ★共商发言的标题统一是「思考」(区块里画),标签('已思考')不进正文。
+  think: m.think ? [m.council ? '' : m.think.label, ...(m.think.steps ?? [])].filter(Boolean).join('\n') : '',
+  thinkElapsed: m.think?.elapsed,
   model: m.model,
   provider: m.provider,
   ts: m.ts,
