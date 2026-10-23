@@ -8,10 +8,17 @@ function now() { return new Date().toISOString().slice(11, 19) }
 
 export interface TraeSpec { bin?: string; defaultModels: Model[] }
 
+// ★只读:plan 模式(只分析不改代码,ExitPlanMode 本身要审批,无头下出不来)+ 把会写 / 跑命令 / 定时的工具
+//  全部 --disallowed-tool(先于一切规则检查,bypass 也盖不过,裸工具名直接从模型的工具表里移除)。无头下没被
+//  授权的工具「自动跳过」,不会挂起。依据 research.md §9(traecli 0.120.51 `traecli doc ...`),未真机探针。
+const TRAE_READONLY_ARGS = ['--permission-mode', 'plan',
+  ...['Edit', 'Write', 'ApplyPatch', 'Bash', 'KillShell', 'CronCreate', 'CronDelete'].flatMap(t => ['--disallowed-tool', t])]
+
 // TraeCode CLI (字节跳动 Trae, binary `traecli`, 通过 install.sh 安装到 ~/.local/bin,非 npm 包)。无头:
 // `traecli -p "<prompt>"` 跑一轮并把回复以纯文本流到 stdout(每行 IS 输出 → 'accent',被 chat 降级捕获)。
-// 模型无 CLI 开关(用 /model 命令或 trae_cli.yaml 配置),故这里不传 --model,只给「账号默认」。print 模式的工具
-// 授权由 trae_cli.yaml 的 permission_mode 决定(想无人值守写文件设 bypass_permissions),app 不代改其配置。
+// 模型:没有 --model,但 `-c model.name=<m>` 能逐次覆盖配置(名字须在 trae_cli.yaml 的 models: 里),选了具体模型
+// 才传。print 模式的工具授权由 trae_cli.yaml 的 permission_mode 决定(想无人值守写文件设 bypass_permissions),
+// app 不代改其配置 —— 只读档除外,见 run() 里的 TRAE_READONLY_ARGS。
 // 无原生 chat()/resume → chat 走 run 降级(回灌本地历史)。
 export function makeTraeProvider(spec: TraeSpec): AgentProvider {
   const bin = spec.bin ?? 'traecli'
@@ -28,8 +35,9 @@ export function makeTraeProvider(spec: TraeSpec): AgentProvider {
       const scanner = createFenceScanner(p => cb.onHandoff?.(p))
       const directive = forgeChatDirective(env)
       const prompt = directive ? `${directive}\n\n${task.prompt}` : task.prompt
-      // No --model: traecli picks the model from /model or trae_cli.yaml, not the command line.
       const args = ['-p', prompt]
+      if (task.permissionMode === 'readonly') args.push(...TRAE_READONLY_ARGS)
+      if (task.model && task.model !== 'default') args.push('-c', `model.name=${task.model}`)
       const child: ResultPromise = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false })
       let buf = ''
       const processLine = (raw: string) => {

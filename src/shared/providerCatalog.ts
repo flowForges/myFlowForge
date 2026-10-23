@@ -224,7 +224,7 @@ export const BUILTIN_PROVIDERS: BuiltinProviderMeta[] = [
     brandBg: 'oklch(64% .12 200 / .2)',
     brandColor: 'oklch(72% .12 200)',
     // TraeCode CLI（字节跳动 Trae，二进制 traecli，install.sh 装到 ~/.local/bin,非 npm）。无头:traecli -p
-    // "<prompt>"(纯文本流到 stdout)。模型无 CLI 开关(用 /model 或 trae_cli.yaml),故只列「账号默认」。想无人
+    // "<prompt>"(纯文本流到 stdout)。没有 --model;非默认模型走 `-c model.name=<m>`(须在 trae_cli.yaml 的 models: 里),这里只列「账号默认」。想无人
     // 值守写文件:traecli config edit 里设 permission_mode: bypass_permissions。
     defaultModels: [
       { id: 'default', label: '账号默认', description: '用 /model 或 trae_cli.yaml 里配置的模型' },

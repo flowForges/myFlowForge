@@ -118,10 +118,23 @@ describe('trae provider', () => {
     expect(logs.every(l => l.level === 'accent')).toBe(true)
     expect(states.at(-1)).toBe('ok')
   })
-  it('never passes --model (traecli has no CLI model flag) even for a non-default model', async () => {
+  it('a non-default model goes through `-c model.name=<m>` (never --model)', async () => {
     const logs: LogLine[] = [], states: string[] = []
     await makeTraeProvider({ bin: cli, defaultModels: [] }).run({ stageKey: 't', agentId: 'tr2', name: 'T', prompt: 'hi', cwd: dir, model: 'claude-3-7-sonnet-20250219' }, cbs(logs, states) as never, process.env).done
-    expect(logs.some(l => l.text === 'ARGS ["-p","hi"]')).toBe(true)   // still no --model
+    expect(logs.some(l => l.text === 'ARGS ["-p","hi","-c","model.name=claude-3-7-sonnet-20250219"]')).toBe(true)
+  })
+  it('readonly: plan mode + every writer / shell / scheduler tool auto-rejected', async () => {
+    const logs: LogLine[] = [], states: string[] = []
+    await makeTraeProvider({ bin: cli, defaultModels: [] }).run({ stageKey: 't', agentId: 'tr3', name: 'T', prompt: 'hi', cwd: dir, model: 'default', permissionMode: 'readonly' }, cbs(logs, states) as never, process.env).done
+    const deny = ['Edit', 'Write', 'ApplyPatch', 'Bash', 'KillShell', 'CronCreate', 'CronDelete'].flatMap(t => ['--disallowed-tool', t])
+    expect(logs.some(l => l.text === `ARGS ${JSON.stringify(['-p', 'hi', '--permission-mode', 'plan', ...deny])}`)).toBe(true)
+  })
+  it('auto / full keep the plain invocation (no permission flags, never -y)', async () => {
+    for (const permissionMode of ['auto', 'full'] as const) {
+      const logs: LogLine[] = [], states: string[] = []
+      await makeTraeProvider({ bin: cli, defaultModels: [] }).run({ stageKey: 't', agentId: 'tr4', name: 'T', prompt: 'hi', cwd: dir, model: 'default', permissionMode }, cbs(logs, states) as never, process.env).done
+      expect(logs.some(l => l.text === 'ARGS ["-p","hi"]')).toBe(true)
+    }
   })
   it('reports id, displayName and mcpTools:false', () => {
     const p = makeTraeProvider({ bin: 'traecli', defaultModels: [] })
