@@ -144,14 +144,23 @@ process.exit(0)
     expectReadonlyAgent(opencodeReadonlyEnv({ OPENCODE_CONFIG_CONTENT: '{nope' }).OPENCODE_CONFIG_CONTENT!)
   })
   it('forge env present: forge MCP rides the same OPENCODE_CONFIG_CONTENT and its tools are allowed after "*":"deny"', () => {
-    const e = opencodeReadonlyEnv({ FORGE_SOCKET: '/tmp/f.sock', FORGE_AGENT_ID: 'a1', FORGE_MCP_ENTRY: '/x/forgeMcp.js', FORGE_TOOLS: 'forge_handoff' })
+    const e = opencodeReadonlyEnv({ FORGE_SOCKET: '/tmp/f.sock', FORGE_AGENT_ID: 'a1', FORGE_MCP_ENTRY: '/x/forgeMcp.js', FORGE_TOOLS: 'forge_handoff,forge_ask' })
     const cfg = JSON.parse(e.OPENCODE_CONFIG_CONTENT!)
     expect(cfg.mcp.forge).toMatchObject({ type: 'local', enabled: true, command: [process.execPath, '/x/forgeMcp.js'] })
-    expect(cfg.mcp.forge.environment).toMatchObject({ FORGE_SOCKET: '/tmp/f.sock', FORGE_AGENT_ID: 'a1', FORGE_TOOLS: 'forge_handoff' })
+    expect(cfg.mcp.forge.environment).toMatchObject({ FORGE_SOCKET: '/tmp/f.sock', FORGE_AGENT_ID: 'a1', FORGE_TOOLS: 'forge_handoff,forge_ask' })
     const perm = cfg.agent[OPENCODE_READONLY_AGENT].permission
     const keys = Object.keys(perm)
-    expect(perm['forge_*']).toBe('allow')
-    expect(keys.indexOf('forge_*')).toBeGreaterThan(keys.indexOf('*'))
+    // exact opencode names (<server>_<tool>), never a forge_* wildcard that would also cover a user server like forge_tools
+    expect(perm['forge_*']).toBeUndefined()
+    expect(perm.forge_forge_handoff).toBe('allow')
+    expect(perm.forge_forge_ask).toBe('allow')
+    expect(keys.filter(k => k.startsWith('forge_'))).toEqual(['forge_forge_handoff', 'forge_forge_ask'])
+    expect(keys.indexOf('forge_forge_handoff')).toBeGreaterThan(keys.indexOf('*'))
+  })
+  it('forge env without FORGE_TOOLS: forge server injected but no allow entries (nothing to name exactly)', () => {
+    const cfg = JSON.parse(opencodeReadonlyEnv({ FORGE_SOCKET: '/s', FORGE_AGENT_ID: 'a', FORGE_MCP_ENTRY: '/e' }).OPENCODE_CONFIG_CONTENT!)
+    expect(cfg.mcp.forge).toBeTruthy()
+    expect(Object.keys(cfg.agent[OPENCODE_READONLY_AGENT].permission).some(k => k.startsWith('forge_'))).toBe(false)
   })
   it('no forge env: no mcp key, no forge allow rule (council seats)', () => {
     const cfg = JSON.parse(opencodeReadonlyEnv({}).OPENCODE_CONFIG_CONTENT!)

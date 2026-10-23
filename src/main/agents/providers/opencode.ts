@@ -5,7 +5,7 @@ import { createFenceScanner } from '../handoffFence'
 import { buildChatPrompt, makeUsageTracker } from '../chatStream'
 import { forgeChatDirective } from '../forgeChatDirective'
 import { provisionForgeMcp, type ForgeProvision } from '../forgeMcpProvision'
-import { forgeServerSpec } from '../mcpConfig'
+import { forgeServerSpec, forgeAllowedToolNames } from '../mcpConfig'
 import { logError } from '../../log/appLog'
 import { makeIdleWatchdog, CHAT_IDLE_MS, CHAT_STALL_KILL_MS } from '../idleWatchdog'
 
@@ -90,8 +90,9 @@ const OPENCODE_READONLY_AGENT_CONFIG = {
 /**
  * 只读那次 spawn 的 env:把只读 agent 并进(不是覆盖)用户自己的 OPENCODE_CONFIG_CONTENT,其余 env 原样保留。
  * ★有 FORGE_* 时(只读的工作流 / 委派 agent)forge MCP 也从这里注入 —— 项目的 opencode.json 已被关掉 ——
- *  并在 "*":"deny" 之后放行 forge_*(opencode 的 MCP 工具名是 <server>_<tool>;暴露哪些由 forge 服务端按
- *  FORGE_TOOLS 决定)。共商席位没有 FORGE_*,两样都不加。
+ *  并在 "*":"deny" 之后逐个放行 FORGE_TOOLS 里的工具(opencode 的 MCP 工具名是 <server>_<tool>,即
+ *  forge_<tool>)。★不用 forge_* 通配:用户若有个叫 forge_tools 的 MCP 服务器,它的工具也会被放行。
+ *  没有 FORGE_TOOLS 就没有可精确点名的工具 → 不放行(和 qoder 只读一致)。共商席位没有 FORGE_*,两样都不加。
  */
 // 用户自己的 JSON 对象型 env;解析不了 / 不是对象 → {}(只用我们的,只读不能因为它而失效)
 function jsonObjectEnv(v: string | undefined): Record<string, any> {
@@ -109,9 +110,8 @@ export function opencodeReadonlyEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const base = jsonObjectEnv(env.OPENCODE_CONFIG_CONTENT)
   const agents = base.agent && typeof base.agent === 'object' ? base.agent : {}
   const forge = forgeServerSpec(env)
-  const agent = forge
-    ? { ...OPENCODE_READONLY_AGENT_CONFIG, permission: { ...OPENCODE_READONLY_AGENT_CONFIG.permission, 'forge_*': 'allow' } }
-    : OPENCODE_READONLY_AGENT_CONFIG
+  const forgeAllow = Object.fromEntries(forgeAllowedToolNames(env).map(t => [t.replace(/^mcp__forge__/, 'forge_'), 'allow']))
+  const agent = { ...OPENCODE_READONLY_AGENT_CONFIG, permission: { ...OPENCODE_READONLY_AGENT_CONFIG.permission, ...forgeAllow } }
   const content: Record<string, any> = { ...base, agent: { ...agents, [OPENCODE_READONLY_AGENT]: agent } }
   if (forge) {
     const mcp = base.mcp && typeof base.mcp === 'object' ? base.mcp : {}
