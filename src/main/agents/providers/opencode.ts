@@ -93,12 +93,20 @@ const OPENCODE_READONLY_AGENT_CONFIG = {
  *  并在 "*":"deny" 之后放行 forge_*(opencode 的 MCP 工具名是 <server>_<tool>;暴露哪些由 forge 服务端按
  *  FORGE_TOOLS 决定)。共商席位没有 FORGE_*,两样都不加。
  */
-export function opencodeReadonlyEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  let base: Record<string, any> = {}
+// 用户自己的 JSON 对象型 env;解析不了 / 不是对象 → {}(只用我们的,只读不能因为它而失效)
+function jsonObjectEnv(v: string | undefined): Record<string, any> {
   try {
-    const parsed = env.OPENCODE_CONFIG_CONTENT ? JSON.parse(env.OPENCODE_CONFIG_CONTENT) : {}
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) base = parsed
-  } catch { /* 用户的值解析不了 → 只用我们的,只读不能因为它而失效 */ }
+    const parsed = v ? JSON.parse(v) : {}
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch { return {} }
+}
+
+// 全局 permission 的兜底(OPENCODE_PERMISSION 最后并进全局 permission):万一 forge-readonly 被用户同名 agent 盖掉,
+// 这几样仍是拒。
+const OPENCODE_READONLY_BACKSTOP = { edit: 'deny', bash: 'deny', task: 'deny', webfetch: 'deny' }
+
+export function opencodeReadonlyEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const base = jsonObjectEnv(env.OPENCODE_CONFIG_CONTENT)
   const agents = base.agent && typeof base.agent === 'object' ? base.agent : {}
   const forge = forgeServerSpec(env)
   const agent = forge
@@ -109,7 +117,8 @@ export function opencodeReadonlyEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     const mcp = base.mcp && typeof base.mcp === 'object' ? base.mcp : {}
     content.mcp = { ...mcp, forge: { type: 'local', command: [forge.command, ...forge.args], environment: forge.env, enabled: true } }
   }
-  return { ...env, OPENCODE_CONFIG_CONTENT: JSON.stringify(content), OPENCODE_DISABLE_PROJECT_CONFIG: '1' }
+  const permission = { ...jsonObjectEnv(env.OPENCODE_PERMISSION), ...OPENCODE_READONLY_BACKSTOP }
+  return { ...env, OPENCODE_CONFIG_CONTENT: JSON.stringify(content), OPENCODE_PERMISSION: JSON.stringify(permission), OPENCODE_DISABLE_PROJECT_CONFIG: '1' }
 }
 
 export interface OpencodeSpec { bin?: string; defaultModels: Model[] }
