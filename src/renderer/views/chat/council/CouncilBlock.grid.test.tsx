@@ -228,3 +228,14 @@ describe('CouncilBlock grid', () => {
     expect(mdRenders).not.toContain('甲稳定')
   })
 })
+
+describe('⤢ 放大弹窗:长输出能滚动', () => {
+  it('★弹窗高度按视口封顶(百分比在 place-items:center 的 grid 里不生效),正文区自己滚', () => {
+    const rule = councilCss.match(/\.council-focus\s*\{[^}]*\}/)?.[0] ?? ''
+    expect(rule).toMatch(/max-height:\s*calc\(100vh/)
+    expect(rule).not.toMatch(/max-height:\s*100%/)
+    const body = councilCss.match(/\.council-focus-body\s*\{[^}]*\}/)?.[0] ?? ''
+    expect(body).toMatch(/min-height:\s*0/)
+    expect(body).toMatch(/overflow:\s*auto/)
+  })
+})
