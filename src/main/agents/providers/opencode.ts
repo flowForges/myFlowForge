@@ -4,7 +4,7 @@ import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, Cha
 import { createFenceScanner } from '../handoffFence'
 import { buildChatPrompt, makeUsageTracker } from '../chatStream'
 import { forgeChatDirective } from '../forgeChatDirective'
-import { provisionForgeMcp } from '../forgeMcpProvision'
+import { provisionForgeMcp, type ForgeProvision } from '../forgeMcpProvision'
 import { logError } from '../../log/appLog'
 import { makeIdleWatchdog, CHAT_IDLE_MS, CHAT_STALL_KILL_MS } from '../idleWatchdog'
 
@@ -67,6 +67,37 @@ export function parseOpencodeModels(stdout: string): Model[] {
     .map(id => ({ id, label: id.split('/').slice(1).join('/') || id, description: id.split('/')[0] }))
 }
 
+// ── readonly ─────────────────────────────────────────────────────────────────
+// ★只读 = 一个 app 自带的 primary agent,经 OPENCODE_CONFIG_CONTENT 注入、--agent 选中。权限规则「最后匹配
+//  的赢」,所以 "*":"deny" 放最前,后面只放开 read/grep/glob/list;最后一条落在 "*"+deny 的工具会从模型的
+//  工具表里直接拿掉。`opencode run` 把 ask 自动拒掉(不挂起),但子代理会话的询问它不答 → task 必须拒;
+//  续会话时 run 不再补 question 的拒绝规则 → 显式拒。内置 plan agent 不拒 bash、还会被用户的
+//  agent.plan 覆盖,不能用。OPENCODE_DISABLE_PROJECT_CONFIG=1 丢掉仓库里的 opencode.json。
+//  依据 research.md §6(opencode 1.3.13 发布包 + 上游 run.ts),未真机探针。
+export const OPENCODE_READONLY_AGENT = 'forge-readonly'
+const OPENCODE_READONLY_AGENT_CONFIG = {
+  mode: 'primary',
+  description: 'myFlowForge read-only: read and search only',
+  permission: {
+    '*': 'deny',
+    read: 'allow', grep: 'allow', glob: 'allow', list: 'allow',
+    edit: 'deny', bash: 'deny', task: 'deny', question: 'deny', webfetch: 'deny',
+    external_directory: 'deny', todowrite: 'deny',
+  },
+}
+
+/** 只读那次 spawn 的 env:把只读 agent 并进(不是覆盖)用户自己的 OPENCODE_CONFIG_CONTENT,其余 env 原样保留。 */
+export function opencodeReadonlyEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  let base: Record<string, any> = {}
+  try {
+    const parsed = env.OPENCODE_CONFIG_CONTENT ? JSON.parse(env.OPENCODE_CONFIG_CONTENT) : {}
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) base = parsed
+  } catch { /* 用户的值解析不了 → 只用我们的,只读不能因为它而失效 */ }
+  const agents = base.agent && typeof base.agent === 'object' ? base.agent : {}
+  const content = { ...base, agent: { ...agents, [OPENCODE_READONLY_AGENT]: OPENCODE_READONLY_AGENT_CONFIG } }
+  return { ...env, OPENCODE_CONFIG_CONTENT: JSON.stringify(content), OPENCODE_DISABLE_PROJECT_CONFIG: '1' }
+}
+
 export interface OpencodeSpec { bin?: string; defaultModels: Model[] }
 
 export function makeOpencodeProvider(spec: OpencodeSpec): AgentProvider {
@@ -77,7 +108,12 @@ export function makeOpencodeProvider(spec: OpencodeSpec): AgentProvider {
   }
   // model id is "provider/model"; only pass -m for a real one (else opencode uses its default).
   const modelArgs = (model: string) => (model && model.includes('/') ? ['-m', model] : [])
-  const baseArgs = (model: string, cwd: string) => ['run', '--format', 'json', '--thinking', ...modelArgs(model), '--dir', cwd]
+  const readonlyArgs = (mode: AgentTask['permissionMode']) => (mode === 'readonly' ? ['--agent', OPENCODE_READONLY_AGENT] : [])
+  const spawnEnv = (mode: AgentTask['permissionMode'], env: NodeJS.ProcessEnv) => (mode === 'readonly' ? opencodeReadonlyEnv(env) : env)
+  // ★只读不往工作区写 forge MCP 配置(opencode.json):项目配置本来就被 OPENCODE_DISABLE_PROJECT_CONFIG 关了,
+  //  "*":"deny" 也不放行 MCP 工具,写了只是白白动用户仓库。
+  const provision = (mode: AgentTask['permissionMode'], env: NodeJS.ProcessEnv, cwd: string): ForgeProvision =>
+    (mode === 'readonly' ? { extraArgs: [] } : provisionForgeMcp('opencode', env, cwd))
 
   return {
     id: 'opencode',
@@ -91,9 +127,9 @@ export function makeOpencodeProvider(spec: OpencodeSpec): AgentProvider {
     run(task: AgentTask, cb: AgentCallbacks, env): AgentSession {
       cb.onState('run')
       const scanner = createFenceScanner(p => cb.onHandoff?.(p))
-      const prov = provisionForgeMcp('opencode', env, task.cwd)
-      const args = [...baseArgs(task.model, task.cwd), ...prov.extraArgs, task.prompt]
-      const child = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false, stdin: 'ignore' })
+      const prov = provision(task.permissionMode, env, task.cwd)
+      const args = ['run', '--format', 'json', '--thinking', ...readonlyArgs(task.permissionMode), ...modelArgs(task.model), '--dir', task.cwd, ...prov.extraArgs, task.prompt]
+      const child = spawnAgent(bin, args, { cwd: task.cwd, env: spawnEnv(task.permissionMode, env), reject: false, stdin: 'ignore' })
       let buf = ''
       const usage = makeUsageTracker(u => cb.onUsage?.(u), opencodeUsage)
       // part.text is cumulative (see opencodeDelta) — track per stream and feed only the growth to the
@@ -138,13 +174,13 @@ export function makeOpencodeProvider(spec: OpencodeSpec): AgentProvider {
       const directive = forgeChatDirective(env)
       const body = buildChatPrompt(task)
       const prompt = directive ? `${directive}\n\n${body}` : body
-      const prov = provisionForgeMcp('opencode', env, task.cwd)
+      const prov = provision(task.permissionMode, env, task.cwd)
       if (prov.gitignoreHint) cb.onStatus?.(`已为 opencode 写入 ${prov.gitignoreHint}，建议加入 .gitignore`)
-      const args = ['run', '--format', 'json', '--thinking', ...sessionArgs, ...modelArgs(task.model), '--dir', task.cwd, ...prov.extraArgs, prompt]
+      const args = ['run', '--format', 'json', '--thinking', ...sessionArgs, ...readonlyArgs(task.permissionMode), ...modelArgs(task.model), '--dir', task.cwd, ...prov.extraArgs, prompt]
       // Inactivity watchdog (not a hard wall-clock timeout): a long input that's actively streaming
       // must not be killed just for taking >180s. Fires only after real silence → no more spurious
       // "chat 无回复" on big prompts.
-      const child = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false, stdin: 'ignore' })
+      const child = spawnAgent(bin, args, { cwd: task.cwd, env: spawnEnv(task.permissionMode, env), reject: false, stdin: 'ignore' })
       // ★静默先报告、半小时才回收(见 idleWatchdog 的 StallPolicy)。原来是 4 分钟无声 SIGTERM,
       // 而静默可能只是在等一个我们看不见的人(外部钩子 / 浏览器授权 / sudo / git 凭据)。
       const wd = makeIdleWatchdog(CHAT_IDLE_MS,

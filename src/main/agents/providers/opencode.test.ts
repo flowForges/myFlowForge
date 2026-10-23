@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest'
-import { parseOpencodeEvent, opencodeErrorMessage, opencodeUsage, parseOpencodeModels, opencodeDelta } from './opencode'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { mkdtempSync, rmSync, writeFileSync, chmodSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { parseOpencodeEvent, opencodeErrorMessage, opencodeUsage, parseOpencodeModels, opencodeDelta, makeOpencodeProvider, opencodeReadonlyEnv, OPENCODE_READONLY_AGENT } from './opencode'
+import type { PermissionMode } from '@shared/permissions'
 
 describe('opencodeDelta (cumulative part.text → incremental delta)', () => {
   it('emits only the growth for cumulative snapshots (the real opencode --format json shape)', () => {
@@ -66,5 +70,77 @@ describe('parseOpencodeModels', () => {
       { id: 'opencode/big-pickle', label: 'big-pickle', description: 'opencode' },
       { id: 'myprovider/ark-code-latest', label: 'ark-code-latest', description: 'myprovider' },
     ])
+  })
+})
+
+// ── readonly launch (fake CLI dumps argv + the env vars that matter) ──────────
+
+describe('opencode readonly', () => {
+  let dir: string, bin: string, out: string
+  const DUMP = `#!/usr/bin/env node
+require('node:fs').writeFileSync(process.env.DUMP_OUT, JSON.stringify({ argv: process.argv.slice(2),
+  content: process.env.OPENCODE_CONFIG_CONTENT ?? null, noProject: process.env.OPENCODE_DISABLE_PROJECT_CONFIG ?? null,
+  keep: process.env.KEEP_ME ?? null }))
+process.stdout.write(JSON.stringify({ type: 'text', part: { text: 'ok' } }) + '\\n')
+process.exit(0)
+`
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'oc-ro-'))
+    bin = join(dir, 'dump.js'); writeFileSync(bin, DUMP); chmodSync(bin, 0o755)
+    out = join(dir, 'out.json')
+  })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+  type Dump = { argv: string[]; content: string | null; noProject: string | null; keep: string | null }
+  const env = (extra: NodeJS.ProcessEnv = {}) => ({ ...process.env, DUMP_OUT: out, KEEP_ME: 'yes', OPENCODE_CONFIG_CONTENT: undefined, OPENCODE_DISABLE_PROJECT_CONFIG: undefined, ...extra })
+  const runDump = async (mode: PermissionMode | undefined, extra: NodeJS.ProcessEnv = {}): Promise<Dump> => {
+    const cb = { onLog() {}, onState() {}, onConfirm: async () => 'allow' as const, onInput: async () => '', onDone() {}, onError() {} }
+    await makeOpencodeProvider({ bin, defaultModels: [] }).run({ stageKey: 's', agentId: 'a', name: 'n', prompt: 'hello', cwd: dir, model: 'default', permissionMode: mode }, cb, env(extra)).done
+    return JSON.parse(readFileSync(out, 'utf8'))
+  }
+  const chatDump = async (mode: PermissionMode | undefined, extra: NodeJS.ProcessEnv = {}): Promise<Dump> => {
+    const cb = { onSession() {}, onAssistantDelta() {}, onThinkDelta() {}, onDone() {}, onError() {} }
+    await makeOpencodeProvider({ bin, defaultModels: [] }).chat!({ id: 'c', prompt: 'hello', model: 'default', cwd: dir, sessionId: 'ses_1', permissionMode: mode }, cb, env(extra)).done
+    return JSON.parse(readFileSync(out, 'utf8'))
+  }
+  const expectReadonlyAgent = (content: string | null) => {
+    const perm = JSON.parse(content!).agent[OPENCODE_READONLY_AGENT].permission
+    expect(Object.keys(perm)[0]).toBe('*')          // last match wins → the catch-all deny must come first
+    expect(perm['*']).toBe('deny')
+    for (const t of ['read', 'grep', 'glob', 'list']) expect(perm[t]).toBe('allow')
+    for (const t of ['edit', 'bash', 'task', 'question', 'webfetch', 'external_directory']) expect(perm[t]).toBe('deny')
+  }
+
+  it('run(): --agent forge-readonly + config via env + project config disabled, other env kept', async () => {
+    const d = await runDump('readonly')
+    expect(d.argv).toEqual(['run', '--format', 'json', '--thinking', '--agent', OPENCODE_READONLY_AGENT, '--dir', dir, 'hello'])
+    expectReadonlyAgent(d.content)
+    expect(d.noProject).toBe('1')
+    expect(d.keep).toBe('yes')
+  })
+  it('chat(): same, with -s resume', async () => {
+    const d = await chatDump('readonly')
+    expect(d.argv).toEqual(['run', '--format', 'json', '--thinking', '-s', 'ses_1', '--agent', OPENCODE_READONLY_AGENT, '--dir', dir, 'hello'])
+    expectReadonlyAgent(d.content)
+    expect(d.noProject).toBe('1')
+  })
+  it('auto / full / unset: unchanged argv, no injected env', async () => {
+    for (const m of ['auto', 'full', undefined] as const) {
+      const r = await runDump(m)
+      expect(r.argv).toEqual(['run', '--format', 'json', '--thinking', '--dir', dir, 'hello'])
+      expect(r.content).toBeNull(); expect(r.noProject).toBeNull()
+      const c = await chatDump(m)
+      expect(c.argv).toEqual(['run', '--format', 'json', '--thinking', '-s', 'ses_1', '--dir', dir, 'hello'])
+      expect(c.content).toBeNull()
+    }
+  })
+  it('merges into a user-supplied OPENCODE_CONFIG_CONTENT instead of clobbering it', () => {
+    const e = opencodeReadonlyEnv({ OPENCODE_CONFIG_CONTENT: JSON.stringify({ theme: 'x', agent: { mine: { mode: 'primary' } } }), PATH: '/bin' })
+    const cfg = JSON.parse(e.OPENCODE_CONFIG_CONTENT!)
+    expect(cfg.theme).toBe('x')
+    expect(cfg.agent.mine).toEqual({ mode: 'primary' })
+    expectReadonlyAgent(e.OPENCODE_CONFIG_CONTENT!)
+    expect(e.PATH).toBe('/bin')
+    // unparsable user value → ours wins (readonly must not silently fail open)
+    expectReadonlyAgent(opencodeReadonlyEnv({ OPENCODE_CONFIG_CONTENT: '{nope' }).OPENCODE_CONFIG_CONTENT!)
   })
 })
