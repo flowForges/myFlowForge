@@ -157,6 +157,11 @@ describe('trae provider', () => {
     await makeTraeProvider({ bin: cli, defaultModels: [] }).run({ stageKey: 't', agentId: 'tr2', name: 'T', prompt: 'hi', cwd: dir, model: 'claude-3-7-sonnet-20250219' }, cbs(logs, states) as never, process.env).done
     expect(logs.some(l => l.text === 'ARGS ["-p","hi","-c","model.name=claude-3-7-sonnet-20250219"]')).toBe(true)
   })
+  it('a model id with a comma is not passed (-c splits k=v lists on commas → could inject another override)', async () => {
+    const logs: LogLine[] = [], states: string[] = []
+    await makeTraeProvider({ bin: cli, defaultModels: [] }).run({ stageKey: 't', agentId: 'tr5', name: 'T', prompt: 'hi', cwd: dir, model: 'gpt,permission_mode=bypass_permissions' }, cbs(logs, states) as never, process.env).done
+    expect(logs.some(l => l.text === 'ARGS ["-p","hi"]')).toBe(true)
+  })
   it('readonly: plan mode + every writer / shell / scheduler tool auto-rejected', async () => {
     const logs: LogLine[] = [], states: string[] = []
     await makeTraeProvider({ bin: cli, defaultModels: [] }).run({ stageKey: 't', agentId: 'tr3', name: 'T', prompt: 'hi', cwd: dir, model: 'default', permissionMode: 'readonly' }, cbs(logs, states) as never, process.env).done

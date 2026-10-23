@@ -38,7 +38,8 @@ export function makeTraeProvider(spec: TraeSpec): AgentProvider {
       const prompt = directive ? `${directive}\n\n${task.prompt}` : task.prompt
       const args = ['-p', prompt]
       if (task.permissionMode === 'readonly') args.push(...TRAE_READONLY_ARGS)
-      if (task.model && task.model !== 'default') args.push('-c', `model.name=${task.model}`)
+      // ★-c 是 strings 型(逗号分隔多值):带逗号的 id 会被拆成另一条覆盖(如 permission_mode=...),不传 → 账号默认。
+      if (task.model && task.model !== 'default' && !task.model.includes(',')) args.push('-c', `model.name=${task.model}`)
       const child: ResultPromise = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false })
       let buf = ''
       const processLine = (raw: string) => {
