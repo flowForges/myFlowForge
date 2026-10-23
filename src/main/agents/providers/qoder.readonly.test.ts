@@ -28,9 +28,10 @@ const CHAT_CB = { onSession: () => {}, onAssistantDelta: () => {}, onThinkDelta:
 const READONLY = ['--permission-mode', 'dont_ask', '--tools', 'Read', 'Grep', 'Glob',
   '--disallowed-tools', 'Edit', '--disallowed-tools', 'Write', '--disallowed-tools', 'Bash']
 
-async function runArgs(mode: PermissionMode | undefined): Promise<string[]> {
+const forgeEnv = (): NodeJS.ProcessEnv => ({ FORGE_SOCKET: join(dir, 'f.sock'), FORGE_AGENT_ID: 'agent-1', FORGE_MCP_ENTRY: join(dir, 'mcp.js'), FORGE_MCP_DIR: dir, FORGE_TOOLS: 'forge_handoff,forge_heartbeat' })
+async function runArgs(mode: PermissionMode | undefined, extra: NodeJS.ProcessEnv = {}): Promise<string[]> {
   const p = makeQoderProvider({ bin, defaultModels: [] })
-  await p.run({ stageKey: 's', agentId: 'a', name: 'n', prompt: 'hello', cwd: dir, model: 'default', permissionMode: mode }, RUN_CB, { ...process.env, ARGV_OUT: argvOut }).done
+  await p.run({ stageKey: 's', agentId: 'a', name: 'n', prompt: 'hello', cwd: dir, model: 'default', permissionMode: mode }, RUN_CB, { ...process.env, ARGV_OUT: argvOut, ...extra }).done
   return JSON.parse(readFileSync(argvOut, 'utf8'))
 }
 async function chatArgs(mode: PermissionMode | undefined): Promise<string[]> {
@@ -68,5 +69,20 @@ describe('qoder readonly', () => {
     const chatAuto = await chatArgs('auto')
     expect(hasSeq(chatAuto, ['--permission-mode', 'accept_edits'])).toBe(true)
     expect(chatAuto).not.toContain('--tools')
+  })
+  it('run(): readonly workflow/delegate agents keep their forge MCP tools (dont_ask would deny unlisted MCP)', async () => {
+    const args = await runArgs('readonly', forgeEnv())
+    expect(hasSeq(args, ['--allowed-tools', 'mcp__forge__forge_handoff'])).toBe(true)
+    expect(hasSeq(args, ['--allowed-tools', 'mcp__forge__forge_heartbeat'])).toBe(true)
+    expect(args).toContain('--mcp-config')
+  })
+  it('run(): council seats (no FORGE_*) get no forge allow / MCP config', async () => {
+    const args = await runArgs('readonly')
+    expect(args.some(a => a.startsWith('mcp__forge__'))).toBe(false)
+    expect(args).not.toContain('--mcp-config')
+  })
+  it('run(): auto with forge env is unchanged (no extra forge --allowed-tools)', async () => {
+    const args = await runArgs('auto', forgeEnv())
+    expect(args.some(a => a.startsWith('mcp__forge__'))).toBe(false)
   })
 })

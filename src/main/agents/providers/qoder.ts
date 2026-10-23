@@ -71,6 +71,9 @@ export function makeQoderProvider(spec: QoderSpec): AgentProvider {
           '--cwd', task.cwd,
           ...(task.model && task.model !== 'default' ? ['-m', task.model] : []),
           ...(task.allowedTools?.length ? task.allowedTools.flatMap(t => ['--allowed-tools', t]) : []),
+          // ★只读的工作流 / 委派 agent 仍要能调 forge MCP:dont_ask 下没放行的 MCP 工具一律被拒(其余档有
+          //  --dangerously-skip-permissions,不需要)。没有 FORGE_* 时为空(共商席位)。
+          ...(task.permissionMode === 'readonly' ? forgeAllowedToolNames(env).flatMap(t => ['--allowed-tools', t]) : []),
           ...forgeMcpArgs(env),
         ]
       }
