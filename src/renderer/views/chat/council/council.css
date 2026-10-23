@@ -204,12 +204,13 @@
 }
 .council-chip:hover { color: var(--fg); border-color: var(--accent); }
 .council-block.fullscreen > .council-fs-bottom {
-  flex: none; display: flex; align-items: flex-end; gap: 8px; padding: 10px 12px;
+  /* ★按钮与输入框垂直居中:贴底对齐时按钮(30px)比两行输入框(54px)矮,看着像沉在右下角(2026-10-23 用户报) */
+  flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 12px;
   border-top: 1px solid var(--border-2); background: var(--bg-2);
 }
 /* ★多行输入随内容长高(Chromium field-sizing),到上限后框内滚动 */
 .council-fs-bottom textarea, .council-followup textarea {
-  flex: 1; min-width: 0; resize: none; field-sizing: content; padding: 6px 10px; border-radius: 8px;
+  flex: 1; min-width: 0; resize: none; field-sizing: content; overflow-y: auto; padding: 6px 10px; border-radius: 8px;
   font: inherit; font-size: 13px; line-height: 20px; color: var(--fg);
   background: var(--surface); border: 1px solid var(--border-2); outline: none;
 }
@@ -285,7 +286,7 @@
 .council-result-actions { display: flex; gap: 6px; margin-top: 10px; }
 
 .council-followup {
-  display: flex; align-items: flex-start; gap: 8px; margin: 0 12px 10px; padding: 10px 12px; border-radius: 12px;
+  display: flex; align-items: center; gap: 8px; margin: 0 12px 10px; padding: 10px 12px; border-radius: 12px;
   background: var(--bg-2); border: 1px solid var(--border-2);
 }
 .council-followup:focus-within { border-color: color-mix(in oklab, var(--accent) 45%, var(--border-2)); }

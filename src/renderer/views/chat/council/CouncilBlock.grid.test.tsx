@@ -239,3 +239,17 @@ describe('⤢ 放大弹窗:长输出能滚动', () => {
     expect(body).toMatch(/overflow:\s*auto/)
   })
 })
+
+describe('全屏底栏 / 追问框:输入框长高有上限,按钮居中', () => {
+  const rule = (sel: string) => councilCss.match(new RegExp(sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\{[^}]*\\}'))?.[0] ?? ''
+  it('★底栏和追问框的按钮与输入框垂直居中', () => {
+    expect(rule('.council-block.fullscreen > .council-fs-bottom')).toMatch(/align-items:\s*center/)
+    expect(rule('.council-followup')).toMatch(/align-items:\s*center/)
+  })
+  it('★输入框随内容长高、到上限后框内滚动', () => {
+    const ta = rule('.council-fs-bottom textarea, .council-followup textarea')
+    expect(ta).toMatch(/field-sizing:\s*content/)
+    expect(ta).toMatch(/overflow-y:\s*auto/)
+    expect(rule('.council-fs-bottom textarea')).toMatch(/max-height:\s*calc\(6 \* 20px/)
+  })
+})
