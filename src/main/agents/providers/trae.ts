@@ -13,7 +13,7 @@ export interface TraeSpec { bin?: string; defaultModels: Model[] }
 //  授权的工具「自动跳过」,不会挂起。mcp__* 用的是文档里的「前缀通配」,整个拿掉 MCP(以 get/list/search 开头的
 //  MCP 工具默认自动放行,不能留)。依据 research.md §9(traecli 0.120.51 `traecli doc ...`),未真机探针。
 const TRAE_READONLY_ARGS = ['--permission-mode', 'plan',
-  ...['Edit', 'Write', 'ApplyPatch', 'Bash', 'KillShell', 'CronCreate', 'CronDelete', 'mcp__*'].flatMap(t => ['--disallowed-tool', t])]
+  ...['Edit', 'Write', 'ApplyPatch', 'Bash', 'KillShell', 'CronCreate', 'CronDelete', 'Agent', 'mcp__*'].flatMap(t => ['--disallowed-tool', t])]
 
 // TraeCode CLI (字节跳动 Trae, binary `traecli`, 通过 install.sh 安装到 ~/.local/bin,非 npm 包)。无头:
 // `traecli -p "<prompt>"` 跑一轮并把回复以纯文本流到 stdout(每行 IS 输出 → 'accent',被 chat 降级捕获)。

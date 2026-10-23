@@ -160,7 +160,7 @@ describe('trae provider', () => {
   it('readonly: plan mode + every writer / shell / scheduler tool auto-rejected', async () => {
     const logs: LogLine[] = [], states: string[] = []
     await makeTraeProvider({ bin: cli, defaultModels: [] }).run({ stageKey: 't', agentId: 'tr3', name: 'T', prompt: 'hi', cwd: dir, model: 'default', permissionMode: 'readonly' }, cbs(logs, states) as never, process.env).done
-    const deny = ['Edit', 'Write', 'ApplyPatch', 'Bash', 'KillShell', 'CronCreate', 'CronDelete', 'mcp__*'].flatMap(t => ['--disallowed-tool', t])
+    const deny = ['Edit', 'Write', 'ApplyPatch', 'Bash', 'KillShell', 'CronCreate', 'CronDelete', 'Agent', 'mcp__*'].flatMap(t => ['--disallowed-tool', t])
     expect(logs.some(l => l.text === `ARGS ${JSON.stringify(['-p', 'hi', '--permission-mode', 'plan', ...deny])}`)).toBe(true)
   })
   it('auto / full keep the plain invocation (no permission flags, never -y)', async () => {
