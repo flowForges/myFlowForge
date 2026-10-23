@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, chmodSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, isAbsolute } from 'node:path'
 import { makePiProvider } from './pi'
 import { makeKimiProvider } from './kimi'
 import { makeReasonixProvider } from './reasonix'
@@ -77,6 +77,40 @@ describe('kimi provider', () => {
     const logs: LogLine[] = [], states: string[] = []
     await makeKimiProvider({ bin: cli, defaultModels: [] }).run({ stageKey: 't', agentId: 'k2', name: 'T', prompt: 'hi', cwd: dir, model: 'kimi-k2.5' }, cbs(logs, states) as never, process.env).done
     expect(logs.some(l => l.text === 'ARGS ["-p","hi","--output-format","text","--model","kimi-k2.5"]')).toBe(true)
+  })
+  it('readonly run(): app-owned agent file (read/search tools only) outside the workspace', async () => {
+    const logs: LogLine[] = [], states: string[] = []
+    await makeKimiProvider({ bin: cli, defaultModels: [] }).run({ stageKey: 't', agentId: 'k3', name: 'T', prompt: 'hi', cwd: dir, model: 'kimi-k2.5', permissionMode: 'readonly' }, cbs(logs, states) as never, process.env).done
+    const argv = JSON.parse(logs.find(l => l.text.startsWith('ARGS '))!.text.slice(5)) as string[]
+    const file = argv[argv.indexOf('--agent-file') + 1]
+    expect(argv).toEqual(['-p', 'hi', '--output-format', 'text', '--agent-file', file, '--model', 'kimi-k2.5'])
+    expect(file.startsWith(dir)).toBe(false)
+    expect(isAbsolute(file)).toBe(true)
+    const md = readFileSync(file, 'utf8')
+    const fm = md.split('---')[1]
+    expect(fm).toMatch(/^name: forge-readonly$/m)
+    expect(fm).toMatch(/^description: \S/m)
+    expect(fm).toMatch(/^tools: \[Read, Glob, Grep, ReadMediaFile\]$/m)
+    expect(fm).toMatch(/^disallowedTools: \[Write, Edit, Bash, Agent, AgentSwarm, Skill, TaskStop, CronCreate, CronDelete, EnterPlanMode, ExitPlanMode, CreateGoal\]$/m)
+    expect(fm).not.toMatch(/WebSearch|FetchURL/)
+    expect(md.split('---').slice(2).join('---')).toContain('${base_prompt}')
+  })
+  it('readonly chat(): never ACP — even on the account-default model it runs the gated -p path', async () => {
+    let text = ''
+    await new Promise<void>((resolve) => {
+      makeKimiProvider({ bin: cli, defaultModels: [] }).chat!({ id: 'kc', prompt: 'hi', model: 'default', cwd: dir, permissionMode: 'readonly' },
+        { onSession() {}, onAssistantDelta: (t) => { text += t }, onThinkDelta() {}, onDone: () => resolve(), onError: () => resolve() }, process.env)
+    })
+    const argv = JSON.parse(text.split('\n')[0].slice(5)) as string[]
+    expect(argv.slice(0, 5)).toEqual(['-p', 'hi', '--output-format', 'text', '--agent-file'])
+    expect(argv).not.toContain('acp')
+  })
+  it('auto / full run() keep the plain invocation', async () => {
+    for (const permissionMode of ['auto', 'full'] as const) {
+      const logs: LogLine[] = [], states: string[] = []
+      await makeKimiProvider({ bin: cli, defaultModels: [] }).run({ stageKey: 't', agentId: 'k4', name: 'T', prompt: 'hi', cwd: dir, model: 'default', permissionMode }, cbs(logs, states) as never, process.env).done
+      expect(logs.some(l => l.text === 'ARGS ["-p","hi","--output-format","text"]')).toBe(true)
+    }
   })
   it('reports id and displayName', () => {
     const p = makeKimiProvider({ bin: 'kimi', defaultModels: [] })

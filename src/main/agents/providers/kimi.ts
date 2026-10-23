@@ -1,4 +1,7 @@
 import { execa, type ResultPromise } from 'execa'
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { spawnAgent, killTree } from '../procGroup'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model } from '../types'
 import { acpProviderChat, runAsChat, type AcpProviderChatSpec } from '../acp/acpProvider'
@@ -7,6 +10,33 @@ import { createFenceScanner } from '../handoffFence'
 import { forgeChatDirective } from '../forgeChatDirective'
 
 function now() { return new Date().toISOString().slice(11, 19) }
+
+// ★只读:print 模式会自动批准一切工具调用(--plan 不许和 -p 同用),唯一硬限制是 agent 定义里的工具表 ——
+//  kimi-code 0.32.0 的 toolPolicy 对 profile 的 tools 做白名单(没列的内置工具、以及没写 mcp__ 模式的 MCP 工具
+//  都不激活),disallowedTools 再兜一层。文件由 app 写到自己的临时目录(mkdtemp,0700),不碰工作区;
+//  ${base_prompt} 保留 kimi 默认的系统提示词。WebSearch / FetchURL 不放。
+//  依据 research.md §4 + 本机 kimi 0.32.0 包里的 parseAgentFileText / isToolActive,未真机探针。
+export const KIMI_READONLY_AGENT_MD = [
+  '---',
+  'name: forge-readonly',
+  'description: myFlowForge read-only agent (read and search only)',
+  'tools: [Read, Glob, Grep, ReadMediaFile]',
+  'disallowedTools: [Write, Edit, Bash, Agent, AgentSwarm, Skill, TaskStop, CronCreate, CronDelete, EnterPlanMode, ExitPlanMode, CreateGoal]',
+  '---',
+  '${base_prompt}',
+  '',
+  'Read-only mode: you cannot create, modify or delete files or run commands. Only read and search, then answer.',
+  '',
+].join('\n')
+
+let readonlyAgentDir: string | undefined
+/** 只读 agent 文件的路径(每次 spawn 前重写一遍,临时目录被清掉也能自愈)。 */
+export function kimiReadonlyAgentFile(): string {
+  if (!readonlyAgentDir || !existsSync(readonlyAgentDir)) readonlyAgentDir = mkdtempSync(join(tmpdir(), 'myflowforge-kimi-'))
+  const file = join(readonlyAgentDir, 'forge-readonly.md')
+  writeFileSync(file, KIMI_READONLY_AGENT_MD)
+  return file
+}
 
 export interface KimiSpec { bin?: string; defaultModels: Model[]; acp?: AcpProviderChatSpec['acp'] }
 
@@ -32,6 +62,7 @@ export function makeKimiProvider(spec: KimiSpec): AgentProvider {
       const directive = forgeChatDirective(env)
       const prompt = directive ? `${directive}\n\n${task.prompt}` : task.prompt
       const args = ['-p', prompt, '--output-format', 'text']
+      if (task.permissionMode === 'readonly') args.push('--agent-file', kimiReadonlyAgentFile())
       if (task.model && task.model !== 'default') args.push('--model', task.model)
       const child: ResultPromise = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false })
       let buf = ''
@@ -69,7 +100,11 @@ export function makeKimiProvider(spec: KimiSpec): AgentProvider {
   //  比少一道门更糟。
   const acpChat = acpProviderChat({ bin, args: () => ['acp'], run: (t, c, e) => provider.run(t, c, e), acp: spec.acp })
   // ★选了具体模型那条直接走 run(),同样经 guardedFallback:没门的那条路要有人点头(见 ChatTask.beforeFallback)。
-  provider.chat = (task, cb, env) => (!task.model || task.model === 'default')
+  // ★只读不走 ACP:会话权限取用户 config.toml 的 default_permission_mode(yolo/auto 时工具调用根本不来问门),
+  //  而 -p + 只读 agent 文件是硬白名单;这条路本身就只读,不需要 guardedFallback 那道「以完全访问跑」的关口。
+  provider.chat = (task, cb, env) => task.permissionMode === 'readonly'
+    ? runAsChat((t, c, e) => provider.run(t, c, e), task, cb, env)
+    : (!task.model || task.model === 'default')
     ? acpChat(task, cb, env)
     : guardedFallback(task, cb, () => runAsChat((t, c, e) => provider.run(t, c, e), task, cb, env), 'kimi acp 不吃 --model')
   return provider
