@@ -26,10 +26,11 @@ export function permissionArgs(providerId: string, mode: PermissionMode | undefi
     // ★qoder readonly:dont_ask = 无头下凡是要问的一律拒(不挂起);--tools 把内置工具收窄到只读三件
     //  (没列出的直接不存在),再显式拒 Edit/Write/Bash —— default 模式会认用户 settings 里的 allow 规则和
     //  「看起来只读」的 Bash,不够。--tools 是可变参,调用方必须让后面紧跟别的 --选项(prompt 已在 -p 后)。
+    //  --strict-mcp-config:只加载 --mcp-config 给的服务器(有 FORGE_* 时就是 forge),用户 / 项目的 MCP 不加载。
     //  依据 research.md §1(docs.qoder.com/en/cli/permissions + 本机 qodercli 1.0.29 --help),未真机探针。
     case 'qoder':
       if (mode === 'readonly') return ['--permission-mode', 'dont_ask', '--tools', 'Read', 'Grep', 'Glob',
-        '--disallowed-tools', 'Edit', '--disallowed-tools', 'Write', '--disallowed-tools', 'Bash']
+        '--disallowed-tools', 'Edit', '--disallowed-tools', 'Write', '--disallowed-tools', 'Bash', '--strict-mcp-config']
       if (mode === 'full') return ['--permission-mode', 'bypass_permissions', '--dangerously-skip-permissions']
       return ['--permission-mode', 'accept_edits']
     default:

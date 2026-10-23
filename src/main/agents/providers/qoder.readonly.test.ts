@@ -26,7 +26,7 @@ const RUN_CB = { onLog: () => {}, onState: () => {}, onConfirm: async () => 'all
 const CHAT_CB = { onSession: () => {}, onAssistantDelta: () => {}, onThinkDelta: () => {}, onDone: () => {}, onError: () => {} }
 
 const READONLY = ['--permission-mode', 'dont_ask', '--tools', 'Read', 'Grep', 'Glob',
-  '--disallowed-tools', 'Edit', '--disallowed-tools', 'Write', '--disallowed-tools', 'Bash']
+  '--disallowed-tools', 'Edit', '--disallowed-tools', 'Write', '--disallowed-tools', 'Bash', '--strict-mcp-config']
 
 const forgeEnv = (): NodeJS.ProcessEnv => ({ FORGE_SOCKET: join(dir, 'f.sock'), FORGE_AGENT_ID: 'agent-1', FORGE_MCP_ENTRY: join(dir, 'mcp.js'), FORGE_MCP_DIR: dir, FORGE_TOOLS: 'forge_handoff,forge_heartbeat' })
 async function runArgs(mode: PermissionMode | undefined, extra: NodeJS.ProcessEnv = {}): Promise<string[]> {
@@ -74,7 +74,8 @@ describe('qoder readonly', () => {
     const args = await runArgs('readonly', forgeEnv())
     expect(hasSeq(args, ['--allowed-tools', 'mcp__forge__forge_handoff'])).toBe(true)
     expect(hasSeq(args, ['--allowed-tools', 'mcp__forge__forge_heartbeat'])).toBe(true)
-    expect(args).toContain('--mcp-config')
+    expect(args).toContain('--mcp-config')   // --strict-mcp-config keeps only this (forge) server
+    expect(args).toContain('--strict-mcp-config')
   })
   it('run(): council seats (no FORGE_*) get no forge allow / MCP config', async () => {
     const args = await runArgs('readonly')

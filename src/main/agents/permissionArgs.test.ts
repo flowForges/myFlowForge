@@ -15,7 +15,7 @@ describe('permissionArgs', () => {
   it('qoder → claude-compatible --permission-mode, full adds --dangerously-skip-permissions', () => {
     // readonly: never prompts (ask → deny) and only the read tools exist
     expect(permissionArgs('qoder', 'readonly')).toEqual(['--permission-mode', 'dont_ask', '--tools', 'Read', 'Grep', 'Glob',
-      '--disallowed-tools', 'Edit', '--disallowed-tools', 'Write', '--disallowed-tools', 'Bash'])
+      '--disallowed-tools', 'Edit', '--disallowed-tools', 'Write', '--disallowed-tools', 'Bash', '--strict-mcp-config'])
     expect(permissionArgs('qoder', 'auto')).toEqual(['--permission-mode', 'accept_edits'])
     expect(permissionArgs('qoder', 'full')).toEqual(['--permission-mode', 'bypass_permissions', '--dangerously-skip-permissions'])
   })
