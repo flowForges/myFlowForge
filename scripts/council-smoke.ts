@@ -19,7 +19,7 @@ import { collectMaterials } from '../src/main/council/materials'
 import { runSeat, seatResumeKey } from '../src/main/council/seatRunner'
 import type { CouncilConfig, CouncilSeat } from '../src/shared/council'
 
-const ALL = ['claude', 'codex', 'qoder', 'gemini', 'qwen', 'copilot', 'antigravity']
+const ALL = ['claude', 'codex', 'gemini', 'qwen', 'copilot', 'qoder', 'pi', 'opencode', 'trae', 'kimi', 'antigravity']
 const git = (cwd: string, ...args: string[]) =>
   execFileSync('git', ['-c', 'user.name=probe', '-c', 'user.email=probe@example.com', ...args], { cwd, encoding: 'utf8' })
 
@@ -36,7 +36,8 @@ const seatOf = (provider: string): CouncilSeat => ({ id: provider, provider, mod
 const env = () => buildAgentEnv({ proxy: '' })
 
 async function probeOne(providers: ReturnType<typeof buildProviderRegistry>, provider: string): Promise<string> {
-  if (!providers[provider]?.chat) return 'skipped: provider has no chat()'
+  // ★没有 chat() 的(pi / trae)runSeat 会走 run(),和真实席位一样;只有没注册的才跳过
+  if (!providers[provider]) return 'skipped: provider not registered'
   const repo = tempRepo(`probe-${provider}`)
   const ws = mkdtempSync(join(tmpdir(), `council-ws-${provider}-`))
   try {

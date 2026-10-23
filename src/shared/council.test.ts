@@ -55,9 +55,9 @@ describe('validateCouncilConfig', () => {
 describe('isCouncilProvider', () => {
   it('白名单', () => {
     expect(isCouncilProvider('codex')).toBe(true)
-    // ★qoder / antigravity 探针未通过,暂不放进来(见 COUNCIL_PROVIDERS 的注释)
-    for (const p of ['qoder', 'antigravity']) expect(isCouncilProvider(p)).toBe(false)
-    expect(isCouncilProvider('cursor')).toBe(false)
+    // ★只读档有硬工具白名单的才收(见 COUNCIL_PROVIDERS 的注释)
+    for (const p of ['claude', 'codex', 'gemini', 'qwen', 'copilot', 'qoder', 'pi', 'opencode', 'trae', 'kimi']) expect(isCouncilProvider(p)).toBe(true)
+    for (const p of ['antigravity', 'deepseek', 'reasonix', 'cursor']) expect(isCouncilProvider(p)).toBe(false)
   })
 })
 

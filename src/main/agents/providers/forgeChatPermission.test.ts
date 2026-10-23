@@ -195,7 +195,10 @@ describe('forge MCP tool authorization in chat()', () => {
   })
 
   it('opencode 写 opencode.json mcp.forge（enabled=true 足够，无需 permission 键 —— 实测确认）', async () => {
-    const args = await capture(makeOpencodeProvider({ bin: argvBin(), defaultModels: [] }), forgeEnv(), dir)
+    // ★非只读档:只读档关掉了项目配置、"*":"deny" 也不放行 MCP,所以不写(见下一条)
+    const env = forgeEnv()
+    await makeOpencodeProvider({ bin: argvBin(), defaultModels: [] }).chat!({ ...task, cwd: dir, permissionMode: 'auto' }, noop, env).done
+    const args = JSON.parse(readFileSync(env.ARGV_OUT as string, 'utf8')) as string[]
     const cfgPath = join(dir, 'opencode.json')
     expect(existsSync(cfgPath)).toBe(true)
     const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'))
@@ -205,5 +208,10 @@ describe('forge MCP tool authorization in chat()', () => {
     // last positional arg since opencode has no -p/--prompt flag for `run`.
     expect(args[args.length - 1]).toContain('Forge 双路径规则')
     expect(args[args.length - 1]).toContain('hi')
+  })
+
+  it('opencode 只读档不往工作区写 opencode.json(项目配置被关、MCP 被 "*":"deny" 挡,写了只是动用户仓库)', async () => {
+    await capture(makeOpencodeProvider({ bin: argvBin(), defaultModels: [] }), forgeEnv(), dir)
+    expect(existsSync(join(dir, 'opencode.json'))).toBe(false)
   })
 })

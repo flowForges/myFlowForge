@@ -9,9 +9,17 @@ import type { Attachment } from './types'
 // ★2026-10-21 真机只读探针(scripts/council-smoke.ts probe):claude / codex / copilot 要求建 PROBE.txt 均被拦住。
 //  gemini / qwen 本机未登录,探针跳过;它们的只读是结构性的:ACP 对非读工具的权限请求在 readonly 下一律拒绝
 //  (acpProvider)、--approval-mode plan、且不退回 run(),所以保留。
-//  qoder / antigravity 的唯一保证是一个未验证的 CLI 参数(--permission-mode default / --mode plan,antigravity 本机也没装),
-//  探针通过前不放进来;通过后再加回(`scripts/council-smoke.ts probe qoder`)。
-export const COUNCIL_PROVIDERS = ['claude', 'codex', 'gemini', 'qwen', 'copilot'] as const
+// ★2026-10-23 加入 qoder / pi / opencode / trae / kimi:只读档改成硬工具白名单,依据文档 / 本机 --help / 发布包源码核对
+//  (verified from docs/source 2026-10-23, not live-probed —— 本机都没登录;登录后跑 `scripts/council-smoke.ts probe <id>`):
+//  qoder    --permission-mode dont_ask(要问的一律拒)+ --tools Read Grep Glob + 拒 Edit/Write/Bash,只读绝不带 --dangerously-skip-permissions
+//  pi       --tools read,grep,find,ls --no-extensions --no-approve(没列的工具模型看不到,pi 没有审批层,不会挂)
+//  opencode env 注入 forge-readonly agent("*":"deny",只放 read/grep/glob/list)+ OPENCODE_DISABLE_PROJECT_CONFIG=1 + --agent
+//  trae     --permission-mode plan + --disallowed-tool Edit/Write/ApplyPatch/Bash/KillShell/CronCreate/CronDelete
+//  kimi     不走 ACP:-p + app 自己写的 --agent-file(tools 只有 Read/Glob/Grep/ReadMediaFile),默认模型也一样
+//  pi / trae 没有 chat(),席位经 runAsChat 走 run()(seatRunner),只读档随之带过去。
+// 仍排除:antigravity(工作区内写文件无头下自动放行,--mode plan 只是提示词前缀)、deepseek(dsh 的 workflow 工具能绕过只读)、
+//  reasonix(项目配置 / MCP 能绕过)、cursor(工作区内写文件不需要审批)。
+export const COUNCIL_PROVIDERS = ['claude', 'codex', 'gemini', 'qwen', 'copilot', 'qoder', 'pi', 'opencode', 'trae', 'kimi'] as const
 
 /** label 形如 "Codex · 6.1",只用于展示。 */
 export type CouncilSeat = { id: string; provider: string; model: string; label: string }
