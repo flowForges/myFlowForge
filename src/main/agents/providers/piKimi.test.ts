@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, chmodSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, chmodSync, readFileSync, statSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, isAbsolute } from 'node:path'
 import { makePiProvider } from './pi'
-import { makeKimiProvider } from './kimi'
+import { makeKimiProvider, kimiReadonlyAgentFile, KIMI_READONLY_AGENT_MD } from './kimi'
 import { makeReasonixProvider } from './reasonix'
 import { makeTraeProvider } from './trae'
 import type { LogLine } from '../types'
@@ -94,6 +94,18 @@ describe('kimi provider', () => {
     expect(fm).toMatch(/^disallowedTools: \[Write, Edit, Bash, Agent, AgentSwarm, Skill, TaskStop, CronCreate, CronDelete, EnterPlanMode, ExitPlanMode, CreateGoal\]$/m)
     expect(fm).not.toMatch(/WebSearch|FetchURL/)
     expect(md.split('---').slice(2).join('---')).toContain('${base_prompt}')
+  })
+  it('readonly agent file: one stable path per process, not rewritten when intact, restored when tampered', () => {
+    const a = kimiReadonlyAgentFile()
+    utimesSync(a, 1_000_000, 1_000_000)
+    const ino = statSync(a).ino
+    const b = kimiReadonlyAgentFile()
+    expect(b).toBe(a)
+    expect(statSync(b).mtimeMs).toBe(1_000_000_000)    // intact → not rewritten
+    writeFileSync(a, '---\nname: evil\n---\nx')
+    expect(kimiReadonlyAgentFile()).toBe(a)
+    expect(readFileSync(a, 'utf8')).toBe(KIMI_READONLY_AGENT_MD)
+    expect(statSync(a).ino).not.toBe(ino)              // restored by write-then-rename, never a half-written file
   })
   it('readonly chat(): never ACP — even on the account-default model it runs the gated -p path', async () => {
     let text = ''

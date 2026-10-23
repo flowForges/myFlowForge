@@ -1,5 +1,5 @@
 import { execa, type ResultPromise } from 'execa'
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnAgent, killTree } from '../procGroup'
@@ -30,11 +30,20 @@ export const KIMI_READONLY_AGENT_MD = [
 ].join('\n')
 
 let readonlyAgentDir: string | undefined
-/** 只读 agent 文件的路径(每次 spawn 前重写一遍,临时目录被清掉也能自愈)。 */
+/**
+ * 只读 agent 文件的路径:每个进程一个固定路径。内容完好就不动;缺了 / 被改了才重写,且先写临时文件再 rename,
+ * 并发的 kimi 进程永远读不到半截文件。临时目录被清掉也能自愈。
+ */
 export function kimiReadonlyAgentFile(): string {
   if (!readonlyAgentDir || !existsSync(readonlyAgentDir)) readonlyAgentDir = mkdtempSync(join(tmpdir(), 'myflowforge-kimi-'))
   const file = join(readonlyAgentDir, 'forge-readonly.md')
-  writeFileSync(file, KIMI_READONLY_AGENT_MD)
+  let current: string | null = null
+  try { current = readFileSync(file, 'utf8') } catch { /* 还没有 */ }
+  if (current !== KIMI_READONLY_AGENT_MD) {
+    const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
+    writeFileSync(tmp, KIMI_READONLY_AGENT_MD)
+    renameSync(tmp, file)
+  }
   return file
 }
 
