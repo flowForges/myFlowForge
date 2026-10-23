@@ -154,6 +154,31 @@ describe('交互聊天:回落到 run() 之前补问「完全访问」', () => {
   })
 })
 
+describe('发车前的「完全访问」预授权门:只读档且 provider 硬执行只读时不弹', () => {
+  async function send(agent: string, permissionMode: 'readonly' | 'auto') {
+    const s = await setup()
+    let ran = false
+    sendTurnMock.mockImplementation(() => { ran = true; return new Promise(() => {}) })
+    s.call(CH.chatSend)({}, { workspacePath: '/ws/a', sessionId: 's1', agent, agentLabel: agent, model: 'm', text: 'x', attachments: [], permissionMode })
+    await tick(); await tick()
+    return { ...s, ran: () => ran }
+  }
+  it.each(['pi', 'opencode', 'trae', 'kimi'])('%s readonly → 不弹卡,直接跑', async (agent) => {
+    const r = await send(agent, 'readonly')
+    expect(events(r.sent, 'confirm-request')).toHaveLength(0)
+    expect(r.ran()).toBe(true)
+  })
+  it('pi auto → 照旧弹卡', async () => {
+    const r = await send('pi', 'auto')
+    expect(events(r.sent, 'confirm-request')).toHaveLength(1)
+    expect(r.ran()).toBe(false)
+  })
+  it('cursor readonly → 照旧弹卡(它的只读不是硬限制)', async () => {
+    const r = await send('cursor', 'readonly')
+    expect(events(r.sent, 'confirm-request')).toHaveLength(1)
+  })
+})
+
 describe('一次性调用:讲不了 ACP 时不回落,和「没有 chat()」一样', () => {
   function oldGemini() {
     const p = makeGeminiProvider({ bin: 'gemini-old', defaultModels: [], acp: { open: refusing } })

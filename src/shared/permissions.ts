@@ -56,6 +56,19 @@ export function providerSupportsPermissions(providerId: string, acpUnavailable =
   return (PERMISSION_AWARE_PROVIDERS as readonly string[]).includes(providerId) || acpGated(providerId, acpUnavailable)
 }
 
+/**
+ * 「只读」这一档是硬限制的 provider(启动参数 / 沙箱 / 工具白名单,见 agents/permissionArgs.ts 和各 provider):
+ * claude plan + 门、codex read-only 沙箱、qoder dont_ask + --tools、deepseek DSH_PERMISSION_MODE=read-only、
+ * pi --tools、opencode forge-readonly agent、trae plan + --disallowed-tool、kimi 只读 agent 文件。
+ * ACP 那几家(gemini / qwen / copilot)只在 ACP 门还在时算(见 ACP_GATED_PROVIDERS)。
+ * ★antigravity 不在:工作区内写文件无头下自动放行,--mode plan 只是提示词前缀。
+ * ★和 PERMISSION_AWARE_PROVIDERS 不是一回事:pi / opencode / trae / kimi 只有只读档有意义,自动 / 完全照旧。
+ */
+export const READONLY_ENFORCED_PROVIDERS = ['claude', 'codex', 'qoder', 'deepseek', 'pi', 'opencode', 'trae', 'kimi'] as const
+export function providerEnforcesReadonly(providerId: string, acpUnavailable = false): boolean {
+  return (READONLY_ENFORCED_PROVIDERS as readonly string[]).includes(providerId) || acpGated(providerId, acpUnavailable)
+}
+
 // 哪些 provider 会为每个操作升起确认门。只有它们能在【运行中】兑现权限档的【提升】—— 门是 app 答的,
 // 所以门升起来时重读一次档、答 allow,就等于半途提权(见 ipc/handlers.ts 的 toolConfirm)。
 // 其余 provider 的档位纯粹是启动时的沙箱参数,进程一起来就钉死:codex 的 approval_policy 恒 "never"

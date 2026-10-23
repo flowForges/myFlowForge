@@ -5,7 +5,7 @@ import { capToolOutput, capToolOutputs, readCap } from '../chat/toolOutputCap'
 import { createTerminalService, type TerminalService } from '../terminal/terminalService'
 import type { HostCapabilities } from '../host/capabilities'
 import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, readHookLibrary, writeHookLibrary, readCustomStages, upsertCustomStage, deleteCustomStage, upsertProject, setProjectDefaultBranch, setProjectAlias, registerWorkspace, unregisterWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setStageModel, isFullAccessAcked, ackFullAccess } from '../config/store'
-import { providerSupportsPermissions, providerUsesCommandShim, permissionAppliesMidRun, permissionModeLabel, DEFAULT_PERMISSION_MODE } from '@shared/permissions'
+import { providerSupportsPermissions, providerEnforcesReadonly, providerUsesCommandShim, permissionAppliesMidRun, permissionModeLabel, DEFAULT_PERMISSION_MODE } from '@shared/permissions'
 import { acpKnownUnavailable, withAcpAvailability } from '../agents/acp/acpAvailability'
 import { isAcpUnavailable } from '../agents/acp/acpChat'
 import { browserPermissionConflict, providerSupportsBrowserUse, DEFAULT_BROWSER_USE, BROWSER_TOOL_PREFIX } from '@shared/browserUse'
@@ -1000,7 +1000,10 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       broadcast(CH.settingsChanged, readSettings())
       return true
     }
-    if (!providerSupportsPermissions(gateProviderId, acpKnownUnavailable(provider?.bin)) && !(await ensureFullAccess())) return
+    // ★只读档且这个 provider 的只读是硬限制(见 READONLY_ENFORCED_PROVIDERS)时不是「以完全访问运行」,不问。
+    const gateAcpDown = acpKnownUnavailable(provider?.bin)
+    const readonlyEnforced = payload.permissionMode === 'readonly' && providerEnforcesReadonly(gateProviderId, gateAcpDown)
+    if (!providerSupportsPermissions(gateProviderId, gateAcpDown) && !readonlyEnforced && !(await ensureFullAccess())) return
     const store = new RunStore(payload.workspacePath, 'chat-bridge')
     // forge_delegate is fire-and-forget: its MCP call returns 「已派发」at once, so without this the turn
     // would resolve while the sub-agents keep running in the background — and the NEXT message would start
