@@ -180,6 +180,25 @@ describe('chatService.sendTurn', () => {
     expect(doneEvt?.message?.text).toBe('partial')
   })
 
+  it('run() fallback forwards readonly (and only readonly) to the provider', async () => {
+    const seen: (string | undefined)[] = []
+    const runProvider: AgentProvider = {
+      id: 'pi', displayName: 'Pi', capabilities: { structuredOutput: false, permissionHook: false, pty: false },
+      async detect() { return true }, async listModels() { return [] },
+      run(task, cb) {
+        seen.push(task.permissionMode)
+        cb.onLog({ ts: '0', text: 'ok', level: 'accent' })
+        const done = Promise.resolve({ ok: true }); cb.onDone({ ok: true }); return { id: task.agentId, cancel() {}, done }
+      }
+    }
+    for (const permissionMode of ['readonly', 'auto', 'full'] as const) {
+      await sendTurn({ ...payload('hi'), agent: 'pi', agentLabel: 'Pi', permissionMode },
+        { provider: runProvider, env: process.env, emit: () => {} })
+    }
+    // ★auto / full 照旧不传(run 的缺省行为不变);只读必须到达 run()
+    expect(seen).toEqual(['readonly', undefined, undefined])
+  })
+
   it('run() fallback excludes process lines (kind:tool/file) but keeps reply output', async () => {
     const runProvider: AgentProvider = {
       id: 'codex', displayName: 'Codex', capabilities: { structuredOutput: false, permissionHook: false, pty: false },

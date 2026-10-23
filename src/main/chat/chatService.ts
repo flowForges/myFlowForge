@@ -506,7 +506,9 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     return new Promise<ChatMessage>((resolve) => {
       let session: AgentSession
       try { session = provider.run(
-        { stageKey: 'chat', agentId: aid, name: 'chat', prompt: promptText, cwd: ws, model: payload.model },
+        // ★只读要带到 run()(pi / trae / kimi 等的只读参数就挂在它上面);其余档照旧不传,保持各 CLI 原来的缺省行为。
+        { stageKey: 'chat', agentId: aid, name: 'chat', prompt: promptText, cwd: ws, model: payload.model,
+          ...(payload.permissionMode === 'readonly' ? { permissionMode: 'readonly' as const } : {}) },
         {
           onLog: (l) => { if (l.level === 'ok' || (l.level === 'accent' && (l.kind === 'output' || l.kind == null))) { dbgDelta('run', l.text); text += (text ? '\n' : '') + l.text; publishLive(); emit({ workspacePath: ws, sessionId: sid, type: 'assistant-delta', id: aid, text: l.text }) } },
           onState: () => {},

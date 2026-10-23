@@ -70,7 +70,9 @@ export function runAsChat(run: AcpProviderChatSpec['run'], task: ChatTask, cb: C
   let ended = false
   const end = (f: () => void) => { if (ended) return; ended = true; f() }
   const session = run(
-    { stageKey: 'chat', agentId: task.id, name: 'chat', prompt: task.prompt, cwd: task.cwd, model: task.model },
+    // ★权限档要带过去:kimi 只读聊天 / 没有 chat() 的共商席位都走这里,丢了档就成了不受限的 run()。
+    { stageKey: 'chat', agentId: task.id, name: 'chat', prompt: task.prompt, cwd: task.cwd, model: task.model,
+      ...(task.permissionMode ? { permissionMode: task.permissionMode } : {}) },
     {
       onLog: (l) => {
         if (!(l.level === 'ok' || (l.level === 'accent' && (l.kind === 'output' || l.kind == null)))) return

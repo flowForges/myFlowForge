@@ -11,6 +11,7 @@ import { shimEnv, shimmedPath } from '../commandShim'
 import { acpKnownUnavailable, withAcpAvailability } from './acpAvailability'
 import { fakeTransport, standardAgent, recorder, send } from './acpTestKit'
 import { isAcpUnavailable, type AcpSpec } from './acpChat'
+import { runAsChat } from './acpProvider'
 import type { AgentProvider, ChatTask } from '../types'
 import { resetAcpAvailability } from './acpAvailability'
 
@@ -269,5 +270,20 @@ describe('权限门 / 权限档', () => {
   it('PATH shim 不看 ACP:只有原生有门的 claude 免装', () => {
     for (const id of ['gemini', 'qwen', 'copilot', 'kimi', 'cursor', 'codex']) expect(providerUsesCommandShim(id)).toBe(true)
     expect(providerUsesCommandShim('claude')).toBe(false)
+  })
+})
+
+describe('runAsChat', () => {
+  it('forwards the permission mode to run() (a readonly turn must stay readonly)', async () => {
+    const seen: (string | undefined)[] = []
+    const run: Parameters<typeof runAsChat>[0] = (t, cb) => {
+      seen.push(t.permissionMode)
+      cb.onLog({ ts: '0', text: 'x', level: 'accent' })
+      return { id: t.agentId, cancel() {}, done: Promise.resolve({ ok: true }) }
+    }
+    const cb = { onSession() {}, onAssistantDelta() {}, onThinkDelta() {}, onDone() {}, onError() {} }
+    await runAsChat(run, { id: 'a', prompt: 'p', model: 'm', cwd: dir, permissionMode: 'readonly' }, cb, {}).done
+    await runAsChat(run, { id: 'b', prompt: 'p', model: 'm', cwd: dir }, cb, {}).done
+    expect(seen).toEqual(['readonly', undefined])
   })
 })

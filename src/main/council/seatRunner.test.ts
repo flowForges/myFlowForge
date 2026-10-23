@@ -47,6 +47,23 @@ describe('runSeat', () => {
     expect(cap.env!.PATH).toBe('/bin')
   })
 
+  it('a provider without chat() runs its seat through run() with readonly', async () => {
+    let seen: { permissionMode?: string; prompt?: string; model?: string } | undefined
+    const provider: AgentProvider = {
+      id: 'pi', displayName: 'Pi',
+      capabilities: { structuredOutput: false, permissionHook: false, pty: false },
+      async detect() { return true }, async listModels() { return [] },
+      run(task, cb) {
+        seen = { permissionMode: task.permissionMode, prompt: task.prompt, model: task.model }
+        cb.onLog({ ts: '0', text: '回答', level: 'accent' })
+        return { id: task.agentId, cancel() {}, done: Promise.resolve({ ok: true }) }
+      },
+    }
+    const r = await runSeat('c1', seat('a', 'pi'), 'p', deps({ pi: provider }), noopCb()).done
+    expect(r).toMatchObject({ ok: true, text: '回答' })
+    expect(seen).toEqual({ permissionMode: 'readonly', prompt: 'p', model: 'm1' })
+  })
+
   it('passes attachments through to the provider task (default none)', async () => {
     const { provider, cap } = fakeProvider('codex', okScript)
     const att = [{ name: 'a.png', path: '/tmp/a.png', size: 3 }]
@@ -106,13 +123,10 @@ describe('runSeat', () => {
     expect(r).toMatchObject({ ok: false, error: 'boom' })
   })
 
-  it('unknown provider or provider without chat -> ok:false', async () => {
+  // (没有 chat() 的 provider 改走 run(),见上面的「a provider without chat()」)
+  it('unknown provider -> ok:false', async () => {
     const r = await runSeat('c1', seat('a', 'nope'), 'p', deps({}), noopCb()).done
     expect(r.ok).toBe(false)
-    const { provider } = fakeProvider('codex', () => {})
-    delete (provider as { chat?: unknown }).chat
-    const r2 = await runSeat('c1', seat('a'), 'p', deps({ codex: provider }), noopCb()).done
-    expect(r2.ok).toBe(false)
   })
 
   it('times out after 300000ms of silence and cancels the provider', async () => {

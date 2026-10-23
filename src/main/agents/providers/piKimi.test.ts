@@ -44,6 +44,18 @@ describe('pi provider', () => {
     await makePiProvider({ bin: cli, defaultModels: [] }).run({ stageKey: 't', agentId: 'p2', name: 'T', prompt: 'hi', cwd: dir, model: 'anthropic/claude-sonnet-4.5' }, cbs(logs, states) as never, process.env).done
     expect(logs.some(l => l.text === 'ARGS ["-p","hi","--model","anthropic/claude-sonnet-4.5"]')).toBe(true)
   })
+  it('readonly: only read/grep/find/ls tools, no extensions, no project-local files', async () => {
+    const logs: LogLine[] = [], states: string[] = []
+    await makePiProvider({ bin: cli, defaultModels: [] }).run({ stageKey: 't', agentId: 'p3', name: 'T', prompt: 'hi', cwd: dir, model: 'default', permissionMode: 'readonly' }, cbs(logs, states) as never, process.env).done
+    expect(logs.some(l => l.text === 'ARGS ["-p","hi","--tools","read,grep,find,ls","--no-extensions","--no-approve"]')).toBe(true)
+  })
+  it('auto / full keep the plain invocation', async () => {
+    for (const permissionMode of ['auto', 'full'] as const) {
+      const logs: LogLine[] = [], states: string[] = []
+      await makePiProvider({ bin: cli, defaultModels: [] }).run({ stageKey: 't', agentId: 'p4', name: 'T', prompt: 'hi', cwd: dir, model: 'default', permissionMode }, cbs(logs, states) as never, process.env).done
+      expect(logs.some(l => l.text === 'ARGS ["-p","hi"]')).toBe(true)
+    }
+  })
   it('reports id, displayName and mcpTools:false', () => {
     const p = makePiProvider({ bin: 'pi', defaultModels: [] })
     expect(p.id).toBe('pi'); expect(p.displayName).toBe('Pi')

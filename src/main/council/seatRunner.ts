@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { AgentProvider, AgentSession, ChatCallbacks, ConfirmDecision, ConfirmReq } from '../agents/types'
 import { makeIdleWatchdog } from '../agents/idleWatchdog'
+import { runAsChat } from '../agents/acp/acpProvider'
 import { readSession, writeSession } from '../chat/chatStore'
 import { COUNCIL_TURN_TIMEOUT_MS, type CouncilSeat } from '@shared/council'
 import type { Attachment } from '@shared/types'
@@ -41,7 +42,12 @@ export function runSeat(
   const msgId = `council-${randomUUID()}`
   const key = seatResumeKey(councilId, seat.id)
   const provider = deps.providers[seat.provider]
-  if (!provider?.chat) {
+  // ★没有 chat() 的 CLI(pi / trae)按 run() 跑一轮,和普通对话的降级路一样;只读档经 runAsChat 带到 run()。
+  //  能不能当席位由 COUNCIL_PROVIDERS 把关,这里不再挑。
+  const chat: AgentProvider['chat'] = provider?.chat
+    ? provider.chat.bind(provider)
+    : provider ? (t, c, e) => runAsChat((rt, rc, re) => provider.run(rt, rc, re), t, c, e) : undefined
+  if (!chat) {
     return { done: Promise.resolve({ ok: false, msgId, error: `provider unavailable: ${seat.provider}` }), cancel() {}, resumed: false }
   }
   const resumeId = readSession(deps.workspacePath, deps.sessionId, key)
@@ -86,7 +92,7 @@ export function runSeat(
   cb.onStart(msgId)
   try {
     // ★故意不传 beforeFallback:ACP 握手失败时直接报错,不退回不受控的 run()。
-    session = provider.chat(
+    session = chat(
       { id: msgId, prompt, model: seat.model, cwd: deps.cwd, sessionId: resumeId, permissionMode: 'readonly', attachments },
       callbacks, envWithoutForge(deps.env),
     )

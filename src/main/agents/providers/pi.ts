@@ -30,6 +30,10 @@ export function makePiProvider(spec: PiSpec): AgentProvider {
       const directive = forgeChatDirective(env)
       const prompt = directive ? `${directive}\n\n${task.prompt}` : task.prompt
       const args = ['-p', prompt]
+      // ★只读:工具白名单只留 read/grep/find/ls(pi 自己的「只读模式」示例),没列的工具模型根本看不到;
+      //  pi 没有审批层,所以不会挂起。--no-extensions 防扩展用同名工具顶替,--no-approve 不加载项目本地文件。
+      //  依据 research.md §7(本机 pi 0.83.0 --help),未真机探针。
+      if (task.permissionMode === 'readonly') args.push('--tools', 'read,grep,find,ls', '--no-extensions', '--no-approve')
       if (task.model && task.model !== 'default') args.push('--model', task.model)
       const child: ResultPromise = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false })
       let buf = ''
