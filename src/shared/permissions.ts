@@ -58,13 +58,14 @@ export function providerSupportsPermissions(providerId: string, acpUnavailable =
 
 /**
  * 「只读」这一档是硬限制的 provider(启动参数 / 沙箱 / 工具白名单,见 agents/permissionArgs.ts 和各 provider):
- * claude plan + 门、codex read-only 沙箱、qoder dont_ask + --tools、deepseek DSH_PERMISSION_MODE=read-only、
- * pi --tools、opencode forge-readonly agent、trae plan + --disallowed-tool、kimi 只读 agent 文件。
+ * claude plan + 门、codex read-only 沙箱、qoder dont_ask + --tools、pi --tools、opencode forge-readonly agent、trae plan + --disallowed-tool、kimi 只读 agent 文件。
  * ACP 那几家(gemini / qwen / copilot)只在 ACP 门还在时算(见 ACP_GATED_PROVIDERS)。
  * ★antigravity 不在:工作区内写文件无头下自动放行,--mode plan 只是提示词前缀。
+ * ★deepseek 不在:dsh 的 workflow 工具能绕过 DSH_PERMISSION_MODE=read-only(见 council.ts 的排除说明)。
+ *  它本来就在 PERMISSION_AWARE_PROVIDERS 里,不走预授权门,所以去掉它不改变行为。
  * ★和 PERMISSION_AWARE_PROVIDERS 不是一回事:pi / opencode / trae / kimi 只有只读档有意义,自动 / 完全照旧。
  */
-export const READONLY_ENFORCED_PROVIDERS = ['claude', 'codex', 'qoder', 'deepseek', 'pi', 'opencode', 'trae', 'kimi'] as const
+export const READONLY_ENFORCED_PROVIDERS = ['claude', 'codex', 'qoder', 'pi', 'opencode', 'trae', 'kimi'] as const
 export function providerEnforcesReadonly(providerId: string, acpUnavailable = false): boolean {
   return (READONLY_ENFORCED_PROVIDERS as readonly string[]).includes(providerId) || acpGated(providerId, acpUnavailable)
 }

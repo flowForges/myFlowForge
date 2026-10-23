@@ -3,7 +3,7 @@ import { providerEnforcesReadonly, providerSupportsPermissions, READONLY_ENFORCE
 
 describe('providerEnforcesReadonly', () => {
   it('providers whose readonly launch is a hard restriction', () => {
-    for (const p of ['claude', 'codex', 'qoder', 'deepseek', 'pi', 'opencode', 'trae', 'kimi']) expect(providerEnforcesReadonly(p)).toBe(true)
+    for (const p of ['claude', 'codex', 'qoder', 'pi', 'opencode', 'trae', 'kimi']) expect(providerEnforcesReadonly(p)).toBe(true)
   })
   it('ACP providers only while their ACP gate is up', () => {
     for (const p of ['gemini', 'qwen', 'copilot']) {
@@ -12,7 +12,7 @@ describe('providerEnforcesReadonly', () => {
     }
   })
   it('antigravity / cursor / reasonix / unknown do not enforce readonly', () => {
-    for (const p of ['antigravity', 'cursor', 'reasonix', 'whatever']) expect(providerEnforcesReadonly(p)).toBe(false)
+    for (const p of ['antigravity', 'deepseek', 'cursor', 'reasonix', 'whatever']) expect(providerEnforcesReadonly(p)).toBe(false)
   })
   it('does not widen PERMISSION_AWARE_PROVIDERS (auto/full still mean nothing for pi/opencode/trae/kimi)', () => {
     for (const p of ['pi', 'opencode', 'trae', 'kimi']) expect(providerSupportsPermissions(p)).toBe(false)
