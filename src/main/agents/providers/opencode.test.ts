@@ -123,8 +123,8 @@ process.exit(0)
     expectReadonlyAgent(d.content)
     expect(d.noProject).toBe('1')
   })
-  it('auto / full / unset: unchanged argv, no injected env', async () => {
-    for (const m of ['auto', 'full', undefined] as const) {
+  it.each(['auto', 'full', undefined] as const)('%s: unchanged argv, no injected env', async (m) => {
+    {
       const r = await runDump(m)
       expect(r.argv).toEqual(['run', '--format', 'json', '--thinking', '--dir', dir, 'hello'])
       expect(r.content).toBeNull(); expect(r.noProject).toBeNull()
@@ -142,5 +142,26 @@ process.exit(0)
     expect(e.PATH).toBe('/bin')
     // unparsable user value → ours wins (readonly must not silently fail open)
     expectReadonlyAgent(opencodeReadonlyEnv({ OPENCODE_CONFIG_CONTENT: '{nope' }).OPENCODE_CONFIG_CONTENT!)
+  })
+  it('forge env present: forge MCP rides the same OPENCODE_CONFIG_CONTENT and its tools are allowed after "*":"deny"', () => {
+    const e = opencodeReadonlyEnv({ FORGE_SOCKET: '/tmp/f.sock', FORGE_AGENT_ID: 'a1', FORGE_MCP_ENTRY: '/x/forgeMcp.js', FORGE_TOOLS: 'forge_handoff' })
+    const cfg = JSON.parse(e.OPENCODE_CONFIG_CONTENT!)
+    expect(cfg.mcp.forge).toMatchObject({ type: 'local', enabled: true, command: [process.execPath, '/x/forgeMcp.js'] })
+    expect(cfg.mcp.forge.environment).toMatchObject({ FORGE_SOCKET: '/tmp/f.sock', FORGE_AGENT_ID: 'a1', FORGE_TOOLS: 'forge_handoff' })
+    const perm = cfg.agent[OPENCODE_READONLY_AGENT].permission
+    const keys = Object.keys(perm)
+    expect(perm['forge_*']).toBe('allow')
+    expect(keys.indexOf('forge_*')).toBeGreaterThan(keys.indexOf('*'))
+  })
+  it('no forge env: no mcp key, no forge allow rule (council seats)', () => {
+    const cfg = JSON.parse(opencodeReadonlyEnv({}).OPENCODE_CONFIG_CONTENT!)
+    expect(cfg.mcp).toBeUndefined()
+    expect(cfg.agent[OPENCODE_READONLY_AGENT].permission['forge_*']).toBeUndefined()
+  })
+  it('keeps the user\'s other MCP servers in the merged config (they stay denied by "*")', () => {
+    const e = opencodeReadonlyEnv({ OPENCODE_CONFIG_CONTENT: JSON.stringify({ mcp: { mine: { type: 'remote', url: 'x' } } }), FORGE_SOCKET: '/s', FORGE_AGENT_ID: 'a', FORGE_MCP_ENTRY: '/e' })
+    const cfg = JSON.parse(e.OPENCODE_CONFIG_CONTENT!)
+    expect(cfg.mcp.mine).toEqual({ type: 'remote', url: 'x' })
+    expect(cfg.mcp.forge).toBeTruthy()
   })
 })

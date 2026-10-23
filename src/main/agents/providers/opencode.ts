@@ -5,6 +5,7 @@ import { createFenceScanner } from '../handoffFence'
 import { buildChatPrompt, makeUsageTracker } from '../chatStream'
 import { forgeChatDirective } from '../forgeChatDirective'
 import { provisionForgeMcp, type ForgeProvision } from '../forgeMcpProvision'
+import { forgeServerSpec } from '../mcpConfig'
 import { logError } from '../../log/appLog'
 import { makeIdleWatchdog, CHAT_IDLE_MS, CHAT_STALL_KILL_MS } from '../idleWatchdog'
 
@@ -86,7 +87,12 @@ const OPENCODE_READONLY_AGENT_CONFIG = {
   },
 }
 
-/** 只读那次 spawn 的 env:把只读 agent 并进(不是覆盖)用户自己的 OPENCODE_CONFIG_CONTENT,其余 env 原样保留。 */
+/**
+ * 只读那次 spawn 的 env:把只读 agent 并进(不是覆盖)用户自己的 OPENCODE_CONFIG_CONTENT,其余 env 原样保留。
+ * ★有 FORGE_* 时(只读的工作流 / 委派 agent)forge MCP 也从这里注入 —— 项目的 opencode.json 已被关掉 ——
+ *  并在 "*":"deny" 之后放行 forge_*(opencode 的 MCP 工具名是 <server>_<tool>;暴露哪些由 forge 服务端按
+ *  FORGE_TOOLS 决定)。共商席位没有 FORGE_*,两样都不加。
+ */
 export function opencodeReadonlyEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   let base: Record<string, any> = {}
   try {
@@ -94,7 +100,15 @@ export function opencodeReadonlyEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) base = parsed
   } catch { /* 用户的值解析不了 → 只用我们的,只读不能因为它而失效 */ }
   const agents = base.agent && typeof base.agent === 'object' ? base.agent : {}
-  const content = { ...base, agent: { ...agents, [OPENCODE_READONLY_AGENT]: OPENCODE_READONLY_AGENT_CONFIG } }
+  const forge = forgeServerSpec(env)
+  const agent = forge
+    ? { ...OPENCODE_READONLY_AGENT_CONFIG, permission: { ...OPENCODE_READONLY_AGENT_CONFIG.permission, 'forge_*': 'allow' } }
+    : OPENCODE_READONLY_AGENT_CONFIG
+  const content: Record<string, any> = { ...base, agent: { ...agents, [OPENCODE_READONLY_AGENT]: agent } }
+  if (forge) {
+    const mcp = base.mcp && typeof base.mcp === 'object' ? base.mcp : {}
+    content.mcp = { ...mcp, forge: { type: 'local', command: [forge.command, ...forge.args], environment: forge.env, enabled: true } }
+  }
   return { ...env, OPENCODE_CONFIG_CONTENT: JSON.stringify(content), OPENCODE_DISABLE_PROJECT_CONFIG: '1' }
 }
 
