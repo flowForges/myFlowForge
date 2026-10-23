@@ -19,3 +19,13 @@ describe('providerEnforcesReadonly', () => {
     expect(READONLY_ENFORCED_PROVIDERS).not.toContain('antigravity')
   })
 })
+
+describe('permissionAppliesMidRun —— codex 走 app-server 时中途切到完全访问当场兑现', () => {
+  it('★app-server:切到 full 兑现(审批经过读当前档的门);exec 照旧不兑现', async () => {
+    const { permissionAppliesMidRun } = await import('./permissions')
+    expect(permissionAppliesMidRun('codex', 'full', false, 'auto', true)).toBe(true)
+    expect(permissionAppliesMidRun('codex', 'full', false, 'readonly', true)).toBe(true)
+    expect(permissionAppliesMidRun('codex', 'full', false, 'auto', false)).toBe(false)
+    expect(permissionAppliesMidRun('codex', 'auto', false, 'readonly', true)).toBe(false)
+  })
+})

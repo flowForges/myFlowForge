@@ -877,7 +877,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // provider —— 对它们说「下一条消息生效」是骗人的,它永远不生效(picker 上已经标了"不支持")。
     const running = chatQueue.runningProvider(wsPath, sessionId)
     const runningAcpDown = !!running && acpKnownUnavailable(providers[running]?.bin)
-    if (running && providerSupportsPermissions(running, runningAcpDown) && !permissionAppliesMidRun(running, mode, runningAcpDown, chatQueue.runningPermissionMode(wsPath, sessionId))) {
+    if (running && providerSupportsPermissions(running, runningAcpDown) && !permissionAppliesMidRun(running, mode, runningAcpDown, chatQueue.runningPermissionMode(wsPath, sessionId), readSettings().codexTransport === 'app-server')) {
       const who = providers[running]?.displayName ?? running
       emitNote(wsPath, sessionId,
         `🛡 已切到「${permissionModeLabel(mode)}」· ${who} 不支持运行中改档，当前这一轮仍按「${permissionModeLabel(prev)}」跑完，下一条消息才生效。`)

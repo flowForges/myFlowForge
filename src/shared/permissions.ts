@@ -97,8 +97,13 @@ export function providerUsesCommandShim(providerId: string): boolean {
 // 已经起来的那个进程的沙箱改不了,而门只能用来【放行】,没法反过来收回已经授予的范围。
 // ★`startedMode` = 这一轮起手时的档。ACP 那几家以「只读审阅」起手时,plan 档参数和「非只读一律拒」的
 //  包装(acpProvider.ts)都是起手那一刻钉死的 —— 半途切到完全访问也放不开,所以和别的 provider 一样算不兑现。
-export function permissionAppliesMidRun(providerId: string, mode: PermissionMode, acpUnavailable = false, startedMode?: PermissionMode): boolean {
+// ★★codex 走 app-server 时(`codexAppServer`),它的审批请求一路送到我们的门(toolConfirm),门读的是**落盘的当前档** ——
+//  所以以「自动」起手、中途切到完全访问,这一轮后面再要授权的命令(比如要联网的内部 CLI)当场就自动放行,
+//  挂着的那些也会被 allowPendingConfirms 一次放掉。原来照样提示「不支持运行中改档」,用户以为切了没用(2026-10-23)。
+//  以「只读」起手也一样:codexSandboxApproval 给只读的也是 on-request,越权请求同样走这道门。
+export function permissionAppliesMidRun(providerId: string, mode: PermissionMode, acpUnavailable = false, startedMode?: PermissionMode, codexAppServer = false): boolean {
   if (mode !== 'full') return false
   if ((OPERATION_GATED_PROVIDERS as readonly string[]).includes(providerId)) return true
+  if (providerId === 'codex' && codexAppServer) return true
   return acpGated(providerId, acpUnavailable) && startedMode !== 'readonly'
 }
