@@ -19,6 +19,8 @@ require('node:fs').writeFileSync(process.env.ARGV_OUT, JSON.stringify(process.ar
 process.exit(0)
 `
 const NO_HOOKS = 'features.hooks=false'
+// ★旧版 codex 里这个特性叫 codex_hooks(用户 config.toml: [features] codex_hooks = true),两个名字都得关。
+const NO_LEGACY_HOOKS = 'features.codex_hooks=false'
 let dir: string, bin: string, argvOut: string, oldPath: string | undefined
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'codex-hooks-'))
@@ -43,7 +45,8 @@ async function chatArgv(task: Partial<ChatTask>): Promise<string[]> {
   await s.done
   return JSON.parse(readFileSync(argvOut, 'utf8')) as string[]
 }
-const hasNoHooks = (args: string[]) => args.some((a, i) => a === NO_HOOKS && args[i - 1] === '-c')
+const hasPair = (args: string[], v: string) => args.some((a, i) => a === v && args[i - 1] === '-c')
+const hasNoHooks = (args: string[]) => hasPair(args, NO_HOOKS) && hasPair(args, NO_LEGACY_HOOKS)
 
 describe('codex 钩子一律关掉 → -c features.hooks=false', () => {
   it('chat exec', async () => {

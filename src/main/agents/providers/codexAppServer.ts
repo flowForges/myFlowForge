@@ -3,7 +3,7 @@ import { adaptCodexEvent, codexTokenUsage } from './codexEventAdapter'
 import { codexApprovalResponse, elicitationUnsupported, PERMISSIONS_METHOD, ELICITATION_METHOD } from './codexApproval'
 
 /**
- * 我们拉起的 codex 一律**关掉钩子**:`-c features.hooks=false`。
+ * 我们拉起的 codex 一律**关掉钩子**:`-c features.hooks=false -c features.codex_hooks=false`。
  *
  * ★★2026-10-21 真机:codex 在我们这儿执行 `git push`,界面一直「主代理思考中」—— 权限请求被用户装的
  *  Ping Island 的 `PermissionRequest` 钩子截走了(弹在刘海上,钩子超时 86400 秒),我们这边什么都收不到。
@@ -14,8 +14,13 @@ import { codexApprovalResponse, elicitationUnsupported, PERMISSIONS_METHOD, ELIC
  *  三处都认(本机 codex 0.154 实测 `-c features.hooks=false` 正常出答案)。
  * ★代价:用户自己的 codex 钩子(oh-my-codex 等)在我们拉起的 codex 里不跑 —— 这本来就是加
  *  `--ignore-user-config` 时想要的效果,只是现在真正做到了。
+ * ★★2026-10-23 又一次真机复现(另一台机器,app 已是 1.2.7):Ping Island 照样截走审批。本机 0.154 上
+ *  逐条实测过 —— exec 和 app-server 两条路上 `features.hooks=false` 都能让钩子不跑(去掉它钩子立刻跑)。
+ *  差别在 codex 版本:钩子这个特性**原来叫 `codex_hooks`**(用户 config.toml 里写的正是
+ *  `[features] codex_hooks = true`),转正后才改名 `hooks`。旧版 codex 不认识 `hooks`,我们那条覆盖
+ *  就被当成未知键忽略了。所以新旧两个名字一起关;0.154 上多传旧名实测不报错、照常跑完。
  */
-export const CODEX_NO_HOOKS_ARGS = ['-c', 'features.hooks=false'] as const
+export const CODEX_NO_HOOKS_ARGS = ['-c', 'features.hooks=false', '-c', 'features.codex_hooks=false'] as const
 
 // Minimal child-process surface so tests can fake the app-server end to end.
 export interface CodexChild {
