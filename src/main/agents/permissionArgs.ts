@@ -23,8 +23,13 @@ export function permissionArgs(providerId: string, mode: PermissionMode | undefi
       if (mode === 'readonly') return ['--mode', 'plan']
       if (mode === 'full') return ['--dangerously-skip-permissions']
       return ['--mode', 'accept-edits']
+    // ★qoder readonly:dont_ask = 无头下凡是要问的一律拒(不挂起);--tools 把内置工具收窄到只读三件
+    //  (没列出的直接不存在),再显式拒 Edit/Write/Bash —— default 模式会认用户 settings 里的 allow 规则和
+    //  「看起来只读」的 Bash,不够。--tools 是可变参,调用方必须让后面紧跟别的 --选项(prompt 已在 -p 后)。
+    //  依据 research.md §1(docs.qoder.com/en/cli/permissions + 本机 qodercli 1.0.29 --help),未真机探针。
     case 'qoder':
-      if (mode === 'readonly') return ['--permission-mode', 'default']
+      if (mode === 'readonly') return ['--permission-mode', 'dont_ask', '--tools', 'Read', 'Grep', 'Glob',
+        '--disallowed-tools', 'Edit', '--disallowed-tools', 'Write', '--disallowed-tools', 'Bash']
       if (mode === 'full') return ['--permission-mode', 'bypass_permissions', '--dangerously-skip-permissions']
       return ['--permission-mode', 'accept_edits']
     default:

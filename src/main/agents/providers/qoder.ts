@@ -66,7 +66,8 @@ export function makeQoderProvider(spec: QoderSpec): AgentProvider {
           // (→ "nothing returned"). So we must omit --verbose here.
           '--include-partial-messages',
           ...permissionArgs('qoder', task.permissionMode ?? 'auto'),
-          '--dangerously-skip-permissions',
+          // ★只读绝不加:它绕过一切权限检查,会把上面的 dont_ask / --tools 白名单作废。
+          ...(task.permissionMode === 'readonly' ? [] : ['--dangerously-skip-permissions']),
           '--cwd', task.cwd,
           ...(task.model && task.model !== 'default' ? ['-m', task.model] : []),
           ...(task.allowedTools?.length ? task.allowedTools.flatMap(t => ['--allowed-tools', t]) : []),
