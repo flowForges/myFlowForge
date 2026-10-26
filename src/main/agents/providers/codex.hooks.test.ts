@@ -5,8 +5,8 @@ import { join } from 'node:path'
 import type { ChatTask } from '../types'
 
 /**
- * 我们拉起的 codex 每条路都带 `-c features.hooks=false`:用户 ~/.codex/hooks.json 里的
- * PermissionRequest 钩子(Ping Island 等)会把审批截走,我们这边永远等不到 → 一直「思考中」。
+ * 我们拉起的 codex **不关钩子**:用户的 codex 钩子里有公司要求必须运行的(a1 上报、r2c 审计)。
+ * 审批钩子(Vibe/Ping Island)由用户自己从 hooks.json 里去掉。这里钉死:任何一条路都不带关钩子的覆盖。
  */
 const transport = vi.hoisted(() => ({ value: 'exec' as 'exec' | 'app-server' }))
 vi.mock('../../config/store', async (importOriginal) => {
@@ -18,9 +18,6 @@ const ARGV_DUMP = `#!/usr/bin/env node
 require('node:fs').writeFileSync(process.env.ARGV_OUT, JSON.stringify(process.argv.slice(2)))
 process.exit(0)
 `
-const NO_HOOKS = 'features.hooks=false'
-// ★旧版 codex 里这个特性叫 codex_hooks(用户 config.toml: [features] codex_hooks = true),两个名字都得关。
-const NO_LEGACY_HOOKS = 'features.codex_hooks=false'
 let dir: string, bin: string, argvOut: string, oldPath: string | undefined
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'codex-hooks-'))
@@ -45,28 +42,27 @@ async function chatArgv(task: Partial<ChatTask>): Promise<string[]> {
   await s.done
   return JSON.parse(readFileSync(argvOut, 'utf8')) as string[]
 }
-const hasPair = (args: string[], v: string) => args.some((a, i) => a === v && args[i - 1] === '-c')
-const hasNoHooks = (args: string[]) => hasPair(args, NO_HOOKS) && hasPair(args, NO_LEGACY_HOOKS)
+const keepsHooks = (args: string[]) => !args.some(a => /features\.(codex_)?hooks/.test(a))
 
-describe('codex 钩子一律关掉 → -c features.hooks=false', () => {
+describe('codex 钩子保持开启 —— 不传任何关钩子的覆盖', () => {
   it('chat exec', async () => {
     const args = await chatArgv({})
     expect(args[0]).toBe('exec')
-    expect(hasNoHooks(args)).toBe(true)
+    expect(keepsHooks(args)).toBe(true)
     expect(args[args.length - 1]).toContain('PROMPT_BODY')
   })
 
   it('chat exec resume', async () => {
     const args = await chatArgv({ sessionId: 'thread-9' })
     expect(args.slice(0, 3)).toEqual(['exec', 'resume', 'thread-9'])
-    expect(hasNoHooks(args)).toBe(true)
+    expect(keepsHooks(args)).toBe(true)
   })
 
   it('app-server:在 app-server 子命令之前', async () => {
     transport.value = 'app-server'
     const args = await chatArgv({})
     expect(args[args.length - 1]).toBe('app-server')
-    expect(hasNoHooks(args)).toBe(true)
+    expect(keepsHooks(args)).toBe(true)
   })
 
   it('workflow run()', async () => {
@@ -80,6 +76,6 @@ describe('codex 钩子一律关掉 → -c features.hooks=false', () => {
     await s.done
     const args = JSON.parse(readFileSync(argvOut, 'utf8')) as string[]
     expect(args[0]).toBe('exec')
-    expect(hasNoHooks(args)).toBe(true)
+    expect(keepsHooks(args)).toBe(true)
   })
 })

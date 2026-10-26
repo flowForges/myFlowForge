@@ -3,24 +3,12 @@ import { adaptCodexEvent, codexTokenUsage } from './codexEventAdapter'
 import { codexApprovalResponse, elicitationUnsupported, PERMISSIONS_METHOD, ELICITATION_METHOD } from './codexApproval'
 
 /**
- * 我们拉起的 codex 一律**关掉钩子**:`-c features.hooks=false -c features.codex_hooks=false`。
- *
- * ★★2026-10-21 真机:codex 在我们这儿执行 `git push`,界面一直「主代理思考中」—— 权限请求被用户装的
- *  Ping Island 的 `PermissionRequest` 钩子截走了(弹在刘海上,钩子超时 86400 秒),我们这边什么都收不到。
- *  原来靠 `--ignore-user-config` 绕开 config.toml 里的钩子;新版 codex 把钩子挪进了独立的
- *  `~/.codex/hooks.json`,而且 `hooks` 特性默认开启(`codex features list`:hooks stable true),
- *  那个开关已经挡不住了。
- * ★用 `-c` 而不是 `--disable hooks`:`exec resume` 对子命令参数挑剔,`-c` 在 exec / resume / app-server
- *  三处都认(本机 codex 0.154 实测 `-c features.hooks=false` 正常出答案)。
- * ★代价:用户自己的 codex 钩子(oh-my-codex 等)在我们拉起的 codex 里不跑 —— 这本来就是加
- *  `--ignore-user-config` 时想要的效果,只是现在真正做到了。
- * ★★2026-10-23 又一次真机复现(另一台机器,app 已是 1.2.7):Ping Island 照样截走审批。本机 0.154 上
- *  逐条实测过 —— exec 和 app-server 两条路上 `features.hooks=false` 都能让钩子不跑(去掉它钩子立刻跑)。
- *  差别在 codex 版本:钩子这个特性**原来叫 `codex_hooks`**(用户 config.toml 里写的正是
- *  `[features] codex_hooks = true`),转正后才改名 `hooks`。旧版 codex 不认识 `hooks`,我们那条覆盖
- *  就被当成未知键忽略了。所以新旧两个名字一起关;0.154 上多传旧名实测不报错、照常跑完。
+ * 我们拉起的 codex **不再关钩子**(2026-10-26 用户定):用户机器上的 codex 钩子里有公司要求必须运行的
+ * (a1 技能上报、r2c 命令审计等),一刀切地关掉不合规。原来为了不让 Ping Island / Vibe Island 的
+ * `PermissionRequest` 钩子截走审批而全关(2026-10-21);现在改由用户在 ~/.codex/hooks.json 里
+ * 只去掉那一条审批钩子。codex 只有「全开 / 全关」一个开关,没法只关某一条,所以 app 这边保持全开。
+ * ★「完全访问」起手不受影响:沙箱 danger-full-access + approval never,codex 根本不发审批请求。
  */
-export const CODEX_NO_HOOKS_ARGS = ['-c', 'features.hooks=false', '-c', 'features.codex_hooks=false'] as const
 
 // Minimal child-process surface so tests can fake the app-server end to end.
 export interface CodexChild {
@@ -138,8 +126,7 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
   // 和这里原来手写的 agentSpawnOptions()+trackAgentChild 完全等价。
   // reject:false —— 我们从不 await 这个 promise(只用它的 stdio 流),非零退出不该变成未处理的 rejection。
   const spawn = deps.spawn ?? ((cmd, args) => spawnAgent(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, reject: false }) as unknown as CodexChild)
-  // 钩子一律关掉:用户的 PermissionRequest 钩子会把审批截走,我们这边收不到(见 CODEX_NO_HOOKS_ARGS)。
-  const args = [...CODEX_NO_HOOKS_ARGS, ...opts.configArgs, ...opts.modelArgs, 'app-server']
+  const args = [...opts.configArgs, ...opts.modelArgs, 'app-server']
   const child = spawn('codex', args)
 
   let buffer = ''
