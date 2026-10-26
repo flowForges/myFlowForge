@@ -203,7 +203,7 @@ describe('driveCodexTurn', () => {
 })
 
 /**
- * 用户 2026-09-14:codex(逐字输出 = app-server 通路)跑公司内部 MCP,里面有 python,MCP 要问权限。
+ * 用户 2026-09-14:codex(逐字输出 = app-server 通路)跑自建的 MCP,里面有 python,MCP 要问权限。
  * 「咱们 app 没有弹窗,光标一直在动,但是没有内容输出」。
  *
  * ★★根因不是没收到,是**回答形状错了**。codex 官方 schema 给每种服务端请求规定了不同的回答,

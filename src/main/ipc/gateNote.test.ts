@@ -30,8 +30,8 @@ describe('权限门审计消息', () => {
     expect(gateNoteBody({ title: 'Bash 请求执行', where: '   ' })).toBe('Bash 请求执行')
   })
 
-  it('★★用户截图里那条:下划线不许被吃成斜体', () => {
-    const where = 'grep -n "func (o \\*RecruitApplyOrder) CloneAsRejected" -A 75 internal/merchant-recruitment/domain/entity/recruit_apply_order.go'
+  it('★★带下划线的路径:下划线不许被吃成斜体', () => {
+    const where = 'grep -n "func (o \\*SampleOrder) CloneAsRejected" -A 75 internal/sample_service/domain/entity/sample_order.go'
     const body = gateNoteBody({ title: 'Bash 请求执行', where })
     // 命令原样出现在消息里
     expect(body).toContain(where)

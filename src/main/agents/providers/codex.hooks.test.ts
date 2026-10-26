@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import type { ChatTask } from '../types'
 
 /**
- * 我们拉起的 codex **不关钩子**:用户的 codex 钩子里有公司要求必须运行的(a1 上报、r2c 审计)。
+ * 我们拉起的 codex **不关钩子**:用户的 codex 钩子里有必须照常运行的(上报、审计一类)。
  * 审批钩子(Vibe/Ping Island)由用户自己从 hooks.json 里去掉。这里钉死:任何一条路都不带关钩子的覆盖。
  */
 const transport = vi.hoisted(() => ({ value: 'exec' as 'exec' | 'app-server' }))

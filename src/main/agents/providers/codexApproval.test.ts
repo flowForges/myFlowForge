@@ -39,7 +39,7 @@ describe('codexGateReq', () => {
 })
 
 /**
- * 用户 2026-09-14 报:codex(逐字输出/app-server 通路)调用公司内部 MCP,里面有 python 执行,
+ * 用户 2026-09-14 报:codex(逐字输出/app-server 通路)调用自建的 MCP,里面有 python 执行,
  * 「也会询问权限,但是咱们 app 里也没有提示,我也不知道是否卡住」——光标一直在动,没有任何内容。
  *
  * 查下来是**回答格式错了**,不是没收到。codex 官方 schema(`codex app-server generate-json-schema`)

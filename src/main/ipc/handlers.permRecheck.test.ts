@@ -220,7 +220,7 @@ describe('确认门升起时重新检查权限档', () => {
   it('★★ auto 档 + 拿不准是不是只读:照常升门(失败即拦)', async () => {
     sessionState.permissionMode = 'auto'
     const { confirm, sent } = await startTurn()
-    void confirm({ title: 'shell 请求执行', where: 'a1 mcp --env prod call-tool x' })
+    void confirm({ title: 'shell 请求执行', where: 'mytool --env prod call x' })
     await new Promise(r => setTimeout(r, 0))
     expect(requests(sent), '拿不准就必须问').toHaveLength(1)
   })

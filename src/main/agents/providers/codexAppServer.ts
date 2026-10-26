@@ -3,8 +3,8 @@ import { adaptCodexEvent, codexTokenUsage } from './codexEventAdapter'
 import { codexApprovalResponse, elicitationUnsupported, PERMISSIONS_METHOD, ELICITATION_METHOD } from './codexApproval'
 
 /**
- * 我们拉起的 codex **不再关钩子**(2026-10-26 用户定):用户机器上的 codex 钩子里有公司要求必须运行的
- * (a1 技能上报、r2c 命令审计等),一刀切地关掉不合规。原来为了不让 Ping Island / Vibe Island 的
+ * 我们拉起的 codex **不再关钩子**(2026-10-26 用户定):用户机器上的 codex 钩子里有
+ * 必须照常运行的(上报、审计一类),一刀切地关掉不行。原来为了不让 Ping Island / Vibe Island 的
  * `PermissionRequest` 钩子截走审批而全关(2026-10-21);现在改由用户在 ~/.codex/hooks.json 里
  * 只去掉那一条审批钩子。codex 只有「全开 / 全关」一个开关,没法只关某一条,所以 app 这边保持全开。
  * ★「完全访问」起手不受影响:沙箱 danger-full-access + approval never,codex 根本不发审批请求。
