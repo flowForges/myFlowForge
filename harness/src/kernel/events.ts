@@ -7,6 +7,8 @@ export class EventBus {
   private modes = new Map<string, DispatchMode>()
   private handlers = new Map<string, Handler[]>()
 
+  constructor(private opts: { onError?: (type: string, err: unknown) => void } = {}) {}
+
   declare(type: string, mode: DispatchMode): void {
     const old = this.modes.get(type)
     if (old && old !== mode) throw new Error(`event ${type} already declared as ${old}`)
@@ -31,9 +33,10 @@ export class EventBus {
       try {
         const r = h(...args)
         // emit 不等待,异步错误吞掉避免未处理拒绝
-        if (r && typeof r.catch === 'function') r.catch(() => {})
-      } catch {
+        if (r && typeof r.catch === 'function') r.catch((e: unknown) => this.report(type, e))
+      } catch (e) {
         // 单个监听者失败不影响其他监听者
+        this.report(type, e)
       }
     }
   }
@@ -60,6 +63,10 @@ export class EventBus {
       if (r !== undefined) return r as R
     }
     return undefined
+  }
+
+  private report(type: string, err: unknown): void {
+    try { this.opts.onError?.(type, err) } catch { /* 忽略 */ }
   }
 
   private snapshot(type: string): Handler[] {

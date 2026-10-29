@@ -52,7 +52,9 @@ describe('harness 边界', () => {
   it('插件之间不互相 import', () => {
     const bad: string[] = []
     for (const f of walk(PLUGINS)) {
-      const own = relative(PLUGINS, f).split(sep)[0]
+      const parts = relative(PLUGINS, f).split(sep)
+      if (parts.length === 1) continue // plugins/index.ts 是静态登记表,允许引用各插件
+      const own = parts[0]
       for (const s of specifiers(f)) {
         if (!s.startsWith('.')) continue
         const r = resolved(f, s)

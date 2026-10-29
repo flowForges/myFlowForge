@@ -43,6 +43,19 @@ describe('ServiceRegistry', () => {
 })
 
 describe('EventBus', () => {
+  it('emit reports sync throws and async rejections to onError, others still run', async () => {
+    const errs: Array<[string, unknown]> = []
+    const b = new EventBus({ onError: (t, e) => errs.push([t, e]) })
+    b.declare('e', 'emit')
+    const seen: number[] = []
+    b.on('e', () => { throw new Error('sync') })
+    b.on('e', async () => { throw new Error('async') })
+    b.on('e', () => { seen.push(1) })
+    b.emit('e')
+    await new Promise(r => setTimeout(r, 0))
+    expect(seen).toEqual([1])
+    expect(errs.map(([t, e]) => [t, (e as Error).message])).toEqual([['e', 'sync'], ['e', 'async']])
+  })
   it('emit calls all handlers in order and ignores return', () => {
     const b = new EventBus()
     b.declare('e', 'emit')
