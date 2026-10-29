@@ -23,15 +23,24 @@ const ERR_INVALID_REQUEST = -32600
 const ERR_INVALID_PARAMS = -32602
 const ERR_METHOD_NOT_FOUND = -32601
 const ERR_INTERNAL = -32603
+const STALE_RECHECK_MS = 50
 
 // POSIX:路径已存在时,有人在听就拒绝,没人听(崩溃遗留)才清掉
-async function clearStale(addr: string): Promise<void> {
-  if (process.platform === 'win32' || !existsSync(addr)) return
-  const code = await new Promise<string | undefined>((resolve) => {
+const probe = (addr: string) =>
+  new Promise<string | undefined>((resolve) => {
     const s = net.connect(addr)
     s.once('connect', () => { s.destroy(); resolve(undefined) })
     s.once('error', (e: NodeJS.ErrnoException) => { s.destroy(); resolve(e.code ?? 'UNKNOWN') })
   })
+
+async function clearStale(addr: string): Promise<void> {
+  if (process.platform === 'win32' || !existsSync(addr)) return
+  let code = await probe(addr)
+  // 另一进程可能刚 bind 还没 listen(此刻也是 ECONNREFUSED):稍等再探一次,别删掉活的
+  if (code === 'ECONNREFUSED') {
+    await new Promise(r => setTimeout(r, STALE_RECHECK_MS))
+    code = await probe(addr)
+  }
   if (code === undefined) throw new Error('address in use')
   // 只有确认没人听才清;其他错误(权限等)不动文件
   if (!['ECONNREFUSED', 'ENOENT', 'ENOTSOCK'].includes(code)) throw new Error(`cannot probe socket: ${code}`)
@@ -135,7 +144,8 @@ export async function startRpcServer(opts: RpcServerOpts): Promise<{ close(): Pr
 
   await new Promise<void>((resolve, reject) => {
     const onErr = (e: NodeJS.ErrnoException) =>
-      reject(e.code === 'EADDRINUSE' ? new Error('address in use') : e)
+      // 并发 bind 同一路径:macOS 可能报 EEXIST
+      reject(e.code === 'EADDRINUSE' || e.code === 'EEXIST' ? new Error('address in use') : e)
     server.once('error', onErr)
     server.listen(opts.addr, () => {
       server.off('error', onErr)

@@ -8,7 +8,7 @@ import { createKernel, type Kernel } from './kernel'
 import { startRpcServer } from './rpcServer'
 import { RpcError } from './rpcError'
 import { HARNESS_VERSION } from './version'
-import { connectClient, FrameDecoder, MAX_FRAME_BYTES, encodeFrame, type KernelEvent, type MffaiClient } from '../protocol/index'
+import { connectClient, connectControlClient, FrameDecoder, MAX_FRAME_BYTES, encodeFrame, type KernelEvent, type MffaiClient } from '../protocol/index'
 import loopEcho from '../plugins/loop-echo'
 
 let dir: string
@@ -227,6 +227,20 @@ describe('rpc server + client', () => {
     expect(existsSync(addr)).toBe(true)
     await serve()
     expect((await (await client()).call('status')).state).toBe('running')
+  })
+
+  it('per-call timeoutMs rejects with timeout; control client defaults to a timeout', async () => {
+    const addr = sockPath('t')
+    const s = await startRpcServer({ addr, token: TOKEN, version: 'v', handle: () => new Promise(() => {}) })
+    closers.push(() => s.close())
+    const c = await connectClient({ addr, token: TOKEN, timeoutMs: 100 })
+    closers.push(() => c.close())
+    await expect(c.call('status')).rejects.toThrow('timeout')
+    const cc = await connectControlClient({ addr, token: TOKEN, timeoutMs: 100 })
+    closers.push(() => cc.close())
+    await expect(cc.call('status')).rejects.toThrow('timeout')
+    // 超时后连接仍可用
+    await expect(cc.call('auth', { token: TOKEN })).resolves.toEqual({ ok: true })
   })
 
   it('a live listener is never stolen', async () => {
