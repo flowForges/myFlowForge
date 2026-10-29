@@ -4,7 +4,6 @@ import { join } from 'node:path'
 import {
   ERR_BUSY,
   ERR_DRAINING,
-  PROTOCOL_VERSION,
   WorkerMethods,
   type KernelEvent,
   type SnapshotResult,
@@ -189,8 +188,6 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
       const p = parsed.data as any
 
       switch (name) {
-        case 'hello':
-          return { version: HARNESS_VERSION, protocolVersion: PROTOCOL_VERSION, compatible: p.protocolVersion === PROTOCOL_VERSION }
         case 'status':
           return status()
         case 'snapshot':

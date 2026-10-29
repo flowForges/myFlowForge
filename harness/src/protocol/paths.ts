@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
@@ -42,15 +42,41 @@ export function runtimePaths(dir: string, platform: NodeJS.Platform = process.pl
   }
 }
 
-export function ensureToken(file: string): string {
-  if (!existsSync(file)) {
-    mkdirSync(dirname(file), { recursive: true })
-    try {
-      writeFileSync(file, randomBytes(32).toString('hex'), { mode: 0o600, flag: 'wx' })
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e
-    }
-    try { chmodSync(file, 0o600) } catch { /* Windows */ }
+const TOKEN_RE = /^[0-9a-f]{64}$/
+
+function readValid(file: string): string | null {
+  try {
+    const t = readFileSync(file, 'utf8').trim()
+    return TOKEN_RE.test(t) ? t : null
+  } catch {
+    return null
   }
-  return readFileSync(file, 'utf8').trim()
+}
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+export function ensureToken(file: string): string {
+  mkdirSync(dirname(file), { recursive: true })
+  let t = readValid(file)
+  // 可能撞上并发写入的半成品:短暂重试
+  for (let i = 0; !t && existsSync(file) && i < 5; i++) {
+    sleepSync(20)
+    t = readValid(file)
+  }
+  if (!t) {
+    t = randomBytes(32).toString('hex')
+    // 临时文件 + rename:读者不会看到半截文件
+    const tmp = `${file}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`
+    writeFileSync(tmp, t, { mode: 0o600 })
+    renameSync(tmp, file)
+    return readValid(file) ?? t
+  }
+  if (process.platform !== 'win32') {
+    try {
+      if ((statSync(file).mode & 0o777) !== 0o600) chmodSync(file, 0o600)
+    } catch { /* 忽略 */ }
+  }
+  return t
 }

@@ -20,22 +20,26 @@ export interface RpcServerOpts {
 
 const ERR_PARSE = -32700
 const ERR_INVALID_REQUEST = -32600
+const ERR_INVALID_PARAMS = -32602
 const ERR_METHOD_NOT_FOUND = -32601
 const ERR_INTERNAL = -32603
 
 // POSIX:路径已存在时,有人在听就拒绝,没人听(崩溃遗留)才清掉
 async function clearStale(addr: string): Promise<void> {
   if (process.platform === 'win32' || !existsSync(addr)) return
-  const live = await new Promise<boolean>((resolve) => {
+  const code = await new Promise<string | undefined>((resolve) => {
     const s = net.connect(addr)
-    s.once('connect', () => { s.destroy(); resolve(true) })
-    s.once('error', () => { s.destroy(); resolve(false) })
+    s.once('connect', () => { s.destroy(); resolve(undefined) })
+    s.once('error', (e: NodeJS.ErrnoException) => { s.destroy(); resolve(e.code ?? 'UNKNOWN') })
   })
-  if (live) throw new Error('address in use')
+  if (code === undefined) throw new Error('address in use')
+  // 只有确认没人听才清;其他错误(权限等)不动文件
+  if (!['ECONNREFUSED', 'ENOENT', 'ENOTSOCK'].includes(code)) throw new Error(`cannot probe socket: ${code}`)
   try { unlinkSync(addr) } catch { /* 已被清掉 */ }
 }
 
 export async function startRpcServer(opts: RpcServerOpts): Promise<{ close(): Promise<void> }> {
+  if (!opts.token) throw new Error('token must not be empty')
   if (process.platform !== 'win32') mkdirSync(dirname(opts.addr), { recursive: true })
   await clearStale(opts.addr)
 
@@ -44,19 +48,24 @@ export async function startRpcServer(opts: RpcServerOpts): Promise<{ close(): Pr
     conns.add(sock)
     sock.setEncoding('utf8')
     let authed = false
+    let closing = false
     let unsubscribe: (() => void) | undefined
     const send = (msg: object) => {
       if (!sock.destroyed && sock.writable) sock.write(encodeFrame(msg))
     }
-    const reply = (id: unknown, result: unknown) => send({ jsonrpc: '2.0', id, result })
+    // 通知(无 id)不回包
+    const reply = (id: unknown, result: unknown) => {
+      if (id !== undefined && id !== null) send({ jsonrpc: '2.0', id, result })
+    }
     const fail = (id: unknown, code: number, message: string, data?: unknown) =>
+      (id !== undefined || code === ERR_PARSE) &&
       send({ jsonrpc: '2.0', id, error: data === undefined ? { code, message } : { code, message, data } })
     const conn: RpcConn = { send }
 
     const subscribe = (id: unknown, after: unknown) => {
       if (!opts.events) return fail(id, ERR_METHOD_NOT_FOUND, 'method not found: events.subscribe')
       const events = opts.events
-      if (typeof after !== 'number' || after < 0) return fail(id, ERR_INVALID_REQUEST, 'invalid params')
+      if (typeof after !== 'number' || !Number.isInteger(after) || after < 0) return fail(id, ERR_INVALID_PARAMS, 'invalid params')
       const last = events.lastSeq()
       if (after > last) return reply(id, { reset: true, lastSeq: last })
       unsubscribe?.()
@@ -82,8 +91,9 @@ export async function startRpcServer(opts: RpcServerOpts): Promise<{ close(): Pr
           authed = true
           return reply(id, { ok: true })
         }
-        fail(id ?? null, ERR_UNAUTHORIZED, 'unauthorized')
-        sock.end()
+        closing = true
+        if (id !== undefined) fail(id, ERR_UNAUTHORIZED, 'unauthorized')
+        sock.end(() => sock.destroy())
         return
       }
       try {
@@ -112,7 +122,7 @@ export async function startRpcServer(opts: RpcServerOpts): Promise<{ close(): Pr
     })
     sock.on('data', (chunk: string) => {
       for (const m of decoder.push(chunk)) {
-        if (sock.destroyed) break
+        if (sock.destroyed || closing) break
         void dispatch(m as Record<string, any>)
       }
     })
@@ -124,9 +134,11 @@ export async function startRpcServer(opts: RpcServerOpts): Promise<{ close(): Pr
   })
 
   await new Promise<void>((resolve, reject) => {
-    server.once('error', reject)
+    const onErr = (e: NodeJS.ErrnoException) =>
+      reject(e.code === 'EADDRINUSE' ? new Error('address in use') : e)
+    server.once('error', onErr)
     server.listen(opts.addr, () => {
-      server.off('error', reject)
+      server.off('error', onErr)
       resolve()
     })
   })

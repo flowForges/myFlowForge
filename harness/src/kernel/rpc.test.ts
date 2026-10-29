@@ -25,7 +25,8 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true })
 })
 
-const sockPath = () => join(dir, 'w.sock')
+const sockPath = (name = 'w') =>
+  process.platform === 'win32' ? `\\\\.\\pipe\\mffai-test-${name}-${process.pid}-${Date.now()}` : join(dir, `${name}.sock`)
 async function serve(addr = sockPath()) {
   const s = await startRpcServer({
     addr, token: TOKEN, version: HARNESS_VERSION, events: kernel.events,
@@ -82,7 +83,7 @@ describe('rpc server + client', () => {
   })
 
   it('non-RpcError throw -> -32603 with message; RpcError keeps code/data', async () => {
-    const addr = join(dir, 'e.sock')
+    const addr = sockPath('e')
     const s = await startRpcServer({
       addr, token: TOKEN, version: 'v',
       handle: async (m) => { if (m === 'status') throw new RpcError(-32003, 'busy', { a: 1 }); throw new Error('kaboom') },
@@ -129,7 +130,7 @@ describe('rpc server + client', () => {
   })
 
   it('pending calls reject on close; onClose fires', async () => {
-    const addr = join(dir, 'h.sock')
+    const addr = sockPath('h')
     const s = await startRpcServer({ addr, token: TOKEN, version: 'v', handle: () => new Promise(() => {}) })
     closers.push(() => s.close())
     const c = await client(addr)
@@ -139,6 +140,64 @@ describe('rpc server + client', () => {
     await s.close()
     await expect(p).rejects.toThrow('connection closed')
     expect(closedCb).toBe(true)
+  })
+
+  it('pipelined bad-auth then good auth then prompt never runs the prompt', async () => {
+    await serve()
+    const sock = net.connect(sockPath())
+    sock.on('error', () => {})
+    await new Promise(r => sock.once('connect', r))
+    const closed = new Promise(r => sock.once('close', r))
+    sock.resume()
+    sock.write(
+      encodeFrame({ jsonrpc: '2.0', id: 1, method: 'status', params: {} }) +
+      encodeFrame({ jsonrpc: '2.0', id: 2, method: 'auth', params: { token: TOKEN } }) +
+      encodeFrame({ jsonrpc: '2.0', id: 3, method: 'session.create', params: { commandId: 'zz' } }),
+    )
+    await closed
+    expect(kernel.events.after(0).some(e => e.type === 'session.created')).toBe(false)
+  })
+
+  it('empty token is refused', async () => {
+    await expect(startRpcServer({ addr: sockPath('t'), token: '', version: 'v', handle: async () => null })).rejects.toThrow('token')
+  })
+
+  it('invalid after -> -32602; notifications get no response', async () => {
+    await serve()
+    const c = await client()
+    for (const after of [-1, 1.5, 'x' as any]) {
+      await expect(c.call('events.subscribe', { after })).rejects.toMatchObject({ code: -32602 })
+    }
+    const sock = net.connect(sockPath())
+    sock.setEncoding('utf8')
+    const got: any[] = []
+    const dec = new FrameDecoder()
+    sock.on('data', (d: string) => got.push(...dec.push(d)))
+    await new Promise(r => sock.once('connect', r))
+    sock.write(
+      encodeFrame({ jsonrpc: '2.0', id: 1, method: 'auth', params: { token: TOKEN } }) +
+      encodeFrame({ jsonrpc: '2.0', method: 'status', params: {} }) +
+      encodeFrame({ jsonrpc: '2.0', method: 'nope', params: {} }) +
+      encodeFrame({ jsonrpc: '2.0', id: 2, method: 'status', params: {} }),
+    )
+    await wait(() => got.length >= 2)
+    await new Promise(r => setTimeout(r, 50))
+    sock.destroy()
+    expect(got.map(g => g.id)).toEqual([1, 2])
+  })
+
+  it('mid-stream subscribe with after = k > 0 starts at k+1', async () => {
+    await serve()
+    const c = await client()
+    await prompt(c)
+    await wait(() => kernel.events.after(0).some(e => e.type === 'turn.ended'))
+    const k = 3
+    const got: KernelEvent[] = []
+    c.onEvent(e => got.push(e))
+    await c.call('events.subscribe', { after: k })
+    const all = kernel.events.after(k)
+    await wait(() => got.length === all.length)
+    expect(got[0].seq).toBe(k + 1)
   })
 
   it('oversized frame closes the connection', async () => {

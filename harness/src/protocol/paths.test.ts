@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync, statSync } from 'node:fs'
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { dataDir, ensureToken, runtimePaths } from './index'
@@ -40,6 +40,29 @@ describe('paths', () => {
       expect(t).toMatch(/^[0-9a-f]{64}$/)
       expect(statSync(f).mode & 0o777).toBe(0o600)
       expect(ensureToken(f)).toBe(t)
+    } finally { rmSync(d, { recursive: true, force: true }) }
+  })
+
+  it('empty or garbage token file is regenerated atomically', () => {
+    const d = mkdtempSync(join(tmpdir(), 'mffai-tok-'))
+    try {
+      mkdirSync(join(d, 'run'))
+      const f = join(d, 'run', 'token')
+      writeFileSync(f, '')
+      const t = ensureToken(f)
+      expect(t).toMatch(/^[0-9a-f]{64}$/)
+      expect(ensureToken(f)).toBe(t)
+    } finally { rmSync(d, { recursive: true, force: true }) }
+  })
+
+  it.skipIf(process.platform === 'win32')('loose token mode is tightened to 0600', () => {
+    const d = mkdtempSync(join(tmpdir(), 'mffai-tok-'))
+    try {
+      const f = join(d, 'token')
+      const t = ensureToken(f)
+      chmodSync(f, 0o644)
+      expect(ensureToken(f)).toBe(t)
+      expect(statSync(f).mode & 0o777).toBe(0o600)
     } finally { rmSync(d, { recursive: true, force: true }) }
   })
 })
