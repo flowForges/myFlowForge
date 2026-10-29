@@ -89,11 +89,16 @@ const vbsQuote = (s: string) => `"${s.replace(/"/g, '""')}"`
 
 export function startVbs(spec: LaunchSpec): string {
   const cmd = `""${spec.execPath.replace(/"/g, '""""')}"" ""${spec.daemonJs.replace(/"/g, '""""')}""`
-  return `Set sh = CreateObject("WScript.Shell")
-Set env = sh.Environment("Process")
-env("ELECTRON_RUN_AS_NODE") = "1"
-env("MFFAI_DATA_DIR") = ${vbsQuote(spec.dataDir)}
-sh.Run "${cmd}", 0, False
+  // exe / 入口被移走或卸载:静默不跑(否则每次登录弹 WSH 错误框)
+  return `On Error Resume Next
+Set fs = CreateObject("Scripting.FileSystemObject")
+If fs.FileExists(${vbsQuote(spec.execPath)}) And fs.FileExists(${vbsQuote(spec.daemonJs)}) Then
+  Set sh = CreateObject("WScript.Shell")
+  Set env = sh.Environment("Process")
+  env("ELECTRON_RUN_AS_NODE") = "1"
+  env("MFFAI_DATA_DIR") = ${vbsQuote(spec.dataDir)}
+  sh.Run "${cmd}", 0, False
+End If
 `
 }
 

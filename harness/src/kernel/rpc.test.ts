@@ -200,6 +200,21 @@ describe('rpc server + client', () => {
     expect(got[0].seq).toBe(k + 1)
   })
 
+  it('socket that never authenticates is closed after the auth deadline; authed one stays', async () => {
+    const addr = sockPath('a')
+    const s = await startRpcServer({ addr, token: TOKEN, version: 'v', authTimeoutMs: 50, handle: async () => null })
+    closers.push(() => s.close())
+    const idle = net.connect(addr)
+    idle.on('error', () => {})
+    await new Promise(r => idle.once('connect', r))
+    const t0 = Date.now()
+    await new Promise(r => idle.once('close', r))
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(40)
+    const c = await client(addr)
+    await new Promise(r => setTimeout(r, 120))
+    expect(await c.call('auth', { token: TOKEN })).toEqual({ ok: true })
+  })
+
   it('oversized frame closes the connection', async () => {
     await serve()
     const sock = net.connect(sockPath())

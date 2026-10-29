@@ -80,6 +80,26 @@ describe('registerMffaiIpc', () => {
     expect(host.disable).toHaveBeenCalledTimes(1)
   })
 
+  it('未启用:restart / resetTrip / setAutostart / tail / prompt 都不加载 host', async () => {
+    const { invoke, loadHost, saveSettings } = setup({ enabled: false, autostart: true })
+    const off = { enabled: false, autostart: true, running: false, dataDir: dataDir() }
+    expect(await invoke(CH.mffaiRestart)).toEqual(off)
+    expect(await invoke(CH.mffaiResetTrip)).toEqual(off)
+    expect(await invoke(CH.mffaiTail, 20)).toEqual({ events: [] })
+    await expect(invoke(CH.mffaiPrompt, 'hi')).rejects.toThrow('mff-ai 未启用')
+    expect(await invoke(CH.mffaiSetAutostart, false)).toEqual({ ...off, autostart: false })
+    expect(saveSettings).toHaveBeenLastCalledWith({ mffai: { enabled: false, autostart: false } })
+    expect(loadHost).not.toHaveBeenCalled()
+  })
+
+  it('tail 的 limit 夹到 1..1000 的整数', async () => {
+    const { invoke, host } = setup({ enabled: true, autostart: true })
+    await invoke(CH.mffaiTail, 5000)
+    await invoke(CH.mffaiTail, 2.7)
+    await invoke(CH.mffaiTail, 'x')
+    expect(host.tail.mock.calls).toEqual([[1000], [2], [50]])
+  })
+
   it('其余通道透传参数给 host', async () => {
     const { invoke, host } = setup({ enabled: true, autostart: true })
     await invoke(CH.mffaiRestart)

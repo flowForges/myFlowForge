@@ -28,9 +28,18 @@ describe('content generators', () => {
   })
   it('vbs quotes paths with spaces, hidden window', () => {
     const w: LaunchSpec = { execPath: 'C:\\Program Files\\App\\app.exe', daemonJs: 'C:\\x y\\d.js', dataDir: 'C:\\d' }
-    const v = startVbs(w)
-    expect(v).toContain('env("ELECTRON_RUN_AS_NODE") = "1"')
-    expect(v).toContain('sh.Run """C:\\Program Files\\App\\app.exe"" ""C:\\x y\\d.js""", 0, False')
+    expect(startVbs(w)).toBe([
+      'On Error Resume Next',
+      'Set fs = CreateObject("Scripting.FileSystemObject")',
+      'If fs.FileExists("C:\\Program Files\\App\\app.exe") And fs.FileExists("C:\\x y\\d.js") Then',
+      '  Set sh = CreateObject("WScript.Shell")',
+      '  Set env = sh.Environment("Process")',
+      '  env("ELECTRON_RUN_AS_NODE") = "1"',
+      '  env("MFFAI_DATA_DIR") = "C:\\d"',
+      '  sh.Run """C:\\Program Files\\App\\app.exe"" ""C:\\x y\\d.js""", 0, False',
+      'End If',
+      '',
+    ].join('\n'))
     expect(windowsRunValue(w)).toBe('wscript.exe "C:\\d\\run\\start.vbs"')
   })
 })

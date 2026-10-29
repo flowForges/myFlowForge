@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { connectControlClient } from '../protocol/index'
 import { startControlServer } from './controlServer'
@@ -88,5 +88,40 @@ describe('control server', () => {
     expect(await c.call('autostart', { on: 'yes' } as never).catch((e) => e.code)).toBe(-32602)
     expect(calls).toEqual([])
     expect(existsSync(join(dir, 'home'))).toBe(false)
+  })
+
+  describe('MFFAI_AUTOSTART_DRY_RUN', () => {
+    beforeEach(() => { vi.stubEnv('MFFAI_AUTOSTART_DRY_RUN', '1') })
+    afterEach(() => { vi.unstubAllEnvs() })
+    const serveDry = async (home: string) => {
+      const calls: string[][] = []
+      const a = addr()
+      const s = await startControlServer({
+        addr: a, token: 't', supervisor: {} as unknown as Supervisor, platform: 'darwin', home, dataDir: join(dir, 'data'),
+        exec: async (f, args) => { calls.push([f, ...args]) },
+      })
+      closers.push(() => s.close())
+      const c = await connectControlClient({ addr: a, token: 't' })
+      closers.push(() => c.close())
+      return { c, calls }
+    }
+
+    it('plans only: no commands, no writes, ok', async () => {
+      const home = join(dir, 'home')
+      const { c, calls } = await serveDry(home)
+      const spec = { execPath: '/e', daemonJs: '/d' }
+      expect(await c.call('autostart', { on: true, spec })).toEqual({ ok: true, errors: [] })
+      expect(await c.call('autostart', { on: false, spec })).toEqual({ ok: true, errors: [] })
+      expect(calls).toEqual([])
+      expect(existsSync(home)).toBe(false)
+    })
+
+    it('refuses when home is the real home directory', async () => {
+      const { c, calls } = await serveDry(userInfo().homedir)
+      const r = (await c.call('autostart', { on: true, spec: { execPath: '/e', daemonJs: '/d' } })) as { ok: boolean; errors: string[] }
+      expect(r.ok).toBe(false)
+      expect(r.errors.join()).toMatch(/real home/)
+      expect(calls).toEqual([])
+    })
   })
 })

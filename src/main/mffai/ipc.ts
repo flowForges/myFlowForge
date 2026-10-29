@@ -25,10 +25,22 @@ export function registerMffaiIpc(deps: MffaiIpcDeps): void {
   const save = (patch: Partial<Settings['mffai']>) =>
     deps.saveSettings({ mffai: { ...deps.readSettings().mffai, ...patch } })
 
-  deps.handle(CH.mffaiState, async (): Promise<MffaiState> => {
+  // 未启用:只读设置,host 永远不加载
+  const enabled = () => deps.readSettings().mffai.enabled
+  const disabledState = (): MffaiState => {
     const { enabled, autostart } = deps.readSettings().mffai
-    // 未启用:只读设置,host 永远不加载
-    if (!enabled) return { enabled, autostart, running: false, dataDir: process.env.MFFAI_DATA_DIR || dataDir() }
+    return { enabled, autostart, running: false, dataDir: process.env.MFFAI_DATA_DIR || dataDir() }
+  }
+  /** 启用时才加载 host 做 fn,否则直接回未启用状态 */
+  const whenEnabled = (fn: (h: HostModule) => Promise<unknown>) => async (): Promise<MffaiState> => {
+    if (!enabled()) return disabledState()
+    const h = await loadHost()
+    await fn(h)
+    return h.getState()
+  }
+
+  deps.handle(CH.mffaiState, async (): Promise<MffaiState> => {
+    if (!enabled()) return disabledState()
     return (await loadHost()).getState()
   })
   deps.handle(CH.mffaiEnable, async () => {
@@ -45,22 +57,20 @@ export function registerMffaiIpc(deps: MffaiIpcDeps): void {
   })
   deps.handle(CH.mffaiSetAutostart, async (on) => {
     save({ autostart: !!on })
-    const h = await loadHost()
-    await h.setAutostart(!!on)
-    return h.getState()
+    return whenEnabled((h) => h.setAutostart(!!on))()
   })
-  deps.handle(CH.mffaiRestart, async () => {
-    const h = await loadHost()
-    await h.restart()
-    return h.getState()
+  deps.handle(CH.mffaiRestart, whenEnabled((h) => h.restart()))
+  deps.handle(CH.mffaiResetTrip, whenEnabled((h) => h.resetTrip()))
+  deps.handle(CH.mffaiTail, async (limit) => {
+    if (!enabled()) return { events: [] }
+    // 协议要求 1..1000 的整数
+    const n = Math.min(1000, Math.max(1, Math.trunc(Number(limit)) || 50))
+    return (await loadHost()).tail(n)
   })
-  deps.handle(CH.mffaiResetTrip, async () => {
-    const h = await loadHost()
-    await h.resetTrip()
-    return h.getState()
+  deps.handle(CH.mffaiPrompt, async (text) => {
+    if (!enabled()) throw new Error('mff-ai 未启用')
+    return (await loadHost()).prompt(String(text ?? ''))
   })
-  deps.handle(CH.mffaiTail, async (limit) => (await loadHost()).tail(Number(limit) || 50))
-  deps.handle(CH.mffaiPrompt, async (text) => (await loadHost()).prompt(String(text ?? '')))
 }
 
 type MffaiSetting = Settings['mffai']

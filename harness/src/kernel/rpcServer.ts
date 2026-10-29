@@ -16,6 +16,8 @@ export interface RpcServerOpts {
   handle: (method: string, params: any, conn: RpcConn) => Promise<unknown>
   // 提供则支持 events.subscribe(工作进程);监管控制口不需要
   events?: EventLog
+  /** 连上后多久内必须完成 auth,否则断开。默认 5000 ms */
+  authTimeoutMs?: number
 }
 
 const ERR_PARSE = -32700
@@ -24,6 +26,7 @@ const ERR_INVALID_PARAMS = -32602
 const ERR_METHOD_NOT_FOUND = -32601
 const ERR_INTERNAL = -32603
 const STALE_RECHECK_MS = 50
+const AUTH_DEADLINE_MS = 5000
 
 // POSIX:路径已存在时,有人在听就拒绝,没人听(崩溃遗留)才清掉
 const probe = (addr: string) =>
@@ -59,6 +62,9 @@ export async function startRpcServer(opts: RpcServerOpts): Promise<{ close(): Pr
     let authed = false
     let closing = false
     let unsubscribe: (() => void) | undefined
+    // 连上不认证的 socket 不许一直占着
+    const authTimer = setTimeout(() => { if (!authed) sock.destroy() }, opts.authTimeoutMs ?? AUTH_DEADLINE_MS)
+    authTimer.unref()
     const send = (msg: object) => {
       if (!sock.destroyed && sock.writable) sock.write(encodeFrame(msg))
     }
@@ -98,6 +104,7 @@ export async function startRpcServer(opts: RpcServerOpts): Promise<{ close(): Pr
       if (!authed) {
         if (method === 'auth' && params.token === opts.token) {
           authed = true
+          clearTimeout(authTimer)
           return reply(id, { ok: true })
         }
         closing = true
@@ -138,6 +145,7 @@ export async function startRpcServer(opts: RpcServerOpts): Promise<{ close(): Pr
     sock.on('error', () => { /* close 随后触发 */ })
     sock.on('close', () => {
       conns.delete(sock)
+      clearTimeout(authTimer)
       unsubscribe?.()
     })
   })

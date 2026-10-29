@@ -49,6 +49,14 @@ describe('schemas', () => {
     const schema = (table as Record<string, { params: { safeParse(v: unknown): { success: boolean } } }>)[name].params
     expect(schema.safeParse(bad).success).toBe(false)
   })
+  it('events.tail limit is an integer 1..1000; subscribe after is a non-negative integer', () => {
+    const tail = WorkerMethods['events.tail'].params
+    for (const limit of [1, 50, 1000]) expect(tail.safeParse({ limit }).success).toBe(true)
+    for (const limit of [0, -1, 1001, 1.5, Number.NaN, Infinity]) expect(tail.safeParse({ limit }).success).toBe(false)
+    const sub = WorkerMethods['events.subscribe'].params
+    expect(sub.safeParse({ after: 0 }).success).toBe(true)
+    for (const after of [-1, 0.5]) expect(sub.safeParse({ after }).success).toBe(false)
+  })
   it('events.subscribe result accepts both shapes', () => {
     const r = WorkerMethods['events.subscribe'].result
     expect(r.safeParse({ ok: true }).success).toBe(true)

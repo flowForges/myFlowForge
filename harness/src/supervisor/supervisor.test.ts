@@ -262,9 +262,10 @@ describe('daemon entry', () => {
     const c = await connectControlClient({ addr: paths.controlAddr, token })
     // autostart 的真实行为在 controlServer.test(注入 exec);此处只校验参数校验仍生效,绝不触碰真实系统
     expect(await c.call('autostart', { on: 'yes' } as never).catch(e => e.code)).toBe(-32602)
-    // 演练模式下合法请求也不碰真实系统,且只写临时 home
+    // 演练模式下合法请求只出计划:不执行命令,连临时 home 也不写
     expect(await c.call('autostart', { on: true, spec: { execPath: process.execPath, daemonJs: bundle } })).toMatchObject({ ok: true })
-    expect(existsSync(join(home, 'Library/LaunchAgents/com.myflowforge.mffai.plist')) || process.platform !== 'darwin').toBe(true)
+    expect(existsSync(join(home, 'Library/LaunchAgents/com.myflowforge.mffai.plist'))).toBe(false)
+    expect(existsSync(join(home, '.config'))).toBe(false)
     expect(await c.call('shutdown')).toEqual({ ok: true })
     c.close()
     expect(await survivor.exited).toBe(0)

@@ -51,11 +51,11 @@ export const WorkerMethods = {
   status: { params: Empty, result: StatusResultSchema },
   snapshot: { params: Empty, result: SnapshotResultSchema },
   'events.subscribe': {
-    params: z.object({ after: z.number() }),
+    params: z.object({ after: z.number().int().nonnegative() }),
     result: z.union([z.object({ ok: z.literal(true) }), z.object({ reset: z.literal(true), lastSeq: z.number() })]),
   },
   'events.tail': {
-    params: z.object({ limit: z.number() }),
+    params: z.object({ limit: z.number().int().min(1).max(1000) }),
     result: z.object({ events: z.array(KernelEventSchema) }),
   },
   'session.create': {

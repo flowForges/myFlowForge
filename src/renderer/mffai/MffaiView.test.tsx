@@ -92,6 +92,22 @@ describe('MffaiView', () => {
     expect(mffai.restart).toHaveBeenCalled()
   })
 
+  it('enabled but no supervisor (start failed / killed) -> 已停止 + 重新启动 calls restart', async () => {
+    setup({ enabled: true, autostart: true, running: false, dataDir: '/d' })
+    render(<MffaiView />)
+    expect(await screen.findByText('已停止')).toBeInTheDocument()
+    fireEvent.click(screen.getByText('重新启动'))
+    expect(mffai.restart).toHaveBeenCalled()
+    expect(mffai.resetTrip).not.toHaveBeenCalled()
+  })
+
+  it('running supervisor -> no 重新启动 button', async () => {
+    setup({ enabled: true, autostart: true, running: true, supervisor: { state: 'running', version: '0.1.0' } })
+    render(<MffaiView />)
+    expect(await screen.findByText('运行中')).toBeInTheDocument()
+    expect(screen.queryByText('重新启动')).toBeNull()
+  })
+
   it('debug panel: 发送 calls prompt and assistant event renders', async () => {
     setup({ enabled: true, autostart: true, running: true, supervisor: { state: 'running', version: '0.1.0' } })
     const { container } = render(<MffaiView />)

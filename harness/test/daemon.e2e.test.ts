@@ -14,7 +14,8 @@ const OUT = resolve(__dirname, '../../out/main')
 const DAEMON = join(OUT, 'mffaiDaemon.js')
 const ACP = join(OUT, 'mffaiAcp.js')
 
-const alive = (pid: number) => { try { process.kill(pid, 0); return true } catch { return false } }
+// pid 0 / 负数指向进程组(含 vitest 自己):一律视为不存在
+const alive = (pid: number) => { if (!(pid > 0)) return false; try { process.kill(pid, 0); return true } catch { return false } }
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 const waitFor = async (fn: () => boolean | Promise<boolean>, ms: number, what: string) => {
   const end = Date.now() + ms
@@ -34,7 +35,7 @@ describe.skipIf(!E2E)('built daemon e2e', () => {
   afterAll(() => { process.off('exit', sweep) })
   afterEach(() => {
     for (const p of procs.splice(0)) killTree(p)
-    for (const pid of pids.splice(0)) if (alive(pid)) { try { process.kill(pid, 'SIGKILL') } catch { /* 已退出 */ } }
+    for (const pid of pids.splice(0)) if (pid > 0 && alive(pid)) { try { process.kill(pid, 'SIGKILL') } catch { /* 已退出 */ } }
     for (const t of temps.splice(0)) rmSync(t, { recursive: true, force: true })
   })
 
@@ -62,7 +63,8 @@ describe.skipIf(!E2E)('built daemon e2e', () => {
         try { const s = await c.call('status'); workerPid = s.workerPid ?? 0; return s.state === 'running' } finally { c.close() }
       } catch { return false }
     }, 10_000, 'control status running')
-    pids.push(sup.pid!, workerPid)
+    // 只记 >0 的 pid:alive(0) / kill(0) 会指向 vitest 自己的进程组
+    for (const pid of [sup.pid, workerPid]) if (pid && pid > 0) pids.push(pid)
 
     const w = await connectClient({ addr: paths.workerAddr, token: tokenOf(), timeoutMs: 3000 })
     try {
@@ -107,6 +109,6 @@ describe.skipIf(!E2E)('built daemon e2e', () => {
     await c.call('shutdown')
     c.close()
     await Promise.race([supExited, sleep(35_000)])
-    await waitFor(() => !alive(sup.pid!) && !alive(workerPid), 35_000, 'both processes gone')
+    await waitFor(() => !alive(sup.pid!) && !(workerPid > 0 && alive(workerPid)), 35_000, 'both processes gone')
   }, 90_000)
 })

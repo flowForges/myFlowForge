@@ -106,7 +106,7 @@ export function createMffaiHost(deps: HostDeps) {
   /**
    * 后台不在就拉起,等到 running 后连上工作进程。
    * 正在 stopping(刚停用又启用)→ 等它退出(排空最多 30 s),退出后再拉起。
-   * `stillWanted` 在连接前复查:等待期间被停用就不连。
+   * `stillWanted` 在拉起和连接前复查:已停用就不拉起,等待期间被停用就不连。
    */
   async function bringUp(waitMs: number, stillWanted: () => boolean = () => true): Promise<void> {
     const start = now()
@@ -114,6 +114,7 @@ export function createMffaiHost(deps: HostDeps) {
     let spawned = false
     let s = await status()
     while (!settled(s)) {
+      if (!stillWanted()) break
       if (s?.state === 'stopping') end = Math.max(end, start + STOP_WAIT_MS)
       if (!s && !spawned) {
         spawn()
@@ -161,25 +162,28 @@ export function createMffaiHost(deps: HostDeps) {
     await control('shutdown').catch((err) => log('mffai shutdown failed', err))
   })
 
+  // 已停用(设置里刚关掉)就什么都不做:绝不为此拉起后台
   const restart = (): Promise<void> => serial('restart', async () => {
+    if (!enabled()) return
     const s = await status()
-    if (!s) return bringUp(START_WAIT_MS)
+    if (!s) return bringUp(START_WAIT_MS, enabled)
     if (isOldProtocol(s) || conn.compatible() === false) {
       // 版本不兼容:整个旧后台停掉,换当前 app 带的新后台
       conn.drop()
       await control('shutdown').catch(() => undefined)
       if (await waitStatus(STOP_WAIT_MS, (x) => !x)) throw new Error('old mff-ai daemon did not stop')
       conn.resetCompat()
-      return bringUp(START_WAIT_MS)
+      return bringUp(START_WAIT_MS, enabled)
     }
     await control('restart') // 失败就抛出,现有连接保持不动
     conn.drop()
-    await bringUp(STOP_WAIT_MS)
+    await bringUp(STOP_WAIT_MS, enabled)
   })
 
   const resetTrip = (): Promise<void> => serial('resetTrip', async () => {
+    if (!enabled()) return
     await control('resetTrip')
-    await bringUp(START_WAIT_MS)
+    await bringUp(START_WAIT_MS, enabled)
   })
 
   const setAutostart = (on: boolean): Promise<void> => serial(`autostart:${on}`, async () => {
@@ -193,6 +197,11 @@ export function createMffaiHost(deps: HostDeps) {
     const { enabled: on, autostart } = deps.readSettings().mffai
     const supervisor = await status()
     const worker = conn.current()
+    // 重连窗口(30 s)过了而监管早已回到 running:页面每 3 s 轮询一次,借此再连上。
+    // 有串行操作在跑(启用 / 重启…)时交给它,不兼容的后台不碰
+    if (on && !worker && !last && supervisor?.state === 'running' && !isOldProtocol(supervisor) && conn.compatible() !== false) {
+      void conn.connect().catch((err) => log('mffai reconnect failed', err))
+    }
     const ws = worker ? await worker.call('status').catch(() => undefined) : undefined
     const rssMb = ws?.rssMb
     const pluginsActive = ws?.plugins.filter((p) => p.state === 'active').length

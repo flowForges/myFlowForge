@@ -23,6 +23,11 @@ async function controlStatus(addr: string, token: string): Promise<ControlStatus
   }
 }
 
+/** 控制口答 status 的是另一个监管进程才算被顶替;没答(超时 / 机器忙)不算 */
+export function lostOwnership(owner: Pick<ControlStatus, 'pid'> | undefined, self: number): boolean {
+  return !!owner && owner.pid !== self
+}
+
 /** 幂等的退出流程:无论清理步骤是否抛错,最后都 exit(0),不留僵尸监管 */
 export function gracefulStop(steps: () => Promise<void>, log: Logger, exit: (code: number) => void = process.exit): () => Promise<void> {
   let p: Promise<void> | undefined
@@ -121,8 +126,10 @@ export async function runSupervisor(): Promise<void> {
 
   // 兜底:并发清理残留 socket 时我们的路径可能被别人顶替;答 status 的不是自己就退出。
   // 不 close:关 unix 监听会删掉路径上(别人的)socket 文件
+  // 探测超时(登录时机器忙)不算被顶替:唯一的监管进程不能因此退出
   const owner = await controlStatus(paths.controlAddr, token)
-  if (owner?.pid !== process.pid) {
+  if (!owner) log.info('control ownership probe got no answer, keep running')
+  if (lostOwnership(owner, process.pid)) {
     log.info('control address owned by another supervisor, exit', { owner: owner?.pid })
     process.exit(0)
   }

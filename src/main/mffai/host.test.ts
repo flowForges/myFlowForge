@@ -17,6 +17,7 @@ function fakeDaemon(dir: string) {
     lastSeq: 5,
     drainPolls: 0, // shutdown 后还要答几次 stopping 才真正退出
     failRestart: false,
+    onRestart: undefined as undefined | (() => void),
     controlCalls: [] as Array<[string, unknown]>,
     workerCalls: [] as Array<[string, unknown]>,
     workers: [] as Array<{ emit(e: KernelEvent): void; drop(): void }>,
@@ -48,6 +49,7 @@ function fakeDaemon(dir: string) {
             return { ok: true }
           case 'restart':
             if (d.failRestart) throw new Error('timeout')
+            if (d.onRestart) { d.onRestart(); return { ok: true } }
             d.control = { ...d.control, state: 'running' }; return { ok: true }
           case 'resetTrip': d.control = { ...d.control, state: 'running', trippedReason: undefined }; return { ok: true }
           case 'autostart': return { ok: true, errors: [] }
@@ -342,6 +344,63 @@ describe('mffai host', () => {
     expect((await t.host.getState()).running).toBe(true)
     // 断线补齐:从最后见到的 seq 续订
     expect(t.d.workerCalls.filter(([m]) => m === 'events.subscribe').map(([, p]) => p)).toEqual([{ after: 5 }, { after: 5 }])
+  })
+
+  it('重连窗口过后监管才回到 running → 页面轮询 getState 时重新连上', async () => {
+    const t = setup()
+    await t.host.enable()
+    t.d.control = { ...t.d.control, state: 'restarting' }
+    t.d.workerUp = false
+    t.d.workers[0].drop()
+    // 重连循环 30 s 后放弃(退避可能超过 30 s)
+    await vi.waitFor(() => expect(clock).toBeGreaterThanOrEqual(30_000))
+    await flush()
+    expect(t.connectWorker).toHaveBeenCalledTimes(1)
+
+    t.d.control = { ...t.d.control, state: 'running' }
+    t.d.workerUp = true
+    expect((await t.host.getState()).running).toBe(false)
+    await vi.waitFor(() => expect(t.connectWorker).toHaveBeenCalledTimes(2))
+    await vi.waitFor(async () => expect((await t.host.getState()).running).toBe(true))
+    expect(t.connectWorker).toHaveBeenCalledTimes(2)
+    expect(t.spawnFn).toHaveBeenCalledTimes(1)
+  })
+
+  it('getState 不替不兼容 / 未启用的后台重连', async () => {
+    const t = setup({ up: true })
+    t.d.compatible = false
+    await t.host.ensureRunning()
+    await t.host.getState()
+    await flush()
+    expect(t.connectWorker).toHaveBeenCalledTimes(1)
+
+    settings = { mffai: { enabled: false, autostart: true } }
+    const t2 = setup({ up: true })
+    await t2.host.getState()
+    await flush()
+    expect(t2.connectWorker).not.toHaveBeenCalled()
+  })
+
+  it('已停用时 restart / resetTrip 不拉起后台、不发控制命令', async () => {
+    settings = { mffai: { enabled: false, autostart: true } }
+    const t = setup()
+    await t.host.restart()
+    await t.host.resetTrip()
+    expect(t.spawnFn).not.toHaveBeenCalled()
+    expect(t.d.controlCalls).toEqual([])
+    expect(t.connectWorker).not.toHaveBeenCalled()
+  })
+
+  it('restart 途中被停用、后台随之消失 → 不再拉起', async () => {
+    const t = setup({ up: true })
+    await t.host.ensureRunning()
+    t.d.onRestart = () => {
+      t.d.up = false
+      settings = { mffai: { enabled: false, autostart: true } }
+    }
+    await t.host.restart()
+    expect(t.spawnFn).not.toHaveBeenCalled()
+    expect((await t.host.getState()).running).toBe(false)
   })
 
   it('断开期间熔断 → alert tripped,停止重连', async () => {

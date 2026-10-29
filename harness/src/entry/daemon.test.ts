@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { gracefulStop } from './daemon'
+import { gracefulStop, lostOwnership } from './daemon'
 
 const mkLog = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() })
 
@@ -21,5 +21,13 @@ describe('gracefulStop', () => {
     await gracefulStop(async () => {}, log, exit)()
     expect(exit).toHaveBeenCalledWith(0)
     expect(log.error).not.toHaveBeenCalled()
+  })
+})
+
+describe('lostOwnership', () => {
+  it('only another live owner counts; no answer keeps the sole supervisor', () => {
+    expect(lostOwnership(undefined, 10)).toBe(false)
+    expect(lostOwnership({ pid: 10 }, 10)).toBe(false)
+    expect(lostOwnership({ pid: 11 }, 10)).toBe(true)
   })
 })

@@ -23,6 +23,8 @@ export function StatusStrip({ state, onRestart, onResetTrip, failed }: StatusStr
   const { text, tone } = label(state)
   const tripped = state.supervisor?.state === 'tripped'
   const incompatible = state.compatible === false
+  // 启用了但监管不在(启动失败 / 被杀):重新启动 = 拉起
+  const gone = state.enabled && !state.supervisor
   return (
     <div className="mffai-strip">
       <span className={`mffai-dot ${tone}`} />
@@ -30,8 +32,8 @@ export function StatusStrip({ state, onRestart, onResetTrip, failed }: StatusStr
       {state.supervisor?.version && <span>{state.supervisor.version}</span>}
       {state.pluginsActive != null && <span>{state.pluginsActive} 插件</span>}
       {state.rssMb != null && <span>{state.rssMb} MB</span>}
-      {(tripped || incompatible) && (
-        <button className="set-btn" onClick={incompatible ? onRestart : onResetTrip}>重新启动</button>
+      {(tripped || incompatible || gone) && (
+        <button className="set-btn" onClick={tripped && !incompatible ? onResetTrip : onRestart}>重新启动</button>
       )}
       {failed && <span className="mffai-fail">失败</span>}
     </div>
