@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import {
+  ERR_BUSY,
   ERR_DRAINING,
   PROTOCOL_VERSION,
   WorkerMethods,
@@ -26,7 +27,7 @@ export interface Kernel {
   events: EventLog
   status(): StatusResult
   snapshot(): SnapshotResult
-  draining: boolean
+  readonly draining: boolean
   drain(timeoutMs: number): Promise<void>
   close(): Promise<void>
 }
@@ -42,7 +43,7 @@ const ERR_METHOD_NOT_FOUND = -32601
 const ERR_INVALID_PARAMS = -32602
 const CANCEL_GRACE_MS = 1000
 
-type Turn = { turnId: string; controller: AbortController; ended: boolean; settled: Promise<void> }
+type Turn = { turnId: string; sessionId: string; ended: boolean; controller: AbortController; settled: Promise<void> }
 
 export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   const log = opts.log ?? nullLogger
@@ -62,26 +63,39 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   })
 
   let state: StatusResult['state'] = 'starting'
-  const turns = new Map<string, Turn>() // sessionId -> 进行中的 turn
+  const turns = new Map<string, Turn>() // turnId -> 进行中的 turn
+  const activeBySession = new Map<string, string>() // sessionId -> turnId(每会话最多一个)
 
-  // 插件(或内核)写入 turn 终态事件时标记
+  // 插件(或内核)写入 turn 终态事件时按 payload.turnId 标记
   eventLog.onAppend(e => {
-    if ((e.type === 'turn.ended' || e.type === 'turn.failed') && e.sessionId) {
-      const t = turns.get(e.sessionId)
+    if (e.type === 'turn.ended' || e.type === 'turn.failed') {
+      const id = (e.payload as { turnId?: string } | null)?.turnId
+      const t = id ? turns.get(id) : undefined
       if (t) t.ended = true
     }
   })
 
-  const failTurn = (sessionId: string, t: Turn, reason: string, extra?: Record<string, unknown>) => {
+  const failTurn = (t: Turn, reason: string, extra?: Record<string, unknown>) => {
     if (t.ended) return
     t.ended = true
-    append({ type: 'turn.failed', sessionId, payload: { turnId: t.turnId, reason, ...extra } })
+    append({ type: 'turn.failed', sessionId: t.sessionId, payload: { turnId: t.turnId, reason, ...extra } })
   }
+
+  // 崩溃恢复:有开始痕迹却无终态的 turn 标记 interrupted,不重放(副作用不确定)
+  const open = new Map<string, string | undefined>()
+  for (const e of eventLog.after(0)) {
+    const id = (e.payload as { turnId?: string } | null)?.turnId
+    if (!id) continue
+    if (e.type === 'turn.started' || e.type === 'message.user') open.set(id, e.sessionId)
+    else if (e.type === 'turn.ended' || e.type === 'turn.failed') open.delete(id)
+  }
+  for (const [turnId, sessionId] of open) append({ type: 'turn.failed', sessionId, payload: { turnId, reason: 'interrupted' } })
 
   const dispatchPrompt = (sessionId: string, turnId: string, text: string) => {
     const controller = new AbortController()
-    const turn: Turn = { turnId, controller, ended: false, settled: Promise.resolve() }
-    turns.set(sessionId, turn) // 先登记:处理者可能同步写完终态事件
+    const turn: Turn = { turnId, sessionId, controller, ended: false, settled: Promise.resolve() }
+    turns.set(turnId, turn)
+    activeBySession.set(sessionId, turnId) // 先登记:处理者可能同步写完终态事件
     turn.settled = (async () => {
       let failure: string | undefined
       try {
@@ -92,9 +106,10 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
       }
       // 处理者结束后 turn 仍未终结:补 turn.failed
       if (!controller.signal.aborted) {
-        failTurn(sessionId, turn, failure ? 'error' : 'unhandled', failure ? { message: failure } : undefined)
+        failTurn(turn, failure ? 'error' : 'unhandled', failure ? { message: failure } : undefined)
       }
-      if (turns.get(sessionId) === turn) turns.delete(sessionId)
+      turns.delete(turnId)
+      if (activeBySession.get(sessionId) === turnId) activeBySession.delete(sessionId)
     })()
   }
 
@@ -103,13 +118,14 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
     method: string,
     commandId: string,
     run: () => { result: R; after?: () => void },
-  ): R {
+    opts: { allowDraining?: boolean } = {},
+  ): { result: R; replayed: boolean } {
     const prior = receipts.get(commandId)
     if (prior) {
       if (prior.method !== method) throw new RpcError(ERR_INVALID_PARAMS, 'commandId already used by another method')
-      return prior.result as R
+      return { result: prior.result as R, replayed: true }
     }
-    if (state === 'draining') throw new RpcError(ERR_DRAINING, 'draining')
+    if (state === 'draining' && !opts.allowDraining) throw new RpcError(ERR_DRAINING, 'draining')
     let after: (() => void) | undefined
     const result = transaction(db, () => {
       const r = run()
@@ -118,17 +134,18 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
       return r.result
     })
     after?.()
-    return result
+    return { result, replayed: false }
   }
 
   async function cancel(sessionId: string): Promise<void> {
-    const t = turns.get(sessionId)
+    const id = activeBySession.get(sessionId)
+    const t = id ? turns.get(id) : undefined
     if (!t) return
     t.controller.abort()
     let timer: ReturnType<typeof setTimeout> | undefined
     await Promise.race([t.settled, new Promise<void>(r => { timer = setTimeout(r, CANCEL_GRACE_MS) })])
     clearTimeout(timer)
-    failTurn(sessionId, t, 'cancelled')
+    failTurn(t, 'cancelled')
   }
 
   function status(): StatusResult {
@@ -160,7 +177,9 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
     events: eventLog,
     status,
     snapshot,
-    draining: false,
+    get draining() {
+      return state === 'draining'
+    },
 
     async handle(method, rawParams) {
       if (!Object.hasOwn(WorkerMethods, method)) throw new RpcError(ERR_METHOD_NOT_FOUND, `method not found: ${method}`)
@@ -183,18 +202,19 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
             const sessionId = randomUUID()
             append({ type: 'session.created', sessionId, payload: { title: p.title } })
             return { result: { sessionId } }
-          })
+          }).result
         case 'session.prompt':
           return command(name, p.commandId, () => {
+            if (activeBySession.has(p.sessionId)) throw new RpcError(ERR_BUSY, 'turn in progress') // 回滚,不留回执
             const turnId = randomUUID()
             append({ type: 'message.user', sessionId: p.sessionId, payload: { turnId, text: p.text } })
             // 提交之后才交给循环插件
             return { result: { accepted: true, turnId }, after: () => dispatchPrompt(p.sessionId, turnId, p.text) }
-          })
+          }).result
         case 'session.cancel': {
-          const r = command(name, p.commandId, () => ({ result: { ok: true } }))
-          await cancel(p.sessionId)
-          return r
+          const r = command(name, p.commandId, () => ({ result: { ok: true } }), { allowDraining: true })
+          if (!r.replayed) await cancel(p.sessionId) // 重放不产生副作用
+          return r.result
         }
         default:
           // auth / events.subscribe 属于传输层
@@ -203,7 +223,6 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
     },
 
     async drain(timeoutMs) {
-      kernel.draining = true
       state = 'draining'
       let timer: ReturnType<typeof setTimeout> | undefined
       const inflight = Promise.all([...turns.values()].map(t => t.settled))
@@ -213,7 +232,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
 
     async close() {
       append({ type: 'kernel.stopping', payload: {} })
-      for (const sid of [...turns.keys()]) turns.get(sid)?.controller.abort()
+      for (const t of turns.values()) t.controller.abort()
       await host.deactivateAll()
       db.close()
     },

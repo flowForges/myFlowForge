@@ -53,7 +53,7 @@ describe('harness 边界', () => {
     const bad: string[] = []
     for (const f of walk(PLUGINS)) {
       const parts = relative(PLUGINS, f).split(sep)
-      if (parts.length === 1) continue // plugins/index.ts 是静态登记表,允许引用各插件
+      if (parts.length === 1 && parts[0] === 'index.ts') continue // 静态登记表,允许引用各插件
       const own = parts[0]
       for (const s of specifiers(f)) {
         if (!s.startsWith('.')) continue

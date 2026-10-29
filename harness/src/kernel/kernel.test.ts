@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { createKernel, type Kernel } from './kernel'
 import { PermissionGate } from './permissionGate'
 import { RpcError } from './rpcError'
-import { ERR_DRAINING } from '../protocol/index'
+import { ERR_BUSY, ERR_DRAINING } from '../protocol/index'
 import type { Plugin } from './pluginHost'
 import loopEcho from '../plugins/loop-echo'
 import { BUILTIN_PLUGINS } from '../plugins'
@@ -129,9 +129,9 @@ describe('kernel', () => {
       manifest: { id: 'slow', version: '1', kernel: '*' },
       activate: ctx => {
         ctx.events.on('session.prompt', async (r: { sessionId: string; turnId: string }) => {
-          ctx.append({ type: 'turn.started', sessionId: r.sessionId, payload: {} })
+          ctx.append({ type: 'turn.started', sessionId: r.sessionId, payload: { turnId: r.turnId } })
           await new Promise<void>(res => { release = res })
-          ctx.append({ type: 'turn.ended', sessionId: r.sessionId, payload: {} })
+          ctx.append({ type: 'turn.ended', sessionId: r.sessionId, payload: { turnId: r.turnId } })
           return true
         })
       },
@@ -182,6 +182,90 @@ describe('kernel', () => {
     await new Promise(r => setTimeout(r, 20))
     const t = types(k)
     expect(t.filter(x => x === 'turn.ended' || x === 'turn.failed')).toHaveLength(1)
+  })
+
+  it('second prompt on a busy session is rejected with ERR_BUSY and leaves no receipt', async () => {
+    let release!: () => void
+    const slow: Plugin = {
+      manifest: { id: 'slow', version: '1', kernel: '*' },
+      activate: ctx => {
+        ctx.events.on('session.prompt', async (r: { sessionId: string; turnId: string }) => {
+          await new Promise<void>(res => { release = res })
+          ctx.append({ type: 'turn.ended', sessionId: r.sessionId, payload: { turnId: r.turnId } })
+          return true
+        })
+      },
+    }
+    const k = await boot([slow])
+    const { sessionId } = (await k.handle('session.create', { commandId: 'c' })) as { sessionId: string }
+    await k.handle('session.prompt', { commandId: 'p1', sessionId, text: 'a' })
+    await expect(k.handle('session.prompt', { commandId: 'p2', sessionId, text: 'b' })).rejects.toMatchObject({ code: ERR_BUSY, message: 'turn in progress' })
+    expect(types(k).filter(t => t === 'message.user')).toHaveLength(1)
+    release()
+    await waitFor(() => types(k).includes('turn.ended'))
+    await waitFor(() => k.status().state === 'running' && true)
+    // 同一 commandId 重试:未存回执,现在可以成功
+    await new Promise(r => setTimeout(r, 10))
+    const ok = (await k.handle('session.prompt', { commandId: 'p2', sessionId, text: 'b' })) as { accepted: boolean }
+    expect(ok.accepted).toBe(true)
+    release()
+  })
+
+  it('replayed cancel has no side effect on a newer turn', async () => {
+    const aborts: AbortSignal[] = []
+    const hang: Plugin = {
+      manifest: { id: 'hang', version: '1', kernel: '*' },
+      activate: ctx => {
+        ctx.events.on('session.prompt', (r: { signal: AbortSignal }) => new Promise(res => {
+          aborts.push(r.signal)
+          r.signal.addEventListener('abort', () => res(true))
+        }))
+      },
+    }
+    const k = await boot([hang])
+    const { sessionId } = (await k.handle('session.create', { commandId: 'c' })) as { sessionId: string }
+    await k.handle('session.prompt', { commandId: 'p1', sessionId, text: 'a' })
+    await waitFor(() => aborts.length === 1)
+    await k.handle('session.cancel', { commandId: 'x', sessionId })
+    await k.handle('session.prompt', { commandId: 'p2', sessionId, text: 'b' })
+    await waitFor(() => aborts.length === 2)
+    await k.handle('session.cancel', { commandId: 'x', sessionId })
+    expect(aborts[1].aborted).toBe(false)
+    expect(types(k).filter(t => t === 'turn.failed')).toHaveLength(1)
+  })
+
+  it('cancel is allowed while draining', async () => {
+    const hang: Plugin = {
+      manifest: { id: 'hang', version: '1', kernel: '*' },
+      activate: ctx => {
+        ctx.events.on('session.prompt', (r: { signal: AbortSignal }) => new Promise(res => {
+          r.signal.addEventListener('abort', () => res(true))
+        }))
+      },
+    }
+    const k = await boot([hang])
+    const { sessionId } = (await k.handle('session.create', { commandId: 'c' })) as { sessionId: string }
+    await k.handle('session.prompt', { commandId: 'p', sessionId, text: 'a' })
+    const d = k.drain(5000)
+    await k.handle('session.cancel', { commandId: 'x', sessionId })
+    await d
+    expect(types(k)).toContain('turn.failed')
+  })
+
+  it('startup marks orphan turns interrupted without replaying them', async () => {
+    const k1 = await boot([])
+    const { sessionId } = (await k1.handle('session.create', { commandId: 'c' })) as { sessionId: string }
+    k1.events.append({ type: 'message.user', sessionId, payload: { turnId: 'T1', text: 'x' } })
+    k1.events.append({ type: 'message.user', sessionId, payload: { turnId: 'T2', text: 'y' } })
+    k1.events.append({ type: 'turn.ended', sessionId, payload: { turnId: 'T2' } })
+    await k1.close()
+    kernels = []
+    const k2 = await boot([loopEcho])
+    const failed = k2.events.after(0).filter(e => e.type === 'turn.failed')
+    expect(failed).toHaveLength(1)
+    expect(failed[0].sessionId).toBe(sessionId)
+    expect(failed[0].payload).toEqual({ turnId: 'T1', reason: 'interrupted' })
+    expect(types(k2).filter(t => t === 'turn.started')).toHaveLength(0)
   })
 
   it('prompt with no handler fails the turn instead of hanging', async () => {

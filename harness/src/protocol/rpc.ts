@@ -4,6 +4,7 @@ import { KernelEventSchema } from './events'
 // JSON-RPC 错误码
 export const ERR_DRAINING = -32001
 export const ERR_UNAUTHORIZED = -32002
+export const ERR_BUSY = -32003
 
 const Ok = z.object({ ok: z.boolean() })
 const Empty = z.object({})
