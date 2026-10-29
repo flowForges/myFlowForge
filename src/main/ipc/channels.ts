@@ -435,6 +435,17 @@ export const CH = {
   // Run-state UX fix: delete one run-history entry's saved state (never the workspace's currently
   // live run — see run2Handlers.ts's guard).
   run2DeleteRun: 'run2:delete-run',
+  // mff-ai(本机后台)。★用 ipcMain.handle 直接注册(见 mffai/ipc.ts),不进方法表、不跟随远程主机。
+  mffaiState: 'mffai:state',
+  mffaiEnable: 'mffai:enable',
+  mffaiDisable: 'mffai:disable',
+  mffaiRestart: 'mffai:restart',
+  mffaiResetTrip: 'mffai:resetTrip',
+  mffaiSetAutostart: 'mffai:setAutostart',
+  mffaiTail: 'mffai:tail',
+  mffaiPrompt: 'mffai:prompt',
+  mffaiEvent: 'mffai:event',   // main → renderer
+  mffaiAlert: 'mffai:alert',   // main → renderer
 } as const
 
 // Individual named exports (in addition to the CH object above) so callers can `import * as CH from

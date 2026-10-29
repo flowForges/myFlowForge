@@ -32,6 +32,8 @@ import { trustSystemCertificates } from './net/systemCa'
 import { createDailyTokenCounter, scanTokenBaseline, localDayKey } from './tokens/dailyTokenCounter'
 import { setDailyTokenCounter } from './tokens/growthSignalRef'
 import type { Settings } from './config/schema'
+import { NOOP_CTX } from './ipc/invokeCtx'
+import { registerMffaiIpc } from './mffai/ipc'
 import { createTerminalService } from './terminal/terminalService'
 import { PluginScheduler } from './plugins/pluginScheduler'
 import { readPlugins } from './plugins/pluginStore'
@@ -588,6 +590,30 @@ app.whenReady().then(() => {
   // every blur>0. Returns a raw blurAmount; the renderer buckets it via the shared vibrancyMaterial().
   ipcMain.handle(CH.appVibrancyBaseline, () => builtWindowBlurAmount())
 
+  // mff-ai:host 只经动态 import 加载 —— 未启用且没人点 mff-ai 页面时永不加载。
+  let mffaiHost: typeof import('./mffai/host') | undefined
+  const loadMffaiHost = () => import('./mffai/host').then((h) => {
+    h.init({
+      send: (ch, p) => { const w = mainWinRef; if (w && !w.isDestroyed()) w.webContents.send(ch, p) },
+      readSettings,
+      clientVersion: app.getVersion(),
+      // ★在这里算:host 被拆进 out/main/chunks/,那里的 __dirname 不是 out/main
+      daemonJs: join(__dirname, 'mffaiDaemon.js'),
+      log: (m, e) => logError('mffai', e === undefined ? m : `${m}: ${e instanceof Error ? e.message : String(e)}`),
+    })
+    mffaiHost = h
+    return h
+  })
+  const mffaiFail = (e: unknown) => logError('mffai', e instanceof Error ? e.stack ?? e.message : String(e))
+  let prevMffai = (() => { try { return readSettings().mffai } catch { return { enabled: false, autostart: true } } })()
+  const syncMffai = (s: Settings) => {
+    const prev = prevMffai
+    const next = s.mffai ?? prev
+    prevMffai = next
+    if (prev.enabled !== next.enabled) void loadMffaiHost().then((h) => (next.enabled ? h.enable() : h.disable())).catch(mffaiFail)
+    else if (next.enabled && prev.autostart !== next.autostart) void loadMffaiHost().then((h) => h.setAutostart(next.autostart)).catch(mffaiFail)
+  }
+
   const onSettings = (s: Settings) => {
     // Window transparency applies LIVE (setOpacity) — the slider updates instantly, no restart.
     applyWindowOpacity(s.appearance.windowOpacity)
@@ -603,6 +629,8 @@ app.whenReady().then(() => {
     // Keep the Dock menu's 开关宠物 label in sync with pet.enabled (also when toggled from the UI).
     refreshDockMenu()
     // 每日 token 目标改了要立刻推给计数器(它会重算进度并广播),否则新目标要等下次重启才生效。
+    // mff-ai 开关 / 自启变了 → 驱动 host(只在变化时加载它)
+    syncMffai(s)
   }
 
   // Tray (right-click) + Dock context menu: 新建工作区 / 打开·关闭桌面宠物 / 退出. Rebuilt on each open so the
@@ -737,6 +765,18 @@ app.whenReady().then(() => {
       // 前者不该在对话里加噪音,后者必须说清楚。
       client: { id: 'local', label: '本机' },
     }, args))
+  }
+
+  // ── mff-ai(本机后台)。★不进方法表:只管本机,不跟随远程主机路由。
+  //    启用 / 停用 / 自启开关都经设置的同一个写入口落盘,onSettings 再去驱动 host。
+  registerMffaiIpc({
+    handle: (ch, fn) => ipcMain.handle(ch, (_e, ...a) => fn(...a)),
+    readSettings,
+    saveSettings: (patch) => methodTable[CH.configSetClientSettings](NOOP_CTX, patch),
+    loadHost: loadMffaiHost,
+  })
+  if (prevMffai.enabled) {
+    setImmediate(() => void loadMffaiHost().then((h) => h.ensureRunning().then(() => h.refreshAutostart())).catch(mffaiFail))
   }
 
   // ── 多主机管理。这些是**客户端自己的**事(这台设备认识哪些机器、现在连着谁),
@@ -912,6 +952,8 @@ app.whenReady().then(() => {
     // 网关也一起收:决策 3 说的「同生共死」不是修辞 —— 留一个还在听的端口给一个已经退出的
     // app,连上去只会是一堆永远不 settle 的调用。
     void mobileGw.close()
+    // mff-ai 后台要活过 app 退出:只断 RPC,不停进程
+    mffaiHost?.disconnect()
   })
   // 主窗口关掉(mac 上 app 还活着)→ 只收**本机窗口开的**那些终端。
   // ★不能用 killAll:这台机器同时也是别人的 host,连上来的客户端开的终端归它们自己,

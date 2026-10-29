@@ -37,6 +37,7 @@ const DEFAULTS: Settings = {
   mobileGateway: { enabled: false, host: '0.0.0.0', port: 6789 },
   relay: { enabled: false, url: '', urlHistory: [] },
   push: { enabled: false, gate: true, done: false },
+  mffai: { enabled: false, autostart: true },
 }
 
 export interface SettingsUpdate {
@@ -68,6 +69,8 @@ export interface SettingsUpdate {
   // codex 的驱动通路。★'app-server' 才有逐 token 流式('exec' 只在整条消息写完后发一次)——
   //  见 AgentsPane 里那个开关和 providers/codex.ts 的注释。
   codexTransport?: Settings['codexTransport']
+  // 整份对象:主进程按顶层键写入,半个对象会把另一项抹回默认
+  mffai?: Settings['mffai']
 }
 
 function merge(base: Settings, partial: SettingsUpdate): Settings {
@@ -116,6 +119,7 @@ function merge(base: Settings, partial: SettingsUpdate): Settings {
     //  外观那边正是这么丢过一次的(见本文件里 appearance 那条)。
     relay: { ...base.relay, ...((partial as Partial<Settings>).relay ?? {}) },
     push: { ...base.push, ...((partial as Partial<Settings>).push ?? {}) },
+    mffai: { ...base.mffai, ...(partial.mffai ?? {}) },
   }
 }
 
