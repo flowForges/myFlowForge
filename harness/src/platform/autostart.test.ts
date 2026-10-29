@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { runtimePaths } from '../protocol/paths'
 import {
   applyAutostart, launchdPlist, planAutostart, startVbs, systemdUnit, windowsRunValue, xdgDesktop, type LaunchSpec,
 } from './autostart'
@@ -74,18 +75,27 @@ describe('planAutostart', () => {
     expect(i.commands).toEqual([])
     expect(planAutostart('uninstall', spec, env).removes).toEqual([desk, unit])
   })
+  it('darwin under launchd: no bootout/bootstrap', () => {
+    const env = { platform: 'darwin' as const, home, uid: 501, hasSystemdUser: false, runningUnderLaunchd: true }
+    expect(planAutostart('install', spec, env)).toEqual({ writes: [{ path: plist, content: launchdPlist(spec) }], removes: [], commands: [], after: [] })
+    expect(planAutostart('uninstall', spec, env)).toEqual({ writes: [], removes: [plist], commands: [], after: [] })
+  })
   it('win32', () => {
     const env = { platform: 'win32' as const, home, hasSystemdUser: false }
-    const i = planAutostart('install', spec, env)
-    expect(i.writes).toHaveLength(1)
-    expect(i.writes[0].path.endsWith('start.vbs')).toBe(true)
-    expect(i.commands[0].argv).toEqual([
-      'reg', 'add', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', '/v', 'myFlowForge-mffai',
-      '/t', 'REG_SZ', '/d', windowsRunValue(spec), '/f',
-    ])
-    const u = planAutostart('uninstall', spec, env)
-    expect(u.commands[0].argv.slice(0, 5)).toEqual(['reg', 'delete', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', '/v', 'myFlowForge-mffai'])
-    expect(u.removes).toEqual([i.writes[0].path])
+    const key = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
+    const vbs = runtimePaths(spec.dataDir).startVbs
+    expect(planAutostart('install', spec, env)).toEqual({
+      writes: [{ path: vbs, content: startVbs(spec) }],
+      removes: [],
+      commands: [{ argv: ['reg', 'add', key, '/v', 'myFlowForge-mffai', '/t', 'REG_SZ', '/d', windowsRunValue(spec), '/f'] }],
+      after: [],
+    })
+    expect(planAutostart('uninstall', spec, env)).toEqual({
+      writes: [],
+      removes: [vbs],
+      commands: [{ argv: ['reg', 'delete', key, '/v', 'myFlowForge-mffai', '/f'], ignoreFailure: true }],
+      after: [],
+    })
   })
 })
 
@@ -111,5 +121,16 @@ describe('applyAutostart', () => {
     expect(existsSync(gone)).toBe(false)
     expect(calls).toEqual(['ok 1', 'bad', 'bad 2', 'ok 3'])
     expect(r).toEqual({ ok: false, errors: ['bad 2: nope'] })
+  })
+  it('a failed write skips commands', async () => {
+    const blocker = join(dir, 'file')
+    writeFileSync(blocker, '')
+    const calls: string[] = []
+    const r = await applyAutostart(
+      { writes: [{ path: join(blocker, 'x/y'), content: 'x' }], removes: [], commands: [{ argv: ['launchctl', 'bootstrap'] }], after: [{ argv: ['z'] }] },
+      async (f) => { calls.push(f) },
+    )
+    expect(r.ok).toBe(false)
+    expect(calls).toEqual([])
   })
 })

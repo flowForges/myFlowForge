@@ -74,4 +74,19 @@ describe('control server', () => {
     expect(r.errors[0]).toContain('denied')
     expect(log.warn).toHaveBeenCalled()
   })
+
+  it('autostart with invalid params -> -32602 and no exec', async () => {
+    const calls: string[][] = []
+    const a = addr()
+    const s = await startControlServer({
+      addr: a, token: 't', supervisor: {} as unknown as Supervisor, platform: 'darwin', home: join(dir, 'home'), dataDir: dir,
+      exec: async (f, args) => { calls.push([f, ...args]) },
+    })
+    closers.push(() => s.close())
+    const c = await connectControlClient({ addr: a, token: 't' })
+    closers.push(() => c.close())
+    expect(await c.call('autostart', { on: 'yes' } as never).catch((e) => e.code)).toBe(-32602)
+    expect(calls).toEqual([])
+    expect(existsSync(join(dir, 'home'))).toBe(false)
+  })
 })

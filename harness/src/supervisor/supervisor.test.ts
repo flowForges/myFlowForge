@@ -176,6 +176,19 @@ describe('daemon entry', () => {
   // 断言失败也要收尸:监管进程、它们的工作进程
   const procs: ChildProcess[] = []
   const pids: number[] = []
+  let home: string
+  // 真实守护进程的环境:HOME 等全指向临时目录,自启走演练模式
+  const daemonEnv = (): NodeJS.ProcessEnv => ({
+    ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, '.config'),
+    MFFAI_DATA_DIR: dir, MFFAI_AUTOSTART_DRY_RUN: '1',
+  })
+  const killTree = (p: ChildProcess) => {
+    try { if (p.pid) process.kill(-p.pid, 'SIGKILL') } catch { try { p.kill('SIGKILL') } catch { /* 已退出 */ } }
+  }
+  const sweep = () => { for (const p of procs) killTree(p) }
+  beforeAll(() => { process.on('exit', sweep) })
+  afterAll(() => { process.off('exit', sweep) })
+  beforeEach(() => { home = mkdtempSync(join(tmpdir(), 'mffai-home-')) })
   beforeAll(async () => {
     bundle = join(mkdtempSync(join(tmpdir(), 'mffai-bundle-')), 'mffaiDaemon.js')
     await build({ entryPoints: [DAEMON_TS], outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent' })
@@ -183,7 +196,8 @@ describe('daemon entry', () => {
   afterEach(() => {
     const json = join(runtimePaths(dir).supervisorJson)
     try { pids.push(JSON.parse(readFileSync(json, 'utf8')).workerPid) } catch { /* 没有 */ }
-    for (const p of procs.splice(0)) if (p.exitCode === null && p.signalCode === null) p.kill('SIGKILL')
+    for (const p of procs.splice(0)) killTree(p)
+    rmSync(home, { recursive: true, force: true })
     for (const pid of pids.splice(0)) if (pid && alive(pid)) process.kill(pid, 'SIGKILL')
   })
   afterAll(() => rmSync(dirname(bundle), { recursive: true, force: true }))
@@ -196,7 +210,7 @@ describe('daemon entry', () => {
       execFileSync(process.execPath, ['-e', `require('net').createServer().listen(${JSON.stringify(workerAddr)}, () => process.exit(0))`])
     }
     const w = spawn(process.execPath, [bundle, '--worker'], {
-      env: { ...process.env, MFFAI_DATA_DIR: dir }, stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+      env: daemonEnv(), stdio: ['ignore', 'ignore', 'pipe', 'ipc'], detached: true,
     })
     procs.push(w)
     const msgs: string[] = []
@@ -211,9 +225,9 @@ describe('daemon entry', () => {
   })
 
   it('two concurrent launches -> exactly one supervisor survives, the other exits 0', async () => {
-    const env = { ...process.env, MFFAI_DATA_DIR: dir, ELECTRON_RUN_AS_NODE: '1' }
+    const env = { ...daemonEnv(), ELECTRON_RUN_AS_NODE: '1' }
     const launch = () => {
-      const p = spawn(process.execPath, [bundle], { env, stdio: 'ignore' })
+      const p = spawn(process.execPath, [bundle], { env, stdio: 'ignore', detached: true })
       procs.push(p)
       const exited = new Promise<number | null>(r => p.once('exit', code => r(code)))
       return { p, exited }
@@ -247,7 +261,10 @@ describe('daemon entry', () => {
 
     const c = await connectControlClient({ addr: paths.controlAddr, token })
     // autostart 的真实行为在 controlServer.test(注入 exec);此处只校验参数校验仍生效,绝不触碰真实系统
-    expect(await c.call('autostart', { on: 'yes' } as never).catch(e => typeof e.code)).toBe('number')
+    expect(await c.call('autostart', { on: 'yes' } as never).catch(e => e.code)).toBe(-32602)
+    // 演练模式下合法请求也不碰真实系统,且只写临时 home
+    expect(await c.call('autostart', { on: true, spec: { execPath: process.execPath, daemonJs: bundle } })).toMatchObject({ ok: true })
+    expect(existsSync(join(home, 'Library/LaunchAgents/com.myflowforge.mffai.plist')) || process.platform !== 'darwin').toBe(true)
     expect(await c.call('shutdown')).toEqual({ ok: true })
     c.close()
     expect(await survivor.exited).toBe(0)

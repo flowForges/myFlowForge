@@ -6,7 +6,7 @@ import { runtimePaths } from '../protocol/paths'
 // 开机自启(spec §7):内容与命令是纯函数,applyAutostart 只做薄执行
 
 export type LaunchSpec = { execPath: string; daemonJs: string; dataDir: string }
-export type AutostartEnv = { platform: NodeJS.Platform; home: string; uid?: number; hasSystemdUser: boolean }
+export type AutostartEnv = { platform: NodeJS.Platform; home: string; uid?: number; hasSystemdUser: boolean; runningUnderLaunchd?: boolean }
 export type Cmd = { argv: string[]; ignoreFailure?: boolean }
 export type AutostartPlan = {
   writes: { path: string; content: string }[]
@@ -112,10 +112,12 @@ export function planAutostart(op: 'install' | 'uninstall', spec: LaunchSpec, env
     if (env.uid === undefined) throw new Error('cannot resolve uid for launchctl')
     const domain = `gui/${env.uid}`
     const p = plistPath(env.home)
-    plan.commands.push({ argv: ['launchctl', 'bootout', `${domain}/${LAUNCHD_LABEL}`], ignoreFailure: true })
+    // 本进程由该 launchd 作业拉起时,bootout 会杀掉自己:只改 plist(已加载;卸载下次登录生效)
+    const self = env.runningUnderLaunchd === true
+    if (!self) plan.commands.push({ argv: ['launchctl', 'bootout', `${domain}/${LAUNCHD_LABEL}`], ignoreFailure: true })
     if (install) {
       plan.writes.push({ path: p, content: launchdPlist(spec) })
-      plan.commands.push({ argv: ['launchctl', 'bootstrap', domain, p] })
+      if (!self) plan.commands.push({ argv: ['launchctl', 'bootstrap', domain, p] })
     } else {
       plan.removes.push(p)
     }
@@ -181,7 +183,9 @@ export async function applyAutostart(plan: AutostartPlan, exec: ExecFn = default
       errors.push(`write ${w.path}: ${String(err)}`)
     }
   }
-  for (const c of plan.commands) await run(c)
+  // 写失败则不执行命令,免得 bootstrap 过期/缺失的文件
+  const writeFailed = errors.length > 0
+  if (!writeFailed) for (const c of plan.commands) await run(c)
   for (const p of plan.removes) {
     try {
       rmSync(p, { force: true })
@@ -189,6 +193,6 @@ export async function applyAutostart(plan: AutostartPlan, exec: ExecFn = default
       errors.push(`remove ${p}: ${String(err)}`)
     }
   }
-  for (const c of plan.after) await run(c)
+  if (!writeFailed) for (const c of plan.after) await run(c)
   return { ok: errors.length === 0, errors }
 }
