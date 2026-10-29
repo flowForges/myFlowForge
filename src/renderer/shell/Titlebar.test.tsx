@@ -192,3 +192,22 @@ describe('Titlebar – 导航分组在哪一侧', () => {
     })
   })
 })
+
+describe('Titlebar – mff-ai tab', () => {
+  it('renders three buttons in one .tb-seg; mffai is on and sidebar toggle hidden in mffai view', () => {
+    const { container } = render(<Titlebar {...base} view="mffai" />)
+    const seg = container.querySelectorAll('.tb-seg')
+    expect(seg).toHaveLength(1)
+    expect(seg[0].querySelectorAll('button')).toHaveLength(3)
+    expect(container.querySelector('button[data-go="mffai"]')).toHaveClass('on')
+    expect(container.querySelector('button[data-go="ws"]')).not.toHaveClass('on')
+    expect(screen.queryByTitle('折叠侧栏')).toBeNull()
+  })
+
+  it('click calls onView("mffai")', () => {
+    const onView = vi.fn()
+    const { container } = render(<Titlebar {...base} view="home" onView={onView} />)
+    fireEvent.click(container.querySelector('button[data-go="mffai"]')!)
+    expect(onView).toHaveBeenCalledWith('mffai')
+  })
+})

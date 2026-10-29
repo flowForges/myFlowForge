@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
+import { dataDir } from '@mffai/protocol'
 import { CH } from '../ipc/channels'
 import { CLIENT_SETTING_KEYS, MffaiSchema, SettingsSchema, defaultSettings, type Settings } from '../config/schema'
 import { createMffaiSettingsSync, mffaiTransition, registerMffaiIpc } from './ipc'
@@ -50,7 +51,7 @@ describe('registerMffaiIpc', () => {
 
   it('未启用:mffai:state 只读设置,不加载 host', async () => {
     const { invoke, loadHost } = setup({ enabled: false, autostart: false })
-    expect(await invoke(CH.mffaiState)).toEqual({ enabled: false, autostart: false, running: false })
+    expect(await invoke(CH.mffaiState)).toEqual({ enabled: false, autostart: false, running: false, dataDir: dataDir() })
     expect(loadHost).not.toHaveBeenCalled()
   })
 

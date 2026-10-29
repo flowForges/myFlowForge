@@ -1,0 +1,16 @@
+.mffai-page { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 14px; padding: 20px 24px; overflow: auto; color: var(--fg); }
+.mffai-card { display: flex; flex-direction: column; gap: 4px; max-width: 460px; padding: 16px 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.mffai-row { display: flex; align-items: center; gap: 14px; padding: 8px 0; font-size: 13px; }
+.mffai-k { width: 80px; color: var(--faint); }
+.mffai-path { font-family: var(--mono, monospace); font-size: 12px; word-break: break-all; }
+.mffai-primary { align-self: flex-start; margin-top: 8px; background: var(--accent); color: #0b1020; border-color: transparent; }
+.mffai-strip { display: flex; align-items: center; gap: 12px; font-size: 13px; }
+.mffai-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+.mffai-dot.ok { background: var(--accent); }
+.mffai-dot.bad { background: var(--del, #e5484d); }
+.mffai-debug { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+.mffai-log { flex: 1; min-height: 120px; overflow: auto; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 12.5px; }
+.mffai-line { padding: 2px 0; white-space: pre-wrap; }
+.mffai-line.user { color: var(--faint); }
+.mffai-send { display: flex; gap: 8px; }
+.mffai-send input { flex: 1; height: 30px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--fg); }

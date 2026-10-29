@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { Titlebar } from './shell/Titlebar'
+
+const MffaiView = lazy(() => import('./mffai/MffaiView'))
 import { Sidebar } from './shell/Sidebar'
 import { useUnread } from './state/useUnread'
 import { ResizeHandle } from './shell/ResizeHandle'
@@ -83,7 +85,7 @@ export function App() {
   // 全局搜索(Cmd+Shift+F)信号:每次触发 +1,WorkspaceView 据此展开检查器→切到文件树→聚焦搜索框。
   const [searchSignal, setSearchSignal] = useState(0)
   // 启动默认落在首页(HomeView):新用户没有工作区时不再看到一个空的 WorkspaceView。
-  const [view, setView] = useState<'home' | 'ws'>('home')
+  const [view, setView] = useState<'home' | 'ws' | 'mffai'>('home')
   // 「打开位置」目标:WorkspaceView 上报当前工作区/预览文件,供顶栏按钮消费。
   const [openTarget, setOpenTarget] = useState<OpenTarget | null>(null)
   const [activeId, setActiveId] = useState('')
@@ -318,7 +320,7 @@ export function App() {
   const activeWsId = activeId || (engine.run?.workspacePath ?? '')
   // On the home view the titlebar shows just "Forge" — never a stale workspace name from the
   // last-viewed workspace or a still-active run.
-  const crumb = view === 'home' ? '' : (home.workspaces.find(w => w.path === activeWsId)?.name ?? engine.run?.workspaceName ?? '')
+  const crumb = view !== 'ws' ? '' : (home.workspaces.find(w => w.path === activeWsId)?.name ?? engine.run?.workspaceName ?? '')
   /**
    * ★「我在看哪个会话」归**这台设备**,不再跟着主机那份 `activeSessionId` 走 ——
    *  否则在 Windows 上点一个会话,本机这台会跟着跳过去(用户 2026-09-20 报的)。
@@ -515,6 +517,15 @@ export function App() {
     return () => off?.()
   }, [])
 
+  // mff-ai 后台告警 → 铃铛通知(点击跳 mff-ai 页)
+  useEffect(() => {
+    const off = window.forge.mffai?.onAlert?.((a) => {
+      const text = a.kind === 'tripped' ? '已熔断' : a.kind === 'incompatible' ? '版本不兼容' : '重启中'
+      setNotifs(ns => [{ ic: 'warn', cls: 'ni-warn', t: `<b>mff-ai</b> ${sanitize(text)}`, m: '', unread: true, view: 'mffai' }, ...ns])
+    })
+    return () => off?.()
+  }, [])
+
   const openWizard = () => { setCreateErr(null); setEditing(null); setWizardOpen(true) }
 
   const openEdit = async () => {
@@ -618,7 +629,7 @@ export function App() {
   // 标题栏「工作区」在没有选中工作区时不落到禁用的空 Composer:优先恢复上次活跃工作区
   // (settings.lastActiveWorkspace,会话随 per-ws activeSessionId 自动恢复),否则挑最近有
   // 动静的;一个工作区都没有就留在首页。
-  const handleView = (v: 'home' | 'ws') => {
+  const handleView = (v: 'home' | 'ws' | 'mffai') => {
     if (v === 'ws' && !activeWsId) {
       const live = home.workspaces.filter(w => !w.archived)
       if (!live.length) return
@@ -669,7 +680,7 @@ export function App() {
 
   return (
     <ChatHtmlCtx.Provider value={settings?.appearance.chatInlineHtml ?? false}>
-    <div className={`window${collapsed ? ' collapsed' : ''}${inspCollapsed ? ' insp-collapsed' : ''}${view === 'home' ? ' home-mode' : ''}`}>
+    <div className={`window${collapsed ? ' collapsed' : ''}${inspCollapsed ? ' insp-collapsed' : ''}${view !== 'ws' ? ' home-mode' : ''}`}>
       {/* App-wide background image layer (shown only when appearance.bgScope === 'app'; the chat-only
           scope is drawn by .chat::before instead). Fixed, behind all chrome, image + opacity from CSS vars. */}
       <div className="app-bg-layer" aria-hidden="true" />
@@ -702,7 +713,8 @@ export function App() {
           // pane for app-global notifs (e.g. a perf stall → 调试日志). Read-only notifs just mark read.
           setNotifs(ns => ns.map((x, j) => (j === i ? { ...x, unread: false } : x)))
           const path = n.wsPath || home.workspaces.find(w => w.name === n.wsName)?.path
-          if (path) { setActiveId(path); setView('ws'); setNotifOpen(false) }
+          if (n.view === 'mffai') { setView('mffai'); setNotifOpen(false) }
+          else if (path) { setActiveId(path); setView('ws'); setNotifOpen(false) }
           else if (n.settingsPane) { setSettingsPane(n.settingsPane); setSettingsOpen(true); setNotifOpen(false) }
         }}
         canEditWorkspace={!!activeWsId}
@@ -730,7 +742,7 @@ export function App() {
           onRemove={(id) => setPendingConfirm({ kind: 'remove', id })}
           onReorder={(ids) => { home.setOrder(ids).catch(e => alert(e instanceof Error ? e.message : String(e))) }}
           collapsed={collapsed}
-          width={view === 'home' ? undefined : sidebar.width}
+          width={view !== 'ws' ? undefined : sidebar.width}
           sessions={sessions.sessions}
           activeSessionId={sessions.activeSessionId}
           onSwitchSession={(wsId, sessionId) => {
@@ -758,9 +770,11 @@ export function App() {
           onToggleExpand={onToggleExpand}
           unread={unread}
         />
-        {!collapsed && view !== 'home' && <ResizeHandle onPointerDown={sidebar.onHandleDown} />}
+        {!collapsed && view === 'ws' && <ResizeHandle onPointerDown={sidebar.onHandleDown} />}
         <div className="content">
-          {view === 'home'
+          {view === 'mffai'
+            ? <Suspense fallback={null}><MffaiView /></Suspense>
+            : view === 'home'
             ? <HomeView
                 workspaces={home.workspaces}
                 stats={home.stats}
@@ -944,6 +958,18 @@ export function App() {
           case 'keybindings': return settings ? <KeybindingsPane keybindings={settings.keybindings} onChange={(kb) => update({ keybindings: kb })} globalFailed={globalFailed} /> : null
           case 'sessions': return <SessionImportPane />
           case 'memory': return settings ? <MemoryPane enabled={settings.memory.enabled} onToggle={(v) => update({ memory: { enabled: v } })} wsPath={activeWsId || undefined} sessionId={sessions.activeSessionId ?? undefined} /> : null
+          case 'mffai': return settings ? (
+            <div className="set-group">
+              <div className="set-row">
+                <div className="info"><div className="t">启用</div></div>
+                <button className={`toggle${settings.mffai.enabled ? ' on' : ''}`} aria-label="启用" onClick={() => update({ mffai: { ...settings.mffai, enabled: !settings.mffai.enabled } })} />
+              </div>
+              <div className="set-row">
+                <div className="info"><div className="t">开机自启</div></div>
+                <button className={`toggle${settings.mffai.autostart ? ' on' : ''}`} aria-label="开机自启" onClick={() => update({ mffai: { ...settings.mffai, autostart: !settings.mffai.autostart } })} />
+              </div>
+            </div>
+          ) : null
           case 'bot': return settings ? <BotPane config={settings.botBridge} onChange={(bb) => update({ botBridge: bb })} /> : null
           case 'debug': return <DebugLogPane perfDiagnostics={settings?.perfDiagnostics ?? false} onTogglePerfDiagnostics={(v) => update({ perfDiagnostics: v })} />
           case 'usage': return <TokenUsagePane />

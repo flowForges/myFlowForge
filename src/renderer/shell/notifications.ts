@@ -12,6 +12,8 @@ export interface Notif {
   // App-global notifications that aren't tied to any workspace (e.g. a main-process perf stall) route
   // to a settings pane instead of a workspace. Every notif is still clickable to mark it read.
   settingsPane?: string
+  // mff-ai 告警:点击切到 mff-ai 页
+  view?: 'mffai'
 }
 
 export const ICN: Record<'ok' | 'warn' | 'file' | 'up', string> = {

@@ -7,8 +7,8 @@ import type { OpenTarget } from '@shared/openers'
 export interface TitlebarProps {
   collapsed: boolean
   onToggleSidebar: () => void
-  view: 'home' | 'ws'
-  onView: (v: 'home' | 'ws') => void
+  view: 'home' | 'ws' | 'mffai'
+  onView: (v: 'home' | 'ws' | 'mffai') => void
   crumb: string
   /** 点主机芯片时打开「设置 → 主机」 */
   onToggleInspector?: () => void
@@ -71,14 +71,14 @@ export function Titlebar({
       </svg>
     </button>
   )
-  const sidebarToggle = view !== 'home' ? (
+  const sidebarToggle = view === 'ws' ? (
     <button className="tb-btn icon" onClick={onToggleSidebar} title="折叠侧栏">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
         <rect x="3" y="4" width="18" height="16" rx="2" /><line x1="9" y1="4" x2="9" y2="20" />
       </svg>
     </button>
   ) : null
-  const inspectorToggle = view !== 'home' ? (
+  const inspectorToggle = view === 'ws' ? (
     <button className="tb-btn icon" onClick={onToggleInspector} title="折叠面板">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
         <rect x="3" y="4" width="18" height="16" rx="2" /><line x1="15" y1="4" x2="15" y2="20" />
@@ -109,6 +109,7 @@ export function Titlebar({
     <div className="tb-seg">
       <button data-go="home" className={view === 'home' ? 'on' : undefined} onClick={() => onView('home')}>首页</button>
       <button data-go="ws" className={view === 'ws' ? 'on' : undefined} onClick={() => onView('ws')}>工作区</button>
+      <button data-go="mffai" className={view === 'mffai' ? 'on' : undefined} onClick={() => onView('mffai')}>mff-ai</button>
     </div>
   )
   const opener = view === 'ws' ? (

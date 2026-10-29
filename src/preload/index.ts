@@ -530,6 +530,27 @@ const api = {
   growthPetImport: (): Promise<{ ok: true; pet: import('@shared/petCustom').CustomPet } | { ok: false; error: string } | null> => ipcRenderer.invoke(CH.growthPetImport),
   // Run2 (P3-A): additive API surface for the new headless run controller. Coexists with startRun/resolve/
   // onEngineEvent above — none of those are touched.
+  // mff-ai(本机后台):invoke + 两路 main→renderer 推送
+  mffai: {
+    state: (): Promise<import('@mffai/protocol').MffaiState> => ipcRenderer.invoke(CH.mffaiState),
+    enable: (): Promise<import('@mffai/protocol').MffaiState> => ipcRenderer.invoke(CH.mffaiEnable),
+    disable: (): Promise<import('@mffai/protocol').MffaiState> => ipcRenderer.invoke(CH.mffaiDisable),
+    restart: (): Promise<import('@mffai/protocol').MffaiState> => ipcRenderer.invoke(CH.mffaiRestart),
+    resetTrip: (): Promise<import('@mffai/protocol').MffaiState> => ipcRenderer.invoke(CH.mffaiResetTrip),
+    setAutostart: (on: boolean): Promise<import('@mffai/protocol').MffaiState> => ipcRenderer.invoke(CH.mffaiSetAutostart, on),
+    tail: (limit: number): Promise<{ events: import('@mffai/protocol').KernelEvent[] }> => ipcRenderer.invoke(CH.mffaiTail, limit),
+    prompt: (text: string): Promise<{ accepted: boolean; turnId: string }> => ipcRenderer.invoke(CH.mffaiPrompt, text),
+    onEvent: (cb: (e: import('@mffai/protocol').KernelEvent) => void): (() => void) => {
+      const listener = (_: unknown, e: import('@mffai/protocol').KernelEvent) => cb(e)
+      ipcRenderer.on(CH.mffaiEvent, listener)
+      return () => ipcRenderer.removeListener(CH.mffaiEvent, listener)
+    },
+    onAlert: (cb: (a: import('@mffai/protocol').MffaiAlert) => void): (() => void) => {
+      const listener = (_: unknown, a: import('@mffai/protocol').MffaiAlert) => cb(a)
+      ipcRenderer.on(CH.mffaiAlert, listener)
+      return () => ipcRenderer.removeListener(CH.mffaiAlert, listener)
+    },
+  },
   run2: {
     start: (opts: { workspacePath: string; runId: string; stages: unknown[]; projects: unknown[] }) => ipcRenderer.invoke(CH.run2Start, opts),
     // Task 8: the launch gate's 运行基准 section — see run2Handlers.ts's ProjectBaseInfo/run2BaseInfo doc.

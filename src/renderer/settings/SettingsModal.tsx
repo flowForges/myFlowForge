@@ -250,6 +250,13 @@ const NAV: NavEntry[] = [
     ),
   },
   {
+    key: 'mffai',
+    label: 'mff-ai',
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="5" y="5" width="14" height="14" rx="3" /><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3" /></svg>
+    ),
+  },
+  {
     key: 'debug',
     label: '调试日志',
     icon: (
