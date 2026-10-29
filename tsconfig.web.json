@@ -3,9 +3,9 @@
     "target": "ES2022", "module": "ESNext", "moduleResolution": "Bundler",
     "jsx": "react-jsx", "strict": true, "esModuleInterop": true, "skipLibCheck": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"], "types": ["node", "vite/client", "@testing-library/jest-dom/vitest"],
-    "baseUrl": ".", "paths": { "@shared/*": ["src/shared/*"] }, "noEmit": true,
+    "baseUrl": ".", "paths": { "@shared/*": ["src/shared/*"], "@mffai/protocol": ["harness/src/protocol/index.ts"] }, "noEmit": true,
     "ignoreDeprecations": "6.0"
   },
   "include": ["src/renderer", "src/shared", "**/*.test.tsx"],
-  "exclude": ["release", "dist", "node_modules"]
+  "exclude": ["release", "dist", "node_modules", "harness"]
 }

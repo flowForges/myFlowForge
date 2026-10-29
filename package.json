@@ -14,7 +14,7 @@
     "make-win-icon": "node scripts/make-win-icon.mjs",
     "test": "vitest run",
     "check:daemon": "FORGE_DAEMON_CHECK=1 vitest run src/main/daemon/daemonProcess.test.ts",
-    "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
+    "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit && tsc -p harness/tsconfig.json --noEmit",
     "postinstall": "node scripts/postinstall.mjs",
     "dist:linux": "npm run build && bash scripts/build-linux-daemon.sh",
     "dist:ios": "bash scripts/build-ios.sh",

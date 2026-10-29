@@ -18,13 +18,13 @@ export default defineConfig({
         },
       },
     },
-    resolve: { alias: { '@shared': resolve('src/shared') } },
+    resolve: { alias: { '@shared': resolve('src/shared'), '@mffai/protocol': resolve('harness/src/protocol/index.ts') } },
   },
-  preload: { build: { outDir: 'out/preload' }, resolve: { alias: { '@shared': resolve('src/shared') } } },
+  preload: { build: { outDir: 'out/preload' }, resolve: { alias: { '@shared': resolve('src/shared'), '@mffai/protocol': resolve('harness/src/protocol/index.ts') } } },
   renderer: {
     root: 'src/renderer',
     plugins: [react()],
-    resolve: { alias: { '@shared': resolve('src/shared') } },
+    resolve: { alias: { '@shared': resolve('src/shared'), '@mffai/protocol': resolve('harness/src/protocol/index.ts') } },
     build: { outDir: 'out/renderer', rollupOptions: { input: { index: resolve('src/renderer/index.html'), pet: resolve('src/renderer/pet.html') } } }
   }
 })

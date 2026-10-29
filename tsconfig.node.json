@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "ES2022", "module": "ESNext", "moduleResolution": "Bundler",
     "strict": true, "esModuleInterop": true, "skipLibCheck": true,
-    "types": ["node"], "baseUrl": ".", "paths": { "@shared/*": ["src/shared/*"] },
+    "types": ["node"], "baseUrl": ".", "paths": { "@shared/*": ["src/shared/*"], "@mffai/protocol": ["harness/src/protocol/index.ts"] },
     "noEmit": true,
     "ignoreDeprecations": "6.0"
   },
@@ -12,5 +12,5 @@
   // 其中 `nav.test.ts` 经 `expo-router` 拖进 RN 那套和本项目冲突的 `@types/node`,
   // 结果是一堆**不相干**的 `src/main/**` 文件报 ProcessEnv/NODE_ENV 错。类型检查没有丢,
   // 只是回到它该在的那个 project 里。
-  "exclude": ["release", "dist", "node_modules", "mobile"]
+  "exclude": ["release", "dist", "node_modules", "mobile", "harness"]
 }

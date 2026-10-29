@@ -4,7 +4,7 @@ import { resolve } from 'node:path'
 
 export default defineConfig({
   plugins: [react()],
-  resolve: { alias: { '@shared': resolve('src/shared') } },
+  resolve: { alias: { '@shared': resolve('src/shared'), '@mffai/protocol': resolve('harness/src/protocol/index.ts') } },
   test: {
     globals: true,
     setupFiles: ['./vitest.setup.ts'],
@@ -28,6 +28,8 @@ export default defineConfig({
       // 打包时最容易被"命令成功了"骗过去。钩子本身要跑 codesign,测不了;判断走哪条路的
       // signingPlan() 是纯函数,钉死它。
       { extends: true, test: { name: 'scripts', environment: 'node', include: ['scripts/**/*.test.mjs'] } },
+      // mff-ai 后台 harness(独立顶层目录,app 只经 @mffai/protocol 引用)。
+      { extends: true, test: { name: 'harness', environment: 'node', include: ['harness/**/*.test.ts'] } },
     ],
   }
 })
