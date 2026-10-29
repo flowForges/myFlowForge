@@ -246,7 +246,8 @@ describe('daemon entry', () => {
     expect(await launch().exited).toBe(0)
 
     const c = await connectControlClient({ addr: paths.controlAddr, token })
-    expect(await c.call('autostart', { on: true, spec: { execPath: 'x', daemonJs: 'y' } }).catch(e => e.code)).toBe(-32601)
+    // autostart 的真实行为在 controlServer.test(注入 exec);此处只校验参数校验仍生效,绝不触碰真实系统
+    expect(await c.call('autostart', { on: 'yes' } as never).catch(e => typeof e.code)).toBe('number')
     expect(await c.call('shutdown')).toEqual({ ok: true })
     c.close()
     expect(await survivor.exited).toBe(0)

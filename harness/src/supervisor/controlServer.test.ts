@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { connectControlClient } from '../protocol/index'
@@ -35,5 +35,43 @@ describe('control server', () => {
     await vi.waitFor(() => expect(log.error).toHaveBeenCalledTimes(2))
     expect(log.error).toHaveBeenCalledWith('restart failed', { error: 'Error: restart boom' })
     expect(log.error).toHaveBeenCalledWith('shutdown failed', { error: 'Error: stop boom' })
+  })
+
+  it('autostart plans and runs commands through the injected exec (darwin, temp home)', async () => {
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
+    const calls: string[][] = []
+    const home = join(dir, 'home')
+    const a = addr()
+    const s = await startControlServer({
+      addr: a, token: 't', supervisor: {} as unknown as Supervisor, log, platform: 'darwin', home, dataDir: join(dir, 'data'),
+      exec: async (f, args) => { calls.push([f, ...args]) },
+    })
+    closers.push(() => s.close())
+    const c = await connectControlClient({ addr: a, token: 't' })
+    closers.push(() => c.close())
+    const spec = { execPath: '/x/Electron', daemonJs: '/x/mffaiDaemon.js' }
+    expect(await c.call('autostart', { on: true, spec })).toEqual({ ok: true, errors: [] })
+    const plist = join(home, 'Library/LaunchAgents/com.myflowforge.mffai.plist')
+    expect(calls.map((x) => x[1])).toEqual(['bootout', 'bootstrap'])
+    expect(calls[1][3]).toBe(plist)
+    expect(readFileSync(plist, 'utf8')).toContain(join(dir, 'data'))
+    expect(await c.call('autostart', { on: false, spec })).toEqual({ ok: true, errors: [] })
+    expect(existsSync(plist)).toBe(false)
+  })
+
+  it('autostart reports command failures without throwing', async () => {
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
+    const a = addr()
+    const s = await startControlServer({
+      addr: a, token: 't', supervisor: {} as unknown as Supervisor, log, platform: 'darwin', home: join(dir, 'home'), dataDir: dir,
+      exec: async (_f, args) => { if (args[0] === 'bootstrap') throw new Error('denied') },
+    })
+    closers.push(() => s.close())
+    const c = await connectControlClient({ addr: a, token: 't' })
+    closers.push(() => c.close())
+    const r = (await c.call('autostart', { on: true, spec: { execPath: '/e', daemonJs: '/d' } })) as { ok: boolean; errors: string[] }
+    expect(r.ok).toBe(false)
+    expect(r.errors[0]).toContain('denied')
+    expect(log.warn).toHaveBeenCalled()
   })
 })
