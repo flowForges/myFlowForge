@@ -33,7 +33,7 @@ import { createDailyTokenCounter, scanTokenBaseline, localDayKey } from './token
 import { setDailyTokenCounter } from './tokens/growthSignalRef'
 import type { Settings } from './config/schema'
 import { NOOP_CTX } from './ipc/invokeCtx'
-import { registerMffaiIpc } from './mffai/ipc'
+import { createMffaiSettingsSync, registerMffaiIpc } from './mffai/ipc'
 import { createTerminalService } from './terminal/terminalService'
 import { PluginScheduler } from './plugins/pluginScheduler'
 import { readPlugins } from './plugins/pluginStore'
@@ -605,14 +605,8 @@ app.whenReady().then(() => {
     return h
   })
   const mffaiFail = (e: unknown) => logError('mffai', e instanceof Error ? e.stack ?? e.message : String(e))
-  let prevMffai = (() => { try { return readSettings().mffai } catch { return { enabled: false, autostart: true } } })()
-  const syncMffai = (s: Settings) => {
-    const prev = prevMffai
-    const next = s.mffai ?? prev
-    prevMffai = next
-    if (prev.enabled !== next.enabled) void loadMffaiHost().then((h) => (next.enabled ? h.enable() : h.disable())).catch(mffaiFail)
-    else if (next.enabled && prev.autostart !== next.autostart) void loadMffaiHost().then((h) => h.setAutostart(next.autostart)).catch(mffaiFail)
-  }
+  const mffaiInitial = (() => { try { return readSettings().mffai } catch { return { enabled: false, autostart: true } } })()
+  const syncMffai = createMffaiSettingsSync({ initial: mffaiInitial, loadHost: loadMffaiHost, onError: mffaiFail })
 
   const onSettings = (s: Settings) => {
     // Window transparency applies LIVE (setOpacity) — the slider updates instantly, no restart.
@@ -775,7 +769,7 @@ app.whenReady().then(() => {
     saveSettings: (patch) => methodTable[CH.configSetClientSettings](NOOP_CTX, patch),
     loadHost: loadMffaiHost,
   })
-  if (prevMffai.enabled) {
+  if (mffaiInitial.enabled) {
     setImmediate(() => void loadMffaiHost().then((h) => h.ensureRunning().then(() => h.refreshAutostart())).catch(mffaiFail))
   }
 

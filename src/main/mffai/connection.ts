@@ -70,6 +70,11 @@ export function createWorkerConnection(o: ConnectionOpts) {
       throw err
     }
     compatible = true
+    if (!wanted) {
+      // 握手期间被主动断开(停用 / 退出):不留连接
+      w.close()
+      return
+    }
     worker = w
     w.onClose(() => {
       if (worker !== w) return
@@ -77,10 +82,13 @@ export function createWorkerConnection(o: ConnectionOpts) {
       if (wanted) onDropped()
     })
   }
-  const connect = (): Promise<void> => {
-    wanted = true
+  const attach = (): Promise<void> => {
     if (worker) return Promise.resolve()
     return (connectP ??= doConnect().finally(() => { connectP = undefined }))
+  }
+  const connect = (): Promise<void> => {
+    wanted = true
+    return attach()
   }
 
   function onDropped(): void {
@@ -97,7 +105,7 @@ export function createWorkerConnection(o: ConnectionOpts) {
       if (s.state === 'tripped') return tripped(s)
       if (s.state === 'running') {
         try {
-          return await connect()
+          return await attach() // 不改 wanted:途中被 drop 就不再挂上
         } catch { /* 下一秒再试 */ }
       }
     }

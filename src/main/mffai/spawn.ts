@@ -17,13 +17,17 @@ export interface SpawnSpec {
  * 拉起监管进程:detached + unref,活过 app 退出。
  * ★刻意不用 spawnAgent / trackAgentChild:那两个会在 app 退出时被 killAllAgentTrees() 杀掉。
  */
-export function spawnDaemon(spec: SpawnSpec, spawnFn: SpawnFn = spawn as unknown as SpawnFn): void {
+export function spawnDaemon(
+  spec: SpawnSpec,
+  spawnFn: SpawnFn = spawn as unknown as SpawnFn,
+  onError: (err: Error) => void = () => {},
+): void {
   const child = spawnFn(spec.execPath, [spec.daemonJs], {
     detached: true,
     stdio: 'ignore',
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', MFFAI_DATA_DIR: spec.dataDir },
   })
-  // 拉不起来(ENOENT 等)由调用方的等待超时报告;不能让 'error' 无人监听而炸掉主进程
-  child.on?.('error', () => {})
+  // 拉不起来(ENOENT 等)交给调用方记录;不能让 'error' 无人监听而炸掉主进程
+  child.on?.('error', onError)
   child.unref()
 }

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { CH } from '../ipc/channels'
 import { CLIENT_SETTING_KEYS, MffaiSchema, SettingsSchema, defaultSettings, type Settings } from '../config/schema'
-import { registerMffaiIpc } from './ipc'
+import { createMffaiSettingsSync, mffaiTransition, registerMffaiIpc } from './ipc'
 
 type Fn = (...a: unknown[]) => unknown
 
@@ -89,5 +89,54 @@ describe('registerMffaiIpc', () => {
     expect(host.resetTrip).toHaveBeenCalledTimes(1)
     expect(host.tail).toHaveBeenCalledWith(20)
     expect(host.prompt).toHaveBeenCalledWith('hi')
+  })
+})
+
+describe('mffai 设置变化 → host', () => {
+  const on = { enabled: true, autostart: true }
+  const off = { enabled: false, autostart: true }
+
+  it('mffaiTransition', () => {
+    expect(mffaiTransition(off, on)).toBe('enable')
+    expect(mffaiTransition(on, off)).toBe('disable')
+    expect(mffaiTransition(on, { enabled: true, autostart: false })).toBe('setAutostart')
+    expect(mffaiTransition(off, { enabled: false, autostart: false })).toBeNull() // 未启用时改自启不碰 host
+    expect(mffaiTransition(on, { ...on })).toBeNull()
+  })
+
+  function sync(initial: Settings['mffai']) {
+    const host = { enable: vi.fn(async () => {}), disable: vi.fn(async () => {}), setAutostart: vi.fn(async () => {}) }
+    const loadHost = vi.fn(async () => host as never)
+    const onError = vi.fn()
+    return { host, loadHost, onError, fn: createMffaiSettingsSync({ initial, loadHost, onError }) }
+  }
+
+  it('mffai 不变 / 只改了别的设置 → 不加载 host', async () => {
+    const t = sync(off)
+    const fontChanged: Settings = { ...defaultSettings(), appearance: { ...defaultSettings().appearance, fontSize: 16 }, mffai: { ...off } }
+    t.fn(fontChanged)
+    t.fn({ ...defaultSettings(), mffai: { ...off } })
+    await Promise.resolve()
+    expect(t.loadHost).not.toHaveBeenCalled()
+  })
+
+  it('开 → enable;再写同样的值不重复;关 → disable;启用时改自启 → setAutostart', async () => {
+    const t = sync(off)
+    t.fn({ mffai: on })
+    t.fn({ mffai: { ...on } })
+    await vi.waitFor(() => expect(t.host.enable).toHaveBeenCalledTimes(1))
+    t.fn({ mffai: { enabled: true, autostart: false } })
+    await vi.waitFor(() => expect(t.host.setAutostart).toHaveBeenCalledWith(false))
+    t.fn({ mffai: { enabled: false, autostart: false } })
+    await vi.waitFor(() => expect(t.host.disable).toHaveBeenCalledTimes(1))
+    expect(t.loadHost).toHaveBeenCalledTimes(3)
+    expect(t.onError).not.toHaveBeenCalled()
+  })
+
+  it('host 报错交给 onError', async () => {
+    const t = sync(off)
+    t.host.enable.mockRejectedValueOnce(new Error('boom'))
+    t.fn({ mffai: on })
+    await vi.waitFor(() => expect(t.onError).toHaveBeenCalledTimes(1))
   })
 })

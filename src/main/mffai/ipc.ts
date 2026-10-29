@@ -62,3 +62,34 @@ export function registerMffaiIpc(deps: MffaiIpcDeps): void {
   deps.handle(CH.mffaiTail, async (limit) => (await loadHost()).tail(Number(limit) || 50))
   deps.handle(CH.mffaiPrompt, async (text) => (await loadHost()).prompt(String(text ?? '')))
 }
+
+type MffaiSetting = Settings['mffai']
+export type MffaiTransition = 'enable' | 'disable' | 'setAutostart' | null
+
+/** 设置前后两份 mffai → 该对 host 做什么(纯函数) */
+export function mffaiTransition(prev: MffaiSetting, next: MffaiSetting): MffaiTransition {
+  if (prev.enabled !== next.enabled) return next.enabled ? 'enable' : 'disable'
+  if (next.enabled && prev.autostart !== next.autostart) return 'setAutostart'
+  return null
+}
+
+/**
+ * onSettings 用:记住上一份 mffai,只在它真的变了时才加载 host。
+ * 其它设置项的写入、mffai 原样不变的写入,一律不碰 host。
+ */
+export function createMffaiSettingsSync(deps: {
+  initial: MffaiSetting
+  loadHost: () => Promise<HostModule>
+  onError: (err: unknown) => void
+}): (s: Pick<Settings, 'mffai'>) => void {
+  let prev = deps.initial
+  return (s) => {
+    const next = s.mffai ?? prev
+    const t = mffaiTransition(prev, next)
+    prev = next
+    if (!t) return
+    void deps.loadHost()
+      .then((h) => (t === 'enable' ? h.enable() : t === 'disable' ? h.disable() : h.setAutostart(next.autostart)))
+      .catch(deps.onError)
+  }
+}

@@ -15,11 +15,14 @@ function fakeDaemon(dir: string) {
     workerUp: true,
     compatible: true,
     lastSeq: 5,
+    drainPolls: 0, // shutdown 后还要答几次 stopping 才真正退出
+    failRestart: false,
     controlCalls: [] as Array<[string, unknown]>,
     workerCalls: [] as Array<[string, unknown]>,
     workers: [] as Array<{ emit(e: KernelEvent): void; drop(): void }>,
     start() {
       d.up = true
+      d.control = { ...d.control, state: 'running' }
       mkdirSync(dirname(runtimePaths(dir).token), { recursive: true })
       writeFileSync(runtimePaths(dir).token, TOKEN)
     },
@@ -34,9 +37,18 @@ function fakeDaemon(dir: string) {
         d.controlCalls.push([method, params])
         if (!d.up) throw new Error('connection closed')
         switch (method) {
-          case 'status': return { ...d.control }
-          case 'shutdown': d.up = false; return { ok: true }
-          case 'restart': d.control = { ...d.control, state: 'running' }; return { ok: true }
+          case 'status': {
+            const s = { ...d.control }
+            if (s.state === 'stopping' && --d.drainPolls <= 0) d.up = false
+            return s
+          }
+          case 'shutdown':
+            if (d.drainPolls > 0) d.control = { ...d.control, state: 'stopping' }
+            else d.up = false
+            return { ok: true }
+          case 'restart':
+            if (d.failRestart) throw new Error('timeout')
+            d.control = { ...d.control, state: 'running' }; return { ok: true }
           case 'resetTrip': d.control = { ...d.control, state: 'running', trippedReason: undefined }; return { ok: true }
           case 'autostart': return { ok: true, errors: [] }
         }
@@ -97,6 +109,7 @@ function setup(opts: { up?: boolean; startOnSpawn?: boolean } = {}) {
   const fake = fakeDaemon(dir)
   if (opts.up) fake.d.start()
   const sent: Array<[string, unknown]> = []
+  const logs: string[] = []
   const unref = vi.fn()
   const spawnFn = vi.fn((..._a: unknown[]) => {
     if (opts.startOnSpawn !== false) fake.d.start()
@@ -114,12 +127,12 @@ function setup(opts: { up?: boolean; startOnSpawn?: boolean } = {}) {
     connectWorker: fake.connectWorker as unknown as HostDeps['connectWorker'],
     now: () => clock,
     sleep: async (ms) => { clock += ms; await new Promise((r) => setImmediate(r)) },
-    log: () => {},
+    log: (m, e) => { logs.push(e === undefined ? m : `${m}: ${e instanceof Error ? e.message : String(e)}`) },
   }
   const host = createMffaiHost(deps)
   const alerts = () => sent.filter(([ch]) => ch === 'mffai:alert').map(([, p]) => p)
   const events = () => sent.filter(([ch]) => ch === 'mffai:event').map(([, p]) => p)
-  return { ...fake, host, sent, alerts, events, spawnFn, unref }
+  return { ...fake, host, sent, logs, alerts, events, spawnFn, unref }
 }
 
 const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve() }
@@ -173,6 +186,58 @@ describe('mffai host', () => {
     await expect(t.host.enable()).rejects.toThrow(/did not start/)
     expect(clock).toBeGreaterThanOrEqual(10_000)
     expect(clock).toBeLessThan(11_000)
+  })
+
+  it('拉起报错(ENOENT)→ 记日志,enable 的报错带上原因', async () => {
+    const t = setup({ startOnSpawn: false })
+    t.spawnFn.mockImplementation(() => ({
+      unref: t.unref,
+      on: (_ev: string, cb: (e: Error) => void) => setImmediate(() => cb(new Error('spawn /app/electron ENOENT'))),
+    }) as never)
+    await expect(t.host.enable()).rejects.toThrow(/ENOENT/)
+    expect(t.logs.some((l) => l.includes('ENOENT'))).toBe(true)
+  })
+
+  it('停用后马上又启用(旧后台还在排空)→ 等它退出再拉起,最终 running', async () => {
+    const t = setup({ up: true })
+    await t.host.ensureRunning()
+    t.d.drainPolls = 5
+    settings = { mffai: { enabled: false, autostart: true } }
+    const off = t.host.disable()
+    settings = { mffai: { enabled: true, autostart: true } }
+    const on = t.host.enable()
+    await Promise.all([off, on])
+    expect(t.spawnFn).toHaveBeenCalledTimes(1)
+    expect(await t.host.getState()).toMatchObject({ running: true, compatible: true })
+    expect(t.alerts()).toEqual([])
+  })
+
+  it('启用进行中被停用 → 不连接,最后发的是 autostart:false,无 restarting', async () => {
+    const t = setup({ startOnSpawn: false })
+    const on = t.host.enable()
+    await flush() // 只走微任务:假 sleep 要等宏任务,启用停在「等 running」里
+    expect(t.spawnFn).toHaveBeenCalledTimes(1)
+    // 后台此刻才起来,同时用户已经关掉
+    settings = { mffai: { enabled: false, autostart: true } }
+    t.d.start()
+    const off = t.host.disable()
+    await Promise.all([on, off])
+    await flush()
+    expect(t.connectWorker).not.toHaveBeenCalled()
+    const auto = t.d.controlCalls.filter(([m]) => m === 'autostart').map(([, p]) => (p as any).on)
+    expect(auto).toEqual([false])
+    expect(t.d.controlCalls.map(([m]) => m).filter((m) => m !== 'status')).toEqual(['autostart', 'shutdown'])
+    expect(t.alerts()).toEqual([])
+    expect((await t.host.getState()).running).toBe(false)
+  })
+
+  it('兼容时 restart 失败 → 抛出且原连接保留', async () => {
+    const t = setup({ up: true })
+    await t.host.ensureRunning()
+    t.d.failRestart = true
+    await expect(t.host.restart()).rejects.toThrow(/timeout/)
+    expect((await t.host.getState()).running).toBe(true)
+    expect(t.alerts()).toEqual([])
   })
 
   it('ensureRunning:控制口已 running 不拉起', async () => {
