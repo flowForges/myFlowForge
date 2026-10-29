@@ -15,6 +15,9 @@ export default defineConfig({
           // PATH shim 的运行时。★必须是**独立入口**:它不跑在 Electron 主进程里,而是被 shim 脚本
           // 以 `electron --run-as-node agentShim.js <命令名> …` 单独拉起,跑在 agent 的环境中。
           agentShim: resolve('src/main/agents/shim/shimMain.ts'),
+          // mff-ai 后台 harness 的两个入口:监管/工作进程(同一文件,--worker 区分)与 ACP 转接器
+          mffaiDaemon: resolve('harness/src/entry/daemon.ts'),
+          mffaiAcp: resolve('harness/src/entry/acp.ts'),
         },
       },
     },
