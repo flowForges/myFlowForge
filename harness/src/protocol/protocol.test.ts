@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ControlMethods, FrameDecoder, PROTOCOL_VERSION, WorkerMethods, encodeFrame } from './index'
+import { ControlMethods, FrameDecoder, MAX_FRAME_BYTES, PROTOCOL_VERSION, WorkerMethods, encodeFrame } from './index'
 
 describe('framing', () => {
   it('round-trips', () => {
@@ -54,5 +54,21 @@ describe('schemas', () => {
     expect(r.safeParse({ ok: true }).success).toBe(true)
     expect(r.safeParse({ reset: true, lastSeq: 3 }).success).toBe(true)
     expect(r.safeParse({}).success).toBe(false)
+  })
+})
+
+describe('FrameDecoder hardening', () => {
+  it('rejects top-level arrays via onError', () => {
+    const errs: string[] = []
+    const d = new FrameDecoder((l) => errs.push(l))
+    expect(d.push('[1,2]\n' + encodeFrame({ a: 1 }))).toEqual([{ a: 1 }])
+    expect(errs).toEqual(['[1,2]'])
+  })
+  it('drops buffer and reports when a line exceeds MAX_FRAME_BYTES', () => {
+    const errs: unknown[] = []
+    const d = new FrameDecoder((_l, e) => errs.push(e))
+    d.push('x'.repeat(MAX_FRAME_BYTES + 1))
+    expect(errs).toHaveLength(1)
+    expect(d.push(encodeFrame({ ok: 1 }))).toEqual([{ ok: 1 }])
   })
 })
