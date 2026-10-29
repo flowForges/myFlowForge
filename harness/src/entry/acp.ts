@@ -13,4 +13,10 @@ void runBridge({
     const token = readFileSync(paths.token, 'utf8').trim() // 只读,不创建
     return connectClient({ addr: paths.workerAddr, token, timeoutMs: 3000 })
   },
-}).then(() => process.exit(0))
+}).then(
+  () => process.exit(0),
+  (e) => {
+    process.stderr.write(`mff-ai acp bridge failed: ${e instanceof Error ? e.stack ?? e.message : String(e)}\n`)
+    process.exit(1)
+  },
+)
