@@ -4,9 +4,10 @@ export interface EnableCardProps {
   autostart: boolean
   onToggleAutostart: (on: boolean) => void
   onEnable: () => void
+  failed?: boolean
 }
 
-export function EnableCard({ expectedRssMb, dataDir, autostart, onToggleAutostart, onEnable }: EnableCardProps) {
+export function EnableCard({ expectedRssMb, dataDir, autostart, onToggleAutostart, onEnable, failed }: EnableCardProps) {
   return (
     <div className="mffai-card">
       <div className="mffai-row"><span className="mffai-k">常驻内存</span><span>约 {expectedRssMb} MB</span></div>
@@ -16,6 +17,7 @@ export function EnableCard({ expectedRssMb, dataDir, autostart, onToggleAutostar
         <input type="checkbox" checked={autostart} onChange={e => onToggleAutostart(e.target.checked)} />
       </label>
       <button className="set-btn mffai-primary" onClick={onEnable}>启用</button>
+      {failed && <span className="mffai-fail">失败</span>}
     </div>
   )
 }

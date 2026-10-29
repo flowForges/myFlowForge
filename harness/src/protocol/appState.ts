@@ -8,6 +8,8 @@ export interface MffaiState {
   supervisor?: ControlStatus
   compatible?: boolean
   rssMb?: number
+  /** 已激活插件数(worker status 里 state==='active' 的个数) */
+  pluginsActive?: number
   dataDir?: string
 }
 

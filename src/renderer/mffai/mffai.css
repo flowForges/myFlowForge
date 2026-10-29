@@ -14,3 +14,4 @@
 .mffai-line.user { color: var(--faint); }
 .mffai-send { display: flex; gap: 8px; }
 .mffai-send input { flex: 1; height: 30px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--fg); }
+.mffai-fail { color: var(--del, #e5484d); font-size: 12.5px; }

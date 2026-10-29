@@ -32,7 +32,7 @@ describe('App mff-ai', () => {
   it('alert adds a bell notification that switches to the page', async () => {
     const { container } = render(<App />)
     act(() => alertCb({ kind: 'tripped', reason: 'crash-loop' }))
-    fireEvent.click(container.querySelector('.bell, [title="通知"], .tb-btn.bell') ?? container.querySelector('[class*="bell"]')!)
+    fireEvent.click(container.querySelector('.tb-bell')!)
     const row = await screen.findByText('已熔断')
     expect(row.closest('.ni-t')?.innerHTML).toContain('<b>mff-ai</b>')
     fireEvent.click(row)

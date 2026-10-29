@@ -77,7 +77,7 @@ function fakeDaemon(dir: string) {
         switch (method) {
           case 'hello': return { version: '0.1.0', protocolVersion: d.compatible ? PROTOCOL_VERSION : PROTOCOL_VERSION + 1, compatible: d.compatible }
           case 'snapshot': return { status: { state: 'running', uptimeMs: 1, rssMb: 51, version: '0.1.0', plugins: [] }, sessions: [], lastSeq: d.lastSeq }
-          case 'status': return { state: 'running', uptimeMs: 1, rssMb: 51, version: '0.1.0', plugins: [] }
+          case 'status': return { state: 'running', uptimeMs: 1, rssMb: 51, version: '0.1.0', plugins: [{ id: 'a', state: 'active' }, { id: 'b', state: 'failed' }] }
           case 'events.subscribe': return { ok: true }
           case 'events.tail': return { events: [] }
           case 'session.create': return { sessionId: 's1' }
@@ -162,7 +162,7 @@ describe('mffai host', () => {
     expect(t.events()).toEqual([ev])
 
     const s = await t.host.getState()
-    expect(s).toMatchObject({ enabled: true, autostart: true, running: true, compatible: true, rssMb: 51, dataDir: dir })
+    expect(s).toMatchObject({ enabled: true, autostart: true, running: true, compatible: true, rssMb: 51, pluginsActive: 1, dataDir: dir })
     expect(s.supervisor?.state).toBe('running')
     expect(t.alerts()).toEqual([])
   })

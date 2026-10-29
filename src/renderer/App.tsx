@@ -1,7 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { Titlebar } from './shell/Titlebar'
-
-const MffaiView = lazy(() => import('./mffai/MffaiView'))
 import { Sidebar } from './shell/Sidebar'
 import { useUnread } from './state/useUnread'
 import { ResizeHandle } from './shell/ResizeHandle'
@@ -78,6 +76,8 @@ import { deriveWsBadge } from './shell/wsBadge'
 import { applyChatGateEvent, type ChatGateMap } from './state/chatGates'
 import { ChatHtmlCtx } from './views/chat/markdown'
 import { switchToSessionInOtherWorkspace } from './state/crossWsSession'
+
+const MffaiView = lazy(() => import('./mffai/MffaiView'))
 
 export function App() {
   const [collapsed, setCollapsed] = useState(false)

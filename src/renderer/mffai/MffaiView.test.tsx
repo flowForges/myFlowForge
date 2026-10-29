@@ -33,6 +33,42 @@ describe('MffaiView', () => {
     await waitFor(() => expect(mffai.enable).toHaveBeenCalled())
   })
 
+  it('autostart toggle persists immediately, survives poll, saved before enable', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const calls: string[] = []
+    setup({ enabled: false, autostart: true, running: false, dataDir: '/d' })
+    let saved = true
+    mffai.state = vi.fn(async () => ({ enabled: false, autostart: saved, running: false, dataDir: '/d' }))
+    ;(window as any).forge.setSettings = vi.fn(async (p: any) => { calls.push('set'); saved = p.mffai.autostart })
+    mffai.enable = vi.fn(async () => { calls.push('enable'); return { enabled: true, autostart: saved, running: true } })
+    render(<MffaiView />)
+    const box = (await screen.findByRole('checkbox')) as HTMLInputElement
+    fireEvent.click(box)
+    expect((window as any).forge.setSettings).toHaveBeenCalledWith({ mffai: { enabled: false, autostart: false } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(3100) })
+    expect((screen.getByRole('checkbox') as HTMLInputElement).checked).toBe(false)
+    calls.length = 0
+    fireEvent.click(screen.getByText('启用'))
+    await waitFor(() => expect(calls).toEqual(['set', 'enable']))
+    vi.useRealTimers()
+  })
+
+  it('failed action shows 失败', async () => {
+    setup({ enabled: true, autostart: true, running: false, supervisor: { state: 'tripped', version: '0.1.0' } })
+    mffai.resetTrip = vi.fn(async () => { throw new Error('x') })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    render(<MffaiView />)
+    fireEvent.click(await screen.findByText('重新启动'))
+    expect(await screen.findByText('失败')).toBeInTheDocument()
+  })
+
+  it('stopping -> 已停止, plugin count shown', async () => {
+    setup({ enabled: true, autostart: true, running: true, pluginsActive: 3, supervisor: { state: 'stopping', version: '0.1.0' } })
+    render(<MffaiView />)
+    expect(await screen.findByText('已停止')).toBeInTheDocument()
+    expect(screen.getByText('3 插件')).toBeInTheDocument()
+  })
+
   it('running -> 运行中', async () => {
     setup({ enabled: true, autostart: true, running: true, rssMb: 99, supervisor: { state: 'running', version: '0.1.0' } })
     render(<MffaiView />)

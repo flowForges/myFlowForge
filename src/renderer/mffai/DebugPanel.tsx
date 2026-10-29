@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { KernelEvent } from '@mffai/protocol'
 
+const KEEP = 500
 const SHOWN = new Set(['message.user', 'message.assistant', 'message.assistant.delta'])
 const textOf = (e: KernelEvent) => String((e.payload as { text?: unknown } | null)?.text ?? '')
 
@@ -25,17 +26,18 @@ function toLines(events: KernelEvent[]): { key: string; role: 'user' | 'assistan
 export function DebugPanel() {
   const [events, setEvents] = useState<KernelEvent[]>([])
   const [text, setText] = useState('')
+  const [failed, setFailed] = useState(false)
 
   useEffect(() => {
     const api = window.forge.mffai
     let alive = true
-    const off = api.onEvent(e => setEvents(es => [...es, e]))
+    const off = api.onEvent(e => setEvents(es => [...es, e].slice(-KEEP)))
     void api.tail(50).then(r => {
       if (!alive) return
       // 订阅先于 tail 返回:按 seq 去重合并
       setEvents(es => {
         const seen = new Set(es.map(x => x.seq))
-        return [...r.events.filter(x => !seen.has(x.seq)), ...es].sort((a, b) => a.seq - b.seq)
+        return [...r.events.filter(x => !seen.has(x.seq)), ...es].sort((a, b) => a.seq - b.seq).slice(-KEEP)
       })
     }).catch(() => {})
     return () => { alive = false; off() }
@@ -46,7 +48,8 @@ export function DebugPanel() {
     const t = text.trim()
     if (!t) return
     setText('')
-    void window.forge.mffai.prompt(t).catch(() => {})
+    setFailed(false)
+    void window.forge.mffai.prompt(t).catch((e) => { console.error('mffai prompt', e); setFailed(true) })
   }
 
   return (
@@ -57,6 +60,7 @@ export function DebugPanel() {
       <div className="mffai-send">
         <input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') send() }} />
         <button className="set-btn" onClick={send}>发送</button>
+        {failed && <span className="mffai-fail">失败</span>}
       </div>
     </div>
   )

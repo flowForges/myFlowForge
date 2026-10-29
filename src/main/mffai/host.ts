@@ -193,7 +193,9 @@ export function createMffaiHost(deps: HostDeps) {
     const { enabled: on, autostart } = deps.readSettings().mffai
     const supervisor = await status()
     const worker = conn.current()
-    const rssMb = worker ? await worker.call('status').then((r) => r.rssMb, () => undefined) : undefined
+    const ws = worker ? await worker.call('status').catch(() => undefined) : undefined
+    const rssMb = ws?.rssMb
+    const pluginsActive = ws?.plugins.filter((p) => p.state === 'active').length
     return {
       enabled: on,
       autostart,
@@ -201,6 +203,7 @@ export function createMffaiHost(deps: HostDeps) {
       supervisor,
       compatible: isOldProtocol(supervisor) ? false : conn.compatible(),
       rssMb,
+      pluginsActive,
       dataDir: dir,
     }
   }

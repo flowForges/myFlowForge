@@ -10,7 +10,13 @@ export const MFFAI_EXPECTED_RSS_MB = 110
 
 export default function MffaiView() {
   const [state, setState] = useState<MffaiState | null>(null)
+  const [failed, setFailed] = useState(false)
   const api = window.forge.mffai
+  // 操作结果:成功更新状态并清失败标记,失败记日志并显示「失败」
+  const run = (p: Promise<MffaiState>) => {
+    setFailed(false)
+    void p.then(setState).catch((e) => { console.error('mffai', e); setFailed(true) })
+  }
 
   const refresh = useCallback(() => { void api.state().then(setState).catch(() => {}) }, [api])
   useEffect(() => {
@@ -29,12 +35,13 @@ export default function MffaiView() {
           expectedRssMb={MFFAI_EXPECTED_RSS_MB}
           dataDir={state.dataDir ?? ''}
           autostart={state.autostart}
-          onToggleAutostart={(on) => setState({ ...state, autostart: on })}
-          onEnable={() => {
-            // 先落盘开机自启选择(enabled 未变,不触发 host),再启用
-            void Promise.resolve(window.forge.setSettings({ mffai: { enabled: false, autostart: state.autostart } }))
-              .catch(() => {}).then(() => api.enable()).then(setState).catch(() => {})
+          failed={failed}
+          // 立刻落盘(enabled 未变,不加载 host),轮询读回的就是用户的选择
+          onToggleAutostart={(on) => {
+            setState({ ...state, autostart: on })
+            void Promise.resolve(window.forge.setSettings({ mffai: { enabled: false, autostart: on } })).catch((e) => console.error('mffai', e))
           }}
+          onEnable={() => run(Promise.resolve(window.forge.setSettings({ mffai: { enabled: false, autostart: state.autostart } })).then(() => api.enable()))}
         />
       </div>
     )
@@ -43,8 +50,9 @@ export default function MffaiView() {
     <div className="mffai-page">
       <StatusStrip
         state={state}
-        onRestart={() => { void api.restart().then(setState).catch(() => {}) }}
-        onResetTrip={() => { void api.resetTrip().then(setState).catch(() => {}) }}
+        failed={failed}
+        onRestart={() => run(api.restart())}
+        onResetTrip={() => run(api.resetTrip())}
       />
       {state.running && <DebugPanel />}
     </div>

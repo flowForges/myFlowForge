@@ -28,7 +28,7 @@ export function registerMffaiIpc(deps: MffaiIpcDeps): void {
   deps.handle(CH.mffaiState, async (): Promise<MffaiState> => {
     const { enabled, autostart } = deps.readSettings().mffai
     // 未启用:只读设置,host 永远不加载
-    if (!enabled) return { enabled, autostart, running: false, dataDir: process.env.MFFAI_DATA_DIR ?? dataDir() }
+    if (!enabled) return { enabled, autostart, running: false, dataDir: process.env.MFFAI_DATA_DIR || dataDir() }
     return (await loadHost()).getState()
   })
   deps.handle(CH.mffaiEnable, async () => {
