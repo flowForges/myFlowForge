@@ -16,11 +16,14 @@ export async function runWorker(): Promise<void> {
   let kernel: Kernel | undefined
   let server: { close(): Promise<void> } | undefined
   let stopping = false
+  let startup: Promise<void> = Promise.resolve()
 
   const stop = async (why: string) => {
     if (stopping) return
     stopping = true
     log.info('worker stopping', { why })
+    // 启动中收到 drain / 断开:等启动结束再按正常路径关
+    await startup.catch(() => {})
     try {
       await kernel?.drain(DRAIN_MS)
       await server?.close()
@@ -39,7 +42,7 @@ export async function runWorker(): Promise<void> {
   // 监管进程没了:自己体面退出
   process.on('disconnect', () => void stop('supervisor gone'))
 
-  try {
+  startup = (async () => {
     kernel = await createKernel({ dataDir: dir, plugins: BUILTIN_PLUGINS, log })
     const k = kernel
     server = await startRpcServer({
@@ -49,9 +52,13 @@ export async function runWorker(): Promise<void> {
       events: k.events,
       handle: (method, params) => k.handle(method, params),
     })
+  })()
+  try {
+    await startup
   } catch (err) {
     log.error('worker start failed', { error: err instanceof Error ? err.stack ?? err.message : String(err) })
-    process.exit(1)
+    if (!stopping) process.exit(1)
+    return
   }
   if (stopping) return
   log.info('worker ready', { pid: process.pid, addr: paths.workerAddr })

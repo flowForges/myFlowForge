@@ -1,8 +1,8 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { spawn } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { build } from 'esbuild'
 import type { ControlStatus } from '../protocol/index'
 import { connectControlClient, runtimePaths } from '../protocol/index'
@@ -112,6 +112,25 @@ describe('Supervisor', () => {
     await waitFor(() => sup.state().state === 'tripped')
   })
 
+  it('restart from tripped clears failure history (needs 10 new failures to trip again)', async () => {
+    const { sup, delays } = make('crash-always')
+    await sup.start()
+    await waitFor(() => sup.state().state === 'tripped')
+    await sup.restart()
+    await waitFor(() => sup.state().state === 'tripped')
+    expect(delays).toHaveLength(18)
+    expect(delays.slice(9, 10)).toEqual([1000])
+  })
+
+  it('startup timeout uses the injected clock', async () => {
+    const { sup } = make('no-ready', { startupMs: 100, now: () => 0 })
+    await sup.start()
+    await waitFor(() => sup.state().workerPid !== undefined)
+    const pid = sup.state().workerPid
+    await new Promise(r => setTimeout(r, 400))
+    expect(sup.state()).toMatchObject({ workerPid: pid, restarts: 0 })
+  })
+
   it('restart drains the current worker and spawns a fresh one', async () => {
     const { sup } = make('ready')
     await sup.start()
@@ -154,15 +173,48 @@ describe('Supervisor', () => {
 // 真实入口:打成 CJS(同 Task 10 的产物形态),两个监管进程同时启动
 describe('daemon entry', () => {
   let bundle: string
+  // 断言失败也要收尸:监管进程、它们的工作进程
+  const procs: ChildProcess[] = []
+  const pids: number[] = []
   beforeAll(async () => {
     bundle = join(mkdtempSync(join(tmpdir(), 'mffai-bundle-')), 'mffaiDaemon.js')
     await build({ entryPoints: [DAEMON_TS], outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent' })
+  })
+  afterEach(() => {
+    const json = join(runtimePaths(dir).supervisorJson)
+    try { pids.push(JSON.parse(readFileSync(json, 'utf8')).workerPid) } catch { /* 没有 */ }
+    for (const p of procs.splice(0)) if (p.exitCode === null && p.signalCode === null) p.kill('SIGKILL')
+    for (const pid of pids.splice(0)) if (pid && alive(pid)) process.kill(pid, 'SIGKILL')
+  })
+  afterAll(() => rmSync(dirname(bundle), { recursive: true, force: true }))
+
+  it.skipIf(process.platform === 'win32')('drain during worker startup -> waits for startup, exits 0 without ready', async () => {
+    // 残留 socket(没人听)让启动走一次异步的探测 + 50 ms 复查,drain 必然落在启动中途
+    const { workerAddr, logs } = runtimePaths(dir)
+    if (process.platform !== 'win32') {
+      mkdirSync(dirname(workerAddr), { recursive: true })
+      execFileSync(process.execPath, ['-e', `require('net').createServer().listen(${JSON.stringify(workerAddr)}, () => process.exit(0))`])
+    }
+    const w = spawn(process.execPath, [bundle, '--worker'], {
+      env: { ...process.env, MFFAI_DATA_DIR: dir }, stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+    })
+    procs.push(w)
+    const msgs: string[] = []
+    w.on('message', (m: { t: string }) => msgs.push(m.t))
+    w.send({ t: 'drain' })
+    const code = await new Promise<number | null>(r => w.once('exit', c => r(c)))
+    expect(code).toBe(0)
+    expect(msgs).not.toContain('ready')
+    const log = readdirSync(logs).filter(f => f.startsWith('worker-')).map(f => readFileSync(join(logs, f), 'utf8')).join('')
+    expect(log).toContain('"why":"drain"')
+    expect(log).not.toContain('failed')
   })
 
   it('two concurrent launches -> exactly one supervisor survives, the other exits 0', async () => {
     const env = { ...process.env, MFFAI_DATA_DIR: dir, ELECTRON_RUN_AS_NODE: '1' }
     const launch = () => {
       const p = spawn(process.execPath, [bundle], { env, stdio: 'ignore' })
+      procs.push(p)
       const exited = new Promise<number | null>(r => p.once('exit', code => r(code)))
       return { p, exited }
     }
@@ -184,7 +236,8 @@ describe('daemon entry', () => {
       if (status?.state === 'running') break
       await new Promise(r => setTimeout(r, 50))
     }
-    expect(status).toMatchObject({ state: 'running', restarts: 0, protocolVersion: 1 })
+    if (status?.workerPid) pids.push(status.workerPid)
+    expect(status).toMatchObject({ state: 'running', restarts: 0, protocolVersion: 1, pid: survivor.p.pid })
     const json = JSON.parse(readFileSync(paths.supervisorJson, 'utf8'))
     expect(json).toMatchObject({ pid: survivor.p.pid, workerPid: status!.workerPid, state: 'running', protocolVersion: 1 })
     expect(existsSync(join(paths.logs))).toBe(true)

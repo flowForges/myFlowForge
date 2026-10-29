@@ -1,4 +1,5 @@
 import { renameSync, rmSync, writeFileSync } from 'node:fs'
+import type { Logger } from '../kernel/log'
 import { HARNESS_VERSION } from '../kernel/version'
 import { PROTOCOL_VERSION, connectControlClient, dataDir, ensureToken, runtimePaths, type ControlStatus } from '../protocol/index'
 import { startControlServer } from '../supervisor/controlServer'
@@ -8,17 +9,34 @@ import { runWorker } from './worker'
 
 // mffaiDaemon.js:无参数为监管进程,--worker 为工作进程
 
-async function alreadyRunning(addr: string, token: string): Promise<boolean> {
+/** 问控制口 status;连不上 / 超时 / 未授权返回 undefined */
+async function controlStatus(addr: string, token: string): Promise<ControlStatus | undefined> {
   try {
     const c = await connectControlClient({ addr, token, timeoutMs: 2000 })
     try {
-      await c.call('status')
-      return true
+      return await c.call('status')
     } finally {
       c.close()
     }
   } catch {
-    return false
+    return undefined
+  }
+}
+
+/** 幂等的退出流程:无论清理步骤是否抛错,最后都 exit(0),不留僵尸监管 */
+export function gracefulStop(steps: () => Promise<void>, log: Logger, exit: (code: number) => void = process.exit): () => Promise<void> {
+  let p: Promise<void> | undefined
+  return () => {
+    p ??= (async () => {
+      try {
+        await steps()
+      } catch (err) {
+        log.error('shutdown step failed', { error: err instanceof Error ? err.stack ?? err.message : String(err) })
+      } finally {
+        exit(0)
+      }
+    })()
+    return p
   }
 }
 
@@ -35,7 +53,7 @@ export async function runSupervisor(): Promise<void> {
   let token = ensureToken(paths.token)
 
   // 单实例:已有监管能答 status 就退出
-  if (await alreadyRunning(paths.controlAddr, token)) {
+  if (await controlStatus(paths.controlAddr, token)) {
     log.info('already running, exit')
     process.exit(0)
   }
@@ -68,22 +86,21 @@ export async function runSupervisor(): Promise<void> {
     onState: s => held && writeJson(s),
   })
 
-  let stopping = false
   let control: { close(): Promise<void> } | undefined
-  const stop = async () => {
-    if (stopping) return
-    stopping = true
+  const stop = gracefulStop(async () => {
     log.info('shutdown')
-    await supervisor.shutdown()
-    await control?.close()
-    writeJson({ ...supervisor.state(), state: 'stopping' })
-    jsonGone = true
-    rmSync(paths.supervisorJson, { force: true })
-    process.exit(0)
-  }
+    try {
+      await supervisor.shutdown()
+      await control?.close()
+    } finally {
+      writeJson({ ...supervisor.state(), state: 'stopping' })
+      jsonGone = true
+      rmSync(paths.supervisorJson, { force: true })
+    }
+  }, log)
 
   // 独占监听控制口即单实例锁;抢输了直接退出
-  const listen = () => startControlServer({ addr: paths.controlAddr, token, supervisor, onShutdown: stop })
+  const listen = () => startControlServer({ addr: paths.controlAddr, token, supervisor, onShutdown: stop, log })
   try {
     control = await listen()
     // 并发首启时两边可能各生成过 token,以最终落盘的为准
@@ -100,6 +117,14 @@ export async function runSupervisor(): Promise<void> {
     }
     log.error('control server failed', { error: String(err) })
     process.exit(1)
+  }
+
+  // 兜底:并发清理残留 socket 时我们的路径可能被别人顶替;答 status 的不是自己就退出。
+  // 不 close:关 unix 监听会删掉路径上(别人的)socket 文件
+  const owner = await controlStatus(paths.controlAddr, token)
+  if (owner?.pid !== process.pid) {
+    log.info('control address owned by another supervisor, exit', { owner: owner?.pid })
+    process.exit(0)
   }
 
   held = true

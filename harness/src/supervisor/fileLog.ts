@@ -11,19 +11,30 @@ const ymd = (t: number) => {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
-/** JSON 行日志,写 `<dir>/<name>-YYYY-MM-DD.log`;创建时删除 7 天前的同名日志 */
+/** JSON 行日志,写 `<dir>/<name>-YYYY-MM-DD.log`;创建时与跨天时删除 7 天前的同名日志 */
 export function createFileLogger(dir: string, name: string, now: () => number = Date.now): Logger {
   mkdirSync(dir, { recursive: true })
-  const cutoff = ymd(now() - RETENTION_DAYS * DAY_MS)
   const re = new RegExp(`^${name}-(\\d{4}-\\d{2}-\\d{2})\\.log$`)
-  for (const f of readdirSync(dir)) {
-    const m = re.exec(f)
-    if (m && m[1] < cutoff) {
-      try { unlinkSync(join(dir, f)) } catch { /* 忽略 */ }
-    }
+  const prune = (t: number) => {
+    const cutoff = ymd(t - RETENTION_DAYS * DAY_MS)
+    try {
+      for (const f of readdirSync(dir)) {
+        const m = re.exec(f)
+        if (m && m[1] < cutoff) {
+          try { unlinkSync(join(dir, f)) } catch { /* 忽略 */ }
+        }
+      }
+    } catch { /* 忽略 */ }
   }
+  let day = ymd(now())
+  prune(now())
   const write = (level: string, msg: string, data?: unknown) => {
     const t = now()
+    // 跨天:换文件,顺便清旧的
+    if (ymd(t) !== day) {
+      day = ymd(t)
+      prune(t)
+    }
     const line = JSON.stringify({ ts: new Date(t).toISOString(), level, msg, ...(data === undefined ? {} : { data }) })
     try { appendFileSync(join(dir, `${name}-${ymd(t)}.log`), line + '\n') } catch { /* 日志失败不影响进程 */ }
   }

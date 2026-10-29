@@ -243,6 +243,17 @@ describe('rpc server + client', () => {
     await expect(cc.call('auth', { token: TOKEN })).resolves.toEqual({ ok: true })
   })
 
+  it('timeoutMs bounds connect + auth as one deadline', async () => {
+    const addr = sockPath('silent')
+    const socks: net.Socket[] = []
+    const silent = net.createServer(sk => { socks.push(sk) /* 接受但从不回 */ })
+    await new Promise<void>(r => silent.listen(addr, r))
+    closers.push(() => new Promise(r => { for (const sk of socks) sk.destroy(); silent.close(r) }))
+    const t0 = Date.now()
+    await expect(connectControlClient({ addr, token: TOKEN, timeoutMs: 150 })).rejects.toThrow('timeout')
+    expect(Date.now() - t0).toBeLessThan(1000)
+  })
+
   it('a live listener is never stolen', async () => {
     await serve()
     await expect(serve()).rejects.toThrow('address in use')

@@ -23,4 +23,16 @@ describe('createFileLogger', () => {
     const lines = readFileSync(join(dir, 'worker-2026-10-29.log'), 'utf8').trim().split('\n').map(l => JSON.parse(l))
     expect(lines).toMatchObject([{ level: 'info', msg: 'hello', data: { a: 1 } }, { level: 'error', msg: 'bad' }])
   })
+
+  it('prunes again when the date rolls over', () => {
+    let now = new Date(2026, 9, 29, 23, 59).getTime()
+    writeFileSync(join(dir, 'worker-2026-10-22.log'), '')
+    const log = createFileLogger(dir, 'worker', () => now)
+    log.info('a')
+    expect(existsSync(join(dir, 'worker-2026-10-22.log'))).toBe(true)
+    now = new Date(2026, 9, 30, 0, 1).getTime()
+    log.info('b')
+    expect(existsSync(join(dir, 'worker-2026-10-22.log'))).toBe(false)
+    expect(existsSync(join(dir, 'worker-2026-10-30.log'))).toBe(true)
+  })
 })

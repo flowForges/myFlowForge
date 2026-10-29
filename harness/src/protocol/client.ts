@@ -25,7 +25,7 @@ export interface MffaiControlClient {
 export interface ClientOpts {
   addr: string
   token: string
-  // 每次调用(含连接与 auth)的超时;超时 reject Error('timeout')
+  // 超时 reject Error('timeout'):连接 + auth 共用一个期限,之后每次调用各自计时
   timeoutMs?: number
 }
 
@@ -39,13 +39,15 @@ interface Conn {
 
 // 两种客户端共用:连接、分帧、请求配对、超时、auth
 async function openConn(opts: ClientOpts, onNotify: (m: Record<string, any>) => void): Promise<Conn> {
+  const deadline = opts.timeoutMs === undefined ? undefined : Date.now() + opts.timeoutMs
+  const remaining = () => (deadline === undefined ? undefined : Math.max(0, deadline - Date.now()))
   const sock = net.connect(opts.addr)
   sock.setEncoding('utf8')
   await new Promise<void>((resolve, reject) => {
-    const timer = opts.timeoutMs === undefined ? undefined : setTimeout(() => {
+    const timer = deadline === undefined ? undefined : setTimeout(() => {
       sock.destroy()
       reject(new Error('timeout'))
-    }, opts.timeoutMs)
+    }, remaining())
     sock.once('connect', () => { clearTimeout(timer); resolve() })
     sock.once('error', (e) => { clearTimeout(timer); reject(e) })
   })
@@ -88,18 +90,20 @@ async function openConn(opts: ClientOpts, onNotify: (m: Record<string, any>) => 
   sock.on('close', onGone)
   sock.on('error', () => { /* close 随后触发 */ })
 
-  const call = (method: string, params: unknown = {}): Promise<any> =>
+  const send = (method: string, params: unknown, ms: number | undefined): Promise<any> =>
     new Promise((resolve, reject) => {
       if (closed) return reject(new Error('connection closed'))
       const id = nextId++
       const p: Pending = { resolve, reject }
-      if (opts.timeoutMs !== undefined) p.timer = setTimeout(() => settle(id)?.reject(new Error('timeout')), opts.timeoutMs)
+      if (ms !== undefined) p.timer = setTimeout(() => settle(id)?.reject(new Error('timeout')), ms)
       pending.set(id, p)
       sock.write(encodeFrame({ jsonrpc: '2.0', id, method, params }))
     })
 
+  const call = (method: string, params: unknown = {}) => send(method, params, opts.timeoutMs)
+
   try {
-    await call('auth', { token: opts.token })
+    await send('auth', { token: opts.token }, remaining())
   } catch (e) {
     sock.destroy()
     throw (e as Error).message === 'unauthorized' || (e as { code?: number }).code === -32002

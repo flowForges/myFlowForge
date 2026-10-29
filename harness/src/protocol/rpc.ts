@@ -33,6 +33,7 @@ export type SnapshotResult = z.infer<typeof SnapshotResultSchema>
 
 export const ControlStatusSchema = z.object({
   state: z.enum(['starting', 'running', 'restarting', 'tripped', 'stopping']),
+  pid: z.number().optional(), // 监管进程 pid(控制口 status 填)
   workerPid: z.number().optional(),
   restarts: z.number(),
   trippedReason: z.enum(['crash-loop', 'oom']).optional(),

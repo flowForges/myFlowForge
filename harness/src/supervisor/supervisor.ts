@@ -88,7 +88,7 @@ export class Supervisor {
   async restart(): Promise<void> {
     if (this.st === 'stopping') return
     const g = ++this.gen
-    this.trippedReason = undefined
+    if (this.st === 'tripped') this.clearFailures()
     this.set('restarting')
     await this.stopWorker()
     if (g !== this.gen) return
@@ -99,13 +99,17 @@ export class Supervisor {
   /** 清掉失败记录;熔断(没有工作进程)时重新拉起 */
   resetTrip(): void {
     if (this.st === 'stopping') return
-    this.history = []
-    this.consecutive = 0
-    this.trippedReason = undefined
+    this.clearFailures()
     if (this.child) return this.emit()
     this.gen++
     this.set('starting')
     this.spawnWorker()
+  }
+
+  private clearFailures(): void {
+    this.history = []
+    this.consecutive = 0
+    this.trippedReason = undefined
   }
 
   private set(s: State): void {
@@ -127,7 +131,7 @@ export class Supervisor {
     let readyAt: number | undefined
     let misses = 0
     let heard = false // 收到过任何消息:IPC 已通,开始按漏 ping 计
-    const spawnedAt = Date.now()
+    const spawnedAt = this.now()
     let hung = false
     let done = false
     let onExit!: () => void
@@ -152,7 +156,7 @@ export class Supervisor {
 
     const ping = setInterval(() => {
       // 进程刚起(Node 启动可能慢于几次 ping)不算漏;启动超时另算
-      const stuck = (heard && misses >= this.missLimit) || (readyAt === undefined && Date.now() - spawnedAt >= this.startupMs)
+      const stuck = (heard && misses >= this.missLimit) || (readyAt === undefined && this.now() - spawnedAt >= this.startupMs)
       if (stuck) {
         hung = true
         clearInterval(ping)
