@@ -6,7 +6,7 @@ export class Receipts {
 
   constructor(db: DatabaseSync) {
     this.getStmt = db.prepare('SELECT method, result FROM receipts WHERE command_id = ?')
-    this.putStmt = db.prepare('INSERT OR REPLACE INTO receipts(command_id, method, result, ts) VALUES (?, ?, ?, ?)')
+    this.putStmt = db.prepare('INSERT OR IGNORE INTO receipts(command_id, method, result, ts) VALUES (?, ?, ?, ?)')
   }
 
   get(commandId: string): { method: string; result: unknown } | undefined {

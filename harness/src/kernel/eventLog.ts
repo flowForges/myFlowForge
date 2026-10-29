@@ -3,6 +3,7 @@ import type { KernelEvent } from '../protocol/index'
 
 export function openDb(file: string): DatabaseSync {
   const db = new DatabaseSync(file)
+  db.exec('PRAGMA busy_timeout = 5000')
   db.exec('PRAGMA journal_mode=WAL')
   db.exec(`CREATE TABLE IF NOT EXISTS events(
     seq INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, type TEXT, session_id TEXT, payload TEXT);
@@ -17,8 +18,8 @@ const pending = new WeakMap<DatabaseSync, Array<() => void>>()
 export function transaction<T>(db: DatabaseSync, fn: () => T): T {
   if (pending.has(db)) return fn() // 嵌套:并入外层事务
   const queue: Array<() => void> = []
+  db.exec('BEGIN IMMEDIATE') // 失败则不登记 pending
   pending.set(db, queue)
-  db.exec('BEGIN IMMEDIATE')
   let result: T
   try {
     result = fn()
@@ -29,7 +30,7 @@ export function transaction<T>(db: DatabaseSync, fn: () => T): T {
     throw err
   }
   pending.delete(db)
-  for (const n of queue) n()
+  for (const n of queue) n() // notify 自身已吞掉订阅者异常
   return result
 }
 
@@ -48,7 +49,10 @@ export class EventLog {
   private tailStmt
   private lastStmt
 
-  constructor(private db: DatabaseSync) {
+  constructor(
+    private db: DatabaseSync,
+    private opts: { onListenerError?: (err: unknown) => void } = {},
+  ) {
     this.insert = db.prepare('INSERT INTO events(ts, type, session_id, payload) VALUES (?, ?, ?, ?)')
     this.afterStmt = db.prepare('SELECT * FROM events WHERE seq > ? ORDER BY seq LIMIT ?')
     this.tailStmt = db.prepare('SELECT * FROM (SELECT * FROM events ORDER BY seq DESC LIMIT ?) ORDER BY seq')
@@ -60,7 +64,13 @@ export class EventLog {
     const info = this.insert.run(ts, e.type, e.sessionId ?? null, JSON.stringify(e.payload ?? null))
     const ev: KernelEvent = { ...e, seq: Number(info.lastInsertRowid), ts }
     const notify = () => {
-      for (const l of [...this.listeners]) l(ev)
+      for (const l of [...this.listeners]) {
+        try {
+          l(ev)
+        } catch (err) {
+          try { this.opts.onListenerError?.(err) } catch { /* 忽略 */ }
+        }
+      }
     }
     const queue = pending.get(this.db)
     if (queue) queue.push(notify)

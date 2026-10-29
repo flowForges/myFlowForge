@@ -53,6 +53,37 @@ describe('event log', () => {
     expect(new Receipts(db).get('c1')).toBeUndefined()
   })
 
+  it('failed BEGIN does not poison later transactions', () => {
+    const f = join(mk(), 'k.db')
+    const db = openDb(f)
+    db.exec('PRAGMA busy_timeout = 0')
+    const other = openDb(f)
+    other.exec('BEGIN IMMEDIATE')
+    expect(() => transaction(db, () => 1)).toThrow()
+    other.exec('ROLLBACK')
+    const log = new EventLog(db)
+    expect(() =>
+      transaction(db, () => {
+        log.append({ type: 'turn.started', payload: 1 })
+        throw new Error('x')
+      }),
+    ).toThrow('x')
+    expect(log.after(0)).toHaveLength(0)
+  })
+
+  it('throwing listener does not break commit or other listeners', () => {
+    const db = openDb(join(mk(), 'k.db'))
+    const errs: unknown[] = []
+    const log = new EventLog(db, { onListenerError: (e) => errs.push(e) })
+    const seen: number[] = []
+    log.onAppend(() => { throw new Error('bad') })
+    log.onAppend((e) => seen.push(e.seq))
+    expect(transaction(db, () => { log.append({ type: 'turn.started', payload: 1 }); return 'ok' })).toBe('ok')
+    expect(() => log.append({ type: 'turn.ended', payload: 2 })).not.toThrow()
+    expect(seen).toHaveLength(2)
+    expect(errs).toHaveLength(2)
+  })
+
   it('unsubscribe stops notifications', () => {
     const log = new EventLog(openDb(join(mk(), 'k.db')))
     let n = 0
@@ -69,6 +100,8 @@ describe('receipts', () => {
     const r = new Receipts(openDb(join(mk(), 'k.db')))
     expect(r.get('x')).toBeUndefined()
     r.put('x', 'session.create', { id: 's1' })
+    expect(r.get('x')).toEqual({ method: 'session.create', result: { id: 's1' } })
+    r.put('x', 'other', { id: 's2' })
     expect(r.get('x')).toEqual({ method: 'session.create', result: { id: 's1' } })
   })
 })
