@@ -17,6 +17,10 @@ function setup(state: any) {
     prompt: vi.fn(async () => ({ accepted: true, turnId: 't1' })),
     onEvent: (cb: any) => { eventCb = cb; return () => {} },
     onAlert: () => () => {},
+    models: {
+      catalog: vi.fn(async () => ({ presets: [], models: {} })),
+      accounts: vi.fn(async () => ({ accounts: [], secretsBackend: 'keychain' })),
+    },
   }
   ;(window as any).forge = { mffai, setSettings: vi.fn(async () => ({})) }
 }

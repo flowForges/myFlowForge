@@ -3,6 +3,7 @@ import type { MffaiState } from '@mffai/protocol'
 import { EnableCard } from './EnableCard'
 import { StatusStrip } from './StatusStrip'
 import { DebugPanel } from './DebugPanel'
+import { Connections } from './Connections'
 import './mffai.css'
 
 /** 监督进程 50 + worker 51 MB(Task 10 实测),向上取整到 10 */
@@ -11,6 +12,7 @@ export const MFFAI_EXPECTED_RSS_MB = 110
 export default function MffaiView() {
   const [state, setState] = useState<MffaiState | null>(null)
   const [failed, setFailed] = useState(false)
+  const [section, setSection] = useState<'debug' | 'conn'>('debug')
   const api = window.forge.mffai
   // 操作结果:成功更新状态并清失败标记,失败记日志并显示「失败」
   const run = (p: Promise<MffaiState>) => {
@@ -54,7 +56,15 @@ export default function MffaiView() {
         onRestart={() => run(api.restart())}
         onResetTrip={() => run(api.resetTrip())}
       />
-      {state.running && <DebugPanel />}
+      {state.running && (
+        <>
+          <div className="mffai-tabs">
+            <button className={`set-btn${section === 'debug' ? ' active' : ''}`} onClick={() => setSection('debug')}>调试</button>
+            <button className={`set-btn${section === 'conn' ? ' active' : ''}`} onClick={() => setSection('conn')}>连接</button>
+          </div>
+          {section === 'debug' ? <DebugPanel /> : <Connections />}
+        </>
+      )}
     </div>
   )
 }
