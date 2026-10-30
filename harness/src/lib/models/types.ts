@@ -1,5 +1,5 @@
 // 统一模型接口(spec §5):各协议适配器与调用方之间只用这些类型
-import type { AccountState, Quota } from '../../protocol/models'
+import type { AccountState, AccountView, CatalogView, ModelEntry, ModelRef, Quota } from '../../protocol/models'
 
 export type { Quota }
 
@@ -59,4 +59,31 @@ export interface ModelAdapter {
   stream(account: Account, req: ModelRequest): AsyncIterable<ModelEvent>
   quota?(account: Account): Promise<Quota | null>
   test(account: Account): Promise<void>
+}
+
+export interface AddAccountInput {
+  presetId: string
+  label?: string
+  apiKey?: string // 只进 SecretStore
+  baseUrl?: string
+  protocol?: ModelProtocol
+  restrictionAck?: boolean
+  models?: ModelEntry[] // 自定义预设的手填清单
+}
+
+/** models-registry 提供的服务(spec §6.1);账号视图不含密钥 */
+export interface ModelsService {
+  registerAdapter(protocol: ModelProtocol, a: ModelAdapter): () => void
+  /** 删除账号前调用(如 ChatGPT 注销令牌);失败只记日志 */
+  registerRemoveHook(protocol: ModelProtocol, fn: (account: Account) => void | Promise<void>): () => void
+  catalog(): CatalogView
+  accounts(): AccountView[]
+  addAccount(input: AddAccountInput): Promise<AccountView>
+  removeAccount(id: string): Promise<void>
+  testAccount(id: string): Promise<{ ok: boolean; error?: ModelError }>
+  setDefault(ref: ModelRef): void
+  /** 适配器上报账号状态(如 needs_login / not_authorized);有变化才发 account.updated */
+  setState(id: string, state: AccountState): void
+  stream(ref: ModelRef | 'default', req: Omit<ModelRequest, 'model'>): AsyncIterable<ModelEvent>
+  quota(accountId: string): Promise<Quota | null>
 }

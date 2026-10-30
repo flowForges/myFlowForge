@@ -10,7 +10,7 @@ import {
   type StatusResult,
   type WorkerMethodName,
 } from '../protocol/index'
-import { loadConfig } from './config'
+import { KernelConfigSchema, loadConfig, saveConfig, type KernelConfig } from './config'
 import { EventBus } from './events'
 import { EventLog, openDb, transaction } from './eventLog'
 import { nullLogger, type Logger } from './log'
@@ -61,12 +61,21 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   bus.declare('session.prompt', 'bail')
   const gate = new PermissionGate()
   const append = (e: Omit<KernelEvent, 'seq' | 'ts'>) => eventLog.append(e)
-  const config = loadConfig(join(opts.dataDir, 'config.json'))
+  const configFile = join(opts.dataDir, 'config.json')
+  let config = loadConfig(configFile)
+  const configAccess = {
+    get: () => config,
+    update: (section: keyof KernelConfig, value: unknown) => {
+      const next = KernelConfigSchema.parse({ ...config, [section]: value })
+      saveConfig(configFile, next) // 先落盘,成功后才换内存
+      config = next
+    },
+  }
   const rpc = new RpcRegistry()
   // 后端故障不抛错:状态为 unavailable / unreadable,内核照常启动
   const secrets = await openSecretStore({ ...opts.secrets, dataDir: opts.dataDir, log })
   const host = new PluginHost({
-    services, events: bus, rpc, append, log, dataDir: opts.dataDir, injectTimeoutMs: opts.injectTimeoutMs, secrets,
+    services, events: bus, rpc, append, log, dataDir: opts.dataDir, injectTimeoutMs: opts.injectTimeoutMs, secrets, config: configAccess,
   })
 
   let state: StatusResult['state'] = 'starting'

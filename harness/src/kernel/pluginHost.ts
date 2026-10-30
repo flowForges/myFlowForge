@@ -1,6 +1,7 @@
 import { join } from 'node:path'
 import { mkdirSync } from 'node:fs'
-import type { KernelEvent, WorkerMethodName } from '../protocol/index'
+import type { KernelEvent, SecretsBackend, WorkerMethodName } from '../protocol/index'
+import type { KernelConfig } from './config'
 import type { EventBus } from './events'
 import type { ServiceRegistry } from './services'
 import { EffectScope } from './effects'
@@ -23,7 +24,12 @@ export interface PluginContext {
   /** 注册工作进程 RPC 方法:参数先由内核按 WorkerMethods 校验;随插件停用自动注销 */
   rpc: { register(method: WorkerMethodName, handler: (params: unknown) => Promise<unknown>): void }
   log: Logger
+  /** 本插件可写配置段在激活时的快照(见 CONFIG_SECTIONS);其他插件为空对象 */
   config: Record<string, unknown>
+  /** 写本插件声明的配置段:按 KernelConfigSchema 校验后原子落盘;非本插件的段 → 抛错 */
+  updateConfig(section: string, value: unknown): void
+  /** 凭据存储后端(启动时探测后固定) */
+  readonly secretsBackend: SecretsBackend
   dataDir: string
   /** 只能读写本插件的键(内核自动加 `<pluginId>/` 前缀);没有列举接口 */
   secrets: { get(k: string): Promise<string | undefined>; set(k: string, v: string): Promise<void>; delete(k: string): Promise<void> }
@@ -33,6 +39,15 @@ export interface PluginContext {
 export interface Plugin {
   manifest: PluginManifest
   activate(ctx: PluginContext): void | Promise<void>
+}
+
+/** 插件可写的内核配置段:收紧为白名单 */
+export const CONFIG_SECTIONS: Record<string, (keyof KernelConfig)[]> = { 'models-registry': ['models'] }
+
+export interface PluginConfigAccess {
+  get(): KernelConfig
+  /** 校验 + 原子落盘;失败抛错,内存配置不变 */
+  update(section: keyof KernelConfig, value: unknown): void
 }
 
 export interface PluginState {
@@ -50,6 +65,7 @@ export interface PluginHostDeps {
   dataDir: string
   injectTimeoutMs?: number
   secrets: SecretStore
+  config?: PluginConfigAccess
 }
 
 export class PluginHost {
@@ -86,6 +102,11 @@ export class PluginHost {
         warn: (m, d) => log.warn(`[${id}] ${m}`, d),
         error: (m, d) => log.error(`[${id}] ${m}`, d),
       }
+      const sections = CONFIG_SECTIONS[id] ?? []
+      const cfg = this.deps.config
+      const ownConfig: Record<string, unknown> = {}
+      for (const k of sections) if (cfg) ownConfig[k] = structuredClone(cfg.get()[k])
+      const secretStore = this.deps.secrets
       const ctx: PluginContext = {
         services: {
           provide: (key, impl) => scope.add(services.provide(key, impl)),
@@ -107,7 +128,14 @@ export class PluginHost {
         effect: d => scope.add(d),
         rpc: { register: (method, handler) => scope.add(rpc.register(id, method, handler)) },
         log: pluginLog,
-        config: {},
+        config: ownConfig,
+        updateConfig: (section, value) => {
+          if (!cfg || !(sections as string[]).includes(section)) throw new Error(`config section not writable: ${section}`)
+          cfg.update(section as keyof KernelConfig, value)
+        },
+        get secretsBackend() {
+          return secretStore.backend
+        },
         dataDir,
         secrets: scopedSecrets(this.deps.secrets, id),
         append,

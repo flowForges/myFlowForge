@@ -48,6 +48,7 @@ describe.skipIf(!E2E)('built daemon e2e', () => {
     const env: NodeJS.ProcessEnv = {
       ...process.env, ELECTRON_RUN_AS_NODE: '1', HOME: home, USERPROFILE: home,
       XDG_CONFIG_HOME: join(home, '.config'), MFFAI_DATA_DIR: data, MFFAI_AUTOSTART_DRY_RUN: '1', MFFAI_SECRETS_PLAINTEXT: '1',
+      MFFAI_CATALOG_OFFLINE: '1',
     }
     const paths = runtimePaths(data)
     const sup = spawn(electron, [DAEMON], { env, stdio: 'ignore', detached: true })

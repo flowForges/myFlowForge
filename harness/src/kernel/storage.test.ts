@@ -109,9 +109,9 @@ describe('receipts', () => {
 describe('config', () => {
   it('writes defaults when missing and round-trips', () => {
     const f = join(mk(), 'config.json')
-    expect(loadConfig(f)).toEqual({ version: 1, plugins: { disabled: [] } })
+    expect(loadConfig(f)).toEqual({ version: 1, plugins: { disabled: [] }, models: { accounts: [] } })
     expect(existsSync(f)).toBe(true)
-    saveConfig(f, { version: 1, plugins: { disabled: ['a'] } })
+    saveConfig(f, { version: 1, plugins: { disabled: ['a'] }, models: { accounts: [] } })
     expect(loadConfig(f).plugins.disabled).toEqual(['a'])
     expect(readdirSync(dir).filter((n) => n.includes('tmp'))).toEqual([])
     expect(JSON.parse(readFileSync(f, 'utf8')).version).toBe(1)

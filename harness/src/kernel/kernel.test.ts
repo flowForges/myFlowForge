@@ -32,8 +32,8 @@ const waitFor = async (fn: () => boolean) => {
 }
 
 describe('kernel', () => {
-  it('exports loop-echo as the only builtin plugin', () => {
-    expect(BUILTIN_PLUGINS.map(p => p.manifest.id)).toEqual(['loop-echo'])
+  it('builtin plugins in registration order', () => {
+    expect(BUILTIN_PLUGINS.map(p => p.manifest.id)).toEqual(['models-registry', 'loop-echo'])
   })
 
   it('create + prompt runs the echo turn in order', async () => {
