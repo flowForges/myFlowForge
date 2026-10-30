@@ -7,6 +7,9 @@ import type { Plugin } from '../../kernel/pluginHost'
 import type { RpcError } from '../../kernel/rpcError'
 import type { AccountView, CatalogView } from '../../protocol/models'
 import type { Account, ModelAdapter, ModelEvent, ModelRequest, ModelsService } from '../../lib/models/types'
+import type { OpenSecretStoreOpts } from '../../kernel/secrets/secretStore'
+import { fakeServer, fixture, sse } from '../../../test/modelPluginHarness'
+import { createModelOpenai } from '../model-openai/index'
 import { createModelsRegistry, type RegistryOpts } from './index'
 
 let dir: string
@@ -64,7 +67,7 @@ function fakeAdapter(fetchFn: typeof fetch, script: (a: Account, r: ModelRequest
   return { adapter, seen }
 }
 
-async function boot(opts: RegistryOpts = {}, extra: Plugin[] = []) {
+async function boot(opts: RegistryOpts = {}, extra: Plugin[] = [], secrets: Omit<OpenSecretStoreOpts, 'dataDir' | 'log'> = { osBackend: false }) {
   let svc: ModelsService | undefined
   const capture: Plugin = {
     manifest: { id: 'capture', version: '1', kernel: '*', inject: ['models'] },
@@ -74,7 +77,7 @@ async function boot(opts: RegistryOpts = {}, extra: Plugin[] = []) {
   const k = await createKernel({
     dataDir: dir,
     plugins: [createModelsRegistry({ timers: t.timers, ...opts }), ...extra, capture],
-    secrets: { osBackend: false },
+    secrets,
   })
   kernels.push(k)
   return { k, svc: svc!, timers: t }
@@ -393,5 +396,113 @@ describe('updateConfig 收紧', () => {
     kernels.push(await createKernel({ dataDir: dir, plugins: [fake], secrets: { osBackend: false } }))
     expect(errs).toHaveLength(2)
     expect(JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')).models.accounts).toEqual([{ id: 'a', presetId: 'p', label: 'l' }])
+  })
+})
+
+describe('列模型(models: list 预设)', () => {
+  /** 假 OpenAI:/models 列出两个模型,/responses 回固定流 */
+  async function openaiServer(ids = ['gpt-4o', 'gpt-5']) {
+    const srv = await fakeServer((req, res) => {
+      if (req.url === '/models') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ data: ids.map(id => ({ id })) })) }
+      if (req.url === '/responses') return sse(res, fixture('responses-text.txt'))
+      res.writeHead(404); res.end()
+    })
+    servers.push(srv.server)
+    return srv
+  }
+  const servers: import('node:http').Server[] = []
+  afterEach(async () => { for (const s of servers.splice(0)) { s.closeAllConnections(); await new Promise(r => s.close(r)) } })
+  const openaiBoot = () => boot({}, [createModelOpenai()])
+
+  it('OpenAI 预设:添加后 /models 的结果进 accounts[].models(带快照元数据)、落盘、发 account.updated;可设为默认', async () => {
+    const srv = await openaiServer()
+    const { k, svc } = await openaiBoot()
+    expect(svc.catalog().models.openai).toEqual([])
+    const a = await svc.addAccount({ presetId: 'openai', apiKey: 'sk-list', baseUrl: srv.base })
+    await expect.poll(() => svc.accounts()[0].models?.map(m => m.id)).toEqual(['gpt-4o', 'gpt-5'])
+    expect(srv.seen.find(x => x.url === '/models')?.headers.authorization).toBe('Bearer sk-list')
+    const [m4o, m5] = svc.accounts()[0].models!
+    expect(m4o).toMatchObject({ name: 'GPT-4o', reasoning: 'none', context: 128000 })
+    expect(m5).toMatchObject({ name: 'GPT-5', reasoning: 'toggle' })
+    expect(accountEvents(k).at(-1)?.models?.map(m => m.id)).toEqual(['gpt-4o', 'gpt-5'])
+    const cfg = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'))
+    expect(cfg.models.accounts[0].models.map((m: { id: string }) => m.id)).toEqual(['gpt-4o', 'gpt-5'])
+    expect(readFileSync(join(dir, 'config.json'), 'utf8')).not.toContain('sk-list')
+    expect(allEventsText(k)).not.toContain('sk-list')
+    expect(await k.handle('models.setDefault', { accountId: a.id, modelId: 'gpt-5' })).toEqual({ ok: true })
+    expect((await errOf(k.handle('models.setDefault', { accountId: a.id, modelId: 'nope' }))).code).toBe(-32602)
+  })
+
+  it('重启:清单仍在;启动时对 ok 账号再列一次(不阻塞启动),失败只记日志、清单保留', async () => {
+    const srv = await openaiServer()
+    const first = await openaiBoot()
+    await first.svc.addAccount({ presetId: 'openai', apiKey: 'sk', baseUrl: srv.base })
+    await expect.poll(() => first.svc.accounts()[0].models?.length).toBe(2)
+    await first.k.close()
+    kernels = []
+    const before = srv.seen.filter(x => x.url === '/models').length
+    const { svc } = await openaiBoot()
+    expect(svc.accounts()[0].models?.map(m => m.id)).toEqual(['gpt-4o', 'gpt-5'])
+    await expect.poll(() => srv.seen.filter(x => x.url === '/models').length).toBe(before + 1)
+    // 服务挂了:testAccount 失败,清单不动
+    srv.server.closeAllConnections()
+    await new Promise(r => srv.server.close(r))
+    servers.splice(0)
+    expect((await svc.testAccount(svc.accounts()[0].id)).ok).toBe(false)
+    expect(svc.accounts()[0].models?.map(m => m.id)).toEqual(['gpt-4o', 'gpt-5'])
+  })
+
+  it('testAccount 成功后刷新清单;预设自带清单时不列', async () => {
+    const srv = await openaiServer(['gpt-4.1'])
+    const { svc } = await openaiBoot()
+    const a = await svc.addAccount({ presetId: 'openai', apiKey: 'sk', baseUrl: srv.base })
+    await expect.poll(() => svc.accounts()[0].models?.map(m => m.id)).toEqual(['gpt-4.1'])
+    const calls = () => srv.seen.filter(x => x.url === '/models').length
+    const n = calls()
+    expect(await svc.testAccount(a.id)).toEqual({ ok: true })
+    await expect.poll(calls).toBe(n + 2) // test() 一次 + 刷新一次
+    // kimi-cn 有内置清单:添加后不调 listModels
+    const listed: string[] = []
+    svc.registerAdapter('anthropic', { async *stream() { yield { type: 'done', reason: 'stop' } }, async test() {}, async listModels(acc) { listed.push(acc.id); return [{ id: 'x' }] } })
+    const kimi = await svc.addAccount({ presetId: 'kimi-cn', apiKey: 'kk' })
+    await new Promise(r => setTimeout(r, 20))
+    expect(listed).toEqual([])
+    expect(svc.accounts().find(x => x.id === kimi.id)?.models).toBeUndefined()
+  })
+
+  it('推理:目录说模型不支持 → 不发 reasoning;支持 / 未知模型 → 原样透传', async () => {
+    const srv = await openaiServer()
+    const { svc } = await openaiBoot()
+    const a = await svc.addAccount({ presetId: 'openai', apiKey: 'sk', baseUrl: srv.base })
+    await expect.poll(() => svc.accounts()[0].models?.length).toBe(2)
+    const body = () => JSON.parse(srv.seen.filter(x => x.url === '/responses').at(-1)!.body)
+    for (const [modelId, effort] of [['gpt-4o', undefined], ['gpt-5', 'medium'], ['not-in-catalog', 'medium']] as const) {
+      const evs = await collect(svc.stream({ accountId: a.id, modelId }, { ...req(true), reasoning: 'medium' }))
+      expect(evs.at(-1)).toMatchObject({ type: 'done', reason: 'stop' })
+      expect(body().model).toBe(modelId)
+      expect(body().reasoning?.effort).toBe(effort)
+    }
+  })
+})
+
+describe('凭据存储不可用', () => {
+  it('钥匙串超时 → 存储 unavailable,api-key 账号 error,请求立即 done{auth} 不挂起', async () => {
+    const first = await boot()
+    await first.svc.addAccount({ presetId: 'deepseek', apiKey: 'dk' })
+    await first.svc.addAccount({ presetId: 'kimi-cn', apiKey: 'kk' })
+    await first.k.close()
+    kernels = []
+    // 假 security:每次都超时;已有密文 → 不得退回明文
+    writeFileSync(join(dir, 'credentials.enc'), 'x')
+    const exec = async () => ({ code: null, stdout: '', timedOut: true })
+    const t0 = Date.now()
+    const { k, svc } = await boot({}, [], { platform: 'darwin', exec, timeoutMs: 50 })
+    expect(Date.now() - t0).toBeLessThan(3000)
+    expect(((await k.handle('models.accounts', undefined)) as { secretsBackend: string }).secretsBackend).toBe('unavailable')
+    expect(svc.accounts().map(a => a.state)).toEqual(['error', 'error'])
+    svc.registerAdapter('openai-chat', { async *stream() { yield { type: 'done', reason: 'stop' } }, async test() {} })
+    const evs = await collect(svc.stream({ accountId: svc.accounts()[0].id, modelId: 'deepseek-chat' }, req(true)))
+    expect(evs).toEqual([{ type: 'done', reason: 'error', error: expect.objectContaining({ kind: 'auth' }) }])
+    expect((await svc.testAccount(svc.accounts()[1].id)).ok).toBe(false)
   })
 })

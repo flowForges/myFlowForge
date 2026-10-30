@@ -44,6 +44,11 @@ export class AccountStore {
     this.commit({ ...this.cfg, default: { accountId: ref.accountId, modelId: ref.modelId } })
   }
 
+  /** 适配器列出的模型清单(非密钥,随账号落盘) */
+  setModels(id: string, models: AccountConfig['models']): void {
+    this.commit({ ...this.cfg, accounts: this.cfg.accounts.map(a => (a.id === id ? { ...a, models } : a)) })
+  }
+
   state(id: string): AccountState {
     return this.states.get(id) ?? 'ok'
   }

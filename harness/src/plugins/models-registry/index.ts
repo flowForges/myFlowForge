@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import type { AccountConfig, ModelsConfig } from '../../kernel/config'
 import type { Plugin, PluginContext } from '../../kernel/pluginHost'
 import { RpcError } from '../../kernel/rpcError'
-import { mergeCatalog, type Snapshot } from '../../lib/models/catalog/merge'
+import { mergeCatalog, resolveListed, type Snapshot } from '../../lib/models/catalog/merge'
 import { PRESETS, type Preset } from '../../lib/models/catalog/presets'
 import snapshotJson from '../../lib/models/catalog/models.snapshot.json'
 import type {
@@ -95,6 +95,8 @@ export function createModelsRegistry(opts: RegistryOpts = {}): Plugin {
         ctx.effect(() => r.stop())
       }
 
+      let alive = true
+      ctx.effect(() => { alive = false })
       const readKey = async (id: string) => {
         try {
           return await ctx.secrets.get(keyName(id))
@@ -139,7 +141,7 @@ export function createModelsRegistry(opts: RegistryOpts = {}): Plugin {
             return { error: { kind: 'auth', message: 'api key unavailable', retryable: false } }
           }
         }
-        const testModel = (service.catalog().models[a.presetId]?.[0] ?? a.models?.[0])?.id
+        const testModel = modelsOf(a)[0]?.id
         const account: Account = {
           id: a.id, presetId: a.presetId, label: a.label, protocol, baseUrl, state: store.state(a.id), quirks: p.quirks,
           ...(testModel !== undefined && { testModel }),
@@ -148,10 +150,53 @@ export function createModelsRegistry(opts: RegistryOpts = {}): Plugin {
         return { account, adapter }
       }
 
+      /** 该账号可选的模型:目录(预设)非空时以它为准,否则用账号上的清单 */
+      const modelsOf = (a: AccountConfig) => {
+        const c = service.catalog().models[a.presetId]
+        return c?.length ? c : a.models ?? []
+      }
+
+      // 列模型:同一账号同一时刻只跑一次;只给目录里为空的预设(models:'list')用
+      const listing = new Map<string, Promise<void>>()
+      function refreshModels(id: string): Promise<void> {
+        const a = store.get(id)
+        const p = a && presets.get(a.presetId)
+        if (!a || !p || service.catalog().models[a.presetId]?.length) return Promise.resolve()
+        let run = listing.get(id)
+        if (run) return run
+        run = (async () => {
+          const r = await prepare(a, p)
+          if ('error' in r || !r.adapter.listModels) return
+          const listed = await r.adapter.listModels(r.account)
+          const cur = store.get(id)
+          if (!alive || !cur || !listed.length) return
+          // 已有条目(手填 / 上次列出的)保留其元数据
+          const prev = new Map((cur.models ?? []).map(m => [m.id, m]))
+          const fresh = resolveListed(listed, p.snapshotProvider, snapshot, cache)
+          const models = fresh.map(m => prev.get(m.id) ?? m)
+          if (JSON.stringify(models) === JSON.stringify(cur.models)) return
+          store.setModels(id, models)
+          emit(store.get(id)!)
+        })()
+          .catch(err => ctx.log.warn('model list failed', { failure: toModelError(err).kind }))
+          .finally(() => listing.delete(id))
+        listing.set(id, run)
+        return run
+      }
+
       const service: ModelsService = {
         registerAdapter(protocol, a) {
           if (adapters.has(protocol)) throw new Error(`adapter already registered: ${protocol}`)
           adapters.set(protocol, a)
+          // 启动后(以及适配器重新注册时):给状态 ok 的账号刷新模型清单,不阻塞
+          if (a.listModels) {
+            queueMicrotask(() => {
+              for (const acc of store.list()) {
+                const p = presets.get(acc.presetId)
+                if (p && protocolOf(acc, p) === protocol && store.state(acc.id) === 'ok') void refreshModels(acc.id)
+              }
+            })
+          }
           return () => { if (adapters.get(protocol) === a) adapters.delete(protocol) }
         },
 
@@ -168,7 +213,7 @@ export function createModelsRegistry(opts: RegistryOpts = {}): Plugin {
 
         accounts: () => store.list().map(a => store.view(a)),
 
-        async addAccount(input: AddAccountInput) {
+        async addAccount(input: AddAccountInput, opts = {}) {
           const p = presets.get(input.presetId)
           if (!p) throw invalid('unknown preset')
           if (p.restriction === 'coding-tools-only' && input.restrictionAck !== true) throw invalid('restriction acknowledgement required')
@@ -180,7 +225,8 @@ export function createModelsRegistry(opts: RegistryOpts = {}): Plugin {
           if (baseUrl !== undefined && !validUrl(baseUrl)) throw invalid('invalid base url')
           if (!protocols.length && !baseUrl) throw invalid('base url required')
 
-          const id = randomUUID()
+          const id = opts.id ?? randomUUID()
+          if (store.get(id)) throw invalid('account exists')
           if (p.auth === 'api-key' && apiKey) await ctx.secrets.set(keyName(id), apiKey)
           const acc: AccountConfig = {
             id,
@@ -198,6 +244,7 @@ export function createModelsRegistry(opts: RegistryOpts = {}): Plugin {
             throw err
           }
           emit(acc)
+          void refreshModels(id)
           return store.view(acc)
         },
 
@@ -227,6 +274,7 @@ export function createModelsRegistry(opts: RegistryOpts = {}): Plugin {
           try {
             await r.adapter.test(r.account)
             setState(a, 'ok')
+            void refreshModels(id)
             return { ok: true }
           } catch (err) {
             const e = redact(toModelError(err), r.account.apiKey)
@@ -237,7 +285,7 @@ export function createModelsRegistry(opts: RegistryOpts = {}): Plugin {
 
         setDefault(ref: ModelRef) {
           const a = mustGet(ref.accountId)
-          const known = [...(service.catalog().models[a.presetId] ?? []), ...(a.models ?? [])]
+          const known = modelsOf(a)
           if (known.length && !known.some(m => m.id === ref.modelId)) throw invalid('unknown model')
           store.setDefault(ref)
         },
@@ -246,6 +294,8 @@ export function createModelsRegistry(opts: RegistryOpts = {}): Plugin {
           const a = store.get(id)
           if (a) setState(a, s)
         },
+
+        refreshModels,
 
         announce(id) {
           const a = store.get(id)
@@ -265,8 +315,12 @@ export function createModelsRegistry(opts: RegistryOpts = {}): Plugin {
           const prep = await prepare(a, p)
           if ('error' in prep) return yield { type: 'done', reason: 'error', error: prep.error }
           const key = prep.account.apiKey
+          // 目录明确说该模型不支持推理:不发推理参数;未知模型原样透传
+          const entry = modelsOf(a).find(m => m.id === r.modelId)
+          const { reasoning: _r, ...plain } = req
+          const sent = entry?.reasoning === 'none' ? plain : req
           try {
-            for await (const e of prep.adapter.stream(prep.account, { ...req, model: r.modelId })) {
+            for await (const e of prep.adapter.stream(prep.account, { ...sent, model: r.modelId })) {
               if (e.type !== 'done') {
                 yield e
                 continue

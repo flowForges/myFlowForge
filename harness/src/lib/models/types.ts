@@ -82,7 +82,8 @@ export interface ModelsService {
   registerRemoveHook(protocol: ModelProtocol, fn: (account: Account) => void | Promise<void>): () => void
   catalog(): CatalogView
   accounts(): AccountView[]
-  addAccount(input: AddAccountInput): Promise<AccountView>
+  /** opts.id:调用方预先生成的账号 id(如 ChatGPT 登录先写凭据再建账号) */
+  addAccount(input: AddAccountInput, opts?: { id?: string }): Promise<AccountView>
   removeAccount(id: string): Promise<void>
   testAccount(id: string): Promise<{ ok: boolean; error?: ModelError }>
   setDefault(ref: ModelRef): void
@@ -90,6 +91,8 @@ export interface ModelsService {
   setState(id: string, state: AccountState): void
   /** 重新发 account.updated(如重新登录成功但状态未变) */
   announce(id: string): void
+  /** 尽力而为:用适配器的 listModels 刷新账号的模型清单(目录里该预设为空时);失败只记日志 */
+  refreshModels(id: string): Promise<void>
   stream(ref: ModelRef | 'default', req: Omit<ModelRequest, 'model'>): AsyncIterable<ModelEvent>
   quota(accountId: string): Promise<Quota | null>
 }

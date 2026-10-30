@@ -52,3 +52,10 @@ export function mergeCatalog(presets: Preset[], snapshot: Snapshot, cache?: Snap
   }
   return { presets: presets.map(toPresetView), models }
 }
+
+/** 适配器列出的模型(只有 id / 名称):按快照 / 缓存补元数据,缺失走保守默认 */
+export function resolveListed(list: { id: string; name?: string }[], provider: string | undefined, snapshot: Snapshot, cache?: Snapshot): ModelEntry[] {
+  const c = lookup(cache)
+  const s = lookup(snapshot)
+  return list.map((m) => resolveModel({ id: m.id, ...(m.name !== undefined && { name: m.name }) }, provider, c, s))
+}
