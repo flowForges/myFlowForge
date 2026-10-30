@@ -11,6 +11,8 @@ import {
   type ControlStatus,
   type MffaiClient,
   type MffaiState,
+  type ModelRef,
+  type WorkerParams,
   type WorkerResult,
 } from '@mffai/protocol'
 import { controlCall, type ConnectControl, type ConnectWorker } from './client'
@@ -39,6 +41,23 @@ const START_WAIT_MS = 10_000
 const STOP_WAIT_MS = 35_000 // 排空最多 30 s
 const POLL_MS = 200
 
+/** 页面能填的添加账号字段;commandId 由宿主生成 */
+export type AddAccountInput = Omit<WorkerParams<'models.addAccount'>, 'commandId'>
+export type OpenExternal = (url: string) => void
+
+// 只认 https + 精确主机名 + 前缀,挡住 chatgpt.com.evil.com / chatgpt.com@evil.com 之类
+function allowedUrl(url: unknown, prefix: string): url is string {
+  if (typeof url !== 'string' || !url.startsWith(prefix)) return false
+  try {
+    const u = new URL(url)
+    return u.protocol === 'https:' && !u.username && !u.password && `${u.protocol}//${u.host}/` === prefix
+  } catch {
+    return false
+  }
+}
+const AUTH_PREFIX = 'https://auth.openai.com/'
+const EXTERNAL_PREFIX = 'https://chatgpt.com/'
+
 export type MffaiHost = ReturnType<typeof createMffaiHost>
 
 export function createMffaiHost(deps: HostDeps) {
@@ -51,7 +70,8 @@ export function createMffaiHost(deps: HostDeps) {
   const connectControl = deps.connectControl ?? connectControlClient
   const spec = { execPath, daemonJs: deps.daemonJs }
 
-  let debugSession: string | undefined
+  // 调试会话:每个模型选择一个,选择变了就新建
+  let debugSession: { key: string; id: string } | undefined
 
   const control = <M extends ControlMethodName>(m: M, p?: ControlParams<M>): Promise<ControlResult<M>> =>
     controlCall(connectControl, paths, m, p)
@@ -235,10 +255,38 @@ export function createMffaiHost(deps: HostDeps) {
     async tail(limit: number): Promise<WorkerResult<'events.tail'>> {
       return requireWorker().call('events.tail', { limit })
     },
-    async prompt(text: string): Promise<WorkerResult<'session.prompt'>> {
+    async prompt(text: string, model?: ModelRef): Promise<WorkerResult<'session.prompt'>> {
       const w = requireWorker()
-      debugSession ??= (await w.call('session.create', { commandId: randomUUID(), title: 'debug' })).sessionId
-      return w.call('session.prompt', { commandId: randomUUID(), sessionId: debugSession, text })
+      const key = model ? JSON.stringify([model.accountId, model.modelId]) : ''
+      if (debugSession?.key !== key) {
+        const params = { commandId: randomUUID(), title: 'debug', ...(model ? { model: { accountId: model.accountId, modelId: model.modelId } } : {}) }
+        debugSession = { key, id: (await w.call('session.create', params)).sessionId }
+      }
+      return w.call('session.prompt', { commandId: randomUUID(), sessionId: debugSession.id, text })
+    },
+    // —— 模型 / 账号:原样转给工作进程。★参数可能带 apiKey,绝不写日志
+    modelsCatalog: () => requireWorker().call('models.catalog', {}),
+    modelsAccounts: () => requireWorker().call('models.accounts', {}),
+    addAccount: (input: AddAccountInput) => requireWorker().call('models.addAccount', { ...input, commandId: randomUUID() }),
+    removeAccount: (accountId: string) => requireWorker().call('models.removeAccount', { commandId: randomUUID(), accountId }),
+    testAccount: (accountId: string) => requireWorker().call('models.testAccount', { accountId }),
+    setDefault: (ref: ModelRef) => requireWorker().call('models.setDefault', { accountId: ref.accountId, modelId: ref.modelId }),
+    quota: (accountId: string) => requireWorker().call('models.quota', { accountId }),
+    /** 开始 ChatGPT 登录:用系统浏览器打开授权页,只把 flowId 回给页面 */
+    async chatgptBegin(open: OpenExternal): Promise<{ flowId: string }> {
+      const { flowId, authUrl } = await requireWorker().call('auth.chatgpt.begin', {})
+      if (!allowedUrl(authUrl, AUTH_PREFIX)) {
+        await requireWorker().call('auth.chatgpt.cancel', { flowId }).catch(() => undefined)
+        throw new Error('unexpected ChatGPT login URL')
+      }
+      open(authUrl)
+      return { flowId }
+    },
+    chatgptCancel: (flowId: string) => requireWorker().call('auth.chatgpt.cancel', { flowId }),
+    /** 页面要打开的外链(用量链接):只放行 https://chatgpt.com/ */
+    async openExternal(url: string, open: OpenExternal): Promise<void> {
+      if (!allowedUrl(url, EXTERNAL_PREFIX)) throw new Error('URL not allowed')
+      open(url)
     },
     /** app 退出:只断 RPC,不停后台 */
     disconnect(): void {
@@ -265,5 +313,15 @@ export const restart = () => h().restart()
 export const resetTrip = () => h().resetTrip()
 export const setAutostart = (on: boolean) => h().setAutostart(on)
 export const tail = (limit: number) => h().tail(limit)
-export const prompt = (text: string) => h().prompt(text)
+export const prompt = (text: string, model?: ModelRef) => h().prompt(text, model)
+export const modelsCatalog = () => h().modelsCatalog()
+export const modelsAccounts = () => h().modelsAccounts()
+export const addAccount = (input: AddAccountInput) => h().addAccount(input)
+export const removeAccount = (accountId: string) => h().removeAccount(accountId)
+export const testAccount = (accountId: string) => h().testAccount(accountId)
+export const setDefault = (ref: ModelRef) => h().setDefault(ref)
+export const quota = (accountId: string) => h().quota(accountId)
+export const chatgptBegin = (open: OpenExternal) => h().chatgptBegin(open)
+export const chatgptCancel = (flowId: string) => h().chatgptCancel(flowId)
+export const openExternal = (url: string, open: OpenExternal) => h().openExternal(url, open)
 export const disconnect = (): void => instance?.disconnect()

@@ -6,6 +6,12 @@ import { createMffaiSettingsSync, mffaiTransition, registerMffaiIpc } from './ip
 
 type Fn = (...a: unknown[]) => unknown
 
+const MODEL_CHANNELS = [
+  CH.mffaiModelsCatalog, CH.mffaiModelsAccounts, CH.mffaiModelsAddAccount, CH.mffaiModelsRemoveAccount,
+  CH.mffaiModelsTestAccount, CH.mffaiModelsSetDefault, CH.mffaiModelsQuota,
+  CH.mffaiChatgptBegin, CH.mffaiChatgptCancel, CH.mffaiOpenExternal,
+]
+
 function setup(mffai: Settings['mffai']) {
   let settings: Settings = { ...defaultSettings(), mffai }
   const handlers = new Map<string, Fn>()
@@ -18,7 +24,18 @@ function setup(mffai: Settings['mffai']) {
     setAutostart: vi.fn(async () => {}),
     tail: vi.fn(async () => ({ events: [] })),
     prompt: vi.fn(async () => ({ accepted: true, turnId: 't1' })),
+    modelsCatalog: vi.fn(async () => ({ presets: [], models: {} })),
+    modelsAccounts: vi.fn(async () => ({ accounts: [], secretsBackend: 'keychain' })),
+    addAccount: vi.fn(async () => ({ id: 'acc1' })),
+    removeAccount: vi.fn(async () => ({ ok: true })),
+    testAccount: vi.fn(async () => ({ ok: true })),
+    setDefault: vi.fn(async () => ({ ok: true })),
+    quota: vi.fn(async () => null),
+    chatgptBegin: vi.fn(async () => ({ flowId: 'f1' })),
+    chatgptCancel: vi.fn(async () => ({ ok: true })),
+    openExternal: vi.fn(async () => {}),
   }
+  const openExternal = vi.fn()
   const loadHost = vi.fn(async () => host as never)
   const saveSettings = vi.fn((patch: Partial<Settings>) => { settings = { ...settings, ...patch } })
   registerMffaiIpc({
@@ -26,9 +43,10 @@ function setup(mffai: Settings['mffai']) {
     readSettings: () => settings,
     saveSettings,
     loadHost,
+    openExternal,
   })
   const invoke = (ch: string, ...a: unknown[]) => handlers.get(ch)!(...a)
-  return { handlers, host, loadHost, saveSettings, invoke, settings: () => settings }
+  return { handlers, host, loadHost, saveSettings, openExternal, invoke, settings: () => settings }
 }
 
 describe('mffai 设置项', () => {
@@ -46,6 +64,7 @@ describe('registerMffaiIpc', () => {
     expect([...handlers.keys()].sort()).toEqual([
       CH.mffaiState, CH.mffaiEnable, CH.mffaiDisable, CH.mffaiRestart,
       CH.mffaiResetTrip, CH.mffaiSetAutostart, CH.mffaiTail, CH.mffaiPrompt,
+      ...MODEL_CHANNELS,
     ].sort())
   })
 
@@ -110,6 +129,51 @@ describe('registerMffaiIpc', () => {
     expect(host.resetTrip).toHaveBeenCalledTimes(1)
     expect(host.tail).toHaveBeenCalledWith(20)
     expect(host.prompt).toHaveBeenCalledWith('hi')
+  })
+})
+
+describe('mffai 模型 / ChatGPT 登录通道', () => {
+  it('通道名', () => {
+    expect(MODEL_CHANNELS).toEqual([
+      'mffai:models:catalog', 'mffai:models:accounts', 'mffai:models:addAccount', 'mffai:models:removeAccount',
+      'mffai:models:testAccount', 'mffai:models:setDefault', 'mffai:models:quota',
+      'mffai:auth:chatgpt:begin', 'mffai:auth:chatgpt:cancel', 'mffai:openExternal',
+    ])
+  })
+
+  it('未启用:每个新通道都报未启用,不加载 host、不打开链接', async () => {
+    const { invoke, loadHost, openExternal } = setup({ enabled: false, autostart: true })
+    for (const ch of MODEL_CHANNELS) {
+      await expect(invoke(ch, 'x', 'y')).rejects.toThrow('mff-ai 未启用')
+    }
+    await expect(invoke(CH.mffaiPrompt, 'hi', { accountId: 'a', modelId: 'm' })).rejects.toThrow('mff-ai 未启用')
+    expect(loadHost).not.toHaveBeenCalled()
+    expect(openExternal).not.toHaveBeenCalled()
+  })
+
+  it('已启用:转发给 host', async () => {
+    const { invoke, host, openExternal } = setup({ enabled: true, autostart: true })
+    expect(await invoke(CH.mffaiModelsCatalog)).toEqual({ presets: [], models: {} })
+    expect(await invoke(CH.mffaiModelsAccounts)).toEqual({ accounts: [], secretsBackend: 'keychain' })
+    const input = { presetId: 'p', label: 'l', apiKey: 'sk-1', baseUrl: 'https://b', protocol: 'anthropic', restrictionAck: true }
+    expect(await invoke(CH.mffaiModelsAddAccount, { ...input, commandId: 'from-page', junk: 1 })).toEqual({ id: 'acc1' })
+    expect(host.addAccount).toHaveBeenCalledWith(input)
+    await invoke(CH.mffaiModelsRemoveAccount, 'acc1')
+    expect(host.removeAccount).toHaveBeenCalledWith('acc1')
+    await invoke(CH.mffaiModelsTestAccount, 'acc1')
+    expect(host.testAccount).toHaveBeenCalledWith('acc1')
+    await invoke(CH.mffaiModelsSetDefault, 'acc1', 'm1')
+    expect(host.setDefault).toHaveBeenCalledWith({ accountId: 'acc1', modelId: 'm1' })
+    expect(await invoke(CH.mffaiModelsQuota, 'acc1')).toBeNull()
+    expect(host.quota).toHaveBeenCalledWith('acc1')
+    expect(await invoke(CH.mffaiChatgptBegin)).toEqual({ flowId: 'f1' })
+    expect(host.chatgptBegin).toHaveBeenCalledWith(openExternal)
+    await invoke(CH.mffaiChatgptCancel, 'f1')
+    expect(host.chatgptCancel).toHaveBeenCalledWith('f1')
+    await invoke(CH.mffaiOpenExternal, 'https://chatgpt.com/x')
+    expect(host.openExternal).toHaveBeenCalledWith('https://chatgpt.com/x', openExternal)
+    await invoke(CH.mffaiPrompt, 'hi', { accountId: 'a', modelId: 'm', extra: 1 })
+    expect(host.prompt).toHaveBeenLastCalledWith('hi', { accountId: 'a', modelId: 'm' })
   })
 })
 

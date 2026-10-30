@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, screen, session, Tray } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, screen, session, shell, Tray } from 'electron'
 import { registerGlobalShortcuts, unregisterGlobalShortcuts } from './shortcuts/globalShortcuts'
 import { createMainWindow, builtWindowBlurAmount } from './windows/mainWindow'
 import { createPetWindow, resolvePetLayout, MARGIN, clampPetSprite, petClampRegion } from './windows/petWindow'
@@ -768,6 +768,8 @@ app.whenReady().then(() => {
     readSettings,
     saveSettings: (patch) => methodTable[CH.configSetClientSettings](NOOP_CTX, patch),
     loadHost: loadMffaiHost,
+    // 地址已由 host 过白名单(auth.openai.com / chatgpt.com)
+    openExternal: (url) => { void shell.openExternal(url).catch(mffaiFail) },
   })
   if (mffaiInitial.enabled) {
     setImmediate(() => void loadMffaiHost().then((h) => h.ensureRunning().then(() => h.refreshAutostart())).catch(mffaiFail))

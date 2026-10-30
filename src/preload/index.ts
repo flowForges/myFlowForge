@@ -539,7 +539,28 @@ const api = {
     resetTrip: (): Promise<import('@mffai/protocol').MffaiState> => ipcRenderer.invoke(CH.mffaiResetTrip),
     setAutostart: (on: boolean): Promise<import('@mffai/protocol').MffaiState> => ipcRenderer.invoke(CH.mffaiSetAutostart, on),
     tail: (limit: number): Promise<{ events: import('@mffai/protocol').KernelEvent[] }> => ipcRenderer.invoke(CH.mffaiTail, limit),
-    prompt: (text: string): Promise<{ accepted: boolean; turnId: string }> => ipcRenderer.invoke(CH.mffaiPrompt, text),
+    prompt: (text: string, model?: import('@mffai/protocol').ModelRef): Promise<{ accepted: boolean; turnId: string }> =>
+      ipcRenderer.invoke(CH.mffaiPrompt, text, model),
+    models: {
+      catalog: (): Promise<import('@mffai/protocol').CatalogView> => ipcRenderer.invoke(CH.mffaiModelsCatalog),
+      accounts: (): Promise<{ accounts: import('@mffai/protocol').AccountView[]; secretsBackend: import('@mffai/protocol').SecretsBackend }> =>
+        ipcRenderer.invoke(CH.mffaiModelsAccounts),
+      addAccount: (input: {
+        presetId: string; label?: string; apiKey?: string; baseUrl?: string
+        protocol?: 'openai-chat' | 'openai-responses' | 'anthropic'
+        restrictionAck?: boolean
+      }): Promise<import('@mffai/protocol').AccountView> => ipcRenderer.invoke(CH.mffaiModelsAddAccount, input),
+      removeAccount: (id: string): Promise<{ ok: true }> => ipcRenderer.invoke(CH.mffaiModelsRemoveAccount, id),
+      testAccount: (id: string): Promise<{ ok: boolean; error?: import('@mffai/protocol').ModelErrorView }> =>
+        ipcRenderer.invoke(CH.mffaiModelsTestAccount, id),
+      setDefault: (accountId: string, modelId: string): Promise<{ ok: true }> => ipcRenderer.invoke(CH.mffaiModelsSetDefault, accountId, modelId),
+      quota: (accountId: string): Promise<import('@mffai/protocol').Quota | null> => ipcRenderer.invoke(CH.mffaiModelsQuota, accountId),
+    },
+    chatgpt: {
+      begin: (): Promise<{ flowId: string }> => ipcRenderer.invoke(CH.mffaiChatgptBegin),
+      cancel: (flowId: string): Promise<{ ok: true }> => ipcRenderer.invoke(CH.mffaiChatgptCancel, flowId),
+    },
+    openExternal: (url: string): Promise<void> => ipcRenderer.invoke(CH.mffaiOpenExternal, url),
     onEvent: (cb: (e: import('@mffai/protocol').KernelEvent) => void): (() => void) => {
       const listener = (_: unknown, e: import('@mffai/protocol').KernelEvent) => cb(e)
       ipcRenderer.on(CH.mffaiEvent, listener)

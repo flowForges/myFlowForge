@@ -444,6 +444,16 @@ export const CH = {
   mffaiSetAutostart: 'mffai:setAutostart',
   mffaiTail: 'mffai:tail',
   mffaiPrompt: 'mffai:prompt',
+  mffaiModelsCatalog: 'mffai:models:catalog',
+  mffaiModelsAccounts: 'mffai:models:accounts',
+  mffaiModelsAddAccount: 'mffai:models:addAccount',
+  mffaiModelsRemoveAccount: 'mffai:models:removeAccount',
+  mffaiModelsTestAccount: 'mffai:models:testAccount',
+  mffaiModelsSetDefault: 'mffai:models:setDefault',
+  mffaiModelsQuota: 'mffai:models:quota',
+  mffaiChatgptBegin: 'mffai:auth:chatgpt:begin',
+  mffaiChatgptCancel: 'mffai:auth:chatgpt:cancel',
+  mffaiOpenExternal: 'mffai:openExternal', // 只放行 https://chatgpt.com/ (用量链接)
   mffaiEvent: 'mffai:event',   // main → renderer
   mffaiAlert: 'mffai:alert',   // main → renderer
 } as const

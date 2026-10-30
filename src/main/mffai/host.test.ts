@@ -17,6 +17,8 @@ function fakeDaemon(dir: string) {
     lastSeq: 5,
     drainPolls: 0, // shutdown 后还要答几次 stopping 才真正退出
     failRestart: false,
+    sessions: 0,
+    authUrl: 'https://auth.openai.com/oauth/authorize?x=1',
     onRestart: undefined as undefined | (() => void),
     controlCalls: [] as Array<[string, unknown]>,
     workerCalls: [] as Array<[string, unknown]>,
@@ -82,7 +84,16 @@ function fakeDaemon(dir: string) {
           case 'status': return { state: 'running', uptimeMs: 1, rssMb: 51, version: '0.1.0', plugins: [{ id: 'a', state: 'active' }, { id: 'b', state: 'failed' }] }
           case 'events.subscribe': return { ok: true }
           case 'events.tail': return { events: [] }
-          case 'session.create': return { sessionId: 's1' }
+          case 'session.create': return { sessionId: `s${++d.sessions}` }
+          case 'models.catalog': return { presets: [], models: {} }
+          case 'models.accounts': return { accounts: [], secretsBackend: 'keychain' }
+          case 'models.addAccount': return { id: 'acc1', presetId: params.presetId, label: 'x', state: 'ok' }
+          case 'models.removeAccount': return { ok: true }
+          case 'models.testAccount': return { ok: true }
+          case 'models.setDefault': return { ok: true }
+          case 'models.quota': return { link: 'https://chatgpt.com/codex/settings/usage' }
+          case 'auth.chatgpt.begin': return { flowId: 'f1', authUrl: d.authUrl }
+          case 'auth.chatgpt.cancel': return { ok: true }
           case 'session.prompt': return { accepted: true, turnId: 't1' }
         }
         throw new Error(`unexpected ${method}`)
@@ -455,5 +466,70 @@ describe('mffai host', () => {
     const t = setup()
     await t.host.setAutostart(false)
     expect(t.spawnFn).not.toHaveBeenCalled()
+  })
+
+  it('prompt 带模型:按选择建会话(带 model),同一选择复用,换选择新建', async () => {
+    const t = setup({ up: true })
+    await t.host.ensureRunning()
+    const a = { accountId: 'acc1', modelId: 'gpt-5' }
+    await t.host.prompt('1', a)
+    await t.host.prompt('2', { ...a })
+    await t.host.prompt('3', { accountId: 'acc1', modelId: 'gpt-5-mini' })
+    await t.host.prompt('4')
+    const creates = t.d.workerCalls.filter(([m]) => m === 'session.create').map(([, p]) => p as any)
+    expect(creates.map((p) => p.model)).toEqual([a, { accountId: 'acc1', modelId: 'gpt-5-mini' }, undefined])
+    const prompts = t.d.workerCalls.filter(([m]) => m === 'session.prompt').map(([, p]) => (p as any).sessionId)
+    expect(prompts).toEqual(['s1', 's1', 's2', 's3'])
+  })
+
+  it('models.* 透传给工作进程;addAccount 原样带 apiKey / restrictionAck 并生成 commandId', async () => {
+    const t = setup({ up: true })
+    await t.host.ensureRunning()
+    expect(await t.host.modelsCatalog()).toEqual({ presets: [], models: {} })
+    expect(await t.host.modelsAccounts()).toEqual({ accounts: [], secretsBackend: 'keychain' })
+    const input = { presetId: 'kimi-coding', label: 'k', apiKey: 'sk-secret', baseUrl: 'https://x', protocol: 'anthropic' as const, restrictionAck: true }
+    expect(await t.host.addAccount(input)).toMatchObject({ id: 'acc1' })
+    await t.host.removeAccount('acc1')
+    await t.host.removeAccount('acc1')
+    expect(await t.host.testAccount('acc1')).toEqual({ ok: true })
+    await t.host.setDefault({ accountId: 'acc1', modelId: 'm' })
+    expect(await t.host.quota('acc1')).toEqual({ link: 'https://chatgpt.com/codex/settings/usage' })
+    const call = (m: string) => t.d.workerCalls.filter(([x]) => x === m).map(([, p]) => p as any)
+    const [add] = call('models.addAccount')
+    expect(add).toEqual({ ...input, commandId: expect.any(String) })
+    const removes = call('models.removeAccount')
+    expect(removes.map((p) => p.accountId)).toEqual(['acc1', 'acc1'])
+    expect(new Set([add.commandId, ...removes.map((p) => p.commandId)]).size).toBe(3)
+    expect(call('models.testAccount')).toEqual([{ accountId: 'acc1' }])
+    expect(call('models.setDefault')).toEqual([{ accountId: 'acc1', modelId: 'm' }])
+    expect(call('models.quota')).toEqual([{ accountId: 'acc1' }])
+    expect(t.logs.join('\n')).not.toContain('sk-secret')
+  })
+
+  it('chatgptBegin:只打开 auth.openai.com 的地址,回给页面的只有 flowId', async () => {
+    const t = setup({ up: true })
+    await t.host.ensureRunning()
+    const open = vi.fn()
+    expect(await t.host.chatgptBegin(open)).toEqual({ flowId: 'f1' })
+    expect(open).toHaveBeenCalledWith('https://auth.openai.com/oauth/authorize?x=1')
+    for (const bad of ['https://evil.com/?https://auth.openai.com/', 'http://auth.openai.com/x', 'https://auth.openai.com.evil.com/']) {
+      t.d.authUrl = bad
+      open.mockClear()
+      await expect(t.host.chatgptBegin(open)).rejects.toThrow()
+      expect(open).not.toHaveBeenCalled()
+    }
+    await t.host.chatgptCancel('f1')
+    expect(t.d.workerCalls).toContainEqual(['auth.chatgpt.cancel', { flowId: 'f1' }])
+  })
+
+  it('openExternal:只放行 https://chatgpt.com/ 开头的地址', async () => {
+    const t = setup()
+    const open = vi.fn()
+    await t.host.openExternal('https://chatgpt.com/codex/settings/usage', open)
+    expect(open).toHaveBeenCalledWith('https://chatgpt.com/codex/settings/usage')
+    for (const bad of ['http://chatgpt.com/', 'https://chatgpt.com.evil.com/', 'https://chatgpt.com@evil.com/', 'file:///etc/passwd', 'javascript:alert(1)', 'https://chatgpt.com', 42]) {
+      await expect(t.host.openExternal(bad as string, open)).rejects.toThrow()
+    }
+    expect(open).toHaveBeenCalledTimes(1)
   })
 })

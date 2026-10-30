@@ -3,6 +3,7 @@ import { CH } from '../ipc/channels'
 import type { Settings } from '../config/schema'
 
 type HostModule = typeof import('./host')
+type AddAccountInput = import('./host').AddAccountInput
 
 export interface MffaiIpcDeps {
   handle: (ch: string, fn: (...a: unknown[]) => unknown) => void
@@ -17,6 +18,27 @@ export interface MffaiIpcDeps {
    * 所以事件推送不经这里。默认 `() => import('./host')`。
    */
   loadHost?: () => Promise<HostModule>
+  /** 用系统浏览器打开链接(index.ts 注入 shell.openExternal;mffai 目录不 import electron) */
+  openExternal: (url: string) => void
+}
+
+const str = (v: unknown): string => (typeof v === 'string' ? v : '')
+const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' ? (v as Record<string, unknown>) : {})
+
+/** 页面传来的 { accountId, modelId };不像就当没选 */
+function modelRef(v: unknown): { accountId: string; modelId: string } | undefined {
+  const o = obj(v)
+  return typeof o.accountId === 'string' && typeof o.modelId === 'string' ? { accountId: o.accountId, modelId: o.modelId } : undefined
+}
+
+/** 只挑添加账号认得的字段(commandId 由宿主生成);其余校验交给工作进程 */
+function addAccountInput(v: unknown): AddAccountInput {
+  const o = obj(v)
+  const out: AddAccountInput = { presetId: str(o.presetId) }
+  for (const k of ['label', 'apiKey', 'baseUrl'] as const) if (typeof o[k] === 'string') out[k] = o[k]
+  if (typeof o.protocol === 'string') out.protocol = o.protocol as AddAccountInput['protocol']
+  if (typeof o.restrictionAck === 'boolean') out.restrictionAck = o.restrictionAck
+  return out
 }
 
 /** mff-ai 的本机 IPC。用 ipcMain.handle 直接注册,不进方法表(不跟随远程主机路由) */
@@ -67,10 +89,27 @@ export function registerMffaiIpc(deps: MffaiIpcDeps): void {
     const n = Math.min(1000, Math.max(1, Math.trunc(Number(limit)) || 50))
     return (await loadHost()).tail(n)
   })
-  deps.handle(CH.mffaiPrompt, async (text) => {
+  /** 未启用直接拒绝(不加载 host),启用才转给 host */
+  const requireEnabled = <A extends unknown[]>(fn: (h: HostModule, ...a: A) => unknown) => async (...a: A) => {
     if (!enabled()) throw new Error('mff-ai 未启用')
-    return (await loadHost()).prompt(String(text ?? ''))
-  })
+    return fn(await loadHost(), ...a)
+  }
+
+  deps.handle(CH.mffaiPrompt, requireEnabled((h, text, model) => {
+    const ref = modelRef(model)
+    return ref ? h.prompt(String(text ?? ''), ref) : h.prompt(String(text ?? ''))
+  }))
+  deps.handle(CH.mffaiModelsCatalog, requireEnabled((h) => h.modelsCatalog()))
+  deps.handle(CH.mffaiModelsAccounts, requireEnabled((h) => h.modelsAccounts()))
+  deps.handle(CH.mffaiModelsAddAccount, requireEnabled((h, input) => h.addAccount(addAccountInput(input))))
+  deps.handle(CH.mffaiModelsRemoveAccount, requireEnabled((h, id) => h.removeAccount(str(id))))
+  deps.handle(CH.mffaiModelsTestAccount, requireEnabled((h, id) => h.testAccount(str(id))))
+  deps.handle(CH.mffaiModelsSetDefault, requireEnabled((h, accountId, modelId) =>
+    h.setDefault({ accountId: str(accountId), modelId: str(modelId) })))
+  deps.handle(CH.mffaiModelsQuota, requireEnabled((h, id) => h.quota(str(id))))
+  deps.handle(CH.mffaiChatgptBegin, requireEnabled((h) => h.chatgptBegin(deps.openExternal)))
+  deps.handle(CH.mffaiChatgptCancel, requireEnabled((h, flowId) => h.chatgptCancel(str(flowId))))
+  deps.handle(CH.mffaiOpenExternal, requireEnabled((h, url) => h.openExternal(str(url), deps.openExternal)))
 }
 
 type MffaiSetting = Settings['mffai']
