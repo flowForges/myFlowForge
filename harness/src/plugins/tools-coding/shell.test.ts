@@ -72,7 +72,7 @@ const baseEnv = () => ({
   ...(process.platform === 'win32' && { ComSpec: process.env.ComSpec, SystemRoot: process.env.SystemRoot, PATHEXT: process.env.PATHEXT }),
 })
 
-async function boot(approvalMode: 'ask' | 'auto' = 'auto') {
+async function boot(approvalMode: 'ask' | 'auto' = 'auto', loginPath: () => Promise<string> = async () => '') {
   let tools: ToolsService | undefined
   let sessions: Sessions | undefined
   const probe: Plugin = {
@@ -84,7 +84,7 @@ async function boot(approvalMode: 'ask' | 'auto' = 'auto') {
   }
   const k = await createKernel({
     dataDir, home, secrets: { osBackend: false },
-    plugins: [toolsRegistry, createToolsCoding({ shellEnv: baseEnv(), loginPath: async () => '', minTimeoutMs: 100 }), probe],
+    plugins: [toolsRegistry, createToolsCoding({ shellEnv: baseEnv(), loginPath, minTimeoutMs: 100 }), probe],
   })
   kernels.push(k)
   const { sessionId } = (await k.handle('session.create', { commandId: `c${Math.random()}`, cwd, approvalMode })) as { sessionId: string }
@@ -137,6 +137,15 @@ describe('shell tool', () => {
     const { call } = await boot()
     const r = await call({ command: track('printf %s "$PATH"') })
     expect(r.content.replace(/^exit 0\n/, '').split(':')).toContain('/opt/homebrew/bin')
+  })
+
+  it.skipIf(!posix)('the login-shell PATH reaches the child, after the base PATH', async () => {
+    const { call } = await boot('auto', async () => '/login/only/bin:relative/bin')
+    const r = await call({ command: track('printf %s "$PATH"') })
+    const parts = r.content.replace(/^exit 0\n/, '').split(':')
+    expect(parts).toContain('/login/only/bin')
+    expect(parts).not.toContain('relative/bin')
+    expect(parts.indexOf('/login/only/bin')).toBeGreaterThan(parts.indexOf((process.env.PATH ?? '').split(':').find(p => p.startsWith('/'))!))
   })
 
   it.skipIf(!posix)('runs in the session cwd', async () => {
@@ -213,6 +222,17 @@ describe('shell tool', () => {
 describe('runShell', () => {
   const env = () => ({ PATH: process.env.PATH ?? '', HOME: home })
 
+  it.skipIf(!posix)('M2: abort then the timeout firing in the grace period → still reported as cancelled', async () => {
+    const { call, ctxOf } = await boot()
+    const ac = new AbortController()
+    // 忽略 TERM:取消后还要等 2 s 才 SIGKILL,其间 100 ms 的超时也触发
+    const p = call({ command: track(`trap '' TERM; sleep 60 & echo $! > pid; wait`), timeoutMs: 400 }, ctxOf(ac.signal))
+    expect(await waitFor(() => existsSync(join(cwd, 'pid')) && readFileSync(join(cwd, 'pid'), 'utf8').trim() !== '')).toBe(true)
+    ac.abort()
+    const r = await p
+    expect(r.content.startsWith('已取消')).toBe(true)
+  }, 10_000)
+
   it.skipIf(!posix)('caps output at 1 MB and keeps the tail', async () => {
     const r = await runShell(track(`head -c 1500000 /dev/zero | tr '\\0' a; echo; echo TAIL-MARK`), {
       cwd, env: env(), timeoutMs: 20_000, signal: new AbortController().signal, platform: process.platform,
@@ -231,6 +251,28 @@ describe('runShell', () => {
     expect(r).toMatchObject({ code: null, cancelled: true, timedOut: false })
     await sleep(100)
     expect(existsSync(marker)).toBe(false)
+  })
+
+  it.skipIf(!posix)('I2: win32 path — taskkill fails / pipe stays open → the call still returns (close fallback)', async () => {
+    // 在 POSIX 上用 platform:'win32' 走 Windows 分支:不建进程组,taskkill.exe 不存在 → child.kill() 只杀 sh;
+    // 后台的 sleep 拿着 stdout,close 永远不来 —— 必须靠 2 s + 1 s 兜底返回
+    const t0 = Date.now()
+    const r = await runShell(`sleep 60 & echo $! > '${join(cwd, 'pid')}'; wait`, {
+      cwd, env: env(), timeoutMs: 200, signal: new AbortController().signal, platform: 'win32',
+    })
+    expect(r.timedOut).toBe(true)
+    expect(Date.now() - t0).toBeLessThan(5000)
+    process.kill(pidIn('pid'), 'SIGKILL') // 这个分支杀不到孙进程(不在单独的组里);测试自己收尾
+  }, 10_000)
+
+  it('UTF-8 is never cut mid-character when the tail is trimmed', async () => {
+    const r = await runShell(posix ? `node -e "process.stdout.write('€'.repeat(400000))"` : 'echo', {
+      cwd, env: { ...env(), PATH: process.env.PATH ?? '' }, timeoutMs: 20_000, signal: new AbortController().signal, platform: process.platform,
+    })
+    if (posix) {
+      expect(r.output).not.toContain('\uFFFD')
+      expect(r.output.endsWith('€€€')).toBe(true)
+    }
   })
 
   it.skipIf(!posix)('missing cwd → rejects', async () => {

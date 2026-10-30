@@ -132,7 +132,14 @@ export function writeChecked(p: string, content: string, recheck: () => boolean)
   mkdirChecked(dirname(p))
   if (!recheck()) throw changed(p)
   // 不带 O_TRUNC:先确认是普通文件、没有别的硬链接(cwd 里指向凭据文件的硬链接 realpath 看不出来),再截断
-  const fd = openSync(p, constants.O_WRONLY | constants.O_CREAT | O_NOFOLLOW, 0o666)
+  // O_NONBLOCK:没有读端的 FIFO 不会卡住线程(→ ENXIO),有读端的由下面的 isFile 拒绝;对普通文件没有影响
+  let fd: number
+  try {
+    fd = openSync(p, constants.O_WRONLY | constants.O_CREAT | O_NOFOLLOW | O_NONBLOCK, 0o666)
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENXIO') throw new Error(`不是普通文件:${p}`)
+    throw e
+  }
   try {
     const st = fstatSync(fd)
     if (!st.isFile()) throw new Error(`不是普通文件:${p}`)

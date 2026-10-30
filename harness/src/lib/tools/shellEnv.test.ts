@@ -21,6 +21,12 @@ const posixBase = {
   NODE_OPTIONS: '--require /evil.js',
   GIT_DIR: '/elsewhere',
   DYLD_INSERT_LIBRARIES: '/evil.dylib',
+  // 工作进程自己的变量(src/main/mffai/spawn.ts daemonEnv)
+  ELECTRON_RUN_AS_NODE: '1',
+  MFFAI_DATA_DIR: '/data',
+  MFFAI_SECRETS_PLAINTEXT: '1',
+  NODE_USE_ENV_PROXY: '1',
+  path: '/lower/case',
 }
 
 describe('shellEnv', () => {
@@ -31,7 +37,32 @@ describe('shellEnv', () => {
       TERM: 'xterm', TMPDIR: '/tmp/x', TZ: 'UTC', HTTP_PROXY: 'http://p:1', https_proxy: 'http://p:2', NO_PROXY: 'localhost',
       MFFAI: '1', GIT_TERMINAL_PROMPT: '0', CI: '1',
     })
-    for (const k of ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'NODE_OPTIONS', 'GIT_DIR', 'DYLD_INSERT_LIBRARIES']) expect(env).not.toHaveProperty(k)
+    for (const k of ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'NODE_OPTIONS', 'GIT_DIR', 'DYLD_INSERT_LIBRARIES', 'ELECTRON_RUN_AS_NODE', 'MFFAI_DATA_DIR', 'MFFAI_SECRETS_PLAINTEXT', 'NODE_USE_ENV_PROXY', 'path'])
+      expect(env).not.toHaveProperty(k)
+    expect(env.PATH).not.toContain('/lower/case')
+  })
+
+  it('proxy URLs lose user:pass@ (with or without scheme); NO_PROXY untouched', () => {
+    const env = shellEnv(
+      {
+        HTTP_PROXY: 'http://alice:s3cret@proxy.local:8080',
+        https_proxy: 'https://tok@proxy.local:443/',
+        ALL_PROXY: 'socks5://u:p@[::1]:1080',
+        all_proxy: 'bob:pw@proxy.local:3128',
+        HTTPS_PROXY: 'http://proxy.local:8080',
+        NO_PROXY: 'a@b,localhost',
+      },
+      { platform: 'linux', home: '/h' },
+    )
+    expect(env).toMatchObject({
+      HTTP_PROXY: 'http://proxy.local:8080',
+      https_proxy: 'https://proxy.local:443/',
+      ALL_PROXY: 'socks5://[::1]:1080',
+      all_proxy: 'proxy.local:3128',
+      HTTPS_PROXY: 'http://proxy.local:8080',
+      NO_PROXY: 'a@b,localhost',
+    })
+    expect(JSON.stringify(env)).not.toMatch(/s3cret|alice|tok@|bob|pw@/)
   })
 
   it('the added variables cannot be overridden by the base', () => {

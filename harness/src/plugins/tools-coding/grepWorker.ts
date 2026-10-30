@@ -22,7 +22,7 @@ for (const f of files) {
   try {
     // 中间段在过门后被换成链接 → realpath 不再是它自己,不读
     if (!same(fs.realpathSync.native(f), f)) continue
-    fd = fs.openSync(f, fs.constants.O_RDONLY | nofollow)
+    fd = fs.openSync(f, fs.constants.O_RDONLY | nofollow | (fs.constants.O_NONBLOCK || 0)) // FIFO 不会卡住线程
     const st = fs.fstatSync(fd)
     if (!st.isFile() || st.size > maxBytes) continue
     const buf = fs.readFileSync(fd)

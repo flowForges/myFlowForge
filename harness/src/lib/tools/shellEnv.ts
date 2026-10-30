@@ -14,6 +14,10 @@ const ALLOW = new Set(
 /** 代理变量大小写各一套;Windows 的变量名本身不区分大小写 → 一律按大写比 */
 const allowed = (k: string) => ALLOW.has(k.toUpperCase()) || k.startsWith('LC_')
 
+/** 代理 URL 去掉 `user:pass@`(子进程用不着用户的代理凭据,模型 `env` 一下就能看到);有无 scheme 都处理 */
+const PROXY = /^(HTTPS?|ALL)_PROXY$/
+const stripUserinfo = (v: string) => v.replace(/^([A-Za-z][A-Za-z0-9+.-]*:\/\/)?[^/?#]*@/, '$1')
+
 const FIXED = { MFFAI: '1', GIT_TERMINAL_PROMPT: '0', CI: '1' }
 
 /** 常见安装目录(登录 shell 探测失败时的兜底) */
@@ -41,7 +45,7 @@ function mergePath(lists: (string | undefined)[]): string {
 
 export function shellEnv(base: NodeJS.ProcessEnv, opts: { platform: NodeJS.Platform; home: string; loginPath?: string }): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
-  for (const [k, v] of Object.entries(base)) if (v !== undefined && allowed(k)) env[k] = v
+  for (const [k, v] of Object.entries(base)) if (v !== undefined && allowed(k)) env[k] = PROXY.test(k.toUpperCase()) ? stripUserinfo(v) : v
   for (const k of Object.keys(env)) if (k.toUpperCase() in FIXED) delete env[k]
   if (opts.platform !== 'win32') {
     for (const k of Object.keys(env)) if (k !== 'PATH' && k.toUpperCase() === 'PATH') delete env[k]

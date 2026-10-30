@@ -539,7 +539,7 @@ describe('review fixes (Task 7 R1)', () => {
     expect(r.content).toMatch(/过大/)
   })
 
-  it.skipIf(process.platform === 'win32')('Task 9 carry: read / edit of a FIFO → isError without blocking; the kernel stays responsive', async () => {
+  it.skipIf(process.platform === 'win32')('Task 9 carry: read / edit / write / grep of a FIFO → isError without blocking; the kernel stays responsive', async () => {
     execFileSync('mkfifo', [join(cwd, 'pipe')])
     const { k, call } = await boot()
     const t0 = Date.now()
@@ -549,6 +549,11 @@ describe('review fixes (Task 7 R1)', () => {
     const e = await call('edit', { path: 'pipe', old: 'a', new: 'b' })
     expect(e.isError).toBe(true)
     expect(e.content).toMatch(/普通文件/)
+    const w = await call('write', { path: 'pipe', content: 'x' })
+    expect(w.isError).toBe(true)
+    expect(w.content).toMatch(/普通文件/)
+    const g = await call('grep', { pattern: 'x', path: 'pipe' }) // worker 里也非阻塞打开:不卡线程
+    expect(g.content).not.toMatch(/超时/)
     await k.handle('status', {})
     expect(Date.now() - t0).toBeLessThan(1000)
   }, 3000)

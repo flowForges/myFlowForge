@@ -58,9 +58,11 @@ class TailBuffer {
         this.size -= first.length
         this.dropped += first.length
       } else {
-        this.chunks[0] = first.subarray(over)
-        this.size -= over
-        this.dropped += over
+        let cut = over
+        while (cut < first.length && (first[cut] & 0xc0) === 0x80) cut++ // 不切在 UTF-8 字符中间
+        this.chunks[0] = first.subarray(cut)
+        this.size -= cut
+        this.dropped += cut
       }
     }
   }
@@ -104,14 +106,16 @@ export function runShell(command: string, opts: RunShellOpts): Promise<ShellRun>
       if (killing || child.pid === undefined) return
       killing = true
       if (win) {
-        const tk = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+        // 绝对路径:不按工作进程的 PATH / 当前目录找 taskkill
+        const taskkill = `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\taskkill.exe`
+        const tk = spawn(taskkill, ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
         tk.on('error', () => child.kill())
-        return
-      }
-      group('SIGTERM')
+        tk.on('exit', code => code !== 0 && child.kill())
+      } else group('SIGTERM')
+      // 两个平台同一条兜底:2 s 后 SIGKILL(win32 已是强杀),再 1 s 管道还不关(有进程拿着继承的句柄)→ 不等了
       timers.push(
         setTimeout(() => {
-          group('SIGKILL')
+          if (!win) group('SIGKILL')
           timers.push(
             setTimeout(() => {
               child.stdout!.destroy()
@@ -166,7 +170,7 @@ export function shellTool(deps: ShellDeps = {}): Tool {
   const loginPath = deps.loginPath ?? (() => loginShellPath())
   return {
     name: 'shell',
-    description: `Run a shell command in the working directory (POSIX /bin/sh -c, Windows cmd.exe). stdout and stderr are merged; stdin is closed, so interactive commands cannot prompt. Default timeout ${DEFAULT_TIMEOUT / 1000} s, max ${MAX_TIMEOUT / 1000} s; on timeout the whole process tree is killed.`,
+    description: `Run a shell command in the working directory (POSIX /bin/sh -c, Windows cmd.exe). stdout and stderr are merged; stdin is closed, so interactive commands cannot prompt. Default timeout ${DEFAULT_TIMEOUT / 1000} s, max ${MAX_TIMEOUT / 1000} s; on timeout the whole process tree is killed. A background job that keeps stdout/stderr open keeps the call running until the timeout; redirect its output (e.g. cmd >/dev/null 2>&1 &).`,
     parameters: jsonSchema(Args),
     permission: raw => [{ actor: 'tools', action: 'exec', resource: argsOf(Args, raw).command }],
     async run(raw, ctx) {
@@ -176,8 +180,8 @@ export function shellTool(deps: ShellDeps = {}): Tool {
       const home = b.HOME ?? b.USERPROFILE ?? homedir()
       const env = shellEnv(b, { platform: process.platform, home, loginPath: await loginPath().catch(() => '') })
       const r = await runShell(args.command, { cwd: ctx.cwd, env, timeoutMs, signal: ctx.signal, platform: process.platform })
+      if (r.cancelled) return { content: `已取消\n${r.output}`, isError: true } // 取消后的宽限期里超时也触发 → 仍报取消
       if (r.timedOut) return { content: `timeout after ${timeoutMs} ms\n${r.output}`, isError: true }
-      if (r.cancelled) return { content: `已取消\n${r.output}`, isError: true }
       return { content: `exit ${r.code ?? r.signal}\n${r.output}` }
     },
   }
