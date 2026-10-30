@@ -66,3 +66,9 @@ export async function collect(it: AsyncIterable<ModelEvent>): Promise<ModelEvent
 }
 
 export const text = (evs: ModelEvent[]) => evs.flatMap((e) => (e.type === 'text' ? [e.delta] : [])).join('')
+
+/** 写完 text 后优雅关 socket(FIN 排在数据之后,确定性):chunked 响应缺终止块 → 客户端读流报错 */
+export const cutStream = (req: IncomingMessage, res: ServerResponse, text: string) => {
+  res.writeHead(200, { 'content-type': 'text/event-stream' })
+  res.write(text, () => req.socket.end())
+}

@@ -52,6 +52,8 @@ export interface Account {
   apiKey?: string
   state: AccountState
   quirks?: Record<string, unknown>
+  /** test() 回退探测用的模型 id(目录首项或手填首项) */
+  testModel?: string
 }
 
 /** 只有收到 done 才算结束;错误永远以 done{error} 结束,不抛给调用方 */

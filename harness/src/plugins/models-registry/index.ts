@@ -137,8 +137,10 @@ export function createModelsRegistry(opts: RegistryOpts = {}): Plugin {
             return { error: { kind: 'auth', message: 'api key unavailable', retryable: false } }
           }
         }
+        const testModel = (service.catalog().models[a.presetId]?.[0] ?? a.models?.[0])?.id
         const account: Account = {
           id: a.id, presetId: a.presetId, label: a.label, protocol, baseUrl, state: store.state(a.id), quirks: p.quirks,
+          ...(testModel !== undefined && { testModel }),
           ...(apiKey !== undefined && { apiKey }),
         }
         return { account, adapter }

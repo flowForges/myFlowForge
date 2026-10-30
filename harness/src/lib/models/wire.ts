@@ -7,19 +7,19 @@ const HEADER_TIMEOUT_MS = 30_000
 
 export const joinUrl = (base: string, path: string) => base.replace(/\/+$/, '') + path
 
-export function openaiHeaders(account: Account): Record<string, string> {
-  return { 'content-type': 'application/json', accept: 'text/event-stream', ...(account.apiKey && { authorization: `Bearer ${account.apiKey}` }) }
+/** 仅认证头(GET 用) */
+export function openaiAuth(account: Account): Record<string, string> {
+  return account.apiKey ? { authorization: `Bearer ${account.apiKey}` } : {}
 }
 
 /** Anthropic 线:只发 x-api-key,不带 Authorization */
-export function anthropicHeaders(account: Account): Record<string, string> {
-  return {
-    'content-type': 'application/json',
-    accept: 'text/event-stream',
-    'anthropic-version': '2023-06-01',
-    ...(account.apiKey && { 'x-api-key': account.apiKey }),
-  }
+export function anthropicAuth(account: Account): Record<string, string> {
+  return { 'anthropic-version': '2023-06-01', ...(account.apiKey && { 'x-api-key': account.apiKey }) }
 }
+
+const STREAM_HEADERS = { 'content-type': 'application/json', accept: 'text/event-stream' }
+export const openaiHeaders = (account: Account) => ({ ...STREAM_HEADERS, ...openaiAuth(account) })
+export const anthropicHeaders = (account: Account) => ({ ...STREAM_HEADERS, ...anthropicAuth(account) })
 
 const cancelled = (): ModelEvent => ({ type: 'done', reason: 'cancelled' })
 
@@ -77,4 +77,33 @@ export function modelIds(json: unknown): { id: string; name?: string }[] {
     const name = typeof m.display_name === 'string' ? m.display_name : typeof m.name === 'string' ? m.name : undefined
     return [{ id: m.id, ...(name && name !== m.id && { name }) }]
   })
+}
+
+const INVALID_MODEL = /model/i
+
+/**
+ * test() 回退:列表端点 404 时发 1 token 流式请求,读到首个 SSE 事件即中止;2xx = 通过。
+ * 400 且错误指向模型无效 = key 已被接受,也算通过。首事件等待有独立期限,防止只发头不发体的服务端卡住。
+ */
+export async function probeWithTinyStream(url: string, headers: Record<string, string>, body: object, timeoutMs = 10_000): Promise<void> {
+  const ac = new AbortController()
+  try {
+    const res = await postStream(url, { headers, body: JSON.stringify(body), signal: ac.signal, timeoutMs })
+    const first = (async () => {
+      for await (const _ of parseSSE(res.body!)) return
+    })()
+    first.catch(() => {})
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const stall = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new ModelFailure({ kind: 'network', message: 'timeout waiting for first event', retryable: true })), timeoutMs)
+    })
+    try { await Promise.race([first, stall]) } catch (err) {
+      if (err instanceof ModelFailure) throw err // 超时;流中途出错但已拿到 2xx,视为通过
+    } finally { clearTimeout(timer) }
+  } catch (err) {
+    if (err instanceof ModelFailure && err.error.kind === 'bad_request' && INVALID_MODEL.test(err.error.message)) return
+    throw err
+  } finally {
+    ac.abort()
+  }
 }

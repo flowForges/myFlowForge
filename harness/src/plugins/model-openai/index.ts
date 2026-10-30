@@ -4,21 +4,22 @@ import { manifest } from './manifest'
 import { buildChatBody, decodeChatStream, type ChatQuirks } from '../../lib/models/chat'
 import { buildResponsesBody, decodeResponsesStream } from '../../lib/models/responses'
 import type { Account, ModelAdapter, ModelsService } from '../../lib/models/types'
-import { getJson, joinUrl, modelIds, openaiHeaders, streamWire } from '../../lib/models/wire'
+import { getJson, joinUrl, modelIds, openaiAuth, openaiHeaders, probeWithTinyStream, streamWire } from '../../lib/models/wire'
 
-const authOnly = (a: Account) => ({ ...(a.apiKey && { authorization: `Bearer ${a.apiKey}` }) })
-
-const common = {
+// 通用部分:test() 先走 GET /models,404 则按协议发 1 token 流式请求
+const common = (probeTimeoutMs: number | undefined, path: string, probeBody: (model: string) => object) => ({
   async test(account: Account) {
-    await getJson(joinUrl(account.baseUrl, '/models'), authOnly(account))
+    const r = await getJson(joinUrl(account.baseUrl, '/models'), openaiAuth(account), { tolerate404: true })
+    if (r !== undefined) return
+    await probeWithTinyStream(joinUrl(account.baseUrl, path), openaiHeaders(account), probeBody(account.testModel ?? 'gpt-4o-mini'), probeTimeoutMs)
   },
   async listModels(account: Account) {
-    return modelIds(await getJson(joinUrl(account.baseUrl, '/models'), authOnly(account)))
+    return modelIds(await getJson(joinUrl(account.baseUrl, '/models'), openaiAuth(account)))
   },
-}
+})
 
-const chat: ModelAdapter = {
-  ...common,
+const chat = (t?: number): ModelAdapter => ({
+  ...common(t, '/chat/completions', (model) => ({ model, stream: true, max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] })),
   stream: (account, req) =>
     streamWire(
       joinUrl(account.baseUrl, '/chat/completions'),
@@ -27,10 +28,10 @@ const chat: ModelAdapter = {
       req,
       decodeChatStream,
     ),
-}
+})
 
-const responses: ModelAdapter = {
-  ...common,
+const responses = (t?: number): ModelAdapter => ({
+  ...common(t, '/responses', (model) => ({ model, stream: true, store: false, max_output_tokens: 16, input: 'hi' })),
   stream: (account, req) =>
     streamWire(
       joinUrl(account.baseUrl, '/responses'),
@@ -39,15 +40,17 @@ const responses: ModelAdapter = {
       req,
       decodeResponsesStream,
     ),
+})
+
+export function createModelOpenai(opts: { probeTimeoutMs?: number } = {}): Plugin {
+  return {
+    manifest,
+    activate(ctx) {
+      const models = ctx.services.get<ModelsService>('models')!
+      ctx.effect(models.registerAdapter('openai-chat', chat(opts.probeTimeoutMs)))
+      ctx.effect(models.registerAdapter('openai-responses', responses(opts.probeTimeoutMs)))
+    },
+  }
 }
 
-const modelOpenai: Plugin = {
-  manifest,
-  activate(ctx) {
-    const models = ctx.services.get<ModelsService>('models')!
-    ctx.effect(models.registerAdapter('openai-chat', chat))
-    ctx.effect(models.registerAdapter('openai-responses', responses))
-  },
-}
-
-export default modelOpenai
+export default createModelOpenai()
