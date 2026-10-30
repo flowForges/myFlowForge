@@ -86,7 +86,11 @@ export async function runSupervisor(): Promise<void> {
   const supervisor = new Supervisor({
     workerCmd: process.execPath,
     workerArgs: [__filename, '--worker'],
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', MFFAI_DATA_DIR: dir },
+    env: {
+      ...process.env, ELECTRON_RUN_AS_NODE: '1', MFFAI_DATA_DIR: dir,
+      // 工作进程才上网:有代理环境变量就让内置 fetch 走代理
+      ...(['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy'].some(k => process.env[k]) && { NODE_USE_ENV_PROXY: '1' }),
+    },
     log,
     onState: s => held && writeJson(s),
   })

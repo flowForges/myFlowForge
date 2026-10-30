@@ -23,7 +23,7 @@ import { spawnDaemon, type SpawnFn } from './spawn'
 
 export interface HostDeps {
   send(ch: string, payload: unknown): void
-  readSettings(): { mffai: { enabled: boolean; autostart: boolean } }
+  readSettings(): { mffai: { enabled: boolean; autostart: boolean }; appProxy?: string }
   clientVersion: string
   /** out/main/mffaiDaemon.js 的绝对路径(由 index.ts 算,见 spawn.ts) */
   daemonJs: string
@@ -116,7 +116,7 @@ export function createMffaiHost(deps: HostDeps) {
   const spawn = () => {
     mkdirSync(dir, { recursive: true })
     spawnError = undefined
-    spawnDaemon({ execPath, daemonJs: deps.daemonJs, dataDir: dir }, deps.spawnFn, (err) => {
+    spawnDaemon({ execPath, daemonJs: deps.daemonJs, dataDir: dir, proxy: deps.readSettings().appProxy }, deps.spawnFn, (err) => {
       spawnError = err.message
       log('mffai spawn failed', err)
     })

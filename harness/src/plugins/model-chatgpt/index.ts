@@ -379,6 +379,12 @@ export function createModelChatgpt(opts: ChatgptOpts = {}): Plugin {
           try {
             const r = await complete(q)
             if (typeof r === 'string') {
+              // 只记原因和授权服务器回的 error / error_description(不含授权码与令牌)
+              ctx.log.warn('chatgpt login failed', {
+                failure: r,
+                ...(q.get('error') && { error: q.get('error')!.slice(0, 80) }),
+                ...(q.get('error_description') && { description: q.get('error_description')!.slice(0, 300) }),
+              })
               end(false)
               return { status: 400, text: r, close: true }
             }

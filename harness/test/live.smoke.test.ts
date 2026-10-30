@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from 'vitest'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -18,6 +18,12 @@ describe.skipIf(!LIVE)('live smoke', () => {
   let sup: ChildProcess | undefined
   const data = mkdtempSync(join(tmpdir(), 'mffai-live-'))
   afterAll(async () => {
+    // 删目录前把守护进程日志里的 warn / error 打出来(日志不含密钥)
+    try {
+      const dir = runtimePaths(data).logs
+      for (const f of readdirSync(dir)) for (const line of readFileSync(join(dir, f), 'utf8').split('\n'))
+        if (/warn|error/i.test(line)) log(`${f}: ${line.slice(0, 600)}`)
+    } catch { /* 无日志 */ }
     try {
       const c = await connectControlClient({ addr: runtimePaths(data).controlAddr, token: readFileSync(runtimePaths(data).token, 'utf8').trim() })
       await c.call('shutdown'); c.close()

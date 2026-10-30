@@ -10,8 +10,15 @@ describe('daemonEnv', () => {
     }
     expect(daemonEnv(base, '/data')).toEqual({
       PATH: '/usr/bin', HOME: '/home/u', HTTPS_PROXY: 'http://p:1', http_proxy: 'http://p:2', NO_PROXY: 'localhost',
-      ELECTRON_RUN_AS_NODE: '1', MFFAI_DATA_DIR: '/data',
+      ELECTRON_RUN_AS_NODE: '1', MFFAI_DATA_DIR: '/data', NODE_USE_ENV_PROXY: '1',
     })
     expect(base.NODE_OPTIONS).toBe('--inspect') // 不改原对象
+  })
+  it('appProxy 覆盖继承的代理并打开 NODE_USE_ENV_PROXY;无代理时不打开', () => {
+    const env = daemonEnv({ PATH: '/b', NO_PROXY: 'corp' }, '/d', ' http://127.0.0.1:7897 ')
+    for (const k of ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']) expect(env[k]).toBe('http://127.0.0.1:7897')
+    expect(env.NO_PROXY).toBe('corp,localhost,127.0.0.1')
+    expect(env.NODE_USE_ENV_PROXY).toBe('1')
+    expect(daemonEnv({ PATH: '/b' }, '/d', '').NODE_USE_ENV_PROXY).toBeUndefined()
   })
 })
