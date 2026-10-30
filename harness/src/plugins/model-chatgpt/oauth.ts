@@ -101,7 +101,8 @@ export class TokenError extends Error {
 
 export interface TokenSet {
   accessToken: string
-  refreshToken: string
+  /** 刷新响应可能不轮换:缺省时沿用旧的 */
+  refreshToken?: string
   idToken?: string
   expiresAt: number
   earliestRefreshAt?: number
@@ -132,20 +133,22 @@ const oauthCode = (text: string): string | undefined => {
   return undefined
 }
 
-async function post(url: string, form: Record<string, string>): Promise<Response> {
+const timeout = (signal?: AbortSignal) => (signal ? AbortSignal.any([signal, AbortSignal.timeout(HTTP_TIMEOUT_MS)]) : AbortSignal.timeout(HTTP_TIMEOUT_MS))
+
+async function post(url: string, form: Record<string, string>, signal?: AbortSignal): Promise<Response> {
   return fetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
     body: new URLSearchParams(form).toString(),
-    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+    signal: timeout(signal),
   })
 }
 
-export async function postToken(authBase: string, form: Record<string, string>, now: number): Promise<TokenSet> {
+export async function postToken(authBase: string, form: Record<string, string>, now: number, signal?: AbortSignal): Promise<TokenSet> {
   let res: Response
   let text: string
   try {
-    res = await post(`${authBase}/api/accounts/oauth/token`, form)
+    res = await post(`${authBase}/api/accounts/oauth/token`, form, signal)
     text = await res.text()
   } catch {
     throw new TokenError(0)
@@ -158,11 +161,11 @@ export async function postToken(authBase: string, form: Record<string, string>, 
     throw new TokenError(res.status, 'invalid_response')
   }
   const { access_token: at, refresh_token: rt, id_token: it, expires_in: exp, scope } = j
-  if (typeof at !== 'string' || !at || typeof rt !== 'string' || !rt) throw new TokenError(res.status, 'invalid_response')
+  if (typeof at !== 'string' || !at) throw new TokenError(res.status, 'invalid_response')
   const earliest = toMs(j.earliest_refresh_at)
   return {
     accessToken: at,
-    refreshToken: rt,
+    ...(typeof rt === 'string' && rt && { refreshToken: rt }),
     ...(typeof it === 'string' && it && { idToken: it }),
     expiresAt: now + (typeof exp === 'number' && exp > 0 ? exp : 3600) * 1000,
     ...(earliest !== undefined && { earliestRefreshAt: earliest }),
@@ -170,8 +173,8 @@ export async function postToken(authBase: string, form: Record<string, string>, 
   }
 }
 
-async function getJson(url: string): Promise<Record<string, unknown>> {
-  const res = await fetch(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) })
+async function getJson(url: string, signal?: AbortSignal): Promise<Record<string, unknown>> {
+  const res = await fetch(url, { headers: { accept: 'application/json' }, signal: timeout(signal) })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return (await res.json()) as Record<string, unknown>
 }
@@ -183,8 +186,8 @@ async function revocationEndpoint(authBase: string): Promise<string> {
   return v
 }
 
-export async function fetchJwks(authBase: string): Promise<Jwks> {
-  const j = await getJson(`${authBase}/.well-known/jwks.json`)
+export async function fetchJwks(authBase: string, signal?: AbortSignal): Promise<Jwks> {
+  const j = await getJson(`${authBase}/.well-known/jwks.json`, signal)
   if (!Array.isArray(j.keys)) throw new Error('bad jwks')
   return j as unknown as Jwks
 }
@@ -228,14 +231,22 @@ export interface CallbackReply {
  */
 export async function listenCallback(preferredPort: number, onCallback: (q: URLSearchParams) => Promise<CallbackReply>): Promise<CallbackListener> {
   const close = () => {
-    server.close()
+    if (server.listening) server.close()
     server.closeAllConnections()
   }
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
+    // 'close' 在发完与浏览器中途断开时都会触发;断开后 end 的回调不再触发,不能靠它关监听
+    let gone = false
+    res.once('close', () => { gone = true })
     const reply = (r: CallbackReply) => {
-      res.writeHead(r.status, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', connection: 'close' })
-      res.end(r.text, () => { if (r.close) close() })
+      if (!gone) {
+        res.writeHead(r.status, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', connection: 'close' })
+        res.end(r.text)
+      }
+      if (!r.close) return
+      if (gone) close()
+      else res.once('close', close)
     }
     if (req.method !== 'GET' || url.pathname !== CALLBACK_PATH) return reply({ status: 404, text: 'not found' })
     onCallback(url.searchParams).then(reply, () => reply({ status: 500, text: '登录失败', close: true }))

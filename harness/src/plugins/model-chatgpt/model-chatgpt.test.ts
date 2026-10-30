@@ -47,6 +47,7 @@ function fakeAuth() {
     nonce: '' as string, sub: 'user-1', scope: 'openid profile email offline_access resource.invoke chatgpt.tokens.use.direct',
     tokenReqs: [] as URLSearchParams[], revokes: [] as URLSearchParams[], n: 0, idTokens: [] as string[],
     refreshDelayMs: 0, refuse: undefined as string | undefined, nonceOverride: undefined as string | undefined,
+    codeDelayMs: 0, omitRefresh: false,
   }
   const idToken = (aud: string) => {
     const head = `${b64({ alg: 'RS256', kid: 'kid-1' })}.${b64({ iss: 'https://auth.openai.com', aud, sub: st.sub, email: 'me@example.com', exp: Math.floor(clock / 1000) + 3600, iat: Math.floor(clock / 1000), nonce: st.nonceOverride ?? st.nonce })}`
@@ -60,13 +61,14 @@ function fakeAuth() {
     if (q.path === '/oauth/revoke') { st.revokes.push(q.form); res.writeHead(200); return res.end() }
     if (q.path === '/api/accounts/oauth/token') {
       st.tokenReqs.push(q.form)
+      if (q.form.get('grant_type') === 'authorization_code' && st.codeDelayMs) await new Promise(r => setTimeout(r, st.codeDelayMs))
       if (q.form.get('grant_type') === 'refresh_token') {
         if (st.refreshDelayMs) await new Promise(r => setTimeout(r, st.refreshDelayMs))
         if (st.refuse) return json(res, 400, { error: st.refuse, error_description: 'nope' })
       }
       st.n++
       return json(res, 200, {
-        access_token: `at-${st.n}`, refresh_token: `rt-${st.n}`, token_type: 'Bearer', expires_in: 3600, scope: st.scope,
+        access_token: `at-${st.n}`, ...(!(st.omitRefresh && q.form.get('grant_type') === 'refresh_token') && { refresh_token: `rt-${st.n}` }), token_type: 'Bearer', expires_in: 3600, scope: st.scope,
         ...(q.form.get('grant_type') === 'authorization_code' && { id_token: idToken(q.form.get('client_id')!) }),
       })
     }
@@ -139,6 +141,7 @@ async function login(k: Kernel, extra: Record<string, string | undefined> = {}) 
 }
 const accounts = async (k: Kernel) => ((await k.handle('models.accounts', {})) as { accounts: AccountView[] }).accounts
 const updates = (k: Kernel) => k.events.tail(200).filter(e => e.type === 'account.updated').map(e => (e.payload as { account: AccountView }).account)
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 const portClosed = async (redirect: string) => fetch(redirect).then(() => false, () => true)
 const req = (extra: object = {}) => ({ messages: [{ role: 'user' as const, parts: [{ type: 'text' as const, text: 'hi' }] }], interactive: true, signal: new AbortController().signal, ...extra })
 async function collect(it: AsyncIterable<ModelEvent>) { const out: ModelEvent[] = []; for await (const e of it) out.push(e); return out }
@@ -284,6 +287,91 @@ describe('model-chatgpt 登录', () => {
     expect(updates(k).length).toBeGreaterThan(before)
   })
 
+  it('非回调路径 → 404,流程不受影响', async () => {
+    const { k } = await boot()
+    const b = await begin(k)
+    const res = await fetch(new URL('/other', b.redirect))
+    expect(res.status).toBe(404)
+    await res.text()
+    expect((await callback(b.redirect, { code: 'c', state: b.p.get('state')!, client_id: 'oaiapp_1' })).text).toBe('已完成')
+  })
+
+  it('缺少 code → 错误页,流程结束', async () => {
+    const { k } = await boot()
+    const { b, r } = await login(k, { code: undefined })
+    expect(r.status).toBe(400)
+    expect(r.type).toBe('text/plain; charset=utf-8')
+    expect(await portClosed(b.redirect)).toBe(true)
+  })
+
+  it('处理中再来回调 → 409', async () => {
+    const { k } = await boot()
+    auth.st.codeDelayMs = 150
+    const b = await begin(k)
+    const params = { code: 'c', state: b.p.get('state')!, client_id: 'oaiapp_1' }
+    const first = callback(b.redirect, params)
+    await sleep(30)
+    expect((await callback(b.redirect, params)).status).toBe(409)
+    expect((await first).text).toBe('已完成')
+    expect(await accounts(k)).toHaveLength(1)
+  })
+
+  it('浏览器在换 token 时断开 → 监听仍会关闭', async () => {
+    const { k } = await boot()
+    auth.st.codeDelayMs = 150
+    const b = await begin(k)
+    const ac = new AbortController()
+    const p = fetch(`${b.redirect}?${new URLSearchParams({ code: 'c', state: b.p.get('state')!, client_id: 'oaiapp_1' })}`, { signal: ac.signal }).catch(() => undefined)
+    await sleep(30)
+    ac.abort()
+    await p
+    await sleep(300)
+    expect(await portClosed(b.redirect)).toBe(true)
+  })
+
+  it('处理中取消 → 立即关闭监听,不建账号', async () => {
+    const { k } = await boot()
+    auth.st.codeDelayMs = 150
+    const b = await begin(k)
+    const cb = callback(b.redirect, { code: 'c', state: b.p.get('state')!, client_id: 'oaiapp_1' }).catch(() => undefined)
+    await sleep(30)
+    expect(await k.handle('auth.chatgpt.cancel', { flowId: b.flowId })).toEqual({ ok: true })
+    expect(await portClosed(b.redirect)).toBe(true)
+    await cb
+    await sleep(200)
+    expect(await accounts(k)).toHaveLength(0)
+  })
+
+  it('处理中关闭内核 → 监听关闭', async () => {
+    const { k } = await boot()
+    auth.st.codeDelayMs = 150
+    const b = await begin(k)
+    const cb = callback(b.redirect, { code: 'c', state: b.p.get('state')!, client_id: 'oaiapp_1' }).catch(() => undefined)
+    await sleep(30)
+    await k.close()
+    kernels = kernels.filter(x => x !== k)
+    expect(await portClosed(b.redirect)).toBe(true)
+    await cb
+  })
+
+  it('并发 begin → 串行,前一个的监听被关闭', async () => {
+    const { k } = await boot()
+    const [x, y] = await Promise.all([k.handle('auth.chatgpt.begin', {}), k.handle('auth.chatgpt.begin', {})]) as Begin[]
+    const rx = new URL(x.authUrl).searchParams.get('redirect_uri')!
+    const ry = new URL(y.authUrl).searchParams.get('redirect_uri')!
+    expect(await portClosed(rx)).toBe(true)
+    expect(await portClosed(ry)).toBe(false)
+    await k.handle('auth.chatgpt.cancel', { flowId: y.flowId })
+  })
+
+  it('以令牌响应的 scope 为准:回调 scope 含 direct 但令牌响应不含 → not_authorized', async () => {
+    const { k } = await boot()
+    const full = auth.st.scope
+    auth.st.scope = 'openid profile email offline_access resource.invoke'
+    await login(k, { scope: full })
+    expect((await accounts(k))[0].state).toBe('not_authorized')
+  })
+
   it('1455 被占用 → 回退到系统分配端口,authUrl 带该端口', async () => {
     const blocker = createNetServer()
     await new Promise<void>(r => blocker.listen(0, '127.0.0.1', r))
@@ -379,6 +467,50 @@ describe('model-chatgpt 推理与令牌', () => {
     clock += (3600 - 100) * 1000
     await collect(svc.stream(ref, req()))
     expect(auth.st.tokenReqs.filter(f => f.get('grant_type') === 'refresh_token')[1].get('refresh_token')).toBe('rt-2')
+  })
+
+  for (const refuse of ['refresh_token_reused', undefined]) {
+    it(`刷新进行中重新登录(刷新${refuse ? '失败' : '成功'})→ 保留新凭据,不回到 needs_login`, async () => {
+      const { k, svc, ref, a } = await ready()
+      svc.setState(a.id, 'needs_login')
+      clock += 3600 * 1000
+      auth.st.refreshDelayMs = 150
+      auth.st.refuse = refuse
+      const pending = collect(svc.stream(ref, req()))
+      await sleep(30)
+      const { r } = await login(k, { client_id: undefined, code: 'code-2' })
+      expect(r.text).toBe('已完成')
+      const evs = await pending
+      expect(evs.at(-1)).toMatchObject({ reason: 'stop' })
+      expect(responsesCalls()[0].headers.authorization).toBe('Bearer at-2') // 登录换来的令牌
+      expect((await accounts(k))[0].state).toBe('ok')
+      await collect(svc.stream(ref, req()))
+      expect(responsesCalls()[1].headers.authorization).toBe('Bearer at-2')
+      expect((await accounts(k))[0].state).toBe('ok')
+    })
+  }
+
+  it('刷新响应不带 refresh_token → 沿用旧的', async () => {
+    const { svc, ref } = await ready()
+    auth.st.omitRefresh = true
+    clock += 3600 * 1000
+    expect((await collect(svc.stream(ref, req()))).at(-1)).toMatchObject({ reason: 'stop' })
+    clock += 3600 * 1000
+    await collect(svc.stream(ref, req()))
+    const refreshes = auth.st.tokenReqs.filter(f => f.get('grant_type') === 'refresh_token')
+    expect(refreshes.map(f => f.get('refresh_token'))).toEqual(['rt-1', 'rt-1'])
+    expect(responsesCalls().map(c => c.headers.authorization)).toEqual(['Bearer at-2', 'Bearer at-3'])
+  })
+
+  it('流中 unsupported_capability 保留 param', async () => {
+    const { svc, ref } = await ready()
+    api.st.respond = (_q, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      res.end('event: response.failed\ndata: {"type":"response.failed","response":{"status":"failed","error":{"code":"subscription_sharing_unsupported_capability","param":"tools[0]","message":"nope"}}}\n\n')
+    }
+    const evs = await collect(svc.stream(ref, req()))
+    expect(evs.at(-1)).toMatchObject({ type: 'done', reason: 'error', error: { kind: 'bad_request', retryable: false } })
+    expect((evs.at(-1) as { error: { message: string } }).error.message).toContain('tools[0]')
   })
 
   it('距过期超过 3 分钟 → 不刷新', async () => {

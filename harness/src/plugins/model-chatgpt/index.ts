@@ -43,25 +43,31 @@ function validRecord(v: unknown): v is OAuthRecord {
   return !!r && typeof r.clientId === 'string' && typeof r.sub === 'string' && Array.isArray(r.scopes)
 }
 
+/** 刷新期间账号重新登录过:结果作废 */
+class Superseded extends Error {
+  name = 'Superseded'
+}
+
 /** Responses 解码 + 套餐共享错误码:流中 response.failed 的码按 §6.4 表改写,并记下供状态判断 */
 async function* decodeChatgptStream(events: AsyncIterable<SSEEvent>, seen: { code?: string }): AsyncIterable<ModelEvent> {
-  let failed: string | undefined
+  let failed: { code?: string; param?: string } | undefined
   async function* tap() {
     for await (const e of events) {
       if (e.data.includes('"error"') || e.data.includes('failed')) {
         try {
-          const f = JSON.parse(e.data) as { type?: string; code?: string; error?: { code?: string }; response?: { error?: { code?: string } } }
+          type Err = { code?: string; param?: string }
+          const f = JSON.parse(e.data) as Err & { type?: string; error?: Err; response?: { error?: Err } }
           const type = e.event ?? f.type
-          if (type === 'response.failed' || type === 'error') failed = f.response?.error?.code ?? f.error?.code ?? f.code
+          if (type === 'response.failed' || type === 'error') failed = f.response?.error ?? f.error ?? f
         } catch { /* 非 JSON 帧 */ }
       }
       yield e
     }
   }
   for await (const ev of decodeResponsesStream(tap())) {
-    if (ev.type === 'done' && ev.error && failed) {
-      seen.code = failed
-      const mapped = mapChatgptCode(failed, ev.error.message)
+    if (ev.type === 'done' && ev.error && failed?.code) {
+      seen.code = failed.code
+      const mapped = mapChatgptCode(failed.code, ev.error.message, failed.param)
       if (mapped) {
         yield { ...ev, error: mapped }
         continue
@@ -84,6 +90,11 @@ export function createModelChatgpt(opts: ChatgptOpts = {}): Plugin {
       const models = ctx.services.get<ModelsService>('models')!
       const flows = new Map<string, () => void>() // flowId → 关闭
       const inflight = new Map<string, Promise<string>>() // accountId → 进行中的取令牌(含刷新)
+      // 登录代次:重新登录写凭据前后各加一;刷新落盘前代次变了 → 作废结果,等登录写完再取
+      const gen = new Map<string, number>()
+      const logins = new Map<string, Promise<void>>()
+      const genOf = (id: string) => gen.get(id) ?? 0
+      const bump = (id: string) => gen.set(id, genOf(id) + 1)
 
       const read = async (id: string): Promise<OAuthRecord | undefined> => {
         const v = await ctx.secrets.get(keyName(id))
@@ -112,7 +123,21 @@ export function createModelChatgpt(opts: ChatgptOpts = {}): Plugin {
       }
 
       // —— 令牌:同一账号同一时刻只有一个取令牌 / 刷新(刷新令牌每次轮换)
-      function accessToken(id: string): Promise<string> {
+      async function accessToken(id: string): Promise<string> {
+        try {
+          return await sharedToken(id)
+        } catch (err) {
+          if (!(err instanceof Superseded)) throw err
+          await logins.get(id)?.catch(() => {})
+          try {
+            return await sharedToken(id)
+          } catch (e) {
+            throw e instanceof Superseded ? fail('unavailable', 'ChatGPT sign-in changed; retry', true) : e
+          }
+        }
+      }
+
+      function sharedToken(id: string): Promise<string> {
         let p = inflight.get(id)
         if (!p) {
           p = ensureToken(id).finally(() => inflight.delete(id))
@@ -122,6 +147,7 @@ export function createModelChatgpt(opts: ChatgptOpts = {}): Plugin {
       }
 
       async function ensureToken(id: string): Promise<string> {
+        const g = genOf(id)
         let rec: OAuthRecord | undefined
         try {
           rec = await read(id)
@@ -143,6 +169,7 @@ export function createModelChatgpt(opts: ChatgptOpts = {}): Plugin {
         try {
           next = await postToken(authBase, { grant_type: 'refresh_token', client_id: rec.clientId, refresh_token: rec.refreshToken!, resource: RESOURCE }, t)
         } catch (err) {
+          if (genOf(id) !== g) throw new Superseded()
           ctx.log.warn('token refresh failed', { failure: errKind(err) })
           const te = err instanceof TokenError ? err : new TokenError(0)
           if (te.code && RELOGIN_CODES.has(te.code)) {
@@ -161,10 +188,11 @@ export function createModelChatgpt(opts: ChatgptOpts = {}): Plugin {
           if (te.status >= 500) throw fail('unavailable', 'ChatGPT token refresh failed', true)
           throw fail('auth', 'ChatGPT token refresh rejected')
         }
-        const updated: OAuthRecord = { ...rec, accessToken: next.accessToken, refreshToken: next.refreshToken, expiresAt: next.expiresAt, scopes: next.scopes ?? rec.scopes }
+        if (genOf(id) !== g) throw new Superseded() // 期间重新登录过:不覆盖新凭据
+        const updated: OAuthRecord = { ...rec, accessToken: next.accessToken, refreshToken: next.refreshToken ?? rec.refreshToken, expiresAt: next.expiresAt, scopes: next.scopes ?? rec.scopes }
         if (next.earliestRefreshAt !== undefined) updated.earliestRefreshAt = next.earliestRefreshAt
         else delete updated.earliestRefreshAt
-        await write(id, updated)
+        await write(id, updated) // 与上面的代次检查同一 tick 入队;写入按调用顺序串行
         if (!updated.scopes.includes(DIRECT_SCOPE)) {
           models.setState(id, 'not_authorized')
           throw fail('auth', 'ChatGPT plan usage is not authorized')
@@ -265,6 +293,7 @@ export function createModelChatgpt(opts: ChatgptOpts = {}): Plugin {
         const flowId = randomUUID()
         let redirectUri = ''
         let busy = false
+        const ac = new AbortController() // 取消 / 超时 / 停用:中止进行中的换 token,且不再写账号
 
         /** 成功返回 undefined,否则返回给浏览器的短错误 */
         async function complete(q: URLSearchParams): Promise<string | undefined> {
@@ -280,10 +309,12 @@ export function createModelChatgpt(opts: ChatgptOpts = {}): Plugin {
             if (!issued || issued === REGISTRATION_CLIENT) return '注册未完成'
             clientId = issued
           }
-          const tokens = await postToken(authBase, { grant_type: 'authorization_code', client_id: clientId, code, code_verifier: verifier, redirect_uri: redirectUri, resource: RESOURCE }, now())
+          const tokens = await postToken(authBase, { grant_type: 'authorization_code', client_id: clientId, code, code_verifier: verifier, redirect_uri: redirectUri, resource: RESOURCE }, now(), ac.signal)
           if (!tokens.idToken) return '缺少 id_token'
-          const claims = verifyIdToken(tokens.idToken, { jwks: await fetchJwks(authBase), clientId, nonce, now: now() })
+          if (!tokens.refreshToken) return '缺少 refresh_token'
+          const claims = verifyIdToken(tokens.idToken, { jwks: await fetchJwks(authBase, ac.signal), clientId, nonce, now: now() })
           if (target && claims.sub !== target.record.sub) return '账号不一致'
+          // 以令牌响应的 scope 为准;仅当它缺省时才看回调里的 scope
           const scopes = tokens.scopes ?? (q.get('scope') ?? '').split(' ').filter(Boolean)
           const record: OAuthRecord = {
             clientId, sub: claims.sub, scopes, accessToken: tokens.accessToken, refreshToken: tokens.refreshToken, expiresAt: tokens.expiresAt,
@@ -291,8 +322,22 @@ export function createModelChatgpt(opts: ChatgptOpts = {}): Plugin {
           }
           const nextState: AccountState = scopes.includes(DIRECT_SCOPE) ? 'ok' : 'not_authorized'
           const existing = target ? chatgptAccounts().find(a => a.id === target.accountId) : await findAccount(claims.sub, clientId)
+          if (ac.signal.aborted) return '登录已取消'
           if (existing) {
-            await write(existing.id, record)
+            const id = existing.id
+            // 先加代次让进行中的刷新作废,等它结束,写入后再加一次(写入前开始的刷新读到的是旧凭据)
+            bump(id)
+            const done = (async () => {
+              await inflight.get(id)?.catch(() => {})
+              await write(id, record)
+            })()
+            logins.set(id, done)
+            try {
+              await done
+            } finally {
+              bump(id)
+              if (logins.get(id) === done) logins.delete(id)
+            }
             const cur = chatgptAccounts().find(a => a.id === existing.id)?.state
             if (cur === nextState) models.announce(existing.id)
             else models.setState(existing.id, nextState)
@@ -310,24 +355,27 @@ export function createModelChatgpt(opts: ChatgptOpts = {}): Plugin {
           return undefined
         }
 
+        // 处理中仍留在 flows 里:取消 / 新的 begin / 停用都能关掉监听;回复发完或浏览器断开后监听自行关闭
         const listener = await listenCallback(preferredPort, async q => {
           if (q.get('state') !== state) return { status: 400, text: '登录状态不匹配' }
           if (busy) return { status: 409, text: '登录处理中' }
           busy = true
-          clearTimeout(timer)
-          flows.delete(flowId)
           try {
             const err = await complete(q)
             return err ? { status: 400, text: err, close: true } : { status: 200, text: '已完成', close: true }
           } catch (err) {
             ctx.log.warn('chatgpt login failed', { failure: errKind(err) })
             return { status: 400, text: '登录失败', close: true }
+          } finally {
+            clearTimeout(timer)
+            flows.delete(flowId)
           }
         })
         redirectUri = `http://127.0.0.1:${listener.port}/auth/callback`
         const close = () => {
           clearTimeout(timer)
           flows.delete(flowId)
+          ac.abort()
           listener.close()
         }
         const timer = setTimeout(close, flowTimeoutMs)
@@ -340,7 +388,13 @@ export function createModelChatgpt(opts: ChatgptOpts = {}): Plugin {
         return { flowId, authUrl }
       }
 
-      ctx.rpc.register('auth.chatgpt.begin', async () => begin())
+      // begin 串行:后一个先关掉前一个的监听再开始
+      let beginning: Promise<unknown> = Promise.resolve()
+      ctx.rpc.register('auth.chatgpt.begin', async () => {
+        const run = beginning.then(begin, begin)
+        beginning = run.catch(() => {})
+        return run
+      })
       ctx.rpc.register('auth.chatgpt.cancel', async params => {
         flows.get((params as { flowId: string }).flowId)?.()
         return { ok: true }
