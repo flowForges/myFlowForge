@@ -170,12 +170,18 @@ export function createModelsRegistry(opts: RegistryOpts = {}): Plugin {
           const listed = await r.adapter.listModels(r.account)
           const cur = store.get(id)
           if (!alive || !cur || !listed.length) return
-          // 已有条目(手填 / 上次列出的)保留其元数据
+          // 手填的在前,列出的补在后(按 id 去重);上次列出的条目保留其元数据,这次没列出的去掉
+          const wasListed = new Set(cur.listedModelIds ?? [])
+          const manual = (cur.models ?? []).filter(m => !wasListed.has(m.id))
           const prev = new Map((cur.models ?? []).map(m => [m.id, m]))
-          const fresh = resolveListed(listed, p.snapshotProvider, snapshot, cache)
-          const models = fresh.map(m => prev.get(m.id) ?? m)
-          if (JSON.stringify(models) === JSON.stringify(cur.models)) return
-          store.setModels(id, models)
+          const have = new Set(manual.map(m => m.id))
+          const added = resolveListed(listed, p.snapshotProvider, snapshot, cache)
+            .filter(m => !have.has(m.id) && (have.add(m.id), true))
+            .map(m => prev.get(m.id) ?? m)
+          const models = [...manual, ...added]
+          const listedIds = added.map(m => m.id)
+          if (JSON.stringify(models) === JSON.stringify(cur.models) && JSON.stringify(listedIds) === JSON.stringify(cur.listedModelIds ?? [])) return
+          store.setModels(id, models, listedIds)
           emit(store.get(id)!)
         })()
           .catch(err => ctx.log.warn('model list failed', { failure: toModelError(err).kind }))
@@ -315,10 +321,9 @@ export function createModelsRegistry(opts: RegistryOpts = {}): Plugin {
           const prep = await prepare(a, p)
           if ('error' in prep) return yield { type: 'done', reason: 'error', error: prep.error }
           const key = prep.account.apiKey
-          // 目录明确说该模型不支持推理:不发推理参数;未知模型原样透传
+          // 目录明确说该模型不支持推理:reasoning 置 'off'(各线路的关闭形式);未知模型原样透传
           const entry = modelsOf(a).find(m => m.id === r.modelId)
-          const { reasoning: _r, ...plain } = req
-          const sent = entry?.reasoning === 'none' ? plain : req
+          const sent = entry?.reasoning === 'none' ? { ...req, reasoning: 'off' as const } : req
           try {
             for await (const e of prep.adapter.stream(prep.account, { ...sent, model: r.modelId })) {
               if (e.type !== 'done') {

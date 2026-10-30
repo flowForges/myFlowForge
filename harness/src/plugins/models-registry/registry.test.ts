@@ -10,6 +10,9 @@ import type { Account, ModelAdapter, ModelEvent, ModelRequest, ModelsService } f
 import type { OpenSecretStoreOpts } from '../../kernel/secrets/secretStore'
 import { fakeServer, fixture, sse } from '../../../test/modelPluginHarness'
 import { createModelOpenai } from '../model-openai/index'
+import { buildAnthropicBody } from '../../lib/models/anthropic'
+import { buildChatBody } from '../../lib/models/chat'
+import { buildResponsesBody } from '../../lib/models/responses'
 import { createModelsRegistry, type RegistryOpts } from './index'
 
 let dir: string
@@ -470,7 +473,7 @@ describe('列模型(models: list 预设)', () => {
     expect(svc.accounts().find(x => x.id === kimi.id)?.models).toBeUndefined()
   })
 
-  it('推理:目录说模型不支持 → 不发 reasoning;支持 / 未知模型 → 原样透传', async () => {
+  it('推理:目录说模型不支持 → 不发 reasoning(Responses 线路);支持 / 未知模型 → 原样透传', async () => {
     const srv = await openaiServer()
     const { svc } = await openaiBoot()
     const a = await svc.addAccount({ presetId: 'openai', apiKey: 'sk', baseUrl: srv.base })
@@ -482,6 +485,41 @@ describe('列模型(models: list 预设)', () => {
       expect(body().model).toBe(modelId)
       expect(body().reasoning?.effort).toBe(effort)
     }
+  })
+
+  it('推理:不支持的模型交给适配器的是 reasoning:\'off\',各线路都编成关闭形式', async () => {
+    const { adapter, seen } = fakeAdapter(spyFetch().fn, () => OK)
+    const { svc } = await boot()
+    svc.registerAdapter('openai-responses', { ...adapter, listModels: async () => [{ id: 'gpt-4o' }, { id: 'gpt-5' }] })
+    const a = await svc.addAccount({ presetId: 'openai', apiKey: 'sk' })
+    await expect.poll(() => svc.accounts()[0].models?.length).toBe(2)
+    for (const modelId of ['gpt-4o', 'gpt-5', 'unknown']) await collect(svc.stream({ accountId: a.id, modelId }, { ...req(true), reasoning: 'high' }))
+    expect(seen.map(x => x.req.reasoning)).toEqual(['off', 'high', 'high'])
+    const off = seen[0].req
+    expect(buildResponsesBody(off, { store: false, includeEncryptedReasoning: false })).not.toHaveProperty('reasoning')
+    expect(buildAnthropicBody({ ...off, maxOutput: 4096 }, {})).not.toHaveProperty('thinking')
+    expect(buildChatBody(off, {})).not.toHaveProperty('reasoning_effort')
+    expect(buildChatBody(off, { thinking: 'zai' })).toMatchObject({ thinking: { type: 'disabled' } })
+    expect(buildChatBody(off, { thinking: 'qwen' })).toMatchObject({ enable_thinking: false })
+  })
+
+  it('自定义预设:手填在前、列出的补在后,按 id 去重;再列时只替换列出的部分', async () => {
+    const manual = [
+      { id: 'mine', name: 'Mine', context: 1000, output: 100, image: false, reasoning: 'none' as const, toolCall: true },
+      { id: 'gpt-5', name: 'My GPT-5', context: 2000, output: 200, image: false, reasoning: 'effort' as const, toolCall: true },
+    ]
+    let ids = ['gpt-5', 'gpt-4o']
+    const { svc } = await boot()
+    svc.registerAdapter('openai-chat', { async *stream() { yield { type: 'done', reason: 'stop' } }, async test() {}, listModels: async () => ids.map(id => ({ id })) })
+    const a = await svc.addAccount({ presetId: 'custom-openai', apiKey: 'ck', baseUrl: 'https://llm.local/v1', models: manual })
+    await expect.poll(() => svc.accounts()[0].models?.map(m => m.id)).toEqual(['mine', 'gpt-5', 'gpt-4o'])
+    expect(svc.accounts()[0].models![1]).toEqual(manual[1]) // 手填的元数据优先
+    expect(svc.accounts()[0].models![2]).toMatchObject({ name: 'GPT-4o' })
+    ids = ['o3']
+    expect(await svc.testAccount(a.id)).toEqual({ ok: true })
+    await expect.poll(() => svc.accounts()[0].models?.map(m => m.id)).toEqual(['mine', 'gpt-5', 'o3'])
+    const cfg = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')).models.accounts[0]
+    expect(cfg.listedModelIds).toEqual(['o3'])
   })
 })
 

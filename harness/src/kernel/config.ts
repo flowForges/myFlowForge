@@ -10,7 +10,8 @@ export const AccountConfigSchema = z.object({
   baseUrl: z.string().optional(),
   protocol: z.enum(['openai-chat', 'openai-responses', 'anthropic', 'chatgpt']).optional(),
   restrictionAckAt: z.number().optional(),
-  models: z.array(ModelEntrySchema).optional(), // 自定义预设的手填清单
+  models: z.array(ModelEntrySchema).optional(), // 手填清单 + 适配器列出的模型
+  listedModelIds: z.array(z.string()).optional(), // models 里哪些 id 来自列模型(其余是手填)
 })
 export type AccountConfig = z.infer<typeof AccountConfigSchema>
 
