@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createKernel, type Kernel } from '../../kernel/kernel'
@@ -198,5 +199,61 @@ describe('apply_patch', () => {
     expect(existsSync(join(outside, 'f'))).toBe(true)
     deleteChecked(p, () => true)
     expect(existsSync(p)).toBe(false)
+  })
+
+  describe('review fixes (Task 8 R1)', () => {
+    it('I3: an Add under a regular file fails in the read phase; the valid Update is not written', async () => {
+      put('u.txt', 'a\n')
+      put('file.txt', 'f\n')
+      const { call } = await boot()
+      const r = await call(wrap('*** Update File: u.txt', '-a', '+A', '*** Add File: file.txt/x', '+x'))
+      expect(r.isError).toBe(true)
+      expect(r.content).toMatch(/不是目录/)
+      expect(text('u.txt')).toBe('a\n')
+      const m = await call(wrap('*** Add File: n.txt', '+n', '*** Update File: u.txt', '*** Move to: file.txt/deep/u.txt', '-a', '+A'))
+      expect(m.isError).toBe(true)
+      expect(existsSync(join(cwd, 'n.txt'))).toBe(false)
+    })
+
+    it('I3: a hard-linked Update source is refused before anything is written', async () => {
+      put('u.txt', 'a\n')
+      linkSync(join(cwd, 'u.txt'), join(root, 'other-link'))
+      const { call } = await boot()
+      const r = await call(wrap('*** Add File: n.txt', '+n', '*** Update File: u.txt', '-a', '+A'))
+      expect(r.isError).toBe(true)
+      expect(r.content).toMatch(/硬链接/)
+      expect(existsSync(join(cwd, 'n.txt'))).toBe(false)
+      expect(text('u.txt')).toBe('a\n')
+    })
+
+    it.skipIf(process.platform === 'win32')('FIFO / non-regular Update source → isError without blocking', async () => {
+      execFileSync('mkfifo', [join(cwd, 'pipe')])
+      const { call } = await boot()
+      const r = await call(wrap('*** Update File: pipe', '-a', '+b'))
+      expect(r.isError).toBe(true)
+      expect(r.content).toMatch(/普通文件/)
+    })
+
+    it('M8: a non-UTF-8 file is refused and left byte-identical', async () => {
+      const bytes = Buffer.from('caf\xe9\nx\n', 'latin1')
+      writeFileSync(join(cwd, 'l1.txt'), bytes)
+      const { call } = await boot()
+      const r = await call(wrap('*** Update File: l1.txt', '-x', '+y'))
+      expect(r.isError).toBe(true)
+      expect(r.content).toMatch(/UTF-8/)
+      expect(readFileSync(join(cwd, 'l1.txt')).equals(bytes)).toBe(true)
+    })
+
+    it('M7: Delete then Add of the same path rewrites it: one permission, reported as M', async () => {
+      put('f.txt', 'old\n')
+      const { call, tool, ctxOf } = await boot()
+      const patch = wrap('*** Delete File: f.txt', '*** Add File: f.txt', '+new')
+      const ctx = ctxOf()
+      expect(tool.permission({ patch }, ctx)).toEqual([{ actor: 'tools', action: 'write', resource: join(ctx.cwd, 'f.txt') }])
+      const r = await call(patch)
+      expect(r.isError).toBeUndefined()
+      expect(r.content).toBe('M f.txt')
+      expect(text('f.txt')).toBe('new\n')
+    })
   })
 })

@@ -90,6 +90,44 @@ export function readNoFollow(p: string, maxBytes = Infinity): Buffer {
   }
 }
 
+/** Windows 没有 O_NONBLOCK → 0 */
+const O_NONBLOCK: number = constants.O_NONBLOCK ?? 0
+
+/**
+ * 读一个要被覆盖写回的文件:O_NONBLOCK 打开(FIFO 不会卡住线程)→ fstat 必须是普通文件、只有一个硬链接
+ * (与 writeChecked 的条件一致,写之前就能拒绝)、不超过 maxBytes。不存在 → undefined
+ */
+export function readRegular(p: string, maxBytes: number): Buffer | undefined {
+  let fd: number
+  try {
+    fd = openSync(p, constants.O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'ENOTDIR') return undefined
+    throw e
+  }
+  try {
+    const st = fstatSync(fd)
+    if (!st.isFile()) throw new Error(`不是普通文件:${p}`)
+    if (st.nlink > 1) throw new Error(`文件有多个硬链接,不写:${p}`)
+    if (st.size > maxBytes) throw new Error(`文件过大(${st.size} 字节,上限 ${maxBytes}):${p}`)
+    return readFileSync(fd)
+  } finally {
+    closeSync(fd)
+  }
+}
+
+/** 最近存在的祖先必须是目录(否则 mkdirChecked 会在写到一半时才失败) */
+export function parentIsDir(p: string): void {
+  let cur = dirname(p)
+  while (!lexists(cur)) {
+    const up = dirname(cur)
+    if (up === cur) return
+    cur = up
+  }
+  if (!lstatSync(cur).isDirectory()) throw new Error(`不是目录:${cur}`)
+}
+
 /**
  * 建父目录 → recheck(再解析、再过权限门)→ O_NOFOLLOW 打开并覆盖写。
  * recheck 返回 false → 抛错,不写

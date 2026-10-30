@@ -144,4 +144,51 @@ describe('planPatch', () => {
     expect(err(wrap('*** Update File: f', '-a', '+b'), {})).toMatch(/不存在/)
     expect(err(wrap('*** Update File: f', '*** Move to: g', '-a', '+b'), { f: 'a\n', g: '' })).toMatch(/已存在/)
   })
+
+  describe('review fixes (Task 8 R1)', () => {
+    const err = (patch: string, m: Record<string, string>) => {
+      const r = planPatch(ok(patch), files(m))
+      expect('error' in r).toBe(true)
+      return (r as { error: string }).error
+    }
+
+    it('I1: an End-of-File hunk only matches at the end of the file', () => {
+      const src = 'function a() {\n}\nfunction b() {\n}\n// end\n'
+      expect(err(wrap('*** Update File: f', '@@', ' }', '+export default x', '*** End of File'), { f: src })).toMatch(/末尾/)
+      // 末尾行尾带空白:宽松档在末尾命中,不去用中间的精确匹配
+      expect(plan(wrap('*** Update File: f', '@@', '-}', '+};', '*** End of File'), { f: '}\nx\n} \n' }).f).toBe('}\nx\n};\n')
+    })
+
+    it('I2: loose tiers with several candidates → error; exact keeps first match; @@ context too', () => {
+      const src = 'def a():\n        x = 1\ndef b():\n    x = 1\n'
+      expect(err(wrap('*** Update File: f', '-  x = 1', '+  x = 2'), { f: src })).toMatch(/2 处/)
+      expect(plan(wrap('*** Update File: f', '-x', '+y'), { f: 'x\nx\n' }).f).toBe('y\nx\n')
+      expect(err(wrap('*** Update File: f', '@@ run():', '-a', '+b'), { f: '  run():\na\n  run():\na\n' })).toMatch(/@@ 上下文行.*2 处/)
+      // 宽松档唯一 → 照常
+      expect(plan(wrap('*** Update File: f', '@@ run():', '-a', '+b'), { f: 'x\n  run():\na\n' }).f).toBe('x\n  run():\nb\n')
+    })
+
+    it('M2: a trailing removed blank line that the file lacks is dropped and retried', () => {
+      expect(plan(wrap('*** Update File: f', '-foo', '-', '+bar'), { f: 'a\nfoo\n' }).f).toBe('a\nbar\n')
+    })
+
+    it('M3: a pure addition with @@ context and a trailing blank line still goes after the context', () => {
+      expect(plan(wrap('*** Update File: f', '@@ a', '+after-a', ''), { f: 'a\nb\n' }).f).toBe('a\nafter-a\nb\n')
+    })
+
+    it('M4: whitespace-only hunk lines are blank context', () => {
+      const ops = ok(wrap('*** Update File: f', ' a', '\t', '-b', '+B'))
+      expect(ops[0]).toMatchObject({ hunks: [{ lines: [{ op: ' ', text: 'a' }, { op: ' ', text: '' }, { op: '-', text: 'b' }, { op: '+', text: 'B' }] }] })
+      expect(plan(wrap('*** Update File: f', ' a', '\t', '-b', '+B'), { f: 'a\n\nb\n' }).f).toBe('a\n\nB\n')
+    })
+
+    it('M7: Delete then Add of the same path is a full rewrite; other repeats stay errors', () => {
+      expect(plan(wrap('*** Delete File: f', '*** Add File: f', '+new'), { f: 'old\n' })).toEqual({ f: 'new\n' })
+      expect(err(wrap('*** Delete File: f', '*** Add File: f', '+new'), {})).toMatch(/不存在/)
+      for (const bad of [wrap('*** Add File: f', '+x', '*** Delete File: f'), wrap('*** Delete File: f', '*** Add File: f', '+x', '*** Update File: f', '-x', '+y')]) {
+        const r = parsePatch(bad)
+        expect((r as { error: string }).error).toMatch(/多次/)
+      }
+    })
+  })
 })

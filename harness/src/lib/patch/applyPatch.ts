@@ -111,9 +111,11 @@ export function parsePatch(text: string): PatchOp[] | Fail {
           const bad = close(i)
           if (bad) return bad
         } else if (l.startsWith('*** ')) break
-        else if (l === '' || l[0] === ' ' || l[0] === '-' || l[0] === '+') {
+        else if (l.trim() === '' || l[0] === ' ' || l[0] === '-' || l[0] === '+') {
           hunk ??= { lines: [] } // 第一个 hunk 可以省略 @@
-          hunk.lines.push(l === '' ? { op: ' ', text: '' } : { op: l[0] as HunkLine['op'], text: l.slice(1) })
+          // 空行、只有空白的行(模型去掉了行尾空白)= 空的上下文行
+          const blank = l === '' || (l[0] !== ' ' && l.trim() === '')
+          hunk.lines.push(blank ? { op: ' ', text: '' } : { op: l[0] as HunkLine['op'], text: l.slice(1) })
         } else return { error: `${at(i)}:hunk 行必须以空格、-、+ 或 @@ 开头` }
       }
       const bad = close(i)
@@ -123,10 +125,13 @@ export function parsePatch(text: string): PatchOp[] | Fail {
     } else return { error: `${at(i)}:不认识的行 "${line.slice(0, 80)}"` }
   }
   if (!ops.length) return { error: '补丁里没有任何文件操作' }
-  const seen = new Set<string>()
-  for (const p of patchPaths(ops)) {
-    if (seen.has(p)) return { error: `${p} 在补丁里出现了多次` }
-    seen.add(p)
+  // 同一路径只能出现一次;唯一的例外:先 Delete 再 Add 同一路径(整体重写)
+  const seen = new Map<string, number>()
+  ops.forEach(op => patchPaths([op]).forEach(p => seen.set(p, (seen.get(p) ?? 0) + 1)))
+  for (const [p, n] of seen) {
+    if (n === 1) continue
+    const kinds = ops.filter(op => patchPaths([op]).includes(p)).map(op => op.kind)
+    if (n !== 2 || kinds[0] !== 'delete' || kinds[1] !== 'add') return { error: `${p} 在补丁里出现了多次;同一文件的改动合并到一个 Update File` }
   }
   return ops
 }
@@ -134,16 +139,34 @@ export function parsePatch(text: string): PatchOp[] | Fail {
 /** 依次放宽:精确 → 忽略行尾空白 → 忽略首尾空白 */
 const LOOSE: ((s: string) => string)[] = [s => s, s => s.trimEnd(), s => s.trim()]
 
-/** pattern 在 lines 里从 from 起的第一处(三档依次试);eof → 先试贴着末尾的那一处 */
-function seek(lines: string[], pattern: string[], from: number, eof: boolean): number {
+/** 找到的位置;-1 = 没有;ambiguous = 宽松档有多处候选(猜不出是哪一处) */
+type Seek = number | { ambiguous: number }
+
+/**
+ * pattern 在 lines 里从 from 起的位置,三档依次试。精确档取第一处;宽松档必须唯一。
+ * eof → 只认贴着文件末尾的那一处
+ */
+function seek(lines: string[], pattern: string[], from: number, eof: boolean): Seek {
   const fits = (at: number, norm: (s: string) => string) => pattern.every((p, k) => norm(lines[at + k]) === norm(p))
-  for (const norm of LOOSE) {
-    const tail = lines.length - pattern.length
-    if (eof && tail >= from && fits(tail, norm)) return tail
-    for (let at = from; at <= tail; at++) if (fits(at, norm)) return at
+  const tail = lines.length - pattern.length
+  for (const [tier, norm] of LOOSE.entries()) {
+    if (eof) {
+      if (tail >= from && fits(tail, norm)) return tail
+      continue
+    }
+    if (tier === 0) {
+      for (let at = from; at <= tail; at++) if (fits(at, norm)) return at
+      continue
+    }
+    const hits: number[] = []
+    for (let at = from; at <= tail; at++) if (fits(at, norm)) hits.push(at)
+    if (hits.length > 1) return { ambiguous: hits.length }
+    if (hits.length === 1) return hits[0]
   }
   return -1
 }
+
+const ambiguous = (where: string, n: number): Fail => ({ error: `${where}:忽略空白后有 ${n} 处同样匹配,无法确定改哪一处;加 @@ 上下文行或更多上下文使其唯一` })
 
 /** 按 hunk 改一个文件的内容;保留原换行风格与末尾换行状态 */
 function applyHunks(path: string, text: string, hunks: Hunk[]): string | Fail {
@@ -157,24 +180,28 @@ function applyHunks(path: string, text: string, hunks: Hunk[]): string | Fail {
     let from = cursor
     if (h.context !== undefined) {
       const c = seek(lines, [h.context], from, false)
+      if (typeof c !== 'number') return ambiguous(`${where} 的 @@ 上下文行`, c.ambiguous)
       if (c === -1) return { error: `${where}:找不到 @@ 上下文行 "${h.context}"` }
       from = c + 1
     }
     let hl = h.lines
     const oldOf = () => hl.filter(l => l.op !== '+').map(l => l.text)
     let old = oldOf()
-    let at: number
-    if (!old.length) at = h.context !== undefined ? from : lines.length // 纯新增:跟在上下文后面,否则追加到末尾
-    else {
+    // 纯新增:跟在 @@ 上下文后面,否则追加到末尾
+    const insertAt = h.context !== undefined ? from : lines.length
+    let at: Seek = insertAt
+    if (old.length) {
       at = seek(lines, old, from, !!h.eof)
-      const lastLine = hl[hl.length - 1]
-      if (at === -1 && lastLine.op === ' ' && lastLine.text === '') {
-        // 补丁末尾的空上下文行(对应文件最后的换行)
-        hl = hl.slice(0, -1)
+      let j = hl.length - 1
+      while (hl[j].op === '+') j--
+      if (at === -1 && hl[j].text === '') {
+        // 旧内容最后一行是空行(多半对应文件末尾的换行,文件里并没有这一行)→ 去掉它再试
+        hl = hl.filter((_, k) => k !== j)
         old = oldOf()
-        at = old.length ? seek(lines, old, from, !!h.eof) : lines.length
+        at = old.length ? seek(lines, old, from, !!h.eof) : insertAt
       }
-      if (at === -1) return { error: `${where}:找不到要替换的行(从 "${old[0]}" 开始的 ${old.length} 行)` }
+      if (typeof at !== 'number') return ambiguous(where, at.ambiguous)
+      if (at === -1) return { error: `${where}:找不到要替换的行(从 "${old[0]}" 开始的 ${old.length} 行${h.eof ? ',且须在文件末尾' : ''})` }
     }
     out.push(...lines.slice(cursor, at))
     // 上下文行保留文件里的原样(宽松匹配时行尾空白不被补丁改掉)
@@ -200,8 +227,11 @@ export function planPatch(ops: PatchOp[], read: (path: string) => string | undef
   for (const op of ops) {
     const cur = read(op.path)
     if (op.kind === 'add') {
-      if (cur !== undefined) return { error: `${op.path} 已存在;改已有文件用 Update File` }
-      writes.push({ path: op.path, content: op.content })
+      // 前面 Delete 过同一路径 → 整体重写:把那条删除换成写入
+      const deleted = writes.findIndex(w => w.path === op.path && w.content === null)
+      if (deleted !== -1) writes[deleted] = { path: op.path, content: op.content }
+      else if (cur !== undefined) return { error: `${op.path} 已存在;改已有文件用 Update File` }
+      else writes.push({ path: op.path, content: op.content })
     } else if (cur === undefined) return { error: `${op.path} 不存在` }
     else if (op.kind === 'delete') writes.push({ path: op.path, content: null })
     else {
