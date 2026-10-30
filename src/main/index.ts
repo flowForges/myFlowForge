@@ -768,7 +768,7 @@ app.whenReady().then(() => {
     readSettings,
     saveSettings: (patch) => methodTable[CH.configSetClientSettings](NOOP_CTX, patch),
     loadHost: loadMffaiHost,
-    // 地址已由 host 过白名单(auth.openai.com / chatgpt.com)
+    // 地址已由 host 过白名单(本机登录起始页 127.0.0.1/auth/start / chatgpt.com)
     openExternal: (url) => { void shell.openExternal(url).catch(mffaiFail) },
   })
   if (mffaiInitial.enabled) {

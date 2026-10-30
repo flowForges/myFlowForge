@@ -45,18 +45,30 @@ const POLL_MS = 200
 export type AddAccountInput = Omit<WorkerParams<'models.addAccount'>, 'commandId'>
 export type OpenExternal = (url: string) => void
 
-// 只认 https + 精确主机名 + 前缀,挡住 chatgpt.com.evil.com / chatgpt.com@evil.com 之类
-function allowedUrl(url: unknown, prefix: string): url is string {
-  if (typeof url !== 'string' || !url.startsWith(prefix)) return false
+// 只认 https + 精确主机名 + 前缀,挡住 chatgpt.com.evil.com / chatgpt.com@evil.com 之类;返回规范化后的地址
+function allowedUrl(url: unknown, prefix: string): string | undefined {
+  if (typeof url !== 'string' || !url.startsWith(prefix)) return undefined
   try {
     const u = new URL(url)
-    return u.protocol === 'https:' && !u.username && !u.password && `${u.protocol}//${u.host}/` === prefix
+    return u.protocol === 'https:' && !u.username && !u.password && `${u.protocol}//${u.host}/` === prefix ? u.href : undefined
   } catch {
-    return false
+    return undefined
   }
 }
-const AUTH_PREFIX = 'https://auth.openai.com/'
 const EXTERNAL_PREFIX = 'https://chatgpt.com/'
+
+/** ChatGPT 登录:只放行后台回调监听的一次性地址 http://127.0.0.1:<port>/auth/start?flow=<flowId>;返回规范化后的地址 */
+function loginStartUrl(url: unknown, flowId: string): string | undefined {
+  if (typeof url !== 'string') return undefined
+  try {
+    const u = new URL(url)
+    const ok = u.protocol === 'http:' && u.hostname === '127.0.0.1' && /^\d+$/.test(u.port) && !u.username && !u.password && !u.hash &&
+      u.pathname === '/auth/start' && [...u.searchParams.keys()].join() === 'flow' && u.searchParams.get('flow') === flowId
+    return ok ? u.href : undefined
+  } catch {
+    return undefined
+  }
+}
 
 export type MffaiHost = ReturnType<typeof createMffaiHost>
 
@@ -272,21 +284,23 @@ export function createMffaiHost(deps: HostDeps) {
     testAccount: (accountId: string) => requireWorker().call('models.testAccount', { accountId }),
     setDefault: (ref: ModelRef) => requireWorker().call('models.setDefault', { accountId: ref.accountId, modelId: ref.modelId }),
     quota: (accountId: string) => requireWorker().call('models.quota', { accountId }),
-    /** 开始 ChatGPT 登录:用系统浏览器打开授权页,只把 flowId 回给页面 */
+    /** 开始 ChatGPT 登录:用系统浏览器打开本机一次性地址(由后台 302 到授权页),只把 flowId 回给页面 */
     async chatgptBegin(open: OpenExternal): Promise<{ flowId: string }> {
       const { flowId, authUrl } = await requireWorker().call('auth.chatgpt.begin', {})
-      if (!allowedUrl(authUrl, AUTH_PREFIX)) {
+      const href = loginStartUrl(authUrl, flowId)
+      if (!href) {
         await requireWorker().call('auth.chatgpt.cancel', { flowId }).catch(() => undefined)
         throw new Error('unexpected ChatGPT login URL')
       }
-      open(authUrl)
+      open(href)
       return { flowId }
     },
     chatgptCancel: (flowId: string) => requireWorker().call('auth.chatgpt.cancel', { flowId }),
     /** 页面要打开的外链(用量链接):只放行 https://chatgpt.com/ */
     async openExternal(url: string, open: OpenExternal): Promise<void> {
-      if (!allowedUrl(url, EXTERNAL_PREFIX)) throw new Error('URL not allowed')
-      open(url)
+      const href = allowedUrl(url, EXTERNAL_PREFIX)
+      if (!href) throw new Error('URL not allowed')
+      open(href)
     },
     /** app 退出:只断 RPC,不停后台 */
     disconnect(): void {

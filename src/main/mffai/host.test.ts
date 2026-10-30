@@ -18,7 +18,7 @@ function fakeDaemon(dir: string) {
     drainPolls: 0, // shutdown 后还要答几次 stopping 才真正退出
     failRestart: false,
     sessions: 0,
-    authUrl: 'https://auth.openai.com/oauth/authorize?x=1',
+    authUrl: 'http://127.0.0.1:1455/auth/start?flow=f1',
     onRestart: undefined as undefined | (() => void),
     controlCalls: [] as Array<[string, unknown]>,
     workerCalls: [] as Array<[string, unknown]>,
@@ -506,20 +506,36 @@ describe('mffai host', () => {
     expect(t.logs.join('\n')).not.toContain('sk-secret')
   })
 
-  it('chatgptBegin:只打开 auth.openai.com 的地址,回给页面的只有 flowId', async () => {
+  it('chatgptBegin:只打开本机一次性 /auth/start?flow=<flowId>(规范化后),回给页面的只有 flowId', async () => {
     const t = setup({ up: true })
     await t.host.ensureRunning()
     const open = vi.fn()
+    const cancels = () => t.d.workerCalls.filter(([m]) => m === 'auth.chatgpt.cancel')
     expect(await t.host.chatgptBegin(open)).toEqual({ flowId: 'f1' })
-    expect(open).toHaveBeenCalledWith('https://auth.openai.com/oauth/authorize?x=1')
-    for (const bad of ['https://evil.com/?https://auth.openai.com/', 'http://auth.openai.com/x', 'https://auth.openai.com.evil.com/']) {
+    expect(open).toHaveBeenCalledWith('http://127.0.0.1:1455/auth/start?flow=f1')
+    // 打开的是规范化后的 href,不是原始字符串
+    t.d.authUrl = 'HTTP://127.0.0.1:01455/auth/start?flow=f1'
+    open.mockClear()
+    await t.host.chatgptBegin(open)
+    expect(open).toHaveBeenCalledWith('http://127.0.0.1:1455/auth/start?flow=f1')
+    expect(cancels()).toEqual([])
+    for (const bad of [
+      'https://auth.openai.com/api/accounts/authorize?id_token_hint=x', 'https://evil.com/?http://127.0.0.1:1455/auth/start?flow=f1',
+      'http://localhost:1455/auth/start?flow=f1', 'http://127.0.0.1/auth/start?flow=f1', 'https://127.0.0.1:1455/auth/start?flow=f1',
+      'http://127.0.0.1:1455/auth/callback?flow=f1', 'http://127.0.0.1:1455/auth/start?flow=f2', 'http://127.0.0.1:1455/auth/start?flow=f1&id_token_hint=x',
+      'http://u@127.0.0.1:1455/auth/start?flow=f1', 'http://127.0.0.1.evil.com:1455/auth/start?flow=f1', 'not a url',
+    ]) {
       t.d.authUrl = bad
       open.mockClear()
+      const before = cancels().length
       await expect(t.host.chatgptBegin(open)).rejects.toThrow()
       expect(open).not.toHaveBeenCalled()
+      // 地址不对:流程被取消,回环监听不会一直挂着
+      expect(cancels().length).toBe(before + 1)
+      expect(cancels().at(-1)).toEqual(['auth.chatgpt.cancel', { flowId: 'f1' }])
     }
     await t.host.chatgptCancel('f1')
-    expect(t.d.workerCalls).toContainEqual(['auth.chatgpt.cancel', { flowId: 'f1' }])
+    expect(t.d.workerCalls.at(-1)).toEqual(['auth.chatgpt.cancel', { flowId: 'f1' }])
   })
 
   it('openExternal:只放行 https://chatgpt.com/ 开头的地址', async () => {
@@ -527,9 +543,11 @@ describe('mffai host', () => {
     const open = vi.fn()
     await t.host.openExternal('https://chatgpt.com/codex/settings/usage', open)
     expect(open).toHaveBeenCalledWith('https://chatgpt.com/codex/settings/usage')
+    await t.host.openExternal('https://chatgpt.com/codex/../settings/usage', open)
+    expect(open).toHaveBeenLastCalledWith('https://chatgpt.com/settings/usage')
     for (const bad of ['http://chatgpt.com/', 'https://chatgpt.com.evil.com/', 'https://chatgpt.com@evil.com/', 'file:///etc/passwd', 'javascript:alert(1)', 'https://chatgpt.com', 42]) {
       await expect(t.host.openExternal(bad as string, open)).rejects.toThrow()
     }
-    expect(open).toHaveBeenCalledTimes(1)
+    expect(open).toHaveBeenCalledTimes(2)
   })
 })
