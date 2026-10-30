@@ -31,11 +31,9 @@ export function sanitizeChatgptBody(body: object): Record<string, unknown> {
   if (Array.isArray(out.tools)) {
     const tools = chatgptTools(out.tools)
     if (tools.length) out.tools = tools
-    else {
-      delete out.tools
-      delete out.tool_choice
-    }
+    else delete out.tools
   }
+  if (!Array.isArray(out.tools)) delete out.tool_choice // tool_choice 只在有工具时才能发(线上会 400)
   return out
 }
 

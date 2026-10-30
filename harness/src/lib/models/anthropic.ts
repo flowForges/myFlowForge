@@ -38,7 +38,7 @@ export function buildAnthropicBody(req: ModelRequest, quirks: AnthropicQuirks): 
   if (thinking) body.thinking = thinking
   if (req.system !== undefined) body.system = req.system
   if (req.tools?.length) body.tools = req.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters }))
-  if (req.toolChoice) body.tool_choice = { type: req.toolChoice }
+  if (req.toolChoice && req.tools?.length) body.tool_choice = { type: req.toolChoice }
   return body
 }
 

@@ -64,6 +64,10 @@ describe('sanitizeChatgptBody', () => {
     const none = sanitizeChatgptBody({ input: [], tools: [{ type: 'file_search' }], tool_choice: 'auto' })
     expect(none).not.toHaveProperty('tools')
     expect(none).not.toHaveProperty('tool_choice')
+    // tools 字段压根没给:tool_choice 单独出现时也要删(线上拒收无 tools 的 tool_choice)
+    const noTools = sanitizeChatgptBody({ input: [], tool_choice: 'none' })
+    expect(noTools).not.toHaveProperty('tools')
+    expect(noTools).not.toHaveProperty('tool_choice')
   })
   it('不改动入参', () => {
     const body = { input: [{ role: 'system', content: 'x' }], temperature: 1 }

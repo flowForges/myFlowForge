@@ -191,10 +191,17 @@ describe('buildChatBody', () => {
     expect((buildChatBody(req, {}) as any).messages[2].reasoning_content).toBeUndefined()
   })
 
-  it('toolChoice: unset → no field; "none" / "auto" map directly', () => {
-    expect((buildChatBody(base, {}) as any).tool_choice).toBeUndefined()
-    expect((buildChatBody({ ...base, toolChoice: 'none' }, {}) as any).tool_choice).toBe('none')
-    expect((buildChatBody({ ...base, toolChoice: 'auto' }, {}) as any).tool_choice).toBe('auto')
+  const withTools: ModelRequest = { ...base, tools: [{ name: 't', description: 'd', parameters: { type: 'object' } }] }
+
+  it('toolChoice: unset → no field; "none" / "auto" map directly when tools are present', () => {
+    expect((buildChatBody(withTools, {}) as any).tool_choice).toBeUndefined()
+    expect((buildChatBody({ ...withTools, toolChoice: 'none' }, {}) as any).tool_choice).toBe('none')
+    expect((buildChatBody({ ...withTools, toolChoice: 'auto' }, {}) as any).tool_choice).toBe('auto')
+  })
+
+  it('toolChoice is never emitted without tools, even when set (API rejects tool_choice without tools)', () => {
+    expect((buildChatBody({ ...base, toolChoice: 'none' }, {}) as any).tool_choice).toBeUndefined()
+    expect((buildChatBody({ ...base, tools: [], toolChoice: 'auto' }, {}) as any).tool_choice).toBeUndefined()
   })
 
   it('multi-round snapshot: text → assistant[reasoning, text, 2 tool_calls] → tool[result, result(isError)] → assistant text → user text', () => {

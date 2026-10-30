@@ -199,10 +199,17 @@ describe('buildAnthropicBody', () => {
     expect(u).toEqual([{ role: 'user', content: [{ type: 'text', text: 'a' }, { type: 'text', text: 'b' }] }])
   })
 
-  it('toolChoice: unset → no field; "none" / "auto" map to {type}', () => {
-    expect((buildAnthropicBody(base, {}) as any).tool_choice).toBeUndefined()
-    expect((buildAnthropicBody({ ...base, toolChoice: 'none' }, {}) as any).tool_choice).toEqual({ type: 'none' })
-    expect((buildAnthropicBody({ ...base, toolChoice: 'auto' }, {}) as any).tool_choice).toEqual({ type: 'auto' })
+  const withTools: ModelRequest = { ...base, tools: [{ name: 't', description: 'd', parameters: { type: 'object' } }] }
+
+  it('toolChoice: unset → no field; "none" / "auto" map to {type} when tools are present', () => {
+    expect((buildAnthropicBody(withTools, {}) as any).tool_choice).toBeUndefined()
+    expect((buildAnthropicBody({ ...withTools, toolChoice: 'none' }, {}) as any).tool_choice).toEqual({ type: 'none' })
+    expect((buildAnthropicBody({ ...withTools, toolChoice: 'auto' }, {}) as any).tool_choice).toEqual({ type: 'auto' })
+  })
+
+  it('toolChoice is never emitted without tools, even when set (Anthropic rejects tool_choice without tools)', () => {
+    expect((buildAnthropicBody({ ...base, toolChoice: 'none' }, {}) as any).tool_choice).toBeUndefined()
+    expect((buildAnthropicBody({ ...base, tools: [], toolChoice: 'auto' }, {}) as any).tool_choice).toBeUndefined()
   })
 
   it('multi-round snapshot: text → assistant[thinking replay, text, 2 tool_use] → user[2 tool_result, is_error on B] → assistant text → user text', () => {

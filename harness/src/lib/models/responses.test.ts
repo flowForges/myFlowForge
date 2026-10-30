@@ -156,10 +156,17 @@ describe('buildResponsesBody', () => {
     expect((body.input as { type: string }[]).some((i) => i.type === 'reasoning')).toBe(false)
   })
 
-  it('toolChoice: unset → no field; "none" / "auto" map directly', () => {
+  it('toolChoice: unset → no field; "none" / "auto" map directly when tools are present', () => {
     expect((buildResponsesBody(req, { store: false, includeEncryptedReasoning: true }) as Record<string, unknown>).tool_choice).toBeUndefined()
     expect((buildResponsesBody({ ...req, toolChoice: 'none' }, { store: false, includeEncryptedReasoning: true }) as Record<string, unknown>).tool_choice).toBe('none')
     expect((buildResponsesBody({ ...req, toolChoice: 'auto' }, { store: false, includeEncryptedReasoning: true }) as Record<string, unknown>).tool_choice).toBe('auto')
+  })
+
+  it('toolChoice is never emitted without tools, even when set (API rejects tool_choice without tools)', () => {
+    const noTools = { ...req, tools: undefined, toolChoice: 'none' as const }
+    expect((buildResponsesBody(noTools, { store: false, includeEncryptedReasoning: true }) as Record<string, unknown>).tool_choice).toBeUndefined()
+    const emptyTools = { ...req, tools: [], toolChoice: 'auto' as const }
+    expect((buildResponsesBody(emptyTools, { store: false, includeEncryptedReasoning: true }) as Record<string, unknown>).tool_choice).toBeUndefined()
   })
 
   it('multi-round snapshot: text → assistant[reasoning, text, 2 tool_calls] → tool[result, result(isError)] → assistant text → user text', () => {
