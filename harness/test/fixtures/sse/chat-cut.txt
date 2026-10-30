@@ -1,0 +1,4 @@
+data: {"choices":[{"index":0,"delta":{"content":"par"}}]}
+
+data: {"choices":[{"index":0,"delta":{"content":"tial"}}]}
+

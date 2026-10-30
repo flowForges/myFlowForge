@@ -1,0 +1,12 @@
+data: {"choices":[{"index":0,"delta":{"reasoning_content":"Thinking "}}]}
+
+data: {"choices":[{"index":0,"delta":{"reasoning_content":"hard."}}]}
+
+data: {"choices":[{"index":0,"delta":{"content":"42"}}]}
+
+data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: {"choices":[],"usage":{"prompt_tokens":20,"completion_tokens":30}}
+
+data: [DONE]
+
