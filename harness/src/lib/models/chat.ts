@@ -31,7 +31,7 @@ function chatMessages(m: Message, quirks: ChatQuirks): Obj[] {
   }
   if (m.role === 'user') {
     const out: Obj[] = []
-    // tool_result 放在 user 消息里时也要拆成 tool 消息
+    // tool_result 放在 user 消息里时也要拆成 tool 消息,且排在 user 内容之前
     for (const p of m.parts) if (p.type === 'tool_result') out.push({ role: 'tool', tool_call_id: p.callId, content: p.content })
     const texts = m.parts.filter((p) => p.type === 'text' || p.type === 'image')
     if (texts.length) {
@@ -41,7 +41,7 @@ function chatMessages(m: Message, quirks: ChatQuirks): Obj[] {
             p.type === 'image' ? { type: 'image_url', image_url: { url: `data:${p.mime};base64,${p.data}` } } : { type: 'text', text: p.type === 'text' ? p.text : '' },
           )
         : texts.map((p) => (p.type === 'text' ? p.text : '')).join('')
-      out.unshift({ role: 'user', content })
+      out.push({ role: 'user', content }) // tool 消息必须紧跟 assistant tool_calls,故在前
     }
     return out
   }
@@ -63,6 +63,11 @@ function chatMessages(m: Message, quirks: ChatQuirks): Obj[] {
 
 export function mapChatError(code: string | undefined, type: string | undefined, message: string): ModelError {
   const c = `${code ?? ''} ${type ?? ''}`
+  const n = Number(code)
+  if (n === 429) return { kind: 'rate_limit', message, retryable: true }
+  if (n === 401 || n === 403) return { kind: 'auth', message, retryable: false }
+  if (n === 400) return { kind: 'bad_request', message, retryable: false }
+  if (n >= 500 && n < 600) return { kind: 'unavailable', message, retryable: true }
   if (c.includes('rate_limit')) return { kind: 'rate_limit', message, retryable: true }
   if (c.includes('insufficient_quota') || c.includes('quota') || c.includes('billing')) return { kind: 'quota', message, retryable: false }
   if (c.includes('invalid_request') || c.includes('context_length')) return { kind: 'bad_request', message, retryable: false }
@@ -95,7 +100,13 @@ export async function* decodeChatStream(events: AsyncIterable<{ event?: string; 
   const ids = new Map<number, string>() // tool call index → id
   let reasoning = ''
   let finish: string | undefined
+  let received = false // 收到过任何内容/用量
+  let hasCall = false
   let usage: ModelEvent | undefined
+  const reasonOf = (): 'stop' | 'length' | 'tool_calls' => {
+    const r = REASONS[finish ?? 'stop'] ?? 'stop'
+    return r === 'stop' && hasCall ? 'tool_calls' : r // 部分供应商有工具调用也报 stop
+  }
   const tail = function* (): Iterable<ModelEvent> {
     if (reasoning) yield { type: 'reasoning', replay: { reasoning_content: reasoning } }
     if (usage) yield usage
@@ -103,9 +114,9 @@ export async function* decodeChatStream(events: AsyncIterable<{ event?: string; 
   try {
     for await (const e of events) {
       if (e.data.trim() === '[DONE]') {
-        if (finish === undefined) break // 无 finish_reason 的 [DONE] 视为异常结束
+        if (finish === undefined && !received) break // 什么都没收到的 [DONE] 视为异常
         yield* tail()
-        yield { type: 'done', reason: REASONS[finish] ?? 'stop' }
+        yield { type: 'done', reason: reasonOf() }
         return
       }
       let f: Chunk
@@ -119,6 +130,7 @@ export async function* decodeChatStream(events: AsyncIterable<{ event?: string; 
         return
       }
       if (f.usage) {
+        received = true
         const cached = f.usage.prompt_tokens_details?.cached_tokens
         usage = {
           type: 'usage',
@@ -131,8 +143,10 @@ export async function* decodeChatStream(events: AsyncIterable<{ event?: string; 
         const d = ch.delta
         if (d?.reasoning_content) {
           reasoning += d.reasoning_content
+          received = true
           yield { type: 'reasoning', delta: d.reasoning_content }
         }
+        if (d?.content) received = true
         if (d?.content) yield { type: 'text', delta: d.content }
         for (const tc of d?.tool_calls ?? []) {
           const idx = tc.index ?? 0
@@ -140,6 +154,7 @@ export async function* decodeChatStream(events: AsyncIterable<{ event?: string; 
           const id = ids.get(idx)
           if (!id) continue
           const args = tc.function?.arguments ?? ''
+          if (tc.id || args) hasCall = received = true
           if (tc.id || args) yield { type: 'tool_call', id, ...(tc.function?.name && { name: tc.function.name }), argsDelta: args }
         }
         if (ch.finish_reason) finish = ch.finish_reason
@@ -152,7 +167,7 @@ export async function* decodeChatStream(events: AsyncIterable<{ event?: string; 
   if (finish !== undefined) {
     // 部分供应商不发 [DONE]:见过 finish_reason 的 EOF 视为正常结束
     yield* tail()
-    yield { type: 'done', reason: REASONS[finish] ?? 'stop' }
+    yield { type: 'done', reason: reasonOf() }
     return
   }
   yield { type: 'done', reason: 'error', error: { kind: 'network', message: 'stream ended before completion', retryable: true } }

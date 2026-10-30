@@ -73,6 +73,29 @@ describe('decodeChatStream', () => {
     expect((await decode(replayText(mk('function_call')))).at(-1)).toEqual({ type: 'done', reason: 'tool_calls' })
   })
 
+  it('stop with tool calls reports tool_calls', async () => {
+    const t = fixture('chat-tool.txt').replace('"finish_reason":"tool_calls"', '"finish_reason":"stop"')
+    expect((await decode(replayText(t))).at(-1)).toEqual({ type: 'done', reason: 'tool_calls' })
+  })
+
+  it('[DONE] without finish_reason: normal if anything received, error if nothing', async () => {
+    const ev = await decode(replayText('data: {"choices":[{"delta":{"content":"x"}}]}\n\ndata: [DONE]\n\n'))
+    expect(ev).toEqual([{ type: 'text', delta: 'x' }, { type: 'done', reason: 'stop' }])
+    const tc = fixture('chat-tool.txt').replace(',"finish_reason":"tool_calls"', '')
+    expect((await decode(replayText(tc))).at(-1)).toEqual({ type: 'done', reason: 'tool_calls' })
+    const none = await decode(replayText('data: [DONE]\n\n'))
+    expect(none[0]).toMatchObject({ type: 'done', reason: 'error', error: { kind: 'network', retryable: true } })
+  })
+
+  it('numeric error codes map by HTTP class', async () => {
+    const k = async (code: number) => ((await decode(replayText(`data: {"error":{"code":${code},"message":"m"}}\n\n`)))[0] as any).error
+    expect(await k(429)).toMatchObject({ kind: 'rate_limit', retryable: true })
+    expect(await k(401)).toMatchObject({ kind: 'auth', retryable: false })
+    expect(await k(403)).toMatchObject({ kind: 'auth' })
+    expect(await k(400)).toMatchObject({ kind: 'bad_request' })
+    expect(await k(503)).toMatchObject({ kind: 'unavailable', retryable: true })
+  })
+
   it('in-stream error chunk maps to done{error}', async () => {
     const ev = await decode(replayText('data: {"error":{"code":"rate_limit_exceeded","message":"slow down"}}\n\n'))
     expect(ev).toEqual([{ type: 'done', reason: 'error', error: { kind: 'rate_limit', message: 'slow down', retryable: true } }])
@@ -124,6 +147,14 @@ describe('buildChatBody', () => {
     expect(ds.reasoning_effort).toBeUndefined()
     expect(b('medium', {}).reasoning_effort).toBe('medium')
     expect(b('off', {}).reasoning_effort).toBeUndefined()
+  })
+
+  it('user message with tool_result + text: tool messages come first', () => {
+    const req: ModelRequest = { ...base, messages: [{ role: 'user', parts: [{ type: 'text', text: 'next' }, { type: 'tool_result', callId: 'c1', content: 'r' }] }] }
+    expect((buildChatBody(req, {}) as any).messages.slice(1)).toEqual([
+      { role: 'tool', tool_call_id: 'c1', content: 'r' },
+      { role: 'user', content: 'next' },
+    ])
   })
 
   it('images, assistant tool_calls, tool results, reasoning replay', () => {
