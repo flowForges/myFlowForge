@@ -1,4 +1,5 @@
 // 工具与 tools 服务的接口(spec §6);实现在 plugins/tools-registry
+import type { ZodType } from 'zod'
 
 /** 权限请求;路径资源由工具解析成绝对路径后给出(lib/fs/paths 的 resolveToolPath) */
 export interface PermissionRequest {
@@ -41,4 +42,12 @@ export interface ToolsService {
   list(filter?: (t: Tool) => boolean): Tool[]
   /** 校验参数 → 权限门(必要时等审批)→ 执行 → 截断 / 落盘 → 写事件;永不抛错 */
   call(name: string, rawArgs: string, ctx: ToolContext): Promise<ToolResult>
+}
+
+/** 工具在 permission / run 里用自己的 zod 校验参数;不合格 → 抛错(tools 服务把消息作为 isError 交给模型) */
+export function argsOf<T>(schema: ZodType<T>, raw: unknown): T {
+  const r = schema.safeParse(raw)
+  if (r.success) return r.data
+  const issues = r.error.issues.map(i => (i.path.length ? `${i.path.join('.')}: ${i.message}` : i.message))
+  throw new Error(`参数无效:${issues.join('; ')}`)
 }
