@@ -1,7 +1,18 @@
 import net from 'node:net'
 import { existsSync, mkdirSync, unlinkSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { ERR_UNAUTHORIZED, FrameDecoder, FrameOverflowError, PROTOCOL_VERSION, encodeFrame } from '../protocol/index'
+import {
+  ERR_UNAUTHORIZED,
+  FrameDecoder,
+  FrameOverflowError,
+  PROTOCOL_VERSION,
+  clientProof,
+  encodeFrame,
+  isNonce,
+  newNonce,
+  proofEquals,
+  serverProof,
+} from '../protocol/index'
 import type { EventLog } from './eventLog'
 import { RpcError } from './rpcError'
 
@@ -16,7 +27,7 @@ export interface RpcServerOpts {
   handle: (method: string, params: any, conn: RpcConn) => Promise<unknown>
   // 提供则支持 events.subscribe(工作进程);监管控制口不需要
   events?: EventLog
-  /** 连上后多久内必须完成 auth,否则断开。默认 5000 ms */
+  /** 连上后多久内必须完成 challenge → verify,否则断开。默认 5000 ms */
   authTimeoutMs?: number
 }
 
@@ -27,6 +38,14 @@ const ERR_METHOD_NOT_FOUND = -32601
 const ERR_INTERNAL = -32603
 const STALE_RECHECK_MS = 50
 const AUTH_DEADLINE_MS = 5000
+// 传输层认证方法;认证完成后再出现也算顺序错
+const AUTH_METHODS = new Set(['auth', 'auth.challenge', 'auth.verify'])
+
+// 每个连接:fresh → challenged → authed,只能按这个顺序走一遍
+type AuthState =
+  | { step: 'fresh' }
+  | { step: 'challenged'; clientNonce: string; serverNonce: string }
+  | { step: 'authed' }
 
 // POSIX:路径已存在时,有人在听就拒绝,没人听(崩溃遗留)才清掉
 const probe = (addr: string) =>
@@ -59,11 +78,11 @@ export async function startRpcServer(opts: RpcServerOpts): Promise<{ close(): Pr
   const server = net.createServer((sock) => {
     conns.add(sock)
     sock.setEncoding('utf8')
-    let authed = false
+    let auth: AuthState = { step: 'fresh' }
     let closing = false
     let unsubscribe: (() => void) | undefined
     // 连上不认证的 socket 不许一直占着
-    const authTimer = setTimeout(() => { if (!authed) sock.destroy() }, opts.authTimeoutMs ?? AUTH_DEADLINE_MS)
+    const authTimer = setTimeout(() => { if (auth.step !== 'authed') sock.destroy() }, opts.authTimeoutMs ?? AUTH_DEADLINE_MS)
     authTimer.unref()
     const send = (msg: object) => {
       if (!sock.destroyed && sock.writable) sock.write(encodeFrame(msg))
@@ -101,19 +120,31 @@ export async function startRpcServer(opts: RpcServerOpts): Promise<{ close(): Pr
       const method = m.method
       if (typeof method !== 'string') return fail(id ?? null, ERR_INVALID_REQUEST, 'invalid request')
       const params = m.params ?? {}
-      if (!authed) {
-        if (method === 'auth' && params.token === opts.token) {
-          authed = true
-          clearTimeout(authTimer)
-          return reply(id, { ok: true })
-        }
+      const refuse = () => {
         closing = true
         if (id !== undefined) fail(id, ERR_UNAUTHORIZED, 'unauthorized')
         sock.end(() => sock.destroy())
-        return
       }
+      if (auth.step !== 'authed') {
+        // 握手的每一步都必须能回包(带 id);否则、顺序错、nonce / proof 不对 → 拒绝并断开
+        const answerable = id !== undefined && id !== null
+        if (answerable && auth.step === 'fresh' && method === 'auth.challenge' && isNonce(params.clientNonce)) {
+          const serverNonce = newNonce()
+          auth = { step: 'challenged', clientNonce: params.clientNonce, serverNonce }
+          return reply(id, { serverNonce, proof: serverProof(opts.token, params.clientNonce, serverNonce) })
+        }
+        if (
+          answerable && auth.step === 'challenged' && method === 'auth.verify' &&
+          proofEquals(params.proof, clientProof(opts.token, auth.serverNonce, auth.clientNonce))
+        ) {
+          auth = { step: 'authed' }
+          clearTimeout(authTimer)
+          return reply(id, { ok: true })
+        }
+        return refuse()
+      }
+      if (AUTH_METHODS.has(method)) return refuse()
       try {
-        if (method === 'auth') return reply(id, { ok: true })
         if (method === 'hello') {
           return reply(id, {
             version: opts.version,

@@ -36,9 +36,17 @@ describe('framing', () => {
 })
 
 describe('schemas', () => {
-  it('version', () => expect(PROTOCOL_VERSION).toBe(2))
+  it('version', () => expect(PROTOCOL_VERSION).toBe(3))
+  it('plaintext auth is gone; challenge/verify exist on both ports', () => {
+    for (const table of [WorkerMethods, ControlMethods]) {
+      expect(Object.hasOwn(table, 'auth')).toBe(false)
+      expect(Object.hasOwn(table, 'auth.challenge')).toBe(true)
+      expect(Object.hasOwn(table, 'auth.verify')).toBe(true)
+    }
+  })
   const required: [typeof WorkerMethods | typeof ControlMethods, string, object][] = [
-    [WorkerMethods, 'auth', {}],
+    [WorkerMethods, 'auth.challenge', {}],
+    [WorkerMethods, 'auth.verify', {}],
     [WorkerMethods, 'hello', { clientVersion: '1' }],
     [WorkerMethods, 'events.subscribe', {}],
     [WorkerMethods, 'events.tail', {}],
@@ -51,7 +59,8 @@ describe('schemas', () => {
     [WorkerMethods, 'models.setDefault', { accountId: 'a' }],
     [WorkerMethods, 'models.quota', {}],
     [WorkerMethods, 'auth.chatgpt.cancel', {}],
-    [ControlMethods, 'auth', {}],
+    [ControlMethods, 'auth.challenge', {}],
+    [ControlMethods, 'auth.verify', {}],
     [ControlMethods, 'autostart', { on: true }],
   ]
   it.each(required)('rejects missing required field: %#', (table, name, bad) => {

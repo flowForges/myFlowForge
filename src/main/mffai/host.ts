@@ -3,6 +3,7 @@ import { existsSync, mkdirSync } from 'node:fs'
 import {
   connectClient,
   connectControlClient,
+  PROTOCOL_VERSION,
   dataDir as defaultDataDir,
   runtimePaths,
   type ControlMethodName,
@@ -15,7 +16,7 @@ import {
   type WorkerParams,
   type WorkerResult,
 } from '@mffai/protocol'
-import { controlCall, type ConnectControl, type ConnectWorker } from './client'
+import { controlCall, readSupervisorJson, type ConnectControl, type ConnectWorker } from './client'
 import { createWorkerConnection, isOldProtocol } from './connection'
 import { spawnDaemon, type SpawnFn } from './spawn'
 
@@ -35,6 +36,19 @@ export interface HostDeps {
   now?: () => number
   sleep?: (ms: number) => Promise<void>
   log?: (msg: string, err?: unknown) => void
+  /** 进程是否还在;默认 process.kill(pid, 0) */
+  isAlive?: (pid: number) => boolean
+  /** 给进程发信号;默认 process.kill */
+  kill?: (pid: number, sig: NodeJS.Signals) => void
+}
+
+function defaultIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM' // 在,但不是我们的
+  }
 }
 
 const START_WAIT_MS = 10_000
@@ -80,6 +94,8 @@ export function createMffaiHost(deps: HostDeps) {
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
   const log = deps.log ?? (() => {})
   const connectControl = deps.connectControl ?? connectControlClient
+  const isAlive = deps.isAlive ?? defaultIsAlive
+  const kill = deps.kill ?? ((pid: number, sig: NodeJS.Signals) => void process.kill(pid, sig))
   const spec = { execPath, daemonJs: deps.daemonJs }
 
   // 调试会话:每个模型选择一个,选择变了就新建
@@ -87,7 +103,21 @@ export function createMffaiHost(deps: HostDeps) {
 
   const control = <M extends ControlMethodName>(m: M, p?: ControlParams<M>): Promise<ControlResult<M>> =>
     controlCall(connectControl, paths, m, p)
-  const status = (): Promise<ControlStatus | undefined> => control('status').catch(() => undefined)
+  /**
+   * 旧协议(v2)的后台:v3 的 challenge 第一步就被拒,控制口什么都问不到。
+   * 这时读 supervisor.json:协议版本不同且 pid 还活着 → 返回它(pid + 版本),否则 undefined
+   */
+  const oldDaemon = () => {
+    const j = readSupervisorJson(paths.supervisorJson)
+    return j && j.protocolVersion !== PROTOCOL_VERSION && isAlive(j.pid) ? j : undefined
+  }
+  const status = (): Promise<ControlStatus | undefined> =>
+    control('status').catch((err): ControlStatus | undefined => {
+      if ((err as Error)?.message !== 'unauthorized') return undefined
+      const j = oldDaemon()
+      // 合成一个"旧版本在跑"的状态,走已有的不兼容 → 用户点重启路径
+      return j && { state: 'running', pid: j.pid, protocolVersion: j.protocolVersion, restarts: 0, version: j.version ?? '' }
+    })
   const settled = (s?: ControlStatus) => !!s && (s.state === 'running' || s.state === 'tripped' || isOldProtocol(s))
   const enabled = () => deps.readSettings().mffai.enabled
 
@@ -202,7 +232,13 @@ export function createMffaiHost(deps: HostDeps) {
     if (isOldProtocol(s) || conn.compatible() === false) {
       // 版本不兼容:整个旧后台停掉,换当前 app 带的新后台
       conn.drop()
-      await control('shutdown').catch(() => undefined)
+      await control('shutdown').catch(() => {
+        // 旧协议的控制口不认我们:直接 SIGTERM 旧监管(它体面退出;Windows 上是强杀)
+        const j = oldDaemon()
+        if (j) {
+          try { kill(j.pid, 'SIGTERM') } catch (err) { log('mffai kill old daemon failed', err) }
+        }
+      })
       if (await waitStatus(STOP_WAIT_MS, (x) => !x)) throw new Error('old mff-ai daemon did not stop')
       conn.resetCompat()
       return bringUp(START_WAIT_MS, enabled)

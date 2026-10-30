@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
-import { connectControlClient } from '../protocol/index'
+import net from 'node:net'
+import { FrameDecoder, connectControlClient, encodeFrame } from '../protocol/index'
 import { startControlServer } from './controlServer'
 import type { Supervisor } from './supervisor'
 
@@ -16,6 +17,29 @@ afterEach(async () => {
 const addr = () => (process.platform === 'win32' ? `\\\\.\\pipe\\mffai-ctl-${process.pid}-${Date.now()}` : join(dir, 'c.sock'))
 
 describe('control server', () => {
+  it('control port speaks the v3 handshake: right token works, wrong token and plaintext auth are refused', async () => {
+    const sup = { state: () => ({ state: 'running', restarts: 0, version: 'v', protocolVersion: 3 }) } as unknown as Supervisor
+    const a = addr()
+    const s = await startControlServer({ addr: a, token: 't', supervisor: sup })
+    closers.push(() => s.close())
+    const c = await connectControlClient({ addr: a, token: 't' })
+    closers.push(() => c.close())
+    expect(await c.call('status')).toMatchObject({ state: 'running', pid: process.pid })
+    await expect(connectControlClient({ addr: a, token: 'wrong' })).rejects.toThrow('unauthorized')
+
+    const sock = net.connect(a)
+    sock.setEncoding('utf8')
+    sock.on('error', () => {})
+    const got: Array<{ id?: unknown; error?: { code: number } }> = []
+    const dec = new FrameDecoder()
+    sock.on('data', (d: string) => got.push(...(dec.push(d) as typeof got)))
+    const closed = new Promise(r => sock.once('close', r))
+    await new Promise(r => sock.once('connect', r))
+    sock.write(encodeFrame({ jsonrpc: '2.0', id: 1, method: 'auth', params: { token: 't' } }))
+    await closed
+    expect(got).toEqual([expect.objectContaining({ id: 1, error: expect.objectContaining({ code: -32002 }) })])
+  })
+
   it('status carries the supervisor pid; deferred shutdown/restart failures are logged', async () => {
     const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
     const sup = {

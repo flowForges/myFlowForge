@@ -18,6 +18,15 @@ export const ERR_BUSY = -32003
 const Ok = z.object({ ok: z.boolean() })
 const Empty = z.object({})
 
+// 传输层挑战应答(见 auth.ts);两个口都一样,由 rpcServer 自己处理
+const AuthMethods = {
+  'auth.challenge': {
+    params: z.object({ clientNonce: z.string() }),
+    result: z.object({ serverNonce: z.string(), proof: z.string() }),
+  },
+  'auth.verify': { params: z.object({ proof: z.string() }), result: Ok },
+} as const
+
 export const StatusResultSchema = z.object({
   state: z.enum(['starting', 'running', 'draining']),
   uptimeMs: z.number(),
@@ -53,7 +62,7 @@ export const ControlStatusSchema = z.object({
 export type ControlStatus = z.infer<typeof ControlStatusSchema>
 
 export const WorkerMethods = {
-  auth: { params: z.object({ token: z.string() }), result: Ok },
+  ...AuthMethods,
   hello: {
     params: z.object({ clientVersion: z.string(), protocolVersion: z.number() }),
     result: z.object({ version: z.string(), protocolVersion: z.number(), compatible: z.boolean() }),
@@ -113,7 +122,7 @@ export const WorkerMethods = {
 } as const
 
 export const ControlMethods = {
-  auth: { params: z.object({ token: z.string() }), result: Ok },
+  ...AuthMethods,
   status: { params: Empty, result: ControlStatusSchema },
   shutdown: { params: Empty, result: Ok },
   restart: { params: Empty, result: Ok },

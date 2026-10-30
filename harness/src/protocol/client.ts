@@ -1,4 +1,5 @@
 import net from 'node:net'
+import { clientProof, isNonce, newNonce, proofEquals, serverProof } from './auth'
 import { FrameDecoder, encodeFrame } from './framing'
 import type { KernelEvent } from './events'
 import type {
@@ -25,7 +26,7 @@ export interface MffaiControlClient {
 export interface ClientOpts {
   addr: string
   token: string
-  // 超时 reject Error('timeout'):连接 + auth 共用一个期限,之后每次调用各自计时
+  // 超时 reject Error('timeout'):连接 + 握手共用一个期限,之后每次调用各自计时
   timeoutMs?: number
 }
 
@@ -37,7 +38,7 @@ interface Conn {
   close(): void
 }
 
-// 两种客户端共用:连接、分帧、请求配对、超时、auth
+// 两种客户端共用:连接、分帧、请求配对、超时、挑战应答握手(见 auth.ts)
 async function openConn(opts: ClientOpts, onNotify: (m: Record<string, any>) => void): Promise<Conn> {
   const deadline = opts.timeoutMs === undefined ? undefined : Date.now() + opts.timeoutMs
   const remaining = () => (deadline === undefined ? undefined : Math.max(0, deadline - Date.now()))
@@ -103,7 +104,13 @@ async function openConn(opts: ClientOpts, onNotify: (m: Record<string, any>) => 
   const call = (method: string, params: unknown = {}) => send(method, params, opts.timeoutMs)
 
   try {
-    await send('auth', { token: opts.token }, remaining())
+    const clientNonce = newNonce()
+    const ch = (await send('auth.challenge', { clientNonce }, remaining())) as { serverNonce?: unknown; proof?: unknown } | null
+    // 先确认对方知道 token;冒充的服务端拿不到我们的 proof
+    if (!ch || !isNonce(ch.serverNonce) || !proofEquals(ch.proof, serverProof(opts.token, clientNonce, ch.serverNonce)))
+      throw new Error('unauthorized')
+    const v = (await send('auth.verify', { proof: clientProof(opts.token, ch.serverNonce, clientNonce) }, remaining())) as { ok?: unknown } | null
+    if (v?.ok !== true) throw new Error('unauthorized')
   } catch (e) {
     sock.destroy()
     throw (e as Error).message === 'unauthorized' || (e as { code?: number }).code === -32002

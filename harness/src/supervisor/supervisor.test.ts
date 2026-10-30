@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { build } from 'esbuild'
 import type { ControlStatus } from '../protocol/index'
-import { connectControlClient, runtimePaths } from '../protocol/index'
+import { PROTOCOL_VERSION, connectControlClient, runtimePaths } from '../protocol/index'
 import { Supervisor } from './supervisor'
 
 const FAKE = resolve(__dirname, '../../test/fixtures/fakeWorker.mjs')
@@ -56,7 +56,7 @@ describe('Supervisor', () => {
     const s = sup.state()
     expect(s.workerPid).toBeGreaterThan(0)
     expect(s.restarts).toBe(0)
-    expect(s.protocolVersion).toBe(2)
+    expect(s.protocolVersion).toBe(PROTOCOL_VERSION)
     expect(states.map(x => x.state)).toContain('starting')
     // 能回 pong 就不会被当成卡死
     await new Promise(r => setTimeout(r, 300))
@@ -251,9 +251,9 @@ describe('daemon entry', () => {
       await new Promise(r => setTimeout(r, 50))
     }
     if (status?.workerPid) pids.push(status.workerPid)
-    expect(status).toMatchObject({ state: 'running', restarts: 0, protocolVersion: 2, pid: survivor.p.pid })
+    expect(status).toMatchObject({ state: 'running', restarts: 0, protocolVersion: PROTOCOL_VERSION, pid: survivor.p.pid })
     const json = JSON.parse(readFileSync(paths.supervisorJson, 'utf8'))
-    expect(json).toMatchObject({ pid: survivor.p.pid, workerPid: status!.workerPid, state: 'running', protocolVersion: 2 })
+    expect(json).toMatchObject({ pid: survivor.p.pid, workerPid: status!.workerPid, state: 'running', protocolVersion: PROTOCOL_VERSION })
     expect(existsSync(join(paths.logs))).toBe(true)
 
     // 第三次启动(探测到已有实例)也直接退出 0

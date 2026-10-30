@@ -46,8 +46,13 @@ describe('RpcRegistry', () => {
   })
   it('reserved core methods throw', () => {
     const r = new RpcRegistry()
-    for (const m of ['auth', 'hello', 'status', 'snapshot', 'events.tail', 'events.subscribe', 'session.create', 'session.prompt', 'session.cancel'])
+    for (const m of ['auth.challenge', 'auth.verify', 'hello', 'status', 'snapshot', 'events.tail', 'events.subscribe', 'session.create', 'session.prompt', 'session.cancel'])
       expect(() => r.register('a', m as WorkerMethodName, async () => 1)).toThrow(/reserved/)
+  })
+  it('transport auth is reserved but plugin-owned auth.chatgpt.* stays registrable', () => {
+    const r = new RpcRegistry()
+    expect(() => r.register('a', 'auth.chatgpt.begin', async () => 1)).not.toThrow()
+    expect(() => r.register('a', 'auth.chatgpt.cancel', async () => 1)).not.toThrow()
   })
   it('unknown method throws', () => {
     expect(() => new RpcRegistry().register('a', 'nope.x' as WorkerMethodName, async () => 1)).toThrow(/unknown/)

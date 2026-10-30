@@ -16,7 +16,8 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
 describe.skipIf(!LIVE)('live smoke', () => {
   let sup: ChildProcess | undefined
-  const data = mkdtempSync(join(tmpdir(), 'mffai-live-'))
+  // describe 体在跳过时也会执行:没开 MFFAI_LIVE 就别建临时目录(afterAll 不会跑,删不掉)
+  const data = LIVE ? mkdtempSync(join(tmpdir(), 'mffai-live-')) : ''
   afterAll(async () => {
     // 删目录前把守护进程日志里的 warn / error 打出来(日志不含密钥)
     try {

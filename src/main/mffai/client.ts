@@ -28,6 +28,28 @@ export function readToken(file: string): string | null {
   }
 }
 
+export interface SupervisorJson {
+  pid: number
+  protocolVersion: number
+  version?: string
+}
+
+/**
+ * 监管写的 run/supervisor.json(无需认证就能读)。
+ * 只取认得出旧后台所需的字段;缺失 / 半截 / 形状不对 → null
+ */
+export function readSupervisorJson(file: string): SupervisorJson | null {
+  try {
+    const j = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+    const { pid, protocolVersion, version } = j ?? {}
+    if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0) return null
+    if (typeof protocolVersion !== 'number' || !Number.isSafeInteger(protocolVersion)) return null
+    return { pid, protocolVersion, ...(typeof version === 'string' ? { version } : {}) }
+  } catch {
+    return null
+  }
+}
+
 /** 控制口单次调用:连 → 调 → 断。连不上 / 无 token 抛错 */
 export async function controlCall<M extends ControlMethodName>(
   connect: ConnectControl,

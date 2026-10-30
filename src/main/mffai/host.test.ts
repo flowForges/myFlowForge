@@ -17,6 +17,8 @@ function fakeDaemon(dir: string) {
     lastSeq: 5,
     drainPolls: 0, // shutdown 后还要答几次 stopping 才真正退出
     failRestart: false,
+    v2Auth: false, // 旧(v2)后台:v3 的 challenge 第一步就被拒
+    killed: [] as Array<[number, string]>,
     sessions: 0,
     authUrl: 'http://127.0.0.1:1455/auth/start?flow=f1',
     onRestart: undefined as undefined | (() => void),
@@ -34,6 +36,7 @@ function fakeDaemon(dir: string) {
 
   const connectControl = vi.fn(async (opts: { addr: string; token: string }) => {
     if (!d.up) throw refused()
+    if (d.v2Auth) throw new Error('unauthorized')
     if (opts.token !== TOKEN) throw new Error('unauthorized')
     return {
       async call(method: string, params?: unknown) {
@@ -118,7 +121,7 @@ beforeEach(() => {
 })
 afterEach(() => rmSync(dirname(dir), { recursive: true, force: true }))
 
-function setup(opts: { up?: boolean; startOnSpawn?: boolean } = {}) {
+function setup(opts: { up?: boolean; startOnSpawn?: boolean; isAlive?: (pid: number) => boolean } = {}) {
   const fake = fakeDaemon(dir)
   if (opts.up) fake.d.start()
   const sent: Array<[string, unknown]> = []
@@ -141,6 +144,12 @@ function setup(opts: { up?: boolean; startOnSpawn?: boolean } = {}) {
     now: () => clock,
     sleep: async (ms) => { clock += ms; await new Promise((r) => setImmediate(r)) },
     log: (m, e) => { logs.push(e === undefined ? m : `${m}: ${e instanceof Error ? e.message : String(e)}`) },
+    isAlive: opts.isAlive ?? (() => { throw new Error('isAlive must not be called') }),
+    kill: (pid, sig) => {
+      fake.d.killed.push([pid, sig])
+      // 旧监管收到 SIGTERM 体面退出
+      if (pid === 4242 && sig === 'SIGTERM') { fake.d.up = false; fake.d.v2Auth = false }
+    },
   }
   const host = createMffaiHost(deps)
   const alerts = () => sent.filter(([ch]) => ch === 'mffai:alert').map(([, p]) => p)
@@ -291,6 +300,80 @@ describe('mffai host', () => {
     expect(t.d.controlCalls.slice(before).map(([m]) => m)).toContain('shutdown')
     expect(t.spawnFn).toHaveBeenCalledTimes(1)
     expect(await t.host.getState()).toMatchObject({ running: true, compatible: true })
+  })
+
+  describe('v2 后台(challenge 被拒,只能读 supervisor.json)', () => {
+    const writeSupervisorJson = (data: object) => {
+      const f = runtimePaths(dir).supervisorJson
+      mkdirSync(dirname(f), { recursive: true })
+      writeFileSync(f, JSON.stringify(data))
+    }
+    const oldDaemon = (isAlive: (pid: number) => boolean, protocolVersion = 2) => {
+      const t = setup({ up: true, isAlive })
+      t.d.v2Auth = true
+      writeSupervisorJson({ pid: 4242, workerPid: 4243, version: '0.0.9', protocolVersion, startedAt: 1, state: 'running' })
+      return t
+    }
+
+    it('pid 活着 → 不拉起第二个后台、compatible:false;restart 时 shutdown 失败改发 SIGTERM,再拉起新后台', async () => {
+      const alive = vi.fn((pid: number) => pid === 4242)
+      const t = oldDaemon(alive)
+      await expect(t.host.ensureRunning()).resolves.toBeUndefined()
+      expect(t.spawnFn).toHaveBeenCalledTimes(0)
+      expect(t.connectWorker).not.toHaveBeenCalled()
+      expect(alive).toHaveBeenCalledWith(4242)
+      expect(t.alerts()).toEqual([{ kind: 'incompatible' }])
+      const st = await t.host.getState()
+      expect(st).toMatchObject({ running: false, compatible: false })
+      expect(st.supervisor).toEqual({ state: 'running', pid: 4242, protocolVersion: 2, restarts: 0, version: '0.0.9' })
+
+      await t.host.restart()
+      expect(t.d.killed).toEqual([[4242, 'SIGTERM']])
+      expect(t.spawnFn).toHaveBeenCalledTimes(1)
+      expect(await t.host.getState()).toMatchObject({ running: true, compatible: true })
+    })
+
+    it('SIGTERM 只在 shutdown 被拒之后发(status 一次 + shutdown 一次,都被拒)', async () => {
+      const t = oldDaemon(() => true)
+      await t.host.ensureRunning()
+      const before = t.connectControl.mock.calls.length
+      let attemptsAtKill = -1
+      const push = t.d.killed.push.bind(t.d.killed)
+      t.d.killed.push = (...x) => { attemptsAtKill = t.connectControl.mock.calls.length - before; return push(...x) }
+      await t.host.restart()
+      expect(attemptsAtKill).toBe(2)
+    })
+
+    it('pid 已死 → 照旧拉起', async () => {
+      const t = oldDaemon(() => false)
+      t.spawnFn.mockImplementation(() => { t.d.v2Auth = false; t.d.start(); return { unref: t.unref } })
+      await t.host.ensureRunning()
+      expect(t.spawnFn).toHaveBeenCalledTimes(1)
+      expect(t.d.killed).toEqual([])
+      expect(await t.host.getState()).toMatchObject({ running: true, compatible: true })
+    })
+
+    it('supervisor.json 说 protocolVersion 3 → 不当旧后台(token 不对之类),照旧拉起', async () => {
+      const t = oldDaemon(() => true, PROTOCOL_VERSION)
+      t.spawnFn.mockImplementation(() => { t.d.v2Auth = false; t.d.start(); return { unref: t.unref } })
+      await t.host.ensureRunning()
+      expect(t.spawnFn).toHaveBeenCalledTimes(1)
+      expect(t.d.killed).toEqual([])
+    })
+
+    it('supervisor.json 缺失 / 坏掉 → 不当旧后台', async () => {
+      for (const content of [undefined, '{bad', JSON.stringify({ pid: 'x', protocolVersion: 2 }), JSON.stringify({ pid: -1, protocolVersion: 2 }), JSON.stringify({ pid: 4242 })]) {
+        const t = setup({ up: true, isAlive: () => true })
+        t.d.v2Auth = true
+        const f = runtimePaths(dir).supervisorJson
+        rmSync(f, { force: true })
+        if (content !== undefined) { mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, content) }
+        t.spawnFn.mockImplementation(() => { t.d.v2Auth = false; t.d.start(); return { unref: t.unref } })
+        await t.host.ensureRunning()
+        expect(t.spawnFn).toHaveBeenCalledTimes(1)
+        expect(t.d.killed).toEqual([])
+      }
+    })
   })
 
   it('控制口 tripped → alert tripped(带原因),不拉起', async () => {

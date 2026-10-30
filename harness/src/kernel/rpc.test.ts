@@ -8,7 +8,10 @@ import { createKernel, type Kernel } from './kernel'
 import { startRpcServer } from './rpcServer'
 import { RpcError } from './rpcError'
 import { HARNESS_VERSION } from './version'
-import { connectClient, connectControlClient, FrameDecoder, MAX_FRAME_BYTES, encodeFrame, type KernelEvent, type MffaiClient } from '../protocol/index'
+import {
+  PROTOCOL_VERSION, clientProof, connectClient, connectControlClient, FrameDecoder, MAX_FRAME_BYTES, encodeFrame, newNonce, proofEquals, serverProof,
+  type KernelEvent, type MffaiClient,
+} from '../protocol/index'
 import loopEcho from '../plugins/loop-echo'
 
 let dir: string
@@ -44,6 +47,43 @@ const wait = async (fn: () => boolean) => {
   for (let i = 0; i < 400 && !fn(); i++) await new Promise(r => setTimeout(r, 5))
   expect(fn()).toBe(true)
 }
+const until = async (fn: () => boolean, ms = 2000) => {
+  const end = Date.now() + ms
+  while (!fn() && Date.now() < end) await new Promise(r => setTimeout(r, 5))
+  return fn()
+}
+
+/** 手写的原始连接:记录收到的每一帧 */
+async function raw(addr = sockPath()) {
+  const sock = net.connect(addr)
+  sock.setEncoding('utf8')
+  sock.on('error', () => {})
+  const got: any[] = []
+  const dec = new FrameDecoder()
+  sock.on('data', (d: string) => got.push(...dec.push(d)))
+  let isClosed = false
+  const closed = new Promise<void>(r => sock.once('close', () => { isClosed = true; r() }))
+  await new Promise(r => sock.once('connect', r))
+  closers.push(() => sock.destroy())
+  const send = (m: object) => sock.write(encodeFrame({ jsonrpc: '2.0', ...m }))
+  const reply = async (id: unknown) => {
+    await until(() => isClosed || got.some(g => g.id === id))
+    return got.find(g => g.id === id)
+  }
+  return { sock, got, closed, send, reply, isClosed: () => isClosed }
+}
+type Raw = Awaited<ReturnType<typeof raw>>
+
+/** 在原始连接上走完 challenge → verify;返回线上出现过的值 */
+async function handshake(r: Raw, token = TOKEN, clientNonce = newNonce()) {
+  r.send({ id: 'c', method: 'auth.challenge', params: { clientNonce } })
+  const ch = (await r.reply('c')).result as { serverNonce: string; proof: string }
+  expect(proofEquals(ch.proof, serverProof(TOKEN, clientNonce, ch.serverNonce))).toBe(true)
+  const proof = clientProof(token, ch.serverNonce, clientNonce)
+  r.send({ id: 'v', method: 'auth.verify', params: { proof } })
+  return { clientNonce, serverNonce: ch.serverNonce, proof, verify: await r.reply('v') }
+}
+
 async function prompt(c: MffaiClient, text = 'hi') {
   const { sessionId } = await c.call('session.create', { commandId: 'c' + Math.random() })
   await c.call('session.prompt', { commandId: 'p' + Math.random(), sessionId, text })
@@ -52,7 +92,133 @@ async function prompt(c: MffaiClient, text = 'hi') {
 describe('rpc server + client', () => {
   it('wrong token -> unauthorized and closed', async () => {
     await serve()
+    // 客户端 token 不对:服务端 proof 对不上,客户端自己就拒绝
     await expect(client(sockPath(), 'bad')).rejects.toThrow('unauthorized')
+    // 服务端视角:错 token 算出的客户端 proof → -32002 并断开
+    const r = await raw()
+    const h = await handshake(r, 'bad')
+    expect(h.verify.error.code).toBe(-32002)
+    await r.closed
+    r.send({ id: 9, method: 'session.create', params: { commandId: 'x' } })
+    expect(kernel.events.after(0).some(e => e.type === 'session.created')).toBe(false)
+  })
+
+  it('handshake happy path on a raw socket, then methods work', async () => {
+    await serve()
+    const r = await raw()
+    const h = await handshake(r)
+    expect(h.verify.result).toEqual({ ok: true })
+    r.send({ id: 2, method: 'hello', params: { clientVersion: 'x', protocolVersion: PROTOCOL_VERSION } })
+    expect((await r.reply(2)).result).toMatchObject({ compatible: true })
+    // token 本身从没上线路
+    expect(JSON.stringify(r.got)).not.toContain(TOKEN)
+  })
+
+  it('auth.verify before auth.challenge -> unauthorized and closed', async () => {
+    await serve()
+    const r = await raw()
+    r.send({ id: 1, method: 'auth.verify', params: { proof: clientProof(TOKEN, newNonce(), newNonce()) } })
+    expect((await r.reply(1)).error.code).toBe(-32002)
+    await r.closed
+  })
+
+  it('a second auth.challenge (before or after verify) -> unauthorized and closed', async () => {
+    await serve()
+    const r = await raw()
+    r.send({ id: 1, method: 'auth.challenge', params: { clientNonce: newNonce() } })
+    expect((await r.reply(1)).result.serverNonce).toBeDefined()
+    r.send({ id: 2, method: 'auth.challenge', params: { clientNonce: newNonce() } })
+    expect((await r.reply(2)).error.code).toBe(-32002)
+    await r.closed
+
+    const r2 = await raw()
+    expect((await handshake(r2)).verify.result).toEqual({ ok: true })
+    r2.send({ id: 3, method: 'auth.challenge', params: { clientNonce: newNonce() } })
+    expect((await r2.reply(3)).error.code).toBe(-32002)
+    await r2.closed
+  })
+
+  it('auth.verify after success is out of order -> unauthorized and closed', async () => {
+    await serve()
+    const r = await raw()
+    const h = await handshake(r)
+    r.send({ id: 3, method: 'auth.verify', params: { proof: h.proof } })
+    expect((await r.reply(3)).error.code).toBe(-32002)
+    await r.closed
+  })
+
+  it('bad clientNonce -> unauthorized and closed', async () => {
+    await serve()
+    for (const clientNonce of ['short', 'a'.repeat(42) + '=', 42, undefined]) {
+      const r = await raw()
+      r.send({ id: 1, method: 'auth.challenge', params: { clientNonce } })
+      expect((await r.reply(1)).error.code).toBe(-32002)
+      await r.closed
+    }
+  })
+
+  it('a captured client proof replayed on a new connection is refused (fresh serverNonce)', async () => {
+    await serve()
+    const first = await raw()
+    const h = await handshake(first)
+    expect(h.verify.result).toEqual({ ok: true })
+    const r = await raw()
+    // 同一个 clientNonce,服务端给的是新 serverNonce
+    r.send({ id: 1, method: 'auth.challenge', params: { clientNonce: h.clientNonce } })
+    const ch = (await r.reply(1)).result
+    expect(ch.serverNonce).not.toBe(h.serverNonce)
+    r.send({ id: 2, method: 'auth.verify', params: { proof: h.proof } })
+    expect((await r.reply(2)).error.code).toBe(-32002)
+    await r.closed
+  })
+
+  it('no handshake within authTimeoutMs -> closed; challenged-but-never-verified too', async () => {
+    const addr = sockPath('to')
+    const s = await startRpcServer({ addr, token: TOKEN, version: 'v', authTimeoutMs: 100, handle: async () => null })
+    closers.push(() => s.close())
+    const idle = await raw(addr)
+    const half = await raw(addr)
+    half.send({ id: 1, method: 'auth.challenge', params: { clientNonce: newNonce() } })
+    await half.reply(1)
+    const t0 = Date.now()
+    await Promise.all([idle.closed, half.closed])
+    expect(Date.now() - t0).toBeLessThan(1000)
+  })
+
+  it('old-style auth {token} -> unauthorized and closed', async () => {
+    await serve()
+    const r = await raw()
+    r.send({ id: 1, method: 'auth', params: { token: TOKEN } })
+    expect((await r.reply(1)).error.code).toBe(-32002)
+    await r.closed
+  })
+
+  it('client never sends auth.verify to a server that cannot prove the token', async () => {
+    const addr = sockPath('fake')
+    const frames: any[] = []
+    const socks: net.Socket[] = []
+    const fake = net.createServer((sk) => {
+      socks.push(sk)
+      sk.setEncoding('utf8')
+      sk.on('error', () => {})
+      const dec = new FrameDecoder()
+      sk.on('data', (d: string) => {
+        for (const m of dec.push(d) as any[]) {
+          frames.push(m)
+          if (m.method === 'auth.challenge') sk.write(encodeFrame({ jsonrpc: '2.0', id: m.id, result: { serverNonce: newNonce(), proof: newNonce() } }))
+          else if (m.method === 'auth.verify') sk.write(encodeFrame({ jsonrpc: '2.0', id: m.id, result: { ok: true } }))
+        }
+      })
+    })
+    await new Promise<void>(r => fake.listen(addr, r))
+    closers.push(() => new Promise(r => { for (const sk of socks) sk.destroy(); fake.close(r) }))
+    await expect(connectClient({ addr, token: TOKEN, timeoutMs: 1000 })).rejects.toThrow('unauthorized')
+    await expect(connectControlClient({ addr, token: TOKEN, timeoutMs: 1000 })).rejects.toThrow('unauthorized')
+    // 客户端主动断开
+    expect(await until(() => socks.length === 2 && socks.every(sk => sk.destroyed || sk.readableEnded))).toBe(true)
+    await new Promise(r => setTimeout(r, 50))
+    expect(frames.map(f => f.method)).toEqual(['auth.challenge', 'auth.challenge'])
+    expect(JSON.stringify(frames)).not.toContain(TOKEN)
   })
 
   it('request before auth gets -32002 and the socket closes', async () => {
@@ -71,8 +237,8 @@ describe('rpc server + client', () => {
   it('hello compatibility', async () => {
     await serve()
     const c = await client()
-    expect(await c.call('hello', { clientVersion: 'x', protocolVersion: 1 })).toMatchObject({ compatible: false, version: HARNESS_VERSION, protocolVersion: 2 })
-    expect(await c.call('hello', { clientVersion: 'x', protocolVersion: 2 })).toMatchObject({ compatible: true })
+    expect(await c.call('hello', { clientVersion: 'x', protocolVersion: 2 })).toMatchObject({ compatible: false, version: HARNESS_VERSION, protocolVersion: 3 })
+    expect(await c.call('hello', { clientVersion: 'x', protocolVersion: PROTOCOL_VERSION })).toMatchObject({ compatible: true })
   })
 
   it('omitted params become {} and errors map to RpcError/-32603', async () => {
@@ -142,7 +308,7 @@ describe('rpc server + client', () => {
     expect(closedCb).toBe(true)
   })
 
-  it('pipelined bad-auth then good auth then prompt never runs the prompt', async () => {
+  it('pipelined bad request then a challenge then prompt never runs the prompt', async () => {
     await serve()
     const sock = net.connect(sockPath())
     sock.on('error', () => {})
@@ -151,7 +317,7 @@ describe('rpc server + client', () => {
     sock.resume()
     sock.write(
       encodeFrame({ jsonrpc: '2.0', id: 1, method: 'status', params: {} }) +
-      encodeFrame({ jsonrpc: '2.0', id: 2, method: 'auth', params: { token: TOKEN } }) +
+      encodeFrame({ jsonrpc: '2.0', id: 2, method: 'auth.challenge', params: { clientNonce: newNonce() } }) +
       encodeFrame({ jsonrpc: '2.0', id: 3, method: 'session.create', params: { commandId: 'zz' } }),
     )
     await closed
@@ -168,22 +334,17 @@ describe('rpc server + client', () => {
     for (const after of [-1, 1.5, 'x' as any]) {
       await expect(c.call('events.subscribe', { after })).rejects.toMatchObject({ code: -32602 })
     }
-    const sock = net.connect(sockPath())
-    sock.setEncoding('utf8')
-    const got: any[] = []
-    const dec = new FrameDecoder()
-    sock.on('data', (d: string) => got.push(...dec.push(d)))
-    await new Promise(r => sock.once('connect', r))
-    sock.write(
-      encodeFrame({ jsonrpc: '2.0', id: 1, method: 'auth', params: { token: TOKEN } }) +
+    const r = await raw()
+    await handshake(r)
+    r.sock.write(
       encodeFrame({ jsonrpc: '2.0', method: 'status', params: {} }) +
       encodeFrame({ jsonrpc: '2.0', method: 'nope', params: {} }) +
       encodeFrame({ jsonrpc: '2.0', id: 2, method: 'status', params: {} }),
     )
-    await wait(() => got.length >= 2)
-    await new Promise(r => setTimeout(r, 50))
-    sock.destroy()
-    expect(got.map(g => g.id)).toEqual([1, 2])
+    await r.reply(2)
+    await new Promise(res => setTimeout(res, 50))
+    r.sock.destroy()
+    expect(r.got.map(g => g.id)).toEqual(['c', 'v', 2])
   })
 
   it('mid-stream subscribe with after = k > 0 starts at k+1', async () => {
@@ -212,7 +373,7 @@ describe('rpc server + client', () => {
     expect(Date.now() - t0).toBeGreaterThanOrEqual(40)
     const c = await client(addr)
     await new Promise(r => setTimeout(r, 120))
-    expect(await c.call('auth', { token: TOKEN })).toEqual({ ok: true })
+    expect(await c.call('hello', { clientVersion: 'x', protocolVersion: PROTOCOL_VERSION })).toMatchObject({ compatible: true })
   })
 
   it('oversized frame closes the connection', async () => {
@@ -255,10 +416,10 @@ describe('rpc server + client', () => {
     closers.push(() => cc.close())
     await expect(cc.call('status')).rejects.toThrow('timeout')
     // 超时后连接仍可用
-    await expect(cc.call('auth', { token: TOKEN })).resolves.toEqual({ ok: true })
+    await expect((cc.call as (m: string, p: unknown) => Promise<unknown>)('hello', { clientVersion: 'x', protocolVersion: PROTOCOL_VERSION })).resolves.toMatchObject({ compatible: true })
   })
 
-  it('timeoutMs bounds connect + auth as one deadline', async () => {
+  it('timeoutMs bounds connect + handshake as one deadline', async () => {
     const addr = sockPath('silent')
     const socks: net.Socket[] = []
     const silent = net.createServer(sk => { socks.push(sk) /* 接受但从不回 */ })
@@ -266,6 +427,29 @@ describe('rpc server + client', () => {
     closers.push(() => new Promise(r => { for (const sk of socks) sk.destroy(); silent.close(r) }))
     const t0 = Date.now()
     await expect(connectControlClient({ addr, token: TOKEN, timeoutMs: 150 })).rejects.toThrow('timeout')
+    expect(Date.now() - t0).toBeLessThan(1000)
+  })
+
+  it('timeoutMs also bounds a server that answers the challenge but never the verify', async () => {
+    const addr = sockPath('halfway')
+    const socks: net.Socket[] = []
+    const srv = net.createServer((sk) => {
+      socks.push(sk)
+      sk.setEncoding('utf8')
+      sk.on('error', () => {})
+      const dec = new FrameDecoder()
+      sk.on('data', (d: string) => {
+        for (const m of dec.push(d) as any[]) {
+          if (m.method !== 'auth.challenge') continue
+          const serverNonce = newNonce()
+          sk.write(encodeFrame({ jsonrpc: '2.0', id: m.id, result: { serverNonce, proof: serverProof(TOKEN, m.params.clientNonce, serverNonce) } }))
+        }
+      })
+    })
+    await new Promise<void>(r => srv.listen(addr, r))
+    closers.push(() => new Promise(r => { for (const sk of socks) sk.destroy(); srv.close(r) }))
+    const t0 = Date.now()
+    await expect(connectClient({ addr, token: TOKEN, timeoutMs: 150 })).rejects.toThrow('timeout')
     expect(Date.now() - t0).toBeLessThan(1000)
   })
 
