@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, win32 } from 'node:path'
-import { credentialRoots, isCredentialPath, isInside, resolveToolPath } from './paths'
+import { canonicalRoots, credentialRoots, isCredentialPath, isInside, OUTSIDE, resolveToolPath } from './paths'
 
 let base: string
 let cwd: string
@@ -64,6 +64,39 @@ describe('resolveToolPath (real tree)', () => {
     expect(isInside(r, cwd, P)).toBe(false)
     expect(isInside(r, '/', 'linux')).toBe(false)
     expect(isCredentialPath(r, [], P)).toBe(true) // 失败即拒
+  })
+})
+
+describe('resolveToolPath: lstat errors', () => {
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('an unreadable component fails closed (EACCES is not "missing")', () => {
+    const locked = join(cwd, 'locked')
+    mkdirSync(locked)
+    chmodSync(locked, 0o000)
+    try {
+      expect(resolveToolPath(cwd, 'locked/x/y')).toBe(OUTSIDE)
+    } finally {
+      chmodSync(locked, 0o755)
+    }
+  })
+  it('an injected exists that throws fails closed', () => {
+    const exists = () => { throw Object.assign(new Error('io'), { code: 'EIO' }) }
+    expect(resolveToolPath('/repo', 'x', { platform: 'linux', exists, realpath: p => p })).toBe(OUTSIDE)
+  })
+})
+
+describe('canonicalRoots: dangling credential links', () => {
+  it('adds the target of a dangling ~/.ssh link, resolved as far as possible', () => {
+    const keys = join(cwd, 'keys') // 还不存在
+    symlinkSync(keys, join(base, '.ssh'))
+    const roots = canonicalRoots(credentialRoots(base, P, {}))
+    expect(isCredentialPath(resolveToolPath(cwd, 'keys/authorized_keys'), roots, P)).toBe(true)
+    expect(isCredentialPath(resolveToolPath(cwd, 'other.txt'), roots, P)).toBe(false)
+  })
+  it('follows a chain of dangling links and a relative link', () => {
+    symlinkSync('outside/hop', join(base, '.aws')) // 相对链接
+    symlinkSync(join(cwd, 'creds'), join(outside, 'hop')) // 第二跳,目标不存在
+    const roots = canonicalRoots(credentialRoots(base, P, {}))
+    expect(isCredentialPath(resolveToolPath(cwd, 'creds/config'), roots, P)).toBe(true)
   })
 })
 
@@ -142,5 +175,22 @@ describe('credential blacklist', () => {
     expect(isCredentialPath('c:\\users\\U\\.SSH\\id', credentialRoots('C:\\Users\\u', 'win32', {}), 'win32')).toBe(true)
     expect(isCredentialPath('/h/.sshx', credentialRoots('/h', 'darwin', {}), 'darwin')).toBe(false)
     expect(isCredentialPath('/h/.netrc', credentialRoots('/h', 'darwin', {}), 'darwin')).toBe(true)
+  })
+  it('Unicode case folds (ſ → s, ß → ss) cannot dodge the blacklist on darwin / win32', () => {
+    const bypass = ['.awſ/config', '.ſſh/authorized_keys', '.ßh/x', '.ſsh/x', '.git-credentialſ', 'Library/Keychainſ/x', '.AWſ/config']
+    for (const rel of bypass) {
+      expect(isCredentialPath(`/h/${rel}`, credentialRoots('/h', 'darwin', {}), 'darwin'), rel).toBe(true)
+      expect(isCredentialPath(`C:\\Users\\u\\${rel.replace(/\//g, '\\')}`, credentialRoots('C:\\Users\\u', 'win32', {}), 'win32'), rel).toBe(true)
+    }
+    expect(isCredentialPath('/h/.awſ/config', credentialRoots('/h', 'linux', {}), 'linux')).toBe(false) // ext4 区分大小写:不同的目录
+    // 容纳判断不受强折叠影响
+    expect(isInside('/h/ſrc/x', '/h/src', 'darwin')).toBe(false)
+  })
+  it('darwin: the /System/Volumes/Data firmlink alias is collapsed', () => {
+    const roots = credentialRoots('/Users/u', 'darwin', {})
+    expect(isCredentialPath('/System/Volumes/Data/Users/u/.ssh/id', roots, 'darwin')).toBe(true)
+    expect(isCredentialPath('/system/volumes/data/Users/u/.SSH/id', roots, 'darwin')).toBe(true)
+    expect(isInside('/Users/u/.ssh/id', '/System/Volumes/Data/Users/u', 'darwin')).toBe(true)
+    expect(isCredentialPath('/System/Volumes/Data/Users/u/.ssh/id', roots, 'linux')).toBe(false)
   })
 })

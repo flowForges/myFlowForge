@@ -113,6 +113,21 @@ describe('PermissionGate.check (real tree)', () => {
     expect(check(gate, 'read', resolveToolPath(cwd, 'repo/a.txt'))).toBe('allow')
   })
 
+  it('I1: case-fold spellings of absent credential roots are denied on this platform', () => {
+    const { gate, cwd } = gateFor(home)
+    const fold = process.platform === 'darwin' || process.platform === 'win32'
+    for (const rel of ['.awſ/config', '.ſſh/authorized_keys', '.git-credentialſ', 'Library/Keychainſ/x'])
+      expect(check(gate, 'write', resolveToolPath(cwd, rel)), rel).toBe(fold ? 'deny' : 'allow')
+  })
+
+  it('M1: a dangling ~/.ssh link into cwd blacklists its target', () => {
+    rmSync(join(home, '.ssh'), { recursive: true })
+    symlinkSync(join(home, 'repo', 'keys'), join(home, '.ssh'))
+    const { gate, cwd } = gateFor(join(home, 'repo'))
+    expect(check(gate, 'write', resolveToolPath(cwd, 'keys/authorized_keys'))).toBe('deny')
+    expect(check(gate, 'write', resolveToolPath(cwd, 'src/a.ts'))).toBe('allow')
+  })
+
   it('a symlinked credential dir is denied through its target', () => {
     const keys = join(outside, 'keys')
     mkdirSync(keys)
