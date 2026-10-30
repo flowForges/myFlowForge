@@ -36,7 +36,7 @@ const waitFor = async (fn: () => boolean) => {
 
 describe('kernel', () => {
   it('builtin plugins in registration order', () => {
-    expect(BUILTIN_PLUGINS.map(p => p.manifest.id)).toEqual(['models-registry', 'model-openai', 'model-anthropic', 'model-chatgpt', 'tools-registry', 'loop-direct', 'loop-echo'])
+    expect(BUILTIN_PLUGINS.map(p => p.manifest.id)).toEqual(['models-registry', 'model-openai', 'model-anthropic', 'model-chatgpt', 'tools-registry', 'tools-coding', 'loop-direct', 'loop-echo'])
   })
 
   it('create + prompt runs the echo turn in order', async () => {

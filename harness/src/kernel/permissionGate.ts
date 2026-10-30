@@ -57,17 +57,30 @@ export class PermissionGate {
   constructor(private deps: GateDeps) {}
 
   check(req: PermissionRequest): Decision {
-    if (req.actor === 'kernel') return 'allow'
+    return this.checkMany([req])[0]
+  }
+
+  /** 批量判断(grep / glob 逐个文件过门):黑名单与各会话 spillDir 只算一次 */
+  checkMany(reqs: PermissionRequest[]): Decision[] {
     const { sessions, dataDir, platform } = this.deps
-    const s = req.sessionId === undefined ? undefined : sessions.get(req.sessionId)
-    let spillDir: string | undefined
-    if (s) {
-      try {
-        spillDir = canonical(sessions.spillDir(s.sessionId), platform)
-      } catch {
-        spillDir = undefined
+    let shared: { roots: string[]; dataDir: string } | undefined
+    const spills = new Map<string, string | undefined>()
+    return reqs.map(req => {
+      if (req.actor === 'kernel') return 'allow'
+      const s = req.sessionId === undefined ? undefined : sessions.get(req.sessionId)
+      let spillDir: string | undefined
+      if (s) {
+        if (!spills.has(s.sessionId)) {
+          try {
+            spills.set(s.sessionId, canonical(sessions.spillDir(s.sessionId), platform))
+          } catch {
+            spills.set(s.sessionId, undefined)
+          }
+        }
+        spillDir = spills.get(s.sessionId)
       }
-    }
-    return decide(req, s, { roots: blacklist(this.deps), dataDir: canonical(dataDir, platform), spillDir, platform })
+      shared ??= { roots: blacklist(this.deps), dataDir: canonical(dataDir, platform) }
+      return decide(req, s, { ...shared, spillDir, platform })
+    })
   }
 }

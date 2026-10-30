@@ -174,4 +174,19 @@ describe('PermissionGate.check (real tree)', () => {
     expect(gate.check({ actor: 'plugin:tools', action: 'exec', resource: 'ls', sessionId: 'nope' })).toBe('deny')
     expect(gate.check({ actor: 'kernel', action: 'x' })).toBe('allow')
   })
+
+  it('checkMany gives the same decisions as check, one per request', () => {
+    const { gate, cwd } = gateFor(home)
+    const reqs = [
+      { actor: 'plugin:tools', action: 'read', resource: resolveToolPath(cwd, '.ssh/id_ed25519'), sessionId: 's1' },
+      { actor: 'plugin:tools', action: 'read', resource: resolveToolPath(cwd, 'repo/a.txt'), sessionId: 's1' },
+      { actor: 'plugin:tools', action: 'write', resource: resolveToolPath(cwd, 'repo/.git/config'), sessionId: 's1' },
+      { actor: 'plugin:tools', action: 'read', resource: resolveToolPath(cwd, 'repo/a.txt'), sessionId: 'nope' },
+      { actor: 'plugin:tools', action: 'read', resource: resolveToolPath(dataDir, 'sessions/s1/spill/x.txt'), sessionId: 's1' },
+      { actor: 'kernel', action: 'x' },
+    ]
+    expect(gate.checkMany(reqs)).toEqual(['deny', 'allow', 'deny', 'deny', 'allow', 'allow'])
+    expect(gate.checkMany(reqs)).toEqual(reqs.map(r => gate.check(r)))
+    expect(gate.checkMany([])).toEqual([])
+  })
 })
