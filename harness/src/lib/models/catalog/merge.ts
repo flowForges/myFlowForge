@@ -5,8 +5,8 @@ import { toPresetView, type Preset, type PresetModel } from './presets'
 export type SnapshotModel = {
   id: string
   name: string
-  context: number
-  output: number
+  context?: number
+  output?: number
   reasoning: boolean
   toolCall: boolean
   image: boolean
@@ -17,18 +17,19 @@ export type Snapshot = { generatedAt: string; models: Record<string, SnapshotMod
 
 const DEFAULTS = { context: 128000, output: 8000, image: false, reasoning: 'none', toolCall: true } as const
 
-/** 按模型 id(不含 provider 前缀)建索引,同 id 先出现者优先。 */
-function indexById(s: Snapshot | undefined): Map<string, SnapshotModel> {
-  const m = new Map<string, SnapshotModel>()
-  for (const v of Object.values(s?.models ?? {})) if (!m.has(v.id)) m.set(v.id, v)
-  return m
+type Lookup = (provider: string | undefined, id: string) => SnapshotModel | undefined
+
+/** 先按 provider/modelId 精确查,缺失才退回任意 provider 的同 id 条目(先出现者优先)。 */
+function lookup(s: Snapshot | undefined): Lookup {
+  const byId = new Map<string, SnapshotModel>()
+  for (const v of Object.values(s?.models ?? {})) if (!byId.has(v.id)) byId.set(v.id, v)
+  return (provider, id) => (provider ? s?.models[`${provider}/${id}`] : undefined) ?? byId.get(id)
 }
 
 function fromSnapshot(s: SnapshotModel): Partial<ModelEntry> {
-  const e: Partial<ModelEntry> = {
-    name: s.name, context: s.context, output: s.output, image: s.image, toolCall: s.toolCall,
-    reasoning: s.reasoning ? 'toggle' : 'none',
-  }
+  const e: Partial<ModelEntry> = { name: s.name, image: s.image, toolCall: s.toolCall, reasoning: s.reasoning ? 'toggle' : 'none' }
+  if (s.context) e.context = s.context
+  if (s.output) e.output = s.output
   if (s.cost) e.cost = s.cost
   if (s.status === 'deprecated') e.deprecated = true
   return e
@@ -36,17 +37,17 @@ function fromSnapshot(s: SnapshotModel): Partial<ModelEntry> {
 
 const defined = <T extends object>(o: T): Partial<T> => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as Partial<T>
 
-function resolveModel(pm: PresetModel, cache: Map<string, SnapshotModel>, snap: Map<string, SnapshotModel>): ModelEntry {
-  const meta = cache.get(pm.id) ?? snap.get(pm.id)
+function resolveModel(pm: PresetModel, provider: string | undefined, cache: Lookup, snap: Lookup): ModelEntry {
+  const meta = cache(provider, pm.id) ?? snap(provider, pm.id)
   return { ...DEFAULTS, ...(meta ? fromSnapshot(meta) : {}), name: pm.id, ...(meta ? { name: meta.name } : {}), ...defined(pm), id: pm.id } as ModelEntry
 }
 
 export function mergeCatalog(presets: Preset[], snapshot: Snapshot, cache?: Snapshot): CatalogView {
-  const c = indexById(cache)
-  const s = indexById(snapshot)
+  const c = lookup(cache)
+  const s = lookup(snapshot)
   const models: Record<string, ModelEntry[]> = {}
   for (const p of presets) {
-    const entries = p.models === 'list' ? [] : p.models.map((pm) => resolveModel(pm, c, s))
+    const entries = p.models === 'list' ? [] : p.models.map((pm) => resolveModel(pm, p.snapshotProvider, c, s))
     models[p.id] = [...entries.filter((e) => !e.deprecated), ...entries.filter((e) => e.deprecated)] // deprecated 排后
   }
   return { presets: presets.map(toPresetView), models }

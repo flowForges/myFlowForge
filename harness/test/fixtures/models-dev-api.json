@@ -10,6 +10,12 @@
         "limit": { "context": 0, "output": 0 }, "cost": { "input": 5, "output": 40 } }
     }
   },
+  "other-provider": {
+    "id": "other-provider", "name": "Other", "models": {
+      "nolimit": { "id": "nolimit", "name": "No Limit", "reasoning": false, "tool_call": true,
+        "modalities": { "input": ["text"], "output": ["text"] } }
+    }
+  },
   "deepseek": {
     "id": "deepseek", "name": "DeepSeek", "api": "https://api.deepseek.com",
     "models": {
