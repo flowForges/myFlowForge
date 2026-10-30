@@ -135,6 +135,22 @@ describe('ModelPicker in debug panel', () => {
     expect(mffai.prompt).toHaveBeenCalledWith('hi', { accountId: 'a2', modelId: 'm2' })
   })
 
+  it('list presets: empty catalog list falls back to the account models (picker + 设为默认)', async () => {
+    accounts.push({ id: 'a3', presetId: 'p-gpt', label: 'gpt', state: 'ok', models: [model('gpt-x')] })
+    mffai.models.catalog = vi.fn(async () => ({ presets, models: { 'p-key': [model('m1')], 'p-code': [model('m2')], 'p-gpt': [] }, default: catalogDefault }))
+    const { container } = render(<MffaiView />)
+    await waitFor(() => {
+      const opts = [...container.querySelectorAll('.mffai-picker option')].map(o => o.textContent)
+      expect(opts).toContain('gpt / GPT-X')
+    })
+    fireEvent.click(await screen.findByText('连接'))
+    await screen.findByText('gpt')
+    const btn = screen.getAllByText('设为默认')[2] as HTMLButtonElement
+    expect(btn.disabled).toBe(false)
+    fireEvent.click(btn)
+    await waitFor(() => expect(mffai.models.setDefault).toHaveBeenCalledWith('a3', 'gpt-x'))
+  })
+
   it('shows reasoning folded and usage', async () => {
     render(<MffaiView />)
     await screen.findByText('发送')
@@ -160,12 +176,30 @@ describe('AddAccount ChatGPT flow cleanup', () => {
     return r
   }
 
-  it('account.updated closes the form and reloads', async () => {
+  it('own flow ended ok closes the form and reloads; other accounts / flows do not', async () => {
     const onDone = vi.fn()
     await gptForm(<AddAccount presets={presets as any} onDone={onDone} />)
-    act(() => eventCb({ seq: 1, ts: 1, type: 'account.updated', payload: {} }))
+    act(() => eventCb({ seq: 1, ts: 1, type: 'account.updated', payload: { account: { id: 'other', presetId: 'p-key', label: 'x', state: 'error' } } }))
+    act(() => eventCb({ seq: 2, ts: 1, type: 'auth.chatgpt.ended', payload: { flowId: 'f0', ok: true, accountId: 'zz' } }))
+    expect(screen.getByText('取消')).toBeInTheDocument()
+    expect(onDone).not.toHaveBeenCalled()
+    act(() => eventCb({ seq: 3, ts: 1, type: 'auth.chatgpt.ended', payload: { flowId: 'f1', ok: true, accountId: 'a9' } }))
     expect(screen.getByText('添加账号')).toBeInTheDocument()
     expect(onDone).toHaveBeenCalledTimes(1)
+    expect(mffai.chatgpt.cancel).not.toHaveBeenCalled()
+  })
+
+  it('own flow ended not ok shows 失败 and offers login again', async () => {
+    const onDone = vi.fn()
+    await gptForm(<AddAccount presets={presets as any} onDone={onDone} />)
+    act(() => eventCb({ seq: 1, ts: 1, type: 'auth.chatgpt.ended', payload: { flowId: 'f1', ok: false } }))
+    expect(screen.getByText('失败')).toBeInTheDocument()
+    expect(screen.getByText('用 ChatGPT 登录')).toBeInTheDocument()
+    expect(onDone).not.toHaveBeenCalled()
+    // 流已结束:关表单不再取消
+    fireEvent.click(screen.getByText('用 ChatGPT 登录'))
+    await screen.findByText('取消')
+    expect(screen.queryByText('失败')).toBeNull()
     expect(mffai.chatgpt.cancel).not.toHaveBeenCalled()
   })
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { PresetView } from '@mffai/protocol'
+import type { ChatgptEndedPayload, PresetView } from '@mffai/protocol'
 
 /** 添加账号内联表单;受限套餐先确认,key 提交后立即清空 */
 export function AddAccount({ presets, onDone }: { presets: PresetView[]; onDone: () => void }) {
@@ -28,12 +28,15 @@ export function AddAccount({ presets, onDone }: { presets: PresetView[]; onDone:
     const id = flowRef.current
     if (id) void window.forge.mffai.chatgpt.cancel(id).catch((e) => console.error('mffai', e))
   }, [])
-  // 登录完成:account.updated 到来时收起表单(流已结束,无需取消)
+  // 只认本表单这个 flow 的 auth.chatgpt.ended:成功收起表单,失败留在表单上显示失败(流已结束,无需取消)
   useEffect(() => {
     if (!flowId) return
     return api.onEvent((e) => {
-      if (e.type !== 'account.updated' || !flowRef.current) return
-      setFlow(null); setOpen(false); onDone()
+      if (e.type !== 'auth.chatgpt.ended') return
+      const p = e.payload as Partial<ChatgptEndedPayload> | undefined
+      if (!p || p.flowId !== flowRef.current) return
+      setFlow(null)
+      if (p.ok) { setOpen(false); onDone() } else setFailed(true)
     })
   }, [flowId]) // eslint-disable-line react-hooks/exhaustive-deps
 

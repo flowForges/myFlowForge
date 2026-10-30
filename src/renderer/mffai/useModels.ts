@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { AccountView, CatalogView, SecretsBackend } from '@mffai/protocol'
+import type { AccountView, CatalogView, ModelEntry, SecretsBackend } from '@mffai/protocol'
+
+/** 账号可选的模型:目录(预设)清单非空时用它,否则用账号上列出 / 手填的清单 */
+export function modelsOf(catalog: CatalogView | null, a: AccountView): ModelEntry[] {
+  const c = catalog?.models[a.presetId]
+  return c?.length ? c : a.models ?? []
+}
 
 export interface ModelsData { catalog: CatalogView | null; accounts: AccountView[]; backend: SecretsBackend | null }
 

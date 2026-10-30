@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { AccountState, AccountView, PresetView, Quota } from '@mffai/protocol'
 import { AddAccount } from './AddAccount'
-import { useModels } from './useModels'
+import { modelsOf, useModels } from './useModels'
 
 const STATE_LABEL: Record<AccountState, string> = {
   ok: '可用', needs_login: '需要重新登录', not_authorized: '未授权套餐使用', quota_exhausted: '额度用尽', error: '出错',
@@ -50,7 +50,7 @@ export function Connections() {
       {backend === 'plaintext-file' && <span className="mffai-badge">明文存储</span>}
       {accounts.map(a => (
         <AccountRow key={a.id} account={a} preset={catalog?.presets.find(p => p.id === a.presetId)}
-          modelId={(catalog?.models[a.presetId] ?? a.models)?.[0]?.id}
+          modelId={modelsOf(catalog, a)[0]?.id}
           isDefault={catalog?.default?.accountId === a.id} onChanged={reload} />
       ))}
       <AddAccount presets={catalog?.presets ?? []} onDone={reload} />

@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from 'react'
 import type { ModelRef } from '@mffai/protocol'
-import { useModels } from './useModels'
+import { modelsOf, useModels } from './useModels'
 
 const SEP = '\u0000'
 
@@ -8,7 +8,7 @@ const SEP = '\u0000'
 export function ModelPicker({ value, onChange }: { value: ModelRef | undefined; onChange: (m: ModelRef | undefined) => void }) {
   const { catalog, accounts } = useModels()
   const options = useMemo(() => accounts.flatMap(a =>
-    (catalog?.models[a.presetId] ?? a.models ?? []).map(m => ({ key: a.id + SEP + m.id, ref: { accountId: a.id, modelId: m.id }, text: `${a.label} / ${m.name}` }))
+    modelsOf(catalog, a).map(m => ({ key: a.id + SEP + m.id, ref: { accountId: a.id, modelId: m.id }, text: `${a.label} / ${m.name}` }))
   ), [catalog, accounts])
 
   useEffect(() => {
