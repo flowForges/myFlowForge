@@ -111,12 +111,17 @@ export function createMffaiHost(deps: HostDeps) {
     const j = readSupervisorJson(paths.supervisorJson)
     return j && j.protocolVersion !== PROTOCOL_VERSION && isAlive(j.pid) ? j : undefined
   }
+  // 由 supervisor.json 合成的状态(控制口不认我们):只能靠信号停
+  const fromJson = new WeakSet<ControlStatus>()
   const status = (): Promise<ControlStatus | undefined> =>
     control('status').catch((err): ControlStatus | undefined => {
       if ((err as Error)?.message !== 'unauthorized') return undefined
       const j = oldDaemon()
+      if (!j) return undefined
       // 合成一个"旧版本在跑"的状态,走已有的不兼容 → 用户点重启路径
-      return j && { state: 'running', pid: j.pid, protocolVersion: j.protocolVersion, restarts: 0, version: j.version ?? '' }
+      const s: ControlStatus = { state: 'running', pid: j.pid, protocolVersion: j.protocolVersion, restarts: 0, version: j.version ?? '' }
+      fromJson.add(s)
+      return s
     })
   const settled = (s?: ControlStatus) => !!s && (s.state === 'running' || s.state === 'tripped' || isOldProtocol(s))
   const enabled = () => deps.readSettings().mffai.enabled
@@ -140,6 +145,22 @@ export function createMffaiHost(deps: HostDeps) {
       if (done(s) || now() >= end) return s
       await sleep(POLL_MS)
     }
+  }
+
+  const waitGone = async (): Promise<void> => {
+    if (await waitStatus(STOP_WAIT_MS, (x) => !x)) throw new Error('old mff-ai daemon did not stop')
+  }
+
+  /**
+   * 旧协议的控制口不认我们:SIGTERM 旧监管(它体面退出;Windows 上是强杀)并等它消失。
+   * 发信号前再读一次 supervisor.json、再确认 pid 活着,防 pid 被复用
+   */
+  async function stopOldDaemon(): Promise<void> {
+    const j = oldDaemon()
+    if (j) {
+      try { kill(j.pid, 'SIGTERM') } catch (err) { log('mffai kill old daemon failed', err) }
+    }
+    await waitGone()
   }
 
   let spawnError: string | undefined
@@ -213,6 +234,9 @@ export function createMffaiHost(deps: HostDeps) {
 
   const disable = (): Promise<void> => serial('disable', async () => {
     conn.drop()
+    // 旧协议后台撤销不了自启也收不到 shutdown:先停掉它,再按下面的常规路径临时拉起新后台撤销
+    const old = await status()
+    if (old && fromJson.has(old)) await stopOldDaemon()
     // 自启要靠后台撤销;后台不在(被手动杀过)就为此临时拉起一次
     if (!(await status()) && existsSync(dir)) {
       spawn()
@@ -232,14 +256,8 @@ export function createMffaiHost(deps: HostDeps) {
     if (isOldProtocol(s) || conn.compatible() === false) {
       // 版本不兼容:整个旧后台停掉,换当前 app 带的新后台
       conn.drop()
-      await control('shutdown').catch(() => {
-        // 旧协议的控制口不认我们:直接 SIGTERM 旧监管(它体面退出;Windows 上是强杀)
-        const j = oldDaemon()
-        if (j) {
-          try { kill(j.pid, 'SIGTERM') } catch (err) { log('mffai kill old daemon failed', err) }
-        }
-      })
-      if (await waitStatus(STOP_WAIT_MS, (x) => !x)) throw new Error('old mff-ai daemon did not stop')
+      const accepted = await control('shutdown').then(() => true, () => false)
+      await (accepted ? waitGone() : stopOldDaemon())
       conn.resetCompat()
       return bringUp(START_WAIT_MS, enabled)
     }

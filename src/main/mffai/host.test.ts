@@ -344,6 +344,39 @@ describe('mffai host', () => {
       expect(attemptsAtKill).toBe(2)
     })
 
+    it('kill 前再查一次:pid 在 status 之后没了 → 不发信号', async () => {
+      let alive = true
+      const t = oldDaemon(() => alive)
+      await t.host.ensureRunning()
+      const realConnect = t.connectControl.getMockImplementation()!
+      let attempts = 0
+      // restart:第 1 次控制口尝试是 status(pid 还活着),第 2 次是 shutdown;shutdown 被拒前旧后台自己退了
+      t.connectControl.mockImplementation(async (o) => {
+        if (++attempts === 2) { alive = false; t.d.up = false; t.d.v2Auth = false }
+        return realConnect(o)
+      })
+      t.spawnFn.mockImplementation(() => { t.d.start(); return { unref: t.unref } })
+      await t.host.restart()
+      expect(t.d.killed).toEqual([])
+      expect(await t.host.getState()).toMatchObject({ running: true, compatible: true })
+    })
+
+    it('disable:先 SIGTERM 旧后台,再临时拉起新后台撤销自启并 shutdown', async () => {
+      const t = oldDaemon(() => true)
+      await t.host.ensureRunning()
+      settings.mffai.enabled = false
+      let killedAtSpawn = -1
+      t.spawnFn.mockImplementation(() => { killedAtSpawn = t.d.killed.length; t.d.start(); return { unref: t.unref } })
+      const before = t.d.controlCalls.length
+      await t.host.disable()
+      expect(t.d.killed).toEqual([[4242, 'SIGTERM']])
+      expect(t.spawnFn).toHaveBeenCalledTimes(1)
+      expect(killedAtSpawn).toBe(1) // 先停旧的,再拉起新的
+      const calls = t.d.controlCalls.slice(before).filter(([m]) => m !== 'status')
+      expect(calls).toEqual([['autostart', { on: false, spec: expect.any(Object) }], ['shutdown', undefined]])
+      expect(t.d.up).toBe(false)
+    })
+
     it('pid 已死 → 照旧拉起', async () => {
       const t = oldDaemon(() => false)
       t.spawnFn.mockImplementation(() => { t.d.v2Auth = false; t.d.start(); return { unref: t.unref } })
