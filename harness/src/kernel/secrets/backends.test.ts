@@ -23,7 +23,7 @@ function fakePowershell() {
       return { code: 0, stdout: Buffer.concat([Buffer.from('P:'), input]).toString('base64') + '\r\n', timedOut: false }
     }
     if (stdin.includes('ProtectedData]::Unprotect(')) {
-      if (input.subarray(0, 2).toString() !== 'P:') return { code: 1, stdout: '', timedOut: false }
+      if (input.subarray(0, 2).toString() !== 'P:') return { code: 3, stdout: '', timedOut: false } // CryptographicException
       return { code: 0, stdout: input.subarray(2).toString('base64') + '\r\n', timedOut: false }
     }
     return { code: 1, stdout: '', timedOut: false }
@@ -71,17 +71,28 @@ describe('Windows DPAPI backend (injected exec)', () => {
     expect(await again.get('k')).toBe('sk-win-secret')
   })
 
-  it('Unprotect fails (other user / machine) → unreadable', async () => {
+  it('Unprotect cannot decrypt (other user / machine) → unreadable; script maps CryptographicException to exit 3', async () => {
     const ps = fakePowershell()
     const s = await openSecretStore({ dataDir: dir, platform: 'win32', exec: ps.exec })
     await s.set('k', 'v')
     // 探测仍能往返(Protect+Unprotect 自身数据),只有 master.dpapi 解不开
     const masterB64 = readFileSync(join(dir, 'master.dpapi'), 'utf8').trim()
     const failing: Exec = async (cmd, args, stdin, t) =>
-      stdin.includes(masterB64) ? { code: 1, stdout: '', timedOut: false } : ps.exec(cmd, args, stdin, t)
+      stdin.includes(masterB64) ? { code: 3, stdout: '', timedOut: false } : ps.exec(cmd, args, stdin, t)
+    expect(ps.calls.find(c => c.stdin.includes('Unprotect('))!.stdin).toContain('catch [System.Security.Cryptography.CryptographicException] { exit 3 }')
     const t = await openSecretStore({ dataDir: dir, platform: 'win32', exec: failing })
     expect(t.backend).toBe('unreadable')
     expect(existsSync(join(dir, 'credentials.enc'))).toBe(true)
+  })
+
+  it('transient failures while loading master.dpapi → unavailable, not unreadable', async () => {
+    const ps = fakePowershell()
+    await (await openSecretStore({ dataDir: dir, platform: 'win32', exec: ps.exec })).set('k', 'v')
+    const masterB64 = readFileSync(join(dir, 'master.dpapi'), 'utf8').trim()
+    for (const r of [{ code: 1, stdout: '', timedOut: false }, { code: null, stdout: '', timedOut: true }, { code: null, stdout: '', timedOut: false }]) {
+      const exec: Exec = async (cmd, args, stdin, t) => (stdin.includes(masterB64) ? r : ps.exec(cmd, args, stdin, t))
+      expect((await openSecretStore({ dataDir: dir, platform: 'win32', exec })).backend).toBe('unavailable')
+    }
   })
 
   it('powershell missing → plaintext-file', async () => {
@@ -108,6 +119,16 @@ describe('Linux secret-service backend (injected exec)', () => {
     for (const c of st.calls) expect(c.args.join(' ')).not.toContain(master)
     const again = await openSecretStore({ dataDir: dir, platform: 'linux', exec: st.exec })
     expect(await again.get('k')).toBe('sk-linux-secret')
+  })
+
+  it('D-Bus drops after the probe (lookup looks absent, enc exists) → unavailable; key really gone → unreadable', async () => {
+    const st = fakeSecretTool()
+    await (await openSecretStore({ dataDir: dir, platform: 'linux', exec: st.exec })).set('k', 'v')
+    let n = 0
+    const dying: Exec = async (cmd, args, stdin, t) => (++n <= 3 ? st.exec(cmd, args, stdin, t) : { code: 1, stdout: '', timedOut: false })
+    expect((await openSecretStore({ dataDir: dir, platform: 'linux', exec: dying })).backend).toBe('unavailable')
+    st.items.clear()
+    expect((await openSecretStore({ dataDir: dir, platform: 'linux', exec: st.exec })).backend).toBe('unreadable')
   })
 
   it('no D-Bus (secret-tool non-zero) → plaintext-file', async () => {

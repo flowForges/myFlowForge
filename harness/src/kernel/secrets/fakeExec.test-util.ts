@@ -3,7 +3,7 @@ import type { Exec, ExecResult } from './exec'
 export type Call = { cmd: string; args: string[]; stdin: string; timeoutMs: number }
 
 /** 内存版 `security`:只认本实现用到的三条命令;never 碰真钥匙串 */
-export function fakeSecurity(opts: { hangOn?: (c: Call) => boolean; failAll?: boolean } = {}) {
+export function fakeSecurity(opts: { hangOn?: (c: Call) => boolean; failAll?: boolean; failDelete?: boolean } = {}) {
   const items = new Map<string, string>() // `${acct}|${svc}` -> value
   const calls: Call[] = []
   const exec: Exec = (cmd, args, stdin, timeoutMs) => {
@@ -26,6 +26,7 @@ export function fakeSecurity(opts: { hangOn?: (c: Call) => boolean; failAll?: bo
       return Promise.resolve(v === undefined ? { code: 44, stdout: '', timedOut: false } : { code: 0, stdout: v + '\n', timedOut: false })
     }
     if (args[0] === 'delete-generic-password') {
+      if (opts.failDelete) return Promise.resolve({ code: 1, stdout: '', timedOut: false })
       const had = items.delete(key)
       return Promise.resolve({ code: had ? 0 : 44, stdout: '', timedOut: false })
     }

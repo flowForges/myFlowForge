@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openSecretStore, scopedSecrets } from './secretStore'
+import { securityQuote } from './keychainMac'
+import type { Logger } from '../log'
 import type { Exec } from './exec'
 import { fakeSecurity, type Call } from './fakeExec.test-util'
 
@@ -111,6 +113,78 @@ describe('SecretStore on macOS keychain (injected exec)', () => {
     const t = await openSecretStore({ dataDir: dir, platform: 'darwin', exec: sec.exec })
     expect(t.backend).toBe('unreadable')
     expect(readFileSync(join(dir, 'credentials.enc'), 'utf8')).toBe(before)
+  })
+})
+
+describe('hardening', () => {
+  const recLog = () => {
+    const warns: Array<[string, unknown]> = []
+    const log: Logger = { info() {}, warn: (m, d) => { warns.push([m, d]) }, error() {} }
+    return { log, warns }
+  }
+
+  it('truncated GCM tag → unreadable', async () => {
+    const sec = fakeSecurity()
+    const s = await openSecretStore({ dataDir: dir, platform: 'darwin', exec: sec.exec })
+    await s.set('k', 'v')
+    const file = join(dir, 'credentials.enc')
+    const j = JSON.parse(readFileSync(file, 'utf8'))
+    writeFileSync(file, JSON.stringify({ ...j, tag: Buffer.from(j.tag, 'base64').subarray(0, 4).toString('base64') }))
+    const t = await openSecretStore({ dataDir: dir, platform: 'darwin', exec: sec.exec })
+    expect(t.backend).toBe('unreadable')
+  })
+
+  it('failed write leaves the previous value in memory', async () => {
+    const s = await openSecretStore({ dataDir: dir, osBackend: false })
+    await s.set('a', '1')
+    const file = join(dir, 'credentials.json')
+    rmSync(file)
+    mkdirSync(file) // rename 到非空目录必然失败
+    writeFileSync(join(file, 'x'), '')
+    await expect(s.set('a', '2')).rejects.toThrow()
+    expect(await s.get('a')).toBe('1')
+    await expect(s.delete('a')).rejects.toThrow()
+    expect(await s.get('a')).toBe('1')
+  })
+
+  it('fs errors while opening → unavailable (never throws), failure kind logged', async () => {
+    mkdirSync(join(dir, 'credentials.json'))
+    const { log, warns } = recLog()
+    const s = await openSecretStore({ dataDir: dir, osBackend: false, log })
+    expect(s.backend).toBe('unavailable')
+    expect(warns).toContainEqual(['secrets backend unavailable', { backend: 'plaintext-file', failure: 'EISDIR' }])
+  })
+
+  it('fs error reading credentials.enc on the keychain path → unavailable', async () => {
+    const sec = fakeSecurity()
+    await (await openSecretStore({ dataDir: dir, platform: 'darwin', exec: sec.exec })).set('k', 'v')
+    rmSync(join(dir, 'credentials.enc'))
+    mkdirSync(join(dir, 'credentials.enc'))
+    const s = await openSecretStore({ dataDir: dir, platform: 'darwin', exec: sec.exec })
+    expect(s.backend).toBe('unavailable')
+  })
+
+  it('plugin ids containing "/" (or empty) are rejected for the scoped view', async () => {
+    const s = await openSecretStore({ dataDir: dir, osBackend: false })
+    expect(() => scopedSecrets(s, 'a/b')).toThrow()
+    expect(() => scopedSecrets(s, '')).toThrow()
+  })
+
+  it('security -i quoting rejects newline / CR (no second command injected)', async () => {
+    expect(securityQuote('a"b\\c')).toBe('"a\\"b\\\\c"')
+    expect(() => securityQuote('x\ndelete-keychain')).toThrow()
+    expect(() => securityQuote('x\r')).toThrow()
+    const sec = fakeSecurity()
+    const s = await openSecretStore({ dataDir: dir, platform: 'darwin', exec: sec.exec, macKeychainPath: '/tmp/a\nb' })
+    expect(s.backend).toBe('plaintext-file')
+    expect(sec.calls.filter(c => c.args[0] === '-i')).toHaveLength(0)
+  })
+
+  it('failed probe-item cleanup is logged (kind only), backend still selected', async () => {
+    const { log, warns } = recLog()
+    const s = await openSecretStore({ dataDir: dir, platform: 'darwin', exec: fakeSecurity({ failDelete: true }).exec, log })
+    expect(s.backend).toBe('keychain')
+    expect(warns).toContainEqual(['secrets probe cleanup failed', { backend: 'keychain', failure: 'security exited 1' }])
   })
 })
 

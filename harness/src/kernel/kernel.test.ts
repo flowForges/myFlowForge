@@ -138,6 +138,14 @@ describe('kernel', () => {
     expect(JSON.stringify(await k.handle('status', {}))).not.toContain('a-secret')
   })
 
+  it('plugin id containing "/" is rejected (secret prefixes cannot collide)', async () => {
+    let ran = false
+    const sly: Plugin = { manifest: { id: 'pa/x', version: '1', kernel: '*' }, activate: () => { ran = true } }
+    const k = await boot([sly])
+    expect(k.status().plugins[0]).toMatchObject({ id: 'pa/x', state: 'failed' })
+    expect(ran).toBe(false)
+  })
+
   it('keychain hangs (prompt / locked) → secrets unavailable, kernel still starts', async () => {
     const { writeFileSync } = await import('node:fs')
     writeFileSync(join(dir, 'credentials.enc'), 'x')

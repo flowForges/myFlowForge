@@ -77,6 +77,7 @@ export class PluginHost {
     this.list.push(entry)
     this.scopes.set(id, scope)
     try {
+      if (!id || id.includes('/')) throw new Error(`invalid plugin id: ${id}`) // 凭据前缀 `<id>/` 不能互相覆盖
       await this.waitInject(p.manifest.inject ?? [])
       const dataDir = join(this.deps.dataDir, 'plugins', id)
       mkdirSync(dataDir, { recursive: true })

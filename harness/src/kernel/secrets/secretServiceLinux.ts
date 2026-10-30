@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto'
+import type { Logger } from '../log'
 import { failure, type ExecResult } from './exec'
 import { PROBE_ACCOUNT, SERVICE, parseHexKey } from './keychainMac'
 import type { MasterKeyBackend } from './secretStore'
@@ -6,7 +7,7 @@ import type { MasterKeyBackend } from './secretStore'
 type Run = (cmd: string, args: string[], stdin?: string) => Promise<ExecResult>
 
 /** Linux:libsecret 的 `secret-tool`;store 的值走 stdin。lookup 非零 = 不存在(secret-tool 不区分) */
-export function secretServiceBackend(run: Run, account: string): MasterKeyBackend {
+export function secretServiceBackend(run: Run, account: string, log: Logger): MasterKeyBackend {
   const attrs = (acct: string) => ['service', SERVICE, 'account', acct]
   const store = async (acct: string, value: string) => {
     const r = await run('secret-tool', ['store', '--label=myFlowForge', 'mff-ai', ...attrs(acct)], value)
@@ -25,7 +26,8 @@ export function secretServiceBackend(run: Run, account: string): MasterKeyBacken
         const v = randomBytes(16).toString('hex')
         await store(PROBE_ACCOUNT, v)
         const back = await lookup(PROBE_ACCOUNT)
-        await run('secret-tool', ['clear', ...attrs(PROBE_ACCOUNT)])
+        const c = await run('secret-tool', ['clear', ...attrs(PROBE_ACCOUNT)])
+        if (c.code !== 0) log.warn('secrets probe cleanup failed', { backend: 'secret-service', failure: failure('secret-tool', c).message })
         return back === v
       } catch {
         return false

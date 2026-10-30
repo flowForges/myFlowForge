@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto'
+import type { Logger } from '../log'
 import { KeyUnreadableError, failure, type ExecResult } from './exec'
 import type { MasterKeyBackend } from './secretStore'
 
@@ -7,13 +8,17 @@ type Run = (cmd: string, args: string[], stdin?: string) => Promise<ExecResult>
 export const SERVICE = 'myflowforge-mffai'
 export const PROBE_ACCOUNT = 'mffai-probe'
 
-const quote = (s: string) => `"${s.replace(/[\\"]/g, c => `\\${c}`)}"`
+/** `security -i` 一行一条命令:换行会注入第二条命令,直接拒绝 */
+export function securityQuote(s: string): string {
+  if (/[\r\n]/.test(s)) throw new Error('security argument contains a line break')
+  return `"${s.replace(/[\\"]/g, c => `\\${c}`)}"`
+}
 
 /** macOS:`security`;写入走 `security -i` 的 stdin,值不进 argv。find 退出码 44 = 不存在 */
-export function keychainBackend(run: Run, account: string, keychainPath?: string): MasterKeyBackend {
+export function keychainBackend(run: Run, account: string, log: Logger, keychainPath?: string): MasterKeyBackend {
   const kc = keychainPath ? [keychainPath] : []
   const add = async (acct: string, value: string) => {
-    const line = `add-generic-password -a ${acct} -s ${SERVICE} -U -w ${quote(value)}${keychainPath ? ` ${quote(keychainPath)}` : ''}\n`
+    const line = `add-generic-password -a ${acct} -s ${SERVICE} -U -w ${securityQuote(value)}${keychainPath ? ` ${securityQuote(keychainPath)}` : ''}\n`
     const r = await run('security', ['-i'], line)
     if (r.code !== 0) throw failure('security', r)
   }
@@ -34,7 +39,7 @@ export function keychainBackend(run: Run, account: string, keychainPath?: string
         const v = randomBytes(16).toString('hex')
         await add(PROBE_ACCOUNT, v)
         const back = await find(PROBE_ACCOUNT)
-        await del(PROBE_ACCOUNT)
+        await del(PROBE_ACCOUNT).catch(err => log.warn('secrets probe cleanup failed', { backend: 'keychain', failure: (err as Error).message }))
         return back === v
       } catch {
         return false
