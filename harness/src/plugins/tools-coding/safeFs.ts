@@ -2,16 +2,14 @@
 // - 工具只碰 permission() 时算出、交给权限门的那个路径(按 args 对象记住),执行前再解析一次,变了就不做;
 // - 打开文件一律 O_NOFOLLOW(平台支持时),末段在检查后被换成符号链接 → 打开失败;
 // - 建父目录逐级来,每建一级都 realpath 核对;写之前再过一次检查(还在 cwd 内、不在黑名单)
-import { closeSync, constants, fstatSync, ftruncateSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, unlinkSync, writeSync } from 'node:fs'
+import { closeSync, constants, fstatSync, ftruncateSync, lstatSync, openSync, readFileSync, realpathSync, unlinkSync, writeSync } from 'node:fs'
 import { dirname, relative, isAbsolute } from 'node:path'
-import { isInside, OUTSIDE, resolveToolPath } from '../../lib/fs/paths'
+import { OUTSIDE, resolveToolPath } from '../../lib/fs/paths'
+import { changed, lexists, mkdirChecked, O_NOFOLLOW, samePath } from '../../lib/fs/safeFs'
 import type { ToolContext } from '../../lib/tools/types'
 
-/** Windows 没有 O_NOFOLLOW → 0(只剩执行前的再解析核对) */
-export const O_NOFOLLOW: number = constants.O_NOFOLLOW ?? 0
-
-/** 同一路径(darwin / win32 不区分大小写,与权限门同一套比较) */
-export const samePath = (a: string, b: string) => isInside(a, b, process.platform) && isInside(b, a, process.platform)
+// O_NOFOLLOW / samePath / mkdirChecked 在 lib/fs/safeFs(快照回滚也用),这里转出给各工具
+export { mkdirChecked, O_NOFOLLOW, samePath }
 
 const memo = new WeakMap<object, Map<string, string>>()
 
@@ -39,42 +37,6 @@ export function shownPath(ctx: ToolContext, p: string): string {
   const r = relative(ctx.cwd, p)
   if (r === '') return '.'
   return r.startsWith('..') || isAbsolute(r) ? p : r
-}
-
-const lexists = (p: string) => {
-  try {
-    lstatSync(p)
-    return true
-  } catch (e) {
-    const code = (e as NodeJS.ErrnoException).code
-    if (code === 'ENOENT' || code === 'ENOTDIR') return false
-    throw e
-  }
-}
-
-const changed = (p: string) => new Error(`路径在权限检查之后发生了变化,未执行:${p}`)
-
-/** 逐级建目录;最近存在的祖先与每个新建的目录都要 realpath 回自己(中途换成链接 → 停,最多多建一级) */
-export function mkdirChecked(dir: string): void {
-  const missing: string[] = []
-  let cur = dir
-  while (!lexists(cur)) {
-    const up = dirname(cur)
-    if (up === cur) throw changed(dir)
-    missing.unshift(cur)
-    cur = up
-  }
-  if (!samePath(realpathSync.native(cur), cur)) throw changed(cur)
-  if (!lstatSync(cur).isDirectory()) throw new Error(`不是目录:${cur}`)
-  for (const d of missing) {
-    try {
-      mkdirSync(d)
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e
-    }
-    const st = lstatSync(d)
-    if (st.isSymbolicLink() || !st.isDirectory() || !samePath(realpathSync.native(d), d)) throw changed(d)
-  }
 }
 
 /** Windows 没有 O_NONBLOCK → 0 */
