@@ -88,6 +88,8 @@ export interface ModelsService {
   setDefault(ref: ModelRef): void
   /** 适配器上报账号状态(如 needs_login / not_authorized);有变化才发 account.updated */
   setState(id: string, state: AccountState): void
+  /** 重新发 account.updated(如重新登录成功但状态未变) */
+  announce(id: string): void
   stream(ref: ModelRef | 'default', req: Omit<ModelRequest, 'model'>): AsyncIterable<ModelEvent>
   quota(accountId: string): Promise<Quota | null>
 }

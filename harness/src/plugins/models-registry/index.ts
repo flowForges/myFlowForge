@@ -111,8 +111,10 @@ export function createModelsRegistry(opts: RegistryOpts = {}): Plugin {
       }
       const protocolOf = (a: AccountConfig, p: Preset): ModelProtocol => a.protocol ?? p.preferred
       // 错误种类 → 账号状态
+      // ChatGPT:适配器已标 not_authorized(未授权套餐使用)时保留,不改成 needs_login
       const applyError = (a: AccountConfig, p: Preset, e: ModelError) => {
-        if (e.kind === 'auth') setState(a, p.auth === 'chatgpt-oauth' ? 'needs_login' : 'error')
+        if (e.kind === 'auth')
+          setState(a, p.auth !== 'chatgpt-oauth' ? 'error' : store.state(a.id) === 'not_authorized' ? 'not_authorized' : 'needs_login')
         else if (e.kind === 'quota') setState(a, 'quota_exhausted')
       }
 
@@ -243,6 +245,11 @@ export function createModelsRegistry(opts: RegistryOpts = {}): Plugin {
         setState(id, s) {
           const a = store.get(id)
           if (a) setState(a, s)
+        },
+
+        announce(id) {
+          const a = store.get(id)
+          if (a) emit(a)
         },
 
         async *stream(ref, req) {

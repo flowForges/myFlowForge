@@ -24,7 +24,7 @@ function messageOf(status: number, bodyText: string): string {
   return text.slice(0, MAX_MESSAGE)
 }
 
-function retryAfterMs(headers?: Headers): number | undefined {
+export function retryAfterMs(headers?: Headers): number | undefined {
   const ms = headers?.get('retry-after-ms')?.trim() // OpenAI 等:毫秒,优先
   if (ms && /^\d+(\.\d+)?$/.test(ms)) return Math.round(Number(ms))
   const v = headers?.get('retry-after')?.trim()
@@ -51,6 +51,8 @@ export interface PostStreamInit extends Omit<RequestInit, 'method' | 'signal'> {
   timeoutMs?: number
   /** 测试注入 */
   fetch?: typeof fetch
+  /** 非 2xx 的错误归一(默认 toModelError);供应商有自己的错误码表时替换 */
+  mapError?: (status: number, body: string, headers: Headers) => ModelError
 }
 
 // 调用方取消时 reject;off() 摘掉监听
@@ -66,7 +68,7 @@ function whenAborted(signal: AbortSignal): { promise: Promise<never>; off(): voi
 }
 
 export async function postStream(url: string, init: PostStreamInit): Promise<Response> {
-  const { signal, timeoutMs, fetch: fetchImpl = fetch, ...rest } = init
+  const { signal, timeoutMs, fetch: fetchImpl = fetch, mapError = toModelError, ...rest } = init
   if (signal.aborted) throw signal.reason
   // 超时只管拿响应头;AbortSignal.any 不在调用方 signal 上留 JS 监听
   const timeout = new AbortController()
@@ -95,7 +97,7 @@ export async function postStream(url: string, init: PostStreamInit): Promise<Res
       res.body?.cancel().catch(() => {})
       throw signal.reason
     }
-    throw new ModelFailure(toModelError(res.status, body, res.headers))
+    throw new ModelFailure(mapError(res.status, body, res.headers))
   }
   return res
 }

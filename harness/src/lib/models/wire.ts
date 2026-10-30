@@ -1,5 +1,5 @@
 // OpenAI / Anthropic 线协议适配器共用的网络层:流式请求 + 取消语义 + 轻量 GET
-import { ModelFailure, postStream, toModelError } from './http'
+import { ModelFailure, postStream, toModelError, type PostStreamInit } from './http'
 import { parseSSE, type SSEEvent } from './sse'
 import type { Account, ModelEvent, ModelRequest } from './types'
 
@@ -23,17 +23,23 @@ export const anthropicHeaders = (account: Account) => ({ ...STREAM_HEADERS, ...a
 
 const cancelled = (): ModelEvent => ({ type: 'done', reason: 'cancelled' })
 
-/** POST 并解码 SSE;错误一律以 done{error} 结束,取消以 done{cancelled} 结束 */
+export interface StreamWireOpts {
+  mapError?: PostStreamInit['mapError']
+}
+
+/** POST 并解码 SSE;错误一律以 done{error} 结束,取消以 done{cancelled} 结束。body 为字符串 / 字节时原样发送 */
 export async function* streamWire(
   url: string,
   headers: Record<string, string>,
-  body: object,
+  body: object | string | Uint8Array,
   req: ModelRequest,
   decode: (events: AsyncIterable<SSEEvent>) => AsyncIterable<ModelEvent>,
+  opts: StreamWireOpts = {},
 ): AsyncIterable<ModelEvent> {
   let res: Response
+  const raw = typeof body === 'string' || body instanceof Uint8Array ? body : JSON.stringify(body)
   try {
-    res = await postStream(url, { headers, body: JSON.stringify(body), signal: req.signal, timeoutMs: HEADER_TIMEOUT_MS })
+    res = await postStream(url, { headers, body: raw as BodyInit, signal: req.signal, timeoutMs: HEADER_TIMEOUT_MS, mapError: opts.mapError })
   } catch (err) {
     if (req.signal.aborted) return yield cancelled()
     if (err instanceof ModelFailure) return yield { type: 'done', reason: 'error', error: err.error }
