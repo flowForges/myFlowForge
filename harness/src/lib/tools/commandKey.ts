@@ -1,11 +1,13 @@
 // allow_session 的键(spec §10 + 控制者裁定):内核审批与 tools-registry 共用,纯函数
 
-/** 含这些的命令永不自动放行:`; & | \` $ > <` 与换行 */
-const META = /[;&|`<>$\n\r]/
+/**
+ * 含这些的命令永不自动放行:`; & | \` $ > <`、换行,以及引号与反斜杠。
+ * 引号 / 反斜杠由 shell 去掉后程序才看到,参数检查就会被 `"/abs"`、`\/abs`、`"--upload-pack"` 绕过;
+ * 一律无键比去引号更封闭(win32 路径带反斜杠,也就一并无键)
+ */
+const META = /[;&|`<>$\n\r'"\\]/
 /** 第一个词只许朴素拼写:引号、反斜杠、括号、通配符、~、= 都会让名单比较失效 */
 const PLAIN_WORD = /^[\w./+-]+$/
-/** 第二个词含引号 / 反斜杠:子命令可被换个写法绕过(`git "push"`) */
-const QUOTED = /['"\\]/
 
 /** 允许清单(控制者裁定):只有这些命令能拿到键;其余每次都问 */
 /**
@@ -42,19 +44,25 @@ const EXACT = new Map<string, Set<string>>([
   ['pip', new Set(['install'])],
   ['uv', new Set(['pip'])],
   ['go', new Set(['run'])],
-  ['git', new Set(['stash', 'branch', 'checkout', 'restore'])],
+  ['git', new Set(['stash', 'branch', 'checkout', 'switch', 'restore'])],
 ])
 
 /**
- * 参数指向工作目录外(绝对路径、~、`..` 路径段(`./...`、`a..b` 不算)、`=/`、`=~`、盘符、UNC,含 `-C/x` 这类紧贴短选项的写法),
- * 或是让 git 跑任意程序的选项 → 没有键
+ * 参数指向工作目录外(绝对路径、~、`..` 路径段(`./...`、`a..b` 不算)、`=/`、`=~`、盘符,含 `-C/x` 这类紧贴短选项的写法),
+ * 或是让 git 跑任意程序的选项(含缩写)→ 没有键;UNC 与 win32 路径含反斜杠,已被 META 拦下
  */
 const OUTSIDE_ARG = [
-  /^[/~]/, /(^|[/\\=]|^-[A-Za-z]+)\.\.([/\\]|$)/, /=[/~]/, /^-[A-Za-z]+[/~]/,
-  /^[A-Za-z]:/, /=[A-Za-z]:/, /^\\\\/, /=\\\\/,
-  /^--(upload-pack|receive-pack|exec)(=|$)/,
+  /^[/~]/, /(^|[/=]|^-[A-Za-z]+)\.\.(\/|$)/, /=[/~]/, /^-[A-Za-z]+[/~]/,
+  /^[A-Za-z]:/, /=[A-Za-z]:/,
 ]
-const reachesOutside = (word: string) => OUTSIDE_ARG.some(r => r.test(word))
+/** git 接受长选项的无歧义缩写(`--upload` = `--upload-pack`):`=` 前的名字至少 5 个字符且是其前缀 → 命中 */
+const RUNS_PROGRAM = ['--upload-pack', '--receive-pack', '--exec']
+const runsProgram = (word: string) => {
+  if (!word.startsWith('--')) return false
+  const name = word.split('=')[0]
+  return name.length >= 5 && RUNS_PROGRAM.some(o => o.startsWith(name))
+}
+const reachesOutside = (word: string) => runsProgram(word) || OUTSIDE_ARG.some(r => r.test(word))
 
 /** 名单比较用:取 basename、小写(APFS / NTFS 默认不区分大小写)、去掉 Windows 可执行后缀 */
 function commandName(word: string): string {
@@ -62,7 +70,7 @@ function commandName(word: string): string {
 }
 
 /**
- * 先过拒绝规则(含 shell 元字符或 `$`、为空、`VAR=` 开头、第一个词拼写不朴素、第二个词带引号、
+ * 先过拒绝规则(含 shell 元字符、`$`、引号或反斜杠、为空、`VAR=` 开头、第一个词拼写不朴素、
  * 之后任一参数指向工作目录外),再查允许清单:
  * BY_NAME 的命令 → 第一个词;BY_PAIR 的命令 + 清单内子命令(不以 `-` 开头)→ 两个词,EXACT 里的 → 整条命令;
  * 其余 → undefined。清单按规范化名字比较,键保留原拼写:`./x/eslint` 与 `eslint` 是不同的键。
@@ -72,7 +80,6 @@ export function sessionKey(command: string): string | undefined {
   const words = command.trim().split(/\s+/)
   const [first, second] = words
   if (!first || !PLAIN_WORD.test(first)) return undefined
-  if (second !== undefined && QUOTED.test(second)) return undefined
   if (words.slice(1).some(reachesOutside)) return undefined
   const name = commandName(first)
   if (BY_NAME.has(name)) return first

@@ -58,6 +58,9 @@ describe('sessionKey', () => {
     ['git branch', 'git branch'],
     ['git checkout main', 'git checkout main'],
     ['git restore src/a.ts', 'git restore src/a.ts'],
+    ['git switch main', 'git switch main'],
+    ['git fetch --update-shallow', 'git fetch'],
+    ['git fetch --ex', 'git fetch'],
   ])('%j → %j', (command, key) => {
     expect(sessionKey(command)).toBe(key)
   })
@@ -218,6 +221,23 @@ describe('sessionKey', () => {
     'ls \\\\server\\share',
     'tsc --outDir=\\\\server\\share',
     'go run github.com/evil/x@latest /tmp',
+    // 引号 / 反斜杠:任一词含有就没有键(R3-I1)
+    'git diff --output "/Users/x/.zshrc"',
+    "git diff --output '/Users/x/.zshrc'",
+    'git diff --output \\/Users/x/.zshrc',
+    'pytest --basetemp "/Users/zghua"',
+    'tsc --outDir ".."',
+    'git fetch "--upload-pack" e.sh .',
+    "git fetch '--upload-pack=e.sh' .",
+    'git commit -m "fix api"',
+    'ls src\\x',
+    // git 长选项缩写(R3-I1)
+    'git fetch --upload e.sh .',
+    'git fetch --upload-p=e.sh .',
+    'git fetch --upl=e.sh .',
+    'git pull --rece=x',
+    'git fetch --exe=x',
+    'git fetch --exec x',
     // 能读任意文件的单词命令:shell 不经路径权限门
     'cat ./a.txt',
     'cat ~/.ssh/id_rsa',
@@ -246,5 +266,6 @@ describe('sessionKey', () => {
     expect(sessionKey('git branch -D main')).not.toBe(sessionKey('git branch'))
     expect(sessionKey('git checkout .')).not.toBe(sessionKey('git checkout main'))
     expect(sessionKey('git restore .')).not.toBe(sessionKey('git restore src/a.ts'))
+    expect(sessionKey('git switch main --discard-changes')).not.toBe(sessionKey('git switch main'))
   })
 })
