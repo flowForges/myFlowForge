@@ -198,4 +198,60 @@ describe('buildAnthropicBody', () => {
     const u = (buildAnthropicBody({ ...base, messages: [{ role: 'user', parts: [{ type: 'text', text: 'a' }] }, { role: 'user', parts: [{ type: 'text', text: 'b' }] }] }, {}) as any).messages
     expect(u).toEqual([{ role: 'user', content: [{ type: 'text', text: 'a' }, { type: 'text', text: 'b' }] }])
   })
+
+  it('toolChoice: unset → no field; "none" / "auto" map to {type}', () => {
+    expect((buildAnthropicBody(base, {}) as any).tool_choice).toBeUndefined()
+    expect((buildAnthropicBody({ ...base, toolChoice: 'none' }, {}) as any).tool_choice).toEqual({ type: 'none' })
+    expect((buildAnthropicBody({ ...base, toolChoice: 'auto' }, {}) as any).tool_choice).toEqual({ type: 'auto' })
+  })
+
+  it('multi-round snapshot: text → assistant[thinking replay, text, 2 tool_use] → user[2 tool_result, is_error on B] → assistant text → user text', () => {
+    const multi: ModelRequest = {
+      model: 'm',
+      interactive: true,
+      signal: new AbortController().signal,
+      messages: [
+        { role: 'user', parts: [{ type: 'text', text: 'first user text' }] },
+        {
+          role: 'assistant',
+          parts: [
+            { type: 'reasoning', replay: { type: 'thinking', thinking: 'r', signature: 'sig-x' } },
+            { type: 'text', text: 'assistant text' },
+            { type: 'tool_call', id: 'call_A', name: 'toolA', args: '{"a":1}' },
+            { type: 'tool_call', id: 'call_B', name: 'toolB', args: '{"b":2}' },
+          ],
+        },
+        {
+          role: 'tool',
+          parts: [
+            { type: 'tool_result', callId: 'call_A', content: 'result A' },
+            { type: 'tool_result', callId: 'call_B', content: 'result B', isError: true },
+          ],
+        },
+        { role: 'assistant', parts: [{ type: 'text', text: 'final assistant text' }] },
+        { role: 'user', parts: [{ type: 'text', text: 'final user text' }] },
+      ],
+    }
+    expect((buildAnthropicBody(multi, {}) as any).messages).toEqual([
+      { role: 'user', content: [{ type: 'text', text: 'first user text' }] },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'r', signature: 'sig-x' },
+          { type: 'text', text: 'assistant text' },
+          { type: 'tool_use', id: 'call_A', name: 'toolA', input: { a: 1 } },
+          { type: 'tool_use', id: 'call_B', name: 'toolB', input: { b: 2 } },
+        ],
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 'call_A', content: 'result A' },
+          { type: 'tool_result', tool_use_id: 'call_B', content: 'result B', is_error: true },
+        ],
+      },
+      { role: 'assistant', content: [{ type: 'text', text: 'final assistant text' }] },
+      { role: 'user', content: [{ type: 'text', text: 'final user text' }] },
+    ])
+  })
 })

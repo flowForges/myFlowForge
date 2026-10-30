@@ -58,7 +58,9 @@ describe('sanitizeChatgptBody', () => {
   })
   it('工具:顶层 function 保留,托管工具去掉;去光后不发 tools / tool_choice', () => {
     const fn = { type: 'function', name: 'f', description: 'd', parameters: {} }
-    expect(sanitizeChatgptBody({ input: [], tools: [fn, { type: 'image_generation' }] }).tools).toEqual([fn])
+    const kept = sanitizeChatgptBody({ input: [], tools: [fn, { type: 'image_generation' }], tool_choice: 'none' })
+    expect(kept.tools).toEqual([fn])
+    expect(kept.tool_choice).toBe('none') // 工具非空时保留 tool_choice(spec §5)
     const none = sanitizeChatgptBody({ input: [], tools: [{ type: 'file_search' }], tool_choice: 'auto' })
     expect(none).not.toHaveProperty('tools')
     expect(none).not.toHaveProperty('tool_choice')

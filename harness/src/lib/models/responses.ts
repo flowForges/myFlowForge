@@ -18,6 +18,7 @@ export function buildResponsesBody(req: ModelRequest, opts: ResponsesBodyOpts): 
   if (req.system !== undefined) body.instructions = req.system
   if (req.tools?.length)
     body.tools = req.tools.map((t) => ({ type: 'function', name: t.name, description: t.description, parameters: t.parameters }))
+  if (req.toolChoice) body.tool_choice = req.toolChoice
   if (req.reasoning && req.reasoning !== 'off') body.reasoning = { effort: req.reasoning, summary: 'auto' }
   if (opts.includeEncryptedReasoning) body.include = ['reasoning.encrypted_content']
   if (req.maxOutput !== undefined) body.max_output_tokens = req.maxOutput

@@ -190,4 +190,54 @@ describe('buildChatBody', () => {
     expect(withReplay[3]).toEqual({ role: 'tool', tool_call_id: 'c1', content: 'res' })
     expect((buildChatBody(req, {}) as any).messages[2].reasoning_content).toBeUndefined()
   })
+
+  it('toolChoice: unset → no field; "none" / "auto" map directly', () => {
+    expect((buildChatBody(base, {}) as any).tool_choice).toBeUndefined()
+    expect((buildChatBody({ ...base, toolChoice: 'none' }, {}) as any).tool_choice).toBe('none')
+    expect((buildChatBody({ ...base, toolChoice: 'auto' }, {}) as any).tool_choice).toBe('auto')
+  })
+
+  it('multi-round snapshot: text → assistant[reasoning, text, 2 tool_calls] → tool[result, result(isError)] → assistant text → user text', () => {
+    const multi: ModelRequest = {
+      model: 'm',
+      interactive: true,
+      signal: new AbortController().signal,
+      messages: [
+        { role: 'user', parts: [{ type: 'text', text: 'first user text' }] },
+        {
+          role: 'assistant',
+          parts: [
+            { type: 'reasoning', replay: { reasoning_content: 'because' } },
+            { type: 'text', text: 'assistant text' },
+            { type: 'tool_call', id: 'call_A', name: 'toolA', args: '{"a":1}' },
+            { type: 'tool_call', id: 'call_B', name: 'toolB', args: '{"b":2}' },
+          ],
+        },
+        {
+          role: 'tool',
+          parts: [
+            { type: 'tool_result', callId: 'call_A', content: 'result A' },
+            { type: 'tool_result', callId: 'call_B', content: 'result B', isError: true },
+          ],
+        },
+        { role: 'assistant', parts: [{ type: 'text', text: 'final assistant text' }] },
+        { role: 'user', parts: [{ type: 'text', text: 'final user text' }] },
+      ],
+    }
+    expect((buildChatBody(multi, {}) as any).messages).toEqual([
+      { role: 'user', content: 'first user text' },
+      {
+        role: 'assistant',
+        content: 'assistant text',
+        tool_calls: [
+          { id: 'call_A', type: 'function', function: { name: 'toolA', arguments: '{"a":1}' } },
+          { id: 'call_B', type: 'function', function: { name: 'toolB', arguments: '{"b":2}' } },
+        ],
+      },
+      { role: 'tool', tool_call_id: 'call_A', content: 'result A' },
+      { role: 'tool', tool_call_id: 'call_B', content: 'result B' },
+      { role: 'assistant', content: 'final assistant text' },
+      { role: 'user', content: 'final user text' },
+    ])
+  })
 })

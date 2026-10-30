@@ -20,6 +20,7 @@ export interface ModelRequest {
   system?: string
   messages: Message[]
   tools?: { name: string; description: string; parameters: object }[]
+  toolChoice?: 'auto' | 'none' // 未设 = 不发该字段
   reasoning?: 'off' | 'low' | 'medium' | 'high'
   maxOutput?: number
   interactive: boolean // 是否由用户当面发起;false 时拒绝 coding-tools-only 账号

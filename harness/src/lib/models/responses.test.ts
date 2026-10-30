@@ -155,4 +155,51 @@ describe('buildResponsesBody', () => {
     expect(body.store).toBe(true)
     expect((body.input as { type: string }[]).some((i) => i.type === 'reasoning')).toBe(false)
   })
+
+  it('toolChoice: unset → no field; "none" / "auto" map directly', () => {
+    expect((buildResponsesBody(req, { store: false, includeEncryptedReasoning: true }) as Record<string, unknown>).tool_choice).toBeUndefined()
+    expect((buildResponsesBody({ ...req, toolChoice: 'none' }, { store: false, includeEncryptedReasoning: true }) as Record<string, unknown>).tool_choice).toBe('none')
+    expect((buildResponsesBody({ ...req, toolChoice: 'auto' }, { store: false, includeEncryptedReasoning: true }) as Record<string, unknown>).tool_choice).toBe('auto')
+  })
+
+  it('multi-round snapshot: text → assistant[reasoning, text, 2 tool_calls] → tool[result, result(isError)] → assistant text → user text', () => {
+    const multi: ModelRequest = {
+      model: 'gpt-5',
+      interactive: true,
+      signal: new AbortController().signal,
+      messages: [
+        { role: 'user', parts: [{ type: 'text', text: 'first user text' }] },
+        {
+          role: 'assistant',
+          parts: [
+            { type: 'reasoning', replay: { id: 'rs_9', encrypted_content: 'ENC9', summary: [] } },
+            { type: 'text', text: 'assistant text' },
+            { type: 'tool_call', id: 'call_A', name: 'toolA', args: '{"a":1}' },
+            { type: 'tool_call', id: 'call_B', name: 'toolB', args: '{"b":2}' },
+          ],
+        },
+        {
+          role: 'tool',
+          parts: [
+            { type: 'tool_result', callId: 'call_A', content: 'result A' },
+            { type: 'tool_result', callId: 'call_B', content: 'result B', isError: true },
+          ],
+        },
+        { role: 'assistant', parts: [{ type: 'text', text: 'final assistant text' }] },
+        { role: 'user', parts: [{ type: 'text', text: 'final user text' }] },
+      ],
+    }
+    const body = buildResponsesBody(multi, { store: false, includeEncryptedReasoning: true }) as Record<string, unknown>
+    expect(body.input).toEqual([
+      { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'first user text' }] },
+      { type: 'reasoning', id: 'rs_9', encrypted_content: 'ENC9', summary: [] },
+      { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'assistant text' }] },
+      { type: 'function_call', call_id: 'call_A', name: 'toolA', arguments: '{"a":1}' },
+      { type: 'function_call', call_id: 'call_B', name: 'toolB', arguments: '{"b":2}' },
+      { type: 'function_call_output', call_id: 'call_A', output: 'result A' },
+      { type: 'function_call_output', call_id: 'call_B', output: 'result B' },
+      { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'final assistant text' }] },
+      { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'final user text' }] },
+    ])
+  })
 })

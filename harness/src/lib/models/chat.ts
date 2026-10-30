@@ -17,6 +17,7 @@ export function buildChatBody(req: ModelRequest, quirks: ChatQuirks): object {
   const body: Obj = { model: req.model, messages, stream: true, stream_options: { include_usage: true } }
   if (req.tools?.length)
     body.tools = req.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }))
+  if (req.toolChoice) body.tool_choice = req.toolChoice
   if (req.maxOutput !== undefined) body[quirks.maxTokensField ?? 'max_tokens'] = req.maxOutput
   const off = req.reasoning === 'off'
   if (quirks.thinking === 'zai') body.thinking = { type: off ? 'disabled' : 'enabled' }
