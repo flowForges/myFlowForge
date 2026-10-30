@@ -2,7 +2,7 @@
 // - 工具只碰 permission() 时算出、交给权限门的那个路径(按 args 对象记住),执行前再解析一次,变了就不做;
 // - 打开文件一律 O_NOFOLLOW(平台支持时),末段在检查后被换成符号链接 → 打开失败;
 // - 建父目录逐级来,每建一级都 realpath 核对;写之前再过一次检查(还在 cwd 内、不在黑名单)
-import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, writeSync } from 'node:fs'
+import { closeSync, constants, fstatSync, ftruncateSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, writeSync } from 'node:fs'
 import { dirname, relative, isAbsolute } from 'node:path'
 import { isInside, OUTSIDE, resolveToolPath } from '../../lib/fs/paths'
 import type { ToolContext } from '../../lib/tools/types'
@@ -77,11 +77,13 @@ export function mkdirChecked(dir: string): void {
   }
 }
 
-/** 读整个文件(不跟随末段链接);目录 → 抛错 */
-export function readNoFollow(p: string): Buffer {
+/** 读整个文件(不跟随末段链接);目录、超过 maxBytes → 抛错 */
+export function readNoFollow(p: string, maxBytes = Infinity): Buffer {
   const fd = openSync(p, constants.O_RDONLY | O_NOFOLLOW)
   try {
-    if (fstatSync(fd).isDirectory()) throw new Error(`是目录,不是文件:${p}`)
+    const st = fstatSync(fd)
+    if (st.isDirectory()) throw new Error(`是目录,不是文件:${p}`)
+    if (st.size > maxBytes) throw new Error(`文件过大(${st.size} 字节,上限 ${maxBytes}):${p}`)
     return readFileSync(fd)
   } finally {
     closeSync(fd)
@@ -95,9 +97,13 @@ export function readNoFollow(p: string): Buffer {
 export function writeChecked(p: string, content: string, recheck: () => boolean): void {
   mkdirChecked(dirname(p))
   if (!recheck()) throw changed(p)
-  const fd = openSync(p, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | O_NOFOLLOW, 0o666)
+  // 不带 O_TRUNC:先确认是普通文件、没有别的硬链接(cwd 里指向凭据文件的硬链接 realpath 看不出来),再截断
+  const fd = openSync(p, constants.O_WRONLY | constants.O_CREAT | O_NOFOLLOW, 0o666)
   try {
-    if (!fstatSync(fd).isFile()) throw new Error(`不是普通文件:${p}`)
+    const st = fstatSync(fd)
+    if (!st.isFile()) throw new Error(`不是普通文件:${p}`)
+    if (st.nlink > 1) throw new Error(`文件有多个硬链接,不写:${p}`)
+    ftruncateSync(fd, 0)
     const buf = Buffer.from(content, 'utf8')
     let off = 0
     while (off < buf.length) off += writeSync(fd, buf, off, buf.length - off)

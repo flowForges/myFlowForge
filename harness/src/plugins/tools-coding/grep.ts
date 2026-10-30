@@ -42,12 +42,14 @@ export function grepTool(deps: CodingDeps): Tool {
         const match = args.glob ? globMatcher(args.glob) : () => true
         candidates = listed.files.filter(match).map(f => join(abs, f))
       } else candidates = [abs]
-      const files = allowedReads(deps, ctx, candidates)
+      const files = await allowedReads(deps, ctx, candidates)
       const timeoutMs = deps.grepTimeoutMs ?? 30_000
-      const r = await runGrep({ files, base: ctx.cwd, pattern: args.pattern, flags, maxMatches: MAX_MATCHES, maxLine: MAX_LINE }, { timeoutMs, signal: ctx.signal })
+      const r = await runGrep({ files, base: ctx.cwd, pattern: args.pattern, flags, maxMatches: MAX_MATCHES + 1, maxLine: MAX_LINE }, { timeoutMs, signal: ctx.signal })
       if (r.aborted) return { content: '已取消', isError: true }
+      const capped = r.matches.length > MAX_MATCHES // 多找一条,恰好 200 条时不误报
+      r.matches = r.matches.slice(0, MAX_MATCHES)
       const notes: string[] = []
-      if (r.matches.length >= MAX_MATCHES) notes.push(`…(已达 ${MAX_MATCHES} 条上限,结果不全;缩小 path 或 glob)`)
+      if (capped) notes.push(`…(已达 ${MAX_MATCHES} 条上限,结果不全;缩小 path 或 glob)`)
       if (truncated) notes.push(`…(只查看了前 ${MAX_FILES} 个文件)`)
       if (r.timedOut) {
         const head = `grep 超时(${timeoutMs / 1000} s),已终止匹配线程;正则可能有灾难回溯,换个写法再试`

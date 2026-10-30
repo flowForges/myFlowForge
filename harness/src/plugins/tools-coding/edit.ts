@@ -16,10 +16,12 @@ const Args = z.object({
   replaceAll: z.boolean().optional().describe('Replace every occurrence'),
 })
 
-/** 不重叠出现次数 */
-function count(hay: string, needle: string): number {
+const MAX_EDIT_BYTES = 10 * 1024 * 1024
+
+/** 出现次数;overlap = 重叠的也算(唯一性判断用:`}\n}` 在 `}\n}\n}` 里有两处) */
+function count(hay: string, needle: string, overlap: boolean): number {
   let n = 0
-  for (let i = hay.indexOf(needle); i !== -1; i = hay.indexOf(needle, i + needle.length)) n++
+  for (let i = hay.indexOf(needle); i !== -1; i = hay.indexOf(needle, i + (overlap ? 1 : needle.length))) n++
   return n
 }
 
@@ -59,19 +61,19 @@ export function editTool(deps: CodingDeps): Tool {
       if (args.old === args.new) return { content: 'old 与 new 相同,没有可改的', isError: true }
       stillSame(ctx, rawPath, abs)
       const shown = shownPath(ctx, abs)
-      const buf = readNoFollow(abs)
+      const buf = readNoFollow(abs, MAX_EDIT_BYTES)
       if (buf.subarray(0, 8192).includes(0)) return { content: `${shown} 是二进制文件,不能编辑`, isError: true }
       const text = buf.toString('utf8')
 
       let old = args.old
       let neu = args.new
-      let n = count(text, old)
+      let n = count(text, old, true)
       if (n === 0) {
         const stripped = strip(old)
         if (stripped !== old && stripped !== '') {
           old = stripped
           if (allPrefixed(neu)) neu = strip(neu)
-          n = count(text, old)
+          n = count(text, old, true)
         }
       }
       if (n === 0) {
@@ -90,7 +92,7 @@ export function editTool(deps: CodingDeps): Tool {
         next = text.slice(0, i) + neu + text.slice(i + old.length) // 不用 String.replace:new 里的 `$&` 要原样
       }
       writeChecked(abs, next, writeAgain(deps, ctx, rawPath, abs))
-      return { content: `已修改 ${shown}(替换 ${args.replaceAll ? n : 1} 处)` }
+      return { content: `已修改 ${shown}(替换 ${args.replaceAll ? count(text, old, false) : 1} 处)` }
     },
   }
 }

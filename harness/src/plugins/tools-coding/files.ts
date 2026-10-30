@@ -4,16 +4,26 @@ import { execFile } from 'node:child_process'
 import { readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
-/** 跑 git,返回 stdout;非 0 退出 → reject */
-export type GitRunner = (args: string[], cwd: string) => Promise<string>
+/** 跑 git,返回 stdout;非 0 退出、超时、取消 → reject */
+export type GitRunner = (args: string[], cwd: string, opts?: { signal?: AbortSignal; timeoutMs?: number }) => Promise<string>
 
-/** 默认 git:不弹交互、不抢索引锁 */
-export const defaultGit: GitRunner = (args, cwd) =>
+export const GIT_TIMEOUT_MS = 10_000
+
+/** 默认 git:不弹交互、不抢索引锁;超时 / 取消杀掉 */
+export const defaultGit: GitRunner = (args, cwd, opts = {}) =>
   new Promise((resolve, reject) =>
     execFile(
       'git',
       args,
-      { cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' }, maxBuffer: 256 << 20, windowsHide: true },
+      {
+        cwd,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' },
+        maxBuffer: 256 << 20,
+        windowsHide: true,
+        timeout: opts.timeoutMs ?? GIT_TIMEOUT_MS,
+        killSignal: 'SIGKILL',
+        ...(opts.signal && { signal: opts.signal }),
+      },
       (err, out) => (err ? reject(err) : resolve(out)),
     ),
   )
@@ -21,6 +31,9 @@ export const defaultGit: GitRunner = (args, cwd) =>
 /** fsmonitor 钩子会让一次 ls-files 跑仓库配置里的命令 → 关掉 */
 const LS_FILES = ['-c', 'core.fsmonitor=false', 'ls-files', '-co', '--exclude-standard', '-z']
 const SKIP_DIRS = new Set(['node_modules', '.git'])
+/** 遍历最多看这么多个目录(只有空目录的大树也有尽头);每这么多个目录让出一次事件循环 */
+export const MAX_DIRS = 20_000
+const YIELD_DIRS = 50
 
 export interface ListOpts {
   signal: AbortSignal
@@ -33,9 +46,9 @@ export async function listFiles(root: string, opts: ListOpts): Promise<{ files: 
   const git = opts.git ?? defaultGit
   let out: string | undefined
   try {
-    out = await git(LS_FILES, root)
+    out = await git(LS_FILES, root, { signal: opts.signal, timeoutMs: GIT_TIMEOUT_MS })
   } catch {
-    out = undefined // 不是 git 工作树,或没装 git
+    out = undefined // 不是 git 工作树、没装 git,或超时
   }
   if (opts.signal.aborted) throw new Error('已取消')
   if (out !== undefined) {
@@ -50,11 +63,14 @@ export async function listFiles(root: string, opts: ListOpts): Promise<{ files: 
   return walk(root, opts)
 }
 
-function walk(root: string, opts: ListOpts): { files: string[]; truncated: boolean } {
+async function walk(root: string, opts: ListOpts): Promise<{ files: string[]; truncated: boolean }> {
   const files: string[] = []
   const stack: string[] = ['']
+  let dirs = 0
   while (stack.length) {
     if (opts.signal.aborted) throw new Error('已取消')
+    if (++dirs > MAX_DIRS) return { files, truncated: true }
+    if (dirs % YIELD_DIRS === 0) await new Promise<void>(r => setImmediate(r))
     const rel = stack.pop()!
     let entries
     try {

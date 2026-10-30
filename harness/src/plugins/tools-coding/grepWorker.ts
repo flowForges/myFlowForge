@@ -13,17 +13,22 @@ const fs = require('node:fs')
 const path = require('node:path')
 const { files, base, pattern, flags, maxMatches, maxLine, maxBytes, sniff, nofollow } = workerData
 const re = new RegExp(pattern, flags.replace(/[gy]/g, ''))
+const fold = process.platform === 'darwin' || process.platform === 'win32'
+const same = (a, b) => (fold ? a.toLowerCase() === b.toLowerCase() : a === b)
 let n = 0
 for (const f of files) {
   if (n >= maxMatches) break
   let fd
   try {
+    // 中间段在过门后被换成链接 → realpath 不再是它自己,不读
+    if (!same(fs.realpathSync.native(f), f)) continue
     fd = fs.openSync(f, fs.constants.O_RDONLY | nofollow)
     const st = fs.fstatSync(fd)
     if (!st.isFile() || st.size > maxBytes) continue
     const buf = fs.readFileSync(fd)
     if (buf.length > maxBytes || buf.subarray(0, sniff).includes(0)) continue
-    const shown = base ? path.relative(base, f) : f
+    const rel = base ? path.relative(base, f) : ''
+    const shown = rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? rel : f
     const lines = buf.toString('utf8').split(/\\r?\\n/)
     if (lines.length && lines[lines.length - 1] === '') lines.pop()
     for (let i = 0; i < lines.length; i++) {

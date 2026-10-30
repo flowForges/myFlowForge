@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { execFile } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createKernel, type Kernel } from '../../kernel/kernel'
@@ -11,7 +11,7 @@ import type { ToolContext, ToolsService } from '../../lib/tools/types'
 import toolsRegistry from '../tools-registry'
 import { createToolsCoding, type GitRunner } from './index'
 import { listFiles } from './files'
-import { globToRegExp } from './glob'
+import { compileGlob, expandBraces, globMatcher } from './glob'
 import { runGrep } from './grepWorker'
 import { mkdirChecked, writeChecked } from './safeFs'
 
@@ -175,14 +175,14 @@ describe('list', () => {
   })
 })
 
-describe('globToRegExp', () => {
+describe('compileGlob', () => {
   it.each([
     ['*.ts', 'a.ts', true], ['*.ts', 'a/b.ts', false], ['**/*.ts', 'a/b/c.ts', true], ['**/*.ts', 'c.ts', true],
     ['src/**', 'src/a/b', true], ['src/**', 'srcx/a', false], ['a?.js', 'ab.js', true], ['a?.js', 'a/.js', false],
     ['*.{ts,tsx}', 'x.tsx', true], ['*.{ts,tsx}', 'x.js', false], ['[ab].txt', 'b.txt', true], ['[!ab].txt', 'b.txt', false],
     ['[!ab].txt', 'c.txt', true], ['a.b', 'axb', false], ['(x)+', '(x)+', true], ['src/**/test/*.ts', 'src/test/a.ts', true],
   ])('%s vs %s → %s', (pat, path, want) => {
-    expect(globToRegExp(pat).test(path)).toBe(want)
+    expect(compileGlob(pat)(path)).toBe(want)
   })
 })
 
@@ -287,11 +287,13 @@ describe('grep', () => {
     put('evil.txt', 'a'.repeat(5000) + 'b\n')
     const { call, k } = await boot({ grepTimeoutMs: 500 })
     const t0 = Date.now()
-    const pending = call('grep', { pattern: '(a+)+$' })
+    let settled = false
+    const pending = call('grep', { pattern: '(a+)+$' }).finally(() => (settled = true))
     await new Promise(r => setTimeout(r, 100)) // 线程已经卡在回溯里
     const s0 = Date.now()
     await k.handle('status', {})
     expect(Date.now() - s0).toBeLessThan(200)
+    expect(settled).toBe(false) // status 回来时 grep 还在跑:量的是忙着的内核
     const r = await pending
     expect(r.isError).toBe(true)
     expect(r.content).toMatch(/超时/)
@@ -424,5 +426,116 @@ describe('edit', () => {
     const { call } = await boot()
     expect((await call('edit', { path: 'a.ts', old: '', new: 'y' })).isError).toBe(true)
     expect((await call('edit', { path: 'missing.ts', old: 'x', new: 'y' })).isError).toBe(true)
+  })
+})
+
+describe('review fixes (Task 7 R1)', () => {
+  it('I1: a tracked dir replaced by a symlink to outside / to $HOME/.ssh is skipped by glob and grep', async () => {
+    const outside = join(root, 'outside')
+    put('f.txt', 'OUTSIDE_SECRET', outside)
+    put('.ssh/id_rsa', 'SSH_SECRET', home)
+    await testGit(['init', '-q'], cwd)
+    put('d/f.txt', 'inside')
+    put('k/id_rsa', 'inside')
+    put('ok.txt', 'OUTSIDE_SECRET SSH_SECRET mention')
+    await testGit(['add', '.'], cwd)
+    rmSync(join(cwd, 'd'), { recursive: true })
+    rmSync(join(cwd, 'k'), { recursive: true })
+    symlinkSync(outside, join(cwd, 'd'))
+    symlinkSync(join(home, '.ssh'), join(cwd, 'k'))
+    expect((await testGit(['ls-files', '-co', '--exclude-standard'], cwd)).split('\n')).toEqual(expect.arrayContaining(['d/f.txt', 'k/id_rsa']))
+    const { call } = await boot()
+    const g = await call('glob', { pattern: '**/*' })
+    expect(g.content.split('\n').sort()).toEqual(['ok.txt'])
+    const r = await call('grep', { pattern: 'SECRET' })
+    expect(r.content).toBe('ok.txt:1: OUTSIDE_SECRET SSH_SECRET mention')
+    const direct = await runGrep({ files: [join(cwd, 'd/f.txt'), join(cwd, 'k/id_rsa')], base: cwd, pattern: 'SECRET', flags: '', maxMatches: 200, maxLine: 2000 }, { signal: new AbortController().signal })
+    expect(direct.matches).toEqual([]) // worker 也再核对一次
+  })
+
+  it('I2: the 41-char brace bomb returns within 1 s and status stays fast', async () => {
+    const bomb = '{*,*}{*,*}{*,*}{*,*}{*,*}{*,*}{*,*}{*,*}x'
+    expect(bomb).toHaveLength(41)
+    for (let i = 0; i < 50; i++) put(`n/${'q'.repeat(30)}${i}`, '')
+    const { call, k } = await boot()
+    const t0 = Date.now()
+    const pending = call('glob', { pattern: bomb })
+    const s0 = Date.now()
+    await k.handle('status', {})
+    expect(Date.now() - s0).toBeLessThan(200)
+    const r = await pending
+    expect(Date.now() - t0).toBeLessThan(1000)
+    expect(r.isError).toBe(true)
+    expect(r.content).toMatch(/64/)
+    const g = await call('grep', { pattern: 'x', glob: bomb })
+    expect(g.isError).toBe(true)
+  })
+
+  it('I2: matching is linear — many stars against long names, the cap, dedupe', () => {
+    const t0 = Date.now()
+    const m = compileGlob('*a*a*a*a*a*a*a*a*a*a*a*a*x')
+    for (let i = 0; i < 200; i++) expect(m('a'.repeat(40 + (i % 5)))).toBe(false)
+    const deep = compileGlob('**/**/**/**/**/**/**/**/z')
+    expect(deep(Array.from({ length: 60 }, () => 'a').join('/'))).toBe(false)
+    expect(Date.now() - t0).toBeLessThan(500)
+    expect(expandBraces('{a,b}{c,d}{e,f}')).toHaveLength(8)
+    expect(expandBraces('{*,*}{*,*}')).toEqual(['**'])
+    expect(() => expandBraces('{a,b}{c,d}{e,f}{g,h}{i,j}{k,l}{m,n}')).toThrow(/64/)
+    expect(globMatcher('{src,lib}/*.ts')('lib/a.ts')).toBe(true)
+    expect(globMatcher('*.{a,b{c,d}}')('x.bd')).toBe(true)
+    expect(globMatcher('[a-c]?.txt')('bz.txt')).toBe(true)
+    expect(globMatcher('[]]x')(']x')).toBe(true)
+    expect(globMatcher('\\*.txt')('*.txt')).toBe(true)
+    expect(globMatcher('\\*.txt')('a.txt')).toBe(false)
+  })
+
+  it('M1: listFiles passes the abort signal and a 10 s timeout to git', async () => {
+    const seen: unknown[] = []
+    const ac = new AbortController()
+    await listFiles(cwd, { signal: ac.signal, max: 10, git: async (_a, _c, o) => (seen.push(o), '') })
+    expect(seen).toEqual([{ signal: ac.signal, timeoutMs: 10_000 }])
+  })
+
+  it('M2: grep shows paths outside cwd (spillDir) as absolute', async () => {
+    const { call, ctxOf } = await boot()
+    const ctx = ctxOf()
+    const f = put('c1-read.txt', 'spilled line\n', ctx.spillDir)
+    const r = await call('grep', { pattern: 'spilled', path: f }, ctx)
+    expect(r.content).toBe(`${realpathSync(f)}:1: spilled line`)
+  })
+
+  it('M3: exactly 200 matches → no cap note', async () => {
+    put('many.txt', Array.from({ length: 200 }, (_, i) => `hit ${i}`).join('\n'))
+    const { call } = await boot()
+    const r = await call('grep', { pattern: '^hit' })
+    expect(r.content.split('\n')).toHaveLength(200)
+    expect(r.content).not.toMatch(/上限/)
+  })
+
+  it('M4: overlapping occurrences count as not unique', async () => {
+    const f = put('a.ts', '}\n}\n}')
+    const { call } = await boot()
+    const r = await call('edit', { path: 'a.ts', old: '}\n}', new: 'X' })
+    expect(r.isError).toBe(true)
+    expect(r.content).toMatch(/2 次/)
+    expect(readFileSync(f, 'utf8')).toBe('}\n}\n}')
+  })
+
+  it('M7: write refuses a file with another hard link and leaves it untouched', async () => {
+    const outside = join(root, 'outside')
+    const target = put('cred', 'orig', outside)
+    linkSync(target, join(cwd, 'hl'))
+    const { call } = await boot()
+    const r = await call('write', { path: 'hl', content: 'pwned' })
+    expect(r.isError).toBe(true)
+    expect(readFileSync(target, 'utf8')).toBe('orig')
+  })
+
+  it('M8: edit refuses files over 10 MB', async () => {
+    put('huge.txt', 'a' + 'b'.repeat(10 * 1024 * 1024))
+    const { call } = await boot()
+    const r = await call('edit', { path: 'huge.txt', old: 'a', new: 'c' })
+    expect(r.isError).toBe(true)
+    expect(r.content).toMatch(/过大/)
   })
 })
