@@ -3,8 +3,9 @@ import type { KernelEvent, ModelRef } from '@mffai/protocol'
 import { ModelPicker } from './ModelPicker'
 
 const KEEP = 500
-const SHOWN = new Set(['message.user', 'message.assistant', 'message.assistant.delta'])
-const textOf = (e: KernelEvent) => String((e.payload as { text?: unknown } | null)?.text ?? '')
+const SHOWN = new Set(['message.user', 'message.assistant', 'message.assistant.delta', 'message.reasoning.delta'])
+const rawText = (e: KernelEvent) => String((e.payload as { text?: unknown } | null)?.text ?? '')
+const textOf = (e: KernelEvent) => e.type === 'message.reasoning.delta' ? '' : rawText(e)
 
 interface Line { key: string; role: 'user' | 'assistant'; text: string; turnId?: string }
 const payloadOf = (e: KernelEvent) => (e.payload ?? {}) as { turnId?: string; input?: number; output?: number }
@@ -34,7 +35,7 @@ function turnExtras(events: KernelEvent[]) {
   for (const e of events) {
     const turnId = payloadOf(e).turnId
     if (!turnId) continue
-    if (e.type === 'message.reasoning.delta') reasoning.set(turnId, (reasoning.get(turnId) ?? '') + textOf(e))
+    if (e.type === 'message.reasoning.delta') reasoning.set(turnId, (reasoning.get(turnId) ?? '') + rawText(e))
     else if (e.type === 'turn.usage') usage.set(turnId, `${payloadOf(e).input ?? 0} / ${payloadOf(e).output ?? 0}`)
   }
   return { reasoning, usage }

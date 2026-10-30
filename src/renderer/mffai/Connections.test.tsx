@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import MffaiView from './MffaiView'
+import { AddAccount } from './AddAccount'
 
 let mffai: any
 let eventCb: (e: any) => void
@@ -74,9 +75,11 @@ describe('Connections', () => {
     await openConnections()
     fireEvent.click(screen.getAllByText('设为默认')[0])
     await waitFor(() => expect(mffai.models.setDefault).toHaveBeenCalledWith('a1', 'm1'))
+    await waitFor(() => expect(mffai.models.accounts.mock.calls.length).toBe(3))
+    const before = mffai.models.accounts.mock.calls.length
     fireEvent.click(screen.getAllByText('删除')[0])
     await waitFor(() => expect(mffai.models.removeAccount).toHaveBeenCalledWith('a1'))
-    await waitFor(() => expect(mffai.models.accounts.mock.calls.length).toBeGreaterThan(2))
+    await waitFor(() => expect(mffai.models.accounts.mock.calls.length).toBe(before + 1))
   })
 
   it('coding-tools-only preset: ack only after 继续', async () => {
@@ -143,5 +146,97 @@ describe('ModelPicker in debug panel', () => {
     expect(await screen.findByText('推理')).toBeInTheDocument()
     expect(screen.getByText('10 / 5')).toBeInTheDocument()
     expect((screen.getByText('推理').closest('details') as HTMLDetailsElement).open).toBe(false)
+  })
+})
+
+describe('AddAccount ChatGPT flow cleanup', () => {
+  beforeEach(setup)
+  const gptForm = async (ui = <AddAccount presets={presets as any} onDone={vi.fn()} />) => {
+    const r = render(ui)
+    fireEvent.click(screen.getByText('添加账号'))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'p-gpt' } })
+    fireEvent.click(screen.getByText('用 ChatGPT 登录'))
+    await screen.findByText('取消')
+    return r
+  }
+
+  it('account.updated closes the form and reloads', async () => {
+    const onDone = vi.fn()
+    await gptForm(<AddAccount presets={presets as any} onDone={onDone} />)
+    act(() => eventCb({ seq: 1, ts: 1, type: 'account.updated', payload: {} }))
+    expect(screen.getByText('添加账号')).toBeInTheDocument()
+    expect(onDone).toHaveBeenCalledTimes(1)
+    expect(mffai.chatgpt.cancel).not.toHaveBeenCalled()
+  })
+
+  it('preset change cancels a pending flow once', async () => {
+    await gptForm()
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'p-key' } })
+    expect(mffai.chatgpt.cancel).toHaveBeenCalledTimes(1)
+    expect(mffai.chatgpt.cancel).toHaveBeenCalledWith('f1')
+  })
+
+  it('unmount cancels a pending flow once', async () => {
+    const { unmount } = await gptForm()
+    unmount()
+    expect(mffai.chatgpt.cancel).toHaveBeenCalledTimes(1)
+  })
+
+  it('unmount without a flow does not cancel', () => {
+    const { unmount } = render(<AddAccount presets={presets as any} onDone={vi.fn()} />)
+    unmount()
+    expect(mffai.chatgpt.cancel).not.toHaveBeenCalled()
+  })
+
+  it('empty preset list while open does not crash and 添加 is disabled', () => {
+    const { rerender } = render(<AddAccount presets={presets as any} onDone={vi.fn()} />)
+    fireEvent.click(screen.getByText('添加账号'))
+    rerender(<AddAccount presets={[]} onDone={vi.fn()} />)
+    expect((screen.getByText('添加') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('添加 is disabled while in flight (no double submit)', async () => {
+    let resolve!: (v: unknown) => void
+    mffai.models.addAccount = vi.fn(() => new Promise(r => { resolve = r }))
+    const onDone = vi.fn()
+    render(<AddAccount presets={presets as any} onDone={onDone} />)
+    fireEvent.click(screen.getByText('添加账号'))
+    fireEvent.click(screen.getByText('添加'))
+    expect((screen.getByText('添加') as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByText('添加'))
+    expect(mffai.models.addAccount).toHaveBeenCalledTimes(1)
+    await act(async () => { resolve({}) })
+    await waitFor(() => expect(onDone).toHaveBeenCalled())
+  })
+
+  it('confirm dialog has an accessible name', () => {
+    render(<AddAccount presets={presets as any} onDone={vi.fn()} />)
+    fireEvent.click(screen.getByText('添加账号'))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'p-code' } })
+    fireEvent.click(screen.getByText('添加'))
+    expect(screen.getByRole('dialog', { name: '此套餐仅限编程工具内使用' })).toBeInTheDocument()
+  })
+})
+
+describe('subscriptions and reasoning', () => {
+  beforeEach(setup)
+
+  it('unmount unsubscribes from events', async () => {
+    const off = vi.fn()
+    mffai.onEvent = () => off
+    const { unmount } = render(<MffaiView />)
+    await screen.findByText('发送')
+    unmount()
+    expect(off).toHaveBeenCalled()
+  })
+
+  it('reasoning shows before the first assistant delta', async () => {
+    render(<MffaiView />)
+    await screen.findByText('发送')
+    act(() => eventCb({ seq: 1, ts: 1, type: 'message.reasoning.delta', payload: { turnId: 't', text: 'pondering' } }))
+    expect(await screen.findByText('推理')).toBeInTheDocument()
+    act(() => eventCb({ seq: 2, ts: 1, type: 'message.assistant.delta', payload: { turnId: 't', text: 'hey' } }))
+    expect(await screen.findByText(/hey/)).toBeInTheDocument()
+    expect(screen.getAllByText('推理')).toHaveLength(1)
   })
 })
