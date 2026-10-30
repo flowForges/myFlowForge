@@ -51,7 +51,8 @@ export const AccountViewSchema = z.object({
 })
 export type AccountView = z.infer<typeof AccountViewSchema>
 
-export const ModelErrorViewSchema = z.object({ kind: z.string(), message: z.string() })
+export const ModelErrorKindSchema = z.enum(['auth', 'quota', 'rate_limit', 'restricted', 'bad_request', 'unavailable', 'network'])
+export const ModelErrorViewSchema = z.object({ kind: ModelErrorKindSchema, message: z.string() })
 export type ModelErrorView = z.infer<typeof ModelErrorViewSchema>
 
 export const QuotaSchema = z.union([

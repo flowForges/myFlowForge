@@ -9,6 +9,9 @@ describe('toModelError', () => {
   it('429 with retry-after seconds → rate_limit + retryAfterMs', () => {
     const e = toModelError(429, '{"message":"slow down"}', new Headers({ 'retry-after': '7' }))
     expect(e).toEqual({ kind: 'rate_limit', message: 'slow down', retryable: true, retryAfterMs: 7000 })
+    // retry-after-ms 优先
+    expect(toModelError(429, '', new Headers({ 'retry-after-ms': '1500', 'retry-after': '7' })).retryAfterMs).toBe(1500)
+    expect(toModelError(429, '', new Headers({ 'retry-after-ms': 'junk', 'retry-after': '2' })).retryAfterMs).toBe(2000)
     expect(toModelError(429, '')).toEqual({ kind: 'rate_limit', message: 'HTTP 429', retryable: true })
   })
   it('400 / 404 / 422 → bad_request', () => {
@@ -72,5 +75,32 @@ describe('postStream', () => {
     expect(fetchSignal!.aborted).toBe(false)
     ac.abort()
     expect(fetchSignal!.aborted).toBe(true)
+  })
+
+  it('caller abort while reading the error body rethrows the abort, not a ModelFailure', async () => {
+    const ac = new AbortController()
+    const fetchImpl = (async () => {
+      const body = new ReadableStream<Uint8Array>({ pull() { /* 错误体迟迟不结束 */ } })
+      setTimeout(() => ac.abort(), 10) // 读错误体时调用方取消
+      return new Response(body, { status: 500 })
+    }) as unknown as typeof fetch
+    const err = await postStream('http://x', { signal: ac.signal, fetch: fetchImpl }).catch(e => e)
+    expect(err).not.toBeInstanceOf(ModelFailure)
+    expect(err.name).toBe('AbortError')
+  })
+
+  it('leaves no listeners on the caller signal after the request settles', async () => {
+    const ac = new AbortController()
+    let added = 0
+    let removed = 0
+    const add = ac.signal.addEventListener.bind(ac.signal)
+    const remove = ac.signal.removeEventListener.bind(ac.signal)
+    ac.signal.addEventListener = ((...a: Parameters<typeof add>) => { added++; return add(...a) }) as typeof add
+    ac.signal.removeEventListener = ((...a: Parameters<typeof remove>) => { removed++; return remove(...a) }) as typeof remove
+    const ok = (async () => okStream()) as unknown as typeof fetch
+    const bad = (async () => new Response('x', { status: 400 })) as unknown as typeof fetch
+    const boom = (async () => { throw new TypeError('fetch failed') }) as unknown as typeof fetch
+    for (const f of [ok, bad, boom]) await postStream('http://x', { signal: ac.signal, timeoutMs: 1000, fetch: f }).catch(() => {})
+    expect(added - removed).toBe(0)
   })
 })

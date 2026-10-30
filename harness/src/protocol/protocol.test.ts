@@ -105,6 +105,7 @@ describe('v2 schemas', () => {
     expect(WorkerMethods['models.accounts'].result.safeParse({ accounts: [account], secretsBackend: 'keychain' }).success).toBe(true)
     expect(WorkerMethods['models.accounts'].result.safeParse({ accounts: [], secretsBackend: 'nope' }).success).toBe(false)
     expect(WorkerMethods['models.testAccount'].result.safeParse({ ok: false, error: { kind: 'auth', message: 'm' } }).success).toBe(true)
+    expect(WorkerMethods['models.testAccount'].result.safeParse({ ok: false, error: { kind: 'weird', message: 'm' } }).success).toBe(false)
     expect(WorkerMethods['models.quota'].result.safeParse(null).success).toBe(true)
     expect(WorkerMethods['auth.chatgpt.begin'].result.safeParse({ flowId: 'f', authUrl: 'https://x' }).success).toBe(true)
     const model = { id: 'm', name: 'M', context: 128000, output: 8000, image: false, reasoning: 'effort' }

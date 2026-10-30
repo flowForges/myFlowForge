@@ -139,6 +139,33 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
     return { result, replayed: false }
   }
 
+  // 插件命令(异步):成功后才写回执;失败不留回执,可用同一 commandId 重试
+  const inflight = new Map<string, { method: string; promise: Promise<unknown> }>()
+  async function pluginCommand(method: string, commandId: string, run: () => Promise<unknown>): Promise<unknown> {
+    const running = inflight.get(commandId)
+    if (running) {
+      if (running.method !== method) throw new RpcError(ERR_INVALID_PARAMS, 'commandId already used by another method')
+      return running.promise
+    }
+    const prior = receipts.get(commandId)
+    if (prior) {
+      if (prior.method !== method) throw new RpcError(ERR_INVALID_PARAMS, 'commandId already used by another method')
+      return prior.result
+    }
+    if (state === 'draining') throw new RpcError(ERR_DRAINING, 'draining')
+    const promise = (async () => {
+      try {
+        const result = await run()
+        receipts.put(commandId, method, result)
+        return result
+      } finally {
+        inflight.delete(commandId)
+      }
+    })()
+    inflight.set(commandId, { method, promise })
+    return promise
+  }
+
   async function cancel(sessionId: string): Promise<void> {
     const id = activeBySession.get(sessionId)
     const t = id ? turns.get(id) : undefined
@@ -220,13 +247,17 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
           // 插件注册的方法;auth / hello / events.subscribe 属于传输层,不会走到这里
           const handler = rpc.get(name)
           if (!handler) throw new RpcError(ERR_METHOD_NOT_FOUND, `method not handled: ${method}`)
-          try {
-            return await handler(p)
-          } catch (err) {
-            if (err instanceof RpcError) throw err
-            log.error(`rpc ${method} failed`, { error: err instanceof Error ? err.message : String(err) })
-            throw new RpcError(ERR_INTERNAL, 'internal error')
+          const run = async () => {
+            try {
+              return await handler(p)
+            } catch (err) {
+              if (err instanceof RpcError) throw err
+              log.error(`rpc ${method} failed`, { error: err instanceof Error ? err.message : String(err) })
+              throw new RpcError(ERR_INTERNAL, 'internal error')
+            }
           }
+          // 带 commandId 的方法与核心命令同样:回执重放 + 排空时拒绝
+          return typeof p.commandId === 'string' ? pluginCommand(name, p.commandId, run) : run()
         }
       }
     },

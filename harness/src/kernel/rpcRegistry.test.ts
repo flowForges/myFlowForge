@@ -110,6 +110,55 @@ describe('plugin RPC via kernel.handle', () => {
     expect(await codeOf(k.handle('models.catalog', {}))).toBe(-32601)
   })
 
+  it('commandId methods are idempotent: replay returns the receipt without calling the handler', async () => {
+    let calls = 0
+    const k = await boot([plugin('p', ctx => {
+      ctx.rpc.register('models.addAccount', async () => ({ id: `acc${++calls}`, presetId: 'x', label: 'L', state: 'ok' }))
+      ctx.rpc.register('models.removeAccount', async () => ({ ok: true }))
+    })])
+    const params = { commandId: 'c1', presetId: 'x' }
+    const a = await k.handle('models.addAccount', params)
+    const b = await k.handle('models.addAccount', params)
+    expect(calls).toBe(1)
+    expect(b).toEqual(a)
+    // 并发的同一 commandId 也只跑一次
+    const [c, d] = await Promise.all([
+      k.handle('models.addAccount', { commandId: 'c2', presetId: 'x' }),
+      k.handle('models.addAccount', { commandId: 'c2', presetId: 'x' }),
+    ])
+    expect(calls).toBe(2)
+    expect(d).toEqual(c)
+    // commandId 被别的方法占用 → -32602
+    expect(await codeOf(k.handle('models.removeAccount', { commandId: 'c1', accountId: 'a' }))).toBe(-32602)
+  })
+
+  it('a throwing commandId handler stores no receipt; retry runs again', async () => {
+    let calls = 0
+    const k = await boot([plugin('p', ctx => {
+      ctx.rpc.register('models.removeAccount', async () => {
+        if (++calls === 1) throw new Error('transient')
+        return { ok: true }
+      })
+    })])
+    expect(await codeOf(k.handle('models.removeAccount', { commandId: 'r1', accountId: 'a' }))).toBe(-32603)
+    expect(await k.handle('models.removeAccount', { commandId: 'r1', accountId: 'a' })).toEqual({ ok: true })
+    expect(calls).toBe(2)
+  })
+
+  it('draining refuses new commandId calls with -32001 but still replays receipts; plain methods keep working', async () => {
+    let calls = 0
+    const k = await boot([plugin('p', ctx => {
+      ctx.rpc.register('models.removeAccount', async () => { calls++; return { ok: true } })
+      ctx.rpc.register('models.quota', async () => null)
+    })])
+    await k.handle('models.removeAccount', { commandId: 'r1', accountId: 'a' })
+    await k.drain(10)
+    expect(await codeOf(k.handle('models.removeAccount', { commandId: 'r2', accountId: 'a' }))).toBe(-32001)
+    expect(await k.handle('models.removeAccount', { commandId: 'r1', accountId: 'a' })).toEqual({ ok: true })
+    expect(calls).toBe(1)
+    expect(await k.handle('models.quota', { accountId: 'a' })).toBeNull()
+  })
+
   it('PluginHost.deactivateAll unregisters plugin methods', async () => {
     const rpc = new RpcRegistry()
     const host = new PluginHost({

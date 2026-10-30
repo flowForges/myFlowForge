@@ -25,6 +25,8 @@ function messageOf(status: number, bodyText: string): string {
 }
 
 function retryAfterMs(headers?: Headers): number | undefined {
+  const ms = headers?.get('retry-after-ms')?.trim() // OpenAI 等:毫秒,优先
+  if (ms && /^\d+(\.\d+)?$/.test(ms)) return Math.round(Number(ms))
   const v = headers?.get('retry-after')?.trim()
   if (!v) return undefined
   if (/^\d+(\.\d+)?$/.test(v)) return Math.round(Number(v) * 1000)
@@ -51,33 +53,48 @@ export interface PostStreamInit extends Omit<RequestInit, 'method' | 'signal'> {
   fetch?: typeof fetch
 }
 
+// 调用方取消时 reject;off() 摘掉监听
+function whenAborted(signal: AbortSignal): { promise: Promise<never>; off(): void } {
+  let onAbort = () => {}
+  const promise = new Promise<never>((_, reject) => {
+    onAbort = () => reject(signal.reason)
+    if (signal.aborted) return onAbort()
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+  promise.catch(() => {})
+  return { promise, off: () => signal.removeEventListener('abort', onAbort) }
+}
+
 export async function postStream(url: string, init: PostStreamInit): Promise<Response> {
   const { signal, timeoutMs, fetch: fetchImpl = fetch, ...rest } = init
   if (signal.aborted) throw signal.reason
-  const ac = new AbortController()
-  const onAbort = () => ac.abort(signal.reason)
-  signal.addEventListener('abort', onAbort, { once: true })
-  let timedOut = false
-  const timer = timeoutMs === undefined ? undefined : setTimeout(() => {
-    timedOut = true
-    ac.abort(new Error('timeout'))
-  }, timeoutMs)
+  // 超时只管拿响应头;AbortSignal.any 不在调用方 signal 上留 JS 监听
+  const timeout = new AbortController()
+  const timer = timeoutMs === undefined ? undefined : setTimeout(() => timeout.abort(new Error('timeout')), timeoutMs)
 
   let res: Response
   try {
-    res = await fetchImpl(url, { ...rest, method: 'POST', signal: ac.signal })
+    res = await fetchImpl(url, { ...rest, method: 'POST', signal: AbortSignal.any([signal, timeout.signal]) })
   } catch (err) {
-    signal.removeEventListener('abort', onAbort)
-    if (signal.aborted && !timedOut) throw err // 调用方取消:原样抛出,由适配器写 cancelled
-    const message = timedOut ? 'timeout' : err instanceof Error ? err.message : String(err)
+    if (signal.aborted) throw signal.reason // 调用方取消:原样抛出,由适配器写 cancelled
+    const message = timeout.signal.aborted ? 'timeout' : err instanceof Error ? err.message : String(err)
     throw new ModelFailure({ kind: 'network', message, retryable: true })
   } finally {
     clearTimeout(timer)
   }
 
   if (!res.ok) {
-    signal.removeEventListener('abort', onAbort)
-    const body = await res.text().catch(() => '')
+    const abort = whenAborted(signal)
+    let body = ''
+    try {
+      body = await Promise.race([res.text(), abort.promise]).catch(() => '')
+    } finally {
+      abort.off()
+    }
+    if (signal.aborted) {
+      res.body?.cancel().catch(() => {})
+      throw signal.reason
+    }
     throw new ModelFailure(toModelError(res.status, body, res.headers))
   }
   return res
