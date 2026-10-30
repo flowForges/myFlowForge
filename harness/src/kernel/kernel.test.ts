@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createKernel, type Kernel } from './kernel'
 import { PermissionGate } from './permissionGate'
+import { Sessions } from './sessions'
 import { RpcError } from './rpcError'
 import { ERR_BUSY, ERR_DRAINING } from '../protocol/index'
 import type { Plugin } from './pluginHost'
@@ -172,8 +173,8 @@ describe('kernel', () => {
     expect(k.status().plugins).toEqual([{ id: 'loop-echo', state: 'active' }])
   })
 
-  it('permission gate denies non-kernel actors', () => {
-    const g = new PermissionGate()
+  it('permission gate allows the kernel and denies unknown actions', () => {
+    const g = new PermissionGate({ sessions: new Sessions(dir), home: dir, dataDir: dir, platform: process.platform, env: {} })
     expect(g.check({ actor: 'kernel', action: 'x' })).toBe('allow')
     expect(g.check({ actor: 'plugin:foo', action: 'x', resource: 'y' })).toBe('deny')
   })

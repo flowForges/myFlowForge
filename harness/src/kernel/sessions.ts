@@ -2,6 +2,8 @@ import { realpathSync, statSync } from 'node:fs'
 import { join, posix, win32 } from 'node:path'
 import type { ApprovalMode, KernelEvent, ModelRef, Toolset } from '../protocol/index'
 import { RpcError } from './rpcError'
+import { isCredentialPath } from '../lib/fs/paths'
+import { blacklist } from './permissionGate'
 
 // 内核 sessions 服务:从 session.created 载荷重建每个会话的选项,供权限门与循环插件查询
 
@@ -49,26 +51,30 @@ export interface CwdEnv {
   home: string
   dataDir: string
   platform: NodeJS.Platform
+  env?: { APPDATA?: string }
+  /** 测试注入(win32 路径在 posix 上跑) */
+  fs?: { realpath(p: string): string; isDirectory(p: string): boolean }
 }
 
-// TODO(Task 3):换成 lib/fs/paths 的 isCredentialPath(凭据黑名单 + mff-ai 数据目录)
-function isBlacklistedCwd(_real: string, _env: CwdEnv): boolean {
-  return false
-}
+const realFs = { realpath: (p: string) => realpathSync.native(p), isDirectory: (p: string) => statSync(p).isDirectory() }
 
-/** 会话工作目录:绝对、存在、是目录、不是根、不在凭据黑名单里;返回 realpath */
+/** 会话工作目录:绝对、存在、是目录、不是根、不在凭据黑名单 / mff-ai 数据目录里;返回 realpath */
 export function validateCwd(raw: string, env: CwdEnv): string {
   const invalid = () => new RpcError(-32602, 'invalid cwd')
-  const path = env.platform === 'win32' ? win32 : posix
-  if (!path.isAbsolute(raw)) throw invalid()
+  const win = env.platform === 'win32'
+  const path = win ? win32 : posix
+  // win32 只收 `X:\…`(拒 `\\?\`、UNC、`\foo` 这种无盘符的);与权限门的判断一致
+  if (win ? !/^[A-Za-z]:[\\/]/.test(raw) : !path.isAbsolute(raw)) throw invalid()
+  const fs = env.fs ?? realFs
   let real: string
   try {
-    real = realpathSync.native(raw)
-    if (!statSync(real).isDirectory()) throw invalid()
+    real = fs.realpath(raw)
+    if (!fs.isDirectory(real)) throw invalid()
   } catch {
     throw invalid()
   }
   if (path.dirname(real) === real) throw invalid() // 文件系统根(含盘符根)
-  if (isBlacklistedCwd(real, env)) throw invalid()
+  const roots = blacklist({ home: env.home, dataDir: env.dataDir, platform: env.platform, env: env.env ?? {} })
+  if (isCredentialPath(real, roots, env.platform)) throw invalid() // 也拒 realpath 后变成 UNC / 带 `:` 的
   return real
 }

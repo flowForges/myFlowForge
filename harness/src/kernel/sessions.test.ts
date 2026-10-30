@@ -126,4 +126,31 @@ describe('validateCwd', () => {
     symlinkSync('/', join(work, 'root'), 'dir')
     expect(() => validateCwd(join(work, 'root'), opts())).toThrow('invalid cwd')
   })
+  it('rejects a cwd in or under a credential root, and the mff-ai dataDir', () => {
+    // work / dir 未 realpath:macOS 上 /var → /private/var,比较前两边都要规范化
+    for (const rel of ['.aws', '.ssh/sub', '.config/gh']) mkdirSync(join(work, rel), { recursive: true })
+    for (const rel of ['.aws', '.ssh/sub', '.config/gh']) expect(() => validateCwd(join(work, rel), opts())).toThrow('invalid cwd')
+    mkdirSync(join(dir, 'plugins'), { recursive: true })
+    expect(() => validateCwd(dir, opts())).toThrow('invalid cwd')
+    expect(() => validateCwd(join(dir, 'plugins'), opts())).toThrow('invalid cwd')
+    expect(validateCwd(work, opts())).toBe(realpathSync.native(work)) // 家目录本身可以
+  })
+  it('rejects a cwd symlinked into a credential root', () => {
+    mkdirSync(join(work, '.aws'))
+    const elsewhere = mkdtempSync(join(tmpdir(), 'mffai-cwd-link-'))
+    try {
+      symlinkSync(join(work, '.aws'), join(elsewhere, 'proj'), 'dir')
+      expect(() => validateCwd(join(elsewhere, 'proj'), opts())).toThrow('invalid cwd')
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true })
+    }
+  })
+  it('win32: rejects share roots, \\?\ / UNC forms, ADS and drive-less paths', () => {
+    const fs = { realpath: (p: string) => p, isDirectory: () => true }
+    const w = { home: 'C:\\Users\\u', dataDir: 'C:\\Users\\u\\.myFlowForge\\mff-ai', platform: 'win32' as const, fs }
+    for (const p of ['\\\\?\\UNC\\srv\\share\\', '\\\\srv\\share\\', '\\\\srv\\share\\proj', '\\\\?\\C:\\repo', '\\\\.\\C:\\repo',
+      'C:\\repo:ads', '\\repo', 'C:\\', 'C:\\Users\\u\\.SSH', 'c:\\users\\U\\.myflowforge\\MFF-AI\\x'])
+      expect(() => validateCwd(p, w), p).toThrow('invalid cwd')
+    expect(validateCwd('C:\\repo', w)).toBe('C:\\repo')
+  })
 })

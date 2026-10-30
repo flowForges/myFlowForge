@@ -64,9 +64,9 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   const services = new ServiceRegistry()
   const bus = new EventBus({ onError: (type, err) => log.error(`handler for ${type} failed`, { error: String(err) }) })
   bus.declare('session.prompt', 'bail')
-  const gate = new PermissionGate()
   const home = opts.home ?? homedir()
   const sessions = new Sessions(opts.dataDir)
+  const gate = new PermissionGate({ sessions, home, dataDir: opts.dataDir, platform: process.platform, env: process.env })
   sessions.load(eventLog.after(0))
   eventLog.onAppend(e => sessions.observe(e)) // 事务提交后才通知:回滚的 session.created 不会进来
   const append = (e: Omit<KernelEvent, 'seq' | 'ts'>) => eventLog.append(e)
@@ -250,7 +250,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
           return { events: eventLog.tail(p.limit).map(toWire) }
         case 'session.create':
           return command(name, p.commandId, () => {
-            const cwd = p.cwd === undefined ? undefined : validateCwd(p.cwd, { home, dataDir: opts.dataDir, platform: process.platform })
+            const cwd = p.cwd === undefined ? undefined : validateCwd(p.cwd, { home, dataDir: opts.dataDir, platform: process.platform, env: process.env })
             const sessionId = randomUUID()
             const payload = {
               title: p.title,
