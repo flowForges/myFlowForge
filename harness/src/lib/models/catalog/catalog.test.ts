@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { CatalogViewSchema } from '../../../protocol/models'
-import { mergeCatalog, type Snapshot } from './merge'
+import { mergeCatalog, resolveListed, type Snapshot } from './merge'
 import { PRESETS, PresetSchema, type Preset } from './presets'
 import snapshot from './models.snapshot.json'
 
@@ -56,6 +56,11 @@ describe('mergeCatalog', () => {
   it('缺元数据用保守默认值,name=id', () => {
     const c = mergeCatalog([base({ models: [{ id: 'unknown-x' }] })], LOCAL)
     expect(c.models.anthropic[0]).toEqual({ id: 'unknown-x', name: 'unknown-x', context: 128000, output: 8000, image: false, reasoning: 'none', toolCall: true })
+  })
+  it('列出的模型:快照里有的用快照的推理能力,查不到的按 toggle(不强制关推理)', () => {
+    const [known, unknown] = resolveListed([{ id: 'old' }, { id: 'gpt-x', name: 'GPT X' }], 'prov', LOCAL)
+    expect(known.reasoning).toBe('none')
+    expect(unknown).toMatchObject({ id: 'gpt-x', name: 'GPT X', reasoning: 'toggle' })
   })
   it('快照缺 limit 时用默认值', () => {
     const c = mergeCatalog([base({ snapshotProvider: 'prov', models: [{ id: 'nolimit' }] })], LOCAL)

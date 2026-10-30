@@ -57,5 +57,10 @@ export function mergeCatalog(presets: Preset[], snapshot: Snapshot, cache?: Snap
 export function resolveListed(list: { id: string; name?: string }[], provider: string | undefined, snapshot: Snapshot, cache?: Snapshot): ModelEntry[] {
   const c = lookup(cache)
   const s = lookup(snapshot)
-  return list.map((m) => resolveModel({ id: m.id, ...(m.name !== undefined && { name: m.name }) }, provider, c, s))
+  // 目录里查不到的模型推理能力未知:按 'toggle' 处理,请求里的 reasoning 原样透传,不被强制关掉
+  return list.map((m) => {
+    const known = c(provider, m.id) ?? s(provider, m.id)
+    const e = resolveModel({ id: m.id, ...(m.name !== undefined && { name: m.name }) }, provider, c, s)
+    return known ? e : { ...e, reasoning: 'toggle' }
+  })
 }
