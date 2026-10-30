@@ -1,7 +1,8 @@
-// tools-coding:编码工具 read / list / glob / grep / write / edit(spec §7),注册到 tools 服务
+// tools-coding:编码工具 read / list / glob / grep / write / edit / apply_patch(spec §7),注册到 tools 服务
 import type { PermissionGate } from '../../kernel/permissionGate'
 import type { Plugin } from '../../kernel/pluginHost'
 import type { ToolsService } from '../../lib/tools/types'
+import { applyPatchTool } from './applyPatchTool'
 import { editTool } from './edit'
 import type { GitRunner } from './files'
 import { globTool } from './glob'
@@ -28,7 +29,7 @@ export function createToolsCoding(opts: ToolsCodingOpts = {}): Plugin {
       const gate = ctx.services.get<PermissionGate>('permissionGate')
       if (!tools || !gate) throw new Error('tools / permissionGate service missing')
       const deps = { gate, git: opts.git, grepTimeoutMs: opts.grepTimeoutMs }
-      for (const t of [readTool(), listTool(), globTool(deps), grepTool(deps), writeTool(deps), editTool(deps)]) ctx.effect(tools.register(t))
+      for (const t of [readTool(), listTool(), globTool(deps), grepTool(deps), writeTool(deps), editTool(deps), applyPatchTool(deps)]) ctx.effect(tools.register(t))
     },
   }
 }

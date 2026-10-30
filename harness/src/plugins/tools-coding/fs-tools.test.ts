@@ -71,10 +71,10 @@ async function boot(opts: { sessionCwd?: string; grepTimeoutMs?: number } = {}) 
 }
 
 describe('tools-coding registration', () => {
-  it('registers read list glob grep write edit with JSON-schema parameters', async () => {
+  it('registers read list glob grep write edit apply_patch with JSON-schema parameters', async () => {
     const { tools } = await boot()
     const names = tools.list().map(t => t.name).sort()
-    expect(names).toEqual(['edit', 'glob', 'grep', 'list', 'read', 'write'])
+    expect(names).toEqual(['apply_patch', 'edit', 'glob', 'grep', 'list', 'read', 'write'])
     for (const t of tools.list()) {
       expect(t.description.length).toBeGreaterThan(10)
       expect(t.parameters).toMatchObject({ type: 'object' })

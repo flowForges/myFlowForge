@@ -2,7 +2,7 @@
 // - 工具只碰 permission() 时算出、交给权限门的那个路径(按 args 对象记住),执行前再解析一次,变了就不做;
 // - 打开文件一律 O_NOFOLLOW(平台支持时),末段在检查后被换成符号链接 → 打开失败;
 // - 建父目录逐级来,每建一级都 realpath 核对;写之前再过一次检查(还在 cwd 内、不在黑名单)
-import { closeSync, constants, fstatSync, ftruncateSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, writeSync } from 'node:fs'
+import { closeSync, constants, fstatSync, ftruncateSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, unlinkSync, writeSync } from 'node:fs'
 import { dirname, relative, isAbsolute } from 'node:path'
 import { isInside, OUTSIDE, resolveToolPath } from '../../lib/fs/paths'
 import type { ToolContext } from '../../lib/tools/types'
@@ -110,4 +110,16 @@ export function writeChecked(p: string, content: string, recheck: () => boolean)
   } finally {
     closeSync(fd)
   }
+}
+
+/**
+ * 删除一个普通文件:recheck(再解析、再过权限门)→ 父目录 realpath 回自己 → lstat 是普通文件 → unlink。
+ * unlink 本身不跟随末段链接;父目录中途被换成链接 → 抛错,不删
+ */
+export function deleteChecked(p: string, recheck: () => boolean): void {
+  if (!recheck()) throw changed(p)
+  const dir = dirname(p)
+  if (!samePath(realpathSync.native(dir), dir)) throw changed(p)
+  if (!lstatSync(p).isFile()) throw new Error(`不是普通文件:${p}`)
+  unlinkSync(p)
 }
