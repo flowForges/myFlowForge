@@ -56,7 +56,7 @@ const EXACT = new Map<string, Set<string>>([
  * 或是让 git 跑任意程序的选项(含缩写)→ 没有键;`~`、UNC 与 win32 路径的反斜杠已被字符清单拦下
  */
 const OUTSIDE_ARG = [
-  /^\//, /(^|[/=]|^-[A-Za-z]+)\.\.(\/|$)/, /=\//, /^-[A-Za-z]+\//,
+  /^\//, /(^|[/=:,]|^-[A-Za-z]+)\.\.(\/|$)/, /=\//, /^-[A-Za-z]+\//,
   /^[A-Za-z]:/, /=[A-Za-z]:/,
 ]
 /** git 接受长选项的无歧义缩写(`--upload` = `--upload-pack`):`=` 前的名字至少 5 个字符且是其前缀 → 命中 */
@@ -85,6 +85,8 @@ export function sessionKey(command: string): string | undefined {
   const [first, second] = words
   if (!first || !PLAIN_WORD.test(first)) return undefined
   if (words.slice(1).some(reachesOutside)) return undefined
+  // git 的参数里出现通配:模型可写出名为 `--upload-pack=x` 的文件,经通配变成选项 → 没有键
+  if (commandName(first) === 'git' && words.slice(1).some(w => w.includes('*'))) return undefined
   const name = commandName(first)
   if (BY_NAME.has(name)) return first
   if (second === undefined || second.startsWith('-') || !BY_PAIR.get(name)?.has(second)) return undefined

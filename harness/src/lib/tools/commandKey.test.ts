@@ -61,6 +61,11 @@ describe('sessionKey', () => {
     ['git switch main', 'git switch main'],
     // 字符清单内的常见写法仍有键
     ['eslint src/**/*.ts', 'eslint'],
+    // 评审 R5 的两条:git 参数里的通配、`:` / `,` 之后的 `..` → 没有键
+    ['git fetch *', undefined],
+    ['git add src/*.ts', undefined],
+    ['eslint --x=foo:../y', undefined],
+    ['eslint a,../y', undefined],
     ['ls *.md', 'ls'],
     ['prettier -w ./src/*.ts', 'prettier'],
     ['git log main..HEAD', 'git log'],
