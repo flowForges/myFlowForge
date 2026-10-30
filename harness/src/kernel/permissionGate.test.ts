@@ -55,6 +55,10 @@ describe('decide (table)', () => {
     const d = { ...env, roots: credentialRoots(home, 'darwin', {}), platform: 'darwin' as const }
     expect(decide(req('read', '/h/.SSH/id'), atHome, d)).toBe('deny')
     expect(decide(req('read', '/H/REPO/a'), ask, d)).toBe('allow')
+    const dataVol: SessionInfo = { ...ask, cwd: '/System/Volumes/Data' }
+    expect(decide(req('write', '/private/etc/x'), dataVol, d)).toBe('deny')
+    expect(decide(req('write', '/System/Volumes/Data/private/etc/x'), dataVol, d)).toBe('deny')
+    expect(decide(req('read', '/h/repo/a'), { ...ask, cwd: '/System/Volumes/Data/h/repo' }, d)).toBe('deny') // h 不是 firmlink 目录
   })
 
   it('win32: other drive, UNC and ADS are denied', () => {

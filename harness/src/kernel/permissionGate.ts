@@ -1,4 +1,4 @@
-import { canonicalRoots, credentialRoots, isCredentialPath, isInside, OUTSIDE, resolveToolPath } from '../lib/fs/paths'
+import { canonicalRoots, credentialRoots, isCredentialPath, isInside, isRootLike, OUTSIDE, resolveToolPath } from '../lib/fs/paths'
 import type { PermissionRequest } from '../lib/tools/types'
 import type { SessionInfo } from './sessions'
 
@@ -22,7 +22,7 @@ export function decide(req: PermissionRequest, s: SessionInfo | undefined, env: 
   if (action === 'read' || action === 'write') {
     if (resource === undefined) return 'deny'
     if (action === 'read' && env.spillDir && isInside(resource, env.spillDir, env.platform)) return 'allow'
-    if (!s?.cwd || !isInside(resource, s.cwd, env.platform)) return 'deny'
+    if (!s?.cwd || isRootLike(s.cwd, env.platform) || !isInside(resource, s.cwd, env.platform)) return 'deny'
     if (isCredentialPath(resource, [...env.roots, env.dataDir], env.platform)) return 'deny'
     return 'allow'
   }

@@ -2,7 +2,7 @@ import { realpathSync, statSync } from 'node:fs'
 import { join, posix, win32 } from 'node:path'
 import type { ApprovalMode, KernelEvent, ModelRef, Toolset } from '../protocol/index'
 import { RpcError } from './rpcError'
-import { isCredentialPath } from '../lib/fs/paths'
+import { isCredentialPath, isRootLike } from '../lib/fs/paths'
 import { blacklist } from './permissionGate'
 
 // 内核 sessions 服务:从 session.created 载荷重建每个会话的选项,供权限门与循环插件查询
@@ -73,7 +73,7 @@ export function validateCwd(raw: string, env: CwdEnv): string {
   } catch {
     throw invalid()
   }
-  if (path.dirname(real) === real) throw invalid() // 文件系统根(含盘符根)
+  if (path.dirname(real) === real || isRootLike(real, env.platform)) throw invalid() // 文件系统根(含盘符根、折叠后为根的 /System/Volumes/Data)
   const roots = blacklist({ home: env.home, dataDir: env.dataDir, platform: env.platform, env: env.env ?? {} })
   if (isCredentialPath(real, roots, env.platform)) throw invalid() // 也拒 realpath 后变成 UNC / 带 `:` 的
   return real

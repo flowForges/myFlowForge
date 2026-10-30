@@ -153,4 +153,12 @@ describe('validateCwd', () => {
       expect(() => validateCwd(p, w), p).toThrow('invalid cwd')
     expect(validateCwd('C:\\repo', w)).toBe('C:\\repo')
   })
+  it('darwin: /System/Volumes/Data is rejected (it would contain every firmlinked dir); its Users alias is not', () => {
+    const fs = { realpath: (p: string) => p, isDirectory: () => true }
+    const d = { home: '/Users/u', dataDir: '/Users/u/.myFlowForge/mff-ai', platform: 'darwin' as const, fs }
+    for (const p of ['/System/Volumes/Data', '/System/Volumes/Data/', '/'])
+      expect(() => validateCwd(p, d), p).toThrow('invalid cwd')
+    expect(() => validateCwd('/System/Volumes/Data/Users/u/.ssh', d)).toThrow('invalid cwd')
+    expect(validateCwd('/System/Volumes/Data/Users/x', d)).toBe('/System/Volumes/Data/Users/x')
+  })
 })

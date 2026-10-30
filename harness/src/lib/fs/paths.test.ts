@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, win32 } from 'node:path'
-import { canonicalRoots, credentialRoots, isCredentialPath, isInside, OUTSIDE, resolveToolPath } from './paths'
+import { canonicalRoots, credentialRoots, isCredentialPath, isInside, isRootLike, OUTSIDE, resolveToolPath } from './paths'
 
 let base: string
 let cwd: string
@@ -192,5 +192,18 @@ describe('credential blacklist', () => {
     expect(isCredentialPath('/system/volumes/data/Users/u/.SSH/id', roots, 'darwin')).toBe(true)
     expect(isInside('/Users/u/.ssh/id', '/System/Volumes/Data/Users/u', 'darwin')).toBe(true)
     expect(isCredentialPath('/System/Volumes/Data/Users/u/.ssh/id', roots, 'linux')).toBe(false)
+  })
+  it('darwin: only real firmlinked dirs collapse; the bare prefix and /usr do not', () => {
+    expect(isInside('/Users/x/f', '/System/Volumes/Data/Users/x', 'darwin')).toBe(true)
+    expect(isInside('/usr/local/bin/x', '/System/Volumes/Data/usr/local', 'darwin')).toBe(true)
+    expect(isInside('/private/etc/x', '/System/Volumes/Data', 'darwin')).toBe(false)
+    expect(isInside('/usr/bin/x', '/System/Volumes/Data/usr', 'darwin')).toBe(false)
+    expect(isInside('/usr/bin/x', '/System/Volumes/Data/usr/bin', 'darwin')).toBe(false)
+    expect(isRootLike('/System/Volumes/Data', 'darwin')).toBe(true) // 数据卷根
+    expect(isRootLike('/System/Volumes/Data', 'linux')).toBe(false)
+    expect(isRootLike('/System/Volumes/Data/Users', 'darwin')).toBe(false)
+    expect(isRootLike('/', 'darwin')).toBe(true)
+    expect(isRootLike('C:\\', 'win32')).toBe(true)
+    expect(isRootLike('C:\\repo', 'win32')).toBe(false)
   })
 })

@@ -83,8 +83,24 @@ function segments(p: string, platform: NodeJS.Platform, strong: boolean): string
     s = strong ? s.toUpperCase().toLowerCase() : s.toLowerCase()
   } else if (platform === 'win32') s = strong ? s.toUpperCase() : s.toLowerCase()
   const segs = s.split(path.sep).filter(x => x !== '')
-  if (platform === 'darwin' && segs.length >= 3 && segs[0] === 'system' && segs[1] === 'volumes' && segs[2] === 'data') return segs.slice(3)
+  if (platform === 'darwin' && isDataAlias(segs)) return segs.slice(3)
   return segs
+}
+
+/** 数据卷上真正有 firmlink 的目录(/usr 本身在只读系统卷上,只有 /usr/local 是) */
+const FIRMLINKED = new Set(['users', 'applications', 'library', 'private', 'opt', 'volumes', 'cores'])
+
+function isDataAlias(segs: string[]): boolean {
+  if (segs[0] !== 'system' || segs[1] !== 'volumes' || segs[2] !== 'data') return false
+  return FIRMLINKED.has(segs[3]) || (segs[3] === 'usr' && segs[4] === 'local')
+}
+
+/** 是否为文件系统根(posix 无段;win32 只剩盘符;darwin 的数据卷根 /System/Volumes/Data 也算);不可比较的路径也算 */
+export function isRootLike(p: string, platform: NodeJS.Platform): boolean {
+  if (!plainAbs(p, platform)) return true
+  const segs = segments(p, platform, false)
+  if (platform === 'darwin' && segs.length === 3 && segs[0] === 'system' && segs[1] === 'volumes' && segs[2] === 'data') return true
+  return segs.length <= (platform === 'win32' ? 1 : 0)
 }
 
 function within(child: string, parent: string, platform: NodeJS.Platform, strong: boolean): boolean {
