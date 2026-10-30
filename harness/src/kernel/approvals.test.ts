@@ -173,6 +173,20 @@ describe('Approvals', () => {
     await expect(home).resolves.toBe('deny')
   })
 
+  it.each([
+    ['git status', 'git push --force'],
+    ['npm test', 'npm exec rimraf ~'],
+  ])('allow_session on %j still asks for %j', async (allowed, other) => {
+    const first = ask(allowed, { key: sessionKey(allowed) })
+    approvals.respond(lastId(), 'allow_session')
+    await expect(first).resolves.toBe('allow')
+    events = []
+    const p = ask(other, { key: sessionKey(other) })
+    expect(requested()).toHaveLength(1)
+    approvals.respond(lastId(), 'deny')
+    await expect(p).resolves.toBe('deny')
+  })
+
   it('a listener that answers inside the approval.requested notification is honoured', async () => {
     approvals = new Approvals({
       timeoutMs: 50,

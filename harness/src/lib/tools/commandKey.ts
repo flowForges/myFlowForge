@@ -4,19 +4,28 @@
 const META = /[;&|`<>$\n\r]/
 /** 第一个词只许朴素拼写:引号、反斜杠、括号、通配符、~、= 都会让名单比较失效 */
 const PLAIN_WORD = /^[\w./+-]+$/
-const SUBCOMMAND = /^[A-Za-z][\w:.-]*$/
 /** 第二个词含引号 / 反斜杠:子命令可被换个写法绕过(`git "push"`) */
 const QUOTED = /['"\\]/
 
-/** 解释器、提权、破坏性命令与"执行另一条命令"的包装器:放行一次等于放行任意脚本 */
-const NEVER = new Set([
-  'rm', 'sudo', 'su', 'doas',
-  'sh', 'bash', 'zsh', 'fish', 'dash', 'pwsh', 'powershell', 'cmd',
-  'node', 'deno', 'bun', 'perl', 'ruby', 'php',
-  'eval', 'exec', 'env', 'xargs', 'find', 'chmod', 'chown', 'dd', 'mkfs',
-  'timeout', 'nohup', 'nice', 'time', 'command', 'builtin', 'stdbuf', 'caffeinate', 'watch', 'script', 'ssh', '.', 'source',
+/** 允许清单(控制者裁定):只有这些命令能拿到键;其余每次都问 */
+/** (a) 只读 / 构建类:键 = 第一个词 */
+const BY_NAME = new Set([
+  'ls', 'cat', 'head', 'tail', 'wc', 'pwd', 'echo', 'grep', 'rg', 'tree', 'diff', 'stat', 'file', 'which',
+  'make', 'tsc', 'eslint', 'prettier', 'vitest', 'jest', 'pytest', 'mypy', 'ruff',
 ])
-const PYTHON = /^python[\d.]*$/
+/** (b) 命令 + 子命令:键 = 两个词;子命令不在清单里 → 没有键 */
+const JS_PM = ['test', 'run', 'install', 'ci', 'build', 'lint', 'typecheck']
+const BY_PAIR = new Map<string, Set<string>>([
+  ['git', new Set(['status', 'diff', 'log', 'show', 'branch', 'add', 'commit', 'checkout', 'switch', 'stash', 'fetch', 'pull', 'restore', 'rev-parse', 'ls-files', 'grep', 'blame'])],
+  ['npm', new Set(JS_PM)],
+  ['pnpm', new Set(JS_PM)],
+  ['yarn', new Set(JS_PM)],
+  ['bun', new Set(JS_PM)],
+  ['cargo', new Set(['build', 'test', 'check', 'clippy', 'fmt', 'run'])],
+  ['go', new Set(['build', 'test', 'vet', 'fmt', 'run'])],
+  ['uv', new Set(['sync', 'pip'])],
+  ['pip', new Set(['install', 'list'])],
+])
 
 /** 名单比较用:取 basename、小写(APFS / NTFS 默认不区分大小写)、去掉 Windows 可执行后缀 */
 function commandName(word: string): string {
@@ -24,18 +33,17 @@ function commandName(word: string): string {
 }
 
 /**
- * 前两个词(第二个词像子命令时),否则第一个词;以下情形 → undefined(永不自动放行):
- * 含 shell 元字符或 `$`、为空、以 `VAR=` 开头、第一个词拼写不朴素、第二个词以 `-` 开头或带引号、
- * 第一个词在 NEVER 名单(或 python*)里。
+ * 先过拒绝规则(含 shell 元字符或 `$`、为空、`VAR=` 开头、第一个词拼写不朴素、第二个词以 `-` 开头或带引号),
+ * 再查允许清单:BY_NAME 的命令 → 第一个词;BY_PAIR 的命令 + 清单内子命令 → 两个词;其余 → undefined。
+ * 清单按规范化名字比较,键保留原拼写:`./x/eslint` 与 `eslint` 是不同的键。
  */
 export function sessionKey(command: string): string | undefined {
   if (META.test(command)) return undefined
-  const words = command.trim().split(/\s+/)
-  const [first, second] = words
+  const [first, second] = command.trim().split(/\s+/)
   if (!first || !PLAIN_WORD.test(first)) return undefined
+  if (second !== undefined && (second.startsWith('-') || QUOTED.test(second))) return undefined
   const name = commandName(first)
-  if (!name || NEVER.has(name) || PYTHON.test(name)) return undefined
-  if (second === undefined) return first
-  if (second.startsWith('-') || QUOTED.test(second)) return undefined
-  return SUBCOMMAND.test(second) ? `${first} ${second}` : first
+  if (BY_NAME.has(name)) return first
+  if (second !== undefined && BY_PAIR.get(name)?.has(second)) return `${first} ${second}`
+  return undefined
 }

@@ -400,11 +400,11 @@ describe('kernel approvals', () => {
   })
 
   it('approval.respond allow_session: resolved allow by user, then the same key is allowed by session', async () => {
-    const { k, g, sessionId, approvalId } = await bootGated(undefined, sessionKey('touch marker'))
+    const { k, g, sessionId, approvalId } = await bootGated(undefined, sessionKey('npm test'))
     expect(await k.handle('approval.respond', { approvalId, decision: 'allow_session' })).toEqual({ ok: true })
     await waitFor(() => types(k).includes('turn.ended'))
     expect(resolvedOf(k)[0].payload).toMatchObject({ approvalId, decision: 'allow', by: 'user' })
-    const again = await g.approvals!.request({ sessionId, turnId: 't2', callId: 'c2', tool: 'shell', summary: 'touch marker', key: sessionKey('touch marker'), signal: new AbortController().signal })
+    const again = await g.approvals!.request({ sessionId, turnId: 't2', callId: 'c2', tool: 'shell', summary: 'npm test -- -t x', key: sessionKey('npm test -- -t x'), signal: new AbortController().signal })
     expect(again).toBe('allow')
     expect(resolvedOf(k)[1].payload).toMatchObject({ decision: 'allow', by: 'session' })
     expect(types(k).filter(t => t === 'approval.requested')).toHaveLength(1)
