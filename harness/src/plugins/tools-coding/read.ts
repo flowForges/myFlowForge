@@ -1,10 +1,10 @@
 // read:带行号读文本文件(spec §7)
-import { closeSync, constants, createReadStream, fstatSync, openSync, readSync } from 'node:fs'
+import { closeSync, createReadStream, fstatSync, readSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { z } from 'zod'
 import type { Tool } from '../../lib/tools/types'
 import { jsonSchema, parsed, request } from './common'
-import { O_NOFOLLOW, shownPath, stillSame } from './safeFs'
+import { openNonBlocking, shownPath, stillSame } from './safeFs'
 
 const DEFAULT_LIMIT = 2000
 const MAX_LINE = 2000
@@ -28,10 +28,12 @@ export function readTool(): Tool {
       const { args, raw: rawPath, abs } = parsed(Args, raw, ctx)
       stillSame(ctx, rawPath, abs)
       const shown = shownPath(ctx, abs)
-      const fd = openSync(abs, constants.O_RDONLY | O_NOFOLLOW)
+      const fd = openNonBlocking(abs) // FIFO 在 open 时就会卡住线程:先非阻塞打开,fstat 后只读普通文件
       let owned = true
       try {
-        if (fstatSync(fd).isDirectory()) return { content: `${shown} 是目录;用 list 查看`, isError: true }
+        const st = fstatSync(fd)
+        if (st.isDirectory()) return { content: `${shown} 是目录;用 list 查看`, isError: true }
+        if (!st.isFile()) return { content: `${shown} 不是普通文件,不能读取`, isError: true }
         const head = Buffer.alloc(SNIFF)
         const n = readSync(fd, head, 0, SNIFF, 0)
         if (head.subarray(0, n).includes(0)) return { content: `${shown} 是二进制文件,不能读取`, isError: true }

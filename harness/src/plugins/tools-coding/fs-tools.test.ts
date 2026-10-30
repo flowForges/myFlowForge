@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { execFile } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -71,10 +71,10 @@ async function boot(opts: { sessionCwd?: string; grepTimeoutMs?: number } = {}) 
 }
 
 describe('tools-coding registration', () => {
-  it('registers read list glob grep write edit apply_patch with JSON-schema parameters', async () => {
+  it('registers read list glob grep write edit apply_patch shell with JSON-schema parameters', async () => {
     const { tools } = await boot()
     const names = tools.list().map(t => t.name).sort()
-    expect(names).toEqual(['apply_patch', 'edit', 'glob', 'grep', 'list', 'read', 'write'])
+    expect(names).toEqual(['apply_patch', 'edit', 'glob', 'grep', 'list', 'read', 'shell', 'write'])
     for (const t of tools.list()) {
       expect(t.description.length).toBeGreaterThan(10)
       expect(t.parameters).toMatchObject({ type: 'object' })
@@ -538,4 +538,18 @@ describe('review fixes (Task 7 R1)', () => {
     expect(r.isError).toBe(true)
     expect(r.content).toMatch(/过大/)
   })
+
+  it.skipIf(process.platform === 'win32')('Task 9 carry: read / edit of a FIFO → isError without blocking; the kernel stays responsive', async () => {
+    execFileSync('mkfifo', [join(cwd, 'pipe')])
+    const { k, call } = await boot()
+    const t0 = Date.now()
+    const r = await call('read', { path: 'pipe' })
+    expect(r.isError).toBe(true)
+    expect(r.content).toMatch(/普通文件/)
+    const e = await call('edit', { path: 'pipe', old: 'a', new: 'b' })
+    expect(e.isError).toBe(true)
+    expect(e.content).toMatch(/普通文件/)
+    await k.handle('status', {})
+    expect(Date.now() - t0).toBeLessThan(1000)
+  }, 3000)
 })

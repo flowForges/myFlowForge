@@ -77,30 +77,25 @@ export function mkdirChecked(dir: string): void {
   }
 }
 
-/** 读整个文件(不跟随末段链接);目录、超过 maxBytes → 抛错 */
-export function readNoFollow(p: string, maxBytes = Infinity): Buffer {
-  const fd = openSync(p, constants.O_RDONLY | O_NOFOLLOW)
-  try {
-    const st = fstatSync(fd)
-    if (st.isDirectory()) throw new Error(`是目录,不是文件:${p}`)
-    if (st.size > maxBytes) throw new Error(`文件过大(${st.size} 字节,上限 ${maxBytes}):${p}`)
-    return readFileSync(fd)
-  } finally {
-    closeSync(fd)
-  }
-}
-
 /** Windows 没有 O_NONBLOCK → 0 */
 const O_NONBLOCK: number = constants.O_NONBLOCK ?? 0
 
 /**
- * 读一个要被覆盖写回的文件:O_NONBLOCK 打开(FIFO 不会卡住线程)→ fstat 必须是普通文件、只有一个硬链接
+ * 只读打开、不跟随末段链接、O_NONBLOCK(FIFO 不会卡住内核线程;对普通文件的读没有影响)。
+ * 调用方必须 fstat 后只读普通文件(目录可以打开,由调用方给自己的提示)
+ */
+export function openNonBlocking(p: string): number {
+  return openSync(p, constants.O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+}
+
+/**
+ * 读一个要被覆盖写回的文件:O_NONBLOCK 打开 → fstat 必须是普通文件、只有一个硬链接
  * (与 writeChecked 的条件一致,写之前就能拒绝)、不超过 maxBytes。不存在 → undefined
  */
 export function readRegular(p: string, maxBytes: number): Buffer | undefined {
   let fd: number
   try {
-    fd = openSync(p, constants.O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+    fd = openNonBlocking(p)
   } catch (e) {
     const code = (e as NodeJS.ErrnoException).code
     if (code === 'ENOENT' || code === 'ENOTDIR') return undefined
@@ -108,6 +103,7 @@ export function readRegular(p: string, maxBytes: number): Buffer | undefined {
   }
   try {
     const st = fstatSync(fd)
+    if (st.isDirectory()) throw new Error(`是目录,不是文件:${p}`)
     if (!st.isFile()) throw new Error(`不是普通文件:${p}`)
     if (st.nlink > 1) throw new Error(`文件有多个硬链接,不写:${p}`)
     if (st.size > maxBytes) throw new Error(`文件过大(${st.size} 字节,上限 ${maxBytes}):${p}`)

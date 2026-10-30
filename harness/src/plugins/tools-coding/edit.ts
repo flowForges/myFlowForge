@@ -3,7 +3,7 @@ import { z } from 'zod'
 import type { Tool } from '../../lib/tools/types'
 import { type CodingDeps, jsonSchema, parsed, request } from './common'
 import { lineNo } from './read'
-import { readNoFollow, shownPath, stillSame, writeChecked } from './safeFs'
+import { readRegular, shownPath, stillSame, writeChecked } from './safeFs'
 import { writeAgain } from './write'
 
 const WINDOW = 3
@@ -61,7 +61,8 @@ export function editTool(deps: CodingDeps): Tool {
       if (args.old === args.new) return { content: 'old 与 new 相同,没有可改的', isError: true }
       stillSame(ctx, rawPath, abs)
       const shown = shownPath(ctx, abs)
-      const buf = readNoFollow(abs, MAX_EDIT_BYTES)
+      const buf = readRegular(abs, MAX_EDIT_BYTES) // FIFO / 设备 / 多硬链接 → 抛错,不会卡住
+      if (buf === undefined) return { content: `${shown} 不存在;新建文件用 write`, isError: true }
       if (buf.subarray(0, 8192).includes(0)) return { content: `${shown} 是二进制文件,不能编辑`, isError: true }
       const text = buf.toString('utf8')
 
