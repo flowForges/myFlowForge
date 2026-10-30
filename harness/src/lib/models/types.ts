@@ -59,6 +59,8 @@ export interface ModelAdapter {
   stream(account: Account, req: ModelRequest): AsyncIterable<ModelEvent>
   quota?(account: Account): Promise<Quota | null>
   test(account: Account): Promise<void>
+  /** models: 'list' 预设的模型清单 */
+  listModels?(account: Account): Promise<{ id: string; name?: string }[]>
 }
 
 export interface AddAccountInput {
