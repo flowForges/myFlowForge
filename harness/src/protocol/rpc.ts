@@ -1,5 +1,14 @@
 import { z } from 'zod'
 import { KernelEventSchema } from './events'
+import {
+  AccountProtocolSchema,
+  AccountViewSchema,
+  CatalogViewSchema,
+  ModelErrorViewSchema,
+  ModelRefSchema,
+  QuotaSchema,
+  SecretsBackendSchema,
+} from './models'
 
 // JSON-RPC 错误码
 export const ERR_DRAINING = -32001
@@ -59,7 +68,7 @@ export const WorkerMethods = {
     result: z.object({ events: z.array(KernelEventSchema) }),
   },
   'session.create': {
-    params: z.object({ commandId: z.string(), title: z.string().optional() }),
+    params: z.object({ commandId: z.string(), title: z.string().optional(), model: ModelRefSchema.optional() }),
     result: z.object({ sessionId: z.string() }),
   },
   'session.prompt': {
@@ -70,6 +79,36 @@ export const WorkerMethods = {
     params: z.object({ commandId: z.string(), sessionId: z.string() }),
     result: Ok,
   },
+  // 以下由插件经 ctx.rpc.register 提供
+  'models.catalog': { params: Empty, result: CatalogViewSchema },
+  'models.accounts': {
+    params: Empty,
+    result: z.object({ accounts: z.array(AccountViewSchema), secretsBackend: SecretsBackendSchema }),
+  },
+  'models.addAccount': {
+    params: z.object({
+      commandId: z.string(),
+      presetId: z.string(),
+      label: z.string().optional(),
+      apiKey: z.string().optional(),
+      baseUrl: z.string().optional(),
+      protocol: AccountProtocolSchema.optional(),
+      restrictionAck: z.boolean().optional(),
+    }),
+    result: AccountViewSchema,
+  },
+  'models.removeAccount': {
+    params: z.object({ commandId: z.string().optional(), accountId: z.string() }),
+    result: Ok,
+  },
+  'models.testAccount': {
+    params: z.object({ commandId: z.string().optional(), accountId: z.string() }),
+    result: z.object({ ok: z.boolean(), error: ModelErrorViewSchema.optional() }),
+  },
+  'models.setDefault': { params: ModelRefSchema, result: z.object({ ok: z.literal(true) }) },
+  'models.quota': { params: z.object({ accountId: z.string() }), result: QuotaSchema.nullable() },
+  'auth.chatgpt.begin': { params: Empty, result: z.object({ flowId: z.string(), authUrl: z.string() }) },
+  'auth.chatgpt.cancel': { params: z.object({ flowId: z.string() }), result: Ok },
 } as const
 
 export const ControlMethods = {

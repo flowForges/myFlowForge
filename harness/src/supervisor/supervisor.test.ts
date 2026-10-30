@@ -56,7 +56,7 @@ describe('Supervisor', () => {
     const s = sup.state()
     expect(s.workerPid).toBeGreaterThan(0)
     expect(s.restarts).toBe(0)
-    expect(s.protocolVersion).toBe(1)
+    expect(s.protocolVersion).toBe(2)
     expect(states.map(x => x.state)).toContain('starting')
     // 能回 pong 就不会被当成卡死
     await new Promise(r => setTimeout(r, 300))
@@ -251,9 +251,9 @@ describe('daemon entry', () => {
       await new Promise(r => setTimeout(r, 50))
     }
     if (status?.workerPid) pids.push(status.workerPid)
-    expect(status).toMatchObject({ state: 'running', restarts: 0, protocolVersion: 1, pid: survivor.p.pid })
+    expect(status).toMatchObject({ state: 'running', restarts: 0, protocolVersion: 2, pid: survivor.p.pid })
     const json = JSON.parse(readFileSync(paths.supervisorJson, 'utf8'))
-    expect(json).toMatchObject({ pid: survivor.p.pid, workerPid: status!.workerPid, state: 'running', protocolVersion: 1 })
+    expect(json).toMatchObject({ pid: survivor.p.pid, workerPid: status!.workerPid, state: 'running', protocolVersion: 2 })
     expect(existsSync(join(paths.logs))).toBe(true)
 
     // 第三次启动(探测到已有实例)也直接退出 0

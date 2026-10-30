@@ -18,6 +18,7 @@ import { PermissionGate } from './permissionGate'
 import { PluginHost, type Plugin } from './pluginHost'
 import { Receipts } from './receipts'
 import { RpcError } from './rpcError'
+import { RpcRegistry } from './rpcRegistry'
 import { ServiceRegistry } from './services'
 import { HARNESS_VERSION } from './version'
 
@@ -40,6 +41,7 @@ export interface KernelOpts {
 
 const ERR_METHOD_NOT_FOUND = -32601
 const ERR_INVALID_PARAMS = -32602
+const ERR_INTERNAL = -32603
 const CANCEL_GRACE_MS = 1000
 
 type Turn = { turnId: string; sessionId: string; ended: boolean; controller: AbortController; settled: Promise<void> }
@@ -57,8 +59,9 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   const gate = new PermissionGate()
   const append = (e: Omit<KernelEvent, 'seq' | 'ts'>) => eventLog.append(e)
   const config = loadConfig(join(opts.dataDir, 'config.json'))
+  const rpc = new RpcRegistry()
   const host = new PluginHost({
-    services, events: bus, append, log, dataDir: opts.dataDir, injectTimeoutMs: opts.injectTimeoutMs,
+    services, events: bus, rpc, append, log, dataDir: opts.dataDir, injectTimeoutMs: opts.injectTimeoutMs,
   })
 
   let state: StatusResult['state'] = 'starting'
@@ -213,9 +216,18 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
           if (!r.replayed) await cancel(p.sessionId) // 重放不产生副作用
           return r.result
         }
-        default:
-          // auth / events.subscribe 属于传输层
-          throw new RpcError(ERR_METHOD_NOT_FOUND, `method not handled by kernel: ${method}`)
+        default: {
+          // 插件注册的方法;auth / hello / events.subscribe 属于传输层,不会走到这里
+          const handler = rpc.get(name)
+          if (!handler) throw new RpcError(ERR_METHOD_NOT_FOUND, `method not handled: ${method}`)
+          try {
+            return await handler(p)
+          } catch (err) {
+            if (err instanceof RpcError) throw err
+            log.error(`rpc ${method} failed`, { error: err instanceof Error ? err.message : String(err) })
+            throw new RpcError(ERR_INTERNAL, 'internal error')
+          }
+        }
       }
     },
 

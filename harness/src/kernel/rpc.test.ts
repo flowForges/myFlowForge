@@ -71,8 +71,8 @@ describe('rpc server + client', () => {
   it('hello compatibility', async () => {
     await serve()
     const c = await client()
-    expect(await c.call('hello', { clientVersion: 'x', protocolVersion: 2 })).toMatchObject({ compatible: false, version: HARNESS_VERSION })
-    expect(await c.call('hello', { clientVersion: 'x', protocolVersion: 1 })).toMatchObject({ compatible: true })
+    expect(await c.call('hello', { clientVersion: 'x', protocolVersion: 1 })).toMatchObject({ compatible: false, version: HARNESS_VERSION, protocolVersion: 2 })
+    expect(await c.call('hello', { clientVersion: 'x', protocolVersion: 2 })).toMatchObject({ compatible: true })
   })
 
   it('omitted params become {} and errors map to RpcError/-32603', async () => {

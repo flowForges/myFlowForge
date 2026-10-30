@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { ControlMethods, FrameDecoder, MAX_FRAME_BYTES, PROTOCOL_VERSION, WorkerMethods, encodeFrame } from './index'
+import {
+  AccountUpdatedPayloadSchema, ControlMethods, EVENT_TYPES, FrameDecoder, MAX_FRAME_BYTES, PROTOCOL_VERSION, QuotaSchema,
+  TurnUsagePayloadSchema, WorkerMethods, encodeFrame,
+} from './index'
 
 describe('framing', () => {
   it('round-trips', () => {
@@ -33,7 +36,7 @@ describe('framing', () => {
 })
 
 describe('schemas', () => {
-  it('version', () => expect(PROTOCOL_VERSION).toBe(1))
+  it('version', () => expect(PROTOCOL_VERSION).toBe(2))
   const required: [typeof WorkerMethods | typeof ControlMethods, string, object][] = [
     [WorkerMethods, 'auth', {}],
     [WorkerMethods, 'hello', { clientVersion: '1' }],
@@ -42,6 +45,12 @@ describe('schemas', () => {
     [WorkerMethods, 'session.create', {}],
     [WorkerMethods, 'session.prompt', { sessionId: 's', text: 't' }],
     [WorkerMethods, 'session.cancel', { sessionId: 's' }],
+    [WorkerMethods, 'models.addAccount', { commandId: 'c' }],
+    [WorkerMethods, 'models.removeAccount', {}],
+    [WorkerMethods, 'models.testAccount', {}],
+    [WorkerMethods, 'models.setDefault', { accountId: 'a' }],
+    [WorkerMethods, 'models.quota', {}],
+    [WorkerMethods, 'auth.chatgpt.cancel', {}],
     [ControlMethods, 'auth', {}],
     [ControlMethods, 'autostart', { on: true }],
   ]
@@ -62,6 +71,61 @@ describe('schemas', () => {
     expect(r.safeParse({ ok: true }).success).toBe(true)
     expect(r.safeParse({ reset: true, lastSeq: 3 }).success).toBe(true)
     expect(r.safeParse({}).success).toBe(false)
+  })
+})
+
+describe('v2 schemas', () => {
+  const ok = (m: keyof typeof WorkerMethods, v: unknown) => WorkerMethods[m].params.safeParse(v).success
+  it('models.addAccount: presetId required, restrictionAck boolean, protocol enum', () => {
+    expect(ok('models.addAccount', { commandId: 'c', presetId: 'zhipu-cn', apiKey: 'k', restrictionAck: true })).toBe(true)
+    expect(ok('models.addAccount', { commandId: 'c', presetId: 'custom', baseUrl: 'http://x', protocol: 'anthropic', label: 'L' })).toBe(true)
+    expect(ok('models.addAccount', { commandId: 'c' })).toBe(false)
+    expect(ok('models.addAccount', { presetId: 'p' })).toBe(false)
+    expect(ok('models.addAccount', { commandId: 'c', presetId: 'p', restrictionAck: 'yes' })).toBe(false)
+    expect(ok('models.addAccount', { commandId: 'c', presetId: 'p', protocol: 'chatgpt' })).toBe(false)
+  })
+  it('session.create accepts an optional model ref', () => {
+    expect(ok('session.create', { commandId: 'c', model: { accountId: 'a', modelId: 'm' } })).toBe(true)
+    expect(ok('session.create', { commandId: 'c', model: { accountId: 'a' } })).toBe(false)
+  })
+  it('other new methods', () => {
+    expect(ok('models.catalog', {})).toBe(true)
+    expect(ok('models.accounts', {})).toBe(true)
+    expect(ok('models.removeAccount', { commandId: 'c', accountId: 'a' })).toBe(true)
+    expect(ok('models.testAccount', { accountId: 'a' })).toBe(true)
+    expect(ok('models.setDefault', { accountId: 'a', modelId: 'm' })).toBe(true)
+    expect(ok('models.quota', { accountId: 'a' })).toBe(true)
+    expect(ok('auth.chatgpt.begin', {})).toBe(true)
+    expect(ok('auth.chatgpt.cancel', { flowId: 'f' })).toBe(true)
+  })
+  it('result schemas', () => {
+    const account = { id: 'a', presetId: 'p', label: 'L', state: 'needs_login' }
+    expect(WorkerMethods['models.addAccount'].result.safeParse(account).success).toBe(true)
+    expect(WorkerMethods['models.addAccount'].result.safeParse({ ...account, state: 'weird' }).success).toBe(false)
+    expect(WorkerMethods['models.accounts'].result.safeParse({ accounts: [account], secretsBackend: 'keychain' }).success).toBe(true)
+    expect(WorkerMethods['models.accounts'].result.safeParse({ accounts: [], secretsBackend: 'nope' }).success).toBe(false)
+    expect(WorkerMethods['models.testAccount'].result.safeParse({ ok: false, error: { kind: 'auth', message: 'm' } }).success).toBe(true)
+    expect(WorkerMethods['models.quota'].result.safeParse(null).success).toBe(true)
+    expect(WorkerMethods['auth.chatgpt.begin'].result.safeParse({ flowId: 'f', authUrl: 'https://x' }).success).toBe(true)
+    const model = { id: 'm', name: 'M', context: 128000, output: 8000, image: false, reasoning: 'effort' }
+    const preset = {
+      id: 'p', label: 'P', billing: 'subscription', restriction: 'coding-tools-only', auth: 'api-key',
+      protocols: ['anthropic'], docsUrl: 'https://d',
+    }
+    const catalog = WorkerMethods['models.catalog'].result
+    expect(catalog.safeParse({ presets: [preset], models: { p: [model] }, default: { accountId: 'a', modelId: 'm' } }).success).toBe(true)
+    expect(catalog.safeParse({ presets: [{ ...preset, restriction: 'x' }], models: {} }).success).toBe(false)
+  })
+  it('Quota is windows or link', () => {
+    expect(QuotaSchema.safeParse({ windows: [{ label: '5h', usedPercent: 40, resetsAt: 1 }] }).success).toBe(true)
+    expect(QuotaSchema.safeParse({ link: 'https://chatgpt.com/settings/usage' }).success).toBe(true)
+    expect(QuotaSchema.safeParse({}).success).toBe(false)
+  })
+  it('new event types and payloads', () => {
+    for (const t of ['account.updated', 'message.reasoning.delta', 'turn.usage']) expect(EVENT_TYPES).toContain(t)
+    expect(TurnUsagePayloadSchema.safeParse({ turnId: 't', input: 1, output: 2, cacheRead: 3 }).success).toBe(true)
+    expect(TurnUsagePayloadSchema.safeParse({ turnId: 't', input: 1 }).success).toBe(false)
+    expect(AccountUpdatedPayloadSchema.safeParse({ account: { id: 'a', presetId: 'p', label: 'L', state: 'ok' } }).success).toBe(true)
   })
 })
 

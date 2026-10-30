@@ -1,10 +1,11 @@
 import { join } from 'node:path'
 import { mkdirSync } from 'node:fs'
-import type { KernelEvent } from '../protocol/index'
+import type { KernelEvent, WorkerMethodName } from '../protocol/index'
 import type { EventBus } from './events'
 import type { ServiceRegistry } from './services'
 import { EffectScope } from './effects'
 import type { Logger } from './log'
+import type { RpcRegistry } from './rpcRegistry'
 
 export interface PluginManifest {
   id: string
@@ -18,6 +19,8 @@ export interface PluginContext {
   services: { provide<T>(key: string, impl: T): void; get<T>(key: string): T | undefined }
   events: Pick<EventBus, 'declare' | 'on' | 'emit' | 'waterfall' | 'serial' | 'bail'>
   effect(dispose: () => void | Promise<void>): void
+  /** 注册工作进程 RPC 方法:参数先由内核按 WorkerMethods 校验;随插件停用自动注销 */
+  rpc: { register(method: WorkerMethodName, handler: (params: unknown) => Promise<unknown>): void }
   log: Logger
   config: Record<string, unknown>
   dataDir: string
@@ -38,6 +41,7 @@ export interface PluginState {
 export interface PluginHostDeps {
   services: ServiceRegistry
   events: EventBus
+  rpc: RpcRegistry
   append(e: Omit<KernelEvent, 'seq' | 'ts'>): KernelEvent
   log: Logger
   dataDir: string
@@ -63,7 +67,7 @@ export class PluginHost {
 
   private async activateOne(p: Plugin): Promise<void> {
     const { id } = p.manifest
-    const { services, events, append, log } = this.deps
+    const { services, events, rpc, append, log } = this.deps
     const scope = new EffectScope()
     const entry: PluginState = { id, state: 'active' }
     this.list.push(entry)
@@ -96,6 +100,7 @@ export class PluginHost {
           bail: (t, ...a) => events.bail(t, ...a),
         },
         effect: d => scope.add(d),
+        rpc: { register: (method, handler) => scope.add(rpc.register(id, method, handler)) },
         log: pluginLog,
         config: {},
         dataDir,

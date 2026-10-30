@@ -1,5 +1,6 @@
 export * from './version'
 export * from './events'
+export * from './models'
 export * from './rpc'
 export * from './framing'
 export * from './paths'

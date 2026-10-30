@@ -6,6 +6,8 @@ const REPO = resolve(__dirname, '..')
 const HARNESS_SRC = join(REPO, 'harness', 'src')
 const APP_SRC = join(REPO, 'src')
 const PLUGINS = join(HARNESS_SRC, 'plugins')
+const LIB = join(HARNESS_SRC, 'lib')
+const KERNEL = join(HARNESS_SRC, 'kernel')
 
 function walk(dir: string, out: string[] = []): string[] {
   if (!existsSync(dir)) return out
@@ -63,6 +65,19 @@ describe('harness 边界', () => {
         if (other !== own) bad.push(`${relative(REPO, f)} -> ${s}`)
       }
     }
+    expect(bad).toEqual([])
+  })
+
+  it('lib 是纯库:不 import kernel/** 或 plugins/**', () => {
+    const files = walk(LIB)
+    expect(files.length).toBeGreaterThan(0)
+    const bad: string[] = []
+    for (const f of files)
+      for (const s of specifiers(f)) {
+        if (!s.startsWith('.')) continue
+        const r = resolved(f, s)
+        if (inside(r, KERNEL) || inside(r, PLUGINS)) bad.push(`${relative(REPO, f)} -> ${s}`)
+      }
     expect(bad).toEqual([])
   })
 

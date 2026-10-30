@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { AccountViewSchema } from './models'
 
 export const EVENT_TYPES = [
   'kernel.started',
@@ -12,6 +13,9 @@ export const EVENT_TYPES = [
   'message.assistant',
   'turn.ended',
   'turn.failed',
+  'account.updated',
+  'message.reasoning.delta',
+  'turn.usage',
 ] as const
 
 export const EventTypeSchema = z.enum(EVENT_TYPES)
@@ -25,3 +29,19 @@ export const KernelEventSchema = z.object({
   payload: z.unknown(),
 })
 export type KernelEvent = z.infer<typeof KernelEventSchema>
+
+// v2 新事件的载荷
+export const AccountUpdatedPayloadSchema = z.object({ account: AccountViewSchema })
+export type AccountUpdatedPayload = z.infer<typeof AccountUpdatedPayloadSchema>
+
+export const ReasoningDeltaPayloadSchema = z.object({ turnId: z.string(), text: z.string() })
+export type ReasoningDeltaPayload = z.infer<typeof ReasoningDeltaPayloadSchema>
+
+export const TurnUsagePayloadSchema = z.object({
+  turnId: z.string(),
+  input: z.number(),
+  output: z.number(),
+  cacheRead: z.number().optional(),
+  cacheWrite: z.number().optional(),
+})
+export type TurnUsagePayload = z.infer<typeof TurnUsagePayloadSchema>
