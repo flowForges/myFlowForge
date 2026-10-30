@@ -8,9 +8,12 @@ const PLAIN_WORD = /^[\w./+-]+$/
 const QUOTED = /['"\\]/
 
 /** 允许清单(控制者裁定):只有这些命令能拿到键;其余每次都问 */
-/** (a) 只读 / 构建类:键 = 第一个词 */
+/**
+ * (a) 键 = 第一个词;第二个词可以是 `-` 开头的选项。
+ * 不收能读任意文件的命令(cat、grep 等):shell 不经路径权限门,放行一次等于放行读 ~/.ssh
+ */
 const BY_NAME = new Set([
-  'ls', 'cat', 'head', 'tail', 'wc', 'pwd', 'echo', 'grep', 'rg', 'tree', 'diff', 'stat', 'file', 'which',
+  'ls', 'pwd', 'echo', 'which',
   'make', 'tsc', 'eslint', 'prettier', 'vitest', 'jest', 'pytest', 'mypy', 'ruff',
 ])
 /** (b) 命令 + 子命令:键 = 两个词;子命令不在清单里 → 没有键 */
@@ -33,17 +36,17 @@ function commandName(word: string): string {
 }
 
 /**
- * 先过拒绝规则(含 shell 元字符或 `$`、为空、`VAR=` 开头、第一个词拼写不朴素、第二个词以 `-` 开头或带引号),
- * 再查允许清单:BY_NAME 的命令 → 第一个词;BY_PAIR 的命令 + 清单内子命令 → 两个词;其余 → undefined。
+ * 先过拒绝规则(含 shell 元字符或 `$`、为空、`VAR=` 开头、第一个词拼写不朴素、第二个词带引号),
+ * 再查允许清单:BY_NAME 的命令 → 第一个词;BY_PAIR 的命令 + 清单内子命令(不以 `-` 开头)→ 两个词;其余 → undefined。
  * 清单按规范化名字比较,键保留原拼写:`./x/eslint` 与 `eslint` 是不同的键。
  */
 export function sessionKey(command: string): string | undefined {
   if (META.test(command)) return undefined
   const [first, second] = command.trim().split(/\s+/)
   if (!first || !PLAIN_WORD.test(first)) return undefined
-  if (second !== undefined && (second.startsWith('-') || QUOTED.test(second))) return undefined
+  if (second !== undefined && QUOTED.test(second)) return undefined
   const name = commandName(first)
   if (BY_NAME.has(name)) return first
-  if (second !== undefined && BY_PAIR.get(name)?.has(second)) return `${first} ${second}`
-  return undefined
+  if (second === undefined || second.startsWith('-')) return undefined
+  return BY_PAIR.get(name)?.has(second) ? `${first} ${second}` : undefined
 }
