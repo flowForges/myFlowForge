@@ -15,6 +15,8 @@ export const SCOPE = `openid profile email offline_access resource.invoke ${DIRE
 export const REGISTRATION_CLIENT = 'dynamic_agent_client'
 export const AGENT_NAME = 'myFlowForge'
 export const CALLBACK_PATH = '/auth/callback'
+/** 浏览器先打开这个一次性地址,再 302 到真正的授权页:授权 URL(可能含 id_token_hint)不进浏览器启动参数 */
+export const START_PATH = '/auth/start'
 const HTTP_TIMEOUT_MS = 15_000
 
 /** 每个账号一条,存 ctx.secrets `account/<id>/oauth`;令牌缺失 = 需要重新登录 */
@@ -229,7 +231,12 @@ export interface CallbackReply {
  * 127.0.0.1 上起回调监听:先试首选端口,EADDRINUSE 则系统分配。
  * onCallback 返回给浏览器的纯文本;非回调路径 404。
  */
-export async function listenCallback(preferredPort: number, onCallback: (q: URLSearchParams) => Promise<CallbackReply>): Promise<CallbackListener> {
+/** onStart:START_PATH 的处理,返回跳转地址;undefined → 404 */
+export async function listenCallback(
+  preferredPort: number,
+  onCallback: (q: URLSearchParams) => Promise<CallbackReply>,
+  onStart: (q: URLSearchParams) => string | undefined = () => undefined,
+): Promise<CallbackListener> {
   const close = () => {
     if (server.listening) server.close()
     server.closeAllConnections()
@@ -247,6 +254,12 @@ export async function listenCallback(preferredPort: number, onCallback: (q: URLS
       if (!r.close) return
       if (gone) close()
       else res.once('close', close)
+    }
+    if (req.method === 'GET' && url.pathname === START_PATH) {
+      const to = onStart(url.searchParams)
+      if (!to) return reply({ status: 404, text: 'not found' })
+      res.writeHead(302, { location: to, 'cache-control': 'no-store', connection: 'close' })
+      return res.end()
     }
     if (req.method !== 'GET' || url.pathname !== CALLBACK_PATH) return reply({ status: 404, text: 'not found' })
     onCallback(url.searchParams).then(reply, () => reply({ status: 500, text: '登录失败', close: true }))

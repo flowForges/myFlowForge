@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  AccountUpdatedPayloadSchema, ControlMethods, EVENT_TYPES, FrameDecoder, MAX_FRAME_BYTES, PROTOCOL_VERSION, QuotaSchema,
+  AccountUpdatedPayloadSchema, ChatgptEndedPayloadSchema, ControlMethods, EVENT_TYPES, FrameDecoder, MAX_FRAME_BYTES, PROTOCOL_VERSION, QuotaSchema,
   TurnUsagePayloadSchema, WorkerMethods, encodeFrame,
 } from './index'
 
@@ -126,7 +126,9 @@ describe('v2 schemas', () => {
     expect(QuotaSchema.safeParse({}).success).toBe(false)
   })
   it('new event types and payloads', () => {
-    for (const t of ['account.updated', 'message.reasoning.delta', 'turn.usage']) expect(EVENT_TYPES).toContain(t)
+    for (const t of ['account.updated', 'message.reasoning.delta', 'turn.usage', 'auth.chatgpt.ended']) expect(EVENT_TYPES).toContain(t)
+    expect(ChatgptEndedPayloadSchema.safeParse({ flowId: 'f', ok: true, accountId: 'a' }).success).toBe(true)
+    expect(ChatgptEndedPayloadSchema.safeParse({ flowId: 'f' }).success).toBe(false)
     expect(TurnUsagePayloadSchema.safeParse({ turnId: 't', input: 1, output: 2, cacheRead: 3 }).success).toBe(true)
     expect(TurnUsagePayloadSchema.safeParse({ turnId: 't', input: 1 }).success).toBe(false)
     expect(AccountUpdatedPayloadSchema.safeParse({ account: { id: 'a', presetId: 'p', label: 'L', state: 'ok' } }).success).toBe(true)

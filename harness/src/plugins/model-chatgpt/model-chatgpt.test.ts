@@ -123,12 +123,21 @@ async function boot(o: { openPortPreferred?: number; flowTimeoutMs?: number } = 
 }
 
 type Begin = { flowId: string; authUrl: string }
+/** begin 只回本机一次性地址;像浏览器一样打开它,拿到 302 指向的授权页 */
+async function openStart(authUrl: string) {
+  const res = await fetch(authUrl, { redirect: 'manual' })
+  await res.text()
+  return { status: res.status, location: res.headers.get('location') }
+}
 async function begin(k: Kernel) {
   const r = (await k.handle('auth.chatgpt.begin', {})) as Begin
-  const u = new URL(r.authUrl)
+  const start = await openStart(r.authUrl)
+  const u = new URL(start.location!)
   auth.st.nonce = u.searchParams.get('nonce')!
   return { ...r, u, p: u.searchParams, redirect: u.searchParams.get('redirect_uri')! }
 }
+const callbackOf = (authUrl: string) => `${new URL(authUrl).origin}/auth/callback`
+const ends = (k: Kernel) => k.events.tail(200).filter(e => e.type === 'auth.chatgpt.ended').map(e => e.payload as { flowId: string; ok: boolean; accountId?: string })
 async function callback(redirect: string, params: Record<string, string>) {
   const res = await fetch(`${redirect}?${new URLSearchParams(params)}`)
   return { status: res.status, type: res.headers.get('content-type'), text: await res.text() }
@@ -182,6 +191,7 @@ describe('model-chatgpt 登录', () => {
     expect(list[0]).toMatchObject({ presetId: 'chatgpt', state: 'ok', label: 'me@example.com' })
     expect(updates(k).at(-1)).toMatchObject({ id: list[0].id, state: 'ok' })
     expect(await portClosed(b.redirect)).toBe(true)
+    expect(ends(k)).toEqual([{ flowId: b.flowId, ok: true, accountId: list[0].id }])
     // 事件 / RPC 结果里不出现令牌
     expect(JSON.stringify(k.events.tail(200))).not.toMatch(/at-1|rt-1|code-1/)
     // 同一主机再次 begin:主机 ID 不变
@@ -198,8 +208,10 @@ describe('model-chatgpt 登录', () => {
     expect(r.text).not.toBe('已完成')
     expect(auth.st.tokenReqs).toHaveLength(0)
     expect(await accounts(k)).toHaveLength(0)
+    expect(ends(k)).toEqual([]) // 流程未结束
     expect(await k.handle('auth.chatgpt.cancel', { flowId: b.flowId })).toEqual({ ok: true })
     expect(await portClosed(b.redirect)).toBe(true)
+    expect(ends(k)).toEqual([{ flowId: b.flowId, ok: false }])
   })
 
   it('nonce 不匹配 → 拒绝,不建账号', async () => {
@@ -209,13 +221,15 @@ describe('model-chatgpt 登录', () => {
     expect(r.status).toBe(400)
     expect(await accounts(k)).toHaveLength(0)
     expect(await portClosed(b.redirect)).toBe(true)
+    expect(ends(k)).toEqual([{ flowId: b.flowId, ok: false }])
   })
 
   it('error=access_denied → 拒绝,不换 token', async () => {
     const { k } = await boot()
-    const { r } = await login(k, { code: undefined, error: 'access_denied' })
+    const { b, r } = await login(k, { code: undefined, error: 'access_denied' })
     expect(r.status).toBe(400)
     expect(auth.st.tokenReqs).toHaveLength(0)
+    expect(ends(k)).toEqual([{ flowId: b.flowId, ok: false }])
   })
 
   it('首次注册回调缺 client_id → 拒绝', async () => {
@@ -247,6 +261,7 @@ describe('model-chatgpt 登录', () => {
     const { b, r } = await login(k, { client_id: undefined, code: 'code-2' })
     expect(b.p.get('client_id')).toBe('oaiapp_1')
     expect(b.p.get('id_token_hint')).toBe(auth.st.idTokens[0])
+    expect(b.authUrl).not.toContain(auth.st.idTokens[0])
     expect(b.p.has('agent_name_hint')).toBe(false)
     expect(r.text).toBe('已完成')
     expect(auth.st.tokenReqs[1].get('client_id')).toBe('oaiapp_1')
@@ -340,6 +355,7 @@ describe('model-chatgpt 登录', () => {
     await cb
     await sleep(200)
     expect(await accounts(k)).toHaveLength(0)
+    expect(ends(k)).toEqual([{ flowId: b.flowId, ok: false }])
   })
 
   it('处理中关闭内核 → 监听关闭', async () => {
@@ -357,11 +373,14 @@ describe('model-chatgpt 登录', () => {
   it('并发 begin → 串行,前一个的监听被关闭', async () => {
     const { k } = await boot()
     const [x, y] = await Promise.all([k.handle('auth.chatgpt.begin', {}), k.handle('auth.chatgpt.begin', {})]) as Begin[]
-    const rx = new URL(x.authUrl).searchParams.get('redirect_uri')!
-    const ry = new URL(y.authUrl).searchParams.get('redirect_uri')!
+    const rx = callbackOf(x.authUrl)
+    const ry = callbackOf(y.authUrl)
     expect(await portClosed(rx)).toBe(true)
     expect(await portClosed(ry)).toBe(false)
+    // 被顶替的那个结束于 ok:false
+    expect(ends(k)).toEqual([{ flowId: x.flowId, ok: false }])
     await k.handle('auth.chatgpt.cancel', { flowId: y.flowId })
+    expect(ends(k)).toEqual([{ flowId: x.flowId, ok: false }, { flowId: y.flowId, ok: false }])
   })
 
   it('以令牌响应的 scope 为准:回调 scope 含 direct 但令牌响应不含 → not_authorized', async () => {
@@ -400,11 +419,54 @@ describe('model-chatgpt 登录', () => {
     await k.handle('auth.chatgpt.cancel', { flowId: b.flowId })
   })
 
+  it('begin 只回本机一次性 /auth/start:302 到授权页,第二次 / 错 flow → 404;令牌不在 authUrl 里', async () => {
+    const { k, svc } = await boot()
+    await login(k)
+    svc.setState((await accounts(k))[0].id, 'needs_login')
+    const r = (await k.handle('auth.chatgpt.begin', {})) as Begin
+    const u = new URL(r.authUrl)
+    expect(`${u.origin}${u.pathname}`).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/auth\/start$/)
+    expect([...u.searchParams.keys()]).toEqual(['flow'])
+    expect(u.searchParams.get('flow')).toBe(r.flowId)
+    expect(r.authUrl).not.toMatch(/id_token|eyJ/)
+    const bad = new URL(r.authUrl)
+    bad.searchParams.set('flow', 'other')
+    expect((await openStart(bad.href)).status).toBe(404)
+    const first = await openStart(r.authUrl)
+    expect(first.status).toBe(302)
+    expect(new URL(first.location!).pathname).toBe('/api/accounts/authorize')
+    expect(new URL(first.location!).searchParams.get('id_token_hint')).toBe(auth.st.idTokens[0])
+    expect(await openStart(r.authUrl)).toEqual({ status: 404, location: null })
+    await k.handle('auth.chatgpt.cancel', { flowId: r.flowId })
+  })
+
+  it('新账号:先写凭据再公布;登录后列出模型,可设为默认', async () => {
+    const { k } = await boot()
+    // account.updated 发出的那一刻凭据文件里已有该账号
+    const credsAtAnnounce: boolean[] = []
+    k.events.onAppend(e => {
+      if (e.type !== 'account.updated') return
+      const id = (e.payload as { account: AccountView }).account.id
+      credsAtAnnounce.push(readFileSync(join(dir, 'credentials.json'), 'utf8').includes(`model-chatgpt/account/${id}/oauth`))
+    })
+    const { b } = await login(k)
+    const [a] = await accounts(k)
+    expect(credsAtAnnounce[0]).toBe(true)
+    await expect.poll(async () => (await accounts(k))[0].models?.map(m => m.id)).toEqual(['gpt-x'])
+    expect(api.st.calls.find(c => c.path === '/v1/models')?.headers.authorization).toBe('Bearer at-1')
+    expect(updates(k).at(-1)).toMatchObject({ id: a.id, models: [expect.objectContaining({ id: 'gpt-x', name: 'GPT X' })] })
+    expect(ends(k)).toEqual([{ flowId: b.flowId, ok: true, accountId: a.id }])
+    expect(await k.handle('models.setDefault', { accountId: a.id, modelId: 'gpt-x' })).toEqual({ ok: true })
+    expect(((await k.handle('models.catalog', {})) as { default?: unknown }).default).toEqual({ accountId: a.id, modelId: 'gpt-x' })
+    expect(JSON.stringify(k.events.tail(200))).not.toMatch(/at-1|rt-1/)
+  })
+
   it('超时 → 自动关闭监听', async () => {
     const { k } = await boot({ flowTimeoutMs: 50 })
     const b = await begin(k)
     await new Promise(r => setTimeout(r, 120))
     expect(await portClosed(b.redirect)).toBe(true)
+    expect(ends(k)).toEqual([{ flowId: b.flowId, ok: false }])
   })
 })
 

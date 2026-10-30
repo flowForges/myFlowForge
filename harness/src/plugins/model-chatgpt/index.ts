@@ -1,5 +1,6 @@
 // model-chatgpt:Sign in with ChatGPT(套餐共享)——登录、令牌刷新 / 吊销、Responses 推理(spec §6.4 / §9)
-// ★code / token / authUrl(可能含 id_token_hint)一律不进日志、事件、RPC 结果之外的地方
+// ★code / token / 授权页 URL(可能含 id_token_hint)一律不进日志、事件、RPC 结果、进程参数;
+//   begin 只回本机一次性地址 /auth/start?flow=…,由回调监听 302 到授权页
 import { randomUUID } from 'node:crypto'
 import type { Plugin } from '../../kernel/pluginHost'
 import { ModelFailure } from '../../lib/models/http'
@@ -13,7 +14,7 @@ import { verifyIdToken } from './jwks'
 import { manifest } from './manifest'
 import {
   API_BASE, AUTH_BASE, authorizeUrl, DIRECT_SCOPE, fetchJwks, hostId, listenCallback, type OAuthRecord, pkce, postToken,
-  randomToken, REGISTRATION_CLIENT, RESOURCE, revoke, TokenError, type TokenSet,
+  randomToken, REGISTRATION_CLIENT, RESOURCE, revoke, START_PATH, TokenError, type TokenSet,
 } from './oauth'
 import { encodeChatgptBody, sanitizeChatgptBody } from './sanitize'
 
@@ -169,7 +170,7 @@ export function createModelChatgpt(opts: ChatgptOpts = {}): Plugin {
         try {
           next = await postToken(authBase, { grant_type: 'refresh_token', client_id: rec.clientId, refresh_token: rec.refreshToken!, resource: RESOURCE }, t)
         } catch (err) {
-          if (genOf(id) !== g) throw new Superseded()
+          if (genOf(id) !== g || logins.has(id)) throw new Superseded()
           ctx.log.warn('token refresh failed', { failure: errKind(err) })
           const te = err instanceof TokenError ? err : new TokenError(0)
           if (te.code && RELOGIN_CODES.has(te.code)) {
@@ -188,7 +189,7 @@ export function createModelChatgpt(opts: ChatgptOpts = {}): Plugin {
           if (te.status >= 500) throw fail('unavailable', 'ChatGPT token refresh failed', true)
           throw fail('auth', 'ChatGPT token refresh rejected')
         }
-        if (genOf(id) !== g) throw new Superseded() // 期间重新登录过:不覆盖新凭据
+        if (genOf(id) !== g || logins.has(id)) throw new Superseded() // 期间重新登录过 / 正在写登录凭据:不覆盖新凭据
         const updated: OAuthRecord = { ...rec, accessToken: next.accessToken, refreshToken: next.refreshToken ?? rec.refreshToken, expiresAt: next.expiresAt, scopes: next.scopes ?? rec.scopes }
         if (next.earliestRefreshAt !== undefined) updated.earliestRefreshAt = next.earliestRefreshAt
         else delete updated.earliestRefreshAt
@@ -293,10 +294,22 @@ export function createModelChatgpt(opts: ChatgptOpts = {}): Plugin {
         const flowId = randomUUID()
         let redirectUri = ''
         let busy = false
+        let authorize: string | undefined // 授权页地址:/auth/start 取走一次即作废
         const ac = new AbortController() // 取消 / 超时 / 停用:中止进行中的换 token,且不再写账号
+        let ended = false
+        /** 每个 flow 恰好一次 auth.chatgpt.ended */
+        const end = (ok: boolean, accountId?: string) => {
+          if (ended) return
+          ended = true
+          try {
+            ctx.append({ type: 'auth.chatgpt.ended', payload: { flowId, ok, ...(accountId && { accountId }) } })
+          } catch (err) {
+            ctx.log.warn('event append failed', { failure: errKind(err) })
+          }
+        }
 
-        /** 成功返回 undefined,否则返回给浏览器的短错误 */
-        async function complete(q: URLSearchParams): Promise<string | undefined> {
+        /** 成功返回账号 id,否则返回给浏览器的短错误 */
+        async function complete(q: URLSearchParams): Promise<{ accountId: string } | string> {
           if (q.get('error')) return '授权未完成'
           const code = q.get('code')
           if (!code) return '缺少授权码'
@@ -341,18 +354,21 @@ export function createModelChatgpt(opts: ChatgptOpts = {}): Plugin {
             const cur = chatgptAccounts().find(a => a.id === existing.id)?.state
             if (cur === nextState) models.announce(existing.id)
             else models.setState(existing.id, nextState)
-            return undefined
+            void models.refreshModels(id)
+            return { accountId: id }
           }
+          // 新账号:先写凭据再建账号(建账号即对外公布,并会用凭据列模型)
           const label = typeof claims.email === 'string' && claims.email ? claims.email : undefined
-          const view = await models.addAccount({ presetId: PRESET, ...(label && { label }) })
+          const id = randomUUID()
+          await write(id, record)
           try {
-            await write(view.id, record)
+            await models.addAccount({ presetId: PRESET, ...(label && { label }) }, { id })
           } catch (err) {
-            await models.removeAccount(view.id).catch(() => {})
+            await ctx.secrets.delete(keyName(id)).catch(() => {})
             throw err
           }
-          if (nextState !== 'ok') models.setState(view.id, nextState)
-          return undefined
+          if (nextState !== 'ok') models.setState(id, nextState)
+          return { accountId: id }
         }
 
         // 处理中仍留在 flows 里:取消 / 新的 begin / 停用都能关掉监听;回复发完或浏览器断开后监听自行关闭
@@ -361,31 +377,44 @@ export function createModelChatgpt(opts: ChatgptOpts = {}): Plugin {
           if (busy) return { status: 409, text: '登录处理中' }
           busy = true
           try {
-            const err = await complete(q)
-            return err ? { status: 400, text: err, close: true } : { status: 200, text: '已完成', close: true }
+            const r = await complete(q)
+            if (typeof r === 'string') {
+              end(false)
+              return { status: 400, text: r, close: true }
+            }
+            end(true, r.accountId)
+            return { status: 200, text: '已完成', close: true }
           } catch (err) {
             ctx.log.warn('chatgpt login failed', { failure: errKind(err) })
+            end(false)
             return { status: 400, text: '登录失败', close: true }
           } finally {
             clearTimeout(timer)
             flows.delete(flowId)
           }
+        }, q => {
+          if (q.get('flow') !== flowId) return undefined
+          const to = authorize
+          authorize = undefined
+          return to
         })
         redirectUri = `http://127.0.0.1:${listener.port}/auth/callback`
+        /** 取消 / 超时 / 被新登录顶替 / 停用 */
         const close = () => {
           clearTimeout(timer)
           flows.delete(flowId)
           ac.abort()
           listener.close()
+          end(false)
         }
         const timer = setTimeout(close, flowTimeoutMs)
         timer.unref()
         flows.set(flowId, close)
-        const authUrl = authorizeUrl(authBase, {
+        authorize = authorizeUrl(authBase, {
           redirectUri, state, nonce, challenge, hostId: host,
           ...(target && { reauth: { clientId: target.record.clientId, idToken: target.record.idToken, consent: target.consent } }),
         })
-        return { flowId, authUrl }
+        return { flowId, authUrl: `http://127.0.0.1:${listener.port}${START_PATH}?${new URLSearchParams({ flow: flowId })}` }
       }
 
       // begin 串行:后一个先关掉前一个的监听再开始

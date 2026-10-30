@@ -16,6 +16,7 @@ export const EVENT_TYPES = [
   'account.updated',
   'message.reasoning.delta',
   'turn.usage',
+  'auth.chatgpt.ended',
 ] as const
 
 export const EventTypeSchema = z.enum(EVENT_TYPES)
@@ -36,6 +37,10 @@ export type AccountUpdatedPayload = z.infer<typeof AccountUpdatedPayloadSchema>
 
 export const ReasoningDeltaPayloadSchema = z.object({ turnId: z.string(), text: z.string() })
 export type ReasoningDeltaPayload = z.infer<typeof ReasoningDeltaPayloadSchema>
+
+/** ChatGPT 登录流结束(成功 / 失败 / 超时 / 取消 / 被新登录顶替),每个 flow 恰好一次 */
+export const ChatgptEndedPayloadSchema = z.object({ flowId: z.string(), ok: z.boolean(), accountId: z.string().optional() })
+export type ChatgptEndedPayload = z.infer<typeof ChatgptEndedPayloadSchema>
 
 export const TurnUsagePayloadSchema = z.object({
   turnId: z.string(),
