@@ -30,6 +30,15 @@ describe('redact', () => {
     ['pem inside JSON', `{"c":"${PEM.replace(/\n/g, '\\n')}"}`, '{"c":"***"}'],
     ['two keys', 'sk-aaaaaaaaaaaaaaaaaaaa and AKIAABCDEFGHIJKLMNOP', '*** and ***'],
     ['plain text', 'nothing secret here', 'nothing secret here'],
+    // 前缀前须是非字母数字 / 开头 / JSON 转义 / URL 编码:普通连字符标识符不被误打码
+    ['kebab identifiers untouched', 'risk-assessment-framework disk-usage-analyzer-tool task-scheduler-service-v2', 'risk-assessment-framework disk-usage-analyzer-tool task-scheduler-service-v2'],
+    ['alnum before AKIA untouched', 'XAKIAABCDEFGHIJKLMNOP', 'XAKIAABCDEFGHIJKLMNOP'],
+    ['after =', 'KEY=sk-abcdefghijklmnopqrstu', 'KEY=***'],
+    ['after quote', '"sk-abcdefghijklmnopqrstu"', '"***"'],
+    ['after JSON \\t', 'a\\tghp_abcdefghijklmnopqrstuvwxyz0123456789', 'a\\t***'],
+    ['after JSON \\u escape', 'a\\u0020sk-abcdefghijklmnopqrstu', 'a\\u0020***'],
+    ['after URL-encoded =', 'key%3Dsk-abcdefghijklmnopqrstu', 'key%3D***'],
+    ['after underscore', 'MY_xoxb-123456789012-abcdefghijkl', 'MY_***'],
   ])('%s', (_name, input, out) => {
     expect(redact(input)).toBe(out)
   })

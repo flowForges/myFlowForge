@@ -32,7 +32,7 @@ export interface Tool {
   description: string
   /** JSON Schema */
   parameters: object
-  /** 权限请求:由参数算出动作与资源;返回多个时全部要放行 */
+  /** 权限请求:由参数算出动作与资源;返回多个时全部要放行;空数组 = 拒绝(tools 服务不执行) */
   permission(args: unknown, ctx: ToolContext): PermissionRequest[]
   run(args: unknown, ctx: ToolContext): Promise<ToolResult>
 }

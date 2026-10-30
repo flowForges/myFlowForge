@@ -9,8 +9,9 @@ import type { PermissionGate } from '../../kernel/permissionGate'
 import type { Plugin } from '../../kernel/pluginHost'
 import type { Sessions } from '../../kernel/sessions'
 import { OUTSIDE, resolveToolPath } from '../../lib/fs/paths'
+import { nullLogger } from '../../kernel/log'
 import { argsOf, type Tool, type ToolContext, type ToolResult, type ToolsService } from '../../lib/tools/types'
-import toolsRegistry from './index'
+import toolsRegistry, { ToolsRegistry } from './index'
 
 let root: string
 let dataDir: string
@@ -43,6 +44,9 @@ const PathArgs = z.object({ path: z.string() })
 const WriteArgs = z.object({ path: z.string(), content: z.string() })
 const ExecArgs = z.object({ command: z.string() })
 const TextArgs = z.object({ text: z.string() })
+
+/** 不碰文件的假工具也要声明请求:空数组 = 拒绝 */
+const cwdRead = (_a: unknown, ctx: ToolContext) => [{ actor: 'tools', action: 'read', resource: ctx.cwd }]
 
 /** 解析失败(OUTSIDE)原样交给权限门,门会拒 */
 const resolved = (ctx: ToolContext, p: string) => resolveToolPath(ctx.cwd, p)
@@ -80,7 +84,7 @@ function fakeTools(probe: Probe): Plugin {
     },
     {
       name: 'boom', description: '', parameters: {},
-      permission: () => [],
+      permission: cwdRead,
       async run() {
         probe.runs.push('boom')
         throw new Error('kaput')
@@ -88,14 +92,14 @@ function fakeTools(probe: Probe): Plugin {
     },
     {
       name: 'big', description: '', parameters: {},
-      permission: () => [],
+      permission: cwdRead,
       async run() {
         return ok('H'.repeat(15_000) + 'M'.repeat(10_000) + 'T'.repeat(15_000))
       },
     },
     {
       name: 'echo', description: '', parameters: {},
-      permission: () => [],
+      permission: cwdRead,
       async run(a) {
         return ok(`got ${argsOf(TextArgs, a).text}`)
       },
@@ -158,8 +162,8 @@ describe('tools-registry', () => {
     const { probe } = await boot()
     expect(probe.tools!.list().map(t => t.name)).toContain('fwrite')
     expect(probe.tools!.list(t => t.name === 'echo').map(t => t.name)).toEqual(['echo'])
-    const off = probe.tools!.register({ name: 'tmp', description: '', parameters: {}, permission: () => [], run: async () => ({ content: '' }) })
-    expect(() => probe.tools!.register({ name: 'tmp', description: '', parameters: {}, permission: () => [], run: async () => ({ content: '' }) })).toThrow()
+    const off = probe.tools!.register({ name: 'tmp', description: '', parameters: {}, permission: cwdRead, run: async () => ({ content: '' }) })
+    expect(() => probe.tools!.register({ name: 'tmp', description: '', parameters: {}, permission: cwdRead, run: async () => ({ content: '' }) })).toThrow()
     off()
     expect(probe.tools!.list().map(t => t.name)).not.toContain('tmp')
   })
@@ -382,7 +386,7 @@ describe('tools-registry', () => {
     const b = await boot()
     const key = 'AKIAABCDEFGHIJKLMNOP'
     const t = b.probe.tools!
-    const off = t.register({ name: 'bigsecret', description: '', parameters: {}, permission: () => [], run: async () => ({ content: key + 'x'.repeat(40_000) + key }) })
+    const off = t.register({ name: 'bigsecret', description: '', parameters: {}, permission: cwdRead, run: async () => ({ content: key + '\n' + 'x'.repeat(40_000) + '\n' + key }) })
     const { r, ctx } = await b.call('bigsecret', {})
     off()
     expect(r.content.startsWith(key)).toBe(true)
@@ -396,7 +400,7 @@ describe('tools-registry', () => {
     const body = Array.from({ length: 200 }, (_, i) => `KEYBODY${String(i).padStart(4, '0')}${'Q'.repeat(50)}`).join('\n')
     const pem = `-----BEGIN RSA PRIVATE KEY-----\n${body}\n-----END RSA PRIVATE KEY-----`
     const content = 'a'.repeat(20_000) + pem + 'z'.repeat(5_000)
-    const off = b.probe.tools!.register({ name: 'pem', description: '', parameters: {}, permission: () => [], run: async () => ({ content }) })
+    const off = b.probe.tools!.register({ name: 'pem', description: '', parameters: {}, permission: cwdRead, run: async () => ({ content }) })
     const { r, ctx } = await b.call('pem', {})
     off()
     expect(r.content).toContain('KEYBODY0199') // 模型看到的结尾里有私钥正文
@@ -404,6 +408,133 @@ describe('tools-registry', () => {
     const logged = b.ended(ctx.callId).content
     expect(logged).not.toContain('KEYBODY')
     expect(JSON.stringify(b.k.events.after(0))).not.toContain('KEYBODY')
+  })
+
+  describe('review fixes', () => {
+    const reg = (b: Awaited<ReturnType<typeof boot>>, t: Partial<Tool> & { name: string }) =>
+      b.probe.tools!.register({ description: '', parameters: {}, permission: cwdRead, run: async () => ({ content: 'ok' }), ...t })
+
+    it('I1: permission() returning [] → isError, run not called, events paired', async () => {
+      const b = await boot()
+      const runs: string[] = []
+      reg(b, { name: 'empty', permission: () => [], run: async () => { runs.push('empty'); return { content: 'ran' } } })
+      const { r, ctx } = await b.call('empty', {})
+      expect(r.isError).toBe(true)
+      expect(runs).toEqual([])
+      b.expectPair(ctx.callId, 'empty')
+    })
+
+    it('M1: spilled output whose redaction shrinks it still keeps the marker and path in the event', async () => {
+      const b = await boot()
+      const body = Array.from({ length: 400 }, (_, i) => `KEYBODY${String(i).padStart(4, '0')}${'Q'.repeat(50)}`).join('\n')
+      const content = 'a'.repeat(8_000) + `-----BEGIN PRIVATE KEY-----\n${body}\n-----END PRIVATE KEY-----` + 'z'.repeat(8_000)
+      expect(content.length).toBeGreaterThan(30_000)
+      reg(b, { name: 'shrink', run: async () => ({ content }) })
+      const { r, ctx } = await b.call('shrink', {})
+      const path = /完整输出:(.+?)\]…/.exec(r.content)![1]
+      const logged = b.ended(ctx.callId).content
+      expect(logged).toContain(`完整输出:${path}]`)
+      expect(logged).not.toContain('KEYBODY')
+    })
+
+    it('M2: error message and approval summary are capped at 2 000 chars', async () => {
+      const b = await boot()
+      reg(b, { name: 'loud', run: async () => { throw new Error('E'.repeat(100_000)) } })
+      const { r, ctx } = await b.call('loud', {})
+      expect(r.isError).toBe(true)
+      expect(r.content.length).toBeLessThanOrEqual(2000)
+      expect(b.ended(ctx.callId).content.length).toBeLessThanOrEqual(2000)
+      const p = b.call('fexec', { command: 'npm test ' + 'x'.repeat(50_000) })
+      await waitFor(() => b.k.events.after(0).some(e => e.type === 'approval.requested'))
+      const ev = b.k.events.after(0).find(e => e.type === 'approval.requested')!.payload as { approvalId: string; summary: string }
+      expect(ev.summary.length).toBeLessThanOrEqual(2000)
+      expect(ev.summary.startsWith('npm test x')).toBe(true)
+      await b.k.handle('approval.respond', { approvalId: ev.approvalId, decision: 'deny' })
+      await p
+    })
+
+    it('M3: colliding callIds never overwrite an earlier spill', async () => {
+      const b = await boot()
+      let n = 0
+      reg(b, { name: 'bigN', run: async () => ({ content: String(++n).repeat(40_000) }) })
+      const pathOf = (c: string) => /完整输出:(.+?)\]…/.exec(c)![1]
+      const p1 = pathOf((await b.call('bigN', {}, { ...b.ctxOf(), callId: 'a/b' })).r.content)
+      const p2 = pathOf((await b.call('bigN', {}, { ...b.ctxOf(), callId: 'a_b' })).r.content)
+      const p3 = pathOf((await b.call('bigN', {}, { ...b.ctxOf(), callId: 'a_b' })).r.content)
+      expect(new Set([p1, p2, p3]).size).toBe(3)
+      expect(readFileSync(p1, 'utf8')).toBe('1'.repeat(40_000))
+      expect(readFileSync(p2, 'utf8')).toBe('2'.repeat(40_000))
+      expect(readFileSync(p3, 'utf8')).toBe('3'.repeat(40_000))
+    })
+
+    it('M5: an unknown tool name that looks like a key is redacted in events', async () => {
+      const b = await boot()
+      const key = 'sk-abcdefghijklmnopqrstuvwxyz'
+      const { ctx } = await b.call(key, {})
+      expect(JSON.stringify(b.k.events.after(0))).not.toContain(key)
+      expect((b.toolEvents(ctx.callId)[0].payload as { name: string }).name).toBe('***')
+      const long = 'n'.repeat(5000)
+      const { ctx: c2 } = await b.call(long, {})
+      expect((b.toolEvents(c2.callId)[0].payload as { name: string }).name.length).toBeLessThanOrEqual(200)
+    })
+
+    it('M6: non-string rawArgs (even Object.create(null)) → isError, no throw', async () => {
+      const b = await boot()
+      const r = await b.probe.tools!.call('echo', Object.create(null) as string, b.ctxOf())
+      expect(r.isError).toBe(true)
+    })
+
+    it('M6: all gate checks run before any approval: ask + deny → deny, nobody asked', async () => {
+      const b = await boot()
+      const runs: string[] = []
+      reg(b, {
+        name: 'mixed',
+        permission: (_a, ctx) => [
+          { actor: 'tools', action: 'exec', resource: 'npm test' },
+          { actor: 'tools', action: 'write', resource: resolveToolPath(ctx.cwd, join(root, 'out.txt')) },
+        ],
+        run: async () => { runs.push('mixed'); return { content: 'ran' } },
+      })
+      const { r, ctx } = await b.call('mixed', {})
+      expect(r.isError).toBe(true)
+      expect(r.content).toMatch(/^拒绝:write /)
+      expect(b.k.events.after(0).filter(e => e.type === 'approval.requested')).toHaveLength(0)
+      expect(runs).toEqual([])
+      b.expectPair(ctx.callId, 'mixed')
+    })
+
+    it('spill failure falls back to 完整输出未能保存 without throwing', async () => {
+      const b = await boot()
+      const file = join(root, 'not-a-dir')
+      writeFileSync(file, '')
+      const { r } = await b.call('big', {}, { ...b.ctxOf(), spillDir: join(file, 'spill') })
+      expect(r.isError).toBeUndefined()
+      expect(r.content).toContain('完整输出未能保存')
+      expect(r.content.length).toBeLessThan(25_000)
+    })
+
+    it('a 40 000-char isError result spills and keeps isError', async () => {
+      const b = await boot()
+      reg(b, { name: 'bigerr', run: async () => ({ content: 'e'.repeat(40_000), isError: true }) })
+      const { r, ctx } = await b.call('bigerr', {})
+      expect(r.isError).toBe(true)
+      expect(r.content).toContain('完整输出:')
+      expect(b.ended(ctx.callId)).toMatchObject({ ok: false, isError: true })
+    })
+
+    it('tool.started cannot be written → run is not called', async () => {
+      const runs: string[] = []
+      const t = new ToolsRegistry({
+        gate: { check: () => 'allow' },
+        approvals: { request: async () => 'allow' },
+        append: () => { throw new Error('db closed') },
+        log: nullLogger,
+      })
+      t.register({ name: 'x', description: '', parameters: {}, permission: cwdRead, run: async () => { runs.push('x'); return { content: 'ok' } } })
+      const r = await t.call('x', '{}', { sessionId: 's', turnId: 't', callId: 'c', cwd, spillDir: join(root, 'sp'), signal: new AbortController().signal })
+      expect(r.isError).toBe(true)
+      expect(runs).toEqual([])
+    })
   })
 
   it('argsPreview is capped at 2 000 chars', async () => {
