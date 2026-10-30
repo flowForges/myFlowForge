@@ -6,6 +6,7 @@ import type { ServiceRegistry } from './services'
 import { EffectScope } from './effects'
 import type { Logger } from './log'
 import type { RpcRegistry } from './rpcRegistry'
+import { scopedSecrets, type SecretStore } from './secrets/secretStore'
 
 export interface PluginManifest {
   id: string
@@ -24,6 +25,8 @@ export interface PluginContext {
   log: Logger
   config: Record<string, unknown>
   dataDir: string
+  /** 只能读写本插件的键(内核自动加 `<pluginId>/` 前缀);没有列举接口 */
+  secrets: { get(k: string): Promise<string | undefined>; set(k: string, v: string): Promise<void>; delete(k: string): Promise<void> }
   append(e: Omit<KernelEvent, 'seq' | 'ts'>): KernelEvent
 }
 
@@ -46,6 +49,7 @@ export interface PluginHostDeps {
   log: Logger
   dataDir: string
   injectTimeoutMs?: number
+  secrets: SecretStore
 }
 
 export class PluginHost {
@@ -104,6 +108,7 @@ export class PluginHost {
         log: pluginLog,
         config: {},
         dataDir,
+        secrets: scopedSecrets(this.deps.secrets, id),
         append,
       }
       await p.activate(ctx)

@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { createKernel, type Kernel } from './kernel'
 import { EventBus } from './events'
 import { nullLogger } from './log'
+import { openSecretStore } from './secrets/secretStore'
 import { PluginHost, type Plugin, type PluginContext } from './pluginHost'
 import { ServiceRegistry } from './services'
 import { RpcError } from './rpcError'
@@ -25,7 +26,7 @@ const plugin = (id: string, activate: (ctx: PluginContext) => void | Promise<voi
   activate,
 })
 async function boot(plugins: Plugin[]) {
-  const k = await createKernel({ dataDir: dir, plugins })
+  const k = await createKernel({ dataDir: dir, plugins, secrets: { osBackend: false } })
   kernels.push(k)
   return k
 }
@@ -163,7 +164,7 @@ describe('plugin RPC via kernel.handle', () => {
     const rpc = new RpcRegistry()
     const host = new PluginHost({
       services: new ServiceRegistry(), events: new EventBus(), rpc, log: nullLogger, dataDir: dir,
-      append: e => ({ ...e, seq: 1, ts: 0 }),
+      append: e => ({ ...e, seq: 1, ts: 0 }), secrets: await openSecretStore({ dataDir: dir, osBackend: false }),
     })
     await host.activateAll([plugin('p', ctx => { ctx.rpc.register('models.catalog', async () => ({})) })], [])
     expect(rpc.get('models.catalog')).toBeDefined()

@@ -30,6 +30,7 @@ export const StatusResultSchema = z.object({
       error: z.string().optional(),
     }),
   ),
+  secretsBackend: SecretsBackendSchema.optional(),
 })
 export type StatusResult = z.infer<typeof StatusResultSchema>
 

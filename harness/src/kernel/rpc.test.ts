@@ -17,7 +17,7 @@ let closers: Array<() => unknown> = []
 const TOKEN = 'tok'
 beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), 'mffai-rpc-'))
-  kernel = await createKernel({ dataDir: dir, plugins: [loopEcho] })
+  kernel = await createKernel({ dataDir: dir, plugins: [loopEcho], secrets: { osBackend: false } })
   closers = [() => kernel.close()]
 })
 afterEach(async () => {

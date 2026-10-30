@@ -43,7 +43,9 @@ export async function runWorker(): Promise<void> {
   process.on('disconnect', () => void stop('supervisor gone'))
 
   startup = (async () => {
-    kernel = await createKernel({ dataDir: dir, plugins: BUILTIN_PLUGINS, log })
+    // MFFAI_SECRETS_PLAINTEXT=1:端到端测试用,不碰系统钥匙串
+    const secrets = { osBackend: process.env.MFFAI_SECRETS_PLAINTEXT !== '1' }
+    kernel = await createKernel({ dataDir: dir, plugins: BUILTIN_PLUGINS, log, secrets })
     const k = kernel
     server = await startRpcServer({
       addr: paths.workerAddr,

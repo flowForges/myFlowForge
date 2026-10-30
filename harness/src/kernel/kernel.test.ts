@@ -21,7 +21,7 @@ afterEach(async () => {
 })
 
 async function boot(plugins: Plugin[] = [loopEcho], injectTimeoutMs?: number) {
-  const k = await createKernel({ dataDir: dir, plugins, injectTimeoutMs })
+  const k = await createKernel({ dataDir: dir, plugins, injectTimeoutMs, secrets: { osBackend: false } })
   kernels.push(k)
   return k
 }
@@ -94,7 +94,7 @@ describe('kernel', () => {
       manifest: { id: 'needy', version: '1', kernel: '*', inject: ['missing'] },
       activate() {},
     }
-    const p = createKernel({ dataDir: dir, plugins: [needy] })
+    const p = createKernel({ dataDir: dir, plugins: [needy], secrets: { osBackend: false } })
     await vi.advanceTimersByTimeAsync(10_001)
     const k = await p
     kernels.push(k)
@@ -115,6 +115,39 @@ describe('kernel', () => {
     }
     const k = await boot([provider, user])
     expect(k.status().plugins.map(p => p.state)).toEqual(['active', 'active'])
+  })
+
+  it('status reports secretsBackend; ctx.secrets is scoped per plugin', async () => {
+    let seenByB: string | undefined = 'unset'
+    const a: Plugin = {
+      manifest: { id: 'pa', version: '1', kernel: '*' },
+      activate: async ctx => { await ctx.secrets.set('token', 'a-secret') },
+    }
+    const b: Plugin = {
+      manifest: { id: 'pb', version: '1', kernel: '*' },
+      activate: async ctx => { seenByB = await ctx.secrets.get('token') ?? (await ctx.secrets.get('../pa/token')) },
+    }
+    const k = await boot([a, b])
+    expect(k.status().secretsBackend).toBe('plaintext-file')
+    expect(k.status().plugins.map(p => p.state)).toEqual(['active', 'active'])
+    expect(seenByB).toBeUndefined()
+    const { readFileSync } = await import('node:fs')
+    expect(Object.keys(JSON.parse(readFileSync(join(dir, 'credentials.json'), 'utf8')))).toEqual(['pa/token'])
+    // 密钥不进事件日志与 RPC 结果
+    expect(JSON.stringify(k.events.after(0))).not.toContain('a-secret')
+    expect(JSON.stringify(await k.handle('status', {}))).not.toContain('a-secret')
+  })
+
+  it('keychain hangs (prompt / locked) → secrets unavailable, kernel still starts', async () => {
+    const { writeFileSync } = await import('node:fs')
+    writeFileSync(join(dir, 'credentials.enc'), 'x')
+    const hang = () => new Promise<never>(() => {})
+    const t0 = Date.now()
+    const k = await createKernel({ dataDir: dir, plugins: [loopEcho], secrets: { platform: 'darwin', exec: hang, timeoutMs: 200 } })
+    kernels.push(k)
+    expect(Date.now() - t0).toBeLessThan(3000)
+    expect(k.status()).toMatchObject({ state: 'running', secretsBackend: 'unavailable' })
+    expect(k.status().plugins).toEqual([{ id: 'loop-echo', state: 'active' }])
   })
 
   it('permission gate denies non-kernel actors', () => {

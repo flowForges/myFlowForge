@@ -19,6 +19,7 @@ import { PluginHost, type Plugin } from './pluginHost'
 import { Receipts } from './receipts'
 import { RpcError } from './rpcError'
 import { RpcRegistry } from './rpcRegistry'
+import { openSecretStore, type OpenSecretStoreOpts } from './secrets/secretStore'
 import { ServiceRegistry } from './services'
 import { HARNESS_VERSION } from './version'
 
@@ -37,6 +38,8 @@ export interface KernelOpts {
   plugins: Plugin[]
   log?: Logger
   injectTimeoutMs?: number
+  /** 凭据存储选项;必填,避免测试误用真钥匙串(测试传 `{ osBackend: false }` 或注入 exec) */
+  secrets: Omit<OpenSecretStoreOpts, 'dataDir' | 'log'>
 }
 
 const ERR_METHOD_NOT_FOUND = -32601
@@ -60,8 +63,10 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   const append = (e: Omit<KernelEvent, 'seq' | 'ts'>) => eventLog.append(e)
   const config = loadConfig(join(opts.dataDir, 'config.json'))
   const rpc = new RpcRegistry()
+  // 后端故障不抛错:状态为 unavailable / unreadable,内核照常启动
+  const secrets = await openSecretStore({ ...opts.secrets, dataDir: opts.dataDir, log })
   const host = new PluginHost({
-    services, events: bus, rpc, append, log, dataDir: opts.dataDir, injectTimeoutMs: opts.injectTimeoutMs,
+    services, events: bus, rpc, append, log, dataDir: opts.dataDir, injectTimeoutMs: opts.injectTimeoutMs, secrets,
   })
 
   let state: StatusResult['state'] = 'starting'
@@ -184,6 +189,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
       rssMb: Math.round(process.memoryUsage().rss / 1048576),
       version: HARNESS_VERSION,
       plugins: host.states(),
+      secretsBackend: secrets.backend,
     }
   }
 

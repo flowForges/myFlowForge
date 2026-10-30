@@ -53,7 +53,7 @@ const failing: Plugin = {
 }
 
 async function boot(ps: Plugin[]) {
-  kernel = await createKernel({ dataDir: dir, plugins: ps })
+  kernel = await createKernel({ dataDir: dir, plugins: ps, secrets: { osBackend: false } })
   closers.push(() => kernel.close())
   const addr = process.platform === 'win32' ? `\\\\.\\pipe\\mffai-acp-${process.pid}-${Date.now()}` : join(dir, 'w.sock')
   const s = await startRpcServer({ addr, token: 'tok', version: HARNESS_VERSION, events: kernel.events, handle: (m, p) => kernel.handle(m, p) })
