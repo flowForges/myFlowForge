@@ -1,4 +1,4 @@
-import { canonicalRoots, credentialRoots, isCredentialPath, isInside, isRootLike, OUTSIDE, resolveToolPath } from '../lib/fs/paths'
+import { canonicalRoots, credentialRoots, hasGitSegment, isCredentialPath, isInside, isRootLike, OUTSIDE, resolveToolPath } from '../lib/fs/paths'
 import type { PermissionRequest } from '../lib/tools/types'
 import type { SessionInfo } from './sessions'
 
@@ -24,6 +24,7 @@ export function decide(req: PermissionRequest, s: SessionInfo | undefined, env: 
     if (action === 'read' && env.spillDir && isInside(resource, env.spillDir, env.platform)) return 'allow'
     if (!s?.cwd || isRootLike(s.cwd, env.platform) || !isInside(resource, s.cwd, env.platform)) return 'deny'
     if (isCredentialPath(resource, [...env.roots, env.dataDir], env.platform)) return 'deny'
+    if (action === 'write' && hasGitSegment(resource, env.platform)) return 'deny' // .git/hooks、.git/config 能让 git status 跑代码
     return 'allow'
   }
   if (action === 'exec') {

@@ -179,6 +179,20 @@ export function canonicalRoots(roots: string[], opts: ResolveOpts = {}): string[
   return [...out]
 }
 
+/**
+ * 路径里是否有 `.git` 段(与黑名单同样折叠大小写);写进去能改 hooks / config,让只读 git 命令跑任意代码。
+ * win32 上 NTFS 忽略段尾的点和空格(`.git.`)、8.3 短名为 `GIT~1`,一并算;不可比较的路径按命中处理
+ */
+export function hasGitSegment(p: string, platform: NodeJS.Platform): boolean {
+  if (!plainAbs(p, platform)) return true
+  return segments(p, platform, true).some(seg => {
+    const s = seg.toLowerCase()
+    if (platform !== 'win32') return s === '.git'
+    const trimmed = s.replace(/[. ]+$/, '')
+    return trimmed === '.git' || /^git~\d+$/.test(trimmed)
+  })
+}
+
 /** 是否命中黑名单;不可比较的路径(NUL、win32 的 UNC 等)按命中处理 */
 export function isCredentialPath(p: string, roots: string[], platform: NodeJS.Platform): boolean {
   if (!plainAbs(p, platform)) return true

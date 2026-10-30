@@ -45,6 +45,14 @@ describe('decide (table)', () => {
     ['session without cwd: read', req('read', '/h/repo/a.txt'), noCwd, 'deny'],
     ['session without cwd: exec auto', req('exec', 'ls'), noCwd, 'allow'],
     ['unknown session: read', req('read', '/h/repo/a.txt'), undefined, 'deny'],
+    ['write .git/hooks', req('write', '/h/repo/.git/hooks/pre-commit'), auto, 'deny'],
+    ['write .git/config', req('write', '/h/repo/.git/config'), auto, 'deny'],
+    ['write .git file itself', req('write', '/h/repo/.git'), auto, 'deny'],
+    ['write nested .git', req('write', '/h/repo/vendor/x/.git/config'), auto, 'deny'],
+    ['read .git/config', req('read', '/h/repo/.git/config'), ask, 'allow'],
+    ['write .github is fine', req('write', '/h/repo/.github/workflows/ci.yml'), ask, 'allow'],
+    ['write .gitignore is fine', req('write', '/h/repo/.gitignore'), ask, 'allow'],
+    ['write x.git is fine', req('write', '/h/repo/x.git/a'), ask, 'allow'],
     ['NUL sentinel', req('read', resolveToolPath('/h/repo', 'a\0b', { platform: 'linux' })), ask, 'deny'],
   ]
   it.each(cases)('%s', (_name, r, s, want) => {
@@ -59,6 +67,16 @@ describe('decide (table)', () => {
     expect(decide(req('write', '/private/etc/x'), dataVol, d)).toBe('deny')
     expect(decide(req('write', '/System/Volumes/Data/private/etc/x'), dataVol, d)).toBe('deny')
     expect(decide(req('read', '/h/repo/a'), { ...ask, cwd: '/System/Volumes/Data/h/repo' }, d)).toBe('deny') // h 不是 firmlink 目录
+  })
+
+  it('darwin / win32: case and spelling variants of .git are denied for writes', () => {
+    const d = { ...env, roots: credentialRoots(home, 'darwin', {}), platform: 'darwin' as const }
+    for (const p of ['/h/repo/.GIT/hooks/x', '/h/repo/.Git/config']) expect(decide(req('write', p), ask, d)).toBe('deny')
+    const w = { roots: credentialRoots('C:\\Users\\u', 'win32', {}), dataDir: 'C:\\Users\\u\\.mff', platform: 'win32' as const }
+    const s: SessionInfo = { sessionId: 's1', cwd: 'C:\\repo', approvalMode: 'auto' }
+    for (const p of ['C:\\repo\\.GIT\\config', 'C:\\repo\\.git.\\hooks\\x', 'C:\\repo\\.git \\config', 'C:\\repo\\GIT~1\\config'])
+      expect(decide(req('write', p), s, w)).toBe('deny')
+    expect(decide(req('write', 'C:\\repo\\.github\\x'), s, w)).toBe('allow')
   })
 
   it('win32: other drive, UNC and ADS are denied', () => {

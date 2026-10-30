@@ -176,6 +176,9 @@ describe('Approvals', () => {
   it.each([
     ['git status', 'git push --force'],
     ['npm test', 'npm exec rimraf ~'],
+    ['npm install', 'npm install evil-pkg'],
+    ['git stash', 'git stash clear'],
+    ['git diff', 'git diff --output=/Users/x/.zshrc'],
   ])('allow_session on %j still asks for %j', async (allowed, other) => {
     const first = ask(allowed, { key: sessionKey(allowed) })
     approvals.respond(lastId(), 'allow_session')
