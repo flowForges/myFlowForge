@@ -75,7 +75,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   // 后端故障不抛错:状态为 unavailable / unreadable,内核照常启动
   const secrets = await openSecretStore({ ...opts.secrets, dataDir: opts.dataDir, log })
   const host = new PluginHost({
-    services, events: bus, rpc, append, log, dataDir: opts.dataDir, injectTimeoutMs: opts.injectTimeoutMs, secrets, config: configAccess,
+    services, events: bus, rpc, append, history: sid => eventLog.bySession(sid), log, dataDir: opts.dataDir, injectTimeoutMs: opts.injectTimeoutMs, secrets, config: configAccess,
   })
 
   let state: StatusResult['state'] = 'starting'
@@ -242,7 +242,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
         case 'session.create':
           return command(name, p.commandId, () => {
             const sessionId = randomUUID()
-            append({ type: 'session.created', sessionId, payload: { title: p.title } })
+            append({ type: 'session.created', sessionId, payload: { title: p.title, ...(p.model && { model: p.model }) } })
             return { result: { sessionId } }
           }).result
         case 'session.prompt':

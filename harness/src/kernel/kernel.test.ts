@@ -33,7 +33,7 @@ const waitFor = async (fn: () => boolean) => {
 
 describe('kernel', () => {
   it('builtin plugins in registration order', () => {
-    expect(BUILTIN_PLUGINS.map(p => p.manifest.id)).toEqual(['models-registry', 'model-openai', 'model-anthropic', 'loop-echo'])
+    expect(BUILTIN_PLUGINS.map(p => p.manifest.id)).toEqual(['models-registry', 'model-openai', 'model-anthropic', 'loop-direct', 'loop-echo'])
   })
 
   it('create + prompt runs the echo turn in order', async () => {
@@ -50,6 +50,20 @@ describe('kernel', () => {
     expect((evs[5].payload as { text: string }).text).toBe('echo: hi')
     const deltas = evs.filter(e => e.type === 'message.assistant.delta').map(e => (e.payload as { text: string }).text)
     expect(deltas.join('')).toBe('echo: hi')
+  })
+
+  it('ctx.events.history returns only that session\'s events in seq order', async () => {
+    let history: (sid: string) => { type: string }[] = () => []
+    const probe: Plugin = { manifest: { id: 'probe', version: '0', kernel: '^0.1.0' }, activate: ctx => { history = ctx.events.history } }
+    const k = await boot([probe, loopEcho])
+    const a = (await k.handle('session.create', { commandId: 'a' })) as { sessionId: string }
+    const b = (await k.handle('session.create', { commandId: 'b' })) as { sessionId: string }
+    await k.handle('session.prompt', { commandId: 'p', sessionId: a.sessionId, text: 'hi' })
+    await waitFor(() => types(k).includes('turn.ended'))
+    expect(history(a.sessionId).map(e => e.type)[0]).toBe('session.created')
+    expect(history(a.sessionId).map(e => e.type)).toContain('message.user')
+    expect(history(b.sessionId).map(e => e.type)).toEqual(['session.created'])
+    expect(history('nope')).toEqual([])
   })
 
   it('same commandId replays the receipt without a second message', async () => {

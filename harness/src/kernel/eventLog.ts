@@ -48,6 +48,7 @@ export class EventLog {
   private afterStmt
   private tailStmt
   private lastStmt
+  private sessionStmt
 
   constructor(
     private db: DatabaseSync,
@@ -56,6 +57,7 @@ export class EventLog {
     this.insert = db.prepare('INSERT INTO events(ts, type, session_id, payload) VALUES (?, ?, ?, ?)')
     this.afterStmt = db.prepare('SELECT * FROM events WHERE seq > ? ORDER BY seq LIMIT ?')
     this.tailStmt = db.prepare('SELECT * FROM (SELECT * FROM events ORDER BY seq DESC LIMIT ?) ORDER BY seq')
+    this.sessionStmt = db.prepare('SELECT * FROM events WHERE session_id = ? ORDER BY seq')
     this.lastStmt = db.prepare('SELECT COALESCE(MAX(seq), 0) AS s FROM events')
   }
 
@@ -80,6 +82,11 @@ export class EventLog {
 
   after(seq: number, limit = -1): KernelEvent[] {
     return (this.afterStmt.all(seq, limit) as Row[]).map(toEvent)
+  }
+
+  /** 某会话的全部事件(seq 升序) */
+  bySession(sessionId: string): KernelEvent[] {
+    return (this.sessionStmt.all(sessionId) as Row[]).map(toEvent)
   }
 
   tail(limit: number): KernelEvent[] {

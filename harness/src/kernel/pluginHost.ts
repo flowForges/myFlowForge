@@ -19,7 +19,10 @@ export interface PluginManifest {
 
 export interface PluginContext {
   services: { provide<T>(key: string, impl: T): void; get<T>(key: string): T | undefined }
-  events: Pick<EventBus, 'declare' | 'on' | 'emit' | 'waterfall' | 'serial' | 'bail'>
+  events: Pick<EventBus, 'declare' | 'on' | 'emit' | 'waterfall' | 'serial' | 'bail'> & {
+    /** 只读:某会话的事件(seq 升序) */
+    history(sessionId: string): KernelEvent[]
+  }
   effect(dispose: () => void | Promise<void>): void
   /** 注册工作进程 RPC 方法:参数先由内核按 WorkerMethods 校验;随插件停用自动注销 */
   rpc: { register(method: WorkerMethodName, handler: (params: unknown) => Promise<unknown>): void }
@@ -61,6 +64,7 @@ export interface PluginHostDeps {
   events: EventBus
   rpc: RpcRegistry
   append(e: Omit<KernelEvent, 'seq' | 'ts'>): KernelEvent
+  history?(sessionId: string): KernelEvent[]
   log: Logger
   dataDir: string
   injectTimeoutMs?: number
@@ -124,6 +128,7 @@ export class PluginHost {
           waterfall: (t, v, ...a) => events.waterfall(t, v, ...a),
           serial: (t, ...a) => events.serial(t, ...a),
           bail: (t, ...a) => events.bail(t, ...a),
+          history: sid => this.deps.history?.(sid) ?? [],
         },
         effect: d => scope.add(d),
         rpc: { register: (method, handler) => scope.add(rpc.register(id, method, handler)) },
