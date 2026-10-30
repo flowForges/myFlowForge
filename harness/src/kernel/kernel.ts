@@ -14,6 +14,7 @@ import {
 import { KernelConfigSchema, loadConfig, saveConfig, type KernelConfig } from './config'
 import { EventBus } from './events'
 import { EventLog, openDb, transaction } from './eventLog'
+import { Approvals } from './approvals'
 import { nullLogger, type Logger } from './log'
 import { PermissionGate } from './permissionGate'
 import { PluginHost, type Plugin } from './pluginHost'
@@ -45,12 +46,15 @@ export interface KernelOpts {
   secrets: Omit<OpenSecretStoreOpts, 'dataDir' | 'log'>
   /** 用户主目录(凭据黑名单的基准);默认 os.homedir(),测试传临时目录 */
   home?: string
+  /** 审批无应答多久按拒绝处理;默认 10 分钟 */
+  approvalTimeoutMs?: number
 }
 
 const ERR_METHOD_NOT_FOUND = -32601
 const ERR_INVALID_PARAMS = -32602
 const ERR_INTERNAL = -32603
 const CANCEL_GRACE_MS = 1000
+const APPROVAL_TIMEOUT_MS = 600_000
 
 type Turn = { turnId: string; sessionId: string; ended: boolean; controller: AbortController; settled: Promise<void> }
 
@@ -70,6 +74,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   sessions.load(eventLog.after(0))
   eventLog.onAppend(e => sessions.observe(e)) // 事务提交后才通知:回滚的 session.created 不会进来
   const append = (e: Omit<KernelEvent, 'seq' | 'ts'>) => eventLog.append(e)
+  const approvals = new Approvals({ append, timeoutMs: opts.approvalTimeoutMs ?? APPROVAL_TIMEOUT_MS })
   const configFile = join(opts.dataDir, 'config.json')
   let config = loadConfig(configFile)
   const configAccess = {
@@ -270,6 +275,8 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
             // 提交之后才交给循环插件
             return { result: { accepted: true, turnId }, after: () => dispatchPrompt(p.sessionId, turnId, p.text) }
           }).result
+        case 'approval.respond':
+          return { ok: approvals.respond(p.approvalId, p.decision) }
         case 'session.cancel': {
           const r = command(name, p.commandId, () => ({ result: { ok: true } }), { allowDraining: true })
           if (!r.replayed) await cancel(p.sessionId) // 重放不产生副作用
@@ -304,6 +311,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
 
     async close() {
       append({ type: 'kernel.stopping', payload: {} })
+      approvals.cancelAll() // 在关库之前:待决审批写完 resolved 再停
       for (const t of turns.values()) t.controller.abort()
       await host.deactivateAll()
       db.close()
@@ -312,6 +320,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
 
   services.provide('permissionGate', gate)
   services.provide('sessions', sessions)
+  services.provide('approvals', approvals)
   append({ type: 'kernel.started', payload: { version: HARNESS_VERSION } })
   await host.activateAll(opts.plugins, config.plugins.disabled)
   state = 'running'

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createKernel, type Kernel } from './kernel'
@@ -10,6 +10,7 @@ import { ERR_BUSY, ERR_DRAINING } from '../protocol/index'
 import type { Plugin } from './pluginHost'
 import loopEcho from '../plugins/loop-echo'
 import { BUILTIN_PLUGINS } from '../plugins'
+import type { Approvals } from './approvals'
 
 let dir: string
 let kernels: Kernel[] = []
@@ -347,5 +348,94 @@ describe('kernel', () => {
     expect(snap.sessions.map(s => [s.id, s.title])).toEqual([[a.sessionId, 'T'], [b.sessionId, '新会话']])
     expect(snap.lastSeq).toBe(k.events.lastSeq())
     expect(snap.status.version).toBe('0.1.0')
+  })
+})
+
+describe('kernel approvals', () => {
+  type Gated = { approvals?: Approvals; modelRequests: number; marker: string }
+  // 模拟循环:请求一次模型 → 要审批 → 放行才"执行命令"(写标记文件);被取消就不再请求模型
+  const gatedLoop = (g: Gated): Plugin => ({
+    manifest: { id: 'gated', version: '1', kernel: '*' },
+    activate: ctx => {
+      g.approvals = ctx.services.get<Approvals>('approvals')
+      ctx.events.on('session.prompt', async (r: { sessionId: string; turnId: string; signal: AbortSignal }) => {
+        ctx.append({ type: 'turn.started', sessionId: r.sessionId, payload: { turnId: r.turnId } })
+        g.modelRequests++
+        const d = await g.approvals!.request({ sessionId: r.sessionId, turnId: r.turnId, callId: 'c1', tool: 'shell', summary: 'touch marker', signal: r.signal })
+        if (d === 'allow') writeFileSync(g.marker, 'x')
+        if (r.signal.aborted) return true
+        g.modelRequests++
+        ctx.append({ type: 'turn.ended', sessionId: r.sessionId, payload: { turnId: r.turnId } })
+        return true
+      })
+    },
+  })
+  const bootGated = async (approvalTimeoutMs?: number) => {
+    const g: Gated = { modelRequests: 0, marker: join(dir, 'marker') }
+    const k = await createKernel({ dataDir: dir, plugins: [gatedLoop(g)], approvalTimeoutMs, secrets: { osBackend: false } })
+    kernels.push(k)
+    const { sessionId } = (await k.handle('session.create', { commandId: 'c' })) as { sessionId: string }
+    await k.handle('session.prompt', { commandId: 'p', sessionId, text: 'go' })
+    await waitFor(() => types(k).includes('approval.requested'))
+    const approvalId = (k.events.after(0).find(e => e.type === 'approval.requested')!.payload as { approvalId: string }).approvalId
+    return { k, g, sessionId, approvalId }
+  }
+  const resolvedOf = (k: Kernel) => k.events.after(0).filter(e => e.type === 'approval.resolved')
+
+  it('provides the approvals service', async () => {
+    const { g } = await bootGated()
+    expect(g.approvals).toBeDefined()
+  })
+
+  it('approval.respond allow runs the command; a second respond is ok:false', async () => {
+    const { k, g, sessionId, approvalId } = await bootGated()
+    expect(k.events.after(0).find(e => e.type === 'approval.requested')!.sessionId).toBe(sessionId)
+    expect(await k.handle('approval.respond', { approvalId, decision: 'allow' })).toEqual({ ok: true })
+    await waitFor(() => types(k).includes('turn.ended'))
+    expect(existsSync(g.marker)).toBe(true)
+    expect(resolvedOf(k)[0].payload).toMatchObject({ approvalId, decision: 'allow', by: 'user' })
+    expect(resolvedOf(k)[0].sessionId).toBe(sessionId)
+    expect(await k.handle('approval.respond', { approvalId, decision: 'deny' })).toEqual({ ok: false })
+  })
+
+  it('approval.respond on an unknown id → ok:false', async () => {
+    const { k } = await bootGated()
+    expect(await k.handle('approval.respond', { approvalId: 'nope', decision: 'allow' })).toEqual({ ok: false })
+    expect(resolvedOf(k)).toHaveLength(0)
+  })
+
+  it('approvalTimeoutMs → deny by timeout', async () => {
+    const { k, g } = await bootGated(30)
+    await waitFor(() => types(k).includes('turn.ended'))
+    expect(resolvedOf(k)[0].payload).toMatchObject({ decision: 'deny', by: 'timeout' })
+    expect(existsSync(g.marker)).toBe(false)
+  })
+
+  it('cancel while waiting: resolved cancel/deny, no marker, turn.failed cancelled, no further model request', async () => {
+    const { k, g, sessionId } = await bootGated()
+    expect(g.modelRequests).toBe(1)
+    await k.handle('session.cancel', { commandId: 'x', sessionId })
+    expect(resolvedOf(k).map(e => e.payload)).toEqual([expect.objectContaining({ decision: 'deny', by: 'cancel' })])
+    expect(existsSync(g.marker)).toBe(false)
+    const failed = k.events.after(0).filter(e => e.type === 'turn.failed')
+    expect(failed.map(e => e.payload)).toEqual([expect.objectContaining({ reason: 'cancelled' })])
+    expect(types(k)).not.toContain('turn.ended')
+    expect(g.modelRequests).toBe(1)
+  })
+
+  it('kernel.close() with a pending approval → deny by cancel and the promise settles', async () => {
+    const { k, g, approvalId } = await bootGated()
+    const pending = g.approvals!.request({ sessionId: 's', turnId: 't', callId: 'c', tool: 'shell', summary: 'x', signal: new AbortController().signal })
+    const byClose: unknown[] = []
+    k.events.onAppend(e => { if (e.type === 'approval.resolved') byClose.push(e.payload) })
+    await k.close()
+    kernels = kernels.filter(x => x !== k)
+    await expect(pending).resolves.toBe('deny')
+    expect(byClose).toEqual(expect.arrayContaining([
+      expect.objectContaining({ approvalId, decision: 'deny', by: 'cancel' }),
+      expect.objectContaining({ decision: 'deny', by: 'cancel' }),
+    ]))
+    expect(byClose).toHaveLength(2)
+    expect(existsSync(g.marker)).toBe(false)
   })
 })
