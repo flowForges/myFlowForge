@@ -161,4 +161,84 @@ describe('Approvals', () => {
     approvals.respond(lastId(), 'deny')
     await p
   })
+
+  it('allow_session on `rm -rf build` does not auto-allow `rm -rf ~`', async () => {
+    const first = ask('rm -rf build', { key: sessionKey('rm -rf build') })
+    approvals.respond(lastId(), 'allow_session')
+    await expect(first).resolves.toBe('allow')
+    events = []
+    const home = ask('rm -rf ~', { key: sessionKey('rm -rf ~') })
+    expect(requested()).toHaveLength(1)
+    approvals.respond(lastId(), 'deny')
+    await expect(home).resolves.toBe('deny')
+  })
+
+  it('a listener that answers inside the approval.requested notification is honoured', async () => {
+    approvals = new Approvals({
+      timeoutMs: 50,
+      append: e => {
+        events.push(e)
+        if (e.type === 'approval.requested') approvals.respond((e.payload as { approvalId: string }).approvalId, 'allow')
+      },
+    })
+    await expect(ask('npm test')).resolves.toBe('allow')
+    expect(resolved()).toEqual([expect.objectContaining({ decision: 'allow', by: 'user' })])
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('an abort inside the approval.requested notification is honoured', async () => {
+    const ac = new AbortController()
+    approvals = new Approvals({ timeoutMs: 50, append: e => { events.push(e); if (e.type === 'approval.requested') ac.abort() } })
+    await expect(ask('npm test', { signal: ac.signal })).resolves.toBe('deny')
+    expect(resolved()).toEqual([expect.objectContaining({ by: 'cancel' })])
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('a failing approval.requested write rejects and leaves nothing pending', async () => {
+    approvals = new Approvals({ timeoutMs: 50, append: e => { if (e.type === 'approval.requested') throw new Error('SQLITE_FULL'); events.push(e) } })
+    const ac = new AbortController()
+    const removeSpy = vi.spyOn(ac.signal, 'removeEventListener')
+    await expect(ask('npm test', { signal: ac.signal })).rejects.toThrow('SQLITE_FULL')
+    expect(vi.getTimerCount()).toBe(0)
+    expect(removeSpy).toHaveBeenCalledWith('abort', expect.any(Function))
+    expect(resolved()).toHaveLength(0)
+  })
+
+  describe('a failing approval.resolved write', () => {
+    const errors: unknown[] = []
+    beforeEach(() => {
+      errors.length = 0
+      approvals = new Approvals({
+        timeoutMs: 50,
+        log: { info() {}, warn() {}, error: (msg: string) => { errors.push(msg) } },
+        append: e => { if (e.type === 'approval.resolved') throw new Error('SQLITE_FULL'); events.push(e) },
+      })
+    })
+
+    it('cancelAll still settles every pending request and clears every timer', async () => {
+      const ps = [ask('a'), ask('b'), ask('c', { sessionId: 's2' })]
+      expect(() => approvals.cancelAll()).not.toThrow()
+      await expect(Promise.all(ps)).resolves.toEqual(['deny', 'deny', 'deny'])
+      expect(vi.getTimerCount()).toBe(0)
+      expect(errors).toHaveLength(3)
+    })
+
+    it('timeout and abort do not throw out of the timer or listener', async () => {
+      const t = ask('a')
+      expect(() => vi.advanceTimersByTime(50)).not.toThrow()
+      await expect(t).resolves.toBe('deny')
+      const ac = new AbortController()
+      const a = ask('b', { signal: ac.signal })
+      expect(() => ac.abort()).not.toThrow()
+      await expect(a).resolves.toBe('deny')
+      expect(vi.getTimerCount()).toBe(0)
+      expect(errors).toHaveLength(2)
+    })
+
+    it('respond still returns true and the decision stands', async () => {
+      const p = ask('npm test', { key: 'npm test' })
+      expect(approvals.respond(lastId(), 'allow_session')).toBe(true)
+      await expect(p).resolves.toBe('allow')
+    })
+  })
 })

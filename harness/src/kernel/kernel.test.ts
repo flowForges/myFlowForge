@@ -11,6 +11,7 @@ import type { Plugin } from './pluginHost'
 import loopEcho from '../plugins/loop-echo'
 import { BUILTIN_PLUGINS } from '../plugins'
 import type { Approvals } from './approvals'
+import { sessionKey } from '../lib/tools/commandKey'
 
 let dir: string
 let kernels: Kernel[] = []
@@ -352,7 +353,7 @@ describe('kernel', () => {
 })
 
 describe('kernel approvals', () => {
-  type Gated = { approvals?: Approvals; modelRequests: number; marker: string }
+  type Gated = { approvals?: Approvals; modelRequests: number; marker: string; key?: string }
   // 模拟循环:请求一次模型 → 要审批 → 放行才"执行命令"(写标记文件);被取消就不再请求模型
   const gatedLoop = (g: Gated): Plugin => ({
     manifest: { id: 'gated', version: '1', kernel: '*' },
@@ -361,7 +362,7 @@ describe('kernel approvals', () => {
       ctx.events.on('session.prompt', async (r: { sessionId: string; turnId: string; signal: AbortSignal }) => {
         ctx.append({ type: 'turn.started', sessionId: r.sessionId, payload: { turnId: r.turnId } })
         g.modelRequests++
-        const d = await g.approvals!.request({ sessionId: r.sessionId, turnId: r.turnId, callId: 'c1', tool: 'shell', summary: 'touch marker', signal: r.signal })
+        const d = await g.approvals!.request({ sessionId: r.sessionId, turnId: r.turnId, callId: 'c1', tool: 'shell', summary: 'touch marker', key: g.key, signal: r.signal })
         if (d === 'allow') writeFileSync(g.marker, 'x')
         if (r.signal.aborted) return true
         g.modelRequests++
@@ -370,8 +371,8 @@ describe('kernel approvals', () => {
       })
     },
   })
-  const bootGated = async (approvalTimeoutMs?: number) => {
-    const g: Gated = { modelRequests: 0, marker: join(dir, 'marker') }
+  const bootGated = async (approvalTimeoutMs?: number, key?: string) => {
+    const g: Gated = { modelRequests: 0, marker: join(dir, 'marker'), key }
     const k = await createKernel({ dataDir: dir, plugins: [gatedLoop(g)], approvalTimeoutMs, secrets: { osBackend: false } })
     kernels.push(k)
     const { sessionId } = (await k.handle('session.create', { commandId: 'c' })) as { sessionId: string }
@@ -396,6 +397,17 @@ describe('kernel approvals', () => {
     expect(resolvedOf(k)[0].payload).toMatchObject({ approvalId, decision: 'allow', by: 'user' })
     expect(resolvedOf(k)[0].sessionId).toBe(sessionId)
     expect(await k.handle('approval.respond', { approvalId, decision: 'deny' })).toEqual({ ok: false })
+  })
+
+  it('approval.respond allow_session: resolved allow by user, then the same key is allowed by session', async () => {
+    const { k, g, sessionId, approvalId } = await bootGated(undefined, sessionKey('touch marker'))
+    expect(await k.handle('approval.respond', { approvalId, decision: 'allow_session' })).toEqual({ ok: true })
+    await waitFor(() => types(k).includes('turn.ended'))
+    expect(resolvedOf(k)[0].payload).toMatchObject({ approvalId, decision: 'allow', by: 'user' })
+    const again = await g.approvals!.request({ sessionId, turnId: 't2', callId: 'c2', tool: 'shell', summary: 'touch marker', key: sessionKey('touch marker'), signal: new AbortController().signal })
+    expect(again).toBe('allow')
+    expect(resolvedOf(k)[1].payload).toMatchObject({ decision: 'allow', by: 'session' })
+    expect(types(k).filter(t => t === 'approval.requested')).toHaveLength(1)
   })
 
   it('approval.respond on an unknown id → ok:false', async () => {

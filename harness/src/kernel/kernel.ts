@@ -74,7 +74,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   sessions.load(eventLog.after(0))
   eventLog.onAppend(e => sessions.observe(e)) // 事务提交后才通知:回滚的 session.created 不会进来
   const append = (e: Omit<KernelEvent, 'seq' | 'ts'>) => eventLog.append(e)
-  const approvals = new Approvals({ append, timeoutMs: opts.approvalTimeoutMs ?? APPROVAL_TIMEOUT_MS })
+  const approvals = new Approvals({ append, log, timeoutMs: opts.approvalTimeoutMs ?? APPROVAL_TIMEOUT_MS })
   const configFile = join(opts.dataDir, 'config.json')
   let config = loadConfig(configFile)
   const configAccess = {
