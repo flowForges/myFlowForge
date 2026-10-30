@@ -17,6 +17,12 @@ export const EVENT_TYPES = [
   'message.reasoning.delta',
   'turn.usage',
   'auth.chatgpt.ended',
+  'tool.started',
+  'tool.ended',
+  'approval.requested',
+  'approval.resolved',
+  'turn.snapshot',
+  'turn.rolledBack',
 ] as const
 
 export const EventTypeSchema = z.enum(EVENT_TYPES)

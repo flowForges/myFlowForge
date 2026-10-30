@@ -2,9 +2,9 @@ import { WorkerMethods, type WorkerMethodName } from '../protocol/index'
 
 export type RpcHandler = (params: unknown) => Promise<unknown>
 
-// 内核自己处理或属于传输层的方法,插件不能注册。
+// 内核自己处理或属于传输层的方法,插件不能注册(approval.* 是内核的审批)。
 // 传输层认证只占 auth.challenge / auth.verify(连同旧的 auth);auth.chatgpt.* 归 model-chatgpt 插件
-const RESERVED = /^(?:auth(?:\.(?:challenge|verify))?|hello|status|snapshot|events\..+|session\..+)$/
+const RESERVED = /^(?:auth(?:\.(?:challenge|verify))?|hello|status|snapshot|events\..+|session\..+|approval\..+)$/
 
 /** 插件注册的工作进程 RPC 方法(每个方法只能有一个提供者) */
 export class RpcRegistry {

@@ -12,9 +12,11 @@ import {
   newNonce,
   proofEquals,
   serverProof,
+  type KernelEvent,
 } from '../protocol/index'
 import type { EventLog } from './eventLog'
 import { RpcError } from './rpcError'
+import { toWire } from './wire'
 
 export interface RpcConn {
   send(msg: object): void
@@ -106,10 +108,10 @@ export async function startRpcServer(opts: RpcServerOpts): Promise<{ close(): Pr
       reply(id, { ok: true })
       // 以下同步完成:补齐与挂监听之间不会插入新事件
       let sent = after
-      const push = (e: { seq: number }) => {
+      const push = (e: KernelEvent) => {
         if (e.seq <= sent) return
         sent = e.seq
-        send({ jsonrpc: '2.0', method: 'event', params: e })
+        send({ jsonrpc: '2.0', method: 'event', params: toWire(e) })
       }
       for (const e of events.after(after)) push(e)
       unsubscribe = events.onAppend(push)

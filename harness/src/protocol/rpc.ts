@@ -9,6 +9,7 @@ import {
   QuotaSchema,
   SecretsBackendSchema,
 } from './models'
+import { ApprovalModeSchema, FileChangeSchema, ToolsetSchema } from './tools'
 
 // JSON-RPC 错误码
 export const ERR_DRAINING = -32001
@@ -78,7 +79,14 @@ export const WorkerMethods = {
     result: z.object({ events: z.array(KernelEventSchema) }),
   },
   'session.create': {
-    params: z.object({ commandId: z.string(), title: z.string().optional(), model: ModelRefSchema.optional() }),
+    params: z.object({
+      commandId: z.string(),
+      title: z.string().optional(),
+      model: ModelRefSchema.optional(),
+      cwd: z.string().optional(),
+      approvalMode: ApprovalModeSchema.optional(),
+      toolset: ToolsetSchema.optional(),
+    }),
     result: z.object({ sessionId: z.string() }),
   },
   'session.prompt': {
@@ -89,7 +97,19 @@ export const WorkerMethods = {
     params: z.object({ commandId: z.string(), sessionId: z.string() }),
     result: Ok,
   },
+  'approval.respond': {
+    params: z.object({ approvalId: z.string(), decision: z.enum(['allow', 'allow_session', 'deny']) }),
+    result: Ok,
+  },
   // 以下由插件经 ctx.rpc.register 提供
+  'turn.rollback': {
+    params: z.object({ commandId: z.string(), sessionId: z.string(), turnId: z.string() }),
+    result: z.object({ ok: z.literal(true), files: z.number() }),
+  },
+  'turn.changes': {
+    params: z.object({ sessionId: z.string(), turnId: z.string() }),
+    result: z.object({ files: z.array(FileChangeSchema) }),
+  },
   'models.catalog': { params: Empty, result: CatalogViewSchema },
   'models.accounts': {
     params: Empty,

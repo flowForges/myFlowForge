@@ -49,6 +49,12 @@ describe('RpcRegistry', () => {
     for (const m of ['auth.challenge', 'auth.verify', 'hello', 'status', 'snapshot', 'events.tail', 'events.subscribe', 'session.create', 'session.prompt', 'session.cancel'])
       expect(() => r.register('a', m as WorkerMethodName, async () => 1)).toThrow(/reserved/)
   })
+  it('approval.* is reserved; turn.* stays registrable', () => {
+    const r = new RpcRegistry()
+    expect(() => r.register('a', 'approval.respond', async () => 1)).toThrow(/reserved/)
+    expect(() => r.register('a', 'turn.rollback', async () => 1)).not.toThrow()
+    expect(() => r.register('a', 'turn.changes', async () => 1)).not.toThrow()
+  })
   it('transport auth is reserved but plugin-owned auth.chatgpt.* stays registrable', () => {
     const r = new RpcRegistry()
     expect(() => r.register('a', 'auth.chatgpt.begin', async () => 1)).not.toThrow()
@@ -95,6 +101,11 @@ describe('plugin RPC via kernel.handle', () => {
 
   it('registering a reserved method makes the plugin fail', async () => {
     const k = await boot([plugin('p', ctx => { ctx.rpc.register('session.create', async () => ({})) })])
+    expect(k.status().plugins).toEqual([expect.objectContaining({ id: 'p', state: 'failed', error: expect.stringMatching(/reserved/) })])
+  })
+
+  it('a plugin registering approval.respond fails as reserved', async () => {
+    const k = await boot([plugin('p', ctx => { ctx.rpc.register('approval.respond', async () => ({ ok: true })) })])
     expect(k.status().plugins).toEqual([expect.objectContaining({ id: 'p', state: 'failed', error: expect.stringMatching(/reserved/) })])
   })
 

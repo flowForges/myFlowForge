@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   AccountUpdatedPayloadSchema, ChatgptEndedPayloadSchema, ControlMethods, EVENT_TYPES, FrameDecoder, MAX_FRAME_BYTES, PROTOCOL_VERSION, QuotaSchema,
   TurnUsagePayloadSchema, WorkerMethods, encodeFrame,
+  ApprovalRequestedPayloadSchema, ApprovalResolvedPayloadSchema, AssistantPartSchema, FileChangeSchema, ToolEndedPayloadSchema,
+  ToolStartedPayloadSchema, TurnRolledBackPayloadSchema, TurnSnapshotPayloadSchema,
 } from './index'
 
 describe('framing', () => {
@@ -141,6 +143,59 @@ describe('v2 schemas', () => {
     expect(TurnUsagePayloadSchema.safeParse({ turnId: 't', input: 1, output: 2, cacheRead: 3 }).success).toBe(true)
     expect(TurnUsagePayloadSchema.safeParse({ turnId: 't', input: 1 }).success).toBe(false)
     expect(AccountUpdatedPayloadSchema.safeParse({ account: { id: 'a', presetId: 'p', label: 'L', state: 'ok' } }).success).toBe(true)
+  })
+})
+
+describe('v3 schemas', () => {
+  const ok = (m: keyof typeof WorkerMethods, v: unknown) => WorkerMethods[m].params.safeParse(v).success
+  it('new event types', () => {
+    for (const t of ['tool.started', 'tool.ended', 'approval.requested', 'approval.resolved', 'turn.snapshot', 'turn.rolledBack'])
+      expect(EVENT_TYPES).toContain(t)
+  })
+  it('new event payloads', () => {
+    expect(ToolStartedPayloadSchema.safeParse({ turnId: 't', callId: 'c', name: 'read', argsPreview: '{}' }).success).toBe(true)
+    expect(ToolStartedPayloadSchema.safeParse({ turnId: 't', callId: 'c', name: 'read' }).success).toBe(false)
+    expect(ToolEndedPayloadSchema.safeParse({ turnId: 't', callId: 'c', name: 'read', ok: true, ms: 3, content: 'x' }).success).toBe(true)
+    expect(ToolEndedPayloadSchema.safeParse({ turnId: 't', callId: 'c', name: 'read', ok: false, ms: 3, content: 'x', isError: true, truncated: true }).success).toBe(true)
+    expect(ToolEndedPayloadSchema.safeParse({ turnId: 't', callId: 'c', name: 'read', ok: true, content: 'x' }).success).toBe(false)
+    expect(ApprovalRequestedPayloadSchema.safeParse({ approvalId: 'a', turnId: 't', callId: 'c', tool: 'shell', summary: 'ls' }).success).toBe(true)
+    expect(ApprovalResolvedPayloadSchema.safeParse({ approvalId: 'a', decision: 'deny', by: 'cancel' }).success).toBe(true)
+    expect(ApprovalResolvedPayloadSchema.safeParse({ approvalId: 'a', decision: 'allow_session', by: 'user' }).success).toBe(false)
+    expect(ApprovalResolvedPayloadSchema.safeParse({ approvalId: 'a', decision: 'allow', by: 'someone' }).success).toBe(false)
+    expect(TurnSnapshotPayloadSchema.safeParse({ turnId: 't', phase: 'start', ref: 'refs/x' }).success).toBe(true)
+    expect(TurnSnapshotPayloadSchema.safeParse({ turnId: 't', phase: 'end', changed: 2 }).success).toBe(true)
+    expect(TurnSnapshotPayloadSchema.safeParse({ turnId: 't', phase: 'end', reason: 'not_git' }).success).toBe(true)
+    expect(TurnSnapshotPayloadSchema.safeParse({ turnId: 't', phase: 'middle' }).success).toBe(false)
+    expect(TurnRolledBackPayloadSchema.safeParse({ turnId: 't', files: 3 }).success).toBe(true)
+    expect(FileChangeSchema.safeParse({ path: 'a', status: 'T' }).success).toBe(true)
+    expect(FileChangeSchema.safeParse({ path: 'a', status: 'R' }).success).toBe(false)
+  })
+  it('AssistantPart is the Part union without image', () => {
+    expect(AssistantPartSchema.safeParse({ type: 'text', text: 'x' }).success).toBe(true)
+    expect(AssistantPartSchema.safeParse({ type: 'tool_call', id: 'i', name: 'n', args: '{}' }).success).toBe(true)
+    expect(AssistantPartSchema.safeParse({ type: 'tool_result', callId: 'i', content: 'c', isError: true }).success).toBe(true)
+    expect(AssistantPartSchema.safeParse({ type: 'reasoning', text: 'r', replay: { any: 1 } }).success).toBe(true)
+    expect(AssistantPartSchema.safeParse({ type: 'image', mime: 'image/png', data: 'x' }).success).toBe(false)
+  })
+  it('session.create: cwd, approvalMode and toolset are optional and enumerated', () => {
+    expect(ok('session.create', { commandId: 'c', cwd: '/x', approvalMode: 'auto', toolset: 'edit' })).toBe(true)
+    expect(ok('session.create', { commandId: 'c', approvalMode: 'ask', toolset: 'patch' })).toBe(true)
+    expect(ok('session.create', { commandId: 'c', approvalMode: 'yolo' })).toBe(false)
+    expect(ok('session.create', { commandId: 'c', toolset: 'bash' })).toBe(false)
+    expect(ok('session.create', { commandId: 'c', cwd: 3 })).toBe(false)
+  })
+  it('approval.respond, turn.rollback, turn.changes', () => {
+    for (const decision of ['allow', 'allow_session', 'deny']) expect(ok('approval.respond', { approvalId: 'a', decision })).toBe(true)
+    expect(ok('approval.respond', { approvalId: 'a', decision: 'maybe' })).toBe(false)
+    expect(ok('approval.respond', { decision: 'allow' })).toBe(false)
+    expect(ok('turn.rollback', { commandId: 'c', sessionId: 's', turnId: 't' })).toBe(true)
+    expect(ok('turn.rollback', { sessionId: 's', turnId: 't' })).toBe(false)
+    expect(ok('turn.changes', { sessionId: 's', turnId: 't' })).toBe(true)
+    expect(ok('turn.changes', { sessionId: 's' })).toBe(false)
+    expect(WorkerMethods['approval.respond'].result.safeParse({ ok: false }).success).toBe(true)
+    expect(WorkerMethods['turn.rollback'].result.safeParse({ ok: true, files: 2 }).success).toBe(true)
+    expect(WorkerMethods['turn.rollback'].result.safeParse({ ok: false, files: 2 }).success).toBe(false)
+    expect(WorkerMethods['turn.changes'].result.safeParse({ files: [{ path: 'a', status: 'A' }] }).success).toBe(true)
   })
 })
 

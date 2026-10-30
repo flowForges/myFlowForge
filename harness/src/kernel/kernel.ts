@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
   ERR_BUSY,
@@ -21,7 +22,9 @@ import { RpcError } from './rpcError'
 import { RpcRegistry } from './rpcRegistry'
 import { openSecretStore, type OpenSecretStoreOpts } from './secrets/secretStore'
 import { ServiceRegistry } from './services'
+import { Sessions, validateCwd } from './sessions'
 import { HARNESS_VERSION } from './version'
+import { toWire } from './wire'
 
 export interface Kernel {
   handle(method: string, params: unknown): Promise<unknown>
@@ -40,6 +43,8 @@ export interface KernelOpts {
   injectTimeoutMs?: number
   /** 凭据存储选项;必填,避免测试误用真钥匙串(测试传 `{ osBackend: false }` 或注入 exec) */
   secrets: Omit<OpenSecretStoreOpts, 'dataDir' | 'log'>
+  /** 用户主目录(凭据黑名单的基准);默认 os.homedir(),测试传临时目录 */
+  home?: string
 }
 
 const ERR_METHOD_NOT_FOUND = -32601
@@ -60,6 +65,10 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   const bus = new EventBus({ onError: (type, err) => log.error(`handler for ${type} failed`, { error: String(err) }) })
   bus.declare('session.prompt', 'bail')
   const gate = new PermissionGate()
+  const home = opts.home ?? homedir()
+  const sessions = new Sessions(opts.dataDir)
+  sessions.load(eventLog.after(0))
+  eventLog.onAppend(e => sessions.observe(e)) // 事务提交后才通知:回滚的 session.created 不会进来
   const append = (e: Omit<KernelEvent, 'seq' | 'ts'>) => eventLog.append(e)
   const configFile = join(opts.dataDir, 'config.json')
   let config = loadConfig(configFile)
@@ -238,11 +247,19 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
         case 'snapshot':
           return snapshot()
         case 'events.tail':
-          return { events: eventLog.tail(p.limit) }
+          return { events: eventLog.tail(p.limit).map(toWire) }
         case 'session.create':
           return command(name, p.commandId, () => {
+            const cwd = p.cwd === undefined ? undefined : validateCwd(p.cwd, { home, dataDir: opts.dataDir, platform: process.platform })
             const sessionId = randomUUID()
-            append({ type: 'session.created', sessionId, payload: { title: p.title, ...(p.model && { model: p.model }) } })
+            const payload = {
+              title: p.title,
+              ...(p.model && { model: p.model }),
+              ...(cwd && { cwd }),
+              approvalMode: p.approvalMode ?? 'ask',
+              ...(p.toolset && { toolset: p.toolset }),
+            }
+            append({ type: 'session.created', sessionId, payload })
             return { result: { sessionId } }
           }).result
         case 'session.prompt':
@@ -294,6 +311,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   }
 
   services.provide('permissionGate', gate)
+  services.provide('sessions', sessions)
   append({ type: 'kernel.started', payload: { version: HARNESS_VERSION } })
   await host.activateAll(opts.plugins, config.plugins.disabled)
   state = 'running'
