@@ -19,12 +19,25 @@ export function buildAnthropicBody(req: ModelRequest, quirks: AnthropicQuirks): 
   // tool_result 必须排在 user 消息内容最前
   for (const m of messages)
     if (m.role === 'user') m.content = [...m.content.filter((b) => b.type === 'tool_result'), ...m.content.filter((b) => b.type !== 'tool_result')]
-  const body: Obj = { model: req.model, messages, max_tokens: req.maxOutput ?? 8192, stream: true }
+  let maxTokens = req.maxOutput ?? 8192
+  let thinking: Obj | undefined
+  if (req.reasoning && req.reasoning !== 'off') {
+    if (quirks.forceAdaptiveThinking) thinking = { type: 'adaptive' }
+    else {
+      const want = BUDGETS[req.reasoning]
+      if (req.maxOutput === undefined) {
+        maxTokens = want + 8192 // budget_tokens 必须小于 max_tokens
+        thinking = { type: 'enabled', budget_tokens: want }
+      } else {
+        const budget = Math.min(want, req.maxOutput - 1)
+        if (budget >= 1024) thinking = { type: 'enabled', budget_tokens: budget } // 最小预算 1024,不够就不开
+      }
+    }
+  }
+  const body: Obj = { model: req.model, messages, max_tokens: maxTokens, stream: true }
+  if (thinking) body.thinking = thinking
   if (req.system !== undefined) body.system = req.system
   if (req.tools?.length) body.tools = req.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters }))
-  if (req.reasoning && req.reasoning !== 'off') {
-    body.thinking = quirks.forceAdaptiveThinking ? { type: 'adaptive' } : { type: 'enabled', budget_tokens: BUDGETS[req.reasoning] }
-  }
   return body
 }
 
@@ -162,7 +175,7 @@ export async function* decodeAnthropicStream(events: AsyncIterable<{ event?: str
         }
         case 'content_block_stop': {
           const b = blocks.get(f.index ?? 0)
-          if (b?.kind === 'thinking') yield { type: 'reasoning', replay: { type: 'thinking', thinking: b.text, signature: b.sig } }
+          if (b?.kind === 'thinking' && b.sig) yield { type: 'reasoning', replay: { type: 'thinking', thinking: b.text, signature: b.sig } }
           blocks.delete(f.index ?? 0)
           break
         }

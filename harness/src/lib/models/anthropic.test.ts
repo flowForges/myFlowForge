@@ -81,6 +81,16 @@ describe('decodeAnthropicStream', () => {
     expect(await k('503')).toMatchObject({ kind: 'unavailable', retryable: true })
   })
 
+  it('thinking without signature emits no replay', async () => {
+    const t = fixture('anthropic-thinking.txt').replace(/event: content_block_delta\ndata: \{[^\n]*signature_delta[^\n]*\n\n/g, '')
+    const ev = await decode(replayText(t))
+    expect(ev.filter((e) => e.type === 'reasoning')).toEqual([
+      { type: 'reasoning', delta: 'Let me ' },
+      { type: 'reasoning', delta: 'think.' },
+      { type: 'reasoning', replay: { type: 'redacted_thinking', data: 'REDACTED==' } },
+    ])
+  })
+
   it('EOF without message_stop is a retryable network error', async () => {
     const ev = await run('anthropic-cut.txt')
     expect(ev.slice(0, 2)).toEqual([
@@ -117,14 +127,18 @@ describe('buildAnthropicBody', () => {
     expect((buildAnthropicBody({ ...base, maxOutput: 99 }, {}) as any).max_tokens).toBe(99)
   })
 
-  it('thinking budgets and adaptive', () => {
-    const b = (reasoning: ModelRequest['reasoning'], q = {}) => (buildAnthropicBody({ ...base, reasoning }, q) as any).thinking
-    expect(b('low')).toEqual({ type: 'enabled', budget_tokens: 2048 })
-    expect(b('medium')).toEqual({ type: 'enabled', budget_tokens: 8192 })
-    expect(b('high')).toEqual({ type: 'enabled', budget_tokens: 24576 })
-    expect(b('high', { forceAdaptiveThinking: true })).toEqual({ type: 'adaptive' })
-    expect(b('off')).toBeUndefined()
-    expect(b(undefined)).toBeUndefined()
+  it('thinking budget stays below max_tokens', () => {
+    const b = (reasoning: ModelRequest['reasoning'], maxOutput?: number, q = {}) => buildAnthropicBody({ ...base, reasoning, maxOutput }, q) as any
+    expect(b('low')).toMatchObject({ max_tokens: 10240, thinking: { type: 'enabled', budget_tokens: 2048 } })
+    expect(b('medium')).toMatchObject({ max_tokens: 16384, thinking: { type: 'enabled', budget_tokens: 8192 } })
+    expect(b('high')).toMatchObject({ max_tokens: 32768, thinking: { type: 'enabled', budget_tokens: 24576 } })
+    expect(b('high', 4096)).toMatchObject({ max_tokens: 4096, thinking: { type: 'enabled', budget_tokens: 4095 } })
+    expect(b('low', 1000).thinking).toBeUndefined()
+    expect(b('low', 1000).max_tokens).toBe(1000)
+    expect(b('low', 1500).thinking).toEqual({ type: 'enabled', budget_tokens: 1499 })
+    expect(b('high', undefined, { forceAdaptiveThinking: true })).toMatchObject({ max_tokens: 8192, thinking: { type: 'adaptive' } })
+    expect(b('off').thinking).toBeUndefined()
+    expect(b(undefined).thinking).toBeUndefined()
   })
 
   it('assistant: replay blocks first, tool_use input parsed (invalid → {}); tool results in next user message', () => {
