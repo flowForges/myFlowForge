@@ -15,6 +15,8 @@ export const ModelEntrySchema = z.object({
   output: z.number(),
   image: z.boolean(),
   reasoning: z.enum(['none', 'toggle', 'effort']),
+  toolCall: z.boolean(),
+  cost: z.object({ input: z.number(), output: z.number() }).optional(), // USD / 百万 token
   deprecated: z.boolean().optional(),
 })
 export type ModelEntry = z.infer<typeof ModelEntrySchema>

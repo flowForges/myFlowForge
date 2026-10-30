@@ -1,0 +1,41 @@
+{
+ "generatedAt": "2026-10-30T07:55:58.706Z",
+ "models": {
+  "deepseek/deepseek-chat": {
+   "id": "deepseek-chat",
+   "name": "DeepSeek Chat",
+   "context": 128000,
+   "output": 8192,
+   "reasoning": false,
+   "toolCall": true,
+   "image": false,
+   "cost": {
+    "input": 0.27,
+    "output": 1.1
+   },
+   "status": "deprecated"
+  },
+  "deepseek/deepseek-v4-pro": {
+   "id": "deepseek-v4-pro",
+   "name": "DeepSeek V4 Pro",
+   "context": 256000,
+   "output": 64000,
+   "reasoning": true,
+   "toolCall": true,
+   "image": false
+  },
+  "openai/gpt-5": {
+   "id": "gpt-5",
+   "name": "GPT-5",
+   "context": 400000,
+   "output": 128000,
+   "reasoning": true,
+   "toolCall": true,
+   "image": true,
+   "cost": {
+    "input": 1.25,
+    "output": 10
+   }
+  }
+ }
+}

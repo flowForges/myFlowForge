@@ -108,7 +108,7 @@ describe('v2 schemas', () => {
     expect(WorkerMethods['models.testAccount'].result.safeParse({ ok: false, error: { kind: 'weird', message: 'm' } }).success).toBe(false)
     expect(WorkerMethods['models.quota'].result.safeParse(null).success).toBe(true)
     expect(WorkerMethods['auth.chatgpt.begin'].result.safeParse({ flowId: 'f', authUrl: 'https://x' }).success).toBe(true)
-    const model = { id: 'm', name: 'M', context: 128000, output: 8000, image: false, reasoning: 'effort' }
+    const model = { id: 'm', name: 'M', context: 128000, output: 8000, image: false, reasoning: 'effort', toolCall: true, cost: { input: 1, output: 2 } }
     const preset = {
       id: 'p', label: 'P', billing: 'subscription', restriction: 'coding-tools-only', auth: 'api-key',
       protocols: ['anthropic'], docsUrl: 'https://d',
@@ -116,6 +116,9 @@ describe('v2 schemas', () => {
     const catalog = WorkerMethods['models.catalog'].result
     expect(catalog.safeParse({ presets: [preset], models: { p: [model] }, default: { accountId: 'a', modelId: 'm' } }).success).toBe(true)
     expect(catalog.safeParse({ presets: [{ ...preset, restriction: 'x' }], models: {} }).success).toBe(false)
+    const { toolCall: _t, ...noTool } = model
+    expect(catalog.safeParse({ presets: [preset], models: { p: [noTool] } }).success).toBe(false)
+    expect(catalog.safeParse({ presets: [preset], models: { p: [{ ...model, cost: { input: 1 } }] } }).success).toBe(false)
   })
   it('Quota is windows or link', () => {
     expect(QuotaSchema.safeParse({ windows: [{ label: '5h', usedPercent: 40, resetsAt: 1 }] }).success).toBe(true)
