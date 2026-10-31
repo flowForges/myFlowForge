@@ -15,6 +15,7 @@ describe('deniedClass', () => {
     // IPv6
     ['::1', 'loopback'], ['::', 'unspecified'], ['fe80::1', 'link_local'], ['ff02::1', 'multicast'],
     ['fd00::1', 'ula'], ['fc00::1', 'ula'], ['fd00:ec2::254', 'metadata'], ['FE80::1%en0', 'link_local'],
+    ['fe80::1%25en0', 'link_local'], ['::1%lo0', 'loopback'], ['::ffff:0:0', 'unspecified'], ['4294967295', 'broadcast'],
     // IPv6 里嵌着的 IPv4 按 IPv4 判
     ['::ffff:10.0.0.1', 'private'], ['::ffff:a00:1', 'private'], ['::ffff:127.0.0.1', 'loopback'],
     ['::ffff:169.254.169.254', 'metadata'], ['::ffff:0:10.0.0.1', 'private'], ['::10.0.0.1', 'private'], ['::127.0.0.1', 'loopback'],

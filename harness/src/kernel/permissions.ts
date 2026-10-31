@@ -24,7 +24,6 @@ export const SANDBOX_STUB: SandboxStatus = { level: 'none', missing: ['platform'
 
 const isObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v)
 
-
 /**
  * 解析并给出全部错误。结构不对的字段一律落到收紧的默认值(沙箱开、回环关、auto 不越过沙箱、白名单为空);
  * 能解析的 deny 即使用例失败也保留(收紧总是安全的),其余无效项丢掉
