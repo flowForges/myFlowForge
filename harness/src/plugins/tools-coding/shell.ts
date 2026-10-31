@@ -1,10 +1,11 @@
-// shell:在会话 cwd 下执行命令(spec §7、§7.1)。POSIX 新进程组,超时 / 取消时杀整组;Windows taskkill /T /F
+// shell:在会话 cwd 下执行命令(spec §7、§7.1)。POSIX 新进程组,超时 / 取消时杀整组;Windows taskkill /T /F。
+// 05 §10:命令先经内核 `sandbox` 服务生成计划;沙箱计划直接起 sandbox-exec / bwrap(它就是组长),生成失败 → 命令失败,绝不退回无沙箱
 import { spawn } from 'node:child_process'
 import { homedir } from 'node:os'
 import { z } from 'zod'
 import type { PgidRegistry } from '../../lib/proc/pgids'
 import { loginShellPath, shellEnv } from '../../lib/tools/shellEnv'
-import { argsOf, type Tool } from '../../lib/tools/types'
+import { argsOf, type SandboxService, type ShellPlan, type Tool } from '../../lib/tools/types'
 import { jsonSchema } from './common'
 
 export const DEFAULT_TIMEOUT = 120_000
@@ -26,6 +27,8 @@ export interface ShellDeps {
   minTimeoutMs?: number
   /** 进程组登记(spec §12);win32 不传 */
   registry?: Pick<PgidRegistry, 'add' | 'settle'>
+  /** 内核 sandbox 服务;不在 → 按 none(03 的行为) */
+  sandbox?: Pick<SandboxService, 'plan' | 'status'>
 }
 
 export interface ShellRun {
@@ -38,7 +41,6 @@ export interface ShellRun {
 
 export interface RunShellOpts {
   cwd: string
-  env: NodeJS.ProcessEnv
   timeoutMs: number
   signal: AbortSignal
   platform: NodeJS.Platform
@@ -47,6 +49,9 @@ export interface RunShellOpts {
   /** 子进程结束、runShell 返回前 */
   onClose?: (pid: number) => void
 }
+
+/** 无沙箱计划(没有 sandbox 服务时):命令本身交给 shell:true */
+export const unsandboxedPlan = (command: string, env: NodeJS.ProcessEnv): ShellPlan => ({ file: command, args: [], env, sandboxed: false, level: 'none', release: () => {} })
 
 /** 只留结尾的输出缓冲 */
 class TailBuffer {
@@ -80,18 +85,37 @@ class TailBuffer {
   }
 }
 
-export function runShell(command: string, opts: RunShellOpts): Promise<ShellRun> {
-  if (opts.signal.aborted) return Promise.resolve({ code: null, signal: null, output: '', timedOut: false, cancelled: true })
+/**
+ * 执行一条计划。plan.release() 在命令结束、超时 / 取消杀完、起不来时各路径上恰好调一次(之后才 resolve / reject)。
+ * 沙箱计划:spawn(file, args, shell:false, detached) —— sandbox-exec / bwrap 是组长,进程组登记与杀组照旧
+ */
+export function runShell(plan: ShellPlan, opts: RunShellOpts): Promise<ShellRun> {
+  let released = false
+  const release = () => {
+    if (released) return
+    released = true
+    try {
+      plan.release()
+    } catch {
+      // 释放失败不影响结果
+    }
+  }
+  if (opts.signal.aborted) {
+    release()
+    return Promise.resolve({ code: null, signal: null, output: '', timedOut: false, cancelled: true })
+  }
   const win = opts.platform === 'win32'
   return new Promise((resolve, reject) => {
-    const child = spawn(command, {
-      cwd: opts.cwd,
-      env: opts.env,
-      shell: true,
-      detached: !win,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-    })
+    const common = { cwd: opts.cwd, env: plan.env, stdio: ['ignore', 'pipe', 'pipe'] as ('ignore' | 'pipe')[], windowsHide: true }
+    let child: ReturnType<typeof spawn>
+    try {
+      child = plan.sandboxed
+        ? spawn(plan.file, plan.args, { ...common, shell: false, detached: true })
+        : spawn(plan.file, { ...common, shell: true, detached: !win })
+    } catch (e) {
+      release()
+      return reject(e)
+    }
     const hook = (fn: ((pid: number) => void) | undefined) => {
       if (!fn || child.pid === undefined) return
       try {
@@ -154,6 +178,7 @@ export function runShell(command: string, opts: RunShellOpts): Promise<ShellRun>
       for (const t of timers) clearTimeout(t)
       opts.signal.removeEventListener('abort', onAbort)
       hook(opts.onClose)
+      release()
       resolve({ code, signal, output: out.text(), timedOut, cancelled })
     }
 
@@ -170,10 +195,19 @@ export function runShell(command: string, opts: RunShellOpts): Promise<ShellRun>
       for (const t of timers) clearTimeout(t)
       opts.signal.removeEventListener('abort', onAbort)
       hook(opts.onClose)
+      release()
       reject(e)
     })
     child.on('close', (code, signal) => finish(code, signal))
   })
+}
+
+const levelOf = (sb: Pick<SandboxService, 'status'>, sessionId: string): ShellPlan['level'] => {
+  try {
+    return sb.status(sessionId).level
+  } catch {
+    return 'none'
+  }
 }
 
 export const clampTimeout = (ms: number | undefined, min = MIN_TIMEOUT) => Math.min(MAX_TIMEOUT, Math.max(min, ms ?? DEFAULT_TIMEOUT))
@@ -197,14 +231,26 @@ export function shellTool(deps: ShellDeps = {}): Tool {
       const b = base()
       const home = b.HOME ?? b.USERPROFILE ?? homedir()
       const env = shellEnv(b, { platform: process.platform, home, loginPath: await loginPath().catch(() => '') })
+      const sb = deps.sandbox
+      let plan: ShellPlan
+      if (!sb) plan = unsandboxedPlan(args.command, env)
+      else {
+        try {
+          plan = await sb.plan(args.command, { sessionId: ctx.sessionId, cwd: ctx.cwd, spillDir: ctx.spillDir }, env)
+        } catch (e) {
+          // 沙箱配置生成失败:命令失败,绝不无沙箱执行
+          return { content: `沙箱准备失败,命令未执行:${e instanceof Error ? e.message : String(e)}`, isError: true, meta: { sandbox: levelOf(sb, ctx.sessionId) } }
+        }
+      }
+      const meta = { sandbox: plan.level }
       const reg = deps.registry
-      const r = await runShell(args.command, {
-        cwd: ctx.cwd, env, timeoutMs, signal: ctx.signal, platform: process.platform,
+      const r = await runShell(plan, {
+        cwd: ctx.cwd, timeoutMs, signal: ctx.signal, platform: process.platform,
         ...(reg && { onSpawn: pid => reg.add(pid), onClose: pid => reg.settle(pid) }),
       })
-      if (r.cancelled) return { content: `已取消\n${r.output}`, isError: true } // 取消后的宽限期里超时也触发 → 仍报取消
-      if (r.timedOut) return { content: `timeout after ${timeoutMs} ms\n${r.output}`, isError: true }
-      return { content: `exit ${r.code ?? r.signal}\n${r.output}` }
+      if (r.cancelled) return { content: `已取消\n${r.output}`, isError: true, meta } // 取消后的宽限期里超时也触发 → 仍报取消
+      if (r.timedOut) return { content: `timeout after ${timeoutMs} ms\n${r.output}`, isError: true, meta }
+      return { content: `exit ${r.code ?? r.signal}\n${r.output}`, meta }
     },
   }
 }
