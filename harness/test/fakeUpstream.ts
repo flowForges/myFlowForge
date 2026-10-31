@@ -50,8 +50,8 @@ function readHead(sock: Socket, first: Buffer = Buffer.alloc(0)): Promise<{ head
   })
 }
 
-/** 源站行为:第一个字节块像 HTTP 请求就回 HTTP,否则回显 */
-function serveOrigin(sock: Socket, inner: SeenRequest[], first: Buffer) {
+/** 源站行为:第一个字节块像 HTTP 请求就回 HTTP(`reply` 给了就原样回它),否则回显 */
+function serveOrigin(sock: Socket, inner: SeenRequest[], first: Buffer, reply?: string) {
   const start = (chunk: Buffer) => {
     if (HTTP_START.test(chunk.toString('latin1'))) {
       void readHead(sock, chunk).then((r) => {
@@ -59,6 +59,7 @@ function serveOrigin(sock: Socket, inner: SeenRequest[], first: Buffer) {
         const req = parseHead(r.head)
         inner.push(req)
         const body = `ok ${req.line.split(' ')[1]}`
+        if (reply !== undefined) return void sock.end(reply, 'latin1')
         sock.end(`HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: ${body.length}\r\nX-Origin: fake\r\nConnection: close\r\n\r\n${body}`)
       })
       return
@@ -95,7 +96,8 @@ function listen(onConn: (s: Socket) => void, extra: Pick<FakeServer, 'connects' 
   })
 }
 
-export function startFakeUpstream(o: { status?: number } = {}): Promise<FakeServer> {
+/** `established`:代替默认的 `HTTP/1.1 200 Connection Established` 状态行 */
+export function startFakeUpstream(o: { status?: number; established?: string } = {}): Promise<FakeServer> {
   const connects: SeenRequest[] = []
   const inner: SeenRequest[] = []
   return listen((sock) => {
@@ -106,13 +108,14 @@ export function startFakeUpstream(o: { status?: number } = {}): Promise<FakeServ
       if (!req.line.startsWith('CONNECT ')) return void sock.end('HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n')
       const status = o.status ?? 200
       if (status !== 200) return void sock.end(`HTTP/1.1 ${status} Nope\r\nContent-Length: 0\r\n\r\n`)
-      sock.write('HTTP/1.1 200 Connection Established\r\n\r\n')
+      sock.write(`${o.established ?? 'HTTP/1.1 200 Connection Established'}\r\n\r\n`)
       serveOrigin(sock, inner, r.rest)
     })
   }, { connects, inner })
 }
 
-export function startFakeOrigin(): Promise<FakeServer> {
+/** `reply`:对 HTTP 请求原样回这段字节(latin1) */
+export function startFakeOrigin(o: { reply?: string } = {}): Promise<FakeServer> {
   const inner: SeenRequest[] = []
-  return listen(sock => serveOrigin(sock, inner, Buffer.alloc(0)), { connects: [], inner })
+  return listen(sock => serveOrigin(sock, inner, Buffer.alloc(0), o.reply), { connects: [], inner })
 }

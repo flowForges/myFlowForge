@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync, existsSync } from 'node:fs'
 import { connect, isIP, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -29,8 +29,8 @@ async function waitFor(cond: () => boolean, ms = 2000) {
 
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms))
 
-async function fake(kind: 'upstream' | 'origin', o: { status?: number } = {}): Promise<FakeServer> {
-  const s = kind === 'upstream' ? await startFakeUpstream(o) : await startFakeOrigin()
+async function fake(kind: 'upstream' | 'origin', o: { status?: number; established?: string; reply?: string } = {}): Promise<FakeServer> {
+  const s = kind === 'upstream' ? await startFakeUpstream(o) : await startFakeOrigin(o)
   closers.push(s.close)
   return s
 }
@@ -531,7 +531,7 @@ describe('startProxy — limits and lifecycle', () => {
   it.skipIf(process.platform === 'win32')('the Unix-socket listener behaves the same', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'mffpx-'))
     tmpDirs.push(dir)
-    const unixPath = join(dir, 'p.sock')
+    const unixPath = join(dir, 'px', 'p.sock')
     const up = await fake('upstream')
     const p = await proxy({ allow: () => NPM, upstream: upstreamAt(up), lookup: fakeLookup({}).lookup, unixPath, onDeny: () => {} })
     expect((await connectReq(unixPath, 'evil.example:443')).status).toBe(403)
@@ -539,8 +539,104 @@ describe('startProxy — limits and lifecycle', () => {
     expect(r.status).toBe(200)
     expect(await echo(r.sock, 'over unix', r.rest)).toBe('over unix')
     expect(up.connects.map(c => c.line)).toEqual(['CONNECT registry.npmjs.org:443 HTTP/1.1'])
+    expect(statSync(join(dir, 'px')).mode & 0o777).toBe(0o700)
     await p.close()
     await expect(open(unixPath)).rejects.toThrow()
+    expect(existsSync(join(dir, 'px'))).toBe(false)
+  })
+
+  it.skipIf(process.platform === 'win32')('the Unix-socket dir must be private: symlinks, shared dirs and taken paths refuse to start', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mffpx-'))
+    tmpDirs.push(dir)
+    const elsewhere = join(dir, 'elsewhere')
+    mkdirSync(elsewhere, { mode: 0o700 })
+    symlinkSync(elsewhere, join(dir, 'link'))
+    await expect(startProxy({ allow: () => [], unixPath: join(dir, 'link', 'p.sock'), onDeny: () => {} })).rejects.toThrow(/not private/)
+    mkdirSync(join(dir, 'shared'))
+    chmodSync(join(dir, 'shared'), 0o755)
+    await expect(startProxy({ allow: () => [], unixPath: join(dir, 'shared', 'p.sock'), onDeny: () => {} })).rejects.toThrow(/not private/)
+    mkdirSync(join(dir, 'taken'), { mode: 0o700 })
+    writeFileSync(join(dir, 'taken', 'p.sock'), 'x')
+    await expect(startProxy({ allow: () => [], unixPath: join(dir, 'taken', 'p.sock'), onDeny: () => {} })).rejects.toThrow(/taken/)
+    // 一个遗留的套接字文件可以被替换(上次崩溃留下的)
+    const first = await proxy({ allow: () => [], unixPath: join(dir, 'again', 'p.sock'), onDeny: () => {} })
+    await first.close()
+  })
+})
+
+describe('startProxy — hostile peers (review fixes)', () => {
+  it('an origin reason phrase with a control byte does not crash the worker; the phrase is not passed on', async () => {
+    const origin = await fake('origin', { reply: 'HTTP/1.1 200 O\x01K\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi' })
+    const p = await proxy({ allow: () => NPM, lookup: fakeLookup({ 'registry.npmjs.org': [PUBLIC] }).lookup, dial: fakeDial(origin).dial, onDeny: () => {} })
+    const res = await exchange(p.port, 'GET http://registry.npmjs.org/ HTTP/1.1\r\nHost: registry.npmjs.org\r\n\r\n')
+    expect(res).toMatch(/^HTTP\/1\.1 (200 OK|502 Bad Gateway)\r\n/)
+    expect(res).not.toContain('\x01')
+    // 代理还活着
+    expect((await connectReq(p.port, 'registry.npmjs.org:443')).status).toBe(200)
+  })
+
+  it('a 101 from the origin → 502 and the client connection closes', async () => {
+    const origin = await fake('origin', { reply: 'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n' })
+    const p = await proxy({ allow: () => NPM, lookup: fakeLookup({ 'registry.npmjs.org': [PUBLIC] }).lookup, dial: fakeDial(origin).dial, onDeny: () => {} })
+    const res = await exchange(p.port, 'GET http://registry.npmjs.org/ HTTP/1.1\r\nHost: registry.npmjs.org\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n')
+    expect(res).toMatch(/^HTTP\/1\.1 502/)
+  })
+
+  it('an upstream 200 with an empty reason phrase is accepted', async () => {
+    const up = await fake('upstream', { established: 'HTTP/1.1 200 ' })
+    const p = await proxy({ allow: () => NPM, upstream: upstreamAt(up), lookup: fakeLookup({}).lookup, onDeny: () => {} })
+    const r = await connectReq(p.port, 'registry.npmjs.org:443')
+    expect(r.status).toBe(200)
+    expect(await echo(r.sock, 'bare', r.rest)).toBe('bare')
+    const up2 = await fake('upstream', { established: 'HTTP/1.1 200' })
+    const p2 = await proxy({ allow: () => NPM, upstream: upstreamAt(up2), lookup: fakeLookup({}).lookup, onDeny: () => {} })
+    expect((await connectReq(p2.port, 'registry.npmjs.org:443')).status).toBe(200)
+  })
+
+  it('a CONNECT pipelined after a denied GET is not served', async () => {
+    const origin = await fake('origin')
+    const { dial, calls } = fakeDial(origin)
+    const p = await proxy({ allow: () => ['ok.test'], lookup: fakeLookup({ 'ok.test': [PUBLIC] }).lookup, dial, onDeny: () => {} })
+    const res = await exchange(p.port, 'GET http://evil.test/ HTTP/1.1\r\nHost: evil.test\r\n\r\nCONNECT ok.test:443 HTTP/1.1\r\nHost: ok.test:443\r\n\r\n')
+    expect(res).toMatch(/^HTTP\/1\.1 403/)
+    expect(res).not.toContain('200')
+    await delay(50)
+    expect(calls).toEqual([])
+  })
+
+  it('denied connections give up their slot and are closed by the proxy even if the client never closes', async () => {
+    const p = await proxy({ allow: () => [], maxConns: 2, onDeny: () => {} })
+    const held: Socket[] = []
+    for (let i = 0; i < 2; i++) {
+      const s = await new Promise<Socket>((resolve) => {
+        const c = connect({ port: p.port, host: '127.0.0.1', allowHalfOpen: true }, () => resolve(c))
+        clients.add(c)
+        c.on('error', () => {})
+        c.resume()
+      })
+      s.write('CONNECT evil.test:443 HTTP/1.1\r\nHost: evil.test:443\r\n\r\n')
+      held.push(s)
+    }
+    await delay(50)
+    // 名额已让出:第三个连接拿到 403 而不是 503
+    expect((await connectReq(p.port, 'evil.test:443')).status).toBe(403)
+    const ended = held.map(s => new Promise<boolean>(r => (s.readableEnded ? r(true) : s.once('end', () => r(true)))))
+    expect(await closedWithin(Promise.all(ended), 2000)).toBe(true)
+  })
+
+  it('a flood of connections over the limit that never close does not pile up sockets in the proxy', async () => {
+    const p = await proxy({ allow: () => [], maxConns: 4, onDeny: () => {} })
+    const sockCount = () => process.getActiveResourcesInfo().filter(r => r === 'TCPSocketWrap').length
+    const base = sockCount()
+    const N = 200
+    await Promise.all(Array.from({ length: N }, () => new Promise<void>((resolve) => {
+      const c = connect({ port: p.port, host: '127.0.0.1', allowHalfOpen: true }, () => resolve())
+      clients.add(c)
+      c.on('error', () => resolve())
+    })))
+    // 客户端这一侧的 N 个都还开着;代理那一侧只该剩下名额内的 4 个
+    await waitFor(() => sockCount() - base <= N + 4, 3000)
+    expect(sockCount() - base).toBeLessThanOrEqual(N + 4)
   })
 })
 

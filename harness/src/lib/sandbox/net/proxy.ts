@@ -3,10 +3,11 @@
 // 每一步(解析、直连、上游 CONNECT、NO_PROXY、拒绝事件)只用 checkHost 返回的规范主机名,不用请求原文;
 // 直连时解析一次、检查每个地址、连的就是检查过的那个 IP(不二次解析,挡 DNS rebinding)
 import { lookup as dnsLookup } from 'node:dns/promises'
-import { chmodSync, unlinkSync } from 'node:fs'
+import { lstatSync, mkdirSync, rmdirSync, unlinkSync } from 'node:fs'
 import { createServer as createHttpServer, request as httpRequest, type IncomingMessage, type ServerResponse } from 'node:http'
 import { BlockList, connect, createServer as createNetServer, type Server, type Socket } from 'node:net'
 import { networkInterfaces } from 'node:os'
+import { dirname } from 'node:path'
 import { deniedClass, parseIp } from './addr'
 import { checkHost, normalizeHost } from './domains'
 
@@ -69,6 +70,33 @@ class ProxyError extends Error {
   }
 }
 
+const REFUSE_GRACE_MS = 1000
+
+/**
+ * Unix socket 所在目录:代理自己建(0700);已存在时必须是本用户的真目录(lstat,不跟符号链接)且组 / 其他人无权限。
+ * 目录保护套接字本身,所以不 chmod 套接字文件(chmod 会跟着符号链接走)。路径上已有的非套接字文件 → 拒绝启动
+ */
+function prepareUnixDir(path: string): string {
+  const dir = dirname(path)
+  try {
+    mkdirSync(dir, { mode: 0o700 })
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e
+  }
+  const st = lstatSync(dir)
+  const uid = process.getuid?.()
+  if (!st.isDirectory() || (uid !== undefined && st.uid !== uid) || (st.mode & 0o077) !== 0) throw new Error('unix socket dir is not private')
+  let old
+  try {
+    old = lstatSync(path)
+  } catch {
+    return dir
+  }
+  if (!old.isSocket()) throw new Error('unix socket path is taken')
+  unlinkSync(path)
+  return dir
+}
+
 const bad = () => new ProxyError(400, { host: '', port: 0, reason: 'bad_request' })
 
 /** `host:port` / `[v6]:port`;没有端口时用 defaultPort(CONNECT 必须带端口)。userinfo、%、空白、路径字符 → undefined */
@@ -124,7 +152,7 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   let t: NodeJS.Timeout | undefined
   return Promise.race([
     p,
-    new Promise<never>((_, reject) => { t = setTimeout(() => reject(new Error('timeout')), ms) }),
+    new Promise<never>((_, reject) => { t = setTimeout(() => reject(new Error('timeout')), ms).unref() }),
   ]).finally(() => clearTimeout(t))
 }
 
@@ -141,7 +169,7 @@ function connected(s: Socket, ms: number): Promise<void> {
       cleanup()
       resolve()
     }
-    const t = setTimeout(fail, ms)
+    const t = setTimeout(fail, ms).unref()
     const cleanup = () => {
       clearTimeout(t)
       s.off('connect', ok)
@@ -172,7 +200,7 @@ function upstreamReply(s: Socket, ms: number): Promise<void> {
       }
       cleanup()
       s.pause()
-      if (!/^HTTP\/1\.[01] 2\d\d /.test(buf.subarray(0, i + 2).toString('latin1'))) {
+      if (!/^HTTP\/1\.[01] 2\d\d(?: |\r)/.test(buf.subarray(0, i + 2).toString('latin1'))) {
         s.destroy()
         return reject(new ProxyError(502))
       }
@@ -180,7 +208,7 @@ function upstreamReply(s: Socket, ms: number): Promise<void> {
       if (rest.length) s.unshift(rest)
       resolve()
     }
-    const t = setTimeout(fail, ms)
+    const t = setTimeout(fail, ms).unref()
     const cleanup = () => {
       clearTimeout(t)
       s.off('data', onData)
@@ -220,7 +248,8 @@ export async function startProxy(o: ProxyOptions): Promise<ProxyHandle> {
   const localAddrs = o.localAddrs ?? interfaceAddrs
 
   const clients = new Set<Socket>() // 计入上限的客户端连接
-  const others = new Set<Socket>() // 出站连接与被 503 的连接
+  const others = new Set<Socket>() // 出站连接
+  const refusing = new Set<Socket>() // 已回了拒绝、等着关的连接;不占名额
   const deadlines = new Map<Socket, NodeJS.Timeout>()
   const served = new WeakSet<Socket>()
   let closing = false
@@ -244,6 +273,23 @@ export async function startProxy(o: ProxyOptions): Promise<ProxyHandle> {
   const clearDeadline = (s: Socket) => {
     clearTimeout(deadlines.get(s))
     deadlines.delete(s)
+  }
+
+  /** 拒绝过的连接:不再读,让出名额,写完就关;对端不收也最多再留 1 s */
+  const release = (s: Socket) => {
+    clearDeadline(s)
+    s.pause()
+    if (clients.delete(s)) armIdle()
+    if (refusing.size >= maxConns * 4) return void s.destroy()
+    refusing.add(s)
+    s.on('close', () => refusing.delete(s))
+    setTimeout(() => s.destroy(), REFUSE_GRACE_MS).unref()
+  }
+
+  const refuse = (s: Socket, status: number) => {
+    if (s.destroyed) return
+    release(s)
+    if (!s.destroyed) s.end(rawResponse(status), () => s.destroy())
   }
 
   const deny = (e: unknown): number => {
@@ -319,6 +365,9 @@ export async function startProxy(o: ProxyOptions): Promise<ProxyHandle> {
 
   async function onConnect(req: IncomingMessage, sock: Socket, head: Buffer) {
     clearDeadline(sock)
+    // 每个客户端连接只处理一个请求
+    if (served.has(sock)) return
+    served.add(sock)
     try {
       const t = parseAuthority(req.url ?? '')
       if (!t) throw bad()
@@ -328,8 +377,7 @@ export async function startProxy(o: ProxyOptions): Promise<ProxyHandle> {
       if (head.length) remote.write(head)
       splice(sock, remote)
     } catch (e) {
-      const status = deny(e)
-      if (!sock.destroyed) sock.end(rawResponse(status))
+      refuse(sock, deny(e))
     }
   }
 
@@ -341,8 +389,12 @@ export async function startProxy(o: ProxyOptions): Promise<ProxyHandle> {
     if (served.has(sock)) return void req.resume()
     served.add(sock)
     const fail = (status: number) => {
-      if (res.headersSent) return void res.destroy()
+      if (res.headersSent || res.destroyed) {
+        res.destroy()
+        return void sock.destroy()
+      }
       const body = bodyFor(status)
+      release(sock)
       res.writeHead(status, { 'Content-Type': 'text/plain', 'Content-Length': body.length }).end(body)
     }
     let remote: Socket
@@ -359,14 +411,34 @@ export async function startProxy(o: ProxyOptions): Promise<ProxyHandle> {
     const hostHeader = target.port === 80 ? (host.includes(':') ? `[${host}]` : host) : authority(host, target.port)
     const headers = ['Host', hostHeader, ...forwardable(req.rawHeaders)]
     if (req.headers['transfer-encoding']) headers.push('Transfer-Encoding', 'chunked')
-    const out = httpRequest({ createConnection: () => remote, method: req.method, path: target.path, headers, setHost: false })
+    let out: ReturnType<typeof httpRequest>
+    try {
+      out = httpRequest({ createConnection: () => remote, method: req.method, path: target.path, headers, setHost: false })
+    } catch {
+      remote.destroy()
+      return fail(502)
+    }
     // 上游握手后套接字是暂停的
     out.once('socket', s => s.resume())
     out.on('response', (up) => {
-      const h = forwardable(up.rawHeaders)
-      res.writeHead(up.statusCode ?? 502, up.statusMessage, h)
-      up.pipe(res)
       up.on('error', () => res.destroy())
+      try {
+        const code = up.statusCode ?? 0
+        if (code < 200 || code > 599) throw new Error('status')
+        // 原因短语不往回传:写回去时 Node 会校验,源站给的控制字节会让 writeHead 抛出
+        res.writeHead(code, forwardable(up.rawHeaders))
+      } catch {
+        up.destroy()
+        remote.destroy()
+        return fail(502)
+      }
+      up.pipe(res)
+    })
+    // 101:不支持升级
+    out.on('upgrade', (_r, s: Socket) => {
+      s.destroy()
+      remote.destroy()
+      fail(502)
     })
     out.on('error', () => {
       remote.destroy()
@@ -377,21 +449,37 @@ export async function startProxy(o: ProxyOptions): Promise<ProxyHandle> {
   }
 
   const http = createHttpServer({ requestTimeout: 0 })
-  http.on('connect', (req: IncomingMessage, sock: Socket, head: Buffer) => void onConnect(req, sock, head))
-  http.on('request', (req: IncomingMessage, res: ServerResponse) => void onRequest(req, res))
+  // 处理函数里的任何异常都只关掉这一个连接,不能冒出去弄死工作进程
+  http.on('connect', (req: IncomingMessage, sock: Socket, head: Buffer) => {
+    onConnect(req, sock, head).catch(() => sock.destroy())
+  })
+  http.on('request', (req: IncomingMessage, res: ServerResponse) => {
+    onRequest(req, res).catch(() => {
+      res.destroy()
+      req.socket.destroy()
+    })
+  })
   http.on('clientError', (_err, sock: Socket) => {
-    if (sock.writable) sock.end(rawResponse(400))
-    else sock.destroy()
+    try {
+      if (sock.writable) refuse(sock, 400)
+      else sock.destroy()
+    } catch {
+      sock.destroy()
+    }
   })
 
   const onConnection = (sock: Socket) => {
-    sock.on('error', () => {})
-    if (closing || clients.size >= maxConns) {
-      track(sock)
-      sock.resume()
-      sock.end(rawResponse(503))
-      return
+    try {
+      accept(sock)
+    } catch {
+      sock.destroy()
     }
+  }
+
+  const accept = (sock: Socket) => {
+    sock.on('error', () => {})
+    if (closing) return void sock.destroy()
+    if (clients.size >= maxConns) return refuse(sock, 503)
     clients.add(sock)
     clearTimeout(idleTimer)
     sock.on('close', () => {
@@ -406,6 +494,7 @@ export async function startProxy(o: ProxyOptions): Promise<ProxyHandle> {
   }
 
   const servers: Server[] = []
+  let unixDir: string | undefined
   const listen = (s: Server, ...args: unknown[]) => new Promise<void>((resolve, reject) => {
     s.once('error', reject)
     s.listen(...(args as [number, string]), () => {
@@ -422,7 +511,15 @@ export async function startProxy(o: ProxyOptions): Promise<ProxyHandle> {
     deadlines.clear()
     for (const s of clients) s.destroy()
     for (const s of others) s.destroy()
+    for (const s of refusing) s.destroy()
     await Promise.all(servers.map(s => new Promise<void>(r => s.close(() => r()))))
+    if (unixDir) {
+      try {
+        rmdirSync(unixDir)
+      } catch {
+        // 不空或已不在:留着
+      }
+    }
     resolveClosed()
   }
 
@@ -431,15 +528,10 @@ export async function startProxy(o: ProxyOptions): Promise<ProxyHandle> {
     servers.push(tcp)
     await listen(tcp, 0, '127.0.0.1')
     if (o.unixPath) {
-      try {
-        unlinkSync(o.unixPath)
-      } catch {
-        // 不存在
-      }
+      unixDir = prepareUnixDir(o.unixPath)
       const unix = createNetServer(onConnection)
       servers.push(unix)
       await listen(unix, o.unixPath)
-      chmodSync(o.unixPath, 0o600)
     }
   } catch (e) {
     await close()
