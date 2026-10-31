@@ -170,9 +170,16 @@ describe('ACP bridge', () => {
 })
 
 /** 假工作进程:session.prompt 时按脚本同步吐事件(先于响应 = 走 early 缓冲),记录全部调用 */
-function fakeWorker(script: { beforeReply?: KernelEvent[]; afterReply?: KernelEvent[]; onRespond?: (p: any) => KernelEvent[] }) {
+function fakeWorker(script: { beforeReply?: KernelEvent[]; afterReply?: KernelEvent[]; onRespond?: (p: any) => KernelEvent[]; holdPrompt?: boolean }) {
   const calls: Array<{ method: string; params: any }> = []
   let listener: (e: KernelEvent) => void = () => {}
+  const closeCbs = new Set<() => void>()
+  const held: Array<(e: Error) => void> = []
+  /** 与真客户端同序:先让在途调用以 connection closed 失败,再通知 onClose */
+  const drop = () => {
+    for (const reject of held.splice(0)) reject(new Error('connection closed'))
+    for (const cb of [...closeCbs]) cb()
+  }
   let seq = 0
   const emit = (es: KernelEvent[]) => { for (const e of es) listener({ ...e, seq: ++seq }) }
   const c: MffaiClient = {
@@ -182,6 +189,7 @@ function fakeWorker(script: { beforeReply?: KernelEvent[]; afterReply?: KernelEv
       if (method === 'events.subscribe') return {}
       if (method === 'session.create') return { sessionId: 'S' }
       if (method === 'session.prompt') {
+        if (script.holdPrompt) return new Promise((_res, reject) => { held.push(reject) })
         emit(script.beforeReply ?? [])
         setTimeout(() => emit(script.afterReply ?? []), 0)
         return { accepted: true, turnId: 'T' }
@@ -193,10 +201,10 @@ function fakeWorker(script: { beforeReply?: KernelEvent[]; afterReply?: KernelEv
       return {}
     },
     onEvent(cb) { listener = cb; return () => {} },
-    onClose() { return () => {} },
+    onClose(cb) { closeCbs.add(cb); return () => void closeCbs.delete(cb) },
     close() {},
   } as MffaiClient
-  return { c, calls, emit }
+  return { c, calls, emit, drop }
 }
 const ev = (type: string, payload: Record<string, unknown>): KernelEvent => ({ seq: 0, ts: 0, type, sessionId: 'S', payload: { turnId: 'T', ...payload } } as KernelEvent)
 const ended = ev('turn.ended', {})
@@ -305,12 +313,35 @@ describe('ACP bridge: tools and approvals', () => {
 
   it('kernel settles the approval (timeout) -> the open permission prompt is withdrawn', async () => {
     const w = fakeWorker({ afterReply: [asked] })
-    const seen = { aborted: false }
-    let atStop = false
-    const { stop, perms } = await runFake(w, untilWithdrawn(seen, () => w.emit([resolvedBy('timeout'), ended])), () => { atStop = seen.aborted })
+    let aborted = false
+    // 先只发 resolved;收回发生之后才结束本轮 → 收回只能由 resolved 引起(否则本轮永不结束,测试超时)
+    const answer = (_p: unknown, signal: AbortSignal) => new Promise(res => {
+      signal.addEventListener('abort', () => {
+        aborted = true
+        res({ outcome: { outcome: 'cancelled' } })
+        setTimeout(() => w.emit([ended]), 0)
+      }, { once: true })
+      w.emit([resolvedBy('timeout')])
+    })
+    const { stop, perms } = await runFake(w, answer)
     expect(stop).toBe('end_turn')
     expect(perms).toHaveLength(1)
-    expect(atStop).toBe(true)
+    expect(aborted).toBe(true)
+  })
+
+  it('worker connection drops before the prompt response -> rejects with mff-ai 连接已断开', async () => {
+    const w = fakeWorker({ holdPrompt: true })
+    const { a, b } = pair()
+    void runBridge({ stream: b, connect: async () => w.c })
+    await client({ name: 't' }).connectWith(a, async (cx) => {
+      await cx.request('initialize', INIT)
+      const { sessionId } = await cx.request('session/new', { cwd: '/x', mcpServers: [] })
+      const p = cx.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'go' }] })
+      const assertion = expect(p).rejects.toThrow('mff-ai 连接已断开')
+      await wait(() => w.calls.some(c => c.method === 'session.prompt'))
+      w.drop()
+      await assertion
+    })
   })
 
   it('turn ends while the prompt is unanswered -> end_turn, prompt withdrawn', async () => {
@@ -343,5 +374,6 @@ describe('ACP bridge: tools and approvals', () => {
     w.emit([ev('message.assistant.delta', { text: 'a' }), asked])
     await wait(() => w.calls.some(c => c.method === 'approval.respond'))
     expect(w.calls.filter(c => c.method === 'approval.respond').map(c => c.params)).toEqual([{ approvalId: 'A1', decision: 'deny' }])
+    w.emit([ended]) // 结束本轮,不留悬着的 prompt 处理
   })
 })
