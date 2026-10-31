@@ -61,10 +61,14 @@ function balanced(s: string): boolean {
   return depth === 0
 }
 
+/** 用例列表:没有,或字符串数组 */
+const stringList = (v: unknown) => v === undefined || (Array.isArray(v) && v.every(x => typeof x === 'string'))
+
 /** 解析一条规则;无效 → RuleError(syntax:写法 / 括号;subject:主语不是 read / write / shell;pattern:模式不可用) */
 export function parseRule(spec: RuleSpec, index = 0): Rule | RuleError {
   const err = (reason: RuleError['reason']): RuleError => ({ index, rule: spec.rule, reason })
   if (!EFFECTS.has(spec.effect) || typeof spec.rule !== 'string') return err('syntax')
+  if (!stringList(spec.match) || !stringList(spec.noMatch)) return err('syntax')
   const text = spec.rule.trim()
   const open = text.indexOf('(')
   if (open < 1 || !text.endsWith(')')) return err('syntax')
@@ -178,23 +182,39 @@ function matchesPath(rule: Rule, resource: string, ctx: MatchCtx): boolean {
 /** 切段:`; && || | &`、换行、`$(`、反引号与括号(子 shell);`&&` / `||` 切出的空段丢掉 */
 const SEGMENT_SPLIT = /\$\(|[;&|\n\r`()]/
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^ ]*) ?/
-const PREFIX_COMMANDS = new Set(['env', 'command', 'exec'])
+/** 前缀命令 → 带参数的选项(`env -u NAME`、`exec -a name`):选项与其参数一起去掉 */
+const PREFIX_COMMANDS = new Map<string, Set<string>>([
+  ['env', new Set(['-u', '--unset', '-C', '--chdir'])],
+  ['command', new Set()],
+  ['exec', new Set(['-a'])],
+  ['time', new Set()],
+])
+/** 段首的 shell 关键字与保留字(`if git push`、`{ git push`、`! git push`) */
+const KEYWORDS = new Set(['then', 'do', 'else', 'elif', 'if', 'while', 'until', '{', '!'])
 
-/** 去掉段首的 `VAR=x` 赋值与 `env` / `command` / `exec` 前缀(及紧跟它们的 `-` 选项) */
+/**
+ * 去掉段首的 `VAR=x` 赋值、shell 关键字与 `env` / `command` / `exec` / `time` 前缀
+ * (及紧跟它们的 `-` 选项;带参数的选项连参数一起)
+ */
 function stripPrefixes(segment: string): string {
-  let s = collapse(segment)
-  let afterPrefix = false
+  let words = collapse(segment).split(' ')
+  let options: Set<string> | undefined
   for (;;) {
+    const s = words.join(' ')
     const m = ASSIGNMENT.exec(s)
     if (m) {
-      s = s.slice(m[0].length)
+      words = s.slice(m[0].length).split(' ')
       continue
     }
-    const sp = s.indexOf(' ')
-    const word = sp < 0 ? s : s.slice(0, sp)
-    if (word === '' || !(PREFIX_COMMANDS.has(word) || (afterPrefix && word.startsWith('-')))) return s
-    afterPrefix = true
-    s = sp < 0 ? '' : s.slice(sp + 1)
+    const [word] = words
+    if (word === '') return ''
+    const prefix = PREFIX_COMMANDS.get(word)
+    if (prefix) options = prefix
+    else if (options && word.startsWith('-')) {
+      if (options.has(word)) words.shift() // 选项的参数
+    } else if (KEYWORDS.has(word)) options = undefined
+    else return s
+    words.shift()
   }
 }
 

@@ -42,6 +42,16 @@ describe('parseRule', () => {
     expect(parseRule({ effect, rule: text }, 3)).toEqual({ index: 3, rule: text, reason })
   })
 
+  it.each<[string, unknown]>([
+    ['match', 'git push'],
+    ['match', [1]],
+    ['noMatch', { a: 'x' }],
+    ['noMatch', ['ok', null]],
+  ])('rejects non-string-array %s %j as syntax instead of throwing', (key, value) => {
+    const spec = { effect: 'deny', rule: 'shell(git push*)', [key]: value } as unknown as RuleSpec
+    expect(parseRule(spec, 2)).toEqual({ index: 2, rule: 'shell(git push*)', reason: 'syntax' })
+  })
+
   it('rejects an unknown effect as syntax', () => {
     expect(parseRule({ effect: 'permit' as Effect, rule: 'read(x)' })).toMatchObject({ reason: 'syntax' })
   })
@@ -73,8 +83,25 @@ describe('matches: shell', () => {
     ['(git push)', true],
     ['  git   push\t ', true],
     ['git pushd', true],
+    ['if git push; then git status; fi', true],
+    ['if true; then git push; fi', true],
+    ['for x in a; do git push; done', true],
+    ['while true; do git push; done', true],
+    ['until git push; do :; done', true],
+    ['if false; then :; elif git push; then :; fi', true],
+    ['if false; then :; else git push; fi', true],
+    ['{ git push; }', true],
+    ['! git push', true],
+    ['time git push', true],
+    ['time -p git push', true],
+    ['env -u HOME git push', true],
+    ['env --unset HOME -i - FOO=1 git push', true],
+    ['env -C /tmp git push', true],
+    ['exec -a name git push', true],
+    ['if env -u X time -p git push; then :; fi', true],
     ['git status', false],
     ['echo git push', false],
+    ['echo if git push', false],
   ])('deny shell(git push*) also hits `git pushd`, because `*` is a raw glob: %j → %s', (cmd, want) => {
     expect(matches(rule('deny', 'shell(git push*)'), cmd, LINUX)).toBe(want)
   })
