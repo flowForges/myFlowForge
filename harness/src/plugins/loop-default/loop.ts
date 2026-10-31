@@ -30,7 +30,10 @@ const mapStrings = (v: unknown, f: (s: string) => string): unknown => {
  */
 export function loggedArgs(raw: string): string {
   try {
-    return JSON.stringify(mapStrings(JSON.parse(raw), redact))
+    const parsed: unknown = JSON.parse(raw)
+    const masked = JSON.stringify(mapStrings(parsed, redact))
+    // 没打到任何东西:留原文,重建的历史与当时发给模型的逐字节相同
+    return masked === JSON.stringify(parsed) ? raw : masked
   } catch {
     return JSON.stringify({ _unparsed: redact(raw).slice(0, ARGS_RAW_MAX) })
   }

@@ -268,6 +268,20 @@ describe('loop-default: one coding turn', () => {
     expect(JSON.stringify(calls[1].messages)).toContain(secret)
   })
 
+  it('logged args keep the raw string byte for byte when nothing was redacted', async () => {
+    const raw = '{ "path" : "a.txt",\n  "limit": 5 }'
+    const calls: Call[] = []
+    const k = await boot(calls, n => (n === 1 ? calling('c1', 'read', raw) : say('ok')))
+    const sid = await create(k, { model: CLAUDE })
+    await turn(k, sid, 'q1')
+    await turn(k, sid, 'q2')
+    const parts = pay<{ parts: { type: string; args?: string }[] }>(evs(k, sid).find(e => e.type === 'message.assistant')).parts
+    expect(parts.find(p => p.type === 'tool_call')?.args).toBe(raw)
+    // 下一轮重建的历史与当时发出的完全一样
+    expect(calls[2].messages[1]).toEqual(calls[1].messages[1])
+    expect((calls[2].messages[1].parts[0] as { args: string }).args).toBe(raw)
+  })
+
   it('logged args stay valid JSON (PEM without END) and odd names are redacted and capped', async () => {
     const pem = '-----BEGIN RSA PRIVATE KEY-----\nMIIEabc'
     const longName = `sk-abcdefghijklmnopqrstuvwxyz0123.${'y'.repeat(500)}`

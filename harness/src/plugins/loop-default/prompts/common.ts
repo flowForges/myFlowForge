@@ -10,7 +10,7 @@ export const WORKFLOW = `# How to work
 - When the task is done, stop calling tools and reply.`
 
 export const SAFETY = `# Safety
-- The working directory and the current date are given in an <environment> block at the start of the user's message.
+- The working directory, platform, git status and approval mode are in the <environment> block at the start of the conversation; each user message starts with a <reminder> giving the date it was sent.
 - Stay inside the working directory. Never read or print credentials, keys or tokens.
 - Commands may need the user's approval. If the user denies one, do not retry it; find another way or explain what you need.
 - Never run destructive commands (deleting files outside the task, rewriting git history, force pushes) unless the user asked for exactly that.
