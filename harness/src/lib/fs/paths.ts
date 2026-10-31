@@ -138,53 +138,138 @@ export const RELOCATED_ENV: readonly { name: string; kind: 'dir' | 'file' | 'lis
   { name: 'XDG_CONFIG_HOME', kind: 'xdg' },
 ]
 
-/** 只认本平台的绝对路径;相对值(相对谁都不确定)、空值、含 NUL 的丢掉 */
-function absValues(raw: string | undefined, platform: NodeJS.Platform, list: boolean): string[] {
-  if (!raw) return []
-  const path = pathOf(platform)
-  return (list ? raw.split(path.delimiter) : [raw]).filter(v => v !== '' && !v.includes('\0') && path.isAbsolute(v))
+/** 环境快照的类型:只读,改它是编译错误 */
+export type EnvSnapshot = Readonly<NodeJS.ProcessEnv>
+
+/**
+ * 内核启动时拷一份环境(之后变化不影响判定)。win32 的变量名不区分大小写,
+ * 展开后会保留存储时的大小写(`AppData`)→ 一律转大写,查时也按大写
+ */
+export function snapshotEnv(src: NodeJS.ProcessEnv, platform: NodeJS.Platform): EnvSnapshot {
+  const out: NodeJS.ProcessEnv = {}
+  for (const [k, v] of Object.entries(src)) out[platform === 'win32' ? k.toUpperCase() : k] = v
+  return Object.freeze(out)
 }
 
-/** 环境变量指向的凭据位置(spec §5.1);调用方传启动时的环境快照 */
-export function relocatedCredentialRoots(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string[] {
+/** 按名取值;win32 不区分大小写(快照已转大写,未经快照的环境也找得到) */
+function envGet(env: EnvSnapshot, name: string, platform: NodeJS.Platform): string | undefined {
+  if (platform !== 'win32') return env[name]
+  if (env[name] !== undefined) return env[name]
+  const key = Object.keys(env).find(k => k.toUpperCase() === name)
+  return key === undefined ? undefined : env[key]
+}
+
+/**
+ * `..` 段先按物理路径走(`/w/link/../gpg`、link → /a/b 时工具实际用的是 /a/gpg):
+ * 遇到 `..` 就把已走过的部分 realpath 再取上层。只在本机平台上做;不存在的部分按字面
+ */
+function physicalDotDot(v: string, platform: NodeJS.Platform): string | undefined {
+  if (platform !== process.platform) return undefined
+  const path = pathOf(platform)
+  const segs = v.split(platform === 'win32' ? /[\\/]/ : '/')
+  if (!segs.includes('..')) return undefined
+  let cur = path.parse(path.resolve(v)).root
+  for (const seg of segs.slice(platform === 'win32' ? 1 : 0)) {
+    if (seg === '' || seg === '.') continue
+    if (seg === '..') {
+      try {
+        cur = realpathSync.native(cur)
+      } catch {
+        // 不存在:字面上取上层
+      }
+      cur = path.dirname(cur)
+    } else cur = path.join(cur, seg)
+  }
+  return cur
+}
+
+/**
+ * 取环境变量里的路径:`~`、`~/…`(win32 另认 `~\…`)按 home 展开(gpg、npm、azure-cli 都这样展开);
+ * 其余相对值(相对谁都不确定,含 `~user`)、空值、含 NUL 的丢掉。
+ * 有 `..` 段时字面形态与物理形态都列上(多拒不漏拒)
+ */
+function absValues(raw: string | undefined, platform: NodeJS.Platform, list: boolean, home?: string): string[] {
+  if (!raw) return []
   const path = pathOf(platform)
   const out: string[] = []
+  for (let v of list ? raw.split(path.delimiter) : [raw]) {
+    if (v === '' || v.includes('\0')) continue
+    if (home !== undefined && (v === '~' || v.startsWith('~/') || (platform === 'win32' && v.startsWith('~\\')))) v = path.join(home, v.slice(1))
+    if (!path.isAbsolute(v)) continue
+    out.push(v)
+    const phys = physicalDotDot(v, platform)
+    if (phys !== undefined && phys !== path.resolve(v)) out.push(phys)
+  }
+  return out
+}
+
+/** 环境变量指向的凭据位置(spec §5.1);调用方传启动时的环境快照,给了 home 才展开 `~` */
+export function relocatedCredentialRoots(env: EnvSnapshot, platform: NodeJS.Platform, home?: string): string[] {
+  return relocatedEntries(env, platform, home).map(e => e.root)
+}
+
+function relocatedEntries(env: EnvSnapshot, platform: NodeJS.Platform, home?: string): { name: string; root: string }[] {
+  const path = pathOf(platform)
+  const out: { name: string; root: string }[] = []
   for (const { name, kind } of RELOCATED_ENV) {
-    const vals = absValues(env[name], platform, kind === 'list')
-    if (kind === 'xdg') for (const v of vals) out.push(path.join(v, 'gh'), path.join(v, 'gcloud'))
-    else out.push(...vals)
+    const vals = absValues(envGet(env, name, platform), platform, kind === 'list', home)
+    for (const v of vals) {
+      if (kind === 'xdg') out.push({ name, root: path.join(v, 'gh') }, { name, root: path.join(v, 'gcloud') })
+      else out.push({ name, root: v })
+    }
+  }
+  return out
+}
+
+/**
+ * 取值宽到盖住家目录或文件系统根的变量(如 `CODEX_HOME=$HOME`、`DOCKER_CONFIG=/`):照样拒(多拒不漏拒),
+ * 只给内核记一行诊断。只回变量名与盖住了什么,不回路径
+ */
+export function overbroadRelocations(env: EnvSnapshot, home: string, platform: NodeJS.Platform): { name: string; covers: 'home' | 'root' }[] {
+  const out: { name: string; covers: 'home' | 'root' }[] = []
+  for (const { name, root } of relocatedEntries(env, platform, home)) {
+    const covers = isRootLike(root, platform) ? 'root' : within(home, root, platform, true) ? 'home' : undefined
+    if (covers && !out.some(o => o.name === name)) out.push({ name, covers })
   }
   return out
 }
 
 /** spec §10.1 凭据黑名单 + 05 §5.1 环境变量挪走的位置(不含 mff-ai 数据目录,由调用方加入) */
-export function credentialRoots(home: string, platform: NodeJS.Platform, env: NodeJS.ProcessEnv): string[] {
+export function credentialRoots(home: string, platform: NodeJS.Platform, env: EnvSnapshot): string[] {
   const path = pathOf(platform)
   const roots = HOME_ROOTS.map(r => path.join(home, ...r.split('/')))
-  if (platform === 'win32' && env.APPDATA) roots.push(...['gh', 'GitHub CLI', 'gcloud'].map(r => path.join(env.APPDATA!, r)))
-  roots.push(...relocatedCredentialRoots(env, platform))
+  const appData = envGet(env, 'APPDATA', platform)
+  if (platform === 'win32' && appData) roots.push(...['gh', 'GitHub CLI', 'gcloud'].map(r => path.join(appData, r)))
+  roots.push(...relocatedCredentialRoots(env, platform, home))
   return roots
 }
 
-/** 05 spec §5.2:登录脚本 / 自启动 / git 全局配置,只拒写(写进去下次开终端或登录就执行) */
+const ZSH_FILES = ['.zshrc', '.zprofile', '.zshenv', '.zlogin', '.zlogout']
+
+/**
+ * 05 spec §5.2:登录脚本 / 自启动 / git 全局配置,只拒写(写进去下次开终端或登录就执行)。
+ * `~/.config/zsh`、`~/.zsh` 是常见的 ZDOTDIR(多在 ~/.zshenv 里设,launchd 起的工作进程环境里没有),静态列上
+ */
 export const PERSISTENCE_FILES: readonly string[] = [
   '.bashrc', '.bash_profile', '.bash_login', '.bash_logout', '.zshrc', '.zprofile', '.zshenv', '.zlogin', '.zlogout', '.profile',
   '.config/fish', '.gitconfig', '.config/git', 'Library/LaunchAgents', '.config/autostart', '.config/systemd',
+  ...['.config/zsh', '.zsh'].flatMap(d => ZSH_FILES.map(f => `${d}/${f}`)),
 ]
 
-const ZSH_FILES = ['.zshrc', '.zprofile', '.zshenv', '.zlogin', '.zlogout']
-const XDG_PERSISTENCE = ['fish', 'git', 'autostart', 'systemd']
+const XDG_PERSISTENCE = ['fish', 'git', 'autostart', 'systemd', 'zsh']
 
 /**
  * 持久化文件的位置;env(启动时的快照)另加被挪走的同类文件:
- * `$ZDOTDIR` 下的 zsh 脚本、`$XDG_CONFIG_HOME` 下的 fish / git / autostart / systemd、`$GIT_CONFIG_GLOBAL`
+ * `$ZDOTDIR` 下的 zsh 脚本、`$XDG_CONFIG_HOME` 下的 fish / git / autostart / systemd / zsh 脚本、`$GIT_CONFIG_GLOBAL`
  */
-export function persistenceRoots(home: string, platform: NodeJS.Platform, env: NodeJS.ProcessEnv = {}): string[] {
+export function persistenceRoots(home: string, platform: NodeJS.Platform, env: EnvSnapshot = {}): string[] {
   const path = pathOf(platform)
   const roots = PERSISTENCE_FILES.map(r => path.join(home, ...r.split('/')))
-  for (const v of absValues(env.ZDOTDIR, platform, false)) roots.push(...ZSH_FILES.map(f => path.join(v, f)))
-  for (const v of absValues(env.XDG_CONFIG_HOME, platform, false)) roots.push(...XDG_PERSISTENCE.map(f => path.join(v, f)))
-  roots.push(...absValues(env.GIT_CONFIG_GLOBAL, platform, false))
+  const get = (n: string) => absValues(envGet(env, n, platform), platform, false, home)
+  for (const v of get('ZDOTDIR')) roots.push(...ZSH_FILES.map(f => path.join(v, f)))
+  for (const v of get('XDG_CONFIG_HOME'))
+    roots.push(...XDG_PERSISTENCE.flatMap(f => (f === 'zsh' ? ZSH_FILES.map(z => path.join(v, f, z)) : [path.join(v, f)])))
+  roots.push(...get('GIT_CONFIG_GLOBAL'))
   return roots
 }
 

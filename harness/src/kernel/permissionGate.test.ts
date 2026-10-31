@@ -63,6 +63,10 @@ describe('decide (table)', () => {
     ['write ~/Library/LaunchAgents plist', req('write', '/h/Library/LaunchAgents/x.plist'), atHome, 'deny'],
     ['write ~/.config/systemd/user unit', req('write', '/h/.config/systemd/user/x.service'), atHome, 'deny'],
     ['write ~/.config/autostart entry', req('write', '/h/.config/autostart/x.desktop'), atHome, 'deny'],
+    ['write ~/.config/zsh/.zshrc', req('write', '/h/.config/zsh/.zshrc'), atHome, 'deny'],
+    ['write ~/.zsh/.zshenv', req('write', '/h/.zsh/.zshenv'), atHome, 'deny'],
+    ['read ~/.config/zsh/.zshrc', req('read', '/h/.config/zsh/.zshrc'), atHome, 'allow'],
+    ['write ~/.config/zsh/plugin.zsh is fine', req('write', '/h/.config/zsh/plugin.zsh'), atHome, 'allow'],
     ['write ~/.zshrc.bak is fine', req('write', '/h/.zshrc.bak'), atHome, 'allow'],
     ['write ~/.config/other is fine', req('write', '/h/.config/other/x'), atHome, 'allow'],
     ['NUL sentinel', req('read', resolveToolPath('/h/repo', 'a\0b', { platform: 'linux' })), ask, 'deny'],
@@ -207,6 +211,14 @@ describe('PermissionGate.check (real tree)', () => {
     expect(check(gateFor(outside, 'auto').gate, 'read', resolveToolPath(cwd, 'gpg/x'))).toBe('allow')
   })
 
+  it('GNUPGHOME with a literal ~ is expanded against home and denied', () => {
+    mkdirSync(join(home, 'keys', 'gpg'), { recursive: true })
+    writeFileSync(join(home, 'keys', 'gpg', 'k'), 'k')
+    const { gate, cwd } = gateFor(join(home, 'keys'), 'auto', { GNUPGHOME: '~/keys/gpg' })
+    expect(check(gate, 'read', resolveToolPath(cwd, 'gpg/k'))).toBe('deny')
+    expect(check(gate, 'read', resolveToolPath(cwd, 'other'))).toBe('allow')
+  })
+
   it('a not-yet-existing relocated root is denied too', () => {
     const { gate, cwd } = gateFor(outside, 'auto', { DOCKER_CONFIG: join(outside, 'docker') })
     expect(check(gate, 'write', resolveToolPath(cwd, 'docker/config.json'))).toBe('deny')
@@ -293,5 +305,22 @@ describe('kernel env snapshot', () => {
     // 后来才设的变量也不起作用:session.create 仍按快照判断
     const { sessionId: s2 } = await k.handle('session.create', { commandId: 'c2', cwd: join(work, 'aws') }) as { sessionId: string }
     expect(s2).toBeTruthy()
+  })
+
+  it('logs one line naming an over-broad variable, without its value', async () => {
+    const lines: [string, unknown][] = []
+    const log = { info() {}, error() {}, warn: (m: string, d?: unknown) => { lines.push([m, d]) } }
+    k = await createKernel({ dataDir, plugins: [probe], home, env: { CODEX_HOME: home, DOCKER_CONFIG: '/', GNUPGHOME: join(work, 'gpg') }, log, secrets: { osBackend: false } })
+    const hits = lines.filter(([m]) => m.includes('covers home or root'))
+    expect(hits).toHaveLength(1)
+    expect(hits[0][1]).toEqual({ vars: 'DOCKER_CONFIG:root,CODEX_HOME:home' })
+    expect(JSON.stringify(hits[0])).not.toContain(home)
+  })
+
+  it('no over-broad line for ordinary values', async () => {
+    const lines: string[] = []
+    const log = { info() {}, error() {}, warn: (m: string) => { lines.push(m) } }
+    k = await createKernel({ dataDir, plugins: [probe], home, env: { GNUPGHOME: join(work, 'gpg') }, log, secrets: { osBackend: false } })
+    expect(lines.filter(m => m.includes('covers home or root'))).toEqual([])
   })
 })

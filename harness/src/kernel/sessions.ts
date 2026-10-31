@@ -2,7 +2,7 @@ import { realpathSync, statSync } from 'node:fs'
 import { join, posix, win32 } from 'node:path'
 import type { ApprovalMode, KernelEvent, ModelRef, Toolset } from '../protocol/index'
 import { RpcError } from './rpcError'
-import { isCredentialPath, isRootLike } from '../lib/fs/paths'
+import { isCredentialPath, isRootLike, type EnvSnapshot } from '../lib/fs/paths'
 import { blacklist } from './permissionGate'
 
 // 内核 sessions 服务:从 session.created 载荷重建每个会话的选项,供权限门与循环插件查询
@@ -52,7 +52,7 @@ export interface CwdEnv {
   dataDir: string
   platform: NodeJS.Platform
   /** 内核启动时的环境快照(凭据黑名单含环境变量挪走的位置) */
-  env?: NodeJS.ProcessEnv
+  env?: EnvSnapshot
   /** 测试注入(win32 路径在 posix 上跑) */
   fs?: { realpath(p: string): string; isDirectory(p: string): boolean }
 }

@@ -25,6 +25,7 @@ import { openSecretStore, type OpenSecretStoreOpts } from './secrets/secretStore
 import { ServiceRegistry } from './services'
 import { Sessions, validateCwd } from './sessions'
 import { CLOSE_GRACE_MS } from './shutdown'
+import { overbroadRelocations, snapshotEnv } from '../lib/fs/paths'
 import { HARNESS_VERSION } from './version'
 import { toWire } from './wire'
 
@@ -74,7 +75,9 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   const bus = new EventBus({ onError: (type, err) => log.error(`handler for ${type} failed`, { error: String(err) }) })
   bus.declare('session.prompt', 'bail')
   const home = opts.home ?? homedir()
-  const envSnapshot: NodeJS.ProcessEnv = Object.freeze({ ...(opts.env ?? process.env) })
+  const envSnapshot = snapshotEnv(opts.env ?? process.env, process.platform)
+  const broad = overbroadRelocations(envSnapshot, home, process.platform)
+  if (broad.length) log.warn('credential env var covers home or root', { vars: broad.map(b => `${b.name}:${b.covers}`).join(',') })
   const sessions = new Sessions(opts.dataDir)
   const gate = new PermissionGate({ sessions, home, dataDir: opts.dataDir, platform: process.platform, env: envSnapshot })
   sessions.load(eventLog.after(0))

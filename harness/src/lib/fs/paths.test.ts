@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, win32 } from 'node:path'
-import { canonicalRoots, credentialRoots, isCredentialPath, isInside, isRootLike, OUTSIDE, PERSISTENCE_FILES, persistenceRoots, RELOCATED_ENV, relocatedCredentialRoots, resolveToolPath } from './paths'
+import { canonicalRoots, credentialRoots, isCredentialPath, isInside, isRootLike, OUTSIDE, overbroadRelocations, PERSISTENCE_FILES, persistenceRoots, RELOCATED_ENV, relocatedCredentialRoots, resolveToolPath, snapshotEnv } from './paths'
 
 let base: string
 let cwd: string
@@ -222,6 +222,45 @@ describe('env-relocated credential roots (spec §5.1)', () => {
       KUBECONFIG: 'list', XDG_CONFIG_HOME: 'xdg',
     })
   })
+  it('a leading ~ / ~/ expands against home (gpg, npm, azure-cli expand it); ~user and other relative values are dropped', () => {
+    expect(relocatedCredentialRoots({ GNUPGHOME: '~/k/gpg', NETRC: '~', AWS_CONFIG_FILE: '~user/x', AZURE_CONFIG_DIR: '~x' }, 'linux', '/h')).toEqual(['/h/k/gpg', '/h'])
+    expect(relocatedCredentialRoots({ AWS_CONFIG_FILE: '~/.aws2' }, 'linux', '/h')).toEqual(['/h/.aws2'])
+    expect(relocatedCredentialRoots({ KUBECONFIG: '~/k1:/b/k2' }, 'linux', '/h')).toEqual(['/h/k1', '/b/k2'])
+    expect(relocatedCredentialRoots({ XDG_CONFIG_HOME: '~/cfg' }, 'linux', '/h')).toEqual(['/h/cfg/gh', '/h/cfg/gcloud'])
+    expect(relocatedCredentialRoots({ GNUPGHOME: '~\\gpg', DOCKER_CONFIG: '~/d' }, 'win32', 'C:\\Users\\u')).toEqual(['C:\\Users\\u\\gpg', 'C:\\Users\\u\\d'])
+    expect(relocatedCredentialRoots({ GNUPGHOME: '~\\gpg' }, 'linux', '/h')).toEqual([]) // posix 上 `~\` 不是家目录
+    expect(credentialRoots('/h', 'linux', { GNUPGHOME: '~/work/keys/gpg' })).toContain('/h/work/keys/gpg')
+    expect(relocatedCredentialRoots({ GNUPGHOME: '~/gpg' }, 'linux')).toEqual([]) // 没给 home 不展开
+  })
+  it('win32: the snapshot upper-cases names, and lookups are case-insensitive', () => {
+    const snap = snapshotEnv({ GnupgHome: 'C:\\g', AppData: 'C:\\ad', Path: 'x' }, 'win32')
+    expect(Object.keys(snap).sort()).toEqual(['APPDATA', 'GNUPGHOME', 'PATH'])
+    expect(Object.isFrozen(snap)).toBe(true)
+    for (const env of [snap, { GnupgHome: 'C:\\g', AppData: 'C:\\ad' }]) {
+      const r = credentialRoots('C:\\Users\\u', 'win32', env)
+      expect(r).toContain('C:\\g')
+      expect(r).toContain('C:\\ad\\gh')
+    }
+    expect(snapshotEnv({ GnupgHome: '/g' }, 'linux')).toEqual({ GnupgHome: '/g' }) // posix 区分大小写
+    expect(relocatedCredentialRoots(snapshotEnv({ GnupgHome: '/g' }, 'linux'), 'linux')).toEqual([])
+  })
+  it('a .. through a symlink lists both the literal and the physical location', () => {
+    mkdirSync(join(base, 'a', 'b'), { recursive: true })
+    mkdirSync(join(base, 'w'))
+    symlinkSync(join(base, 'a', 'b'), join(base, 'w', 'link'), 'dir')
+    const r = relocatedCredentialRoots({ GNUPGHOME: `${join(base, 'w', 'link')}/../gpg` }, P)
+    expect(r).toHaveLength(2)
+    expect(isCredentialPath(join(base, 'w', 'gpg', 'x'), r, P)).toBe(true)
+    expect(isCredentialPath(join(base, 'a', 'gpg', 'x'), r, P)).toBe(true)
+    expect(relocatedCredentialRoots({ GNUPGHOME: join(base, 'w', 'gpg') }, P)).toHaveLength(1)
+  })
+  it('overbroadRelocations names variables that cover home or the root, without paths', () => {
+    expect(overbroadRelocations({ CODEX_HOME: '/h', DOCKER_CONFIG: '/', GNUPGHOME: '/h/x', XDG_CONFIG_HOME: '/h/cfg', KUBECONFIG: '/:/' }, '/h', 'linux'))
+      .toEqual([{ name: 'DOCKER_CONFIG', covers: 'root' }, { name: 'CODEX_HOME', covers: 'home' }, { name: 'KUBECONFIG', covers: 'root' }])
+    expect(overbroadRelocations({ NETRC: '~' }, '/h', 'linux')).toEqual([{ name: 'NETRC', covers: 'home' }])
+    expect(overbroadRelocations({ CLAUDE_CONFIG_DIR: '/H' }, '/h', 'darwin')).toEqual([{ name: 'CLAUDE_CONFIG_DIR', covers: 'home' }])
+    expect(overbroadRelocations({}, '/h', 'linux')).toEqual([])
+  })
   it('relative and empty values are ignored', () => {
     expect(relocatedCredentialRoots({ GNUPGHOME: 'gpg', NETRC: '', DOCKER_CONFIG: './d', AWS_CONFIG_FILE: '~/.aws2', KUBECONFIG: '', XDG_CONFIG_HOME: 'cfg' }, 'linux')).toEqual([])
     expect(relocatedCredentialRoots({}, 'linux')).toEqual([])
@@ -252,15 +291,18 @@ describe('persistence files (spec §5.2)', () => {
     for (const rel of ['.bashrc', '.bash_profile', '.bash_login', '.bash_logout', '.zshrc', '.zprofile', '.zshenv', '.zlogin', '.zlogout', '.profile',
       '.config/fish', '.gitconfig', '.config/git', 'Library/LaunchAgents', '.config/autostart', '.config/systemd'])
       expect(r).toContain(`/h/${rel}`)
-    expect(PERSISTENCE_FILES).toHaveLength(16)
+    for (const d of ['.config/zsh', '.zsh']) for (const f of ['.zshrc', '.zshenv', '.zprofile', '.zlogin', '.zlogout']) expect(r).toContain(`/h/${d}/${f}`)
+    expect(PERSISTENCE_FILES).toHaveLength(26)
     expect(persistenceRoots('C:\\Users\\u', 'win32')).toContain('C:\\Users\\u\\.config\\git')
   })
   it('env-relocated rc locations are added (ZDOTDIR, XDG_CONFIG_HOME, GIT_CONFIG_GLOBAL); relative ones ignored', () => {
     const r = persistenceRoots('/h', 'linux', { ZDOTDIR: '/w/zsh', XDG_CONFIG_HOME: '/w/cfg', GIT_CONFIG_GLOBAL: '/w/gitconfig' })
     for (const p of ['/w/zsh/.zshrc', '/w/zsh/.zshenv', '/w/zsh/.zprofile', '/w/zsh/.zlogin', '/w/zsh/.zlogout',
-      '/w/cfg/fish', '/w/cfg/git', '/w/cfg/autostart', '/w/cfg/systemd', '/w/gitconfig'])
+      '/w/cfg/fish', '/w/cfg/git', '/w/cfg/autostart', '/w/cfg/systemd', '/w/cfg/zsh/.zshrc', '/w/cfg/zsh/.zshenv', '/w/gitconfig'])
       expect(r, p).toContain(p)
     expect(persistenceRoots('/h', 'linux', { ZDOTDIR: 'zsh', XDG_CONFIG_HOME: '', GIT_CONFIG_GLOBAL: 'g' })).toEqual(persistenceRoots('/h', 'linux'))
+    expect(persistenceRoots('/h', 'linux', { ZDOTDIR: '~/zd', GIT_CONFIG_GLOBAL: '~/gc' })).toEqual(expect.arrayContaining(['/h/zd/.zshrc', '/h/gc']))
+    expect(persistenceRoots('C:\\Users\\u', 'win32', { Git_Config_Global: 'C:\\gc' })).toContain('C:\\gc')
   })
   it('matching folds like the credential blacklist', () => {
     const r = persistenceRoots('/h', 'darwin')

@@ -1,4 +1,4 @@
-import { canonicalRoots, credentialRoots, hasGitSegment, isCredentialPath, isInside, isRootLike, OUTSIDE, persistenceRoots, resolveToolPath } from '../lib/fs/paths'
+import { canonicalRoots, credentialRoots, hasGitSegment, isCredentialPath, isInside, isRootLike, OUTSIDE, persistenceRoots, resolveToolPath, type EnvSnapshot } from '../lib/fs/paths'
 import type { PermissionRequest } from '../lib/tools/types'
 import type { SessionInfo } from './sessions'
 
@@ -43,7 +43,7 @@ export interface GateDeps {
   dataDir: string
   platform: NodeJS.Platform
   /** 启动时的环境快照(内核拷一份传进来,之后环境变化不影响) */
-  env: NodeJS.ProcessEnv
+  env: EnvSnapshot
 }
 
 /** 规范化路径(最近存在的祖先 realpath);失败时用原样 */
