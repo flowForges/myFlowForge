@@ -3,17 +3,28 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { credentialRoots, persistenceRoots, resolveToolPath } from '../lib/fs/paths'
-import { decide, PermissionGate, type PermissionRequest } from './permissionGate'
+import { decide, defaultRules, PermissionGate, type DecideEnv, type PermissionRequest } from './permissionGate'
+import { parseRule, type Rule, type RuleSpec } from '../lib/permissions/rules'
+import type { SandboxStatus } from '../protocol/index'
 import { Sessions, type SessionInfo } from './sessions'
 import type { KernelEvent } from '../protocol/index'
 import { createKernel, type Kernel } from './kernel'
 import type { Plugin } from './pluginHost'
 
+const FULL: SandboxStatus = { level: 'full', missing: [], autoDegraded: false }
+/** 03 的判定表默认在完整沙箱下跑(auto 不降级),没有用户规则 */
+const layered = { rules: [] as Rule[], sandbox: FULL, allowUnsandboxedAuto: false }
+const rules = (...specs: RuleSpec[]): Rule[] => specs.map((s, i) => {
+  const r = parseRule(s, i)
+  if ('reason' in r) throw new Error(`bad rule ${s.rule}`)
+  return r
+})
+
 describe('decide (table)', () => {
   const home = '/h'
   const dataDir = '/h/.myFlowForge/mff-ai'
   const spillDir = `${dataDir}/sessions/s1/spill`
-  const env = { roots: credentialRoots(home, 'linux', {}), persistence: persistenceRoots(home, 'linux'), dataDir, spillDir, platform: 'linux' as const }
+  const env: DecideEnv = { roots: credentialRoots(home, 'linux', {}), persistence: persistenceRoots(home, 'linux'), dataDir, spillDir, platform: 'linux', home, ...layered }
   const ask: SessionInfo = { sessionId: 's1', cwd: '/h/repo', approvalMode: 'ask' }
   const auto: SessionInfo = { ...ask, approvalMode: 'auto' }
   const atHome: SessionInfo = { ...ask, cwd: home }
@@ -88,7 +99,7 @@ describe('decide (table)', () => {
   it('darwin / win32: case and spelling variants of .git are denied for writes', () => {
     const d = { ...env, roots: credentialRoots(home, 'darwin', {}), persistence: persistenceRoots(home, 'darwin'), platform: 'darwin' as const }
     for (const p of ['/h/repo/.GIT/hooks/x', '/h/repo/.Git/config']) expect(decide(req('write', p), ask, d)).toBe('deny')
-    const w = { roots: credentialRoots('C:\\Users\\u', 'win32', {}), persistence: persistenceRoots('C:\\Users\\u', 'win32'), dataDir: 'C:\\Users\\u\\.mff', platform: 'win32' as const }
+    const w: DecideEnv = { roots: credentialRoots('C:\\Users\\u', 'win32', {}), persistence: persistenceRoots('C:\\Users\\u', 'win32'), dataDir: 'C:\\Users\\u\\.mff', platform: 'win32', home: 'C:\\Users\\u', ...layered }
     const s: SessionInfo = { sessionId: 's1', cwd: 'C:\\repo', approvalMode: 'auto' }
     for (const p of ['C:\\repo\\.GIT\\config', 'C:\\repo\\.git.\\hooks\\x', 'C:\\repo\\.git \\config', 'C:\\repo\\GIT~1\\config'])
       expect(decide(req('write', p), s, w)).toBe('deny')
@@ -102,11 +113,99 @@ describe('decide (table)', () => {
   })
 
   it('win32: other drive, UNC and ADS are denied', () => {
-    const w = { roots: credentialRoots('C:\\Users\\u', 'win32', {}), persistence: persistenceRoots('C:\\Users\\u', 'win32'), dataDir: 'C:\\Users\\u\\.mff', platform: 'win32' as const }
+    const w: DecideEnv = { roots: credentialRoots('C:\\Users\\u', 'win32', {}), persistence: persistenceRoots('C:\\Users\\u', 'win32'), dataDir: 'C:\\Users\\u\\.mff', platform: 'win32', home: 'C:\\Users\\u', ...layered }
     const s: SessionInfo = { sessionId: 's1', cwd: 'C:\\repo', approvalMode: 'auto' }
     expect(decide(req('read', 'c:\\REPO\\x'), s, w)).toBe('allow')
     for (const p of ['D:\\x', '\\\\server\\share\\x', '\\\\?\\C:\\repo\\x', 'C:\\repo\\a.txt:stream'])
       expect(decide(req('write', p), s, w)).toBe('deny')
+  })
+})
+
+describe('decide: layered rules (Review Focus 3)', () => {
+  const home = '/h'
+  const dataDir = '/h/.myFlowForge/mff-ai'
+  const base: DecideEnv = { roots: credentialRoots(home, 'linux', {}), persistence: persistenceRoots(home, 'linux'), dataDir, platform: 'linux', home, ...layered }
+  const repo: SessionInfo = { sessionId: 's1', cwd: '/h/repo', approvalMode: 'ask' }
+  const atHome: SessionInfo = { ...repo, cwd: home }
+  const auto: SessionInfo = { ...repo, approvalMode: 'auto' }
+  const req = (action: string, resource: string): PermissionRequest => ({ actor: 'tools', action, resource, sessionId: 's1' })
+  const with_ = (...specs: RuleSpec[]): DecideEnv => ({ ...base, rules: rules(...specs) })
+
+  it('user allow rules cannot loosen hard denies', () => {
+    expect(decide(req('read', '/h/.ssh/id_ed25519'), atHome, with_({ effect: 'allow', rule: 'read(~/.ssh/**)' }))).toBe('deny')
+    expect(decide(req('write', '/h/repo/.git/hooks/pre-commit'), repo, with_({ effect: 'allow', rule: 'write(.git/**)' }))).toBe('deny')
+    expect(decide(req('write', '/elsewhere/x'), repo, with_({ effect: 'allow', rule: 'write(/elsewhere/**)' }))).toBe('deny')
+    expect(decide(req('write', '/h/.zshrc'), atHome, with_({ effect: 'allow', rule: 'write(~/.zshrc)' }))).toBe('deny')
+    expect(decide(req('read', `${dataDir}/token`), atHome, with_({ effect: 'allow', rule: `read(${dataDir}/**)` }))).toBe('deny')
+    expect(decide(req('read', '/etc/passwd'), { ...repo, cwd: '/' }, with_({ effect: 'allow', rule: 'read(/**)' }))).toBe('deny') // R18
+    expect(decide(req('read', 'relative.txt'), repo, with_({ effect: 'allow', rule: 'read(**)' }))).toBe('deny')
+  })
+
+  it('GNUPGHOME relocated outside home: a user allow on it is still denied', () => {
+    const env = { ...with_({ effect: 'allow', rule: 'read(/t/gpg/**)' }), roots: credentialRoots(home, 'linux', { GNUPGHOME: '/t/gpg' }) }
+    expect(decide(req('read', '/t/gpg/pubring.kbx'), repo, env)).toBe('deny')
+    expect(decide(req('read', '/t/gpg/pubring.kbx'), repo, with_({ effect: 'allow', rule: 'read(/t/gpg/**)' }))).toBe('allow')
+  })
+
+  it('a user deny beats the default allow; a user allow beats the default deny (reads only)', () => {
+    const env = with_({ effect: 'deny', rule: 'write(src/gen/**)' })
+    expect(decide(req('write', '/h/repo/src/gen/a.ts'), repo, env)).toBe('deny')
+    expect(decide(req('write', '/h/repo/src/a.ts'), repo, env)).toBe('allow')
+    expect(decide(req('read', '/h/repo/src/gen/a.ts'), repo, env)).toBe('allow')
+    const lib = with_({ effect: 'allow', rule: 'read(/opt/lib/**)' })
+    expect(decide(req('read', '/opt/lib/x.ts'), repo, lib)).toBe('allow')
+    expect(decide(req('read', '/opt/other/x.ts'), repo, lib)).toBe('deny')
+    expect(decide(req('write', '/opt/lib/x.ts'), repo, with_({ effect: 'allow', rule: 'write(/opt/lib/**)' }))).toBe('deny')
+  })
+
+  it('user ask and deny > ask > allow within the user layer', () => {
+    expect(decide(req('write', '/h/repo/package.json'), repo, with_({ effect: 'ask', rule: 'write(package.json)' }))).toBe('ask')
+    const mixed = with_({ effect: 'allow', rule: 'read(/opt/**)' }, { effect: 'ask', rule: 'read(/opt/a/**)' }, { effect: 'deny', rule: 'read(/opt/a/b)' })
+    expect(decide(req('read', '/opt/x'), repo, mixed)).toBe('allow')
+    expect(decide(req('read', '/opt/a/x'), repo, mixed)).toBe('ask')
+    expect(decide(req('read', '/opt/a/b'), repo, mixed)).toBe('deny')
+  })
+
+  it('a session without a cwd is denied reads and writes even with a matching allow', () => {
+    const noCwd: SessionInfo = { sessionId: 's1', approvalMode: 'auto' }
+    expect(decide(req('read', '/opt/x'), noCwd, with_({ effect: 'allow', rule: 'read(/opt/**)' }))).toBe('deny')
+  })
+
+  it('exec: user rules first, then the mode default', () => {
+    const env = with_({ effect: 'deny', rule: 'shell(git push*)' }, { effect: 'ask', rule: 'shell(rm *)' }, { effect: 'allow', rule: 'shell(npm test)' })
+    expect(decide(req('exec', 'git push origin main'), auto, env)).toBe('deny')
+    expect(decide(req('exec', 'ls && git push'), auto, env)).toBe('deny')
+    expect(decide(req('exec', 'rm -rf build'), auto, env)).toBe('ask')
+    expect(decide(req('exec', 'npm test'), repo, env)).toBe('allow')
+    expect(decide(req('exec', 'npm test; ls'), repo, env)).toBe('ask')
+    expect(decide(req('exec', 'ls'), auto, env)).toBe('allow')
+    expect(decide({ actor: 'tools', action: 'exec', resource: 'npm test' }, undefined, env)).toBe('deny')
+  })
+
+  it('auto degrades to ask at level none unless allowUnsandboxedAuto; partial still auto-allows', () => {
+    const none: SandboxStatus = { level: 'none', missing: ['platform'], autoDegraded: true }
+    const partial: SandboxStatus = { level: 'partial', missing: ['netns'], autoDegraded: false }
+    expect(decide(req('exec', 'ls'), auto, { ...base, sandbox: none })).toBe('ask')
+    expect(decide(req('exec', 'ls'), auto, { ...base, sandbox: none, allowUnsandboxedAuto: true })).toBe('allow')
+    expect(decide(req('exec', 'ls'), auto, { ...base, sandbox: partial })).toBe('allow')
+    expect(decide(req('exec', 'npm test'), auto, { ...with_({ effect: 'allow', rule: 'shell(npm test)' }), sandbox: none })).toBe('allow')
+  })
+
+  it('defaultRules lists the per-session defaults', () => {
+    const none: SandboxStatus = { level: 'none', missing: ['platform'], autoDegraded: true }
+    expect(defaultRules(repo, FULL, false)).toEqual(['allow read(/h/repo/**)', 'allow write(/h/repo/**)', 'ask shell(*)'])
+    expect(defaultRules(auto, FULL, false)).toEqual(['allow read(/h/repo/**)', 'allow write(/h/repo/**)', 'allow shell(*)'])
+    expect(defaultRules(auto, none, false)[2]).toBe('ask shell(*)')
+    expect(defaultRules(auto, none, true)[2]).toBe('allow shell(*)')
+    expect(defaultRules({ sessionId: 's', approvalMode: 'auto' }, FULL, false)).toEqual(['allow shell(*)'])
+    expect(defaultRules(undefined, FULL, false)).toEqual(['allow read(<cwd>/**)', 'allow write(<cwd>/**)', '<mode> shell(*)'])
+  })
+
+  it('a cwd with glob characters does not widen the default allow', () => {
+    const odd: SessionInfo = { ...repo, cwd: '/h/a?b' }
+    expect(decide(req('read', '/h/a?b/x'), odd, base)).toBe('allow')
+    expect(decide(req('read', '/h/aXb/x'), odd, base)).toBe('deny')
+    expect(decide(req('read', '/h/a(b/x'), { ...repo, cwd: '/h/a(b' }, base)).toBe('allow')
   })
 })
 
@@ -130,11 +229,12 @@ describe('PermissionGate.check (real tree)', () => {
     rmSync(outside, { recursive: true, force: true })
   })
 
-  const gateFor = (cwd: string, approvalMode: 'ask' | 'auto' = 'ask', env: NodeJS.ProcessEnv = {}) => {
+  const gateFor = (cwd: string, approvalMode: 'ask' | 'auto' = 'ask', env: NodeJS.ProcessEnv = {}, specs: RuleSpec[] = []) => {
     const sessions = new Sessions(dataDir)
     const ev: KernelEvent = { seq: 1, ts: 0, type: 'session.created', sessionId: 's1', payload: { cwd: realpathSync.native(cwd), approvalMode } }
     sessions.observe(ev)
-    return { gate: new PermissionGate({ sessions, home, dataDir, platform: process.platform, env }), cwd: realpathSync.native(cwd) }
+    const permissions = () => ({ rules: rules(...specs), config: { allowUnsandboxedAuto: false } })
+    return { gate: new PermissionGate({ sessions, home, dataDir, platform: process.platform, env, permissions }), cwd: realpathSync.native(cwd) }
   }
   const check = (gate: PermissionGate, action: string, resource: string) => gate.check({ actor: 'plugin:tools', action, resource, sessionId: 's1' })
 
@@ -217,6 +317,21 @@ describe('PermissionGate.check (real tree)', () => {
     const { gate, cwd } = gateFor(join(home, 'keys'), 'auto', { GNUPGHOME: '~/keys/gpg' })
     expect(check(gate, 'read', resolveToolPath(cwd, 'gpg/k'))).toBe('deny')
     expect(check(gate, 'read', resolveToolPath(cwd, 'other'))).toBe('allow')
+  })
+
+  it('Review Focus 3: GNUPGHOME=<tmp>/gpg with a user allow read(<tmp>/gpg/**) is still denied', () => {
+    mkdirSync(join(outside, 'gpg'))
+    writeFileSync(join(outside, 'gpg', 'x'), 'k')
+    const real = realpathSync.native(outside)
+    const { gate } = gateFor(join(home, 'repo'), 'auto', { GNUPGHOME: join(outside, 'gpg') }, [{ effect: 'allow', rule: `read(${outside}/**)` }])
+    expect(check(gate, 'read', resolveToolPath(real, 'gpg/x'))).toBe('deny')
+    expect(check(gate, 'read', resolveToolPath(real, 'secret'))).toBe('allow') // 同一条 allow 放开了别的文件(模式经 realpath 对上 /private/var)
+  })
+
+  it('a user deny in the real gate blocks a file the default would allow', () => {
+    const { gate, cwd } = gateFor(join(home, 'repo'), 'auto', {}, [{ effect: 'deny', rule: 'read(src/gen/**)' }])
+    expect(check(gate, 'read', resolveToolPath(cwd, 'src/gen/a.ts'))).toBe('deny')
+    expect(check(gate, 'read', resolveToolPath(cwd, 'src/a.ts'))).toBe('allow')
   })
 
   it('a not-yet-existing relocated root is denied too', () => {

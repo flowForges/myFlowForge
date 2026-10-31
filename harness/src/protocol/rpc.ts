@@ -51,6 +51,37 @@ export const SnapshotResultSchema = z.object({
 })
 export type SnapshotResult = z.infer<typeof SnapshotResultSchema>
 
+// 05:沙箱级别(spec §7);Missing 是稳定代码,界面直接显示
+export const SandboxMissingSchema = z.enum(['platform', 'sandbox-exec', 'bwrap', 'userns', 'netns', 'proxy', 'loopback', 'disabled'])
+export type SandboxMissing = z.infer<typeof SandboxMissingSchema>
+export const SandboxStatusSchema = z.object({
+  level: z.enum(['full', 'partial', 'none']),
+  missing: z.array(SandboxMissingSchema),
+  autoDegraded: z.boolean(),
+})
+export type SandboxStatus = z.infer<typeof SandboxStatusSchema>
+
+// 05:权限配置段(spec §4、§6)
+export const RuleSpecSchema = z.object({
+  effect: z.enum(['deny', 'ask', 'allow']),
+  rule: z.string(),
+  match: z.array(z.string()).optional(),
+  noMatch: z.array(z.string()).optional(),
+})
+export const RuleErrorSchema = z.object({
+  index: z.number(),
+  rule: z.string(),
+  reason: z.enum(['syntax', 'subject', 'pattern', 'test_failed', 'network']),
+  case: z.string().optional(),
+})
+export const PermissionsConfigSchema = z.object({
+  rules: z.array(RuleSpecSchema),
+  network: z.object({ allow: z.array(z.string()) }),
+  sandbox: z.object({ enabled: z.boolean(), allowLoopback: z.boolean() }),
+  allowUnsandboxedAuto: z.boolean(),
+})
+export type PermissionsConfig = z.infer<typeof PermissionsConfigSchema>
+
 export const ControlStatusSchema = z.object({
   state: z.enum(['starting', 'running', 'restarting', 'tripped', 'stopping']),
   pid: z.number().optional(), // 监管进程 pid(控制口 status 填)
@@ -101,6 +132,17 @@ export const WorkerMethods = {
     params: z.object({ approvalId: z.string(), decision: z.enum(['allow', 'allow_session', 'deny']) }),
     result: Ok,
   },
+  'permissions.get': {
+    params: z.object({ sessionId: z.string().optional() }),
+    result: z.object({
+      config: PermissionsConfigSchema,
+      defaults: z.array(z.string()),
+      errors: z.array(RuleErrorSchema),
+      sandbox: SandboxStatusSchema,
+    }),
+  },
+  // config 宽松收下,由内核严格校验(无效 → -32602 invalid rules + RuleError[])
+  'permissions.set': { params: z.object({ commandId: z.string(), config: z.unknown() }), result: Ok },
   // 以下由插件经 ctx.rpc.register 提供
   'turn.rollback': {
     params: z.object({ commandId: z.string(), sessionId: z.string(), turnId: z.string() }),

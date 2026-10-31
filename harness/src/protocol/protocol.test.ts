@@ -4,6 +4,7 @@ import {
   TurnUsagePayloadSchema, WorkerMethods, encodeFrame,
   ApprovalRequestedPayloadSchema, ApprovalResolvedPayloadSchema, AssistantPartSchema, FileChangeSchema, ToolEndedPayloadSchema,
   ToolStartedPayloadSchema, TurnRolledBackPayloadSchema, TurnSnapshotPayloadSchema,
+  PermissionsUpdatedPayloadSchema, SandboxNetDeniedPayloadSchema, SandboxStatusSchema,
 } from './index'
 
 describe('framing', () => {
@@ -61,6 +62,7 @@ describe('schemas', () => {
     [WorkerMethods, 'models.setDefault', { accountId: 'a' }],
     [WorkerMethods, 'models.quota', {}],
     [WorkerMethods, 'auth.chatgpt.cancel', {}],
+    [WorkerMethods, 'permissions.set', { config: {} }],
     [ControlMethods, 'auth.challenge', {}],
     [ControlMethods, 'auth.verify', {}],
     [ControlMethods, 'autostart', { on: true }],
@@ -196,6 +198,37 @@ describe('v3 schemas', () => {
     expect(WorkerMethods['turn.rollback'].result.safeParse({ ok: true, files: 2 }).success).toBe(true)
     expect(WorkerMethods['turn.rollback'].result.safeParse({ ok: false, files: 2 }).success).toBe(false)
     expect(WorkerMethods['turn.changes'].result.safeParse({ files: [{ path: 'a', status: 'A' }] }).success).toBe(true)
+  })
+})
+
+describe('05 schemas', () => {
+  const ok = (m: keyof typeof WorkerMethods, v: unknown) => WorkerMethods[m].params.safeParse(v).success
+  it('permissions.get takes an optional sessionId; permissions.set needs a commandId', () => {
+    expect(ok('permissions.get', {})).toBe(true)
+    expect(ok('permissions.get', { sessionId: 's' })).toBe(true)
+    expect(ok('permissions.get', { sessionId: 3 })).toBe(false)
+    expect(ok('permissions.set', { commandId: 'c', config: { rules: 'anything' } })).toBe(true)
+  })
+  it('permissions.get result carries config, defaults, errors and sandbox', () => {
+    const r = WorkerMethods['permissions.get'].result
+    const config = { rules: [{ effect: 'deny', rule: 'shell(x)' }], network: { allow: [] }, sandbox: { enabled: true, allowLoopback: false }, allowUnsandboxedAuto: false }
+    const sandbox = { level: 'none', missing: ['platform'], autoDegraded: false }
+    expect(r.safeParse({ config, defaults: ['ask shell(*)'], errors: [{ index: 0, rule: 'x', reason: 'network' }], sandbox }).success).toBe(true)
+    expect(r.safeParse({ config, defaults: [], errors: [{ index: 0, rule: 'x', reason: 'weird' }], sandbox }).success).toBe(false)
+    expect(r.safeParse({ config: { ...config, rules: [{ effect: 'maybe', rule: 'x' }] }, defaults: [], errors: [], sandbox }).success).toBe(false)
+  })
+  it('SandboxStatus levels and missing codes are closed', () => {
+    for (const m of ['platform', 'sandbox-exec', 'bwrap', 'userns', 'netns', 'proxy', 'loopback', 'disabled'])
+      expect(SandboxStatusSchema.safeParse({ level: 'partial', missing: [m], autoDegraded: false }).success).toBe(true)
+    expect(SandboxStatusSchema.safeParse({ level: 'half', missing: [], autoDegraded: false }).success).toBe(false)
+    expect(SandboxStatusSchema.safeParse({ level: 'none', missing: ['other'], autoDegraded: false }).success).toBe(false)
+  })
+  it('new event types and payloads', () => {
+    for (const t of ['permissions.updated', 'sandbox.netDenied']) expect(EVENT_TYPES).toContain(t)
+    expect(PermissionsUpdatedPayloadSchema.safeParse({ rules: 2, network: 9 }).success).toBe(true)
+    expect(PermissionsUpdatedPayloadSchema.safeParse({ rules: 'read(x)', network: 9 }).success).toBe(false)
+    expect(SandboxNetDeniedPayloadSchema.safeParse({ host: 'evil.example', port: 443, reason: 'not_allowed' }).success).toBe(true)
+    expect(SandboxNetDeniedPayloadSchema.safeParse({ host: 'evil.example' }).success).toBe(false)
   })
 })
 

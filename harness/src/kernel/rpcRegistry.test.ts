@@ -49,6 +49,10 @@ describe('RpcRegistry', () => {
     for (const m of ['auth.challenge', 'auth.verify', 'hello', 'status', 'snapshot', 'events.tail', 'events.subscribe', 'session.create', 'session.prompt', 'session.cancel'])
       expect(() => r.register('a', m as WorkerMethodName, async () => 1)).toThrow(/reserved/)
   })
+  it('permissions.* is reserved', () => {
+    const r = new RpcRegistry()
+    for (const m of ['permissions.get', 'permissions.set']) expect(() => r.register('a', m as WorkerMethodName, async () => 1)).toThrow(/reserved/)
+  })
   it('approval.* is reserved; turn.* stays registrable', () => {
     const r = new RpcRegistry()
     expect(() => r.register('a', 'approval.respond', async () => 1)).toThrow(/reserved/)

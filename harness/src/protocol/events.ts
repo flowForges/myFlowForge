@@ -23,6 +23,8 @@ export const EVENT_TYPES = [
   'approval.resolved',
   'turn.snapshot',
   'turn.rolledBack',
+  'permissions.updated',
+  'sandbox.netDenied',
 ] as const
 
 export const EventTypeSchema = z.enum(EVENT_TYPES)
@@ -56,3 +58,11 @@ export const TurnUsagePayloadSchema = z.object({
   cacheWrite: z.number().optional(),
 })
 export type TurnUsagePayload = z.infer<typeof TurnUsagePayloadSchema>
+
+// 05:权限配置换了(只带条数,不带规则内容)
+export const PermissionsUpdatedPayloadSchema = z.object({ rules: z.number(), network: z.number() })
+export type PermissionsUpdatedPayload = z.infer<typeof PermissionsUpdatedPayloadSchema>
+
+// 05:沙箱代理拦下的连接(记在会话上)
+export const SandboxNetDeniedPayloadSchema = z.object({ host: z.string(), port: z.number(), reason: z.string() })
+export type SandboxNetDeniedPayload = z.infer<typeof SandboxNetDeniedPayloadSchema>

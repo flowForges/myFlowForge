@@ -25,6 +25,8 @@ export const KernelConfigSchema = z.object({
   version: z.literal(1).default(1),
   plugins: z.object({ disabled: z.array(z.string()).default([]) }).default({ disabled: [] }),
   models: ModelsConfigSchema.default({ accounts: [] }),
+  // 05 §6:宽松收下、原样保留,由 permissions.ts 单独解析 —— 规则写坏了也不能让整份配置被改名(会丢模型账号)
+  permissions: z.unknown().optional(),
 })
 export type KernelConfig = z.infer<typeof KernelConfigSchema>
 

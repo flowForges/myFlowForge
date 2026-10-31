@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -17,6 +17,7 @@ import { EventLog, openDb, transaction } from './eventLog'
 import { Approvals } from './approvals'
 import { nullLogger, type Logger } from './log'
 import { PermissionGate } from './permissionGate'
+import { PermissionsStore, SANDBOX_STUB } from './permissions'
 import { PluginHost, type Plugin } from './pluginHost'
 import { Receipts } from './receipts'
 import { RpcError } from './rpcError'
@@ -79,7 +80,6 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   const broad = overbroadRelocations(envSnapshot, home, process.platform)
   if (broad.length) log.warn('credential env var covers home or root', { vars: broad.map(b => `${b.name}:${b.covers}`).join(',') })
   const sessions = new Sessions(opts.dataDir)
-  const gate = new PermissionGate({ sessions, home, dataDir: opts.dataDir, platform: process.platform, env: envSnapshot })
   sessions.load(eventLog.after(0))
   eventLog.onAppend(e => sessions.observe(e)) // 事务提交后才通知:回滚的 session.created 不会进来
   const turns = new Map<string, Turn>() // turnId -> 进行中的 turn
@@ -111,6 +111,12 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
       config = next
     },
   }
+  // 规则写坏了只记进 errors,不影响启动,也不动 config.json(spec §6)
+  const permissions = new PermissionsStore({ config: configAccess, ctx: { home, platform: process.platform, realpath: realpathSync.native } })
+  const sandboxStatus = () => SANDBOX_STUB // Task 9 换成真实探测
+  const gate = new PermissionGate({
+    sessions, home, dataDir: opts.dataDir, platform: process.platform, env: envSnapshot, permissions: () => permissions.get(),
+  })
   const rpc = new RpcRegistry()
   // 后端故障不抛错:状态为 unavailable / unreadable,内核照常启动
   const secrets = await openSecretStore({ ...opts.secrets, dataDir: opts.dataDir, log })
@@ -288,6 +294,19 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
             append({ type: 'message.user', sessionId: p.sessionId, payload: { turnId, text: p.text } })
             // 提交之后才交给循环插件
             return { result: { accepted: true, turnId }, after: () => dispatchPrompt(p.sessionId, turnId, p.text) }
+          }).result
+        case 'permissions.get': {
+          const { config: cfg, errors } = permissions.get()
+          return { config: cfg, defaults: gate.defaults(p.sessionId), errors, sandbox: sandboxStatus() }
+        }
+        case 'permissions.set':
+          return command(name, p.commandId, () => {
+            const v = permissions.validate(p.config)
+            if (!v.ok) throw new RpcError(ERR_INVALID_PARAMS, 'invalid rules', v.errors) // 回滚,不留回执,不落盘
+            // 事件先写进事务:落盘失败时一起回滚
+            append({ type: 'permissions.updated', payload: { rules: v.config.rules.length, network: v.config.network.allow.length } })
+            permissions.set(v.config)
+            return { result: { ok: true } }
           }).result
         case 'approval.respond':
           return { ok: approvals.respond(p.approvalId, p.decision) }
