@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { bwrapArgs, ensureGitHooksDir, execRootFor, type BwrapParams } from './bwrap'
 import { RELAY_PORT, RELAY_SOURCE } from './relay'
 
-// 纯测试:路径都是假的,exists / realpath 注入。逐个元素断言 argv,顺序即挂载顺序(后挂的生效)
+// 纯测试:路径都是假的,exists / realpath / isDir / isSymlink 注入。逐个元素断言 argv,顺序即挂载顺序(后挂的生效)
 
 const H = '/home/u'
 const CWD = `${H}/proj`
@@ -16,13 +16,28 @@ const SPILL = `${DATA}/sessions/s1/spill`
 const SOCK = '/tmp/mffai-net-abc/net.sock'
 const EXEC = '/opt/mff/mff'
 const CMD = 'npm test && echo "ok"'
+const RUN = '/run/user/1000'
 
-const EXISTING = new Set([
-  H, CWD, GIT, `${GIT}/hooks`, `${GIT}/config`, `${GIT}/worktrees/w/gitdir`,
-  DATA, TMP, SPILL, SOCK, EXEC,
-  `${H}/.ssh`, '/data/ssh', `${H}/.npmrc`, `${H}/.zshrc`, `${H}/.config/fish`,
-])
+const DIRS = new Set([H, CWD, GIT, `${GIT}/hooks`, DATA, TMP, SPILL, '/data/ssh', `${H}/.config`, `${H}/.config/fish`, RUN])
+const FILES = new Set([`${GIT}/config`, `${GIT}/worktrees/w/gitdir`, SOCK, EXEC, `${H}/.npmrc`, `${H}/.zshrc`])
+const EXISTING = new Set([...DIRS, ...FILES])
 const REAL: Record<string, string> = { [`${H}/.ssh`]: '/data/ssh' }
+const LINKS = new Set([`${H}/.ssh`])
+
+const UNSET = [
+  '--unsetenv', 'SSH_AUTH_SOCK', '--unsetenv', 'DBUS_SESSION_BUS_ADDRESS', '--unsetenv', 'GPG_AGENT_INFO', '--unsetenv', 'DOCKER_HOST',
+]
+
+function fs(extraDirs: string[] = [], extraFiles: string[] = [], real: Record<string, string> = {}, links: string[] = []) {
+  const dirs = new Set([...DIRS, ...extraDirs])
+  const all = new Set([...EXISTING, ...extraDirs, ...extraFiles])
+  return {
+    exists: (p: string) => all.has(p),
+    isDir: (p: string) => dirs.has(p),
+    realpath: (p: string) => real[p] ?? REAL[p] ?? p,
+    isSymlink: (p: string) => links.includes(p) || LINKS.has(p),
+  }
+}
 
 function params(over: Partial<BwrapParams> = {}): BwrapParams {
   return {
@@ -39,8 +54,9 @@ function params(over: Partial<BwrapParams> = {}): BwrapParams {
     unixSock: SOCK,
     execPath: EXEC,
     command: CMD,
-    exists: p => EXISTING.has(p),
-    realpath: p => REAL[p] ?? p,
+    env: { HOME: H },
+    uid: 1000,
+    ...fs(),
     ...over,
   }
 }
@@ -60,14 +76,15 @@ const opts = (args: string[]) => args.slice(0, args.indexOf('--'))
 describe('bwrapArgs', () => {
   it('full: exact argv in mount order, relay last', () => {
     expect(bwrapArgs(params())).toEqual([
-      '--die-with-parent', '--unshare-user', '--unshare-pid', '--unshare-net',
+      '--die-with-parent', '--unshare-user', '--unshare-pid', '--unshare-ipc', '--unshare-net',
       '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp',
       '--bind', CWD, CWD, '--bind', GIT, GIT, '--bind', TMP, TMP, '--ro-bind', SPILL, SPILL,
       '--ro-bind', `${GIT}/hooks`, `${GIT}/hooks`, '--ro-bind', `${GIT}/config`, `${GIT}/config`,
       '--ro-bind', `${GIT}/worktrees/w/gitdir`, `${GIT}/worktrees/w/gitdir`,
-      '--tmpfs', `${H}/.ssh`, '--tmpfs', '/data/ssh', '--ro-bind', '/dev/null', `${H}/.npmrc`, '--tmpfs', DATA,
+      '--tmpfs', RUN, '--tmpfs', '/data/ssh', '--ro-bind', '/dev/null', `${H}/.npmrc`, '--tmpfs', DATA,
       '--bind', TMP, TMP, '--ro-bind', SPILL, SPILL,
       '--ro-bind', SOCK, SOCK,
+      ...UNSET,
       '--setenv', 'ELECTRON_RUN_AS_NODE', '1',
       '--chdir', CWD,
       '--', EXEC, '-e', RELAY_SOURCE, String(RELAY_PORT), SOCK, '/bin/sh', '-c', CMD,
@@ -76,13 +93,14 @@ describe('bwrapArgs', () => {
 
   it('partial: no --unshare-net, no relay, no socket, shell sees no ELECTRON_RUN_AS_NODE', () => {
     expect(bwrapArgs(params({ level: 'partial' }))).toEqual([
-      '--die-with-parent', '--unshare-user', '--unshare-pid',
+      '--die-with-parent', '--unshare-user', '--unshare-pid', '--unshare-ipc',
       '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp',
       '--bind', CWD, CWD, '--bind', GIT, GIT, '--bind', TMP, TMP, '--ro-bind', SPILL, SPILL,
       '--ro-bind', `${GIT}/hooks`, `${GIT}/hooks`, '--ro-bind', `${GIT}/config`, `${GIT}/config`,
       '--ro-bind', `${GIT}/worktrees/w/gitdir`, `${GIT}/worktrees/w/gitdir`,
-      '--tmpfs', `${H}/.ssh`, '--tmpfs', '/data/ssh', '--ro-bind', '/dev/null', `${H}/.npmrc`, '--tmpfs', DATA,
+      '--tmpfs', RUN, '--tmpfs', '/data/ssh', '--ro-bind', '/dev/null', `${H}/.npmrc`, '--tmpfs', DATA,
       '--bind', TMP, TMP, '--ro-bind', SPILL, SPILL,
+      ...UNSET,
       '--unsetenv', 'ELECTRON_RUN_AS_NODE',
       '--chdir', CWD,
       '--', '/bin/sh', '-c', CMD,
@@ -91,17 +109,18 @@ describe('bwrapArgs', () => {
 
   it('full without a socket (proxy down): network namespace stays, no relay', () => {
     const a = bwrapArgs(params({ unixSock: undefined }))
-    expect(a.slice(0, 4)).toEqual(['--die-with-parent', '--unshare-user', '--unshare-pid', '--unshare-net'])
+    expect(a.slice(0, 5)).toEqual(['--die-with-parent', '--unshare-user', '--unshare-pid', '--unshare-ipc', '--unshare-net'])
     expect(a.slice(a.indexOf('--'))).toEqual(['--', '/bin/sh', '-c', CMD])
     expect(a).not.toContain(RELAY_SOURCE)
     expect(at(a, '--unsetenv', 'ELECTRON_RUN_AS_NODE')).toHaveLength(1)
   })
 
-  it('--unshare-net and the relay appear only at level full', () => {
+  it('--unshare-net and the relay appear only at level full; --unshare-ipc at both', () => {
     expect(opts(bwrapArgs(params()))).toContain('--unshare-net')
     expect(bwrapArgs(params())).toContain(RELAY_SOURCE)
     expect(opts(bwrapArgs(params({ level: 'partial' })))).not.toContain('--unshare-net')
     expect(bwrapArgs(params({ level: 'partial' }))).not.toContain(RELAY_SOURCE)
+    for (const level of ['full', 'partial'] as const) expect(opts(bwrapArgs(params({ level })))).toContain('--unshare-ipc')
   })
 
   it('never passes --new-session (the process-group kill depends on it)', () => {
@@ -117,16 +136,17 @@ describe('bwrapArgs', () => {
     expect(last(a, '--ro-bind', SPILL, SPILL)).toBeGreaterThan(t)
   })
 
-  it('cwd = HOME: the cwd bind comes before the credential hides; persistence inside the writable root is ro-bound', () => {
+  it('cwd = HOME: the cwd bind comes before the hides; persistence is ro-bound before the hides', () => {
     const a = bwrapArgs(params({ cwd: H, gitDirs: [], gitProtected: [] }))
     const b = first(a, '--bind', H, H)
-    expect(first(a, '--tmpfs', `${H}/.ssh`)).toBeGreaterThan(b)
-    expect(first(a, '--tmpfs', '/data/ssh')).toBeGreaterThan(b)
+    const ssh = first(a, '--tmpfs', '/data/ssh')
+    expect(ssh).toBeGreaterThan(b)
     expect(first(a, '--ro-bind', '/dev/null', `${H}/.npmrc`)).toBeGreaterThan(b)
-    // 持久化文件:存在且在可写根内 → 只读挂回自己(只拒写,内容照读);在 tmp / spill 的盖回之后
+    // 持久化文件:存在且在可写根内 → 只读挂回自己(只拒写,内容照读);在隐藏之前(源是宿主,挂在后面会读回被隐藏的内容)
     const z = first(a, '--ro-bind', `${H}/.zshrc`, `${H}/.zshrc`)
-    expect(z).toBeGreaterThan(last(a, '--bind', TMP, TMP))
-    expect(first(a, '--ro-bind', `${H}/.config/fish`, `${H}/.config/fish`)).toBeGreaterThan(b)
+    expect(z).toBeGreaterThan(b)
+    expect(z).toBeLessThan(first(a, '--tmpfs', RUN))
+    expect(first(a, '--ro-bind', `${H}/.config/fish`, `${H}/.config/fish`)).toBeLessThan(ssh)
     expect(a).not.toContain(`${H}/.bashrc`) // 不存在
   })
 
@@ -136,13 +156,25 @@ describe('bwrapArgs', () => {
     expect(a).not.toContain(`${H}/.config/fish`)
   })
 
-  it('persistence reached through a realpath spelling inside cwd is still covered', () => {
-    const a = bwrapArgs(params({
-      persistence: ['/link/.zshrc'],
-      exists: p => EXISTING.has(p) || p === '/link/.zshrc',
-      realpath: p => (p === '/link/.zshrc' ? `${CWD}/.zshrc` : REAL[p] ?? p),
-    }))
-    expect(at(a, '--ro-bind', '/link/.zshrc', '/link/.zshrc')).toHaveLength(1)
+  it('persistence whose realpath is inside cwd is ro-bound at the realpath only', () => {
+    const a = bwrapArgs(params({ persistence: ['/link/.zshrc'], ...fs([], [`${CWD}/.zshrc`, '/link/.zshrc'], { '/link/.zshrc': `${CWD}/.zshrc` }) }))
+    expect(at(a, '--ro-bind', `${CWD}/.zshrc`, `${CWD}/.zshrc`)).toHaveLength(1)
+    expect(a).not.toContain('/link/.zshrc')
+  })
+
+  it('symlinked persistence inside a writable root: the link dir is ro-bound when it is not itself a writable root', () => {
+    // cwd = HOME;~/.config/fish → ~/dotfiles/fish(链接在 ~/.config 里 → 只读挂 ~/.config);
+    // ~/.zshrc → ~/dotfiles/.zshrc(链接就在 HOME = cwd 里,挂不了 HOME → 只剩目标那一条)
+    const f = fs([`${H}/dotfiles`, `${H}/dotfiles/fish`], [`${H}/dotfiles/.zshrc`], {
+      [`${H}/.zshrc`]: `${H}/dotfiles/.zshrc`, [`${H}/.config/fish`]: `${H}/dotfiles/fish`,
+    }, [`${H}/.zshrc`, `${H}/.config/fish`])
+    const a = bwrapArgs(params({ cwd: H, gitDirs: [], gitProtected: [], ...f }))
+    expect(at(a, '--ro-bind', `${H}/.config`, `${H}/.config`)).toHaveLength(1)
+    expect(at(a, '--ro-bind', `${H}/dotfiles/fish`, `${H}/dotfiles/fish`)).toHaveLength(1)
+    expect(at(a, '--ro-bind', `${H}/dotfiles/.zshrc`, `${H}/dotfiles/.zshrc`)).toHaveLength(1)
+    expect(at(a, '--ro-bind', H, H)).toHaveLength(0)
+    expect(a).not.toContain(`${H}/.zshrc`)
+    expect(first(a, '--ro-bind', `${H}/.config`, `${H}/.config`)).toBeLessThan(first(a, '--tmpfs', '/data/ssh'))
   })
 
   it('gitDir is always bound on its own (even inside cwd) and its hooks / config are ro-bound after it', () => {
@@ -153,13 +185,17 @@ describe('bwrapArgs', () => {
     expect(first(a, '--ro-bind', `${GIT}/config`, `${GIT}/config`)).toBeGreaterThan(g)
   })
 
+  it('an existing gitDir without hooks fails closed (call ensureGitHooksDir first)', () => {
+    const g = '/repos/nohooks/.git'
+    expect(() => bwrapArgs(params({ gitDirs: [g], ...fs([g]) }))).toThrow(/hooks/)
+  })
+
   it('a gitDir outside cwd (worktree / subdir) is bound and protected, with the worktree .git file ro-bound', () => {
     const main = '/repos/main/.git'
-    const ex = new Set([...EXISTING, main, `${main}/hooks`, `${main}/config`, `${main}/config.worktree`, `${CWD}/.git`])
     const a = bwrapArgs(params({
       gitDirs: [main],
       gitProtected: [`${CWD}/.git`],
-      exists: p => ex.has(p),
+      ...fs([main, `${main}/hooks`], [`${main}/config`, `${main}/config.worktree`, `${CWD}/.git`]),
     }))
     const g = first(a, '--bind', main, main)
     for (const f of ['hooks', 'config', 'config.worktree']) expect(first(a, '--ro-bind', `${main}/${f}`, `${main}/${f}`)).toBeGreaterThan(g)
@@ -173,16 +209,16 @@ describe('bwrapArgs', () => {
       gitProtected: ['/nope/x'],
     }))
     expect(opts(a)).toEqual([
-      '--die-with-parent', '--unshare-user', '--unshare-pid', '--unshare-net',
+      '--die-with-parent', '--unshare-user', '--unshare-pid', '--unshare-ipc', '--unshare-net',
       '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp',
       '--bind', CWD, CWD,
+      ...UNSET,
       '--unsetenv', 'ELECTRON_RUN_AS_NODE',
       '--chdir', CWD,
     ])
     // 每个挂载的源 / 目标都存在(或是固定的系统路径)
     const fixed = new Set(['/', '/dev', '/proc', '/tmp', '/dev/null'])
-    const full = bwrapArgs(params())
-    const o = opts(full)
+    const o = opts(bwrapArgs(params()))
     for (let i = 0; i < o.length; i++) {
       if (o[i] === '--bind' || o[i] === '--ro-bind') {
         for (const p of [o[i + 1], o[i + 2]]) expect(fixed.has(p) || EXISTING.has(p), p).toBe(true)
@@ -191,20 +227,63 @@ describe('bwrapArgs', () => {
     }
   })
 
-  it('hide paths come in literal and realpath spellings, deduplicated', () => {
+  it('mounts only realpaths: a symlinked hide or data dir is mounted at its target, never at the link', () => {
     const a = bwrapArgs(params({
       hideFiles: [`${H}/.npmrc`, '/l/.netrc'],
-      exists: p => EXISTING.has(p) || p === '/l/.netrc' || p === '/r/.netrc' || p === '/r/data',
-      realpath: p => ({ '/l/.netrc': '/r/.netrc', [DATA]: '/r/data' } as Record<string, string>)[p] ?? REAL[p] ?? p,
+      ...fs(['/r/data'], ['/l/.netrc', '/r/.netrc'], { '/l/.netrc': '/r/.netrc', [DATA]: '/r/data' }),
     }))
-    expect(at(a, '--tmpfs', `${H}/.ssh`)).toHaveLength(1)
     expect(at(a, '--tmpfs', '/data/ssh')).toHaveLength(1)
-    expect(at(a, '--ro-bind', '/dev/null', '/l/.netrc')).toHaveLength(1)
+    expect(a).not.toContain(`${H}/.ssh`)
     expect(at(a, '--ro-bind', '/dev/null', '/r/.netrc')).toHaveLength(1)
-    expect(at(a, '--ro-bind', '/dev/null', `${H}/.npmrc`)).toHaveLength(1)
-    expect(at(a, '--tmpfs', DATA)).toHaveLength(1)
+    expect(a).not.toContain('/l/.netrc')
     expect(at(a, '--tmpfs', '/r/data')).toHaveLength(1)
+    expect(at(a, '--tmpfs', DATA)).toHaveLength(0)
     expect(last(a, '--bind', TMP, TMP)).toBeGreaterThan(first(a, '--tmpfs', '/r/data'))
+  })
+
+  it('writable roots and --chdir use the realpath (HOME behind a symlinked /home)', () => {
+    const real = (p: string) => p.startsWith('/home/') ? `/var${p}` : p
+    const ex = new Set([...EXISTING].map(real))
+    const a = bwrapArgs(params({ exists: p => ex.has(p), isDir: p => DIRS.has(p.replace(/^\/var/, '')), realpath: real, isSymlink: () => false }))
+    expect(at(a, '--bind', `/var${CWD}`, `/var${CWD}`)).toHaveLength(1)
+    expect(at(a, '--tmpfs', `/var${DATA}`)).toHaveLength(1)
+    expect(a[a.indexOf('--chdir') + 1]).toBe(`/var${CWD}`)
+    expect(opts(a).some(x => x.startsWith('/home/'))).toBe(false)
+  })
+
+  it('hides pick --tmpfs or /dev/null by the real type, whichever list the path came in', () => {
+    const a = bwrapArgs(params({ hideDirs: [`${H}/.npmrc`], hideFiles: [`${H}/.ssh`] }))
+    expect(at(a, '--ro-bind', '/dev/null', `${H}/.npmrc`)).toHaveLength(1)
+    expect(at(a, '--tmpfs', '/data/ssh')).toHaveLength(1)
+  })
+
+  it('hides the runtime dir, the env-named sockets and the well-known sockets; strips their env vars', () => {
+    const agent = `${H}/.agent.sock`
+    const a = bwrapArgs(params({
+      env: {
+        HOME: H,
+        XDG_RUNTIME_DIR: '/xdg',
+        SSH_AUTH_SOCK: agent,
+        GPG_AGENT_INFO: '/g/S.gpg-agent:123:1',
+        DBUS_SESSION_BUS_ADDRESS: `unix:path=${RUN}/bus,guid=abc;unix:path=/b/bus%20x;unix:abstract=/z`,
+      },
+      ...fs(['/xdg', '/run/podman'], [agent, '/g/S.gpg-agent', '/b/bus x', `${RUN}/bus`, '/var/run/docker.sock', '/run/dbus/system_bus_socket']),
+    }))
+    expect(at(a, '--tmpfs', RUN)).toHaveLength(1)
+    expect(at(a, '--tmpfs', '/xdg')).toHaveLength(1)
+    for (const f of [agent, '/g/S.gpg-agent', '/b/bus x', '/var/run/docker.sock', '/run/dbus/system_bus_socket']) {
+      expect(at(a, '--ro-bind', '/dev/null', f), f).toHaveLength(1)
+    }
+    expect(a).not.toContain(`${RUN}/bus`) // 已在被隐藏的运行时目录里
+    expect(a).not.toContain('/run/docker.sock') // 不存在
+    for (const level of ['full', 'partial'] as const) {
+      const o = opts(bwrapArgs(params({ level })))
+      for (const k of ['SSH_AUTH_SOCK', 'DBUS_SESSION_BUS_ADDRESS', 'GPG_AGENT_INFO', 'DOCKER_HOST']) expect(at(o, '--unsetenv', k)).toHaveLength(1)
+    }
+  })
+
+  it('malformed env socket values are skipped, not thrown', () => {
+    expect(() => bwrapArgs(params({ env: { HOME: H, SSH_AUTH_SOCK: 'rel/sock', GPG_AGENT_INFO: '/a\nb:1:1', XDG_RUNTIME_DIR: '' } }))).not.toThrow()
   })
 
   it('the proxy socket is ro-bound by itself (never its dir), after /tmp and the hides', () => {
@@ -216,16 +295,23 @@ describe('bwrapArgs', () => {
 
   it('rejects a socket whose parent is writable inside the sandbox', () => {
     for (const s of [`${CWD}/net.sock`, `${CWD}/sub/net.sock`, `${TMP}/net.sock`, `${GIT}/net.sock`]) {
-      expect(() => bwrapArgs(params({ unixSock: s, exists: p => EXISTING.has(p) || p === s })), s).toThrow(/socket/)
+      expect(() => bwrapArgs(params({ unixSock: s, ...fs([], [s]) })), s).toThrow(/socket/)
     }
-    // realpath 拼写落进可写根也拒
+    // realpath 落进可写根也拒
     expect(() => bwrapArgs(params({ unixSock: '/l/net.sock', realpath: p => (p === '/l/net.sock' ? `${TMP}/net.sock` : p) }))).toThrow(/socket/)
+  })
+
+  it('rejects / or an ancestor of HOME as a writable root', () => {
+    expect(() => bwrapArgs(params({ cwd: '/' }))).toThrow(/too broad/)
+    expect(() => bwrapArgs(params({ cwd: '/home' }))).toThrow(/too broad/)
+    expect(() => bwrapArgs(params({ gitDirs: ['/'] }))).toThrow(/too broad/)
+    expect(() => bwrapArgs(params({ cwd: H, gitDirs: [] }))).not.toThrow()
   })
 
   it('execRoot: ro-bound right after --tmpfs /tmp so an AppImage execPath stays reachable', () => {
     const exec = '/tmp/.mount_mffXYZ/mff'
     const root = '/tmp/.mount_mffXYZ'
-    const a = bwrapArgs(params({ execPath: exec, execRoot: root, exists: p => EXISTING.has(p) || p === root || p === exec }))
+    const a = bwrapArgs(params({ execPath: exec, execRoot: root, ...fs([root], [exec]) }))
     expect(first(a, '--ro-bind', root, root)).toBe(first(a, '--tmpfs', '/tmp') + 2)
     expect(a.slice(a.indexOf('--') + 1, a.indexOf('--') + 2)).toEqual([exec])
   })

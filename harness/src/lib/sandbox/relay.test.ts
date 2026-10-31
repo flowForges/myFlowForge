@@ -9,6 +9,7 @@ import { RELAY_SOURCE } from './relay'
 // 中转的纯逻辑(不需要 bwrap):用 process.execPath 跑内联源码,TCP 127.0.0.1 ↔ 测试自己起的 Unix socket
 
 const posix = process.platform !== 'win32'
+const BIG = 8 * 1024 * 1024
 
 let R = ''
 let sock = ''
@@ -25,7 +26,7 @@ beforeAll(async () => {
     peers.add(c)
     c.on('close', () => peers.delete(c))
     c.on('error', () => {})
-    c.on('data', d => { c.write(`echo:${d}`) })
+    c.on('data', d => { if (String(d) === 'big') c.end(Buffer.alloc(BIG, 0x61)); else c.write(`echo:${d}`) })
     c.on('end', () => c.end())
   })
   await new Promise<void>(r => server.listen(sock, r))
@@ -77,6 +78,13 @@ describe.skipIf(!posix)('relay', () => {
     expect(r.out).toBe('got[echo:ping]')
     expect(r.code).toBe(7)
     expect(r.signal).toBeNull()
+  }, 20_000)
+
+  it('a half-closing client gets the whole of a large response (no tail lost on close)', async () => {
+    const port = await freePort()
+    const cmd = `"$NODE" -e 'const s=require("net").connect(${port},"127.0.0.1");s.on("error",e=>process.stdout.write("err"));s.end("big");let n=0;s.on("data",d=>n+=d.length);s.on("close",()=>process.stdout.write("n="+n))'`
+    const r = await relay(port, cmd)
+    expect(r.out).toBe(`n=${BIG}`)
   }, 20_000)
 
   it('exit 0 → 0', async () => {

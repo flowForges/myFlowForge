@@ -1,14 +1,19 @@
 // 设计参考 anthropic-experimental/sandbox-runtime(Apache-2.0)
-// Linux bubblewrap 参数(spec §9,评审修订 R5、R9)。纯函数:exists / realpath 可注入,默认读文件系统。
+// Linux bubblewrap 参数(spec §9,评审修订 R5、R9,Task 8 评审 C1 / I1–I4)。纯函数:文件系统查询可注入,默认读真实文件系统。
 // bwrap 按参数顺序挂载,后挂的盖住先挂的,所以顺序即语义:
-//   只读根 + 私有 /tmp → [execRoot] → 可写根(cwd、各 gitDir、tmp)与只读 spill → git 保护 →
-//   凭据 / 数据目录隐藏 → 盖回 tmp / spill → 持久化文件只读 → 代理 socket → 命令(full 时经中转)。
-// 不传 --new-session:超时 / 取消杀的是 bwrap 所在的进程组(Task 4 的进程组登记依赖它)。
-// 所有挂载都只给存在的路径(bwrap 对不存在的源直接失败)。
-import { existsSync, mkdirSync } from 'node:fs'
+//   只读根 + 私有 /tmp → [execRoot] → 可写根(cwd、各 gitDir、tmp)与只读 spill → git 保护 → 持久化文件只读 →
+//   隐藏(运行时目录、已知 Unix socket、凭据、数据目录)→ 盖回 tmp / spill → 代理 socket → 命令(full 时经中转)。
+// - 只挂 realpath:bwrap 先 pivot_root 再 mount(2),目标里的符号链接按新根解析 —— 绝对链接会 ENOENT 让 bwrap 起不来,
+//   相对链接落到目标上、链接本身仍可删可换。挂载按 inode 生效,一个 realpath 就覆盖所有拼写(I1)。
+// - 持久化文件在隐藏之前挂:它们的源是宿主,挂在隐藏之后会把被隐藏根里的内容读回来(M1)。
+// - 不传 --new-session:超时 / 取消杀的是 bwrap 所在的进程组(Task 4 的进程组登记依赖它)。
+// - 所有挂载都只给存在的路径(bwrap 对不存在的源直接失败);例外:存在的 gitDir 缺 hooks → 抛错(I3,先调 ensureGitHooksDir)。
+// - Unix socket(C1):没有 seccomp,文件系统上的 socket 靠隐藏路径挡(会话总线、systemd 用户管理器、ssh / gpg agent、
+//   docker / podman);抽象 socket 按网络命名空间隔离,full 下被 --unshare-net 挡住,partial 下挡不住(§14)。
+import { existsSync, lstatSync, mkdirSync, statSync } from 'node:fs'
 import { posix } from 'node:path'
 import { cleanPath, realSpelling, within } from './paths'
-import { RELAY_PORT, RELAY_SOURCE } from './relay'
+import { RELAY_PORT, RELAY_SOURCE, RELAY_STRIP_ENV } from './relay'
 
 export interface BwrapParams {
   /** full = 文件 + 网络命名空间(经中转连代理);partial = 只有文件限制,网络照常 */
@@ -22,9 +27,8 @@ export interface BwrapParams {
   gitDirs: string[]
   /** 另外要只读的 git 文件:worktrees/*\/{config.worktree,commondir,gitdir}、worktree 时 cwd 里的 `.git` 文件 */
   gitProtected: string[]
-  /** 凭据目录 → --tmpfs */
+  /** 凭据路径;按真实类型隐藏:目录 → --tmpfs,其他 → --ro-bind /dev/null(两张表合并处理) */
   hideDirs: string[]
-  /** 凭据文件 → --ro-bind /dev/null */
   hideFiles: string[]
   /** 数据目录 → --tmpfs(之后盖回 tmp / spill) */
   dataDir: string
@@ -37,9 +41,26 @@ export interface BwrapParams {
   /** execPath 在 /tmp 下(AppImage 挂载点)时它的根,用 execRootFor 算 */
   execRoot?: string
   command: string
+  /** 命令的环境(内核快照):取 HOME、XDG_RUNTIME_DIR 与各 agent / 总线 socket 路径。默认 process.env */
+  env?: Record<string, string | undefined>
+  /** 默认 process.getuid() */
+  uid?: number
   exists?: (p: string) => boolean
   realpath?: (p: string) => string
+  /** 跟随符号链接 */
+  isDir?: (p: string) => boolean
+  /** 不跟随符号链接 */
+  isSymlink?: (p: string) => boolean
 }
+
+/** 宿主上常见的高权限 Unix socket(文件 → /dev/null,目录 → tmpfs) */
+export const KNOWN_SOCKETS = [
+  '/var/run/docker.sock',
+  '/run/docker.sock',
+  '/run/podman/podman.sock',
+  '/run/dbus/system_bus_socket',
+  '/var/run/dbus/system_bus_socket',
+]
 
 const who = 'bwrap'
 const clean = (p: string) => cleanPath(p, who)
@@ -62,30 +83,65 @@ export function ensureGitHooksDir(gitDir: string): void {
   }
 }
 
+/** 环境变量里的 socket 路径(值不归我们管:坏值跳过,不抛错) */
+function envSockets(env: Record<string, string | undefined>): string[] {
+  const out: string[] = []
+  if (env.SSH_AUTH_SOCK) out.push(env.SSH_AUTH_SOCK)
+  if (env.GPG_AGENT_INFO) out.push(env.GPG_AGENT_INFO.split(':')[0])
+  for (const a of (env.DBUS_SESSION_BUS_ADDRESS ?? '').split(';')) {
+    if (!a.startsWith('unix:')) continue
+    for (const kv of a.slice(5).split(',')) if (kv.startsWith('path=')) out.push(decodeURIComponentSafe(kv.slice(5)))
+  }
+  return out
+}
+
+function decodeURIComponentSafe(s: string): string {
+  try { return decodeURIComponent(s) } catch { return s }
+}
+
+/** 外来路径:绝对且无控制字符才用,`..` 按字面折叠(只用于隐藏,多挂不少挂) */
+function lenient(p: string | undefined): string | undefined {
+  if (!p || !p.startsWith('/')) return undefined
+  try { return clean(posix.normalize(p)) } catch { return undefined }
+}
+
 export function bwrapArgs(p: BwrapParams): string[] {
   const exists = p.exists ?? existsSync
-  const real = p.realpath ?? realSpelling
+  const realpath = p.realpath ?? realSpelling
+  const isDir = p.isDir ?? ((x: string) => { try { return statSync(x).isDirectory() } catch { return false } })
+  const isSymlink = p.isSymlink ?? ((x: string) => { try { return lstatSync(x).isSymbolicLink() } catch { return false } })
+  const env = p.env ?? process.env
+  const uid = p.uid ?? process.getuid?.()
+
+  /** 校验原样拼写,再取 realpath(也校验) */
+  const R = (x: string) => clean(realpath(clean(x)))
 
   // 先校验全部路径(不管存不存在、用不用得到):坏路径一律抛错,命令不跑
-  const cwd = clean(p.cwd)
-  const tmp = clean(p.tmp)
-  const spill = clean(p.spill)
-  const dataDir = clean(p.dataDir)
-  const execPath = clean(p.execPath)
-  const gitDirs = p.gitDirs.map(clean)
-  const gitProtected = p.gitProtected.map(clean)
-  const hideDirs = p.hideDirs.map(clean)
-  const hideFiles = p.hideFiles.map(clean)
+  const cwd = R(p.cwd)
+  const tmp = R(p.tmp)
+  const spill = R(p.spill)
+  const dataDir = R(p.dataDir)
+  const execPath = R(p.execPath)
+  const gitDirs = p.gitDirs.map(R)
+  const gitProtected = p.gitProtected.map(R)
+  const hides = [...p.hideDirs, ...p.hideFiles].map(R)
   const persistence = p.persistence.map(clean)
-  const unixSock = p.unixSock === undefined ? undefined : clean(p.unixSock)
-  const execRoot = p.execRoot === undefined ? undefined : clean(p.execRoot)
+  const unixSock = p.unixSock === undefined ? undefined : R(p.unixSock)
+  const execRoot = p.execRoot === undefined ? undefined : R(p.execRoot)
 
-  /** 原样 + realpath 两种拼写,去重 */
-  const spell = (x: string) => [...new Set([x, clean(real(x))])]
-  const writableRoots = [cwd, ...gitDirs, tmp].flatMap(spell)
-  const inWritable = (x: string) => spell(x).some(s => writableRoots.some(r => within(s, r)))
+  const writableRoots = [cwd, ...gitDirs, tmp]
+  const inWritable = (x: string) => writableRoots.some(r => within(x, r))
 
-  if (unixSock !== undefined && spell(unixSock).some(s => inWritable(posix.dirname(s)))) {
+  // 可写根不能是 / 或家目录的祖先(纵深防御;会话层已有同样的检查)
+  const homeLit = lenient(env.HOME)
+  const home = homeLit === undefined ? undefined : clean(realpath(homeLit))
+  for (const r of writableRoots) {
+    if (r === '/' || (home !== undefined && r !== home && within(home, r))) {
+      throw new Error(`${who}: writable root is too broad: ${JSON.stringify(r)}`)
+    }
+  }
+
+  if (unixSock !== undefined && inWritable(posix.dirname(unixSock))) {
     throw new Error(`${who}: proxy socket's parent is writable inside the sandbox: ${JSON.stringify(unixSock)}`)
   }
 
@@ -97,7 +153,12 @@ export function bwrapArgs(p: BwrapParams): string[] {
     throw new Error(`${who}: execPath under /tmp needs an execRoot: ${JSON.stringify(execPath)}`)
   }
 
-  const out: string[] = ['--die-with-parent', '--unshare-user', '--unshare-pid']
+  // I3:存在的 gitDir 必须有 hooks 才能只读挂上;没有就不跑(调用方先 ensureGitHooksDir)
+  for (const g of gitDirs) {
+    if (exists(g) && !exists(`${g}/hooks`)) throw new Error(`${who}: ${JSON.stringify(g)} has no hooks dir; call ensureGitHooksDir first`)
+  }
+
+  const out: string[] = ['--die-with-parent', '--unshare-user', '--unshare-pid', '--unshare-ipc']
   if (p.level === 'full') out.push('--unshare-net')
   out.push('--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp')
 
@@ -125,10 +186,43 @@ export function bwrapArgs(p: BwrapParams): string[] {
   for (const g of gitDirs) for (const f of ['hooks', 'config', 'config.worktree']) self('--ro-bind', `${g}/${f}`)
   for (const f of gitProtected) self('--ro-bind', f)
 
-  // 凭据与数据目录:两种拼写都挂
-  for (const d of hideDirs.flatMap(spell)) mount('--tmpfs', d)
-  for (const f of hideFiles.flatMap(spell)) mount('--ro-bind', '/dev/null', f)
-  for (const d of spell(dataDir)) mount('--tmpfs', d)
+  // 持久化文件:目标在可写根内 → 只读挂 realpath。路径上任一段是可写根里的符号链接 → 链接本身可删可换,
+  // 改为只读挂链接所在的目录;那个目录本身是(或包含)可写根时挂不了,只剩 realpath 那一条(§14)
+  for (const lit of persistence) {
+    const parts = lit.split('/').filter(Boolean)
+    for (let i = 1; i <= parts.length; i++) {
+      const pre = `/${parts.slice(0, i).join('/')}`
+      if (!isSymlink(pre)) continue
+      const parent = R(posix.dirname(pre))
+      if (!inWritable(parent)) continue
+      if (writableRoots.some(w => within(w, parent))) continue
+      self('--ro-bind', parent)
+    }
+    const r = R(lit)
+    if (inWritable(r)) self('--ro-bind', r)
+  }
+
+  // 隐藏:运行时目录(会话总线、systemd 用户管理器、各 agent)、环境里点名的 socket、已知 socket、凭据、数据目录
+  const runtime = [uid === undefined ? undefined : `/run/user/${uid}`, lenient(env.XDG_RUNTIME_DIR)]
+  const candidates = [
+    ...runtime,
+    ...envSockets(env).map(lenient),
+    ...KNOWN_SOCKETS,
+    ...hides,
+    dataDir,
+  ].filter((x): x is string => x !== undefined).map(x => clean(realpath(x)))
+  const targets: { path: string; dir: boolean }[] = []
+  for (const t of candidates) {
+    if (!exists(t) || targets.some(o => o.path === t)) continue
+    targets.push({ path: t, dir: isDir(t) })
+  }
+  // 已在某个被隐藏目录里的不再单独挂(目标在 tmpfs 里已不存在)
+  const hiddenDirs = targets.filter(t => t.dir).map(t => t.path)
+  for (const t of targets) {
+    if (hiddenDirs.some(d => d !== t.path && within(t.path, d))) continue
+    if (t.dir) mount('--tmpfs', t.path)
+    else mount('--ro-bind', '/dev/null', t.path)
+  }
 
   // 盖回数据目录里本会话的两个目录(bwrap 允许同一路径再挂一次,所以这里不去重)
   seen.delete(['--bind', tmp, tmp].join('\0'))
@@ -136,12 +230,10 @@ export function bwrapArgs(p: BwrapParams): string[] {
   self('--bind', tmp)
   self('--ro-bind', spill)
 
-  // 持久化文件:只在可写根内才需要(根本来就只读)
-  for (const f of persistence) if (inWritable(f)) for (const s of spell(f)) self('--ro-bind', s)
-
   // 代理 socket:只绑文件本身;只读挂载上 connect() 照样可用(EROFS 只针对普通文件 / 目录 / 符号链接)
   if (relay) self('--ro-bind', unixSock!)
 
+  for (const k of RELAY_STRIP_ENV) out.push('--unsetenv', k)
   if (relay) out.push('--setenv', 'ELECTRON_RUN_AS_NODE', '1')
   else out.push('--unsetenv', 'ELECTRON_RUN_AS_NODE')
   out.push('--chdir', cwd, '--')
