@@ -59,6 +59,10 @@ describe('sessionKey', () => {
     ['git checkout main', 'git checkout main'],
     ['git restore src/a.ts', 'git restore src/a.ts'],
     ['git switch main', 'git switch main'],
+    // 终审 I1:commit / pull 会跑钩子(core.hooksPath 可指向工作区里模型能写的目录)→ 整条命令做键
+    ['git commit -m fix', 'git commit -m fix'],
+    ['git pull', 'git pull'],
+    ['git pull --rebase origin main', 'git pull --rebase origin main'],
     // 字符清单内的常见写法仍有键
     ['eslint src/**/*.ts', 'eslint'],
     // 评审 R5 的两条:git 参数里的通配、`:` / `,` 之后的 `..` → 没有键
@@ -70,7 +74,6 @@ describe('sessionKey', () => {
     ['prettier -w ./src/*.ts', 'prettier'],
     ['git log main..HEAD', 'git log'],
     ['go test ./...', 'go test'],
-    ['git commit -m fix', 'git commit'],
     ['git show HEAD:src/a.ts', 'git show'],
     ['npm install @scope/pkg@1.2.3', 'npm install @scope/pkg@1.2.3'],
     ['vitest run a,b', 'vitest'],
@@ -306,5 +309,7 @@ describe('sessionKey', () => {
     expect(sessionKey('git checkout .')).not.toBe(sessionKey('git checkout main'))
     expect(sessionKey('git restore .')).not.toBe(sessionKey('git restore src/a.ts'))
     expect(sessionKey('git switch main --discard-changes')).not.toBe(sessionKey('git switch main'))
+    expect(sessionKey('git commit -m other')).not.toBe(sessionKey('git commit -m fix'))
+    expect(sessionKey('git pull origin evil')).not.toBe(sessionKey('git pull'))
   })
 })

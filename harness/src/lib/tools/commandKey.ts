@@ -38,7 +38,8 @@ const BY_PAIR = new Map<string, Set<string>>([
 
 /**
  * (c) 键 = 整条命令(空白折叠):只有一字不差的重复才自动放行。
- * 安装 / 直接运行会拉远程代码或跑任意文件;这几个 git 子命令会毁掉快照救不回的状态(stash、分支、未提交改动)
+ * 安装 / 直接运行会拉远程代码或跑任意文件;stash / branch / checkout / switch / restore 会毁掉快照救不回的状态
+ * (stash、分支、未提交改动);commit / pull 会跑钩子,而 core.hooksPath 可指向工作区里模型能写的目录(终审 I1)
  */
 const EXACT = new Map<string, Set<string>>([
   ['npm', new Set(['install'])],
@@ -48,7 +49,7 @@ const EXACT = new Map<string, Set<string>>([
   ['pip', new Set(['install'])],
   ['uv', new Set(['pip'])],
   ['go', new Set(['run'])],
-  ['git', new Set(['stash', 'branch', 'checkout', 'switch', 'restore'])],
+  ['git', new Set(['stash', 'branch', 'checkout', 'switch', 'restore', 'commit', 'pull'])],
 ])
 
 /**
