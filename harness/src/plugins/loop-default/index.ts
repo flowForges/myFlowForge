@@ -73,7 +73,11 @@ export function createLoopDefault(opts: LoopDefaultOpts = {}): Plugin {
         let startRef: string | undefined
         let outcome: TurnOutcome | undefined
         try {
-          await locks.get(sessionId) // 已开始的回滚先做完
+          const rolling = locks.get(sessionId)
+          if (rolling) {
+            ctx.log.info('turn waits for a rollback', { turnId }) // 已开始的回滚先做完
+            await rolling
+          }
           startRef = await startSnapshot(snap, target, turnId)
           outcome = await runTurn(
             {

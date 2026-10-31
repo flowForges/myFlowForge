@@ -88,11 +88,16 @@ const say = (text: string): AsyncIterable<ModelEvent> => seq({ type: 'text', del
 /** 每轮:第一步调用一个工具,第二步回答 */
 const oneTool = (name: string, args: object): Script => (n => (n % 2 === 1 ? calling(`c${n}`, name, args) : say('done')))
 
+/** 插件日志(只留消息):测试据此确认第 2 轮已在等回滚,不靠睡固定时长 */
+let logs: string[] = []
+const logger = { info: (m: string) => { logs.push(m) }, warn: (m: string) => { logs.push(m) }, error: (m: string) => { logs.push(m) } }
 async function boot(calls: Message[][], script: () => Script, wrapGit?: (g: Git) => Git) {
   const g = createGit({ base: baseEnv(), extraEnv: gitInjected() })
+  logs = []
   const k = await createKernel({
     dataDir,
     home,
+    log: logger,
     secrets: { osBackend: false },
     injectTimeoutMs: 100,
     plugins: [
@@ -366,13 +371,15 @@ describe('Review Focus 5: turn.rollback restores only that turn files', () => {
     await waitFor(() => hold.reached)
     script = () => say('ok')
     const t2 = await prompt(k, sid, 'second turn')
-    await sleep(1_500) // 一次快照约几百毫秒:不等回滚的话这时第 2 轮早已拍完开始快照
-    expect(snaps(k, sid, t2)).toEqual([]) // 还在等回滚
+    await waitFor(() => logs.some(m => m.endsWith('turn waits for a rollback')))
+    expect(snaps(k, sid, t2)).toEqual([]) // 第 2 轮已开始,但在等回滚
     hold.release()
     expect(await rb).toEqual({ ok: true, files: 1 })
-    await waitFor(() => terminalOf(k, sid, t2).length === 1)
+    // 等事件而不是睡固定时长:开始快照落下之后再比顺序
+    await waitFor(() => snaps(k, sid, t2).some(p => p.phase === 'start'))
     const seqOf = (pred: (e: KernelEvent) => boolean) => evs(k, sid).find(pred)!.seq
-    expect(seqOf(e => e.type === 'turn.snapshot' && pay(e).turnId === t2)).toBeGreaterThan(seqOf(e => e.type === 'turn.rolledBack'))
+    expect(seqOf(e => e.type === 'turn.snapshot' && pay(e).turnId === t2 && pay(e).phase === 'start')).toBeGreaterThan(seqOf(e => e.type === 'turn.rolledBack'))
+    await waitFor(() => terminalOf(k, sid, t2).length === 1)
     expect(JSON.stringify(calls.at(-1))).not.toContain('first turn')
     expect(existsSync(R('one.txt'))).toBe(false)
   })
