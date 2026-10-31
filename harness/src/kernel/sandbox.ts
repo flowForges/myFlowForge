@@ -4,9 +4,9 @@
 //   含 `..` 等坏值的条目丢掉(其解析后的形态已在清单里):一个坏环境变量不能让所有命令都跑不了;
 // - cwd / 临时目录等自身路径坏了照样抛错:plan reject,调用方让命令失败,绝不退回无沙箱执行;
 // - 代理每会话一个,按需启动;命令在跑(plan 之后、release 之前)时保持不关,之后按空闲关闭。
-import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync, chmodSync, type Dirent } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, type Dirent } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, posix } from 'node:path'
+import { join, posix, resolve } from 'node:path'
 import type { KernelEvent, PermissionsConfig, SandboxStatus } from '../protocol/index'
 import { canonicalRoots, credentialRoots, persistenceRoots, type EnvSnapshot } from '../lib/fs/paths'
 import { createGit, type Git } from '../lib/git/snapshot'
@@ -78,6 +78,8 @@ export interface SandboxOpts {
 
 interface SessionProxy {
   handle?: ProxyHandle
+  /** 本会话最近一次启动代理失败(级别按会话算,review M3) */
+  failed: boolean
   starting?: Promise<ProxyHandle | undefined>
   holds: number
   keepalive?: NodeJS.Timeout
@@ -99,16 +101,14 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
   const execPath = o.execPath ?? process.execPath
   const proxies = new Map<string, SessionProxy>()
   const repos = new Map<string, Promise<RepoGit>>()
-  let proxyFailed = false
   let closed = false
 
   /** 这个级别下命令是否经会话代理上网:macOS 总是;Linux 只有 full(网络命名空间 + 中转) */
   const usesProxy = () => platform === 'darwin' || (platform === 'linux' && o.detected.level === 'full')
 
-  function status(): SandboxStatus {
-    const c = o.permissions()
-    const autoDegraded = (level: SandboxStatus['level']) => level === 'none' && !c.allowUnsandboxedAuto
-    if (!c.sandbox.enabled) return { level: 'none', missing: ['disabled'], autoDegraded: autoDegraded('none') }
+  /** 级别:探测结果 + 现读的配置 + 代理是否失败(status 看任一会话,plan 只看本会话) */
+  function levelOf(c: PermissionsConfig, proxyFailed: boolean): Pick<SandboxStatus, 'level' | 'missing'> {
+    if (!c.sandbox.enabled) return { level: 'none', missing: ['disabled'] }
     let level = o.detected.level
     const missing = [...o.detected.missing]
     if (level !== 'none') {
@@ -121,7 +121,13 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
         missing.push('proxy')
       }
     }
-    return { level, missing, autoDegraded: autoDegraded(level) }
+    return { level, missing }
+  }
+
+  function status(): SandboxStatus {
+    const c = o.permissions()
+    const r = levelOf(c, [...proxies.values()].some(e => e.failed))
+    return { ...r, autoDegraded: r.level === 'none' && !c.allowUnsandboxedAuto }
   }
 
   // ---- 清单(每次 plan 现算:之后才建出的 ~/.ssh 链接也拦得住)----
@@ -159,14 +165,24 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
 
   // ---- git ----
 
-  async function lookupGit(cwd: string): Promise<RepoGit> {
+  /**
+   * git 的答案(review I1):不用 --path-format(git 2.31 才有,旧版原样回显未知参数且退出 0),相对结果按 cwd 解析。
+   * 结果第一行像参数(`-` 开头,更老的 git 不认 --git-common-dir)也当没答上来
+   */
+  async function askGit(cwd: string): Promise<{ repo?: RepoGit; ran: boolean }> {
+    let r: Awaited<ReturnType<Git>>
     try {
-      const r = await git(['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd })
-      const dir = r.code === 0 ? r.stdout.toString().split('\n')[0] : ''
-      if (!dir || !dir.startsWith('/')) return { gitDirs: [] }
-      const gitDir = realpathSync.native(dir)
+      r = await git(['rev-parse', '--git-common-dir'], { cwd })
+    } catch (err) {
+      log.warn('sandbox git lookup failed', { error: String(err) })
+      return { ran: false }
+    }
+    const line = r.code === 0 ? r.stdout.toString().split('\n')[0] : ''
+    if (!line || line.startsWith('-')) return { ran: r.code !== 0 } // 非 0 = 确实不是仓库(仍要走一遍目录兜底)
+    try {
+      const gitDir = realpathSync.native(resolve(cwd, line))
       let cwdGitFile: string | undefined
-      const t = await git(['rev-parse', '--path-format=absolute', '--show-toplevel'], { cwd })
+      const t = await git(['rev-parse', '--show-toplevel'], { cwd })
       const top = t.code === 0 ? t.stdout.toString().split('\n')[0] : ''
       if (top.startsWith('/')) {
         const f = join(realpathSync.native(top), '.git')
@@ -176,18 +192,70 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
           // 没有 .git(GIT_DIR 之类):不保护
         }
       }
-      return { gitDirs: [gitDir], cwdGitFile }
+      return { repo: { gitDirs: [gitDir], cwdGitFile }, ran: true }
     } catch (err) {
       log.warn('sandbox git lookup failed', { error: String(err) })
-      return { gitDirs: [] }
+      return { ran: false }
     }
   }
 
-  function repoFor(sessionId: string, cwd: string): Promise<RepoGit> {
+  /**
+   * 兜底(git 不在 / 太老 / 出错):从 cwd 往上找 `.git`。目录 → 它就是 gitDir;文件 → 按 `gitdir:` 与 commondir 解析。
+   * 有 `.git` 却解析不出 → 抛错(命令失败,不在没有 git 保护的情况下跑)
+   */
+  function walkGit(cwd: string): RepoGit {
+    for (let d = cwd; ; d = posix.dirname(d)) {
+      const p = join(d, '.git')
+      let st
+      try {
+        st = lstatSync(p)
+      } catch {
+        if (d === posix.dirname(d)) return { gitDirs: [] }
+        continue
+      }
+      try {
+        if (st.isDirectory()) return { gitDirs: [realpathSync.native(p)] }
+        if (st.isSymbolicLink() && statSync(p).isDirectory()) return { gitDirs: [realpathSync.native(p)], cwdGitFile: p }
+        const m = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(readFileSync(p, 'utf8'))
+        if (!m) throw new Error('no gitdir line')
+        const gd = realpathSync.native(resolve(d, m[1]))
+        let common = gd
+        try {
+          common = realpathSync.native(resolve(gd, readFileSync(join(gd, 'commondir'), 'utf8').trim()))
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
+        }
+        return { gitDirs: [common], cwdGitFile: p }
+      } catch (err) {
+        throw new Error(`sandbox: can't resolve the git dir of ${JSON.stringify(p)}: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+  }
+
+  const MAX_REPOS = 256
+
+  /** 一个会话查一次;git 没答上来的结果不缓存(review M6) */
+  async function repoFor(sessionId: string, cwd: string): Promise<RepoGit> {
     const key = `${sessionId}\0${cwd}`
-    let p = repos.get(key)
-    if (!p) repos.set(key, (p = lookupGit(cwd)))
-    return p
+    const cached = repos.get(key)
+    if (cached) return cached
+    const a = await askGit(cwd)
+    if (a.repo) {
+      remember(key, a.repo)
+      return a.repo
+    }
+    const walked = walkGit(cwd)
+    if (a.ran && walked.gitDirs.length === 0) remember(key, walked) // git 说不是仓库,目录里也没有 .git
+    return walked
+  }
+
+  function remember(key: string, repo: RepoGit): void {
+    repos.set(key, Promise.resolve(repo))
+    if (repos.size > MAX_REPOS) repos.delete(repos.keys().next().value!)
+  }
+
+  function forgetRepo(sessionId: string): void {
+    for (const k of repos.keys()) if (k.startsWith(`${sessionId}\0`)) repos.delete(k)
   }
 
   /** Linux:worktrees/*\/{config.worktree,commondir,gitdir} 与 cwd 的 .git 文件(bwrapArgs 只挂存在的) */
@@ -210,7 +278,7 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
 
   function entryFor(sessionId: string): SessionProxy {
     let e = proxies.get(sessionId)
-    if (!e) proxies.set(sessionId, (e = { holds: 0, denied: { keys: new Set() } }))
+    if (!e) proxies.set(sessionId, (e = { holds: 0, failed: false, denied: { keys: new Set() } }))
     return e
   }
 
@@ -230,7 +298,25 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
     }
   }
 
-  async function proxyFor(sessionId: string, e: SessionProxy): Promise<ProxyHandle | undefined> {
+  /** 不在任何可写根里(两种拼写)的 socket 父目录;都不行 → 抛错(review M2) */
+  function socketParent(writable: string[]): string {
+    const roots = [...new Set(writable.flatMap(w => [w, realSpelling(w)]))]
+    for (const c of new Set([o.proxyParent ?? tmpdir(), '/tmp'])) {
+      const spells = [c, realSpelling(c)]
+      if (!spells.some(x => roots.some(r => within(x, r)))) return c
+    }
+    throw new Error('sandbox: no proxy socket directory outside the writable roots')
+  }
+
+  /** 代理已关、没有命令在跑:整条记录连同 git 缓存丢掉(review M5);失败标记要留着给 status */
+  function prune(sessionId: string, e: SessionProxy): void {
+    if (e.holds === 0 && !e.handle && !e.starting && !e.failed && proxies.get(sessionId) === e) {
+      proxies.delete(sessionId)
+      forgetRepo(sessionId)
+    }
+  }
+
+  async function proxyFor(sessionId: string, e: SessionProxy, writable: string[]): Promise<ProxyHandle | undefined> {
     if (e.handle && !e.handle.closing) {
       e.handle.touch()
       return e.handle
@@ -242,10 +328,10 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
       lookup: o.lookup,
       onDeny: d => onDeny(sessionId, e, d),
       idleMs,
-      ...(platform === 'linux' && { unixSocket: { parent: o.proxyParent ?? tmpdir() } }),
+      ...(platform === 'linux' && { unixSocket: { parent: socketParent(writable) } }),
     }).then(
       h => {
-        proxyFailed = false
+        e.failed = false
         if (closed) {
           void h.close()
           return undefined
@@ -253,11 +339,12 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
         e.handle = h
         void h.closed.then(() => {
           if (e.handle === h) e.handle = undefined
+          prune(sessionId, e)
         })
         return h
       },
       err => {
-        proxyFailed = true
+        e.failed = true
         log.warn('sandbox proxy failed to start', { error: String(err) })
         return undefined
       },
@@ -271,7 +358,7 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
   }
 
   /** 命令在跑:定期 touch,空闲计时从命令结束才开始 */
-  function hold(e: SessionProxy): () => void {
+  function hold(sessionId: string, e: SessionProxy): () => void {
     e.holds++
     if (e.holds === 1) {
       e.keepalive = setInterval(() => e.handle?.touch(), Math.max(5, Math.floor(idleMs / 2)))
@@ -286,6 +373,7 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
         clearInterval(e.keepalive)
         e.keepalive = undefined
         e.handle?.touch()
+        prune(sessionId, e)
       }
     }
   }
@@ -301,22 +389,24 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
 
   async function plan(command: string, s: { sessionId: string; cwd: string; spillDir: string }, env: NodeJS.ProcessEnv): Promise<ShellPlan> {
     if (closed) throw new Error('sandbox closed')
-    const st = status()
-    if (st.level === 'none') return { file: command, args: [], env, sandboxed: false, level: 'none', release: () => {} }
+    // 配置只取一次:之后的 await 里 permissions.set 改了也不影响这条命令(review M4)
+    const cfg = o.permissions()
+    const base = levelOf(cfg, false).level
+    if (base === 'none') return { file: command, args: [], env, sandboxed: false, level: 'none', release: () => {} }
 
     const tmp = sessionTmpDir(o.dataDir, s.sessionId)
     ensureTmp(tmp)
     const repo = await repoFor(s.sessionId, s.cwd)
+    const writable = [s.cwd, ...repo.gitDirs, tmp]
     const e = usesProxy() ? entryFor(s.sessionId) : undefined
-    const release = e ? hold(e) : () => {}
+    const release = e ? hold(s.sessionId, e) : () => {}
     try {
-      const proxy = e ? await proxyFor(s.sessionId, e) : undefined
+      const proxy = e ? await proxyFor(s.sessionId, e, writable) : undefined
       if (closed) throw new Error('sandbox closed')
-      const level = status().level as 'full' | 'partial' // 代理结果可能改了级别
-      const cfg = o.permissions()
+      // 本会话的代理没起来 → 网络全断,级别如实报 partial
+      const level: 'full' | 'partial' = e?.failed ? 'partial' : base
       const creds = credentialList()
       const persistence = persistenceList()
-      const writable = [s.cwd, ...repo.gitDirs, tmp]
 
       if (platform === 'darwin') {
         const allowLoopback = cfg.sandbox.allowLoopback
@@ -328,7 +418,7 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
           reAllowRead: [s.spillDir, tmp],
           denyWrite: [...creds, o.dataDir, ...persistence],
           reAllowWrite: [tmp],
-          moveBlock: withAncestors([...creds, o.dataDir, ...persistence, ...repo.gitDirs.flatMap(g => [g, `${g}/hooks`, `${g}/config`]), ...(repo.cwdGitFile ? [repo.cwdGitFile] : [])], writable),
+          moveBlock: withAncestors([...creds, o.dataDir, ...persistence, ...repo.gitDirs.flatMap(g => [g, `${g}/hooks`, `${g}/config`, `${g}/modules`, `${g}/worktrees`]), ...(repo.cwdGitFile ? [repo.cwdGitFile] : [])], writable),
           proxyPort: proxy?.port,
           allowLoopback,
         })

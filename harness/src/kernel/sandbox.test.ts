@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { createGit } from '../lib/git/snapshot'
 import type { DetectResult } from '../lib/sandbox/detect'
 import { startProxy } from '../lib/sandbox/net/proxy'
@@ -326,6 +326,140 @@ describe('sandbox plan (darwin)', () => {
   })
 })
 
+describe('gitDir lookup fallbacks (review I1, M6)', () => {
+  /** git < 2.5:未知参数原样回显、退出 0 */
+  const echoGit = (calls: { n: number }) => (async (args: string[]) => {
+    calls.n++
+    return { code: 0, stdout: Buffer.from(args.slice(1).join('\n') + '\n'), stderr: '' }
+  }) as never
+  const brokenGit = (calls: { n: number }) => (async () => { calls.n++; throw new Error('spawn git ENOENT') }) as never
+
+  it('no --path-format: a relative --git-common-dir answer is resolved against cwd', async () => {
+    const seen: string[][] = []
+    const g = testGit()
+    const { svc } = service({ git: (a, o) => { seen.push(a); return g(a, o) } })
+    const p = await svc.plan('true', session(), baseEnv)
+    expect(seen.flat()).not.toContain('--path-format=absolute')
+    expect(profileOf(p.args)).toContain(`(subpath ${q(join(repo, '.git'))})`)
+    p.release()
+  })
+
+  it('a git that echoes the flag back (too old) → walk up from cwd and find .git; the miss is not cached', async () => {
+    const calls = { n: 0 }
+    const { svc } = service({ git: echoGit(calls) })
+    const p = await svc.plan('true', session(), baseEnv)
+    expect(profileOf(p.args)).toMatch(new RegExp(`\\(allow file-write\\* [^\\n]*\\(subpath ${q(join(repo, '.git')).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)`))
+    p.release()
+    const before = calls.n
+    ;(await svc.plan('true', session(), baseEnv)).release()
+    expect(calls.n).toBeGreaterThan(before)
+  })
+
+  it('git missing → walk fallback; on linux the hooks dir is still ro-bound', async () => {
+    rmSync(join(repo, '.git', 'hooks'), { recursive: true, force: true })
+    const calls = { n: 0 }
+    const { svc } = service({ platform: 'linux', detected: { level: 'partial', missing: ['netns'], bwrap: '/usr/bin/bwrap' }, git: brokenGit(calls) })
+    const p = await svc.plan('true', session(), baseEnv)
+    const hooks = join(repo, '.git', 'hooks')
+    const i = p.args.findIndex((x, k) => x === '--ro-bind' && p.args[k + 1] === hooks)
+    expect(i).toBeGreaterThan(0)
+    p.release()
+    ;(await svc.plan('true', session(), baseEnv)).release()
+    expect(calls.n).toBe(2) // 失败不缓存
+  })
+
+  it('walk fallback understands a worktree .git file (gitdir + commondir)', async () => {
+    execFileSync('git', ['-C', repo, 'commit', '-q', '--allow-empty', '-m', 'i'], { env: { ...gitTestEnv(), GIT_AUTHOR_NAME: 'a', GIT_AUTHOR_EMAIL: 'a@x', GIT_COMMITTER_NAME: 'a', GIT_COMMITTER_EMAIL: 'a@x' } })
+    const wt = join(home, 'wt')
+    execFileSync('git', ['-C', repo, 'worktree', 'add', '-q', wt], { env: gitTestEnv() })
+    const { svc } = service({ git: brokenGit({ n: 0 }) })
+    const p = await svc.plan('true', session('s1', wt), baseEnv)
+    expect(profileOf(p.args)).toContain(`(literal ${q(join(wt, '.git'))})`)
+    expect(profileOf(p.args)).toContain(`(subpath ${q(join(repo, '.git', 'hooks'))})`)
+    p.release()
+  })
+
+  it('a .git that cannot be resolved fails the plan closed', async () => {
+    const odd = join(home, 'odd')
+    mkdirSync(join(odd, 'sub'), { recursive: true })
+    writeFileSync(join(odd, '.git'), 'not a gitdir line\n')
+    const { svc } = service({ git: brokenGit({ n: 0 }) })
+    await expect(svc.plan('true', session('s1', join(odd, 'sub')), baseEnv)).rejects.toThrow(/can't resolve the git dir/)
+  })
+
+  it('not a repo (git says so, no .git anywhere) → cached as no gitDir', async () => {
+    const plain = join(root, 'plain')
+    mkdirSync(plain)
+    let n = 0
+    const g = testGit()
+    const { svc } = service({ git: (a, o) => { n++; return g(a, o) } })
+    for (let i = 0; i < 3; i++) (await svc.plan('true', session('s1', plain), baseEnv)).release()
+    expect(n).toBe(1)
+  })
+
+  it('the darwin moveBlock includes the gitDir modules and worktrees dirs', async () => {
+    const { svc } = service()
+    const p = await svc.plan('true', session(), baseEnv)
+    const block = profileOf(p.args).split('\n').find(l => l.startsWith('(deny file-write-unlink file-write-create'))!
+    for (const x of ['modules', 'worktrees']) expect(block).toContain(`(literal ${q(join(repo, '.git', x))})`)
+    p.release()
+  })
+})
+
+describe('proxy bookkeeping (review M3, M5, M8)', () => {
+  it('concurrent plans of one session share one proxy start', async () => {
+    let starts = 0
+    const { svc } = service({ startProxy: async o => { starts++; return startProxy(o) } })
+    const [a, b] = await Promise.all([svc.plan('true', session(), baseEnv), svc.plan('true', session(), baseEnv)])
+    expect(starts).toBe(1)
+    expect(portOf(a.env)).toBe(portOf(b.env))
+    a.release()
+    b.release()
+  })
+
+  it('the proxy-failure flag is per session: another session stays full', async () => {
+    let cur = 's1'
+    const { svc } = service({ startProxy: async o => { if (cur === 's1') throw new Error('x'); return startProxy(o) } })
+    const p1 = await svc.plan('true', session('s1'), baseEnv)
+    cur = 's2'
+    const p2 = await svc.plan('true', session('s2'), baseEnv)
+    expect(p1.level).toBe('partial')
+    expect(p1.env.HTTPS_PROXY).toBeUndefined()
+    expect(p2.level).toBe('full')
+    expect(portOf(p2.env)).toBeGreaterThan(0)
+    expect(svc.status()).toEqual({ level: 'partial', missing: ['proxy'], autoDegraded: false }) // 有会话的代理坏了
+    p1.release()
+    p2.release()
+  })
+
+  it('a config change during the plan awaits does not relabel the plan (level is taken once)', async () => {
+    const g = testGit()
+    let flip = false
+    const svc2 = createSandboxService({
+      platform: 'darwin', dataDir, home, env: { HOME: home }, detected: { level: 'full', missing: [] },
+      permissions: () => (flip ? cfg({}, { enabled: false }) : cfg()), append: () => {},
+      git: async (a, o) => { flip = true; return g(a, o) },
+    })
+    closers.push(() => svc2.close())
+    const p = await svc2.plan('true', session(), baseEnv)
+    expect(p.sandboxed).toBe(true)
+    expect(p.level).toBe('full')
+    expect(p.env.MFFAI_SANDBOX).toBe('full')
+    p.release()
+  })
+
+  it('a session whose proxy idled out is forgotten (git looked up again next time)', async () => {
+    let n = 0
+    const g = testGit()
+    const { svc } = service({ idleMs: 80, git: (a, o) => { n++; return g(a, o) } })
+    ;(await svc.plan('true', session(), baseEnv)).release()
+    const once = n
+    await wait(300)
+    ;(await svc.plan('true', session(), baseEnv)).release()
+    expect(n).toBe(once * 2)
+  })
+})
+
 describe('sandbox plan (injected linux)', () => {
   it('full → bwrap with --unshare-net, the relay on the proxy unix socket, HTTPS_PROXY at the relay port; missing hooks dir is created', async () => {
     rmSync(join(repo, '.git', 'hooks'), { recursive: true, force: true })
@@ -342,6 +476,15 @@ describe('sandbox plan (injected linux)', () => {
     expect(p.args.slice(-3)).toEqual(['/bin/sh', '-c', 'echo hi'])
     expect(p.env.HTTPS_PROXY).toBe('http://127.0.0.1:3128')
     expect(p.env.NO_PROXY).toBe('')
+    p.release()
+  })
+
+  it('a proxy socket parent inside the writable cwd is not used: falls back to /tmp (review M2)', async () => {
+    const { svc } = service({ platform: 'linux', detected: { level: 'full', missing: [], bwrap: '/usr/bin/bwrap' }, proxyParent: join(repo, 'sub') })
+    const p = await svc.plan('true', session(), baseEnv)
+    const sock = p.args[p.args.indexOf(process.execPath) + 4]
+    expect(sock.startsWith(join(repo, 'sub'))).toBe(false)
+    expect(['/tmp', '/private/tmp']).toContain(dirname(dirname(sock)))
     p.release()
   })
 
@@ -441,10 +584,15 @@ describe('kernel wiring', () => {
     const k = await boot(() => ({ level: 'full', missing: [] }))
     const plan = await seen!.plan('true', session('s1'), baseEnv)
     const plan2 = await seen!.plan('true', session('s2'), baseEnv)
-    const ports = [portOf(plan.env), portOf(plan2.env)]
-    if (process.platform === 'darwin') for (const port of ports) expect(await canConnect(port)).toBe(true)
+    // darwin:看 TCP 端口;linux:看代理自己建的 socket 目录(close 时删掉)
+    const ports = process.platform === 'darwin' ? [portOf(plan.env), portOf(plan2.env)] : []
+    const socks = process.platform === 'linux' ? [plan, plan2].map(p => p.args.find(a => a.endsWith('/net.sock'))!) : []
+    for (const port of ports) expect(await canConnect(port)).toBe(true)
+    for (const sk of socks) expect(existsSync(sk)).toBe(true)
+    expect(ports.length + socks.length).toBe(2)
     await k.close()
     kernels = []
-    if (process.platform === 'darwin') for (const port of ports) expect(await canConnect(port)).toBe(false)
+    for (const port of ports) expect(await canConnect(port)).toBe(false)
+    for (const sk of socks) expect(existsSync(dirname(sk))).toBe(false)
   })
 })

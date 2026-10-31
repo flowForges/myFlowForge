@@ -138,7 +138,10 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   const permissions = new PermissionsStore({ config: configAccess, ctx: { home, platform: process.platform, realpath: realpathSync.native } })
   // 探测一次(约 50 ms),之后缓存;enabled / allowLoopback 由服务现读配置
   const so = opts.sandbox ?? {}
+  const detectStart = Date.now()
   const detected = await (so.detect ?? (() => detectSandbox({ platform: process.platform, enabled: true })))()
+  const detectMs = Date.now() - detectStart
+  if (detectMs > 500) log.warn('sandbox detection was slow', { ms: detectMs, level: detected.level }) // 挂住的容器里最多 2×3 s
   let upstream: Upstream | undefined
   if (so.upstream === undefined) {
     const u = upstreamFromEnv(envSnapshot)

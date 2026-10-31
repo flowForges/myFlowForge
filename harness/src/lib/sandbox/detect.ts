@@ -1,12 +1,12 @@
 // 设计参考 anthropic-experimental/sandbox-runtime(Apache-2.0)
 // 沙箱级别探测(spec §7,R10)。工作进程启动时跑一次,结果由内核缓存。
 // - darwin:`sandbox-exec -p '(version 1)(allow default)' /usr/bin/true` 退出 0 → full;已在别的沙箱里(嵌套 → 71)等失败 → none。
-// - linux:用与 bwrapArgs 相同的参数集合跑一次 bwrap(含 --proc、--unshare-ipc、--tmpfs、--setenv / --unsetenv、--chdir、--;
+// - linux:bwrap 只认 root 所有、不可被他人改写的(/usr/bin、/usr/local/bin 优先,再 PATH;review I2)。用与 bwrapArgs 相同的参数集合跑一次 bwrap(含 --proc、--unshare-ipc、--tmpfs、--setenv / --unsetenv、--chdir、--;
 //   不带 --new-session),通过 → full;去掉 --unshare-net 才通过 → partial(netns);都不过 → none(userns);没有 bwrap → none(bwrap)。
 // - 其他平台 → none(platform);sandbox.enabled:false → none(disabled),什么都不跑。
 import { spawn } from 'node:child_process'
-import { accessSync, constants, statSync } from 'node:fs'
-import { delimiter, isAbsolute, join } from 'node:path'
+import { realpathSync, statSync } from 'node:fs'
+import { delimiter, dirname, isAbsolute, join } from 'node:path'
 import type { SandboxMissing } from '../../protocol/rpc'
 
 export type SandboxLevel = 'full' | 'partial' | 'none'
@@ -57,24 +57,40 @@ export const defaultRun: RunFn = (file, args, timeoutMs) =>
     })
   })
 
-const isExecutable = (p: string) => {
+export interface BwrapFs {
+  realpath(p: string): string
+  stat(p: string): { uid: number; mode: number; isFile(): boolean; isDirectory(): boolean }
+}
+const realFs: BwrapFs = { realpath: p => realpathSync.native(p), stat: p => statSync(p) }
+
+/**
+ * 可信的 bwrap:realpath 是 root 所有、组 / 其他不可写的可执行文件,且路上每一级目录都是 root 所有、组 / 其他不可写
+ * (review I2:PATH 里 ~/.local/bin 之类的 bwrap 能被沙箱里的命令换成直接 exec 的假货,下次启动就报 full)。返回 realpath
+ */
+export function trustedBwrap(p: string, fs: BwrapFs = realFs): string | undefined {
   try {
-    if (!statSync(p).isFile()) return false
-    accessSync(p, constants.X_OK)
-    return true
+    const r = fs.realpath(p)
+    const st = fs.stat(r)
+    if (!st.isFile() || st.uid !== 0 || (st.mode & 0o022) !== 0 || (st.mode & 0o111) === 0) return undefined
+    for (let d = dirname(r); ; d = dirname(d)) {
+      const ds = fs.stat(d)
+      if (!ds.isDirectory() || ds.uid !== 0 || (ds.mode & 0o022) !== 0) return undefined
+      if (d === dirname(d)) break
+    }
+    return r
   } catch {
-    return false
+    return undefined
   }
 }
 
-/** PATH 里的 bwrap,其次 /usr/bin/bwrap;只认绝对目录 */
-export function findBwrap(path: string | undefined = process.env.PATH): string | undefined {
-  for (const dir of (path ?? '').split(delimiter)) {
-    if (!dir || !isAbsolute(dir)) continue
-    const p = join(dir, 'bwrap')
-    if (isExecutable(p)) return p
+/** 先 /usr/bin/bwrap、/usr/local/bin/bwrap,再 PATH 里的绝对目录;只认 trustedBwrap 通过的 */
+export function findBwrap(path: string | undefined = process.env.PATH, fs: BwrapFs = realFs): string | undefined {
+  const dirs = (path ?? '').split(delimiter).filter(d => d && isAbsolute(d))
+  for (const c of ['/usr/bin/bwrap', '/usr/local/bin/bwrap', ...dirs.map(d => join(d, 'bwrap'))]) {
+    const t = trustedBwrap(c, fs)
+    if (t) return t
   }
-  return isExecutable('/usr/bin/bwrap') ? '/usr/bin/bwrap' : undefined
+  return undefined
 }
 
 const passes = (run: RunFn, file: string, args: string[]) => run(file, args, PROBE_TIMEOUT_MS).then(c => c === 0, () => false)

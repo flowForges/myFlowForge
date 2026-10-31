@@ -329,6 +329,37 @@ describe.skipIf(!usable)('seatbelt (real sandbox-exec)', () => {
     expect(existsSync(join(cwd, '.git', 'h2'))).toBe(false)
   })
 
+  it('blocks renaming .git/modules to plant a submodule hook (review C1)', async () => {
+    const r = await boxed('mv .git/modules .git/m && echo evil > .git/m/sub/hooks/post-checkout && mv .git/m .git/modules')
+    expect(r.code).not.toBe(0)
+    expect(existsSync(join(cwd, '.git', 'modules', 'sub', 'hooks'))).toBe(true)
+    expect(existsSync(join(cwd, '.git', 'm'))).toBe(false)
+    expect(existsSync(join(cwd, '.git', 'modules', 'sub', 'hooks', 'post-checkout'))).toBe(false)
+    // 在别处备好带钩子的目录再挪进 modules,或换掉 modules/sub 本身,都不行
+    const into = await boxed('mkdir -p .git/x/hooks && echo evil > .git/x/hooks/post-checkout && mv .git/x .git/modules/')
+    expect(into.code).not.toBe(0)
+    expect(existsSync(join(cwd, '.git', 'modules', 'x'))).toBe(false)
+    const swap = await boxed('mv .git/modules/sub .git/modules/old')
+    expect(swap.code).not.toBe(0)
+    expect(existsSync(join(cwd, '.git', 'modules', 'sub', 'config'))).toBe(true)
+    const nested = await boxed('mkdir -p .git/modules/sub/modules && mkdir -p .git/y/hooks && mv .git/y .git/modules/sub/modules/inner')
+    expect(nested.code).not.toBe(0)
+    expect(existsSync(join(cwd, '.git', 'modules', 'sub', 'modules', 'inner'))).toBe(false)
+    await sh('rm -rf .git/x .git/y')
+  })
+
+  it('blocks renaming .git/worktrees to rewrite commondir (review C1)', async () => {
+    const r = await boxed('mv .git/worktrees .git/wt && echo /evil > .git/wt/w1/commondir && mv .git/wt .git/worktrees')
+    expect(r.code).not.toBe(0)
+    expect(existsSync(join(cwd, '.git', 'wt'))).toBe(false)
+    expect(readFileSync(join(cwd, '.git', 'worktrees', 'w1', 'commondir'), 'utf8')).toBe('../..\n')
+    const swap = await boxed('mkdir -p .git/z && echo /evil > .git/z/commondir && mv .git/worktrees/w1 .git/w1old; mv .git/z .git/worktrees/w2')
+    expect(swap.code).not.toBe(0)
+    expect(existsSync(join(cwd, '.git', 'w1old'))).toBe(false)
+    expect(existsSync(join(cwd, '.git', 'worktrees', 'w2'))).toBe(false)
+    await sh('rm -rf .git/z')
+  })
+
   it('blocks the ancestor-rename trick', async () => {
     const r = await boxed('mv h h2 && cat h2/.ssh/id')
     expect(r.code).not.toBe(0)

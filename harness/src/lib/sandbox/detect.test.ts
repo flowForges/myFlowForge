@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { BWRAP_PROBE, DARWIN_PROBE, detectSandbox, type RunFn } from './detect'
+import { BWRAP_PROBE, DARWIN_PROBE, detectSandbox, findBwrap, trustedBwrap, type BwrapFs, type RunFn } from './detect'
 
 /** 按 (file, 是否带 --unshare-net) 给退出码;记下每次调用 */
 function fakeRun(codes: { darwin?: number | Error; net?: number | Error; noNet?: number | Error }) {
@@ -94,5 +94,60 @@ describe('detectSandbox (spec §7)', () => {
     expect(await defaultRun('/bin/sh', ['-c', 'sleep 10'], 200)).not.toBe(0)
     expect(Date.now() - t).toBeLessThan(2000)
     await expect(defaultRun('/nonexistent/mffai-probe', [], 1000)).rejects.toThrow()
+  })
+})
+
+describe('findBwrap (review I2)', () => {
+  type Node = { uid: number; mode: number; dir?: boolean; link?: string }
+  const fsOf = (nodes: Record<string, Node>): BwrapFs => ({
+    realpath: p => {
+      let cur = p
+      for (let i = 0; i < 8 && nodes[cur]?.link; i++) cur = nodes[cur].link!
+      if (!nodes[cur]) throw new Error('ENOENT')
+      return cur
+    },
+    stat: p => {
+      const n = nodes[p]
+      if (!n) throw new Error('ENOENT')
+      return { uid: n.uid, mode: n.mode, isFile: () => !n.dir, isDirectory: () => !!n.dir }
+    },
+  })
+  const rootDir = { uid: 0, mode: 0o755, dir: true }
+  const sys = { '/': rootDir, '/usr': rootDir, '/usr/bin': rootDir, '/usr/local': rootDir, '/usr/local/bin': rootDir, '/home': rootDir }
+  const userBin = { '/home/u': { uid: 1000, mode: 0o755, dir: true }, '/home/u/bin': { uid: 1000, mode: 0o755, dir: true }, '/home/u/bin/bwrap': { uid: 1000, mode: 0o755 } }
+
+  it('prefers /usr/bin/bwrap over a PATH entry that comes first', () => {
+    const fs = fsOf({ ...sys, ...userBin, '/usr/bin/bwrap': { uid: 0, mode: 0o755 } })
+    expect(findBwrap('/home/u/bin:/usr/bin', fs)).toBe('/usr/bin/bwrap')
+  })
+
+  it('then /usr/local/bin/bwrap, then a trusted PATH entry', () => {
+    expect(findBwrap('/home/u/bin', fsOf({ ...sys, ...userBin, '/usr/local/bin/bwrap': { uid: 0, mode: 0o755 } }))).toBe('/usr/local/bin/bwrap')
+    const opt = { '/opt': rootDir, '/opt/bw': rootDir, '/opt/bw/bwrap': { uid: 0, mode: 0o755 } }
+    expect(findBwrap('/home/u/bin:/opt/bw', fsOf({ ...sys, ...userBin, ...opt }))).toBe('/opt/bw/bwrap')
+  })
+
+  it('a user-owned bwrap on PATH is never used → none', async () => {
+    const fs = fsOf({ ...sys, ...userBin })
+    expect(findBwrap('/home/u/bin', fs)).toBeUndefined()
+    const run: RunFn = async () => 0
+    expect(await detectSandbox({ platform: 'linux', enabled: true, run, findBwrap: () => findBwrap('/home/u/bin', fs) })).toEqual({ level: 'none', missing: ['bwrap'] })
+  })
+
+  it('rejects group/other-writable files or directories, non-executables, and links into untrusted dirs; returns the realpath', () => {
+    const f = (o: Partial<Node>) => trustedBwrap('/usr/bin/bwrap', fsOf({ ...sys, '/usr/bin/bwrap': { uid: 0, mode: 0o755, ...o } }))
+    expect(f({})).toBe('/usr/bin/bwrap')
+    expect(f({ mode: 0o775 })).toBeUndefined()
+    expect(f({ mode: 0o757 })).toBeUndefined()
+    expect(f({ mode: 0o644 })).toBeUndefined()
+    expect(f({ uid: 1000 })).toBeUndefined()
+    expect(trustedBwrap('/usr/bin/bwrap', fsOf({ ...sys, '/usr/bin': { uid: 0, mode: 0o777, dir: true }, '/usr/bin/bwrap': { uid: 0, mode: 0o755 } }))).toBeUndefined()
+    // 链接到用户目录 → 拒;链接到可信位置 → 返回目标
+    expect(trustedBwrap('/usr/bin/bwrap', fsOf({ ...sys, ...userBin, '/usr/bin/bwrap': { uid: 0, mode: 0o777, link: '/home/u/bin/bwrap' } }))).toBeUndefined()
+    expect(trustedBwrap('/usr/local/bin/bwrap', fsOf({ ...sys, '/usr/local/bin/bwrap': { uid: 0, mode: 0o777, link: '/usr/bin/bwrap' }, '/usr/bin/bwrap': { uid: 0, mode: 0o755 } }))).toBe('/usr/bin/bwrap')
+  })
+
+  it('missing everywhere → undefined', () => {
+    expect(findBwrap('/nope', fsOf(sys))).toBeUndefined()
   })
 })

@@ -26,7 +26,7 @@ export interface SeatbeltParams {
   denyWrite: string[]
   /** 本会话临时目录(R3:必须在 denyWrite 之后) */
   reAllowWrite: string[]
-  /** 拒改名 / 删除的路径(literal),调用方已加上它们在可写根内的各级父目录 */
+  /** 拒改名 / 删除的路径(literal),调用方已加上它们在可写根内的各级父目录;gitDir 及其 hooks / config / modules / worktrees 由这里自己加 */
   moveBlock: string[]
   /** 本会话代理的 TCP 端口(127.0.0.1);没有 → 网络全断 */
   proxyPort?: number
@@ -110,9 +110,18 @@ export function seatbeltProfile(p: SeatbeltParams): string {
     ]
   })
 
+  // 子模块 / worktree 各自的 git 目录(modules/<名>、worktrees/<名>,子模块里嵌套的 modules/<名>)不能被换掉:
+  // 目录改名时其中的内容不过 b 的检查,先在别处备好带钩子的目录再挪进来就能绕过(review C1)。
+  // 代价:沙箱里 git submodule add / worktree add / prune 不可用(本来就写不了 config)
+  const gitMoveRegex = gitDirs.flatMap(g => {
+    const e = reEscape(g)
+    return [`^${e}/(modules|worktrees)/[^/]+$`, `^${e}/modules/(.+/)?modules/[^/]+$`]
+  })
+
   const moveBlock = [...new Set([
     ...spellings(p.moveBlock),
-    ...gitDirs.flatMap(g => [g, `${g}/hooks`, `${g}/config`]),
+    // modules / worktrees 也不能改名:b 里的正则按这两个目录名写死,改名后其下的 hooks / config / commondir 就能写(review C1)
+    ...gitDirs.flatMap(g => [g, `${g}/hooks`, `${g}/config`, `${g}/modules`, `${g}/worktrees`]),
     ...cwdGitFile,
   ])]
 
@@ -149,7 +158,7 @@ export function seatbeltProfile(p: SeatbeltParams): string {
     // 写 c
     ...rule('allow', 'file-write*', [filters('subpath', spellings(p.reAllowWrite))]),
     // 写 d
-    ...rule('deny', 'file-write-unlink file-write-create', [filters('literal', moveBlock)]),
+    ...rule('deny', 'file-write-unlink file-write-create', [filters('literal', moveBlock), regexes(gitMoveRegex)]),
   ]
 
   // 网络:只有代理端口;R6 时整个回环。任何情况都不放 AF_UNIX
