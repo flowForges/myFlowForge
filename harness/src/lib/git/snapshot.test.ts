@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { changes, createGit, gitEnv, pruneRefs, repoInfo, restore, takeSnapshot, type Git } from './snapshot'
@@ -38,6 +38,9 @@ const R = (p: string) => join(repo, p)
 const tree = (ref: string) => ug(['ls-tree', '-r', '--name-only', '-z', ref]).split('\0').filter(Boolean)
 const show = (ref: string, p: string) => ug(['show', `${ref}:${p}`])
 const hidden = () => ug(['for-each-ref', '--format=%(refname)', 'refs/mffai']).split('\n').filter(Boolean)
+
+/** guardArgs 之后的子命令名 */
+const sub = (a: string[]) => a.find((x, i) => x !== '-c' && a[i - 1] !== '-c')
 
 function initRepo(cwd = repo) {
   ug(['init', '-q', '-b', 'main'], cwd)
@@ -104,6 +107,9 @@ describe('Review Focus 4: snapshots never touch the user git state', () => {
       head: ug(['rev-parse', 'HEAD']),
       branch: ug(['branch']),
       stash: ug(['stash', 'list']),
+      config: ug(['config', '--local', '--list']),
+      worktrees: ug(['worktree', 'list', '--porcelain']),
+      dotGit: readdirSync(R('.git')).sort(),
     })
     const before = state()
     const index = () => readFileSync(R('.git/index'))
@@ -173,7 +179,7 @@ describe('Review Focus 5: restore puts back only that turn files', () => {
 
     expect(readFileSync(R('a.txt'), 'utf8')).toBe('a v1\n')
     expect(readFileSync(R('exec.sh'), 'utf8')).toBe('#!/bin/sh\necho hi\n')
-    expect(statSync(R('exec.sh')).mode & 0o111).not.toBe(0)
+    expect(statSync(R('exec.sh')).mode & 0o777).toBe(0o777 & ~process.umask())
     expect(statSync(R('a.txt')).mode & 0o111).toBe(0)
     expect(existsSync(R('dir/new.txt'))).toBe(false)
     expect(existsSync(R('dir'))).toBe(false)
@@ -307,9 +313,9 @@ describe('takeSnapshot edge cases', () => {
     ug(['add', '.'])
     commit('init')
     const real = git()
-    const failing: Git = (args, o) => (args[0] === 'write-tree' ? Promise.resolve({ code: 1, stdout: Buffer.alloc(0), stderr: 'boom' }) : real(args, o))
+    const failing: Git = (args, o) => (sub(args) === 'write-tree' ? Promise.resolve({ code: 1, stdout: Buffer.alloc(0), stderr: 'boom' }) : real(args, o))
     expect(await takeSnapshot(repo, 'refs/mffai/snapshots/s/t-start', failing, { tmpDir: tmp })).toEqual({ reason: 'error' })
-    const throwing: Git = (args, o) => (args[0] === 'commit-tree' ? Promise.reject(new Error('spawn failed')) : real(args, o))
+    const throwing: Git = (args, o) => (sub(args) === 'commit-tree' ? Promise.reject(new Error('spawn failed')) : real(args, o))
     expect(await takeSnapshot(repo, 'refs/mffai/snapshots/s/t-start', throwing, { tmpDir: tmp })).toEqual({ reason: 'error' })
     expect(hidden()).toEqual([])
     expect(readdirSync(tmp)).toEqual([])
@@ -347,6 +353,123 @@ describe('takeSnapshot edge cases', () => {
     expect(tree(s.ref!)).toEqual(['a.txt'])
     expect(existsSync(bogus)).toBe(false)
     expect(existsSync(join(root, 'bogus-index'))).toBe(false)
+  })
+})
+
+describe('review fixes', () => {
+  const g0 = () => git()
+
+  it('I1: user hooks and fsmonitor never run during snapshot, changes, restore and pruneRefs', async () => {
+    initRepo()
+    write(R('a.txt'), 'a\n')
+    ug(['add', '.'])
+    commit('init')
+    const marker = join(root, 'marker')
+    const script = join(root, 'hook.sh')
+    writeFileSync(script, `#!/bin/sh\necho "$0" >> '${marker}'\nexit 0\n`)
+    chmodSync(script, 0o755)
+    for (const h of ['post-index-change', 'reference-transaction', 'pre-commit', 'post-commit']) {
+      writeFileSync(R(`.git/hooks/${h}`), readFileSync(script))
+      chmodSync(R(`.git/hooks/${h}`), 0o755)
+    }
+    ug(['config', 'core.fsmonitor', script])
+    // 对照:用户自己的 git 操作确实会触发这些钩子
+    write(R('a.txt'), 'a2\n')
+    ug(['add', 'a.txt'])
+    ug(['update-ref', 'refs/heads/probe', 'HEAD'])
+    expect(readFileSync(marker, 'utf8')).toMatch(/post-index-change/)
+    expect(readFileSync(marker, 'utf8')).toMatch(/reference-transaction/)
+    rmSync(marker)
+
+    const g = g0()
+    const start = await takeSnapshot(repo, 'refs/mffai/snapshots/s/t-start', g, { tmpDir: tmp })
+    write(R('a.txt'), 'a3\n')
+    const end = await takeSnapshot(repo, 'refs/mffai/snapshots/s/t-end', g, { tmpDir: tmp })
+    const files = await changes(repo, start.ref!, end.ref!, g, { tmpDir: tmp })
+    await restore(repo, start.ref!, files, g, { tmpDir: tmp })
+    await pruneRefs(repo, 'refs/mffai/snapshots/s', 0, g, { tmpDir: tmp })
+    expect(start.ref && end.ref).toBeTruthy()
+    expect(files).toEqual([{ path: 'a.txt', status: 'M' }])
+    expect(readFileSync(R('a.txt'), 'utf8')).toBe('a2\n')
+    expect(hidden()).toEqual([])
+    expect(existsSync(marker)).toBe(false)
+    expect(readdirSync(tmp)).toEqual([])
+  })
+
+  it('I2: the copied index keeps its mtime, so a same-size edit in the same tick is still captured', async () => {
+    initRepo()
+    const T = new Date(Math.floor(Date.now() / 1000) * 1000 - 60_000)
+    write(R('x.txt'), 'x1\n')
+    utimesSync(R('x.txt'), T, T)
+    ug(['add', '.'])
+    commit('init')
+    write(R('x.txt'), 'x2\n')
+    utimesSync(R('x.txt'), T, T)
+    utimesSync(R('.git/index'), T, T)
+    const s = await takeSnapshot(repo, 'refs/mffai/snapshots/s/t-start', g0(), { tmpDir: tmp })
+    expect(show(s.ref!, 'x.txt')).toBe('x2\n')
+  })
+
+  it('I3: restore writes the checkout form (autocrlf line endings, smudge filter)', async () => {
+    initRepo()
+    ug(['config', 'core.autocrlf', 'true'])
+    ug(['config', 'filter.rot.clean', 'tr a-zA-Z n-za-mN-ZA-M'])
+    ug(['config', 'filter.rot.smudge', 'tr a-zA-Z n-za-mN-ZA-M'])
+    write(R('.gitattributes'), 'secret.txt filter=rot\n')
+    const crlf = Buffer.from('line1\r\nline2\r\n')
+    write(R('crlf.txt'), crlf)
+    write(R('secret.txt'), 'hello\r\n')
+    ug(['add', '.'])
+    commit('init')
+    expect(ug(['cat-file', 'blob', 'HEAD:secret.txt'])).toBe('uryyb\n')
+    const g = g0()
+    const start = await takeSnapshot(repo, 'refs/mffai/snapshots/s/t-start', g, { tmpDir: tmp })
+    write(R('crlf.txt'), 'changed\r\n')
+    write(R('secret.txt'), 'changed\n')
+    const end = await takeSnapshot(repo, 'refs/mffai/snapshots/s/t-end', g, { tmpDir: tmp })
+    const files = await changes(repo, start.ref!, end.ref!, g)
+    expect(files.map(f => f.path)).toEqual(['crlf.txt', 'secret.txt'])
+    await restore(repo, start.ref!, files, g)
+    expect(readFileSync(R('crlf.txt')).equals(crlf)).toBe(true)
+    expect(readFileSync(R('secret.txt'), 'utf8')).toBe('hello\r\n')
+  })
+
+  it('M1: a split index in the user repo gets no new sharedindex files', async () => {
+    initRepo()
+    ug(['config', 'core.splitIndex', 'true'])
+    write(R('a.txt'), 'a\n')
+    ug(['add', '.'])
+    commit('init')
+    const shared = () => readdirSync(R('.git')).filter(n => n.startsWith('sharedindex.')).sort()
+    const before = shared()
+    expect(before.length).toBeGreaterThan(0)
+    write(R('b.txt'), 'b\n')
+    const s = await takeSnapshot(repo, 'refs/mffai/snapshots/s/t-start', g0(), { tmpDir: tmp })
+    expect(tree(s.ref!)).toEqual(['a.txt', 'b.txt'])
+    expect(shared()).toEqual(before)
+  })
+
+  it('M2: assume-unchanged files are still captured from the worktree; the user flag stays', async () => {
+    initRepo()
+    write(R('f.txt'), 'f1\n')
+    ug(['add', '.'])
+    commit('init')
+    ug(['update-index', '--assume-unchanged', 'f.txt'])
+    write(R('f.txt'), 'changed\n')
+    const s = await takeSnapshot(repo, 'refs/mffai/snapshots/s/t-start', g0(), { tmpDir: tmp })
+    expect(show(s.ref!, 'f.txt')).toBe('changed\n')
+    expect(ug(['ls-files', '-v', 'f.txt'])).toBe('h f.txt\n')
+  })
+
+  it('M3: a submodule entry is reported as not restored', async () => {
+    initRepo()
+    write(R('a.txt'), 'a\n')
+    ug(['add', '.'])
+    commit('init')
+    const head = ug(['rev-parse', 'HEAD']).trim()
+    ug(['update-index', '--add', '--cacheinfo', `160000,${head},mod`])
+    commit('gitlink')
+    await expect(restore(repo, 'HEAD', [{ path: 'mod', status: 'M' }], g0())).rejects.toThrow(/子模块未回滚/)
   })
 })
 

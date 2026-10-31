@@ -1,7 +1,8 @@
 // 每轮的 git 快照与回滚(spec §11):快照写在隐藏引用 refs/mffai/…,用临时索引拍,
 // 不碰用户的索引、分支、stash、工作区;回滚只写回本轮改过的文件,不跟随链接、不出 cwd、不写 .git
 import { spawn } from 'node:child_process'
-import { copyFileSync, lstatSync, mkdtempSync, realpathSync, rmdirSync, rmSync } from 'node:fs'
+import { lstatSync, realpathSync, rmdirSync } from 'node:fs'
+import { copyFile, lstat, mkdir, mkdtemp, rm, stat, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import type { FileChange } from '../../protocol/tools'
@@ -65,8 +66,27 @@ export function createGit(opts: { base?: NodeJS.ProcessEnv; extraEnv?: Record<st
 /** 跑一条 git,非 0 退出 → 抛错(带 stderr 第一行) */
 async function run(git: Git, args: string[], o: Parameters<Git>[1]): Promise<Buffer> {
   const r = await git(args, o)
-  if (r.code !== 0) throw new Error(`git ${args[0]} 失败(${r.code}):${r.stderr.split('\n')[0]}`)
+  if (r.code !== 0) throw new Error(`git ${args.find((a, i) => a !== '-c' && args[i - 1] !== '-c')} 失败(${r.code}):${r.stderr.split('\n')[0]}`)
   return r.stdout
+}
+
+/**
+ * 快照用到的每条 git 都带上:钩子目录指向一个空的临时目录(用户的 post-index-change、
+ * reference-transaction 等钩子不跑)、不用 fsmonitor、不写拆分索引(否则会往用户 .git 里加 sharedindex.*)
+ */
+const guardArgs = (hooks: string) => ['-c', `core.hooksPath=${hooks}`, '-c', 'core.fsmonitor=false', '-c', 'core.splitIndex=false']
+
+/** 建一个临时目录(含空的 hooks/),给 fn 一个带 guardArgs 的 git;结束时整个目录删掉 */
+async function guarded<T>(git: Git, tmpDir: string | undefined, fn: (g: Git, dir: string) => Promise<T>): Promise<T> {
+  const dir = await mkdtemp(join(tmpDir ?? tmpdir(), 'mffai-snap-'))
+  try {
+    const hooks = join(dir, 'hooks')
+    await mkdir(hooks)
+    const pre = guardArgs(hooks)
+    return await fn((args, o) => git([...pre, ...args], o), dir)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
 }
 
 export interface RepoInfo {
@@ -77,8 +97,7 @@ export interface RepoInfo {
   head?: string
 }
 
-/** cwd 所在的工作树;不在工作树内(含 .git 目录里、裸仓库)→ undefined */
-export async function repoInfo(cwd: string, git: Git): Promise<RepoInfo | undefined> {
+async function readRepoInfo(cwd: string, git: Git): Promise<RepoInfo | undefined> {
   const r = await git(['rev-parse', '--show-toplevel', '--show-prefix', '--absolute-git-dir'], { cwd })
   if (r.code !== 0) return undefined
   const [top, prefix, gitDir] = r.stdout.toString().split('\n')
@@ -86,6 +105,11 @@ export async function repoInfo(cwd: string, git: Git): Promise<RepoInfo | undefi
   const h = await git(['rev-parse', '-q', '--verify', 'HEAD'], { cwd })
   const head = h.code === 0 ? h.stdout.toString().trim() || undefined : undefined
   return { top, prefix: prefix ?? '', gitDir, head }
+}
+
+/** cwd 所在的工作树;不在工作树内(含 .git 目录里、裸仓库)→ undefined */
+export function repoInfo(cwd: string, git: Git, opts: { tmpDir?: string } = {}): Promise<RepoInfo | undefined> {
+  return guarded(git, opts.tmpDir, g => readRepoInfo(cwd, g))
 }
 
 /** 前缀 → 从仓库根算的字面路径规格(前缀里的 `*` 等不当通配) */
@@ -96,74 +120,91 @@ const splitZ = (b: Buffer) => b.toString().split('\0').filter(s => s !== '')
 export interface SnapshotOpts {
   maxFileBytes?: number
   maxTotalBytes?: number
-  /** 临时索引放在这里的独立子目录里,用完即删(默认系统临时目录) */
+  /** 临时索引与空钩子目录放在这里的独立子目录里,用完即删(默认系统临时目录) */
   tmpDir?: string
 }
 
 export type SnapshotResult = { ref?: string; reason?: 'not_git' | 'too_large' | 'error' }
 
+/** 一次并发 lstat 的个数 */
+const STAT_BATCH = 64
+
+/** 未跟踪且未忽略的文件是否超限(单个或合计);列出后被删的不算 */
+async function tooLarge(top: string, paths: string[], maxFile: number, maxTotal: number): Promise<boolean> {
+  let total = 0
+  for (let i = 0; i < paths.length; i += STAT_BATCH) {
+    const sizes = await Promise.all(paths.slice(i, i + STAT_BATCH).map(p => lstat(join(top, p)).then(s => s.size, () => 0)))
+    for (const size of sizes) {
+      total += size
+      if (size > maxFile || total > maxTotal) return true
+    }
+  }
+  return false
+}
+
 /** 把 cwd 前缀下的工作区(遵守 .gitignore)拍成一个提交,写到 ref;任何失败都不抛,只给 reason */
 export async function takeSnapshot(cwd: string, ref: string, git: Git, opts: SnapshotOpts = {}): Promise<SnapshotResult> {
   const maxFile = opts.maxFileBytes ?? 20 << 20
   const maxTotal = opts.maxTotalBytes ?? 200 << 20
-  let info: RepoInfo | undefined
   try {
-    info = await repoInfo(cwd, git)
+    return await guarded(git, opts.tmpDir, async (g, dir): Promise<SnapshotResult> => {
+      const info = await readRepoInfo(cwd, g)
+      if (!info) return { reason: 'not_git' }
+      const { top, prefix, gitDir, head } = info
+      // 未跟踪且未忽略的文件:单个或合计过大 → 不拍(不把大文件塞进用户的对象库)
+      const untracked = splitZ(await run(g, ['ls-files', '-o', '--exclude-standard', '-z', '--full-name', '--', scope(prefix)], { cwd: top }))
+      if (await tooLarge(top, untracked, maxFile, maxTotal)) return { reason: 'too_large' }
+      const index = join(dir, 'index')
+      const env = { GIT_INDEX_FILE: index }
+      // 复制用户索引(复用 stat 缓存,不用重新哈希全部文件);没有索引 → 从 HEAD 读;没有 HEAD → 空索引。
+      // 副本保留原索引的 mtime:git 靠"条目 mtime ≥ 索引 mtime"识别同一时刻内的改动,新 mtime 会让它漏掉同大小的编辑
+      const src = join(gitDir, 'index')
+      if (lexists(src)) {
+        await copyFile(src, index)
+        const st = await stat(src)
+        await utimes(index, st.atime, st.mtime)
+        await clearAssumeUnchanged(g, top, prefix, env)
+      } else if (head) await run(g, ['read-tree', head], { cwd: top, env })
+      await run(g, ['add', '-A', '--', scope(prefix)], { cwd: top, env })
+      const tree = (await run(g, ['write-tree'], { cwd: top, env })).toString().trim()
+      const commitArgs = ['commit-tree', '--no-gpg-sign', '-m', 'mff-ai snapshot', ...(head ? ['-p', head] : []), tree]
+      const commit = (await run(g, commitArgs, { cwd: top })).toString().trim()
+      await run(g, ['update-ref', ref, commit], { cwd: top })
+      return { ref }
+    })
   } catch {
     return { reason: 'error' }
   }
-  if (!info) return { reason: 'not_git' }
-  const { top, prefix, gitDir, head } = info
-  let dir: string | undefined
-  try {
-    // 未跟踪且未忽略的文件:单个或合计过大 → 不拍(不把大文件塞进用户的对象库)
-    const untracked = splitZ(await run(git, ['ls-files', '-o', '--exclude-standard', '-z', '--full-name', '--', scope(prefix)], { cwd: top }))
-    let total = 0
-    for (const p of untracked) {
-      let size = 0
-      try {
-        size = lstatSync(join(top, p)).size
-      } catch {
-        continue // 列出后被删了,add 时也不会有
-      }
-      total += size
-      if (size > maxFile || total > maxTotal) return { reason: 'too_large' }
-    }
-    dir = mkdtempSync(join(opts.tmpDir ?? tmpdir(), 'mffai-snap-'))
-    const index = join(dir, 'index')
-    const env = { GIT_INDEX_FILE: index }
-    // 复制用户索引(复用 stat 缓存,不用重新哈希全部文件);没有索引 → 从 HEAD 读;没有 HEAD → 空索引
-    if (lexists(join(gitDir, 'index'))) copyFileSync(join(gitDir, 'index'), index)
-    else if (head) await run(git, ['read-tree', head], { cwd: top, env })
-    await run(git, ['add', '-A', '--', scope(prefix)], { cwd: top, env })
-    const tree = (await run(git, ['write-tree'], { cwd: top, env })).toString().trim()
-    const commitArgs = ['commit-tree', '--no-gpg-sign', '-m', 'mff-ai snapshot', ...(head ? ['-p', head] : []), tree]
-    const commit = (await run(git, commitArgs, { cwd: top })).toString().trim()
-    await run(git, ['update-ref', ref, commit], { cwd: top })
-    return { ref }
-  } catch {
-    return { reason: 'error' }
-  } finally {
-    if (dir) rmSync(dir, { recursive: true, force: true })
-  }
+}
+
+/**
+ * 临时索引里去掉 assume-unchanged(否则 add -A 不看这些文件的工作区内容,本轮对它们的改动拍不进来)。
+ * skip-worktree 不动:稀疏检出里清掉它会把文件记成已删除
+ */
+async function clearAssumeUnchanged(g: Git, top: string, prefix: string, env: Record<string, string>): Promise<void> {
+  const listed = splitZ(await run(g, ['ls-files', '-v', '-z', '--full-name', '--', scope(prefix)], { cwd: top, env }))
+  const paths = listed.filter(l => /^[a-z] /.test(l) && l[0] !== 's').map(l => l.slice(2))
+  if (paths.length) await run(g, ['update-index', '-z', '--no-assume-unchanged', '--stdin'], { cwd: top, env, input: Buffer.from(paths.join('\0') + '\0') })
 }
 
 const STATUSES = new Set(['A', 'M', 'D', 'T'])
 
 /** from..to 之间 cwd 前缀下变化的文件(路径相对仓库根,`/` 分隔) */
-export async function changes(cwd: string, from: string, to: string, git: Git): Promise<FileChange[]> {
-  const info = await repoInfo(cwd, git)
-  if (!info) throw new Error(`不是 git 工作树:${cwd}`)
-  const parts = splitZ(
-    await run(git, ['diff', '--name-status', '--no-renames', '--no-ext-diff', '-z', from, to, '--', scope(info.prefix)], { cwd: info.top }),
-  )
-  const out: FileChange[] = []
-  for (let i = 0; i + 1 < parts.length; i += 2) {
-    const status = parts[i][0]
-    if (!STATUSES.has(status)) throw new Error(`未知的改动状态:${parts[i]}`)
-    out.push({ path: parts[i + 1], status: status as FileChange['status'] })
-  }
-  return out
+export function changes(cwd: string, from: string, to: string, git: Git, opts: { tmpDir?: string } = {}): Promise<FileChange[]> {
+  return guarded(git, opts.tmpDir, async g => {
+    const info = await readRepoInfo(cwd, g)
+    if (!info) throw new Error(`不是 git 工作树:${cwd}`)
+    const parts = splitZ(
+      await run(g, ['diff', '--name-status', '--no-renames', '--no-ext-diff', '-z', from, to, '--', scope(info.prefix)], { cwd: info.top }),
+    )
+    const out: FileChange[] = []
+    for (let i = 0; i + 1 < parts.length; i += 2) {
+      const status = parts[i][0]
+      if (!STATUSES.has(status)) throw new Error(`未知的改动状态:${parts[i]}`)
+      out.push({ path: parts[i + 1], status: status as FileChange['status'] })
+    }
+    return out
+  })
 }
 
 /** ls-tree 一次查的路径数(避免参数过长) */
@@ -184,22 +225,32 @@ async function entries(git: Git, top: string, from: string, paths: string[]): Pr
   return m
 }
 
-/** `cat-file --batch`:一次取出全部 blob(二进制安全) */
-async function blobs(git: Git, top: string, shas: string[]): Promise<Map<string, Buffer>> {
-  const m = new Map<string, Buffer>()
-  const want = [...new Set(shas)]
-  if (!want.length) return m
-  const out = await run(git, ['cat-file', '--batch'], { cwd: top, input: Buffer.from(want.join('\n') + '\n'), binary: true })
+/** `cat-file --batch`:一次取出全部原始内容(二进制安全),按输入顺序返回(只用于符号链接:不做检出转换) */
+async function catRaw(git: Git, top: string, shas: string[]): Promise<Buffer[]> {
+  if (!shas.length) return []
+  const out = await run(git, ['cat-file', '--batch'], { cwd: top, input: Buffer.from(shas.join('\n') + '\n'), binary: true })
+  const res: Buffer[] = []
   let off = 0
-  for (const sha of want) {
+  for (const sha of shas) {
     const nl = out.indexOf(0x0a, off)
+    if (nl < 0) throw new Error(`读不到对象:${sha}`)
     const [got, type, size] = out.subarray(off, nl).toString().split(' ')
     if (got !== sha || type !== 'blob') throw new Error(`读不到对象:${sha}`)
     const n = Number(size)
-    m.set(sha, out.subarray(nl + 1, nl + 1 + n))
+    res.push(out.subarray(nl + 1, nl + 1 + n))
     off = nl + 1 + n + 1
   }
-  return m
+  return res
+}
+
+/**
+ * 文件内容按该路径的属性做检出转换(换行符、smudge 过滤器),与 git checkout 写出的一致。
+ * 逐个跑:`cat-file --batch --filters` 的头里给的是转换前的大小,没法按它切分输出
+ */
+async function catFiltered(git: Git, top: string, items: { sha: string; path: string }[]): Promise<Buffer[]> {
+  const res: Buffer[] = []
+  for (const it of items) res.push(await run(git, ['cat-file', '--filters', `--path=${it.path}`, it.sha], { cwd: top, binary: true }))
+  return res
 }
 
 /**
@@ -239,62 +290,66 @@ function pruneEmptyDirs(from: string, realCwd: string): void {
 
 /**
  * 把 files 按 from 的内容写回:from 里没有的删除,其余按 from 的内容与权限位写回(符号链接按链接重建)。
- * 先从 git 取齐全部内容再动文件;逐个处理,失败的汇总后抛出
+ * 先从 git 取齐全部内容再动文件;逐个处理,失败的(含无法写回的子模块)汇总后抛出
  */
-export async function restore(cwd: string, from: string, files: FileChange[], git: Git): Promise<void> {
-  const info = await repoInfo(cwd, git)
-  if (!info) throw new Error(`不是 git 工作树:${cwd}`)
-  const realCwd = realpathSync.native(cwd)
-  const targets = files.map(f => ({ f, p: target(realCwd, info.top, f.path) }))
-  const want = targets.filter(t => t.f.status !== 'A').map(t => t.f.path)
-  const ents = await entries(git, info.top, from, want)
-  const data = await blobs(
-    git,
-    info.top,
-    [...ents.values()].filter(e => e.mode !== '160000').map(e => e.sha),
-  )
-  const errors: string[] = []
-  // 先删后写:start 里是文件、本轮换成了目录(foo → foo/x)时,删掉 foo/x 之后 foo 才能写回
-  const removals = targets.filter(t => t.f.status === 'A' || !ents.has(t.f.path))
-  const writes = targets.filter(t => !removals.includes(t))
-  for (const { f, p } of removals) {
-    try {
-      if (!lexists(p)) continue
-      parentStillInside(p, realCwd)
-      if (lstatSync(p).isDirectory()) throw new Error('是目录')
-      removeLeaf(p)
-      pruneEmptyDirs(dirname(p), realCwd)
-    } catch (e) {
-      errors.push(`${f.path}: ${(e as Error).message}`)
+export function restore(cwd: string, from: string, files: FileChange[], git: Git, opts: { tmpDir?: string } = {}): Promise<void> {
+  return guarded(git, opts.tmpDir, async g => {
+    const info = await readRepoInfo(cwd, g)
+    if (!info) throw new Error(`不是 git 工作树:${cwd}`)
+    const realCwd = realpathSync.native(cwd)
+    const targets = files.map(f => {
+      return { f, p: target(realCwd, info.top, f.path) }
+    })
+    const ents = await entries(g, info.top, from, targets.filter(t => t.f.status !== 'A').map(t => t.f.path))
+    // 先删后写:start 里是文件、本轮换成了目录(foo → foo/x)时,删掉 foo/x 之后 foo 才能写回
+    const removals = targets.filter(t => t.f.status === 'A' || !ents.has(t.f.path))
+    const writes = targets.filter(t => !removals.includes(t)).map(t => ({ ...t, e: ents.get(t.f.path)! }))
+    const errors: string[] = []
+    for (const w of writes) if (w.e.mode === '160000') errors.push(`${w.f.path}: 子模块未回滚`)
+    const files_ = writes.filter(w => w.e.mode === '100644' || w.e.mode === '100755')
+    const links = writes.filter(w => w.e.mode === '120000')
+    const fileData = await catFiltered(g, info.top, files_.map(w => ({ sha: w.e.sha, path: w.f.path })))
+    const linkData = await catRaw(g, info.top, links.map(w => w.e.sha))
+    for (const { f, p } of removals) {
+      try {
+        if (!lexists(p)) continue
+        parentStillInside(p, realCwd)
+        if (lstatSync(p).isDirectory()) throw new Error('是目录')
+        removeLeaf(p)
+        pruneEmptyDirs(dirname(p), realCwd)
+      } catch (e) {
+        errors.push(`${f.path}: ${(e as Error).message}`)
+      }
     }
-  }
-  for (const { f, p } of writes) {
-    const e = ents.get(f.path)!
-    if (e.mode === '160000') continue // 子模块:不在本仓库的对象里,无法写回
-    try {
-      mkdirChecked(dirname(p))
-      parentStillInside(p, realCwd)
-      const buf = data.get(e.sha)!
-      if (e.mode === '120000') replaceSymlink(p, buf.toString())
-      else replaceFile(p, buf, e.mode === '100755')
-    } catch (err) {
-      errors.push(`${f.path}: ${(err as Error).message}`)
-    }
-  }
-  if (errors.length) throw new Error(`回滚有 ${errors.length} 个文件失败:\n${errors.join('\n')}`)
+    const put = (list: typeof writes, data: Buffer[], write: (p: string, buf: Buffer, mode: string) => void) =>
+      list.forEach(({ f, p, e }, i) => {
+        try {
+          mkdirChecked(dirname(p))
+          parentStillInside(p, realCwd)
+          write(p, data[i], e.mode)
+        } catch (err) {
+          errors.push(`${f.path}: ${(err as Error).message}`)
+        }
+      })
+    put(files_, fileData, (p, buf, mode) => replaceFile(p, buf, mode === '100755'))
+    put(links, linkData, (p, buf) => replaceSymlink(p, buf.toString()))
+    if (errors.length) throw new Error(`回滚有 ${errors.length} 个文件失败:\n${errors.join('\n')}`)
+  })
 }
 
 /** 一个会话(prefixRef 下)只留最近 keepTurns 轮的引用;按提交时间从新到旧,同一轮的 start / end / pre-rollback 算一轮 */
-export async function pruneRefs(cwd: string, prefixRef: string, keepTurns: number, git: Git): Promise<void> {
-  const base = prefixRef.replace(/\/+$/, '') + '/'
-  const out = await run(git, ['for-each-ref', '--sort=-committerdate', '--format=%(refname)', base], { cwd })
-  const kept = new Set<string>()
-  const drop: string[] = []
-  for (const ref of out.toString().split('\n').filter(Boolean)) {
-    const turn = ref.slice(base.length).replace(/-(start|end|pre-rollback)$/, '')
-    if (kept.has(turn)) continue
-    if (kept.size < keepTurns) kept.add(turn)
-    else drop.push(ref)
-  }
-  if (drop.length) await run(git, ['update-ref', '--stdin'], { cwd, input: Buffer.from(drop.map(r => `delete ${r}\n`).join('')) })
+export function pruneRefs(cwd: string, prefixRef: string, keepTurns: number, git: Git, opts: { tmpDir?: string } = {}): Promise<void> {
+  return guarded(git, opts.tmpDir, async g => {
+    const base = prefixRef.replace(/\/+$/, '') + '/'
+    const out = await run(g, ['for-each-ref', '--sort=-committerdate', '--format=%(refname)', base], { cwd })
+    const kept = new Set<string>()
+    const drop: string[] = []
+    for (const ref of out.toString().split('\n').filter(Boolean)) {
+      const turn = ref.slice(base.length).replace(/-(start|end|pre-rollback)$/, '')
+      if (kept.has(turn)) continue
+      if (kept.size < keepTurns) kept.add(turn)
+      else drop.push(ref)
+    }
+    if (drop.length) await run(g, ['update-ref', '--stdin'], { cwd, input: Buffer.from(drop.map(r => `delete ${r}\n`).join('')) })
+  })
 }

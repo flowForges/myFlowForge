@@ -1,7 +1,7 @@
 // 不跟随链接的文件操作(编码工具与快照回滚共用):
 // - 打开文件一律 O_NOFOLLOW(平台支持时),末段在检查后被换成符号链接 → 打开失败;
 // - 建父目录逐级来,每建一级都 realpath 核对
-import { closeSync, constants, fchmodSync, lstatSync, mkdirSync, openSync, realpathSync, rmdirSync, symlinkSync, unlinkSync, writeSync } from 'node:fs'
+import { closeSync, constants, lstatSync, mkdirSync, openSync, realpathSync, rmdirSync, symlinkSync, unlinkSync, writeSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { isInside } from './paths'
 
@@ -64,15 +64,14 @@ export function removeLeaf(p: string): void {
 
 /**
  * 以新文件替换末段:先移走原来的(链接、FIFO、多硬链接文件都不会被写穿),
- * 再 O_CREAT | O_EXCL | O_NOFOLLOW 新建并写入;exec → 0o755。父目录须由调用方核对过
+ * 再 O_CREAT | O_EXCL | O_NOFOLLOW 新建并写入;权限位 0o666 / exec 0o777,再经 umask(与 git checkout 一致)。父目录须由调用方核对过
  */
 export function replaceFile(p: string, data: Buffer, exec: boolean): void {
   removeLeaf(p)
-  const fd = openSync(p, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | O_NOFOLLOW, 0o666)
+  const fd = openSync(p, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | O_NOFOLLOW, exec ? 0o777 : 0o666)
   try {
     let off = 0
     while (off < data.length) off += writeSync(fd, data, off, data.length - off)
-    if (exec) fchmodSync(fd, 0o755)
   } finally {
     closeSync(fd)
   }
