@@ -6,6 +6,7 @@ interface Turn {
   sessionId: string
   deltas: Promise<void>
   client: AgentContext
+  prompts: Map<string, AbortController> // approvalId → 还开着(或排队待发)的权限请求
   done(r: { ok: true } | { ok: false; reason: string }): void
 }
 
@@ -15,7 +16,7 @@ const turnIdOf = (e: KernelEvent): string | undefined => {
 }
 
 const EARLY_MAX_TURNS = 16
-const ROUTED = new Set(['message.assistant.delta', 'tool.started', 'tool.ended', 'approval.requested', 'turn.ended', 'turn.failed'])
+const ROUTED = new Set(['message.assistant.delta', 'tool.started', 'tool.ended', 'approval.requested', 'approval.resolved', 'turn.ended', 'turn.failed'])
 
 const TOOL_KIND: Record<string, ToolKind> = {
   read: 'read', list: 'read', glob: 'search', grep: 'search',
@@ -69,19 +70,36 @@ export async function runBridge(opts: { stream: Stream; connect: () => Promise<M
     return worker
   }
 
-  /** 本轮的通知按事件顺序排队发出 */
+  /** 本轮的通知按事件顺序排队发出;一步失败不断队(后面的权限请求照发,失败即 deny) */
   function send(t: Turn, update: SessionUpdate): void {
-    t.deltas = t.deltas.then(() => t.client.notify('session/update', { sessionId: t.sessionId, update }))
+    t.deltas = t.deltas.then(() => t.client.notify('session/update', { sessionId: t.sessionId, update })).catch(() => {})
+  }
+
+  /** 收回本轮还开着的权限请求(发 $/cancel_request);还在队里的就不再发 */
+  function withdraw(t: Turn, approvalId?: string): void {
+    for (const [id, ac] of [...t.prompts]) {
+      if (approvalId !== undefined && id !== approvalId) continue
+      ac.abort()
+      t.prompts.delete(id)
+    }
   }
 
   /** 问客户端;取消 / 出错 / 不认识的选项 → deny。请求在队列里按序发出,但不堵住后面的通知 */
   function ask(t: Turn, approvalId: string, callId: string, summary: string): void {
+    const ac = new AbortController()
+    t.prompts.set(approvalId, ac)
     t.deltas = t.deltas.then(() => {
-      void t.client
-        .request('session/request_permission', {
-          sessionId: t.sessionId,
-          toolCall: { toolCallId: callId, title: summary },
-          options: PERMISSION_OPTIONS,
+      if (ac.signal.aborted) return // 内核已了结(如 requested / resolved 都在 early 缓冲里)
+      void Promise.resolve()
+        .then(() =>
+          t.client.request(
+            'session/request_permission',
+            { sessionId: t.sessionId, toolCall: { toolCallId: callId, title: summary }, options: PERMISSION_OPTIONS },
+            { cancellationSignal: ac.signal },
+          ),
+        )
+        .finally(() => {
+          if (t.prompts.get(approvalId) === ac) t.prompts.delete(approvalId)
         })
         .then(
           (r): Decision => {
@@ -104,7 +122,7 @@ export async function runBridge(opts: { stream: Stream; connect: () => Promise<M
       send(t, {
         sessionUpdate: 'tool_call',
         toolCallId: str(p.callId),
-        title: `${name} ${str(p.argsPreview).slice(0, 80)}`,
+        title: [name, str(p.argsPreview).slice(0, 80)].filter(Boolean).join(' '),
         kind: TOOL_KIND[name] ?? 'other',
         status: 'in_progress',
       })
@@ -117,6 +135,8 @@ export async function runBridge(opts: { stream: Stream; connect: () => Promise<M
       })
     } else if (e.type === 'approval.requested') {
       ask(t, str(p.approvalId), str(p.callId), str(p.summary))
+    } else if (e.type === 'approval.resolved') {
+      withdraw(t, str(p.approvalId)) // 任何 by:自己应答引起的已结束,abort 无副作用
     } else if (e.type === 'turn.ended') t.done({ ok: true })
     else if (e.type === 'turn.failed') t.done({ ok: false, reason: p.message ?? p.reason ?? 'turn failed' })
   }
@@ -132,7 +152,10 @@ export async function runBridge(opts: { stream: Stream; connect: () => Promise<M
 
   function onGone(): void {
     closed = true
-    for (const t of [...turns.values()]) t.done({ ok: false, reason: 'mff-ai 连接已断开' })
+    for (const t of [...turns.values()]) {
+      withdraw(t)
+      t.done({ ok: false, reason: 'mff-ai 连接已断开' })
+    }
   }
 
   async function open(): Promise<MffaiClient> {
@@ -178,14 +201,15 @@ export async function runBridge(opts: { stream: Stream; connect: () => Promise<M
       let turnId: string | undefined
       try {
         const res = await w.call('session.prompt', { commandId: randomUUID(), sessionId, text }).catch((e: Error) => {
-          throw new RequestError(-32603, e.message)
+          // 响应到达前连接断开:与轮中断开同一说法
+          throw new RequestError(-32603, closed || e.message === 'connection closed' ? 'mff-ai 连接已断开' : e.message)
         })
         if (!res.accepted) throw new RequestError(-32603, 'mff-ai 拒绝了这次请求')
         turnId = res.turnId
 
         let t!: Turn
         const finished = new Promise<{ ok: true } | { ok: false; reason: string }>((resolve) => {
-          t = { sessionId, deltas: Promise.resolve(), client: ctx.client, done: resolve }
+          t = { sessionId, deltas: Promise.resolve(), client: ctx.client, prompts: new Map(), done: resolve }
         })
         turns.set(turnId, t)
         for (const e of early.take(turnId)) dispatch(t, e)
@@ -203,6 +227,7 @@ export async function runBridge(opts: { stream: Stream; connect: () => Promise<M
           throw new RequestError(-32603, r.reason)
         } finally {
           ctx.signal.removeEventListener('abort', abort)
+          withdraw(t)
         }
       } finally {
         if (turnId) turns.delete(turnId)

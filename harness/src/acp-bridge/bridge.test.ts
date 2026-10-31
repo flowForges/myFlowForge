@@ -196,13 +196,14 @@ function fakeWorker(script: { beforeReply?: KernelEvent[]; afterReply?: KernelEv
     onClose() { return () => {} },
     close() {},
   } as MffaiClient
-  return { c, calls }
+  return { c, calls, emit }
 }
 const ev = (type: string, payload: Record<string, unknown>): KernelEvent => ({ seq: 0, ts: 0, type, sessionId: 'S', payload: { turnId: 'T', ...payload } } as KernelEvent)
 const ended = ev('turn.ended', {})
 const asked = ev('approval.requested', { approvalId: 'A1', callId: 'c1', tool: 'shell', summary: 'npm test' })
+const resolvedBy = (by: string) => ev('approval.resolved', { approvalId: 'A1', callId: 'c1', decision: 'deny', by })
 
-async function runFake(w: ReturnType<typeof fakeWorker>, answer?: (p: any) => any) {
+async function runFake(w: ReturnType<typeof fakeWorker>, answer?: (p: any, signal: AbortSignal) => any, onStop?: () => void) {
   const { a, b } = pair()
   void runBridge({ stream: b, connect: async () => w.c })
   const updates: any[] = []
@@ -212,12 +213,14 @@ async function runFake(w: ReturnType<typeof fakeWorker>, answer?: (p: any) => an
     .onRequest('session/request_permission', async (ctx) => {
       perms.push(ctx.params)
       updates.push({ sessionUpdate: 'permission' })
-      return answer!(ctx.params)
+      return answer!(ctx.params, ctx.signal)
     })
     .connectWith(a, async (cx) => {
       await cx.request('initialize', INIT)
       const { sessionId } = await cx.request('session/new', { cwd: '/x', mcpServers: [] })
-      return (await cx.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'go' }] })).stopReason
+      const r = await cx.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'go' }] })
+      onStop?.() // 仍在连接内:此时看到的收回不是断开连接引起的
+      return r.stopReason
     })
   return { stop, updates, perms }
 }
@@ -246,6 +249,7 @@ describe('ACP bridge: tools and approvals', () => {
     const names = ['read', 'list', 'glob', 'grep', 'write', 'edit', 'apply_patch', 'shell', 'mystery']
     const w = fakeWorker({ afterReply: [...names.map((name, i) => ev('tool.started', { callId: 'c' + i, name, argsPreview: '' })), ended] })
     const { updates } = await runFake(w)
+    expect(updates[8].title).toBe('mystery') // 无参数摘要时不留尾随空格
     expect(updates.map(u => u.kind)).toEqual(['read', 'read', 'search', 'search', 'edit', 'edit', 'edit', 'execute', 'other'])
   })
 
@@ -290,5 +294,54 @@ describe('ACP bridge: tools and approvals', () => {
     expect(perms).toHaveLength(1)
     expect(updates.map(u => u.sessionUpdate)).toEqual(['tool_call', 'permission', 'tool_call_update'])
     expect(w.calls.filter(c => c.method === 'approval.respond').map(c => c.params)).toEqual([{ approvalId: 'A1', decision: 'allow' }])
+  })
+
+  /** 客户端不应答,直到请求被收回;收回后回 cancelled */
+  const untilWithdrawn = (seen: { aborted: boolean }, onAsked: () => void) => (_p: unknown, signal: AbortSignal) =>
+    new Promise(res => {
+      signal.addEventListener('abort', () => { seen.aborted = true; res({ outcome: { outcome: 'cancelled' } }) }, { once: true })
+      onAsked()
+    })
+
+  it('kernel settles the approval (timeout) -> the open permission prompt is withdrawn', async () => {
+    const w = fakeWorker({ afterReply: [asked] })
+    const seen = { aborted: false }
+    let atStop = false
+    const { stop, perms } = await runFake(w, untilWithdrawn(seen, () => w.emit([resolvedBy('timeout'), ended])), () => { atStop = seen.aborted })
+    expect(stop).toBe('end_turn')
+    expect(perms).toHaveLength(1)
+    expect(atStop).toBe(true)
+  })
+
+  it('turn ends while the prompt is unanswered -> end_turn, prompt withdrawn', async () => {
+    const w = fakeWorker({ afterReply: [asked] })
+    const seen = { aborted: false }
+    let atStop = false
+    const { stop } = await runFake(w, untilWithdrawn(seen, () => w.emit([ended])), () => { atStop = seen.aborted })
+    expect(stop).toBe('end_turn')
+    expect(atStop).toBe(true)
+  })
+
+  it('requested and resolved both in the early buffer -> the client is not asked', async () => {
+    const w = fakeWorker({ beforeReply: [asked, resolvedBy('user')], afterReply: [ended] })
+    const { stop, perms } = await runFake(w, () => { throw new Error('must not be asked') })
+    expect(stop).toBe('end_turn')
+    expect(perms).toHaveLength(0)
+    expect(w.calls.some(c => c.method === 'approval.respond')).toBe(false)
+  })
+
+  it('a failed notify does not drop the queue: the next permission request still goes out and is denied at once', async () => {
+    const w = fakeWorker({})
+    const { a, b } = pair()
+    void runBridge({ stream: b, connect: async () => w.c })
+    await client({ name: 't' }).connectWith(a, async (cx) => {
+      await cx.request('initialize', INIT)
+      const { sessionId } = await cx.request('session/new', { cwd: '/x', mcpServers: [] })
+      void cx.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'go' }] }).catch(() => {})
+      await wait(() => w.calls.some(c => c.method === 'session.prompt'))
+    }) // 客户端断开:之后的 notify / request 都失败
+    w.emit([ev('message.assistant.delta', { text: 'a' }), asked])
+    await wait(() => w.calls.some(c => c.method === 'approval.respond'))
+    expect(w.calls.filter(c => c.method === 'approval.respond').map(c => c.params)).toEqual([{ approvalId: 'A1', decision: 'deny' }])
   })
 })
