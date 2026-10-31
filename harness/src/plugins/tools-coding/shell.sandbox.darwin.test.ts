@@ -292,7 +292,9 @@ describe.skipIf(!usable)('shell tool in the real macOS sandbox', () => {
     expect(await waitFor(() => existsSync(join(repo, 'pid')) && readFileSync(join(repo, 'pid'), 'utf8').trim() !== '')).toBe(true)
     const pid = Number(readFileSync(join(repo, 'pid'), 'utf8').trim())
     ac.abort()
-    expect((await p).content.startsWith('已取消')).toBe(true)
+    const r = await p
+    expect(r.meta).toEqual({ sandbox: 'full' })
+    expect(r.content.startsWith('已取消')).toBe(true)
     expect(await waitFor(() => !alive(pid), 2000)).toBe(true)
   })
 
@@ -300,6 +302,7 @@ describe.skipIf(!usable)('shell tool in the real macOS sandbox', () => {
     const { k, call, dataDir } = await boot()
     const r = await call('sleep 60 >/dev/null 2>&1 & echo $! > pid; echo $$ > leader')
     expect(exitOf(r), r.content).toBe(0)
+    expect(r.meta).toEqual({ sandbox: 'full' })
     const leader = Number(readFileSync(join(repo, 'leader'), 'utf8').trim())
     const pid = Number(readFileSync(join(repo, 'pid'), 'utf8').trim())
     // 沙箱里看不到进程表(ps 被拒),从外面查:后台任务与组长同组,组号就是登记的那个

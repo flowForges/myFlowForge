@@ -466,6 +466,36 @@ describe('sandbox plan (injected service, 05 §10)', () => {
     expect(f.releases()).toBe(1)
   })
 
+  it.skipIf(!posix)('cancel while the plan is being built: nothing is spawned, the plan is released once, the result is cancelled (final review M2)', async () => {
+    let releases = 0
+    let planned!: () => void
+    let entered!: () => void
+    const inPlan = new Promise<void>(r => { entered = r })
+    const marker = join(cwd, 'marker')
+    svcMode = {
+      fake: {
+        status: () => ({ level: 'full', missing: [], autoDegraded: false }),
+        plan: (command, _s, env) => new Promise<ShellPlan>(resolve => {
+          planned = () => resolve({ file: '/bin/sh', args: ['-c', command], env, sandboxed: true, level: 'full', release: () => { releases++ } })
+          entered()
+        }),
+      },
+    }
+    const { call, ctxOf } = await boot()
+    const ac = new AbortController()
+    const p = call({ command: track(`touch '${marker}'`) }, ctxOf(ac.signal))
+    await inPlan
+    ac.abort()
+    planned()
+    const r = await p
+    expect(r).toMatchObject({ isError: true, meta: { sandbox: 'full' } })
+    expect(r.content.startsWith('已取消')).toBe(true)
+    expect(releases).toBe(1)
+    await sleep(100)
+    expect(existsSync(marker)).toBe(false)
+    expect(recorded()).toEqual([])
+  })
+
   it.skipIf(!posix)('spawn failure (sandbox binary missing): the call fails and release is called once', async () => {
     const f = useFake(fakeService({ file: join(root, 'no-such-sandbox-exec') }))
     const { call } = await boot()
