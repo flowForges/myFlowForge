@@ -9,8 +9,7 @@
 // - SBPL 不解码 \uXXXX:含控制字符的路径会被 JSON.stringify 写成 \u0001,拼写对不上 → 拒绝规则悄悄失效。
 //   所以含 C0 控制字符、DEL、孤立代理项的路径直接抛错(宁可命令跑不了,也不放过);
 // - 正则里的路径先转义全部正则元字符,再整体 JSON.stringify。
-import { existsSync, realpathSync } from 'node:fs'
-import { posix } from 'node:path'
+import { cleanPath, realSpelling } from './paths'
 
 export interface SeatbeltParams {
   /** a:可写根(cwd、各 gitDir、本会话临时目录);spillDir 不在这里(R2) */
@@ -70,35 +69,7 @@ const SHM_PREFIXES = ['/psm_']
 const SHM_NAMES = ['apple.shm.notification_center']
 const SEM_PREFIXES = ['/mp-']
 
-const UNSAFE = /[\u0000-\u001f\u007f]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/
-
-/** 校验并规范化:必须是绝对路径;去掉 . 段、重复与结尾斜杠。
- *  `..` 段直接拒:按字面折叠会越过符号链接,拒绝规则落在错的目录上(M1);调用方传解析好的路径 */
-function clean(p: string): string {
-  if (typeof p !== 'string' || !p.startsWith('/')) throw new Error(`seatbelt: path must be absolute: ${JSON.stringify(p)}`)
-  if (UNSAFE.test(p)) throw new Error(`seatbelt: path contains control characters: ${JSON.stringify(p)}`)
-  if (p.split('/').includes('..')) throw new Error(`seatbelt: path must not contain '..': ${JSON.stringify(p)}`)
-  const n = posix.normalize(p)
-  return n.length > 1 && n.endsWith('/') ? n.slice(0, -1) : n
-}
-
-/** realpath 拼写;不存在时取最深的存在祖先的 realpath 再接上尾巴 */
-function realSpelling(p: string): string {
-  const tail: string[] = []
-  let cur = p
-  for (;;) {
-    if (existsSync(cur)) {
-      try {
-        const r = realpathSync.native(cur)
-        return tail.length ? posix.join(r, ...tail.reverse()) : r
-      } catch { return p }
-    }
-    const parent = posix.dirname(cur)
-    if (parent === cur) return p
-    tail.push(posix.basename(cur))
-    cur = parent
-  }
-}
+const clean = (p: string) => cleanPath(p, 'seatbelt')
 
 /** 每个路径的原样 + realpath 拼写,去重 */
 function spellings(paths: readonly string[]): string[] {
