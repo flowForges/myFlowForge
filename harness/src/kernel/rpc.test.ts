@@ -122,6 +122,16 @@ describe('rpc server + client', () => {
     await r.closed
   })
 
+  it('malformed pre-auth frame (non-string method) -> unauthorized and closed at once, not at the deadline', async () => {
+    await serve()
+    const r = await raw()
+    const t0 = Date.now()
+    r.send({ id: 1, method: 123 })
+    expect((await r.reply(1)).error.code).toBe(-32002)
+    await r.closed
+    expect(Date.now() - t0).toBeLessThan(2000)
+  })
+
   it('a second auth.challenge (before or after verify) -> unauthorized and closed', async () => {
     await serve()
     const r = await raw()

@@ -120,7 +120,6 @@ export async function startRpcServer(opts: RpcServerOpts): Promise<{ close(): Pr
     const dispatch = async (m: Record<string, any>) => {
       const id = m.id
       const method = m.method
-      if (typeof method !== 'string') return fail(id ?? null, ERR_INVALID_REQUEST, 'invalid request')
       const params = m.params ?? {}
       const refuse = () => {
         closing = true
@@ -128,7 +127,7 @@ export async function startRpcServer(opts: RpcServerOpts): Promise<{ close(): Pr
         sock.end(() => sock.destroy())
       }
       if (auth.step !== 'authed') {
-        // 握手的每一步都必须能回包(带 id);否则、顺序错、nonce / proof 不对 → 拒绝并断开
+        // 握手的每一步都必须能回包(带 id);否则、顺序错、nonce / proof 不对、帧畸形(method 不是字符串)→ 拒绝并断开
         const answerable = id !== undefined && id !== null
         if (answerable && auth.step === 'fresh' && method === 'auth.challenge' && isNonce(params.clientNonce)) {
           const serverNonce = newNonce()
@@ -145,6 +144,7 @@ export async function startRpcServer(opts: RpcServerOpts): Promise<{ close(): Pr
         }
         return refuse()
       }
+      if (typeof method !== 'string') return fail(id ?? null, ERR_INVALID_REQUEST, 'invalid request')
       if (AUTH_METHODS.has(method)) return refuse()
       try {
         if (method === 'hello') {
