@@ -10,6 +10,8 @@ export function AddAccount({ presets, onDone }: { presets: PresetView[]; onDone:
   const [confirming, setConfirming] = useState(false)
   const [flowId, setFlowId] = useState<string | null>(null)
   const flowRef = useRef<string | null>(null)
+  /** 每次开始登录 +1;取消 / 换套餐 / 卸载也 +1:晚到的 begin 结果对不上号 → 立即取消,不留回环监听 */
+  const loginGen = useRef(0)
   const [busy, setBusy] = useState(false)
   const [failed, setFailed] = useState(false)
   const api = window.forge.mffai
@@ -19,12 +21,14 @@ export function AddAccount({ presets, onDone }: { presets: PresetView[]; onDone:
   const setFlow = (id: string | null) => { flowRef.current = id; setFlowId(id) }
   // 释放挂起的登录流(回环回调监听);只会对同一 flow 取消一次
   const cancelFlow = () => {
+    loginGen.current++
     const id = flowRef.current
     if (!id) return
     setFlow(null)
     void api.chatgpt.cancel(id).catch(fail)
   }
   useEffect(() => () => {
+    loginGen.current++
     const id = flowRef.current
     if (id) void window.forge.mffai.chatgpt.cancel(id).catch((e) => console.error('mffai', e))
   }, [])
@@ -52,7 +56,11 @@ export function AddAccount({ presets, onDone }: { presets: PresetView[]; onDone:
   }
   const login = () => {
     setFailed(false)
-    void api.chatgpt.begin().then(r => setFlow(r.flowId)).catch(fail)
+    const gen = ++loginGen.current
+    void api.chatgpt.begin().then(r => {
+      if (gen === loginGen.current) return setFlow(r.flowId)
+      void api.chatgpt.cancel(r.flowId).catch((e) => console.error('mffai', e))
+    }).catch(fail)
   }
 
   if (!open) return <button className="set-btn" onClick={() => setOpen(true)} disabled={!presets.length}>添加账号</button>

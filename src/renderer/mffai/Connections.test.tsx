@@ -4,7 +4,9 @@ import MffaiView from './MffaiView'
 import { AddAccount } from './AddAccount'
 
 let mffai: any
-let eventCb: (e: any) => void
+/** 与 preload 同语义:每个订阅者都收到事件,退订真的移除 */
+let listeners: Set<(e: any) => void>
+const emit = (e: any) => { for (const cb of [...listeners]) cb(e) }
 const model = (id: string) => ({ id, name: id.toUpperCase(), context: 1, output: 1, image: false, reasoning: 'none', toolCall: true })
 const presets = [
   { id: 'p-key', label: 'Key套餐', billing: 'metered', restriction: 'none', auth: 'api-key', protocols: [], docsUrl: '' },
@@ -15,7 +17,7 @@ let accounts: any[]
 let catalogDefault: any
 
 function setup() {
-  eventCb = () => {}
+  listeners = new Set()
   accounts = [
     { id: 'a1', presetId: 'p-key', label: 'acc1', state: 'ok' },
     { id: 'a2', presetId: 'p-code', label: 'acc2', state: 'needs_login' },
@@ -26,7 +28,7 @@ function setup() {
     restart: vi.fn(), resetTrip: vi.fn(),
     tail: vi.fn(async () => ({ events: [] })),
     prompt: vi.fn(async () => ({ accepted: true, turnId: 't1' })),
-    onEvent: (cb: any) => { eventCb = cb; return () => {} },
+    onEvent: (cb: any) => { listeners.add(cb); return () => { listeners.delete(cb) } },
     onAlert: () => () => {},
     openExternal: vi.fn(async () => {}),
     chatgpt: { begin: vi.fn(async () => ({ flowId: 'f1' })), cancel: vi.fn(async () => ({ ok: true })) },
@@ -66,7 +68,7 @@ describe('Connections', () => {
   it('account.updated reloads the list', async () => {
     await openConnections()
     accounts = [...accounts, { id: 'a3', presetId: 'p-key', label: 'acc3', state: 'error' }]
-    act(() => eventCb({ seq: 1, ts: 1, type: 'account.updated', payload: {} }))
+    act(() => emit({ seq: 1, ts: 1, type: 'account.updated', payload: {} }))
     expect(await screen.findByText('acc3')).toBeInTheDocument()
     expect(screen.getByText('出错')).toBeInTheDocument()
   })
@@ -155,9 +157,9 @@ describe('ModelPicker in debug panel', () => {
     render(<MffaiView />)
     await screen.findByText('发送')
     act(() => {
-      eventCb({ seq: 1, ts: 1, type: 'message.reasoning.delta', payload: { turnId: 't', text: 'thinking' } })
-      eventCb({ seq: 2, ts: 1, type: 'message.assistant', payload: { turnId: 't', text: 'ans' } })
-      eventCb({ seq: 3, ts: 1, type: 'turn.usage', payload: { turnId: 't', input: 10, output: 5 } })
+      emit({ seq: 1, ts: 1, type: 'message.reasoning.delta', payload: { turnId: 't', text: 'thinking' } })
+      emit({ seq: 2, ts: 1, type: 'message.assistant', payload: { turnId: 't', text: 'ans' } })
+      emit({ seq: 3, ts: 1, type: 'turn.usage', payload: { turnId: 't', input: 10, output: 5 } })
     })
     expect(await screen.findByText('推理')).toBeInTheDocument()
     expect(screen.getByText('10 / 5')).toBeInTheDocument()
@@ -171,19 +173,21 @@ describe('AddAccount ChatGPT flow cleanup', () => {
     const r = render(ui)
     fireEvent.click(screen.getByText('添加账号'))
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'p-gpt' } })
-    fireEvent.click(screen.getByText('用 ChatGPT 登录'))
-    await screen.findByText('取消')
+    // begin 的 then 与随后订阅事件的 effect 都在 act 里落定;否则 findByText 看到「取消」时订阅可能还没挂上
+    await act(async () => { fireEvent.click(screen.getByText('用 ChatGPT 登录')) })
+    expect(screen.getByText('取消')).toBeInTheDocument()
+    expect(listeners.size).toBe(1)
     return r
   }
 
   it('own flow ended ok closes the form and reloads; other accounts / flows do not', async () => {
     const onDone = vi.fn()
     await gptForm(<AddAccount presets={presets as any} onDone={onDone} />)
-    act(() => eventCb({ seq: 1, ts: 1, type: 'account.updated', payload: { account: { id: 'other', presetId: 'p-key', label: 'x', state: 'error' } } }))
-    act(() => eventCb({ seq: 2, ts: 1, type: 'auth.chatgpt.ended', payload: { flowId: 'f0', ok: true, accountId: 'zz' } }))
+    act(() => emit({ seq: 1, ts: 1, type: 'account.updated', payload: { account: { id: 'other', presetId: 'p-key', label: 'x', state: 'error' } } }))
+    act(() => emit({ seq: 2, ts: 1, type: 'auth.chatgpt.ended', payload: { flowId: 'f0', ok: true, accountId: 'zz' } }))
     expect(screen.getByText('取消')).toBeInTheDocument()
     expect(onDone).not.toHaveBeenCalled()
-    act(() => eventCb({ seq: 3, ts: 1, type: 'auth.chatgpt.ended', payload: { flowId: 'f1', ok: true, accountId: 'a9' } }))
+    act(() => emit({ seq: 3, ts: 1, type: 'auth.chatgpt.ended', payload: { flowId: 'f1', ok: true, accountId: 'a9' } }))
     expect(screen.getByText('添加账号')).toBeInTheDocument()
     expect(onDone).toHaveBeenCalledTimes(1)
     expect(mffai.chatgpt.cancel).not.toHaveBeenCalled()
@@ -192,7 +196,7 @@ describe('AddAccount ChatGPT flow cleanup', () => {
   it('own flow ended not ok shows 失败 and offers login again', async () => {
     const onDone = vi.fn()
     await gptForm(<AddAccount presets={presets as any} onDone={onDone} />)
-    act(() => eventCb({ seq: 1, ts: 1, type: 'auth.chatgpt.ended', payload: { flowId: 'f1', ok: false } }))
+    act(() => emit({ seq: 1, ts: 1, type: 'auth.chatgpt.ended', payload: { flowId: 'f1', ok: false } }))
     expect(screen.getByText('失败')).toBeInTheDocument()
     expect(screen.getByText('用 ChatGPT 登录')).toBeInTheDocument()
     expect(onDone).not.toHaveBeenCalled()
@@ -214,6 +218,34 @@ describe('AddAccount ChatGPT flow cleanup', () => {
     const { unmount } = await gptForm()
     unmount()
     expect(mffai.chatgpt.cancel).toHaveBeenCalledTimes(1)
+  })
+
+  it('a flow that begins after unmount is cancelled, not leaked', async () => {
+    let resolve!: (v: { flowId: string }) => void
+    mffai.chatgpt.begin = vi.fn(() => new Promise(r => { resolve = r }))
+    const { unmount } = render(<AddAccount presets={presets as any} onDone={vi.fn()} />)
+    fireEvent.click(screen.getByText('添加账号'))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'p-gpt' } })
+    fireEvent.click(screen.getByText('用 ChatGPT 登录'))
+    unmount()
+    expect(mffai.chatgpt.cancel).not.toHaveBeenCalled()
+    await act(async () => { resolve({ flowId: 'late' }) })
+    expect(mffai.chatgpt.cancel).toHaveBeenCalledTimes(1)
+    expect(mffai.chatgpt.cancel).toHaveBeenCalledWith('late')
+  })
+
+  it('a flow that begins after the preset changed away is cancelled and not shown', async () => {
+    let resolve!: (v: { flowId: string }) => void
+    mffai.chatgpt.begin = vi.fn(() => new Promise(r => { resolve = r }))
+    render(<AddAccount presets={presets as any} onDone={vi.fn()} />)
+    fireEvent.click(screen.getByText('添加账号'))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'p-gpt' } })
+    fireEvent.click(screen.getByText('用 ChatGPT 登录'))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'p-key' } })
+    await act(async () => { resolve({ flowId: 'late' }) })
+    expect(mffai.chatgpt.cancel).toHaveBeenCalledWith('late')
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'p-gpt' } })
+    expect(screen.getByText('用 ChatGPT 登录')).toBeInTheDocument()
   })
 
   it('unmount without a flow does not cancel', () => {
@@ -267,9 +299,9 @@ describe('subscriptions and reasoning', () => {
   it('reasoning shows before the first assistant delta', async () => {
     render(<MffaiView />)
     await screen.findByText('发送')
-    act(() => eventCb({ seq: 1, ts: 1, type: 'message.reasoning.delta', payload: { turnId: 't', text: 'pondering' } }))
+    act(() => emit({ seq: 1, ts: 1, type: 'message.reasoning.delta', payload: { turnId: 't', text: 'pondering' } }))
     expect(await screen.findByText('推理')).toBeInTheDocument()
-    act(() => eventCb({ seq: 2, ts: 1, type: 'message.assistant.delta', payload: { turnId: 't', text: 'hey' } }))
+    act(() => emit({ seq: 2, ts: 1, type: 'message.assistant.delta', payload: { turnId: 't', text: 'hey' } }))
     expect(await screen.findByText(/hey/)).toBeInTheDocument()
     expect(screen.getAllByText('推理')).toHaveLength(1)
   })
