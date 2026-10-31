@@ -162,3 +162,15 @@ describe('validateCwd', () => {
     expect(validateCwd('/System/Volumes/Data/Users/x', d)).toBe('/System/Volumes/Data/Users/x')
   })
 })
+
+describe('validateCwd: env-relocated credential roots', () => {
+  it('rejects a cwd inside GNUPGHOME / CLAUDE_CONFIG_DIR; ignores relative values', () => {
+    mkdirSync(join(work, 'gpg', 'sub'), { recursive: true })
+    mkdirSync(join(work, 'claude'))
+    const env = { GNUPGHOME: join(work, 'gpg'), CLAUDE_CONFIG_DIR: join(work, 'claude') }
+    const o = { home: dir, dataDir: join(dir, 'data'), platform: process.platform, env }
+    for (const p of [join(work, 'gpg'), join(work, 'gpg', 'sub'), join(work, 'claude')]) expect(() => validateCwd(p, o), p).toThrow('invalid cwd')
+    expect(validateCwd(work, o)).toBe(realpathSync.native(work))
+    expect(validateCwd(join(work, 'gpg'), { ...o, env: { GNUPGHOME: 'gpg' } })).toBe(realpathSync.native(join(work, 'gpg')))
+  })
+})

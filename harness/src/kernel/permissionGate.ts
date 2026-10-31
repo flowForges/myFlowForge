@@ -1,4 +1,4 @@
-import { canonicalRoots, credentialRoots, hasGitSegment, isCredentialPath, isInside, isRootLike, OUTSIDE, resolveToolPath } from '../lib/fs/paths'
+import { canonicalRoots, credentialRoots, hasGitSegment, isCredentialPath, isInside, isRootLike, OUTSIDE, persistenceRoots, resolveToolPath } from '../lib/fs/paths'
 import type { PermissionRequest } from '../lib/tools/types'
 import type { SessionInfo } from './sessions'
 
@@ -9,6 +9,8 @@ export type Decision = 'allow' | 'deny' | 'ask'
 export interface DecideEnv {
   /** 凭据黑名单(已规范化) */
   roots: string[]
+  /** 持久化文件(登录脚本、自启动、git 全局配置;已规范化):只拒写 */
+  persistence: string[]
   /** mff-ai 数据目录:整个在黑名单里,只有本会话 spillDir 可读 */
   dataDir: string
   spillDir?: string
@@ -25,6 +27,7 @@ export function decide(req: PermissionRequest, s: SessionInfo | undefined, env: 
     if (!s?.cwd || isRootLike(s.cwd, env.platform) || !isInside(resource, s.cwd, env.platform)) return 'deny'
     if (isCredentialPath(resource, [...env.roots, env.dataDir], env.platform)) return 'deny'
     if (action === 'write' && hasGitSegment(resource, env.platform)) return 'deny' // .git/hooks、.git/config 能让 git status 跑代码
+    if (action === 'write' && isCredentialPath(resource, env.persistence, env.platform)) return 'deny' // 下次开终端 / 登录就执行
     return 'allow'
   }
   if (action === 'exec') {
@@ -39,7 +42,8 @@ export interface GateDeps {
   home: string
   dataDir: string
   platform: NodeJS.Platform
-  env: { APPDATA?: string }
+  /** 启动时的环境快照(内核拷一份传进来,之后环境变化不影响) */
+  env: NodeJS.ProcessEnv
 }
 
 /** 规范化路径(最近存在的祖先 realpath);失败时用原样 */
@@ -53,6 +57,11 @@ export function blacklist(d: Omit<GateDeps, 'sessions'>): string[] {
   return canonicalRoots([...credentialRoots(d.home, d.platform, d.env), d.dataDir], { platform: d.platform })
 }
 
+/** 持久化文件的原样与 realpath 形态(~/.zshrc 链到 dotfiles 仓库时,仓库里的目标也拒写);每次现算 */
+export function persistenceList(d: Omit<GateDeps, 'sessions'>): string[] {
+  return canonicalRoots(persistenceRoots(d.home, d.platform, d.env), { platform: d.platform })
+}
+
 export class PermissionGate {
   constructor(private deps: GateDeps) {}
 
@@ -63,7 +72,7 @@ export class PermissionGate {
   /** 批量判断(grep / glob 逐个文件过门):黑名单与各会话 spillDir 只算一次 */
   checkMany(reqs: PermissionRequest[]): Decision[] {
     const { sessions, dataDir, platform } = this.deps
-    let shared: { roots: string[]; dataDir: string } | undefined
+    let shared: { roots: string[]; persistence: string[]; dataDir: string } | undefined
     const spills = new Map<string, string | undefined>()
     return reqs.map(req => {
       if (req.actor === 'kernel') return 'allow'
@@ -79,7 +88,7 @@ export class PermissionGate {
         }
         spillDir = spills.get(s.sessionId)
       }
-      shared ??= { roots: blacklist(this.deps), dataDir: canonical(dataDir, platform) }
+      shared ??= { roots: blacklist(this.deps), persistence: persistenceList(this.deps), dataDir: canonical(dataDir, platform) }
       return decide(req, s, { ...shared, spillDir, platform })
     })
   }

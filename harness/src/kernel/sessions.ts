@@ -51,7 +51,8 @@ export interface CwdEnv {
   home: string
   dataDir: string
   platform: NodeJS.Platform
-  env?: { APPDATA?: string }
+  /** 内核启动时的环境快照(凭据黑名单含环境变量挪走的位置) */
+  env?: NodeJS.ProcessEnv
   /** 测试注入(win32 路径在 posix 上跑) */
   fs?: { realpath(p: string): string; isDirectory(p: string): boolean }
 }

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, win32 } from 'node:path'
-import { canonicalRoots, credentialRoots, isCredentialPath, isInside, isRootLike, OUTSIDE, resolveToolPath } from './paths'
+import { canonicalRoots, credentialRoots, isCredentialPath, isInside, isRootLike, OUTSIDE, PERSISTENCE_FILES, persistenceRoots, RELOCATED_ENV, relocatedCredentialRoots, resolveToolPath } from './paths'
 
 let base: string
 let cwd: string
@@ -205,5 +205,67 @@ describe('credential blacklist', () => {
     expect(isRootLike('/', 'darwin')).toBe(true)
     expect(isRootLike('C:\\', 'win32')).toBe(true)
     expect(isRootLike('C:\\repo', 'win32')).toBe(false)
+  })
+})
+
+describe('env-relocated credential roots (spec §5.1)', () => {
+  it('dir and file variables add their absolute value', () => {
+    for (const name of ['GNUPGHOME', 'DOCKER_CONFIG', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GH_CONFIG_DIR', 'CLOUDSDK_CONFIG', 'AZURE_CONFIG_DIR',
+      'AWS_CONFIG_FILE', 'AWS_SHARED_CREDENTIALS_FILE', 'GOOGLE_APPLICATION_CREDENTIALS', 'NPM_CONFIG_USERCONFIG', 'NETRC'])
+      expect(relocatedCredentialRoots({ [name]: '/w/x' }, 'linux'), name).toEqual(['/w/x'])
+  })
+  it('the table matches the spec', () => {
+    const kinds = Object.fromEntries(RELOCATED_ENV.map(e => [e.name, e.kind]))
+    expect(kinds).toEqual({
+      GNUPGHOME: 'dir', DOCKER_CONFIG: 'dir', CODEX_HOME: 'dir', CLAUDE_CONFIG_DIR: 'dir', GH_CONFIG_DIR: 'dir', CLOUDSDK_CONFIG: 'dir', AZURE_CONFIG_DIR: 'dir',
+      AWS_CONFIG_FILE: 'file', AWS_SHARED_CREDENTIALS_FILE: 'file', GOOGLE_APPLICATION_CREDENTIALS: 'file', NPM_CONFIG_USERCONFIG: 'file', NETRC: 'file',
+      KUBECONFIG: 'list', XDG_CONFIG_HOME: 'xdg',
+    })
+  })
+  it('relative and empty values are ignored', () => {
+    expect(relocatedCredentialRoots({ GNUPGHOME: 'gpg', NETRC: '', DOCKER_CONFIG: './d', AWS_CONFIG_FILE: '~/.aws2', KUBECONFIG: '', XDG_CONFIG_HOME: 'cfg' }, 'linux')).toEqual([])
+    expect(relocatedCredentialRoots({}, 'linux')).toEqual([])
+    expect(relocatedCredentialRoots({ GNUPGHOME: 'C:gpg' }, 'win32')).toEqual([])
+    expect(relocatedCredentialRoots({ GNUPGHOME: '/a\0b' }, 'linux')).toEqual([])
+  })
+  it('KUBECONFIG splits on the platform delimiter; relative and empty entries are dropped', () => {
+    expect(relocatedCredentialRoots({ KUBECONFIG: '/a/k1:/b/k2' }, 'linux')).toEqual(['/a/k1', '/b/k2'])
+    expect(relocatedCredentialRoots({ KUBECONFIG: '/a/k1::rel:/b/k2' }, 'darwin')).toEqual(['/a/k1', '/b/k2'])
+    expect(relocatedCredentialRoots({ KUBECONFIG: 'C:\\k1;D:\\k2;rel' }, 'win32')).toEqual(['C:\\k1', 'D:\\k2'])
+  })
+  it('XDG_CONFIG_HOME yields gh and gcloud under it', () => {
+    expect(relocatedCredentialRoots({ XDG_CONFIG_HOME: '/x/cfg' }, 'linux')).toEqual(['/x/cfg/gh', '/x/cfg/gcloud'])
+    expect(relocatedCredentialRoots({ XDG_CONFIG_HOME: 'C:\\cfg' }, 'win32')).toEqual(['C:\\cfg\\gh', 'C:\\cfg\\gcloud'])
+  })
+  it('credentialRoots appends the relocated roots after the home roots', () => {
+    const r = credentialRoots('/h', 'linux', { GNUPGHOME: '/w/gpg', KUBECONFIG: '/w/k' })
+    expect(r).toContain('/h/.ssh')
+    expect(r.slice(-2)).toEqual(['/w/gpg', '/w/k'])
+    expect(isCredentialPath('/w/gpg/private-keys-v1.d/x', r, 'linux')).toBe(true)
+    expect(isCredentialPath('/w/gpgx', r, 'linux')).toBe(false)
+  })
+})
+
+describe('persistence files (spec §5.2)', () => {
+  it('lists the spec files under home', () => {
+    const r = persistenceRoots('/h', 'darwin')
+    for (const rel of ['.bashrc', '.bash_profile', '.bash_login', '.bash_logout', '.zshrc', '.zprofile', '.zshenv', '.zlogin', '.zlogout', '.profile',
+      '.config/fish', '.gitconfig', '.config/git', 'Library/LaunchAgents', '.config/autostart', '.config/systemd'])
+      expect(r).toContain(`/h/${rel}`)
+    expect(PERSISTENCE_FILES).toHaveLength(16)
+    expect(persistenceRoots('C:\\Users\\u', 'win32')).toContain('C:\\Users\\u\\.config\\git')
+  })
+  it('env-relocated rc locations are added (ZDOTDIR, XDG_CONFIG_HOME, GIT_CONFIG_GLOBAL); relative ones ignored', () => {
+    const r = persistenceRoots('/h', 'linux', { ZDOTDIR: '/w/zsh', XDG_CONFIG_HOME: '/w/cfg', GIT_CONFIG_GLOBAL: '/w/gitconfig' })
+    for (const p of ['/w/zsh/.zshrc', '/w/zsh/.zshenv', '/w/zsh/.zprofile', '/w/zsh/.zlogin', '/w/zsh/.zlogout',
+      '/w/cfg/fish', '/w/cfg/git', '/w/cfg/autostart', '/w/cfg/systemd', '/w/gitconfig'])
+      expect(r, p).toContain(p)
+    expect(persistenceRoots('/h', 'linux', { ZDOTDIR: 'zsh', XDG_CONFIG_HOME: '', GIT_CONFIG_GLOBAL: 'g' })).toEqual(persistenceRoots('/h', 'linux'))
+  })
+  it('matching folds like the credential blacklist', () => {
+    const r = persistenceRoots('/h', 'darwin')
+    expect(isCredentialPath('/h/.ZSHRC', r, 'darwin')).toBe(true)
+    expect(isCredentialPath('/h/Library/LaunchAgents/x.plist', r, 'darwin')).toBe(true)
+    expect(isCredentialPath('/h/.zshrc.bak', r, 'darwin')).toBe(false)
   })
 })

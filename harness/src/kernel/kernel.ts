@@ -49,6 +49,8 @@ export interface KernelOpts {
   home?: string
   /** 审批无应答多久按拒绝处理;默认 10 分钟 */
   approvalTimeoutMs?: number
+  /** 凭据黑名单 / 持久化文件读的环境;默认 process.env。启动时拷一份,之后的变化不影响判定 */
+  env?: NodeJS.ProcessEnv
 }
 
 const ERR_METHOD_NOT_FOUND = -32601
@@ -72,8 +74,9 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   const bus = new EventBus({ onError: (type, err) => log.error(`handler for ${type} failed`, { error: String(err) }) })
   bus.declare('session.prompt', 'bail')
   const home = opts.home ?? homedir()
+  const envSnapshot: NodeJS.ProcessEnv = Object.freeze({ ...(opts.env ?? process.env) })
   const sessions = new Sessions(opts.dataDir)
-  const gate = new PermissionGate({ sessions, home, dataDir: opts.dataDir, platform: process.platform, env: process.env })
+  const gate = new PermissionGate({ sessions, home, dataDir: opts.dataDir, platform: process.platform, env: envSnapshot })
   sessions.load(eventLog.after(0))
   eventLog.onAppend(e => sessions.observe(e)) // 事务提交后才通知:回滚的 session.created 不会进来
   const turns = new Map<string, Turn>() // turnId -> 进行中的 turn
@@ -263,7 +266,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
           return { events: eventLog.tail(p.limit).map(toWire) }
         case 'session.create':
           return command(name, p.commandId, () => {
-            const cwd = p.cwd === undefined ? undefined : validateCwd(p.cwd, { home, dataDir: opts.dataDir, platform: process.platform, env: process.env })
+            const cwd = p.cwd === undefined ? undefined : validateCwd(p.cwd, { home, dataDir: opts.dataDir, platform: process.platform, env: envSnapshot })
             const sessionId = randomUUID()
             const payload = {
               title: p.title,

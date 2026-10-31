@@ -2,16 +2,18 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { credentialRoots, resolveToolPath } from '../lib/fs/paths'
+import { credentialRoots, persistenceRoots, resolveToolPath } from '../lib/fs/paths'
 import { decide, PermissionGate, type PermissionRequest } from './permissionGate'
 import { Sessions, type SessionInfo } from './sessions'
 import type { KernelEvent } from '../protocol/index'
+import { createKernel, type Kernel } from './kernel'
+import type { Plugin } from './pluginHost'
 
 describe('decide (table)', () => {
   const home = '/h'
   const dataDir = '/h/.myFlowForge/mff-ai'
   const spillDir = `${dataDir}/sessions/s1/spill`
-  const env = { roots: credentialRoots(home, 'linux', {}), dataDir, spillDir, platform: 'linux' as const }
+  const env = { roots: credentialRoots(home, 'linux', {}), persistence: persistenceRoots(home, 'linux'), dataDir, spillDir, platform: 'linux' as const }
   const ask: SessionInfo = { sessionId: 's1', cwd: '/h/repo', approvalMode: 'ask' }
   const auto: SessionInfo = { ...ask, approvalMode: 'auto' }
   const atHome: SessionInfo = { ...ask, cwd: home }
@@ -53,6 +55,16 @@ describe('decide (table)', () => {
     ['write .github is fine', req('write', '/h/repo/.github/workflows/ci.yml'), ask, 'allow'],
     ['write .gitignore is fine', req('write', '/h/repo/.gitignore'), ask, 'allow'],
     ['write x.git is fine', req('write', '/h/repo/x.git/a'), ask, 'allow'],
+    ['write ~/.zshrc, cwd = home', req('write', '/h/.zshrc'), atHome, 'deny'],
+    ['read ~/.zshrc, cwd = home', req('read', '/h/.zshrc'), atHome, 'allow'],
+    ['write ~/.config/fish/config.fish', req('write', '/h/.config/fish/config.fish'), atHome, 'deny'],
+    ['write ~/.gitconfig', req('write', '/h/.gitconfig'), atHome, 'deny'],
+    ['write ~/.config/git/config', req('write', '/h/.config/git/config'), atHome, 'deny'],
+    ['write ~/Library/LaunchAgents plist', req('write', '/h/Library/LaunchAgents/x.plist'), atHome, 'deny'],
+    ['write ~/.config/systemd/user unit', req('write', '/h/.config/systemd/user/x.service'), atHome, 'deny'],
+    ['write ~/.config/autostart entry', req('write', '/h/.config/autostart/x.desktop'), atHome, 'deny'],
+    ['write ~/.zshrc.bak is fine', req('write', '/h/.zshrc.bak'), atHome, 'allow'],
+    ['write ~/.config/other is fine', req('write', '/h/.config/other/x'), atHome, 'allow'],
     ['NUL sentinel', req('read', resolveToolPath('/h/repo', 'a\0b', { platform: 'linux' })), ask, 'deny'],
   ]
   it.each(cases)('%s', (_name, r, s, want) => {
@@ -60,7 +72,7 @@ describe('decide (table)', () => {
   })
 
   it('darwin: case variants of a blacklisted root are denied', () => {
-    const d = { ...env, roots: credentialRoots(home, 'darwin', {}), platform: 'darwin' as const }
+    const d = { ...env, roots: credentialRoots(home, 'darwin', {}), persistence: persistenceRoots(home, 'darwin'), platform: 'darwin' as const }
     expect(decide(req('read', '/h/.SSH/id'), atHome, d)).toBe('deny')
     expect(decide(req('read', '/H/REPO/a'), ask, d)).toBe('allow')
     const dataVol: SessionInfo = { ...ask, cwd: '/System/Volumes/Data' }
@@ -70,17 +82,23 @@ describe('decide (table)', () => {
   })
 
   it('darwin / win32: case and spelling variants of .git are denied for writes', () => {
-    const d = { ...env, roots: credentialRoots(home, 'darwin', {}), platform: 'darwin' as const }
+    const d = { ...env, roots: credentialRoots(home, 'darwin', {}), persistence: persistenceRoots(home, 'darwin'), platform: 'darwin' as const }
     for (const p of ['/h/repo/.GIT/hooks/x', '/h/repo/.Git/config']) expect(decide(req('write', p), ask, d)).toBe('deny')
-    const w = { roots: credentialRoots('C:\\Users\\u', 'win32', {}), dataDir: 'C:\\Users\\u\\.mff', platform: 'win32' as const }
+    const w = { roots: credentialRoots('C:\\Users\\u', 'win32', {}), persistence: persistenceRoots('C:\\Users\\u', 'win32'), dataDir: 'C:\\Users\\u\\.mff', platform: 'win32' as const }
     const s: SessionInfo = { sessionId: 's1', cwd: 'C:\\repo', approvalMode: 'auto' }
     for (const p of ['C:\\repo\\.GIT\\config', 'C:\\repo\\.git.\\hooks\\x', 'C:\\repo\\.git \\config', 'C:\\repo\\GIT~1\\config'])
       expect(decide(req('write', p), s, w)).toBe('deny')
     expect(decide(req('write', 'C:\\repo\\.github\\x'), s, w)).toBe('allow')
   })
 
+  it('darwin: case variants of a persistence file are denied for writes', () => {
+    const d = { ...env, roots: credentialRoots(home, 'darwin', {}), persistence: persistenceRoots(home, 'darwin'), platform: 'darwin' as const }
+    for (const p of ['/h/.ZSHRC', '/h/.Bashrc', '/h/library/launchagents/x.plist']) expect(decide(req('write', p), atHome, d), p).toBe('deny')
+    expect(decide(req('read', '/h/.ZSHRC'), atHome, d)).toBe('allow')
+  })
+
   it('win32: other drive, UNC and ADS are denied', () => {
-    const w = { roots: credentialRoots('C:\\Users\\u', 'win32', {}), dataDir: 'C:\\Users\\u\\.mff', platform: 'win32' as const }
+    const w = { roots: credentialRoots('C:\\Users\\u', 'win32', {}), persistence: persistenceRoots('C:\\Users\\u', 'win32'), dataDir: 'C:\\Users\\u\\.mff', platform: 'win32' as const }
     const s: SessionInfo = { sessionId: 's1', cwd: 'C:\\repo', approvalMode: 'auto' }
     expect(decide(req('read', 'c:\\REPO\\x'), s, w)).toBe('allow')
     for (const p of ['D:\\x', '\\\\server\\share\\x', '\\\\?\\C:\\repo\\x', 'C:\\repo\\a.txt:stream'])
@@ -108,11 +126,11 @@ describe('PermissionGate.check (real tree)', () => {
     rmSync(outside, { recursive: true, force: true })
   })
 
-  const gateFor = (cwd: string, approvalMode: 'ask' | 'auto' = 'ask') => {
+  const gateFor = (cwd: string, approvalMode: 'ask' | 'auto' = 'ask', env: NodeJS.ProcessEnv = {}) => {
     const sessions = new Sessions(dataDir)
     const ev: KernelEvent = { seq: 1, ts: 0, type: 'session.created', sessionId: 's1', payload: { cwd: realpathSync.native(cwd), approvalMode } }
     sessions.observe(ev)
-    return { gate: new PermissionGate({ sessions, home, dataDir, platform: process.platform, env: {} }), cwd: realpathSync.native(cwd) }
+    return { gate: new PermissionGate({ sessions, home, dataDir, platform: process.platform, env }), cwd: realpathSync.native(cwd) }
   }
   const check = (gate: PermissionGate, action: string, resource: string) => gate.check({ actor: 'plugin:tools', action, resource, sessionId: 's1' })
 
@@ -175,6 +193,51 @@ describe('PermissionGate.check (real tree)', () => {
     expect(gate.check({ actor: 'kernel', action: 'x' })).toBe('allow')
   })
 
+  it('GNUPGHOME / AWS_SHARED_CREDENTIALS_FILE relocated into cwd are denied', () => {
+    mkdirSync(join(outside, 'gpg'))
+    writeFileSync(join(outside, 'gpg', 'x'), 'k')
+    writeFileSync(join(outside, 'creds'), 'k')
+    const env = { GNUPGHOME: join(outside, 'gpg'), AWS_SHARED_CREDENTIALS_FILE: join(outside, 'creds') }
+    const { gate, cwd } = gateFor(outside, 'auto', env)
+    expect(check(gate, 'read', resolveToolPath(cwd, 'gpg/x'))).toBe('deny')
+    expect(check(gate, 'write', resolveToolPath(cwd, 'gpg/new'))).toBe('deny')
+    expect(check(gate, 'read', resolveToolPath(cwd, 'creds'))).toBe('deny')
+    expect(check(gate, 'read', resolveToolPath(cwd, 'secret'))).toBe('allow')
+    // 同一目录、不带这些变量:放行
+    expect(check(gateFor(outside, 'auto').gate, 'read', resolveToolPath(cwd, 'gpg/x'))).toBe('allow')
+  })
+
+  it('a not-yet-existing relocated root is denied too', () => {
+    const { gate, cwd } = gateFor(outside, 'auto', { DOCKER_CONFIG: join(outside, 'docker') })
+    expect(check(gate, 'write', resolveToolPath(cwd, 'docker/config.json'))).toBe('deny')
+  })
+
+  it('cwd = home: writing ~/.zshrc is denied, reading it is allowed', () => {
+    writeFileSync(join(home, '.zshrc'), 'x')
+    const { gate, cwd } = gateFor(home, 'auto')
+    expect(check(gate, 'write', resolveToolPath(cwd, '.zshrc'))).toBe('deny')
+    expect(check(gate, 'read', resolveToolPath(cwd, '.zshrc'))).toBe('allow')
+    expect(check(gate, 'write', resolveToolPath(cwd, '.bash_profile'))).toBe('deny') // 不存在的也拦
+    expect(check(gate, 'write', resolveToolPath(cwd, 'Library/LaunchAgents/evil.plist'))).toBe('deny')
+    expect(check(gate, 'write', resolveToolPath(cwd, 'repo/a.txt'))).toBe('allow')
+  })
+
+  it('a ~/.zshrc symlinked into a dotfiles repo: writing the target from that repo is denied', () => {
+    mkdirSync(join(home, 'dotfiles'))
+    writeFileSync(join(home, 'dotfiles', 'zshrc'), 'x')
+    symlinkSync(join(home, 'dotfiles', 'zshrc'), join(home, '.zshrc'))
+    const { gate, cwd } = gateFor(join(home, 'dotfiles'), 'auto')
+    expect(check(gate, 'write', resolveToolPath(cwd, 'zshrc'))).toBe('deny')
+    expect(check(gate, 'read', resolveToolPath(cwd, 'zshrc'))).toBe('allow')
+    expect(check(gate, 'write', resolveToolPath(cwd, 'README'))).toBe('allow')
+  })
+
+  it('ZDOTDIR moves the zsh rc files: writes there are denied', () => {
+    const { gate, cwd } = gateFor(outside, 'auto', { ZDOTDIR: outside })
+    expect(check(gate, 'write', resolveToolPath(cwd, '.zshrc'))).toBe('deny')
+    expect(check(gate, 'write', resolveToolPath(cwd, 'secret'))).toBe('allow')
+  })
+
   it('checkMany gives the same decisions as check, one per request', () => {
     const { gate, cwd } = gateFor(home)
     const reqs = [
@@ -188,5 +251,47 @@ describe('PermissionGate.check (real tree)', () => {
     expect(gate.checkMany(reqs)).toEqual(['deny', 'allow', 'deny', 'deny', 'allow', 'allow'])
     expect(gate.checkMany(reqs)).toEqual(reqs.map(r => gate.check(r)))
     expect(gate.checkMany([])).toEqual([])
+  })
+})
+
+describe('kernel env snapshot', () => {
+  let home: string
+  let dataDir: string
+  let work: string
+  let k: Kernel | undefined
+  let gate: PermissionGate | undefined
+  const probe: Plugin = {
+    manifest: { id: 'probe', version: '0', kernel: '^0.1.0' },
+    activate: ctx => { gate = ctx.services.get<PermissionGate>('permissionGate') },
+  }
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), 'mffai-snap-home-'))
+    dataDir = mkdtempSync(join(tmpdir(), 'mffai-snap-data-'))
+    work = realpathSync.native(mkdtempSync(join(tmpdir(), 'mffai-snap-work-')))
+    mkdirSync(join(work, 'gpg'))
+    mkdirSync(join(work, 'aws'))
+    gate = undefined
+  })
+  afterEach(async () => {
+    await k?.close().catch(() => {})
+    k = undefined
+    for (const d of [home, dataDir, work]) rmSync(d, { recursive: true, force: true })
+  })
+
+  it('decisions and validateCwd use the env given at createKernel; later mutation changes nothing', async () => {
+    const env: NodeJS.ProcessEnv = { GNUPGHOME: join(work, 'gpg') }
+    k = await createKernel({ dataDir, plugins: [probe], home, env, secrets: { osBackend: false } })
+    env.GNUPGHOME = join(work, 'elsewhere')
+    env.AWS_CONFIG_FILE = join(work, 'aws', 'config')
+    const code = await (k.handle('session.create', { commandId: 'c0', cwd: join(work, 'gpg') }) as Promise<unknown>).then(() => undefined, (e: { code?: number }) => e.code)
+    expect(code).toBe(-32602)
+    const { sessionId } = await k.handle('session.create', { commandId: 'c1', cwd: work, approvalMode: 'auto' }) as { sessionId: string }
+    const check = (action: string, rel: string) => gate!.check({ actor: 'plugin:tools', action, resource: resolveToolPath(work, rel), sessionId })
+    expect(check('read', 'gpg/x')).toBe('deny')
+    expect(check('read', 'aws/config')).toBe('allow')
+    expect(check('read', 'elsewhere/x')).toBe('allow')
+    // 后来才设的变量也不起作用:session.create 仍按快照判断
+    const { sessionId: s2 } = await k.handle('session.create', { commandId: 'c2', cwd: join(work, 'aws') }) as { sessionId: string }
+    expect(s2).toBeTruthy()
   })
 })

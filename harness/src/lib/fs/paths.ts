@@ -120,11 +120,71 @@ const HOME_ROOTS = [
   '.git-credentials', '.npmrc', '.pypirc', '.codex', '.claude', 'Library/Keychains',
 ]
 
-/** spec §10.1 凭据黑名单(不含 mff-ai 数据目录,由调用方加入) */
-export function credentialRoots(home: string, platform: NodeJS.Platform, env: { APPDATA?: string }): string[] {
+/** 05 spec §5.1:把凭据挪出家目录的环境变量;dir / file 取值本身,list 按平台分隔符拆,xdg 取其下的 gh、gcloud */
+export const RELOCATED_ENV: readonly { name: string; kind: 'dir' | 'file' | 'list' | 'xdg' }[] = [
+  { name: 'GNUPGHOME', kind: 'dir' },
+  { name: 'DOCKER_CONFIG', kind: 'dir' },
+  { name: 'CODEX_HOME', kind: 'dir' },
+  { name: 'CLAUDE_CONFIG_DIR', kind: 'dir' },
+  { name: 'GH_CONFIG_DIR', kind: 'dir' },
+  { name: 'CLOUDSDK_CONFIG', kind: 'dir' },
+  { name: 'AZURE_CONFIG_DIR', kind: 'dir' },
+  { name: 'AWS_CONFIG_FILE', kind: 'file' },
+  { name: 'AWS_SHARED_CREDENTIALS_FILE', kind: 'file' },
+  { name: 'GOOGLE_APPLICATION_CREDENTIALS', kind: 'file' },
+  { name: 'NPM_CONFIG_USERCONFIG', kind: 'file' },
+  { name: 'NETRC', kind: 'file' },
+  { name: 'KUBECONFIG', kind: 'list' },
+  { name: 'XDG_CONFIG_HOME', kind: 'xdg' },
+]
+
+/** 只认本平台的绝对路径;相对值(相对谁都不确定)、空值、含 NUL 的丢掉 */
+function absValues(raw: string | undefined, platform: NodeJS.Platform, list: boolean): string[] {
+  if (!raw) return []
+  const path = pathOf(platform)
+  return (list ? raw.split(path.delimiter) : [raw]).filter(v => v !== '' && !v.includes('\0') && path.isAbsolute(v))
+}
+
+/** 环境变量指向的凭据位置(spec §5.1);调用方传启动时的环境快照 */
+export function relocatedCredentialRoots(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string[] {
+  const path = pathOf(platform)
+  const out: string[] = []
+  for (const { name, kind } of RELOCATED_ENV) {
+    const vals = absValues(env[name], platform, kind === 'list')
+    if (kind === 'xdg') for (const v of vals) out.push(path.join(v, 'gh'), path.join(v, 'gcloud'))
+    else out.push(...vals)
+  }
+  return out
+}
+
+/** spec §10.1 凭据黑名单 + 05 §5.1 环境变量挪走的位置(不含 mff-ai 数据目录,由调用方加入) */
+export function credentialRoots(home: string, platform: NodeJS.Platform, env: NodeJS.ProcessEnv): string[] {
   const path = pathOf(platform)
   const roots = HOME_ROOTS.map(r => path.join(home, ...r.split('/')))
   if (platform === 'win32' && env.APPDATA) roots.push(...['gh', 'GitHub CLI', 'gcloud'].map(r => path.join(env.APPDATA!, r)))
+  roots.push(...relocatedCredentialRoots(env, platform))
+  return roots
+}
+
+/** 05 spec §5.2:登录脚本 / 自启动 / git 全局配置,只拒写(写进去下次开终端或登录就执行) */
+export const PERSISTENCE_FILES: readonly string[] = [
+  '.bashrc', '.bash_profile', '.bash_login', '.bash_logout', '.zshrc', '.zprofile', '.zshenv', '.zlogin', '.zlogout', '.profile',
+  '.config/fish', '.gitconfig', '.config/git', 'Library/LaunchAgents', '.config/autostart', '.config/systemd',
+]
+
+const ZSH_FILES = ['.zshrc', '.zprofile', '.zshenv', '.zlogin', '.zlogout']
+const XDG_PERSISTENCE = ['fish', 'git', 'autostart', 'systemd']
+
+/**
+ * 持久化文件的位置;env(启动时的快照)另加被挪走的同类文件:
+ * `$ZDOTDIR` 下的 zsh 脚本、`$XDG_CONFIG_HOME` 下的 fish / git / autostart / systemd、`$GIT_CONFIG_GLOBAL`
+ */
+export function persistenceRoots(home: string, platform: NodeJS.Platform, env: NodeJS.ProcessEnv = {}): string[] {
+  const path = pathOf(platform)
+  const roots = PERSISTENCE_FILES.map(r => path.join(home, ...r.split('/')))
+  for (const v of absValues(env.ZDOTDIR, platform, false)) roots.push(...ZSH_FILES.map(f => path.join(v, f)))
+  for (const v of absValues(env.XDG_CONFIG_HOME, platform, false)) roots.push(...XDG_PERSISTENCE.map(f => path.join(v, f)))
+  roots.push(...absValues(env.GIT_CONFIG_GLOBAL, platform, false))
   return roots
 }
 
