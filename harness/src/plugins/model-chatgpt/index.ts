@@ -25,6 +25,14 @@ export interface ChatgptOpts {
   /** 回调监听首选端口;被占用时系统分配 */
   openPortPreferred?: number
   flowTimeoutMs?: number
+  /** 登录流超时用的定时器(测试注入);返回取消函数 */
+  setTimer?: (fn: () => void, ms: number) => () => void
+}
+
+const unrefTimer = (fn: () => void, ms: number) => {
+  const t = setTimeout(fn, ms)
+  t.unref()
+  return () => clearTimeout(t)
 }
 
 const PRESET = 'chatgpt'
@@ -84,6 +92,7 @@ export function createModelChatgpt(opts: ChatgptOpts = {}): Plugin {
   const now = opts.now ?? Date.now
   const preferredPort = opts.openPortPreferred ?? 1455
   const flowTimeoutMs = opts.flowTimeoutMs ?? FLOW_TIMEOUT_MS
+  const setTimer = opts.setTimer ?? unrefTimer
 
   return {
     manifest,
@@ -395,7 +404,7 @@ export function createModelChatgpt(opts: ChatgptOpts = {}): Plugin {
             end(false)
             return { status: 400, text: '登录失败', close: true }
           } finally {
-            clearTimeout(timer)
+            clearTimer()
             flows.delete(flowId)
           }
         }, q => {
@@ -407,14 +416,13 @@ export function createModelChatgpt(opts: ChatgptOpts = {}): Plugin {
         redirectUri = `http://127.0.0.1:${listener.port}/auth/callback`
         /** 取消 / 超时 / 被新登录顶替 / 停用 */
         const close = () => {
-          clearTimeout(timer)
+          clearTimer()
           flows.delete(flowId)
           ac.abort()
           listener.close()
           end(false)
         }
-        const timer = setTimeout(close, flowTimeoutMs)
-        timer.unref()
+        const clearTimer = setTimer(close, flowTimeoutMs)
         flows.set(flowId, close)
         authorize = authorizeUrl(authBase, {
           redirectUri, state, nonce, challenge, hostId: host,

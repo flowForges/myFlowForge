@@ -108,14 +108,14 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true })
 })
 
-async function boot(o: { openPortPreferred?: number; flowTimeoutMs?: number } = {}) {
+async function boot(o: { openPortPreferred?: number; flowTimeoutMs?: number; setTimer?: (fn: () => void, ms: number) => () => void } = {}) {
   const authBase = await auth.start()
   const apiBase = `${await api.start()}/v1`
   let svc: ModelsService | undefined
   const capture: Plugin = { manifest: { id: 'capture', version: '1', kernel: '*', inject: ['models'] }, activate(ctx) { svc = ctx.services.get<ModelsService>('models') } }
   const k = await createKernel({
     dataDir: dir,
-    plugins: [createModelsRegistry({ catalogRefresh: false }), createModelChatgpt({ authBase, apiBase, now, openPortPreferred: o.openPortPreferred ?? 0, flowTimeoutMs: o.flowTimeoutMs }), capture],
+    plugins: [createModelsRegistry({ catalogRefresh: false }), createModelChatgpt({ authBase, apiBase, now, openPortPreferred: o.openPortPreferred ?? 0, flowTimeoutMs: o.flowTimeoutMs, setTimer: o.setTimer }), capture],
     secrets: { osBackend: false },
   })
   kernels.push(k)
@@ -462,9 +462,20 @@ describe('model-chatgpt 登录', () => {
   })
 
   it('超时 → 自动关闭监听', async () => {
-    const { k } = await boot({ flowTimeoutMs: 50 })
+    // 注入定时器,手动触发:不靠墙钟(满载时 50 ms 的定时器可能晚于 120 ms 的等待)
+    const timers: Array<{ fn: () => void; ms: number; cleared: boolean }> = []
+    const setTimer = (fn: () => void, ms: number) => {
+      const t = { fn, ms, cleared: false }
+      timers.push(t)
+      return () => { t.cleared = true }
+    }
+    const { k } = await boot({ flowTimeoutMs: 50, setTimer })
     const b = await begin(k)
-    await new Promise(r => setTimeout(r, 120))
+    expect(timers).toHaveLength(1)
+    expect(timers[0]).toMatchObject({ ms: 50, cleared: false })
+    expect(ends(k)).toEqual([])
+    timers[0].fn()
+    expect(timers[0].cleared).toBe(true)
     expect(await portClosed(b.redirect)).toBe(true)
     expect(ends(k)).toEqual([{ flowId: b.flowId, ok: false }])
   })
