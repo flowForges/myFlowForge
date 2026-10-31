@@ -145,10 +145,17 @@ export class ToolsRegistry implements ToolsService {
       if (decision !== 'allow' && decision !== 'ask') return failed(`拒绝:${r.action}${shown(r.resource)}`)
       checked.push({ req: r, decision })
     }
+    let asked = false
     for (const { req, decision } of checked) {
-      if (decision === 'ask' && !(await this.approve(req, tool.name, ctx))) return failed(DENIED_BY_USER)
+      if (decision !== 'ask') continue
+      asked = true
+      if (!(await this.approve(req, tool.name, ctx))) return failed(DENIED_BY_USER)
     }
     if (ctx.signal.aborted) return failed('已取消')
+    // 等审批期间权限配置可能变了(permissions.set):新加的 deny 照样生效
+    if (asked) {
+      for (const { req } of checked) if (this.check(req) === 'deny') return failed(`拒绝:${req.action}${shown(req.resource)}`)
+    }
 
     let result: ToolResult
     try {

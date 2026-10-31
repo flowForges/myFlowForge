@@ -58,10 +58,15 @@ function analyze(raw: unknown, ctx: ParseCtx): ParsedPermissions {
   })
 
   let network: Record<string, unknown> = {}
+  let networkBad = false
   if (isObject(root.network)) network = root.network
-  else if (root.network !== undefined) shape('network')
+  else if (root.network !== undefined) {
+    shape('network')
+    networkBad = true // 收紧:不退回默认白名单
+  }
   let allow: string[] = []
-  if (network.allow === undefined) allow = [...DEFAULT_NETWORK_ALLOW]
+  if (networkBad) allow = []
+  else if (network.allow === undefined) allow = [...DEFAULT_NETWORK_ALLOW]
   else if (!Array.isArray(network.allow)) shape('network.allow')
   else
     network.allow.forEach((e, i) => {
@@ -130,6 +135,11 @@ export class PermissionsStore {
   set(raw: unknown): void {
     const v = this.validate(raw)
     if (!v.ok) throw new InvalidPermissions(v.errors)
+    this.apply(v)
+  }
+
+  /** 写入已经 validate 过的结果(不再重跑用例):先落盘,成功后才换内存 */
+  apply(v: { config: PermissionsConfig; rules: Rule[] }): void {
     this.deps.config.update('permissions', v.config)
     this.current = { config: v.config, rules: v.rules, errors: [] }
   }

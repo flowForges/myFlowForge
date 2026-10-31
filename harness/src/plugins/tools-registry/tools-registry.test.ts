@@ -291,6 +291,20 @@ describe('tools-registry', () => {
       b.expectPair(ctx.callId, 'fexec')
     })
 
+    it('a deny added while the approval card is open still stops the call after allow', async () => {
+      const b = await boot()
+      const p = b.call('fexec', { command: 'git push origin main' })
+      await waitFor(() => requested(b.k).length === 1)
+      await b.k.handle('permissions.set', { commandId: 'perm1', config: { rules: [{ effect: 'deny', rule: 'shell(git push*)' }] } })
+      const { approvalId } = requested(b.k)[0].payload as { approvalId: string }
+      await b.k.handle('approval.respond', { approvalId, decision: 'allow' })
+      const { r, ctx } = await p
+      expect(r.isError).toBe(true)
+      expect(r.content).toContain('拒绝')
+      expect(b.probe.runs).toEqual([])
+      b.expectPair(ctx.callId, 'fexec')
+    })
+
     it('ask → deny → isError "用户拒绝了该操作", run not called', async () => {
       const b = await boot()
       const p = b.call('fexec', { command: 'npm test' })

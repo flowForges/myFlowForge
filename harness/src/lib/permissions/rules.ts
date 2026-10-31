@@ -93,14 +93,25 @@ export function parseRule(spec: RuleSpec, index = 0): Rule | RuleError {
 const pathOf = (platform: NodeJS.Platform) => (platform === 'win32' ? win32 : posix)
 const hasGlob = (seg: string) => seg.includes('*') || seg.includes('?')
 
-/** 模式 / 用例 → 绝对路径:`~` 开头按 home,绝对路径原样(win32 认 `X:\` 与 `X:/`),其余相对 cwd;结尾 `/` = `/**` */
-function absolutePattern(p: string, ctx: MatchCtx): string {
+/**
+ * 模式 / 用例 → 绝对路径:`~` 开头按 home,绝对路径原样(win32 认 `X:\` 与 `X:/`),其余相对 cwd;结尾 `/` = `/**`。
+ * anchor = 代入的 home / cwd:它们是字面量,里面的 `*`、`?` 不能当通配符(否则 cwd `/h/a*` 会放开兄弟目录)
+ */
+function anchoredPattern(p: string, ctx: MatchCtx): { abs: string; anchor?: string } {
   const path = pathOf(ctx.platform)
   const win = ctx.platform === 'win32'
   if (p.endsWith('/') || (win && p.endsWith('\\'))) p += '**'
-  if (p === '~' || p.startsWith('~/') || (win && p.startsWith('~\\'))) return path.join(ctx.home, p.slice(1))
+  if (p === '~' || p.startsWith('~/') || (win && p.startsWith('~\\'))) return { abs: path.join(ctx.home, p.slice(1)), anchor: ctx.home }
   const absolute = win ? /^[A-Za-z]:[\\/]/.test(p) : p.startsWith('/')
-  return absolute ? path.normalize(p) : path.join(ctx.cwd, p)
+  return absolute ? { abs: path.normalize(p) } : { abs: path.join(ctx.cwd, p), anchor: ctx.cwd }
+}
+
+const absolutePattern = (p: string, ctx: MatchCtx) => anchoredPattern(p, ctx).abs
+
+/** 路径按分隔符拆段,根只算一段(posix `/` → `['']`,win32 `C:\` → `['C:']`) */
+function rawSegments(p: string, platform: NodeJS.Platform): string[] {
+  const path = pathOf(platform)
+  return path.normalize(p).split(path.sep).filter((x, i) => i === 0 || x !== '')
 }
 
 /** 最近能 realpath 的祖先取 realpath,拼回其余部分;没注入 realpath 或一路失败 → undefined */
@@ -122,23 +133,31 @@ function realPrefix(p: string, ctx: MatchCtx): string | undefined {
   }
 }
 
-/** 模式的两种绝对形态:原样,与字面前缀(第一个带通配符的段之前)取 realpath 后的 */
-function patternForms(pattern: string, ctx: MatchCtx): string[] {
+/** 一种绝对形态;literal 是它的字面前缀(anchor 与其后第一个通配段之前的部分,或其 realpath),整段按字面量比 */
+interface PatternForm {
+  path: string
+  literal: string
+}
+
+/** 模式的两种绝对形态:原样,与字面前缀取 realpath 后的 */
+function patternForms(pattern: string, ctx: MatchCtx): PatternForm[] {
   const path = pathOf(ctx.platform)
-  const abs = absolutePattern(pattern, ctx)
+  const { abs, anchor } = anchoredPattern(pattern, ctx)
   const segs = abs.split(path.sep)
-  let k = segs.findIndex(hasGlob)
+  const fixed = anchor === undefined ? 0 : Math.min(rawSegments(anchor, ctx.platform).length, segs.length)
+  let k = segs.findIndex((seg, i) => i >= fixed && hasGlob(seg))
   if (k < 0) k = segs.length
   // 只剩根(posix 的 `''`、win32 的 `C:`)时用 `/`、`C:\`:`C:` 本身是盘符上的当前目录
   const prefix = k <= 1 ? segs[0] + path.sep : segs.slice(0, k).join(path.sep)
+  const raw: PatternForm = { path: abs, literal: prefix }
   const real = realPrefix(prefix, ctx)
-  if (real === undefined) return [abs]
+  if (real === undefined) return [raw]
   const realAbs = k < segs.length ? path.join(real, ...segs.slice(k)) : real
-  return realAbs === abs ? [abs] : [abs, realAbs]
+  return realAbs === abs ? [raw] : [raw, { path: realAbs, literal: real }]
 }
 
 interface CompiledPath {
-  forms: string[]
+  forms: PatternForm[]
   folded: Map<boolean, Seg[][]>
 }
 
@@ -156,7 +175,7 @@ function compiledPath(rule: Rule, ctx: MatchCtx): CompiledPath {
 function foldedForms(c: CompiledPath, platform: NodeJS.Platform, strong: boolean): Seg[][] {
   let segs = c.folded.get(strong)
   if (!segs) {
-    segs = c.forms.map(f => basicSegments(foldedSegments(f, platform, strong)))
+    segs = c.forms.map(f => basicSegments(foldedSegments(f.path, platform, strong), foldedSegments(f.literal, platform, strong).length))
     c.folded.set(strong, segs)
   }
   return segs

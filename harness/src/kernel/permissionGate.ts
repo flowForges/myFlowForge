@@ -39,9 +39,11 @@ function execDefault(mode: ApprovalMode, sandbox: SandboxStatus, allowUnsandboxe
  * 内置默认规则的显示形态(permissions.get 用;不可编辑)。判定里不走模式匹配,直接按 cwd 比较:
  * cwd 里的 `*`、`?`、括号不会被当成通配符或写法
  */
-export function defaultRules(s: SessionInfo | undefined, sandbox: SandboxStatus, allowUnsandboxedAuto: boolean): string[] {
+export function defaultRules(s: SessionInfo | undefined, sandbox: SandboxStatus, allowUnsandboxedAuto: boolean, platform: NodeJS.Platform = process.platform): string[] {
   const cwd = s ? s.cwd : '<cwd>'
-  const out = cwd === undefined ? [] : [`allow read(${cwd}/**)`, `allow write(${cwd}/**)`]
+  // 没有 cwd 或 cwd 是根:读写被硬拒绝,不列默认的 allow
+  const listed = cwd !== undefined && (!s || !isRootLike(cwd, platform))
+  const out = listed ? [`allow read(${cwd}/**)`, `allow write(${cwd}/**)`] : []
   out.push(`${s ? execDefault(s.approvalMode, sandbox, allowUnsandboxedAuto) : '<mode>'} shell(*)`)
   return out
 }
@@ -120,7 +122,7 @@ export class PermissionGate {
   defaults(sessionId?: string): string[] {
     const s = sessionId === undefined ? undefined : this.deps.sessions.get(sessionId)
     const e = this.execEnv()
-    return defaultRules(s, e.sandbox, e.allowUnsandboxedAuto)
+    return defaultRules(s, e.sandbox, e.allowUnsandboxedAuto, this.deps.platform)
   }
 
   check(req: PermissionRequest): Decision {

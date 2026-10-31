@@ -60,6 +60,7 @@ describe('parsePermissions (load mode)', () => {
       [-1, 'rules', 'syntax'], [-1, 'network.allow', 'syntax'], [-1, 'sandbox.enabled', 'syntax'], [-1, 'sandbox.allowLoopback', 'syntax'],
       [-1, 'allowUnsandboxedAuto', 'syntax'],
     ])
+    for (const network of ['x', [], null]) expect(parsePermissions({ network }, ctx).config.network.allow, String(network)).toEqual([]) // M1
     expect(parsePermissions('nope', ctx).errors).toEqual([{ index: -1, rule: 'permissions', reason: 'syntax' }])
     expect(parsePermissions(null, ctx).errors).toEqual([{ index: -1, rule: 'permissions', reason: 'syntax' }])
   })
@@ -269,6 +270,8 @@ describe('kernel permissions section', () => {
     const auto = await k.handle('session.create', { commandId: 'c2', cwd: work, approvalMode: 'auto' }) as { sessionId: string }
     expect((await k.handle('permissions.get', { sessionId: auto.sessionId }) as { defaults: string[] }).defaults[2]).toBe('allow shell(*)')
     expect((await k.handle('permissions.get', {}) as { defaults: string[] }).defaults).toEqual(['allow read(<cwd>/**)', 'allow write(<cwd>/**)', '<mode> shell(*)'])
+    const unknown = await rpcError(k.handle('permissions.get', { sessionId: 'nope' })) // M5
+    expect([unknown.code, unknown.message]).toEqual([-32602, 'unknown session'])
   })
 
   it('a plugin cannot register permissions.get (reserved)', async () => {

@@ -201,6 +201,26 @@ describe('decide: layered rules (Review Focus 3)', () => {
     expect(defaultRules(undefined, FULL, false)).toEqual(['allow read(<cwd>/**)', 'allow write(<cwd>/**)', '<mode> shell(*)'])
   })
 
+  it('I1: a cwd or home with glob characters does not widen a user relative / ~ rule', () => {
+    const star: SessionInfo = { ...repo, cwd: '/h/a*' }
+    const lib = with_({ effect: 'allow', rule: 'read(lib/**)' })
+    expect(decide(req('read', '/h/aX/lib/x'), star, lib)).toBe('deny')
+    expect(decide(req('read', '/h/aOTHER/lib/x'), star, lib)).toBe('deny')
+    expect(decide(req('read', '/h/a*/lib/x'), star, lib)).toBe('allow')
+    const q: SessionInfo = { ...repo, cwd: '/h/w?rk' }
+    expect(decide(req('read', '/h/w0rk/lib/x'), q, lib)).toBe('deny')
+    expect(decide(req('read', '/h/w?rk/lib/x'), q, lib)).toBe('allow')
+    // 用户自己写的通配符照常生效
+    expect(decide(req('read', '/h/w?rk/lib2/x'), q, with_({ effect: 'allow', rule: 'read(li?2/**)' }))).toBe('allow')
+    const odd: DecideEnv = { ...with_({ effect: 'allow', rule: 'read(~/shared/**)' }), home: '/u/h*' }
+    expect(decide(req('read', '/u/hX/shared/a'), repo, odd)).toBe('deny')
+    expect(decide(req('read', '/u/h*/shared/a'), repo, odd)).toBe('allow')
+  })
+
+  it('M5: defaultRules lists no read / write defaults for a root-like cwd', () => {
+    expect(defaultRules({ ...repo, cwd: '/' }, FULL, false)).toEqual(['ask shell(*)'])
+  })
+
   it('a cwd with glob characters does not widen the default allow', () => {
     const odd: SessionInfo = { ...repo, cwd: '/h/a?b' }
     expect(decide(req('read', '/h/a?b/x'), odd, base)).toBe('allow')

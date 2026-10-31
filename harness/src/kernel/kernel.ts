@@ -296,6 +296,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
             return { result: { accepted: true, turnId }, after: () => dispatchPrompt(p.sessionId, turnId, p.text) }
           }).result
         case 'permissions.get': {
+          if (p.sessionId !== undefined && !sessions.get(p.sessionId)) throw new RpcError(ERR_INVALID_PARAMS, 'unknown session')
           const { config: cfg, errors } = permissions.get()
           return { config: cfg, defaults: gate.defaults(p.sessionId), errors, sandbox: sandboxStatus() }
         }
@@ -305,7 +306,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
             if (!v.ok) throw new RpcError(ERR_INVALID_PARAMS, 'invalid rules', v.errors) // 回滚,不留回执,不落盘
             // 事件先写进事务:落盘失败时一起回滚
             append({ type: 'permissions.updated', payload: { rules: v.config.rules.length, network: v.config.network.allow.length } })
-            permissions.set(v.config)
+            permissions.apply(v)
             return { result: { ok: true } }
           }).result
         case 'approval.respond':

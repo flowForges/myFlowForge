@@ -169,9 +169,12 @@ export function basicTokens(s: string): Tok[] {
   return out
 }
 
-/** 基本语法的路径段:`**` 段 → 任意层,其余按 basicTokens */
-export function basicSegments(segs: string[]): Seg[] {
-  return segs.map(s => (s === '**' ? 'globstar' : basicTokens(s)))
+/** 基本语法的路径段:`**` 段 → 任意层,其余按 basicTokens;前 literal 段整段按字面量(代入的 cwd / home) */
+export function basicSegments(segs: string[], literal = 0): Seg[] {
+  return segs.map((s, i) => {
+    if (i < literal) return Array.from({ length: s.length }, (_, j): Tok => ({ t: 'lit', c: s[j] }))
+    return s === '**' ? 'globstar' : basicTokens(s)
+  })
 }
 
 /** 只认 `*`(任意字符,含空格与 `/`)、其余逐字的整串匹配(shell 命令模式);O(n·m),无回溯正则 */
