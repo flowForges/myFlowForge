@@ -33,6 +33,7 @@
 .mffai-approval code, .mffai-skipped code { font-family: var(--mono, monospace); word-break: break-all; }
 .mffai-snap { display: flex; align-items: center; gap: 10px; color: var(--faint); }
 .mffai-skipped { display: flex; flex-wrap: wrap; gap: 6px; }
-.mffai-approval .mffai-unsandboxed, .mffai-degraded, .mffai-sandbox.none { align-self: flex-start; color: var(--del, #e5484d); border-color: currentColor; }
+.mffai-unsandboxed, .mffai-degraded, .mffai-sandbox.none { color: var(--del, #e5484d); border-color: currentColor; }
+.mffai-approval .mffai-unsandboxed { align-self: flex-start; }
 .mffai-sandbox.full { color: var(--accent); border-color: currentColor; }
 .mffai-net { font-family: var(--mono, monospace); color: var(--faint); }

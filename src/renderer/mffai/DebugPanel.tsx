@@ -198,7 +198,7 @@ export function DebugPanel() {
     refresh()
     const off = api.onEvent(e => {
       setEvents(es => [...es, e].slice(-KEEP))
-      if (e.type === 'kernel.started') refresh()
+      if (e.type === 'kernel.started' || e.type === 'permissions.updated') refresh()
     })
     void api.tail(KEEP).then(r => {
       if (!alive) return

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { connect } from 'node:net'
@@ -667,6 +667,17 @@ describe('kernel wiring', () => {
     expect(k.snapshot().status.sandbox).toEqual({ level: 'full', missing: [], autoDegraded: false })
     expect(((await k.handle('status', {})) as { sandbox: unknown }).sandbox).toEqual({ level: 'full', missing: [], autoDegraded: false })
     expect(((await k.handle('permissions.get', {})) as { sandbox: unknown }).sandbox).toEqual({ level: 'full', missing: [], autoDegraded: false })
+  })
+
+  it('permissions.get with a sessionId asks for that session\'s status; without one, the global status', async () => {
+    const k = await boot(() => ({ level: 'full', missing: [] }))
+    const { sessionId } = (await k.handle('session.create', { commandId: 'c1', title: 't' })) as { sessionId: string }
+    const spy = vi.spyOn(seen!, 'status').mockImplementation(sid =>
+      sid === sessionId ? { level: 'partial', missing: ['proxy'], autoDegraded: false } : { level: 'full', missing: [], autoDegraded: false })
+    expect(((await k.handle('permissions.get', { sessionId })) as { sandbox: unknown }).sandbox).toEqual({ level: 'partial', missing: ['proxy'], autoDegraded: false })
+    expect(spy).toHaveBeenLastCalledWith(sessionId)
+    expect(((await k.handle('permissions.get', {})) as { sandbox: unknown }).sandbox).toEqual({ level: 'full', missing: [], autoDegraded: false })
+    expect(spy.mock.lastCall?.[0]).toBeUndefined()
   })
 
   it('async detect works and none degrades auto', async () => {

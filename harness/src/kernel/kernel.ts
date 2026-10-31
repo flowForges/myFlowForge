@@ -164,6 +164,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
     git: so.git,
     log,
   })
+  /** 全局状态(status / snapshot 用):不含单个会话的代理失败 */
   const sandboxStatus = () => sandbox.status()
   const gate = new PermissionGate({
     sessions, home, dataDir: opts.dataDir, platform: process.platform, env: envSnapshot, permissions: () => permissions.get(),
@@ -351,7 +352,8 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
         case 'permissions.get': {
           if (p.sessionId !== undefined && !sessions.get(p.sessionId)) throw new RpcError(ERR_INVALID_PARAMS, 'unknown session')
           const { config: cfg, errors } = permissions.get()
-          return { config: cfg, defaults: gate.defaults(p.sessionId), errors, sandbox: sandboxStatus() }
+          // 有 sessionId:默认规则与沙箱状态都按该会话(含它的代理失败)
+          return { config: cfg, defaults: gate.defaults(p.sessionId), errors, sandbox: sandbox.status(p.sessionId) }
         }
         case 'permissions.set':
           return command(name, p.commandId, () => {

@@ -344,7 +344,7 @@ export function createMffaiHost(deps: HostDeps) {
     },
     approvalRespond: (approvalId: string, decision: ApprovalDecision) => requireWorker().call('approval.respond', { approvalId, decision }),
     rollback: (sessionId: string, turnId: string) => requireWorker().call('turn.rollback', { commandId: randomUUID(), sessionId, turnId }),
-    // —— 权限:有 sessionId 时默认规则按该会话展开,沙箱状态也算上该会话(代理失败只记在会话上)
+    // —— 权限:有 sessionId 时内核按该会话展开默认规则,沙箱状态也按该会话(含它的代理失败);没有时是全局状态
     permissionsGet: async (sessionId?: string) => requireWorker().call('permissions.get', sessionId ? { sessionId } : {}),
     permissionsSet: async (config: object) => requireWorker().call('permissions.set', { commandId: randomUUID(), config }),
     // —— 模型 / 账号:原样转给工作进程。★参数可能带 apiKey,绝不写日志

@@ -326,6 +326,17 @@ describe('DebugPanel', () => {
       expect(mffai.state).toHaveBeenCalledTimes(2)
     })
 
+    it('permissions.updated 后重新取状态', async () => {
+      let sandbox = { level: 'full', missing: [] as string[], autoDegraded: false }
+      mffai.state = vi.fn(async () => ({ enabled: true, autostart: true, running: true, sandbox }))
+      const { container } = render(<DebugPanel />)
+      await waitFor(() => expect(chip(container)?.textContent).toBe('完整'))
+      sandbox = { level: 'partial', missing: ['loopback'], autoDegraded: false }
+      emit('permissions.updated', { rules: 0, network: 1 }, undefined as never)
+      await waitFor(() => expect(chip(container)?.textContent).toBe('部分'))
+      expect(mffai.state).toHaveBeenCalledTimes(2)
+    })
+
     it('需审批:只在勾了命令自动放行且 autoDegraded 时出现', async () => {
       withSandbox({ level: 'none', missing: ['platform'], autoDegraded: true })
       const { container } = render(<DebugPanel />)
