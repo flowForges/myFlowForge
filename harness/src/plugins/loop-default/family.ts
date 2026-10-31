@@ -12,12 +12,12 @@ export const TOOLSETS: Record<Toolset, readonly string[]> = {
 }
 
 /**
- * 账号协议是 chatgpt → gpt;模型 id(去掉 `vendor/` 前缀)匹配 `^(gpt-|o\d|codex-)` → gpt,`^claude-` → claude;其余 generic
+ * 账号协议是 chatgpt → gpt;模型 id(去掉 `vendor/` 前缀)匹配 `^(gpt-|gpt\d|chatgpt-|o\d|codex)` → gpt,`^claude-` → claude;其余 generic
  */
 export function family(protocol: string | undefined, modelId: string | undefined): Family {
   if (protocol === 'chatgpt') return 'gpt'
   const id = (modelId ?? '').split('/').at(-1)!.toLowerCase()
-  if (/^(gpt-|o\d|codex-)/.test(id)) return 'gpt'
+  if (/^(gpt-?\d|gpt-|chatgpt-|o\d|codex)/.test(id)) return 'gpt'
   if (/^claude-/.test(id)) return 'claude'
   return 'generic'
 }

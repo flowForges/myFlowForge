@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { KernelEvent } from '../../protocol/index'
-import { buildMessages, INTERRUPTED } from './history'
+import { buildMessages, INTERRUPTED, type ReplayOrigin } from './history'
+
+const ORIGIN: ReplayOrigin = { accountId: 'acc', protocol: 'anthropic', modelId: 'claude-x' }
 
 let seq = 0
 const ev = (type: KernelEvent['type'], payload: object): KernelEvent => ({ seq: ++seq, ts: seq, type, sessionId: 's', payload })
@@ -14,7 +16,7 @@ describe('buildMessages', () => {
       ev('session.created', { approvalMode: 'ask' }),
       ev('message.user', { turnId: 't1', text: 'q1' }),
       ev('turn.started', { turnId: 't1' }),
-      ev('message.assistant', { turnId: 't1', step: 1, text: 'look', parts: [{ type: 'reasoning', replay: { r: 1 } }, { type: 'text', text: 'look' }, call('c1'), call('c2', 'grep')] }),
+      ev('message.assistant', { turnId: 't1', step: 1, text: 'look', parts: [{ type: 'reasoning', replay: { r: 1 }, ...ORIGIN }, { type: 'text', text: 'look' }, call('c1'), call('c2', 'grep')] }),
       ev('tool.started', { turnId: 't1', callId: 'c1', name: 'read', argsPreview: '' }),
       ended('t1', 'c1', 'file body'),
       ended('t1', 'c2', 'bad', true),
@@ -22,7 +24,7 @@ describe('buildMessages', () => {
       ev('turn.ended', { turnId: 't1' }),
       ev('message.user', { turnId: 't2', text: 'q2' }),
     ]
-    expect(buildMessages(events, 't2', 'q2')).toEqual([
+    expect(buildMessages(events, 't2', 'q2', { origin: ORIGIN })).toEqual([
       { role: 'user', parts: [{ type: 'text', text: 'q1' }] },
       { role: 'assistant', parts: [{ type: 'reasoning', replay: { r: 1 } }, { type: 'text', text: 'look' }, call('c1'), call('c2', 'grep')] },
       { role: 'tool', parts: [{ type: 'tool_result', callId: 'c1', content: 'file body' }, { type: 'tool_result', callId: 'c2', content: 'bad', isError: true }] },
@@ -103,5 +105,45 @@ describe('buildMessages', () => {
     const out = buildMessages(events, 't2', 'q2')
     expect(out[2].parts).toEqual([{ type: 'tool_result', callId: 'c', content: 'first' }])
     expect(out[4].parts).toEqual([{ type: 'tool_result', callId: 'c', content: 'second' }])
+  })
+
+  it('replay parts from another account / protocol / model, or without provenance, are dropped', () => {
+    const step = (parts: object[]) => ev('message.assistant', { turnId: 't1', step: 1, text: 'a', parts: [...parts, { type: 'text', text: 'a' }] })
+    const events = [
+      ev('message.user', { turnId: 't1', text: 'q1' }),
+      step([{ type: 'reasoning', replay: { keep: 1 }, ...ORIGIN }, { type: 'reasoning', replay: { other: 1 }, ...ORIGIN, protocol: 'openai-responses' }, { type: 'reasoning', replay: { bare: 1 } }]),
+      ev('turn.ended', { turnId: 't1' }),
+    ]
+    const replays = (o?: ReplayOrigin) => buildMessages(events, 't2', 'q2', { origin: o })[1].parts.filter(p => p.type === 'reasoning')
+    expect(replays(ORIGIN)).toEqual([{ type: 'reasoning', replay: { keep: 1 } }])
+    expect(replays({ ...ORIGIN, modelId: 'claude-y' })).toEqual([])
+    expect(replays({ ...ORIGIN, accountId: 'other' })).toEqual([])
+    expect(replays(undefined)).toEqual([])
+  })
+
+  it('a reasoning-only step is not rebuilt (a lone reasoning item is rejected by Responses)', () => {
+    const events = [
+      ev('message.user', { turnId: 't1', text: 'q1' }),
+      ev('message.assistant', { turnId: 't1', step: 1, text: '', parts: [{ type: 'reasoning', replay: { r: 1 }, ...ORIGIN }] }),
+      ev('turn.ended', { turnId: 't1' }),
+    ]
+    expect(buildMessages(events, 't2', 'q2', { origin: ORIGIN }).map(m => m.role)).toEqual(['user', 'user'])
+  })
+
+  it('environment goes before the first user message, the reminder before every user message, both from stable inputs', () => {
+    const events = [
+      ev('message.user', { turnId: 't1', text: 'q1' }),
+      ev('message.assistant', { turnId: 't1', text: 'a1' }),
+      ev('turn.ended', { turnId: 't1' }),
+      ev('message.user', { turnId: 't2', text: 'q2' }),
+    ]
+    const opts = { environment: '<environment>E</environment>', reminder: (ts: number) => `<r>${ts}</r>`, now: 999 }
+    const t1 = events[0].ts
+    const t2 = events[3].ts
+    const out = buildMessages(events, 't2', 'q2', opts)
+    expect(out[0].parts).toEqual([{ type: 'text', text: '<environment>E</environment>' }, { type: 'text', text: `<r>${t1}</r>` }, { type: 'text', text: 'q1' }])
+    expect(out[2].parts).toEqual([{ type: 'text', text: `<r>${t2}</r>` }, { type: 'text', text: 'q2' }])
+    // 第一轮本身:当前消息就是第一条,带环境块;不在 events 里时用 now
+    expect(buildMessages([], 't1', 'q1', opts)[0].parts).toEqual([{ type: 'text', text: '<environment>E</environment>' }, { type: 'text', text: '<r>999</r>' }, { type: 'text', text: 'q1' }])
   })
 })

@@ -13,7 +13,8 @@ export const SAFETY = `# Safety
 - The working directory and the current date are given in an <environment> block at the start of the user's message.
 - Stay inside the working directory. Never read or print credentials, keys or tokens.
 - Commands may need the user's approval. If the user denies one, do not retry it; find another way or explain what you need.
-- Never run destructive commands (deleting files outside the task, rewriting git history, force pushes) unless the user asked for exactly that.`
+- Never run destructive commands (deleting files outside the task, rewriting git history, force pushes) unless the user asked for exactly that.
+- Do not commit, push, or create branches or tags unless the user asks; leave your changes in the working tree.`
 
 export const STYLE = `# Replies
 - Be brief and concrete: say what you changed and how you verified it. Mention file paths.
@@ -22,7 +23,8 @@ export const STYLE = `# Replies
 
 export const READ_TOOLS = `- read: read a file with line numbers (use offset / limit for large files). list: one directory level. glob: find files by pattern. grep: search file contents with a JavaScript regular expression.
 - shell: run a command in the working directory (tests, builds, git status). stdin is closed, so never run interactive commands.
-- Prefer read / glob / grep over shell for looking at files.`
+- Prefer read / glob / grep over shell for looking at files.
+- Long tool output is cut to its beginning and end, and the full text is saved to a file whose path is in the result; read that file (with offset / limit) when you need the middle.`
 
 /** 改文件的工具说明,按工具集 */
 export const PATCH_TOOLS = `- apply_patch: the only way to create, change, move or delete files. Use the "*** Begin Patch" format with enough context lines for each hunk to match exactly once; paths are relative to the working directory. Group related changes to one file into one patch.`

@@ -1,12 +1,11 @@
 import { BUILTIN_PLUGINS } from '../plugins/index'
 import { createKernel, type Kernel } from '../kernel/kernel'
 import { startRpcServer } from '../kernel/rpcServer'
+import { DRAIN_MS } from '../kernel/shutdown'
 import { HARNESS_VERSION } from '../kernel/version'
 import { dataDir, ensureToken, runtimePaths } from '../protocol/index'
 import { createFileLogger } from '../supervisor/fileLog'
 
-// 比监管的 30 s 强杀早一点结束排空,留时间关库
-const DRAIN_MS = 28_000
 
 /** 工作进程:组装内核 → 监听 worker.sock → 告诉监管 ready;响应 ping / drain */
 export async function runWorker(): Promise<void> {

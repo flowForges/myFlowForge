@@ -9,11 +9,32 @@ import { redact } from '../../lib/tools/redact'
 import type { ToolsService } from '../../lib/tools/types'
 import type { KernelEvent, ModelRef } from '../../protocol/index'
 import { accountProtocol, family, toolDefs, toolsetFor } from './family'
-import { buildMessages } from './history'
+import { buildMessages, type ReplayOrigin } from './history'
 import { LOOP_REMINDER, LoopGuard } from './loopGuard'
-import { environmentBlock, systemPrompt } from './prompts/index'
+import { dateReminder, environmentBlock, systemPrompt } from './prompts/index'
 
 export const MAX_STEPS = 50
+const NAME_MAX = 200
+const ARGS_RAW_MAX = 2_000
+
+const mapStrings = (v: unknown, f: (s: string) => string): unknown => {
+  if (typeof v === 'string') return f(v)
+  if (Array.isArray(v)) return v.map(x => mapStrings(x, f))
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [f(k), mapStrings(x, f)]))
+  return v
+}
+
+/**
+ * 写进事件的工具参数:在解析后的字符串值里打码再序列化,保证仍是合法 JSON(PEM 规则不会吃掉结尾的 `"}`);
+ * 不是合法 JSON 的参数换成占位对象,原文打码截断后放在里面
+ */
+export function loggedArgs(raw: string): string {
+  try {
+    return JSON.stringify(mapStrings(JSON.parse(raw), redact))
+  } catch {
+    return JSON.stringify({ _unparsed: redact(raw).slice(0, ARGS_RAW_MAX) })
+  }
+}
 const MAX_RETRIES = 2
 const RETRY_DEFAULT_MS = 5_000
 const RETRY_MAX_MS = 60_000
@@ -45,7 +66,7 @@ export interface TurnRequest {
 
 type Call = { id: string; name: string; args: string }
 type StepResult =
-  | { kind: 'ok'; text: string; replays: unknown[]; calls: Call[] }
+  | { kind: 'ok'; text: string; replays: unknown[]; calls: Call[]; reason: string }
   | { kind: 'cancelled' }
   | { kind: 'error'; error: ModelError; produced: boolean }
 
@@ -85,16 +106,14 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<void> {
   const defs = toolDefs(tools.list(), toolset)
   const system = systemPrompt(fam, toolset)
 
-  const messages: Message[] = buildMessages(deps.history(sessionId), turnId, req.text)
-  const env = environmentBlock({
-    cwd: info.cwd,
-    platform: deps.platform ?? process.platform,
-    date: deps.now?.() ?? new Date(),
-    isGit: isGitDir(info.cwd),
-    approvalMode: info.approvalMode,
+  // 回传推理 replay 只限同一账号 / 协议 / 模型('default' 换了模型或协议后,旧 replay 不再发)
+  const origin: ReplayOrigin | undefined = concrete && { accountId: concrete.accountId, protocol: accountProtocol(models, concrete), modelId: concrete.modelId }
+  const messages: Message[] = buildMessages(deps.history(sessionId), turnId, req.text, {
+    origin,
+    environment: environmentBlock({ cwd: info.cwd, platform: deps.platform ?? process.platform, isGit: isGitDir(info.cwd), approvalMode: info.approvalMode }),
+    reminder: dateReminder,
+    now: (deps.now?.() ?? new Date()).getTime(),
   })
-  const current = messages[messages.length - 1]
-  messages[messages.length - 1] = { ...current, parts: [{ type: 'text', text: env }, ...current.parts] }
 
   const guard = new LoopGuard()
   const sleep = deps.sleep ?? defaultSleep
@@ -153,7 +172,7 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<void> {
     }
     // 模型没给 id 的调用:补一个本步内唯一的
     const list = [...calls.values()].map((c, i) => (c.id ? c : { ...c, id: `call_${step}_${i}` }))
-    return { kind: 'ok', text, replays, calls: list }
+    return { kind: 'ok', text, replays, calls: list, reason: doneEvent.reason }
   }
 
   for (let step = 1; step <= maxSteps; step++) {
@@ -177,9 +196,16 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<void> {
       ...(r.text ? [{ type: 'text' as const, text: r.text }] : []),
       ...r.calls.map(c => ({ type: 'tool_call' as const, id: c.id, name: c.name, args: c.args })),
     ]
-    const logged = parts.map(p => (p.type === 'tool_call' ? { ...p, args: redact(p.args) } : p))
+    const logged = parts.map(p => {
+      if (p.type === 'tool_call') return { ...p, name: redact(p.name).slice(0, NAME_MAX), args: loggedArgs(p.args) }
+      if (p.type === 'reasoning') return { ...p, ...origin } // 来源:重建时只回传给同一模型
+      return p
+    })
     ev('message.assistant', { step, text: r.text, parts: logged })
-    if (!r.calls.length) return ev('turn.ended', {})
+    if (!r.calls.length) {
+      if (r.reason === 'length') deps.log.warn('model output hit the length limit', { step })
+      return ev('turn.ended', {})
+    }
     if (step === maxSteps) return fail('max_steps')
     messages.push({ role: 'assistant', parts })
 

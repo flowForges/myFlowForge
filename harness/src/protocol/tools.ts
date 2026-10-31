@@ -65,6 +65,14 @@ export const AssistantPartSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('text'), text: z.string() }),
   z.object({ type: z.literal('tool_call'), id: z.string(), name: z.string(), args: z.string() }),
   z.object({ type: z.literal('tool_result'), callId: z.string(), content: z.string(), isError: z.boolean().optional() }),
-  z.object({ type: z.literal('reasoning'), text: z.string().optional(), replay: z.unknown().optional() }),
+  // accountId / protocol / modelId:产出该 replay 的模型;重建历史时只回传给同一个
+  z.object({
+    type: z.literal('reasoning'),
+    text: z.string().optional(),
+    replay: z.unknown().optional(),
+    accountId: z.string().optional(),
+    protocol: z.string().optional(),
+    modelId: z.string().optional(),
+  }),
 ])
 export type AssistantPart = z.infer<typeof AssistantPartSchema>

@@ -76,9 +76,9 @@ type Script = (n: number, req: Req) => AsyncIterable<ModelEvent>
 const GPT: ModelRef = { accountId: 'acc', modelId: 'gpt-5' }
 const CLAUDE: ModelRef = { accountId: 'acc', modelId: 'claude-sonnet-4-5' }
 
-function fakeModels(calls: Call[], script: Script, def?: ModelRef): Plugin {
+function fakeModels(calls: Call[], script: Script, def?: ModelRef | (() => ModelRef | undefined)): Plugin {
   const service = {
-    catalog: () => ({ presets: [], models: {}, default: def }),
+    catalog: () => ({ presets: [], models: {}, default: typeof def === 'function' ? def() : def }),
     accounts: () => [],
     stream(ref: ModelRef | 'default', req: Req) {
       calls.push({ ref, req, messages: structuredClone(req.messages) })
@@ -105,7 +105,7 @@ const calling = (id: string, name: string, args: object | string) => seq(...tool
 const say = (text: string) => seq({ type: 'text', delta: text }, { type: 'usage', input: 1, output: 1 }, done())
 
 interface BootOpts { disabled?: string[]; loop?: LoopDefaultOpts; extra?: Plugin[] }
-async function boot(calls: Call[], script: Script, opts: BootOpts = {}, def?: ModelRef) {
+async function boot(calls: Call[], script: Script, opts: BootOpts = {}, def?: ModelRef | (() => ModelRef | undefined)) {
   if (opts.disabled) writeFileSync(join(dataDir, 'config.json'), JSON.stringify({ plugins: { disabled: opts.disabled } }))
   const k = await createKernel({
     dataDir,
@@ -219,7 +219,7 @@ describe('loop-default: one coding turn', () => {
     expect(steps.map(s => s.step)).toEqual([1, 2, 3, 4])
     expect(steps[0]).toEqual({
       turnId, step: 1, text: 'Reading.',
-      parts: [{ type: 'reasoning', replay: { id: 'r1' } }, { type: 'text', text: 'Reading.' }, { type: 'tool_call', id: 'c1', name: 'read', args: '{"path":"a.txt"}' }],
+      parts: [{ type: 'reasoning', replay: { id: 'r1' }, accountId: 'acc', modelId: 'gpt-5' }, { type: 'text', text: 'Reading.' }, { type: 'tool_call', id: 'c1', name: 'read', args: '{"path":"a.txt"}' }],
     })
     expect(steps[3]).toMatchObject({ step: 4, text: 'done', parts: [{ type: 'text', text: 'done' }] })
     expect(main.filter(e => e.type === 'tool.ended').map(e => pay(e).ok)).toEqual([true, true, true])
@@ -234,7 +234,7 @@ describe('loop-default: one coding turn', () => {
     // 第 2 步的请求带着第 1 步的工具调用与结果
     expect(calls).toHaveLength(4)
     const m2 = calls[1].messages
-    expect(m2.at(-2)).toEqual({ role: 'assistant', parts: steps[0].parts })
+    expect(m2.at(-2)).toEqual({ role: 'assistant', parts: [{ type: 'reasoning', replay: { id: 'r1' } }, ...steps[0].parts.slice(1)] })
     expect(toolResults(m2)).toEqual([{ type: 'tool_result', callId: 'c1', content: expect.stringContaining('hello') }])
     expect(calls[0].req).toMatchObject({ interactive: true, reasoning: 'medium' })
     expect(calls[0].req.toolChoice).toBeUndefined()
@@ -266,6 +266,21 @@ describe('loop-default: one coding turn', () => {
     expect(parts.find(p => p.type === 'tool_call')?.args).toContain('***')
     // 本轮内模型拿到原文
     expect(JSON.stringify(calls[1].messages)).toContain(secret)
+  })
+
+  it('logged args stay valid JSON (PEM without END) and odd names are redacted and capped', async () => {
+    const pem = '-----BEGIN RSA PRIVATE KEY-----\nMIIEabc'
+    const longName = `sk-abcdefghijklmnopqrstuvwxyz0123.${'y'.repeat(500)}`
+    const calls: Call[] = []
+    const k = await boot(calls, n => (n === 1 ? seq(...toolCall('c1', 'write', { path: 'k.pem', content: pem }), ...toolCall('c2', longName, '{"a":'), done('tool_calls')) : say('ok')))
+    const sid = await create(k, { model: CLAUDE })
+    await turn(k, sid, 'hi')
+    const parts = pay<{ parts: { type: string; name?: string; args?: string }[] }>(evs(k, sid).find(e => e.type === 'message.assistant')).parts.filter(p => p.type === 'tool_call')
+    expect(JSON.parse(parts[0].args!)).toEqual({ path: 'k.pem', content: '***' })
+    expect(JSON.parse(parts[1].args!)).toEqual({ _unparsed: '{"a":' })
+    expect(parts[1].name!.length).toBe(200)
+    expect(parts[1].name!.startsWith('***.')).toBe(true)
+    expect(readFileSync(join(cwd, 'k.pem'), 'utf8')).toBe(pem)
   })
 })
 
@@ -335,6 +350,22 @@ describe('loop-default: cancel and shutdown', () => {
     await waitFor(() => terminal(k, sid).length === 1)
     expect(pay(terminal(k, sid)[0]).reason).toBe('cancelled')
     await waitFor(() => !alive(pidOf()!), 2000)
+    expect(calls).toHaveLength(1)
+  })
+
+  it.skipIf(!posix)('a shell that ignores SIGTERM: cancel still yields exactly one terminal event', async () => {
+    const calls: Call[] = []
+    const k = await boot(calls, n => (n === 1 ? calling('c1', 'shell', { command: "trap '' TERM; sleep 30 & echo $! > pid; wait" }) : say('no')))
+    const sid = await create(k, { model: GPT, approvalMode: 'auto' })
+    await prompt(k, sid, 'go')
+    await waitFor(() => pidOf() !== undefined)
+    await sleep(50)
+    await k.handle('session.cancel', { commandId: 'cx', sessionId: sid })
+    // 内核 1 s 宽限后写 cancelled;shell 2 s 后 SIGKILL,循环随后也想写一条
+    await waitFor(() => evs(k, sid).some(e => e.type === 'tool.ended'), 5000)
+    await waitFor(() => !alive(pidOf()!), 2000)
+    await sleep(100)
+    expect(terminal(k, sid).map(e => [e.type, pay(e).reason])).toEqual([['turn.failed', 'cancelled']])
     expect(calls).toHaveLength(1)
   })
 
@@ -463,22 +494,28 @@ describe('loop-default: history and prompts', () => {
     expect(calls).toHaveLength(3)
     const m = calls[2].messages
     expect(m.map(x => x.role)).toEqual(['user', 'assistant', 'tool', 'assistant', 'user'])
-    expect(m[0].parts).toEqual([{ type: 'text', text: 'q1' }]) // 旧轮的提醒块不进历史
+    expect(m[0].parts).toHaveLength(3) // 环境块 + 日期提醒 + 原文,每轮重建都一样
+    expect(m[0].parts[0]).toMatchObject({ type: 'text', text: expect.stringMatching(/^<environment>[\s\S]*<\/environment>$/) })
+    expect((m[0].parts[0] as { text: string }).text).toContain(cwd)
+    expect(m[0].parts[1]).toMatchObject({ type: 'text', text: expect.stringMatching(/^<reminder>date: \d{4}-\d{2}-\d{2}<\/reminder>$/) })
+    expect(m[0].parts[2]).toEqual({ type: 'text', text: 'q1' })
+    // 前缀逐字节相同:第 1 轮最后一次请求的消息原样是第 2 轮请求的开头
+    expect(m.slice(0, calls[1].messages.length)).toEqual(calls[1].messages)
+    expect(calls[1].messages[0]).toEqual(calls[0].messages[0])
     expect(m[1].parts).toEqual([{ type: 'tool_call', id: 'c1', name: 'read', args: '{"path":"a.txt"}' }])
     expect(toolResults(m)[0]).toMatchObject({ callId: 'c1', content: expect.stringContaining('hello') })
     expect(m[3].parts).toEqual([{ type: 'text', text: 'answer2' }])
     const last = m.at(-1)!.parts
     expect(last).toHaveLength(2)
-    expect(last[0]).toMatchObject({ type: 'text', text: expect.stringMatching(/^<environment>[\s\S]*<\/environment>$/) })
-    expect((last[0] as { text: string }).text).toContain(cwd)
+    expect(last[0]).toMatchObject({ type: 'text', text: expect.stringMatching(/^<reminder>date: /) })
     expect(last[1]).toEqual({ type: 'text', text: 'q2' })
     expect(calls[0].req.system).toBeTruthy()
     expect(calls[2].req.system).toBe(calls[0].req.system)
     expect(calls[0].req.system).not.toContain(cwd)
-    expect(JSON.stringify(k.events.after(0))).not.toContain('<environment>')
+    expect(JSON.stringify(k.events.after(0))).not.toMatch(/<environment>|<reminder>/)
   })
 
-  it('an interrupted turn (kernel restart mid-tool) gets the 已中断 pad', async () => {
+  it('synthetic crash mid-tool (events written by hand, then restart) → the unpaired call gets the 已中断 pad', async () => {
     const calls: Call[] = []
     let writer: ((e: Omit<KernelEvent, 'seq' | 'ts'>) => KernelEvent) | undefined
     const probe: Plugin = { manifest: { id: 'probe', version: '0', kernel: '^0.1.0' }, activate: ctx => { writer = e => ctx.append(e) } }
@@ -497,5 +534,18 @@ describe('loop-default: history and prompts', () => {
     const m = calls[0].messages
     expect(m.map(x => x.role)).toEqual(['user', 'assistant', 'tool', 'user'])
     expect(toolResults(m)).toEqual([{ type: 'tool_result', callId: 'c9', content: '已中断', isError: true }])
+  })
+
+  it("a 'default' session whose default switches model does not replay the old model's reasoning", async () => {
+    const calls: Call[] = []
+    let def: ModelRef = CLAUDE
+    const k = await boot(calls, n => (n === 1 ? seq({ type: 'reasoning', replay: { type: 'thinking', signature: 's' } }, { type: 'text', delta: 'a1' }, done()) : say('a')), {}, () => def)
+    const sid = await create(k)
+    await turn(k, sid, 'q1')
+    await turn(k, sid, 'q2')
+    expect(calls[1].messages[1].parts).toEqual([{ type: 'reasoning', replay: { type: 'thinking', signature: 's' } }, { type: 'text', text: 'a1' }])
+    def = GPT
+    await turn(k, sid, 'q3')
+    expect(calls[2].messages[1].parts).toEqual([{ type: 'text', text: 'a1' }])
   })
 })

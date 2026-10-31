@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { PROTOCOL_VERSION, type ControlStatus } from '../protocol/index'
 import { nullLogger, type Logger } from '../kernel/log'
+import { WORKER_KILL_MS } from '../kernel/shutdown'
 import { HARNESS_VERSION } from '../kernel/version'
 import { isOom, nextDelayMs, shouldTrip, type Failure } from './backoff'
 
@@ -50,7 +51,7 @@ export class Supervisor {
   constructor(private readonly opts: SupervisorOpts) {
     this.pingMs = opts.pingMs ?? 1000
     this.missLimit = opts.missLimit ?? 3
-    this.drainMs = opts.drainMs ?? 30_000
+    this.drainMs = opts.drainMs ?? WORKER_KILL_MS
     this.startupMs = opts.startupMs ?? 30_000
     this.log = opts.log ?? nullLogger
     this.delayFn = opts.delayFn ?? (ms => new Promise(r => setTimeout(r, ms)))

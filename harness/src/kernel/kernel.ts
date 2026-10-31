@@ -24,6 +24,7 @@ import { RpcRegistry } from './rpcRegistry'
 import { openSecretStore, type OpenSecretStoreOpts } from './secrets/secretStore'
 import { ServiceRegistry } from './services'
 import { Sessions, validateCwd } from './sessions'
+import { CLOSE_GRACE_MS } from './shutdown'
 import { HARNESS_VERSION } from './version'
 import { toWire } from './wire'
 
@@ -54,11 +55,11 @@ const ERR_METHOD_NOT_FOUND = -32601
 const ERR_INVALID_PARAMS = -32602
 const ERR_INTERNAL = -32603
 const CANCEL_GRACE_MS = 1000
-/** 关闭时等进行中的 turn 收尾(shell 杀进程组:SIGTERM 后 2 s SIGKILL,再 1 s 不等管道)*/
-const CLOSE_GRACE_MS = 3500
 const APPROVAL_TIMEOUT_MS = 600_000
 
-type Turn = { turnId: string; sessionId: string; ended: boolean; controller: AbortController; settled: Promise<void> }
+type Turn = { turnId: string; sessionId: string; ended: boolean; controller: AbortController; settled: Promise<void>; terminal?: KernelEvent }
+
+const isTerminal = (type: string) => type === 'turn.ended' || type === 'turn.failed'
 
 export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   const log = opts.log ?? nullLogger
@@ -75,7 +76,24 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   const gate = new PermissionGate({ sessions, home, dataDir: opts.dataDir, platform: process.platform, env: process.env })
   sessions.load(eventLog.after(0))
   eventLog.onAppend(e => sessions.observe(e)) // 事务提交后才通知:回滚的 session.created 不会进来
-  const append = (e: Omit<KernelEvent, 'seq' | 'ts'>) => eventLog.append(e)
+  const turns = new Map<string, Turn>() // turnId -> 进行中的 turn
+  const activeBySession = new Map<string, string>() // sessionId -> turnId(每会话最多一个)
+  /**
+   * 所有写入都经这里。进行中的 turn 只收一个终态:已终结的 turn 再来 turn.ended / turn.failed 直接丢弃,
+   * 返回第一条(如取消宽限期过后内核已写 cancelled,忽略 SIGTERM 的 shell 被 SIGKILL 后循环又写一条)。
+   * 检查与写入同步完成,中间不会插进别的写入
+   */
+  const append = (e: Omit<KernelEvent, 'seq' | 'ts'>): KernelEvent => {
+    const id = isTerminal(e.type) ? (e.payload as { turnId?: unknown } | null)?.turnId : undefined
+    const t = typeof id === 'string' ? turns.get(id) : undefined
+    if (t?.terminal) return t.terminal
+    const written = eventLog.append(e)
+    if (t) {
+      t.ended = true
+      t.terminal = written
+    }
+    return written
+  }
   const approvals = new Approvals({ append, log, timeoutMs: opts.approvalTimeoutMs ?? APPROVAL_TIMEOUT_MS })
   const configFile = join(opts.dataDir, 'config.json')
   let config = loadConfig(configFile)
@@ -95,21 +113,9 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   })
 
   let state: StatusResult['state'] = 'starting'
-  const turns = new Map<string, Turn>() // turnId -> 进行中的 turn
-  const activeBySession = new Map<string, string>() // sessionId -> turnId(每会话最多一个)
-
-  // 插件(或内核)写入 turn 终态事件时按 payload.turnId 标记
-  eventLog.onAppend(e => {
-    if (e.type === 'turn.ended' || e.type === 'turn.failed') {
-      const id = (e.payload as { turnId?: string } | null)?.turnId
-      const t = id ? turns.get(id) : undefined
-      if (t) t.ended = true
-    }
-  })
 
   const failTurn = (t: Turn, reason: string, extra?: Record<string, unknown>) => {
     if (t.ended) return
-    t.ended = true
     append({ type: 'turn.failed', sessionId: t.sessionId, payload: { turnId: t.turnId, reason, ...extra } })
   }
 
@@ -119,7 +125,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
     const id = (e.payload as { turnId?: string } | null)?.turnId
     if (!id) continue
     if (e.type === 'turn.started' || e.type === 'message.user') open.set(id, e.sessionId)
-    else if (e.type === 'turn.ended' || e.type === 'turn.failed') open.delete(id)
+    else if (isTerminal(e.type)) open.delete(id)
   }
   for (const [turnId, sessionId] of open) append({ type: 'turn.failed', sessionId, payload: { turnId, reason: 'interrupted' } })
 
