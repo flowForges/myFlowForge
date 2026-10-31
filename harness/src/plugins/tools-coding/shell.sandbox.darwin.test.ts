@@ -176,6 +176,14 @@ describe.skipIf(!usable)('shell tool in the real macOS sandbox', () => {
     expect(env).not.toContain(`:${up.port}`) // 子进程只看到内核代理,看不到上游
   })
 
+  it('Review Focus 4: detect full, session auto → no approval, and the command runs sandboxed', async () => {
+    const { k, call, sessionId } = await boot()
+    const r = await call('echo $MFFAI_SANDBOX')
+    expect(r.meta).toEqual({ sandbox: 'full' })
+    expect(body(r).trim()).toBe('full')
+    expect(k.events.bySession(sessionId).filter(e => e.type === 'approval.requested')).toHaveLength(0)
+  })
+
   // ── Review Focus 1 ──
 
   it('Review Focus 1: writes outside cwd fail', async () => {
@@ -258,7 +266,8 @@ describe.skipIf(!usable)('shell tool in the real macOS sandbox', () => {
 
   it('sandbox.enabled:false keeps the 03 behaviour (no sandbox, meta none, ../outside writable)', async () => {
     const { k, call } = await boot()
-    await k.handle('permissions.set', { commandId: 'p1', config: { sandbox: { enabled: false, allowLoopback: false } } })
+    // 关掉沙箱 = 级别 none:auto 要显式放开才不审批(Task 11)
+    await k.handle('permissions.set', { commandId: 'p1', config: { sandbox: { enabled: false, allowLoopback: false }, allowUnsandboxedAuto: true } })
     const r = await call('echo x > ../outside/g && echo "[$MFFAI_SANDBOX][$HTTPS_PROXY]"')
     expect(r).toEqual({ content: 'exit 0\n[][]\n', meta: { sandbox: 'none' } })
     expect(existsSync(join(outside, 'g'))).toBe(true)

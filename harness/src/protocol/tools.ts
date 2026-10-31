@@ -35,6 +35,8 @@ export const ApprovalRequestedPayloadSchema = z.object({
   callId: z.string(),
   tool: z.string(),
   summary: z.string(),
+  /** 命令不在沙箱里跑(沙箱级别 none) */
+  unsandboxed: z.boolean().optional(),
 })
 export type ApprovalRequestedPayload = z.infer<typeof ApprovalRequestedPayloadSchema>
 

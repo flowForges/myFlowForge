@@ -51,6 +51,9 @@ describe('toWire', () => {
       ev('message.user', { turnId: 't', text: 'x'.repeat(5000) }),
       ev('tool.ended', null),
       ev('kernel.started', { version: '1' }),
+      ev('sandbox.netDenied', { host: 'evil.example', port: 443, reason: 'not_allowed' }),
+      ev('permissions.updated', { rules: 3, network: 9 }),
+      ev('approval.requested', { approvalId: 'a', turnId: 't', callId: 'c', tool: 'shell', summary: 'x'.repeat(5000), unsandboxed: true }),
     ]) expect(toWire(e)).toBe(e)
   })
 })

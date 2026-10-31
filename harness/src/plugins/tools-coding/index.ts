@@ -39,8 +39,9 @@ export function createToolsCoding(opts: ToolsCodingOpts = {}): Plugin {
       const deps = { gate, git: opts.git, grepTimeoutMs: opts.grepTimeoutMs }
       // 进程组登记由内核提供(win32 没有);不在就不登记
       const registry = process.platform === 'win32' ? undefined : ctx.services.get<PgidRegistry>('pgids')
-      // 沙箱由内核在插件激活前提供;不在 → shell 按 none(03 的行为)
+      // 沙箱由内核在插件激活前提供;不在就不激活(不能让命令悄悄无沙箱执行)
       const sandbox = ctx.services.get<SandboxService>('sandbox')
+      if (!sandbox) throw new Error('sandbox service missing')
       const shell = shellTool({ env: opts.shellEnv, loginPath: opts.loginPath, minTimeoutMs: opts.minTimeoutMs, registry, sandbox })
       for (const t of [readTool(), listTool(), globTool(deps), grepTool(deps), writeTool(deps), editTool(deps), applyPatchTool(deps), shell]) ctx.effect(tools.register(t))
     },

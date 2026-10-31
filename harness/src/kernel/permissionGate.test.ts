@@ -250,12 +250,19 @@ describe('PermissionGate.check (real tree)', () => {
     rmSync(outside, { recursive: true, force: true })
   })
 
-  const gateFor = (cwd: string, approvalMode: 'ask' | 'auto' = 'ask', env: NodeJS.ProcessEnv = {}, specs: RuleSpec[] = []) => {
+  const gateFor = (
+    cwd: string, approvalMode: 'ask' | 'auto' = 'ask', env: NodeJS.ProcessEnv = {}, specs: RuleSpec[] = [],
+    o: { sandbox?: SandboxStatus; allowUnsandboxedAuto?: boolean; asked?: (string | undefined)[] } = {},
+  ) => {
     const sessions = new Sessions(dataDir)
     const ev: KernelEvent = { seq: 1, ts: 0, type: 'session.created', sessionId: 's1', payload: { cwd: realpathSync.native(cwd), approvalMode } }
     sessions.observe(ev)
-    const permissions = () => ({ rules: rules(...specs), config: { allowUnsandboxedAuto: false } })
-    return { gate: new PermissionGate({ sessions, home, dataDir, platform: process.platform, env, permissions }), cwd: realpathSync.native(cwd) }
+    const permissions = () => ({ rules: rules(...specs), config: { allowUnsandboxedAuto: o.allowUnsandboxedAuto ?? false } })
+    const sandbox = (sessionId?: string) => {
+      o.asked?.push(sessionId)
+      return o.sandbox ?? FULL
+    }
+    return { gate: new PermissionGate({ sessions, home, dataDir, platform: process.platform, env, permissions, sandbox }), cwd: realpathSync.native(cwd) }
   }
   const check = (gate: PermissionGate, action: string, resource: string) => gate.check({ actor: 'plugin:tools', action, resource, sessionId: 's1' })
 
@@ -386,6 +393,55 @@ describe('PermissionGate.check (real tree)', () => {
     expect(check(gate, 'write', resolveToolPath(cwd, 'secret'))).toBe('allow')
   })
 
+  describe('Task 11: the gate reads the sandbox service', () => {
+    const NONE: SandboxStatus = { level: 'none', missing: ['platform'], autoDegraded: true }
+    const PARTIAL: SandboxStatus = { level: 'partial', missing: ['proxy'], autoDegraded: false }
+    const repo = () => join(home, 'repo')
+
+    it('auto at level none → ask; allowUnsandboxedAuto → allow; partial / full → allow', () => {
+      expect(check(gateFor(repo(), 'auto', {}, [], { sandbox: NONE }).gate, 'exec', 'ls')).toBe('ask')
+      expect(check(gateFor(repo(), 'auto', {}, [], { sandbox: NONE, allowUnsandboxedAuto: true }).gate, 'exec', 'ls')).toBe('allow')
+      expect(check(gateFor(repo(), 'auto', {}, [], { sandbox: PARTIAL }).gate, 'exec', 'ls')).toBe('allow')
+      expect(check(gateFor(repo(), 'auto', {}, [], { sandbox: FULL }).gate, 'exec', 'ls')).toBe('allow')
+      // ask 会话不受级别影响
+      expect(check(gateFor(repo(), 'ask', {}, [], { sandbox: FULL }).gate, 'exec', 'ls')).toBe('ask')
+    })
+
+    it('a user allow shell(npm test) at level none runs without approval', () => {
+      const { gate } = gateFor(repo(), 'auto', {}, [{ effect: 'allow', rule: 'shell(npm test)' }], { sandbox: NONE })
+      expect(check(gate, 'exec', 'npm test')).toBe('allow')
+      expect(check(gate, 'exec', 'npm run build')).toBe('ask')
+    })
+
+    it('a user ask shell(git push*) asks even in auto + full', () => {
+      const { gate } = gateFor(repo(), 'auto', {}, [{ effect: 'ask', rule: 'shell(git push*)' }], { sandbox: FULL })
+      expect(check(gate, 'exec', 'git push origin main')).toBe('ask')
+      expect(check(gate, 'exec', 'git status')).toBe('allow')
+    })
+
+    it('reads / writes do not depend on the level', () => {
+      const { gate, cwd } = gateFor(repo(), 'auto', {}, [], { sandbox: NONE })
+      expect(check(gate, 'write', resolveToolPath(cwd, 'a.txt'))).toBe('allow')
+      expect(check(gate, 'read', resolveToolPath(cwd, 'a.txt'))).toBe('allow')
+    })
+
+    it('the level is asked per session (a proxy failure is per session)', () => {
+      const asked: (string | undefined)[] = []
+      const { gate } = gateFor(repo(), 'auto', {}, [], { asked })
+      check(gate, 'exec', 'ls')
+      expect(asked).toEqual(['s1'])
+      asked.length = 0
+      gate.defaults('s1')
+      expect(asked).toEqual(['s1'])
+    })
+
+    it('defaults() reflects the degrade', () => {
+      expect(gateFor(repo(), 'auto', {}, [], { sandbox: NONE }).gate.defaults('s1').at(-1)).toBe('ask shell(*)')
+      expect(gateFor(repo(), 'auto', {}, [], { sandbox: NONE, allowUnsandboxedAuto: true }).gate.defaults('s1').at(-1)).toBe('allow shell(*)')
+      expect(gateFor(repo(), 'auto', {}, [], { sandbox: FULL }).gate.defaults('s1').at(-1)).toBe('allow shell(*)')
+    })
+  })
+
   it('checkMany gives the same decisions as check, one per request', () => {
     const { gate, cwd } = gateFor(home)
     const reqs = [
@@ -441,6 +497,19 @@ describe('kernel env snapshot', () => {
     // 后来才设的变量也不起作用:session.create 仍按快照判断
     const { sessionId: s2 } = await k.handle('session.create', { commandId: 'c2', cwd: join(work, 'aws') }) as { sessionId: string }
     expect(s2).toBeTruthy()
+  })
+
+  it('Task 11: the kernel gate reads the sandbox level (auto degrades at none, not at full)', async () => {
+    const execIn = async (detect: () => { level: 'full' | 'none'; missing: [] | ['platform'] }) => {
+      k = await createKernel({ sandbox: { detect, upstream: null }, dataDir, plugins: [probe], home, secrets: { osBackend: false } })
+      const { sessionId } = await k.handle('session.create', { commandId: 'c1', cwd: work, approvalMode: 'auto' }) as { sessionId: string }
+      const d = gate!.check({ actor: 'plugin:tools', action: 'exec', resource: 'ls', sessionId })
+      await k.close()
+      k = undefined
+      return d
+    }
+    expect(await execIn(() => ({ level: 'none', missing: ['platform'] }))).toBe('ask')
+    expect(await execIn(() => ({ level: 'full', missing: [] }))).toBe('allow')
   })
 
   it('logs one line naming an over-broad variable, without its value', async () => {

@@ -14,7 +14,7 @@ import { createToolsCoding } from '../tools-coding'
 import toolsRegistry from '../tools-registry'
 import { createLoopDefault, type LoopDefaultOpts } from './index'
 import { LOOP_REMINDER } from './loopGuard'
-import { NO_SANDBOX } from '../../../test/sandboxStub'
+import { NO_SANDBOX, seedUnsandboxedAuto } from '../../../test/sandboxStub'
 
 const posix = process.platform !== 'win32'
 
@@ -112,7 +112,8 @@ const say = (text: string) => seq({ type: 'text', delta: text }, { type: 'usage'
 
 interface BootOpts { disabled?: string[]; loop?: LoopDefaultOpts; extra?: Plugin[]; context?: number }
 async function boot(calls: Call[], script: Script, opts: BootOpts = {}, def?: ModelRef | (() => ModelRef | undefined)) {
-  if (opts.disabled) writeFileSync(join(dataDir, 'config.json'), JSON.stringify({ plugins: { disabled: opts.disabled } }))
+  // auto 会话的 03 用例:NO_SANDBOX 下显式放开无沙箱 auto(R22)
+  seedUnsandboxedAuto(dataDir, opts.disabled ? { plugins: { disabled: opts.disabled } } : {})
   const k = await createKernel({ sandbox: NO_SANDBOX,
     dataDir,
     home,

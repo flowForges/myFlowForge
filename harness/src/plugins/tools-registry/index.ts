@@ -12,7 +12,7 @@ import type { Plugin } from '../../kernel/pluginHost'
 import { OUTSIDE } from '../../lib/fs/paths'
 import { sessionKey } from '../../lib/tools/commandKey'
 import { redact } from '../../lib/tools/redact'
-import type { PermissionRequest, Tool, ToolContext, ToolResult, ToolsService } from '../../lib/tools/types'
+import type { PermissionRequest, SandboxService, Tool, ToolContext, ToolResult, ToolsService } from '../../lib/tools/types'
 import { manifest } from './manifest'
 
 const MAX_CONTENT = 30_000
@@ -29,6 +29,8 @@ type Outcome = { result: ToolResult; logged: string }
 interface Deps {
   gate: Pick<PermissionGate, 'check'>
   approvals: Pick<Approvals, 'request'>
+  /** 内核 sandbox 服务:exec 审批据它标 unsandboxed;不在 / 出错 = 没有沙箱 */
+  sandbox?: Pick<SandboxService, 'status'>
   append(e: Omit<KernelEvent, 'seq' | 'ts'>): unknown
   log: Logger
 }
@@ -185,9 +187,21 @@ export class ToolsRegistry implements ToolsService {
     }
   }
 
+  /** exec 在本会话不进沙箱(级别 none,或拿不到级别)→ 审批卡标 `未隔离`(spec §13、R13) */
+  private unsandboxed(r: PermissionRequest, sessionId: string): boolean {
+    if (r.action !== 'exec') return false
+    try {
+      return !this.deps.sandbox || this.deps.sandbox.status(sessionId).level === 'none'
+    } catch (e) {
+      this.deps.log.error('sandbox status failed', { error: message(e) })
+      return true
+    }
+  }
+
   /** 用户放行 → true;拒绝、取消、超时、写不了 requested(reject)→ false */
   private async approve(r: PermissionRequest, tool: string, ctx: ToolContext): Promise<boolean> {
     try {
+      const unsandboxed = this.unsandboxed(r, ctx.sessionId)
       const d = await this.deps.approvals.request({
         sessionId: ctx.sessionId,
         turnId: ctx.turnId,
@@ -195,6 +209,7 @@ export class ToolsRegistry implements ToolsService {
         tool,
         summary: clip(redact(r.resource ?? tool), SHORT),
         key: r.action === 'exec' && r.resource !== undefined ? sessionKey(r.resource) : undefined,
+        ...(unsandboxed && { unsandboxed: true }),
         signal: ctx.signal,
       })
       return d === 'allow'
@@ -237,7 +252,9 @@ const toolsRegistry: Plugin = {
     const gate = ctx.services.get<PermissionGate>('permissionGate')
     const approvals = ctx.services.get<Approvals>('approvals')
     if (!gate || !approvals) throw new Error('permissionGate / approvals service missing')
-    ctx.services.provide<ToolsService>('tools', new ToolsRegistry({ gate, approvals, append: e => ctx.append(e), log: ctx.log }))
+    // 内核在插件激活前提供;不在 → exec 审批一律标 unsandboxed
+    const sandbox = ctx.services.get<SandboxService>('sandbox')
+    ctx.services.provide<ToolsService>('tools', new ToolsRegistry({ gate, approvals, sandbox, append: e => ctx.append(e), log: ctx.log }))
   },
 }
 

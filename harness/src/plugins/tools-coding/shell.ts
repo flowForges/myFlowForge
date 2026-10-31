@@ -27,8 +27,8 @@ export interface ShellDeps {
   minTimeoutMs?: number
   /** 进程组登记(spec §12);win32 不传 */
   registry?: Pick<PgidRegistry, 'add' | 'settle'>
-  /** 内核 sandbox 服务;不在 → 按 none(03 的行为) */
-  sandbox?: Pick<SandboxService, 'plan' | 'status'>
+  /** 内核 sandbox 服务(必需);不在 → 命令不执行 */
+  sandbox: Pick<SandboxService, 'plan' | 'status'>
 }
 
 export interface ShellRun {
@@ -50,7 +50,7 @@ export interface RunShellOpts {
   onClose?: (pid: number) => void
 }
 
-/** 无沙箱计划(没有 sandbox 服务时):命令本身交给 shell:true */
+/** 无沙箱计划(级别 none):命令本身交给 shell:true */
 export const unsandboxedPlan = (command: string, env: NodeJS.ProcessEnv): ShellPlan => ({ file: command, args: [], env, sandboxed: false, level: 'none', release: () => {} })
 
 /** 只留结尾的输出缓冲 */
@@ -217,7 +217,7 @@ const Args = z.object({
   timeoutMs: z.number().int().positive().optional().describe(`Timeout in milliseconds (default ${DEFAULT_TIMEOUT}, max ${MAX_TIMEOUT})`),
 })
 
-export function shellTool(deps: ShellDeps = {}): Tool {
+export function shellTool(deps: ShellDeps): Tool {
   const base = () => deps.env ?? process.env
   const loginPath = deps.loginPath ?? (() => loginShellPath())
   return {
@@ -232,15 +232,14 @@ export function shellTool(deps: ShellDeps = {}): Tool {
       const home = b.HOME ?? b.USERPROFILE ?? homedir()
       const env = shellEnv(b, { platform: process.platform, home, loginPath: await loginPath().catch(() => '') })
       const sb = deps.sandbox
+      // 没有沙箱服务(不合约的调用方):不执行,绝不无沙箱跑
+      if (!sb) return { content: '沙箱服务不可用,命令未执行', isError: true, meta: { sandbox: 'none' } }
       let plan: ShellPlan
-      if (!sb) plan = unsandboxedPlan(args.command, env)
-      else {
-        try {
-          plan = await sb.plan(args.command, { sessionId: ctx.sessionId, cwd: ctx.cwd, spillDir: ctx.spillDir }, env)
-        } catch (e) {
-          // 沙箱配置生成失败:命令失败,绝不无沙箱执行
-          return { content: `沙箱准备失败,命令未执行:${e instanceof Error ? e.message : String(e)}`, isError: true, meta: { sandbox: levelOf(sb, ctx.sessionId) } }
-        }
+      try {
+        plan = await sb.plan(args.command, { sessionId: ctx.sessionId, cwd: ctx.cwd, spillDir: ctx.spillDir }, env)
+      } catch (e) {
+        // 沙箱配置生成失败:命令失败,绝不无沙箱执行
+        return { content: `沙箱准备失败,命令未执行:${e instanceof Error ? e.message : String(e)}`, isError: true, meta: { sandbox: levelOf(sb, ctx.sessionId) } }
       }
       const meta = { sandbox: plan.level }
       const reg = deps.registry

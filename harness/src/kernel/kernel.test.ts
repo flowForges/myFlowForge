@@ -177,7 +177,11 @@ describe('kernel', () => {
   })
 
   it('permission gate allows the kernel and denies unknown actions', () => {
-    const g = new PermissionGate({ sessions: new Sessions(dir), home: dir, dataDir: dir, platform: process.platform, env: {} })
+    const g = new PermissionGate({
+      sessions: new Sessions(dir), home: dir, dataDir: dir, platform: process.platform, env: {},
+      permissions: () => ({ rules: [], config: { allowUnsandboxedAuto: false } }),
+      sandbox: () => ({ level: 'none', missing: ['platform'], autoDegraded: true }),
+    })
     expect(g.check({ actor: 'kernel', action: 'x' })).toBe('allow')
     expect(g.check({ actor: 'plugin:foo', action: 'x', resource: 'y' })).toBe('deny')
   })

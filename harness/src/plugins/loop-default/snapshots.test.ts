@@ -12,7 +12,7 @@ import type { ModelRef } from '../../protocol/models'
 import { createToolsCoding } from '../tools-coding'
 import toolsRegistry from '../tools-registry'
 import { createLoopDefault } from './index'
-import { NO_SANDBOX } from '../../../test/sandboxStub'
+import { NO_SANDBOX, seedUnsandboxedAuto } from '../../../test/sandboxStub'
 
 const posix = process.platform !== 'win32'
 
@@ -95,6 +95,7 @@ const logger = { info: (m: string) => { logs.push(m) }, warn: (m: string) => { l
 async function boot(calls: Message[][], script: () => Script, wrapGit?: (g: Git) => Git) {
   const g = createGit({ base: baseEnv(), extraEnv: gitInjected() })
   logs = []
+  seedUnsandboxedAuto(dataDir) // auto 会话的 03 用例:NO_SANDBOX 下显式放开无沙箱 auto(R22)
   const k = await createKernel({ sandbox: NO_SANDBOX,
     dataDir,
     home,

@@ -2,7 +2,7 @@
 // 加载时宽松(坏规则不能让内核起不来),设置时严格(坏规则不落盘)
 import { DEFAULT_NETWORK_ALLOW, parseRule, runTests, type MatchCtx, type Rule, type RuleError, type RuleSpec } from '../lib/permissions/rules'
 import { validateNetworkEntry } from '../lib/sandbox/net/domains'
-import type { PermissionsConfig, SandboxStatus } from '../protocol/index'
+import type { PermissionsConfig } from '../protocol/index'
 import type { KernelConfig } from './config'
 
 export type { PermissionsConfig }
@@ -18,9 +18,6 @@ export interface ParsedPermissions {
   /** index 指原始列表里的位置;结构错误(类型不对)index 为 -1,rule 是字段名 */
   errors: RuleError[]
 }
-
-/** Task 9 之前内核报告的沙箱状态 */
-export const SANDBOX_STUB: SandboxStatus = { level: 'none', missing: ['platform'], autoDegraded: false }
 
 const isObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v)
 

@@ -161,6 +161,8 @@ describe('v3 schemas', () => {
     expect(ToolEndedPayloadSchema.safeParse({ turnId: 't', callId: 'c', name: 'read', ok: false, ms: 3, content: 'x', isError: true, truncated: true }).success).toBe(true)
     expect(ToolEndedPayloadSchema.safeParse({ turnId: 't', callId: 'c', name: 'read', ok: true, content: 'x' }).success).toBe(false)
     expect(ApprovalRequestedPayloadSchema.safeParse({ approvalId: 'a', turnId: 't', callId: 'c', tool: 'shell', summary: 'ls' }).success).toBe(true)
+    expect(ApprovalRequestedPayloadSchema.parse({ approvalId: 'a', turnId: 't', callId: 'c', tool: 'shell', summary: 'ls', unsandboxed: true }).unsandboxed).toBe(true)
+    expect(ApprovalRequestedPayloadSchema.safeParse({ approvalId: 'a', turnId: 't', callId: 'c', tool: 'shell', summary: 'ls', unsandboxed: 'yes' }).success).toBe(false)
     expect(ApprovalResolvedPayloadSchema.safeParse({ approvalId: 'a', decision: 'deny', by: 'cancel' }).success).toBe(true)
     expect(ApprovalResolvedPayloadSchema.safeParse({ approvalId: 'a', decision: 'allow_session', by: 'user' }).success).toBe(false)
     expect(ApprovalResolvedPayloadSchema.safeParse({ approvalId: 'a', decision: 'allow', by: 'someone' }).success).toBe(false)

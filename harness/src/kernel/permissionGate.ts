@@ -3,7 +3,6 @@ import { canonicalRoots, credentialRoots, hasGitSegment, isComparablePath, isCre
 import { evaluate, type MatchCtx, type Rule } from '../lib/permissions/rules'
 import type { PermissionRequest } from '../lib/tools/types'
 import type { ApprovalMode, SandboxStatus } from '../protocol/index'
-import { SANDBOX_STUB } from './permissions'
 import type { SessionInfo } from './sessions'
 
 export type { PermissionRequest }
@@ -77,6 +76,9 @@ export function decide(req: PermissionRequest, s: SessionInfo | undefined, env: 
   return 'deny'
 }
 
+/** 读写判定不看沙箱级别,给 decide 的占位(不会被用到) */
+const NOT_ASKED: SandboxStatus = { level: 'none', missing: [], autoDegraded: false }
+
 export interface GateDeps {
   sessions: { get(id: string): SessionInfo | undefined; spillDir(id: string): string }
   home: string
@@ -84,12 +86,10 @@ export interface GateDeps {
   platform: NodeJS.Platform
   /** 启动时的环境快照(内核拷一份传进来,之后环境变化不影响) */
   env: EnvSnapshot
-  /** 当前权限配置(每批判定现取:permissions.set 之后立即生效);不给 = 没有用户规则 */
-  permissions?: () => { rules: Rule[]; config: { allowUnsandboxedAuto: boolean } }
-  /**
-   * 沙箱级别。Task 11 接上之前不给:此时 auto 照 03 放行(不降级)
-   */
-  sandbox?: () => SandboxStatus
+  /** 当前权限配置(每批判定现取:permissions.set 之后立即生效) */
+  permissions: () => { rules: Rule[]; config: { allowUnsandboxedAuto: boolean } }
+  /** 沙箱级别(内核 sandbox 服务);按会话问:代理没起来只影响它自己的会话 */
+  sandbox: (sessionId?: string) => SandboxStatus
 }
 
 /** 规范化路径(最近存在的祖先 realpath);失败时用原样 */
@@ -99,30 +99,23 @@ function canonical(p: string, platform: NodeJS.Platform): string {
 }
 
 /** 黑名单根 + 数据目录的原样与 realpath 形态;每次现算,之后才建出的 ~/.ssh 链接也拦得住 */
-export function blacklist(d: Omit<GateDeps, 'sessions'>): string[] {
+export function blacklist(d: Pick<GateDeps, 'home' | 'dataDir' | 'platform' | 'env'>): string[] {
   return canonicalRoots([...credentialRoots(d.home, d.platform, d.env), d.dataDir], { platform: d.platform })
 }
 
 /** 持久化文件的原样与 realpath 形态(~/.zshrc 链到 dotfiles 仓库时,仓库里的目标也拒写);每次现算 */
-export function persistenceList(d: Omit<GateDeps, 'sessions'>): string[] {
+export function persistenceList(d: Pick<GateDeps, 'home' | 'platform' | 'env'>): string[] {
   return canonicalRoots(persistenceRoots(d.home, d.platform, d.env), { platform: d.platform })
 }
 
 export class PermissionGate {
   constructor(private deps: GateDeps) {}
 
-  /** 沙箱状态与是否允许无沙箱 auto;沙箱还没接上时不降级 */
-  private execEnv(): { sandbox: SandboxStatus; allowUnsandboxedAuto: boolean } {
-    const { sandbox, permissions } = this.deps
-    if (!sandbox) return { sandbox: SANDBOX_STUB, allowUnsandboxedAuto: true }
-    return { sandbox: sandbox(), allowUnsandboxedAuto: permissions?.().config.allowUnsandboxedAuto ?? false }
-  }
-
   /** permissions.get 的 defaults:有会话按会话展开,没有保留占位符 */
   defaults(sessionId?: string): string[] {
     const s = sessionId === undefined ? undefined : this.deps.sessions.get(sessionId)
-    const e = this.execEnv()
-    return defaultRules(s, e.sandbox, e.allowUnsandboxedAuto, this.deps.platform)
+    const { allowUnsandboxedAuto } = this.deps.permissions().config
+    return defaultRules(s, this.deps.sandbox(s?.sessionId), allowUnsandboxedAuto, this.deps.platform)
   }
 
   check(req: PermissionRequest): Decision {
@@ -132,8 +125,15 @@ export class PermissionGate {
   /** 批量判断(grep / glob 逐个文件过门):黑名单与各会话 spillDir 只算一次 */
   checkMany(reqs: PermissionRequest[]): Decision[] {
     const { sessions, dataDir, platform } = this.deps
-    let shared: Omit<DecideEnv, 'spillDir' | 'platform'> | undefined
+    let shared: Omit<DecideEnv, 'spillDir' | 'platform' | 'sandbox'> | undefined
     const spills = new Map<string, string | undefined>()
+    const levels = new Map<string | undefined, SandboxStatus>()
+    /** 级别只对 exec 有用,按会话问一次 */
+    const levelOf = (sessionId: string | undefined) => {
+      let l = levels.get(sessionId)
+      if (!l) levels.set(sessionId, (l = this.deps.sandbox(sessionId)))
+      return l
+    }
     return reqs.map(req => {
       if (req.actor === 'kernel') return 'allow'
       const s = req.sessionId === undefined ? undefined : sessions.get(req.sessionId)
@@ -148,16 +148,21 @@ export class PermissionGate {
         }
         spillDir = spills.get(s.sessionId)
       }
-      shared ??= {
-        roots: blacklist(this.deps),
-        persistence: persistenceList(this.deps),
-        dataDir: canonical(dataDir, platform),
-        rules: this.deps.permissions?.().rules ?? [],
-        ...this.execEnv(),
-        home: this.deps.home,
-        realpath: realpathSync.native,
+      if (!shared) {
+        const { rules, config } = this.deps.permissions()
+        shared = {
+          roots: blacklist(this.deps),
+          persistence: persistenceList(this.deps),
+          dataDir: canonical(dataDir, platform),
+          rules,
+          allowUnsandboxedAuto: config.allowUnsandboxedAuto,
+          home: this.deps.home,
+          realpath: realpathSync.native,
+        }
       }
-      return decide(req, s, { ...shared, spillDir, platform })
+      // 读写不看级别;exec 没有会话直接拒,不问
+      const sandbox = req.action === 'exec' && s ? levelOf(s.sessionId) : NOT_ASKED
+      return decide(req, s, { ...shared, sandbox, spillDir, platform })
     })
   }
 }

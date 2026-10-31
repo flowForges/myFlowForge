@@ -167,6 +167,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   const sandboxStatus = () => sandbox.status()
   const gate = new PermissionGate({
     sessions, home, dataDir: opts.dataDir, platform: process.platform, env: envSnapshot, permissions: () => permissions.get(),
+    sandbox: sid => sandbox.status(sid),
   })
   const rpc = new RpcRegistry()
   // 后端故障不抛错:状态为 unavailable / unreadable,内核照常启动

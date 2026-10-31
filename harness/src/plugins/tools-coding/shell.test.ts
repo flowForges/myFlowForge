@@ -11,7 +11,7 @@ import toolsRegistry from '../tools-registry'
 import { createToolsCoding } from './index'
 import { clampTimeout, runShell, shellTool, unsandboxedPlan, MAX_OUTPUT } from './shell'
 import { parseEntries, pgidFile } from '../../lib/proc/pgids'
-import { NO_SANDBOX } from '../../../test/sandboxStub'
+import { NO_SANDBOX, seedUnsandboxedAuto } from '../../../test/sandboxStub'
 
 const posix = process.platform !== 'win32'
 
@@ -51,8 +51,7 @@ const direct = (command: string, env: NodeJS.ProcessEnv): ShellPlan => unsandbox
  * 03 的用例在两种情形下都要过:内核给的 none 级 sandbox 服务(NO_SANDBOX),以及 shell 根本拿不到 sandbox 服务
  * (另一个插件直接注册 shellTool,不传 sandbox);fake:注入的假服务(本文件末尾的用例)
  */
-type SvcMode = 'none service' | 'no service'
-let svcMode: SvcMode | { fake: Pick<SandboxService, 'plan' | 'status'> } = 'none service'
+let svcMode: 'none service' | { fake: Pick<SandboxService, 'plan' | 'status'> } = 'none service'
 
 beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'mffai-shell-')))
@@ -95,7 +94,7 @@ async function boot(approvalMode: 'ask' | 'auto' = 'auto', loginPath: () => Prom
       sessions = ctx.services.get<Sessions>('sessions')
     },
   }
-  const shellOnly = (sandbox?: Pick<SandboxService, 'plan' | 'status'>): Plugin => ({
+  const shellOnly = (sandbox: Pick<SandboxService, 'plan' | 'status'>): Plugin => ({
     manifest: { id: 'shell-only', version: '0', kernel: '^0.1.0', inject: ['tools'] },
     activate(ctx) {
       const registry = posix ? ctx.services.get<PgidRegistry>('pgids') : undefined
@@ -104,7 +103,8 @@ async function boot(approvalMode: 'ask' | 'auto' = 'auto', loginPath: () => Prom
   })
   const shellPlugin = svcMode === 'none service'
     ? createToolsCoding({ shellEnv: baseEnv(), loginPath, minTimeoutMs: 100 })
-    : shellOnly(svcMode === 'no service' ? undefined : svcMode.fake)
+    : shellOnly(svcMode.fake)
+  seedUnsandboxedAuto(dataDir) // NO_SANDBOX 下 auto 照 03 不审批
   const k = await createKernel({ sandbox: NO_SANDBOX,
     dataDir, home, secrets: { osBackend: false },
     plugins: [toolsRegistry, shellPlugin, probe],
@@ -119,11 +119,7 @@ async function boot(approvalMode: 'ask' | 'auto' = 'auto', loginPath: () => Prom
   return { k, tools: tools!, call, ctxOf }
 }
 
-describe.each<SvcMode>(['none service', 'no service'])('sandbox: %s', mode => {
-  beforeEach(() => {
-    svcMode = mode
-  })
-
+describe('sandbox: none service', () => {
   describe('shell tool', () => {
     it('is registered; permission() = exec(command)', async () => {
       const { tools, ctxOf } = await boot()
@@ -138,7 +134,7 @@ describe.each<SvcMode>(['none service', 'no service'])('sandbox: %s', mode => {
       expect(clampTimeout(5, 1000)).toBe(1000)
       expect(clampTimeout(10_000_000, 1000)).toBe(600_000)
       expect(clampTimeout(300, 100)).toBe(300)
-      expect(shellTool({ loginPath: async () => '' }).description.length).toBeGreaterThan(10)
+      expect(shellTool({ loginPath: async () => '', sandbox: undefined as never }).description.length).toBeGreaterThan(10)
     })
 
     it.skipIf(!posix)('merges stdout and stderr, reports the exit code', async () => {
@@ -384,6 +380,24 @@ describe('sandbox plan (injected service, 05 §10)', () => {
     svcMode = { fake: f.svc }
     return f
   }
+
+  it('without a sandbox service the shell refuses; it never runs unsandboxed', async () => {
+    const marker = join(cwd, 'marker')
+    const t = shellTool({ env: baseEnv(), loginPath: async () => '', minTimeoutMs: 100, sandbox: undefined as never })
+    const ctx: ToolContext = { sessionId: 's', turnId: 't', callId: 'c', cwd, spillDir: join(root, 'spill'), signal: new AbortController().signal }
+    const r = await t.run({ command: `touch '${marker}'` }, ctx)
+    expect(r).toEqual({ content: '沙箱服务不可用,命令未执行', isError: true, meta: { sandbox: 'none' } })
+    await sleep(100)
+    expect(existsSync(marker)).toBe(false)
+  })
+
+  it('tools-coding injects sandbox and refuses to activate without it', () => {
+    const p = createToolsCoding()
+    expect(p.manifest.inject).toContain('sandbox')
+    const services = new Map<string, unknown>([['tools', { register: () => () => {} }], ['permissionGate', {}]])
+    const ctx = { services: { get: (k: string) => services.get(k) }, effect: () => {} } as unknown as Parameters<typeof p.activate>[0]
+    expect(() => p.activate(ctx)).toThrow(/sandbox/)
+  })
 
   it.skipIf(!posix)('a rejected plan fails the command; it never runs unsandboxed', async () => {
     const f = useFake(fakeService({ reject: new Error('profile: bad path') }))

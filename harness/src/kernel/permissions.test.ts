@@ -282,6 +282,9 @@ describe('kernel permissions section', () => {
     expect(got.errors).toEqual([])
     expect(got.config).toEqual(parsePermissions(undefined, { home, platform: process.platform }).config)
     const auto = await k.handle('session.create', { commandId: 'c2', cwd: work, approvalMode: 'auto' }) as { sessionId: string }
+    // NO_SANDBOX = none:auto 降级为 ask,直到显式放开
+    expect((await k.handle('permissions.get', { sessionId: auto.sessionId }) as { defaults: string[] }).defaults[2]).toBe('ask shell(*)')
+    await k.handle('permissions.set', { commandId: 'p-auto', config: { allowUnsandboxedAuto: true } })
     expect((await k.handle('permissions.get', { sessionId: auto.sessionId }) as { defaults: string[] }).defaults[2]).toBe('allow shell(*)')
     expect((await k.handle('permissions.get', {}) as { defaults: string[] }).defaults).toEqual(['allow read(<cwd>/**)', 'allow write(<cwd>/**)', '<mode> shell(*)'])
     const unknown = await rpcError(k.handle('permissions.get', { sessionId: 'nope' })) // M5

@@ -12,6 +12,8 @@ import { OUTSIDE, resolveToolPath } from '../../lib/fs/paths'
 import { nullLogger } from '../../kernel/log'
 import { argsOf, type Tool, type ToolContext, type ToolResult, type ToolsService } from '../../lib/tools/types'
 import toolsRegistry, { ToolsRegistry } from './index'
+import { createToolsCoding } from '../tools-coding/index'
+import type { DetectResult } from '../../lib/sandbox/detect'
 import { NO_SANDBOX } from '../../../test/sandboxStub'
 
 let root: string
@@ -127,9 +129,19 @@ function fakeTools(probe: Probe): Plugin {
   }
 }
 
-async function boot(sessionCwd = cwd, approvalMode: 'ask' | 'auto' = 'ask') {
+interface BootOpts {
+  /** 探测结果;默认 NO_SANDBOX(none) */
+  detect?: DetectResult
+  /** 写进 config.json 的 permissions 段 */
+  permissions?: Record<string, unknown>
+  plugins?: Plugin[]
+}
+
+async function boot(sessionCwd = cwd, approvalMode: 'ask' | 'auto' = 'ask', o: BootOpts = {}) {
   const probe: Probe = { runs: [] }
-  const k = await createKernel({ sandbox: NO_SANDBOX, dataDir, home, plugins: [toolsRegistry, fakeTools(probe)], secrets: { osBackend: false } })
+  if (o.permissions) writeFileSync(join(dataDir, 'config.json'), JSON.stringify({ permissions: o.permissions }))
+  const sandbox = o.detect ? { detect: () => o.detect!, upstream: null } : NO_SANDBOX
+  const k = await createKernel({ sandbox, dataDir, home, plugins: [toolsRegistry, fakeTools(probe), ...(o.plugins ?? [])], secrets: { osBackend: false } })
   kernels.push(k)
   const { sessionId } = (await k.handle('session.create', { commandId: `c${Math.random()}`, cwd: sessionCwd, approvalMode })) as { sessionId: string }
   let n = 0
@@ -347,10 +359,117 @@ describe('tools-registry', () => {
       b.expectPair(ctx.callId, 'fexec')
     })
 
-    it('auto mode: exec runs without asking', async () => {
-      const b = await boot(cwd, 'auto')
+    it('auto mode with allowUnsandboxedAuto: exec runs without asking', async () => {
+      const b = await boot(cwd, 'auto', { permissions: { allowUnsandboxedAuto: true } })
       expect((await b.call('fexec', { command: 'npm test' })).r.content).toBe('ran')
       expect(requested(b.k)).toHaveLength(0)
+    })
+  })
+
+  describe('Review Focus 4: auto degrades without a sandbox', () => {
+    const requested = (k: Kernel) => k.events.after(0).filter(e => e.type === 'approval.requested')
+    const NONE: DetectResult = { level: 'none', missing: ['platform'] }
+    const FULL: DetectResult = { level: 'full', missing: [] }
+    const PARTIAL: DetectResult = { level: 'partial', missing: ['netns'] }
+
+    it('detect none, session auto → approval.requested {unsandboxed: true}', async () => {
+      const b = await boot(cwd, 'auto', { detect: NONE })
+      const p = b.call('fexec', { command: 'npm test' })
+      await waitFor(() => requested(b.k).length === 1)
+      const ev = requested(b.k)[0].payload as { approvalId: string; unsandboxed?: boolean }
+      expect(ev.unsandboxed).toBe(true)
+      await b.k.handle('approval.respond', { approvalId: ev.approvalId, decision: 'deny' })
+      expect((await p).r.isError).toBe(true)
+      expect(b.probe.runs).toEqual([])
+    })
+
+    it('with allowUnsandboxedAuto: true → no approval', async () => {
+      const b = await boot(cwd, 'auto', { detect: NONE, permissions: { allowUnsandboxedAuto: true } })
+      expect((await b.call('fexec', { command: 'npm test' })).r.content).toBe('ran')
+      expect(requested(b.k)).toHaveLength(0)
+    })
+
+    it.each([['full', FULL], ['partial', PARTIAL]] as const)('detect %s → no approval', async (_n, detect) => {
+      const b = await boot(cwd, 'auto', { detect })
+      expect((await b.call('fexec', { command: 'npm test' })).r.content).toBe('ran')
+      expect(requested(b.k)).toHaveLength(0)
+    })
+
+    it('a user allow shell(npm test) at level none runs without approval', async () => {
+      const b = await boot(cwd, 'auto', { detect: NONE, permissions: { rules: [{ effect: 'allow', rule: 'shell(npm test)' }] } })
+      expect((await b.call('fexec', { command: 'npm test' })).r.content).toBe('ran')
+      expect(requested(b.k)).toHaveLength(0)
+    })
+
+    it.each([['none', NONE, true], ['full', FULL, false]] as const)('an ask session at level %s → unsandboxed flag %s', async (_n, detect, flagged) => {
+      const b = await boot(cwd, 'ask', { detect })
+      const p = b.call('fexec', { command: 'npm test' })
+      await waitFor(() => requested(b.k).length === 1)
+      const ev = requested(b.k)[0].payload as Record<string, unknown>
+      if (flagged) expect(ev.unsandboxed).toBe(true)
+      else expect(ev).not.toHaveProperty('unsandboxed')
+      await b.k.handle('approval.respond', { approvalId: ev.approvalId as string, decision: 'deny' })
+      await p
+    })
+
+    it('non-exec approvals never carry the flag (user ask write rule at level none)', async () => {
+      const b = await boot(cwd, 'ask', { detect: NONE, permissions: { rules: [{ effect: 'ask', rule: 'write(package.json)' }] } })
+      const p = b.call('fwrite', { path: 'package.json', content: '{}' })
+      await waitFor(() => requested(b.k).length === 1)
+      const ev = requested(b.k)[0].payload as Record<string, unknown>
+      expect(ev).not.toHaveProperty('unsandboxed')
+      await b.k.handle('approval.respond', { approvalId: ev.approvalId as string, decision: 'deny' })
+      await p
+    })
+
+    it('allow_session keys still auto-allow at level none', async () => {
+      const b = await boot(cwd, 'auto', { detect: NONE })
+      const p = b.call('fexec', { command: 'npm test' })
+      await waitFor(() => requested(b.k).length === 1)
+      const { approvalId } = requested(b.k)[0].payload as { approvalId: string }
+      await b.k.handle('approval.respond', { approvalId, decision: 'allow_session' })
+      expect((await p).r.content).toBe('ran')
+      expect((await b.call('fexec', { command: 'npm test' })).r.content).toBe('ran')
+      expect(requested(b.k)).toHaveLength(1)
+      expect(b.probe.runs).toEqual(['fexec', 'fexec'])
+    })
+
+    it('a user ask shell(git push*) asks even in auto + full, without the flag', async () => {
+      const b = await boot(cwd, 'auto', { detect: FULL, permissions: { rules: [{ effect: 'ask', rule: 'shell(git push*)' }] } })
+      expect((await b.call('fexec', { command: 'git status' })).r.content).toBe('ran')
+      const p = b.call('fexec', { command: 'git push origin main' })
+      await waitFor(() => requested(b.k).length === 1)
+      const ev = requested(b.k)[0].payload as Record<string, unknown>
+      expect(ev).not.toHaveProperty('unsandboxed')
+      await b.k.handle('approval.respond', { approvalId: ev.approvalId as string, decision: 'deny' })
+      expect((await p).r.isError).toBe(true)
+    })
+
+    it('the real shell tool at detect none in auto → approval.requested {unsandboxed: true}', async () => {
+      const shell = createToolsCoding({ shellEnv: { PATH: process.env.PATH ?? '', HOME: home, GIT_CONFIG_GLOBAL: join(root, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1' }, loginPath: async () => '' })
+      const b = await boot(cwd, 'auto', { detect: NONE, plugins: [shell] })
+      const p = b.call('shell', { command: 'echo hi' })
+      await waitFor(() => requested(b.k).length === 1)
+      const ev = requested(b.k)[0].payload as { approvalId: string; tool: string; unsandboxed?: boolean }
+      expect(ev).toMatchObject({ tool: 'shell', summary: 'echo hi', unsandboxed: true })
+      await b.k.handle('approval.respond', { approvalId: ev.approvalId, decision: 'allow' })
+      const { r } = await p
+      expect(r.content).toMatch(/^exit 0\nhi/)
+      expect(r.meta).toEqual({ sandbox: 'none' })
+    })
+
+    it('ToolsRegistry flags exec approvals when the sandbox service is missing or throws (R13)', async () => {
+      const seen: { unsandboxed?: boolean }[] = []
+      const approvals = { request: async (r: { unsandboxed?: boolean }) => (seen.push(r), 'deny' as const) }
+      const gate = { check: () => 'ask' as const }
+      const ctx: ToolContext = { sessionId: 's', turnId: 't', callId: 'c', cwd, spillDir: join(root, 'spill'), signal: new AbortController().signal }
+      const tool: Tool = { name: 'x', description: '', parameters: {}, permission: () => [{ actor: 'tools', action: 'exec', resource: 'ls' }], run: async () => ({ content: '' }) }
+      for (const sandbox of [undefined, { status: () => { throw new Error('boom') } }, { status: () => ({ level: 'partial' as const, missing: [], autoDegraded: false }) }]) {
+        const reg = new ToolsRegistry({ gate, approvals, sandbox, append: () => {}, log: nullLogger })
+        reg.register(tool)
+        await reg.call('x', '{}', ctx)
+      }
+      expect(seen.map(r => r.unsandboxed)).toEqual([true, true, undefined])
     })
   })
 

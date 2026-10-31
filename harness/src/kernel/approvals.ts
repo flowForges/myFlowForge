@@ -17,6 +17,8 @@ export interface ApprovalRequest {
   summary: string
   /** allow_session 的键(lib/tools/commandKey 的 sessionKey);undefined → 永不自动放行 */
   key?: string
+  /** 命令不在沙箱里跑(级别 none):载荷带 unsandboxed,卡片显示 `未隔离` */
+  unsandboxed?: boolean
   signal: AbortSignal
 }
 
@@ -70,7 +72,7 @@ export class Approvals {
         this.opts.append({
           type: 'approval.requested',
           sessionId: req.sessionId,
-          payload: { approvalId, turnId: req.turnId, callId: req.callId, tool: req.tool, summary: req.summary },
+          payload: { approvalId, turnId: req.turnId, callId: req.callId, tool: req.tool, summary: req.summary, ...(req.unsandboxed === true && { unsandboxed: true }) },
         })
       } catch (err) {
         if (this.pending.delete(approvalId)) cleanup()

@@ -14,7 +14,7 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers() })
 
 const base = { sessionId: 's1', turnId: 't1', callId: 'c1', tool: 'shell' }
-const ask = (summary: string, extra: { key?: string; signal?: AbortSignal; sessionId?: string } = {}) =>
+const ask = (summary: string, extra: { key?: string; signal?: AbortSignal; sessionId?: string; unsandboxed?: boolean } = {}) =>
   approvals.request({ ...base, summary, signal: new AbortController().signal, ...extra })
 const requested = () => events.filter(e => e.type === 'approval.requested')
 const resolved = () => events.filter(e => e.type === 'approval.resolved').map(e => e.payload as Record<string, unknown>)
@@ -160,6 +160,17 @@ describe('Approvals', () => {
     expect((requested()[0].payload as { summary: string }).summary).toBe(summary)
     approvals.respond(lastId(), 'deny')
     await p
+  })
+
+  it('unsandboxed: true goes into the payload; absent / false leaves no field', async () => {
+    for (const [extra, want] of [[{ unsandboxed: true }, true], [{ unsandboxed: false }, undefined], [{}, undefined]] as const) {
+      const p = ask('ls', extra)
+      const payload = requested().at(-1)!.payload as Record<string, unknown>
+      if (want) expect(payload.unsandboxed).toBe(true)
+      else expect(payload).not.toHaveProperty('unsandboxed')
+      approvals.respond(lastId(), 'deny')
+      await p
+    }
   })
 
   it('allow_session on `rm -rf build` does not auto-allow `rm -rf ~`', async () => {
