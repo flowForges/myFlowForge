@@ -451,6 +451,32 @@ describe('submodule git dirs (re-review C1)', () => {
     p.release()
   })
 
+  it('only config identifies a module; recognising one never stops the descent (re-review R2)', async () => {
+    const lib = fakeModule('vendor/lib')
+    const vendor = join(repo, '.git', 'modules', 'vendor')
+    writeFileSync(join(vendor, 'HEAD'), 'ref: refs/heads/x\n') // 伪造的 HEAD + objects:不算
+    mkdirSync(join(vendor, 'objects'))
+    const outer = fakeModule('outer')
+    const deep = fakeModule('outer/sub/deep') // 在一个已认出的 git 目录里,但不在它的 modules 下
+    const { svc } = service()
+    const p = await svc.plan('true', session(), baseEnv)
+    const block = blockLine(profileOf(p.args))
+    for (const x of [lib, outer, deep, join(outer, 'sub')]) expect(block, x).toContain(`(literal ${q(x)})`)
+    const writeDeny = profileOf(p.args).split('\n').find(l => l.startsWith('(deny file-write* '))!
+    expect(writeDeny).not.toContain(`(subpath ${q(join(vendor, 'hooks'))})`) // vendor 不是 git 目录
+    expect(writeDeny).toContain(`(subpath ${q(join(deep, 'hooks'))})`)
+    p.release()
+  })
+
+  it('objects, refs and logs are not walked (no cap hit for a big module)', async () => {
+    const m = fakeModule('big')
+    for (const d of ['objects', 'refs', 'logs']) for (let i = 0; i < 120; i++) mkdirSync(join(m, d, `x${i}`), { recursive: true })
+    const { svc } = service()
+    const p = await svc.plan('true', session(), baseEnv)
+    expect(blockLine(profileOf(p.args))).toContain(`(literal ${q(m)})`)
+    p.release()
+  })
+
   it('more than 200 directories under modules → the plan fails closed', async () => {
     for (let i = 0; i < 201; i++) mkdirSync(join(repo, '.git', 'modules', `d${i}`), { recursive: true })
     const { svc } = service()

@@ -22,6 +22,7 @@ import { nullLogger, type Logger } from './log'
 
 const SAFE_ID = /^[A-Za-z0-9_-]+$/
 const MAX_MODULE_DIRS = 200
+const SKIP_MODULE_DIRS = new Set(['objects', 'refs', 'logs'])
 const DEFAULT_IDLE_MS = 600_000
 
 /** 本会话临时目录(= 沙箱里的 TMPDIR);只给路径 */
@@ -261,9 +262,9 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
   }
 
   /**
-   * `.git/modules` 下的子模块 git 目录(有 config,或有 HEAD 与 objects;名字可带 `/`,如 vendor/lib),
-   * 以及它们与 modules 之间的各级目录(re-review C1)。每条命令现走一遍;认出的 git 目录只往它的 modules 里走,
-   * 不进 objects。不跟随符号链接。超过 MAX_MODULE_DIRS 个目录 → 抛错(命令失败,不在保护不全时跑)
+   * `.git/modules` 下的子模块 git 目录(有 config 的目录;名字可带 `/`,如 vendor/lib),
+   * 以及它们与 modules 之间的各级目录(re-review C1、R2)。每条命令现走一遍,走遍所有子目录(objects / refs / logs 除外),
+   * 不跟随符号链接。超过 MAX_MODULE_DIRS 个目录 → 抛错(命令失败,不在保护不全时跑)
    */
   function moduleGitDirs(g: string): { dirs: string[]; between: string[] } {
     const dirs: string[] = []
@@ -293,15 +294,14 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
     }
     const visit = (d: string, chain: string[]): void => {
       if (++visited > MAX_MODULE_DIRS) throw new Error(`sandbox: more than ${MAX_MODULE_DIRS} directories under ${JSON.stringify(join(g, 'modules'))}`)
-      // 只有 config 也算:HEAD 在沙箱里可删(git 要写它),config 删不了 —— 认出来就一直认得出
-      if (has(join(d, 'config')) || (has(join(d, 'HEAD')) && has(join(d, 'objects')))) {
+      // 只认 config(re-review R2):modules 下新建 config 被 b 步拒绝,沙箱里伪造不出来,也删不掉;
+      // HEAD / objects 都能伪造,不能用来认
+      if (has(join(d, 'config'))) {
         dirs.push(d)
         for (const c of chain) between.add(c)
-        const sub = join(d, 'modules')
-        if (isDir(sub)) for (const c of children(sub)) visit(c, [...chain, d, sub])
-        return
       }
-      for (const c of children(d)) visit(c, [...chain, d])
+      // 认出来也接着往下走:伪造的"git 目录"不能把真的子模块藏起来。只跳过 objects / refs / logs(体量大,里面没有子模块)
+      for (const c of children(d)) if (!SKIP_MODULE_DIRS.has(posix.basename(c))) visit(c, [...chain, d])
     }
     const root = join(g, 'modules')
     if (isDir(root)) for (const c of children(root)) visit(c, [root])

@@ -71,6 +71,21 @@ describe.skipIf(!usable)('kernel sandbox, real sandbox-exec: submodule git dirs'
     expect(readFileSync(join(lib, 'config'), 'utf8')).toBe('[core]\n')
   })
 
+  it('pre-created fake HEAD/objects on the dir in between do not hide the real module: the swap is still denied (re-review R2)', async () => {
+    const pre = await boxed('echo "ref: refs/heads/x" > .git/modules/vendor/HEAD && mkdir -p .git/modules/vendor/objects')
+    expect(pre.code, pre.err).toBe(0) // 能伪造(HEAD / objects 不受保护)
+    const r = await boxed('mkdir -p .git/y/hooks && echo evil > .git/y/hooks/post-checkout && cp .git/modules/vendor/lib/HEAD .git/y/'
+      + ' && mv .git/modules/vendor/lib .git/lib.bak && mv .git/y .git/modules/vendor/lib')
+    expect(r.code).not.toBe(0)
+    expect(existsSync(join(repo, '.git', 'lib.bak'))).toBe(false)
+    expect(existsSync(join(lib, 'hooks', 'post-checkout'))).toBe(false)
+    // 伪造 config 来"认领"中间目录也不行
+    expect((await boxed('echo "[core]" > .git/modules/vendor/config')).code).not.toBe(0)
+    rmSync(join(repo, '.git', 'modules', 'vendor', 'HEAD'), { force: true })
+    rmSync(join(repo, '.git', 'modules', 'vendor', 'objects'), { recursive: true, force: true })
+    rmSync(join(repo, '.git', 'y'), { recursive: true, force: true })
+  })
+
   it('renaming or deleting the module dir, or the dir between it and modules, is denied', async () => {
     expect((await boxed('mv .git/modules/vendor/lib .git/modules/vendor/old')).code).not.toBe(0)
     expect((await boxed('mv .git/modules/vendor .git/modules/v2')).code).not.toBe(0)
