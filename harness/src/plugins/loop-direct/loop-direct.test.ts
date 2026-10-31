@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createKernel, type Kernel } from '../../kernel/kernel'
@@ -8,14 +8,19 @@ import type { Message, ModelEvent, ModelRequest, ModelsService } from '../../lib
 import type { ModelRef } from '../../protocol/models'
 import loopDirect from './index'
 import loopEcho from '../loop-echo'
+import { createLoopDefault } from '../loop-default'
+import toolsRegistry from '../tools-registry'
 
 let dir: string
 let kernels: Kernel[] = []
+let cleanups: (() => void)[] = []
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'mffai-loopdirect-')) })
 afterEach(async () => {
   for (const k of kernels) await k.close().catch(() => {})
   kernels = []
   rmSync(dir, { recursive: true, force: true })
+  for (const c of cleanups) c()
+  cleanups = []
 })
 
 interface Fake { calls: { ref: ModelRef | 'default'; req: Omit<ModelRequest, 'model'> }[] }
@@ -168,5 +173,29 @@ describe('loop-direct', () => {
     const t = terminal(k, sid)
     expect(t).toHaveLength(1)
     expect(t[0]).toMatchObject({ type: 'turn.failed', payload: { reason: 'cancelled' } })
+  })
+
+  it('a cwd session reaches loop-direct when loop-default is disabled in config', async () => {
+    // 工作目录不能在数据目录里(凭据黑名单)
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'mffai-loopdirect-cwd-')))
+    const cwd = join(root, 'repo')
+    mkdirSync(cwd)
+    cleanups.push(() => rmSync(root, { recursive: true, force: true }))
+    writeFileSync(join(dir, 'config.json'), JSON.stringify({ plugins: { disabled: ['loop-default'] } }))
+    const fake: Fake = { calls: [] }
+    const k = await createKernel({
+      dataDir: dir, home: join(root, 'home'), secrets: { osBackend: false },
+      plugins: [fakeModels(fake, () => seq({ type: 'text', delta: 'direct' }, done())), toolsRegistry, createLoopDefault(), loopDirect, loopEcho],
+    })
+    kernels.push(k)
+    expect(k.status().plugins.find(p => p.id === 'loop-default')?.state).toBe('disabled')
+    const sid = ((await k.handle('session.create', { commandId: 'c-cwd', model: REF, cwd })) as { sessionId: string }).sessionId
+    expect(k.events.bySession(sid)[0].payload).toMatchObject({ cwd })
+    await prompt(k, sid, 'hi')
+    await waitFor(() => terminal(k, sid).length > 0)
+    expect(fake.calls).toHaveLength(1)
+    expect(fake.calls[0].req.tools).toBeUndefined()
+    expect(k.events.bySession(sid).find(e => e.type === 'message.assistant')?.payload).toEqual({ turnId: expect.any(String), text: 'direct' }) // 没有 step / parts:是 loop-direct 写的
+    expect(terminal(k, sid)[0].type).toBe('turn.ended')
   })
 })

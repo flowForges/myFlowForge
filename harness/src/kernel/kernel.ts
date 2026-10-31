@@ -54,6 +54,8 @@ const ERR_METHOD_NOT_FOUND = -32601
 const ERR_INVALID_PARAMS = -32602
 const ERR_INTERNAL = -32603
 const CANCEL_GRACE_MS = 1000
+/** 关闭时等进行中的 turn 收尾(shell 杀进程组:SIGTERM 后 2 s SIGKILL,再 1 s 不等管道)*/
+const CLOSE_GRACE_MS = 3500
 const APPROVAL_TIMEOUT_MS = 600_000
 
 type Turn = { turnId: string; sessionId: string; ended: boolean; controller: AbortController; settled: Promise<void> }
@@ -312,7 +314,14 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
     async close() {
       append({ type: 'kernel.stopping', payload: {} })
       approvals.cancelAll() // 在关库之前:待决审批写完 resolved 再停
-      for (const t of turns.values()) t.controller.abort()
+      // 中止进行中的 turn(模型流、工具、shell 进程树),等它们写完终态再关库;不等无限久
+      const running = [...turns.values()]
+      for (const t of running) t.controller.abort()
+      if (running.length) {
+        let timer: ReturnType<typeof setTimeout> | undefined
+        await Promise.race([Promise.all(running.map(t => t.settled)), new Promise<void>(r => { timer = setTimeout(r, CLOSE_GRACE_MS) })])
+        clearTimeout(timer)
+      }
       await host.deactivateAll()
       db.close()
     },
