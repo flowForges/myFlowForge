@@ -44,12 +44,16 @@ describe('parsePermissions (load mode)', () => {
   })
 
   it('invalid network entries are dropped and reported with reason network', () => {
-    const r = parsePermissions({ network: { allow: ['pypi.org', '', 7, '  '] } }, ctx)
-    expect(r.config.network.allow).toEqual(['pypi.org'])
+    const r = parsePermissions({ network: { allow: ['pypi.org', '', 7, '  ', 'github.com:22', '*.github.com', 'https://x.org', '127.0.0.1', 'u@x.org', '*'] } }, ctx)
+    expect(r.config.network.allow).toEqual(['pypi.org', 'github.com:22', '*.github.com'])
     expect(r.errors).toEqual([
       { index: 1, rule: '', reason: 'network' },
       { index: 2, rule: '7', reason: 'network' },
       { index: 3, rule: '  ', reason: 'network' },
+      { index: 6, rule: 'https://x.org', reason: 'network' },
+      { index: 7, rule: '127.0.0.1', reason: 'network' },
+      { index: 8, rule: 'u@x.org', reason: 'network' },
+      { index: 9, rule: '*', reason: 'network' },
     ])
   })
 
@@ -222,6 +226,15 @@ describe('kernel permissions section', () => {
     expect(k.events.after(0).map(x => x.type)).not.toContain('permissions.updated')
     // 失败不留回执:同一 commandId 改好后能成功
     expect(await k.handle('permissions.set', { commandId: 'p1', config: { rules: [] } })).toEqual({ ok: true })
+  })
+
+  it('permissions.set with a bad network entry → -32602 reason network, nothing saved', async () => {
+    const k = await boot()
+    const before = readFileSync(configFile())
+    const e = await rpcError(k.handle('permissions.set', { commandId: 'p1', config: { network: { allow: ['pypi.org', '10.0.0.1', 'evil.com/x'] } } }))
+    expect(e.code).toBe(-32602)
+    expect(e.data).toEqual([{ index: 1, rule: '10.0.0.1', reason: 'network' }, { index: 2, rule: 'evil.com/x', reason: 'network' }])
+    expect(readFileSync(configFile())).toEqual(before)
   })
 
   it('permissions.set without a config is rejected', async () => {

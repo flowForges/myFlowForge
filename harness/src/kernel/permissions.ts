@@ -1,6 +1,7 @@
 // 05 spec §4、§6:config.json 的 permissions 段。内核独占(插件不能写),
 // 加载时宽松(坏规则不能让内核起不来),设置时严格(坏规则不落盘)
 import { DEFAULT_NETWORK_ALLOW, parseRule, runTests, type MatchCtx, type Rule, type RuleError, type RuleSpec } from '../lib/permissions/rules'
+import { validateNetworkEntry } from '../lib/sandbox/net/domains'
 import type { PermissionsConfig, SandboxStatus } from '../protocol/index'
 import type { KernelConfig } from './config'
 
@@ -23,8 +24,6 @@ export const SANDBOX_STUB: SandboxStatus = { level: 'none', missing: ['platform'
 
 const isObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v)
 
-/** 网络白名单条目(Task 5 换成真正的校验) */
-const validNetworkEntry = (e: unknown): e is string => typeof e === 'string' && e.trim() !== ''
 
 /**
  * 解析并给出全部错误。结构不对的字段一律落到收紧的默认值(沙箱开、回环关、auto 不越过沙箱、白名单为空);
@@ -70,7 +69,7 @@ function analyze(raw: unknown, ctx: ParseCtx): ParsedPermissions {
   else if (!Array.isArray(network.allow)) shape('network.allow')
   else
     network.allow.forEach((e, i) => {
-      if (validNetworkEntry(e)) allow.push(e)
+      if (typeof e === 'string' && validateNetworkEntry(e)) allow.push(e)
       else errors.push({ index: i, rule: String(e), reason: 'network' })
     })
 
