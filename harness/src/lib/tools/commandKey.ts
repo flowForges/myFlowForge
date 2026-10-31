@@ -10,6 +10,10 @@ const SAFE_COMMAND = /^[ \tA-Za-z0-9_@%+=:,./*-]*$/
 const DOT_GLOB = /(^|[/=:,]|^-[A-Za-z]+)\.[^/]*\*/
 /** win32 的 cmd 会展开成对的 `%VAR%`(延迟展开的 `!` 已不在字符清单里) */
 const CMD_VAR = /%[^%]*%/
+/** 字符清单内且没有成对的 `%VAR%`:shell 不会在程序看到之前改写它(sessionKey 与 shell 的 allow 规则共用,05 spec R17) */
+export function isPlainCommand(command: string): boolean {
+  return SAFE_COMMAND.test(command) && !CMD_VAR.test(command)
+}
 /** 第一个词只许朴素拼写:引号、反斜杠、括号、通配符、~、= 都会让名单比较失效 */
 const PLAIN_WORD = /^[\w./+-]+$/
 
@@ -81,7 +85,7 @@ function commandName(word: string): string {
  * 其余 → undefined。清单按规范化名字比较,键保留原拼写:`./x/eslint` 与 `eslint` 是不同的键。
  */
 export function sessionKey(command: string): string | undefined {
-  if (!SAFE_COMMAND.test(command) || CMD_VAR.test(command)) return undefined
+  if (!isPlainCommand(command)) return undefined
   const words = command.trim().split(/[ \t]+/)
   const [first, second] = words
   if (!first || !PLAIN_WORD.test(first)) return undefined

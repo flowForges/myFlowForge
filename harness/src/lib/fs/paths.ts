@@ -87,6 +87,16 @@ function segments(p: string, platform: NodeJS.Platform, strong: boolean): string
   return segs
 }
 
+/** 规则引擎(05 spec §4)用:与 isInside / 黑名单同一套按段折叠;调用方先用 isComparablePath 排除不可比较的路径 */
+export function foldedSegments(p: string, platform: NodeJS.Platform, strong: boolean): string[] {
+  return segments(p, platform, strong)
+}
+
+/** 是否为本平台可比较的绝对路径(不含 NUL;win32 只认朴素的 `X:\…`) */
+export function isComparablePath(p: string, platform: NodeJS.Platform): boolean {
+  return plainAbs(p, platform)
+}
+
 /** 数据卷上真正有 firmlink 的目录(/usr 本身在只读系统卷上,只有 /usr/local 是) */
 const FIRMLINKED = new Set(['users', 'applications', 'library', 'private', 'opt', 'volumes', 'cores'])
 
