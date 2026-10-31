@@ -102,6 +102,7 @@ describe('DebugPanel', () => {
     mffai.rollback = vi.fn(async () => ({ ok: true, files: 1, skipped: ['vendor/lib'] }))
     render(<DebugPanel />)
     emit('message.user', { turnId: 't1', text: 'edit' })
+    emit('turn.snapshot', { turnId: 't1', phase: 'start', ref: 'r0' })
     emit('turn.snapshot', { turnId: 't1', phase: 'end', ref: 'r', changed: 2 })
     emit('turn.ended', { turnId: 't1' })
     fireEvent.click(screen.getByText('回滚本轮'))
@@ -111,9 +112,11 @@ describe('DebugPanel', () => {
   it('已有 turn.rolledBack:显示已回滚,不给按钮;更早的轮变成可回滚', async () => {
     render(<DebugPanel />)
     emit('message.user', { turnId: 't1', text: 'a' })
+    emit('turn.snapshot', { turnId: 't1', phase: 'start', ref: 'r1s' })
     emit('turn.snapshot', { turnId: 't1', phase: 'end', ref: 'r1', changed: 1 })
     emit('turn.ended', { turnId: 't1' })
     emit('message.user', { turnId: 't2', text: 'b' })
+    emit('turn.snapshot', { turnId: 't2', phase: 'start', ref: 'r2s' })
     emit('turn.snapshot', { turnId: 't2', phase: 'end', ref: 'r2', changed: 2 })
     emit('turn.ended', { turnId: 't2' })
     expect(screen.getAllByText('回滚本轮')).toHaveLength(1)
@@ -130,6 +133,113 @@ describe('DebugPanel', () => {
     emit('turn.snapshot', { turnId: 't1', phase: 'end', ref: 'r1', changed: 1 })
     expect(screen.getByText('1 个文件')).toBeInTheDocument()
     expect(screen.queryByText('回滚本轮')).toBeNull()
+  })
+
+  it('同一 callId 在两轮重复:各占一行,状态互不影响', async () => {
+    render(<DebugPanel />)
+    emit('message.user', { turnId: 't1', text: 'a' })
+    emit('tool.started', { turnId: 't1', callId: 'call_1_0', name: 'read', argsPreview: 'one' })
+    emit('tool.ended', { turnId: 't1', callId: 'call_1_0', name: 'read', ok: true })
+    emit('turn.ended', { turnId: 't1' })
+    emit('message.user', { turnId: 't2', text: 'b' })
+    emit('tool.started', { turnId: 't2', callId: 'call_1_0', name: 'read', argsPreview: 'two' })
+    emit('tool.ended', { turnId: 't2', callId: 'call_1_0', name: 'read', ok: false })
+    emit('turn.failed', { turnId: 't2', reason: 'error' })
+    const one = screen.getByText('read one').closest('.mffai-line')!
+    const two = screen.getByText('read two').closest('.mffai-line')!
+    expect(one.textContent).toContain('✓')
+    expect(one.textContent).not.toContain('失败')
+    expect(two.textContent).toContain('✗')
+    expect(two.textContent).toContain('失败')
+  })
+
+  it('只有结束快照(开始快照没拍到)不给回滚按钮', async () => {
+    render(<DebugPanel />)
+    emit('message.user', { turnId: 't1', text: 'a' })
+    emit('turn.snapshot', { turnId: 't1', phase: 'start', reason: 'too_large' })
+    emit('turn.snapshot', { turnId: 't1', phase: 'end', ref: 'r1' })
+    emit('turn.ended', { turnId: 't1' })
+    expect(screen.queryByText('回滚本轮')).toBeNull()
+  })
+
+  it('会话里有进行中的轮(没拍快照)时不给回滚按钮,结束后再给', async () => {
+    render(<DebugPanel />)
+    emit('message.user', { turnId: 't1', text: 'a' })
+    emit('turn.snapshot', { turnId: 't1', phase: 'start', ref: 'r1s' })
+    emit('turn.snapshot', { turnId: 't1', phase: 'end', ref: 'r1', changed: 1 })
+    emit('turn.ended', { turnId: 't1' })
+    expect(screen.getByText('回滚本轮')).toBeInTheDocument()
+    emit('message.user', { turnId: 't2', text: 'b' })
+    expect(screen.queryByText('回滚本轮')).toBeNull()
+    emit('turn.ended', { turnId: 't2' })
+    expect(screen.getByText('回滚本轮')).toBeInTheDocument()
+  })
+
+  it('两个会话各自有可回滚的轮', async () => {
+    render(<DebugPanel />)
+    for (const [sid, tid] of [['s1', 'a1'], ['s2', 'b1']]) {
+      emit('message.user', { turnId: tid, text: tid }, sid)
+      emit('turn.snapshot', { turnId: tid, phase: 'start', ref: `${tid}s` }, sid)
+      emit('turn.snapshot', { turnId: tid, phase: 'end', ref: `${tid}e`, changed: 1 }, sid)
+      emit('turn.ended', { turnId: tid }, sid)
+    }
+    const buttons = screen.getAllByText('回滚本轮')
+    expect(buttons).toHaveLength(2)
+    fireEvent.click(buttons[1])
+    expect(mffai.rollback).toHaveBeenCalledWith('s2', 'b1')
+  })
+
+  it('应答回 ok:false:当作已结束,卡片消失', async () => {
+    mffai.approvalRespond = vi.fn(async () => ({ ok: false }))
+    render(<DebugPanel />)
+    emit('approval.requested', { approvalId: 'ap9', turnId: 't1', callId: 'c1', tool: 'shell', summary: 'rm x' })
+    fireEvent.click(screen.getByText('允许'))
+    await waitFor(() => expect(screen.queryByText('rm x')).toBeNull())
+    expect(mffai.approvalRespond).toHaveBeenCalledWith('ap9', 'allow')
+  })
+
+  it('日志重置后 seq 重复:新的用户消息照样显示', async () => {
+    render(<DebugPanel />)
+    seq = 0
+    emit('message.user', { turnId: 't1', text: 'old' })
+    seq = 0
+    emit('message.user', { turnId: 't2', text: 'new' })
+    expect(screen.getByText('old')).toBeInTheDocument()
+    expect(screen.getByText('new')).toBeInTheDocument()
+  })
+
+  it('挂载时 tail 回放(审批 / 工具 / 快照)与之后的实时事件合并', async () => {
+    const ev = (s: number, type: string, payload: any) => ({ seq: s, ts: 1, type, sessionId: 's1', payload })
+    let release!: () => void
+    const gate = new Promise<void>(r => { release = r })
+    mffai.tail = vi.fn(async () => {
+      await gate
+      return {
+        events: [
+          ev(1, 'message.user', { turnId: 't1', text: 'go' }),
+          ev(2, 'turn.snapshot', { turnId: 't1', phase: 'start', ref: 'rs' }),
+          ev(3, 'tool.started', { turnId: 't1', callId: 'c1', name: 'shell', argsPreview: 'make' }),
+          ev(4, 'approval.requested', { approvalId: 'ap1', turnId: 't1', callId: 'c1', tool: 'shell', summary: 'make all' }),
+        ],
+      }
+    })
+    render(<DebugPanel />)
+    expect(mffai.tail).toHaveBeenCalledWith(500)
+    // 订阅先到的实时事件(与回放有重叠)
+    seq = 3
+    emit('approval.requested', { approvalId: 'ap1', turnId: 't1', callId: 'c1', tool: 'shell', summary: 'make all' })
+    await act(async () => { release(); await gate })
+    await screen.findByText('make all')
+    expect(screen.getAllByText('make all')).toHaveLength(1)
+    expect(screen.getByText('go')).toBeInTheDocument()
+    emit('approval.resolved', { approvalId: 'ap1', turnId: 't1', callId: 'c1', decision: 'allow', by: 'user' })
+    emit('tool.ended', { turnId: 't1', callId: 'c1', name: 'shell', ok: true })
+    emit('turn.snapshot', { turnId: 't1', phase: 'end', ref: 're', changed: 4 })
+    emit('turn.ended', { turnId: 't1' })
+    expect(screen.queryByText('make all')).toBeNull()
+    expect(screen.getByText('shell make').closest('.mffai-line')!.textContent).toContain('✓')
+    expect(screen.getByText('4 个文件')).toBeInTheDocument()
+    expect(screen.getByText('回滚本轮')).toBeInTheDocument()
   })
 
   it('turn.failed 的轮标失败', async () => {
@@ -157,6 +267,10 @@ describe('DebugPanel', () => {
     fireEvent.change(msg, { target: { value: 'more' } })
     fireEvent.click(screen.getByText('发送'))
     expect(mffai.prompt).toHaveBeenLastCalledWith('more', undefined, { cwd: '/repo', approvalMode: 'auto' })
-    await waitFor(() => expect(mffai.prompt).toHaveBeenCalledTimes(3))
+    fireEvent.change(screen.getByLabelText('工作目录'), { target: { value: '  ' } })
+    fireEvent.change(msg, { target: { value: 'chat' } })
+    fireEvent.click(screen.getByText('发送'))
+    expect(mffai.prompt).toHaveBeenLastCalledWith('chat', undefined, { approvalMode: 'auto' })
+    await waitFor(() => expect(mffai.prompt).toHaveBeenCalledTimes(4))
   })
 })

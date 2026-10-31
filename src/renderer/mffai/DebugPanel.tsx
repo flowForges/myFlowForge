@@ -35,7 +35,7 @@ interface Item {
   failed?: boolean
 }
 
-interface Turn { sessionId?: string; terminal: boolean; failed: boolean; snapshotted: boolean; endRef: boolean; items: number[] }
+interface Turn { sessionId?: string; started: boolean; terminal: boolean; failed: boolean; snapshotted: boolean; startRef: boolean; endRef: boolean; items: number[] }
 interface RolledBack { skipped: string[] }
 
 interface View { items: Item[]; turns: Map<string, Turn>; rolledBack: Map<string, RolledBack>; snapOrder: string[] }
@@ -55,7 +55,7 @@ function toView(events: KernelEvent[]): View {
   const snapOrder: string[] = []
   const turn = (id: string, sessionId?: string): Turn => {
     let t = turns.get(id)
-    if (!t) turns.set(id, (t = { sessionId, terminal: false, failed: false, snapshotted: false, endRef: false, items: [] }))
+    if (!t) turns.set(id, (t = { sessionId, started: false, terminal: false, failed: false, snapshotted: false, startRef: false, endRef: false, items: [] }))
     t.sessionId ??= sessionId
     return t
   }
@@ -76,7 +76,9 @@ function toView(events: KernelEvent[]): View {
     const akey = turnId ? `a${turnId}:${p.step ?? ''}` : `s${e.seq}`
     switch (e.type) {
       case 'message.user':
-        item(`u${e.seq}`, { kind: 'user', text: textOf(e), ...base })
+        // turnId 键:日志重置后 seq 会重复
+        item(turnId ? `u${turnId}` : `u#${e.seq}`, { kind: 'user', text: textOf(e), ...base })
+        if (turnId) turn(turnId, e.sessionId).started = true
         break
       case 'message.assistant.delta': {
         const it = item(akey, { kind: 'assistant', text: '', ...base })
@@ -100,7 +102,8 @@ function toView(events: KernelEvent[]): View {
       case 'tool.started':
       case 'tool.ended': {
         if (!p.callId) break
-        const it = item(`c${p.callId}`, { kind: 'tool', text: `${String(p.name ?? '')} ${String(p.argsPreview ?? '').slice(0, ARGS_SHOWN)}`.trimEnd(), ...base })
+        // callId 来自模型,可能在各轮重复(call_1_0、functions.read:0)
+        const it = item(`c${e.sessionId ?? ''}:${turnId ?? ''}:${p.callId}`, { kind: 'tool', text: `${String(p.name ?? '')} ${String(p.argsPreview ?? '').slice(0, ARGS_SHOWN)}`.trimEnd(), ...base })
         if (e.type === 'tool.ended') it.ok = p.ok === true
         break
       }
@@ -117,6 +120,7 @@ function toView(events: KernelEvent[]): View {
         const t = turn(turnId, e.sessionId)
         if (!t.snapshotted) snapOrder.push(turnId)
         t.snapshotted = true
+        if (p.phase === 'start' && p.ref) t.startRef = true
         if (p.phase === 'end' && p.ref) {
           t.endRef = true
           item(`k${turnId}`, { kind: 'snapshot', text: '', ...base, ...(typeof p.changed === 'number' && { changed: p.changed }) })
@@ -145,14 +149,21 @@ function toView(events: KernelEvent[]): View {
   return { items, turns, rolledBack, snapOrder }
 }
 
-/** 能回滚的轮:每个会话里拍过快照且未回滚的最新一轮,已结束且有结束快照(同 loop-default 的 rollbackRefs) */
+/**
+ * 能回滚的轮(同 loop-default 的 rollbackRefs + ERR_BUSY):每个会话里拍过快照且未回滚的最新一轮,
+ * 两张快照都在,且该会话没有进行中的轮
+ */
 function rollbackable(v: View, local: Map<string, RolledBack>): Set<string> {
   const latest = new Map<string, string>()
   for (const id of v.snapOrder) {
     const t = v.turns.get(id)!
     if (!v.rolledBack.has(id) && !local.has(id)) latest.set(t.sessionId ?? '', id)
   }
-  return new Set([...latest.values()].filter(id => { const t = v.turns.get(id)!; return t.terminal && t.endRef && !!t.sessionId }))
+  const busy = new Set([...v.turns.values()].filter(t => t.started && !t.terminal).map(t => t.sessionId))
+  return new Set([...latest.values()].filter(id => {
+    const t = v.turns.get(id)!
+    return !!t.sessionId && t.terminal && t.startRef && t.endRef && !busy.has(t.sessionId)
+  }))
 }
 
 export function DebugPanel() {
@@ -163,6 +174,8 @@ export function DebugPanel() {
   const [failed, setFailed] = useState(false)
   const [model, setModel] = useState<ModelRef | undefined>()
   const [responding, setResponding] = useState<ReadonlySet<string>>(new Set())
+  // 应答回 ok:false(已结束 / 内核重启后不认)的审批:本地当作已结束
+  const [settled, setSettled] = useState<ReadonlySet<string>>(new Set())
   const [rolled, setRolled] = useState<Map<string, RolledBack>>(new Map())
   const [rolling, setRolling] = useState<ReadonlySet<string>>(new Set())
   const [rollFailed, setRollFailed] = useState<ReadonlySet<string>>(new Set())
@@ -171,7 +184,7 @@ export function DebugPanel() {
     const api = window.forge.mffai
     let alive = true
     const off = api.onEvent(e => setEvents(es => [...es, e].slice(-KEEP)))
-    void api.tail(50).then(r => {
+    void api.tail(KEEP).then(r => {
       if (!alive) return
       // 订阅先于 tail 返回:按 seq 去重合并
       setEvents(es => {
@@ -200,6 +213,7 @@ export function DebugPanel() {
   const respond = (approvalId: string, decision: Decision) => {
     setResponding(s => new Set(s).add(approvalId))
     void window.forge.mffai.approvalRespond(approvalId, decision)
+      .then(r => { if (!r.ok) setSettled(s => new Set(s).add(approvalId)) })
       .catch((e) => console.error('mffai approval', e))
       .finally(() => setResponding(s => { const n = new Set(s); n.delete(approvalId); return n }))
   }
@@ -241,6 +255,7 @@ export function DebugPanel() {
       )
     }
     if (it.kind === 'approval') {
+      if (settled.has(it.approvalId!)) return null
       const busy = responding.has(it.approvalId!)
       return (
         <div key={it.key} className="mffai-line mffai-approval">
