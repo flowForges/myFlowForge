@@ -18,6 +18,7 @@ let root = ''
 let home = ''
 let repo = ''
 let lib = ''
+let logs = ''
 let svc: SandboxService
 
 describe.skipIf(!usable)('kernel sandbox, real sandbox-exec: submodule git dirs', () => {
@@ -35,6 +36,12 @@ describe.skipIf(!usable)('kernel sandbox, real sandbox-exec: submodule git dirs'
     mkdirSync(join(lib, 'hooks'))
     writeFileSync(join(lib, 'HEAD'), 'ref: refs/heads/main\n')
     writeFileSync(join(lib, 'config'), '[core]\n')
+    // 名为 vendor/logs 的子模块(final review I1):logs 不在已认出的 git 目录里,不能被当成内部目录跳过
+    logs = join(repo, '.git', 'modules', 'vendor', 'logs')
+    mkdirSync(join(logs, 'objects'), { recursive: true })
+    mkdirSync(join(logs, 'hooks'))
+    writeFileSync(join(logs, 'HEAD'), 'ref: refs/heads/main\n')
+    writeFileSync(join(logs, 'config'), '[core]\n')
     const missingGit = (async () => { throw new Error('no git in this test') }) as never // 走目录兜底,不需要真的 git
     svc = createSandboxService({
       platform: 'darwin', dataDir: join(root, 'data'), home, env: { HOME: home }, detected: { level: 'full', missing: [] },
@@ -107,5 +114,16 @@ describe.skipIf(!usable)('kernel sandbox, real sandbox-exec: submodule git dirs'
     expect(readFileSync(join(lib, 'config'), 'utf8')).toBe('[core]\n')
     const ok = await boxed('echo x > .git/modules/vendor/lib/objects/t')
     expect(ok.code, ok.err).toBe(0)
+  })
+
+  it('a module named vendor/logs: swapping it for a dir with a hook, and direct hook / config writes, are denied (final review I1)', async () => {
+    const r = await boxed('mv .git/modules/vendor/logs .git/x && mkdir -p .git/x/hooks && echo evil > .git/x/hooks/post-checkout && mv .git/x .git/modules/vendor/logs')
+    expect(r.code).not.toBe(0)
+    expect(existsSync(join(repo, '.git', 'x'))).toBe(false)
+    expect(existsSync(join(logs, 'hooks', 'post-checkout'))).toBe(false)
+    expect((await boxed('echo evil > .git/modules/vendor/logs/hooks/post-checkout')).code).not.toBe(0)
+    expect((await boxed('echo "[core] fsmonitor = evil" >> .git/modules/vendor/logs/config')).code).not.toBe(0)
+    expect(existsSync(join(logs, 'hooks', 'post-checkout'))).toBe(false)
+    expect(readFileSync(join(logs, 'config'), 'utf8')).toBe('[core]\n')
   })
 })

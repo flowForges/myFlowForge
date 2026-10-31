@@ -487,10 +487,63 @@ describe('submodule git dirs (re-review C1)', () => {
     p.release()
   })
 
-  it('more than 200 directories under modules → the plan fails closed', async () => {
-    for (let i = 0; i < 201; i++) mkdirSync(join(repo, '.git', 'modules', `d${i}`), { recursive: true })
+  it('more than 2000 candidate directories under modules → the plan fails closed', async () => {
+    for (let i = 0; i < 2001; i++) mkdirSync(join(repo, '.git', 'modules', `d${i}`), { recursive: true })
     const { svc } = service()
-    await expect(svc.plan('true', session(), baseEnv)).rejects.toThrow(/more than 200 directories/)
+    await expect(svc.plan('true', session(), baseEnv)).rejects.toThrow(/more than 2000 directories/)
+  })
+
+  it('a module named vendor/logs (logs / refs / objects below the top level) is recognised and protected (final review I1)', async () => {
+    const logs = fakeModule('vendor/logs')
+    const refs = fakeModule('a/refs')
+    const objs = fakeModule('b/objects/c')
+    const { svc } = service()
+    const p = await svc.plan('true', session(), baseEnv)
+    const prof = profileOf(p.args)
+    const block = blockLine(prof)
+    for (const x of [logs, join(repo, '.git', 'modules', 'vendor'), refs, objs, join(repo, '.git', 'modules', 'b', 'objects')]) expect(block, x).toContain(`(literal ${q(x)})`)
+    const writeDeny = prof.split('\n').find(l => l.startsWith('(deny file-write* '))!
+    for (const m of [logs, refs, objs]) for (const f of ['hooks', 'config']) expect(writeDeny).toContain(`(subpath ${q(join(m, f))})`)
+    p.release()
+  })
+
+  it('linux: the hooks and config of a module named vendor/logs are ro-bound (final review I1)', async () => {
+    const logs = fakeModule('vendor/logs')
+    const { svc } = service({ platform: 'linux', detected: { level: 'partial', missing: ['netns'], bwrap: '/usr/bin/bwrap' } })
+    const p = await svc.plan('true', session(), baseEnv)
+    for (const f of ['hooks', 'config']) {
+      const x = join(logs, f)
+      expect(p.args.some((a, k) => a === '--ro-bind' && p.args[k + 1] === x && p.args[k + 2] === x), x).toBe(true)
+    }
+    p.release()
+  })
+
+  it('logs / refs / objects are skipped only directly inside a recognised git dir', async () => {
+    const m = fakeModule('m')
+    mkdirSync(join(m, 'logs', 'refs'), { recursive: true })
+    writeFileSync(join(m, 'logs', 'config'), '[core]\n') // m 自己的 logs:不走,里面的 config 不算
+    const { svc } = service()
+    const p = await svc.plan('true', session(), baseEnv)
+    const block = blockLine(profileOf(p.args))
+    expect(block).toContain(`(literal ${q(m)})`)
+    expect(block).not.toContain(q(join(m, 'logs')))
+    p.release()
+  })
+
+  it('dirs under a recognised git dir\'s info / hooks / lfs / branches are not counted (final review M1)', async () => {
+    const m = fakeModule('m')
+    for (const d of ['info', 'hooks', 'lfs', 'branches']) for (let i = 0; i < 600; i++) mkdirSync(join(m, d, `x${i}`), { recursive: true })
+    // 60 个子模块,各带 hooks / info / lfs / branches:远低于上限
+    for (let i = 0; i < 60; i++) {
+      const s = fakeModule(`s${i}`)
+      for (const d of ['info', 'lfs/objects', 'branches']) mkdirSync(join(s, d), { recursive: true })
+    }
+    const { svc } = service()
+    const p = await svc.plan('true', session(), baseEnv)
+    const block = blockLine(profileOf(p.args))
+    expect(block).toContain(`(literal ${q(m)})`)
+    expect(block).toContain(`(literal ${q(join(repo, '.git', 'modules', 's59'))})`)
+    p.release()
   })
 
   it('a real submodule gitDir with many object dirs stays under the cap', async () => {

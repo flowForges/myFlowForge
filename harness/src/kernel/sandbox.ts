@@ -22,8 +22,13 @@ import type { SandboxService, ShellPlan } from '../lib/tools/types'
 import { nullLogger, type Logger } from './log'
 
 const SAFE_ID = /^[A-Za-z0-9_-]+$/
-const MAX_MODULE_DIRS = 200
-const SKIP_MODULE_DIRS = new Set(['objects', 'refs', 'logs'])
+const MAX_MODULE_DIRS = 2000
+/**
+ * 已认出的 git 目录里不往下走的子目录(final review I1、M1):objects / refs / logs 体量大;hooks / info / lfs / branches
+ * 是 git 内部目录,里面不会有子模块(git 拒绝在另一个子模块的 git 目录里放 git 目录)。只在"直接位于已认出的 git 目录里"时跳过:
+ * 名为 vendor/logs 的子模块在 modules/vendor/logs,vendor 不是 git 目录,logs 照样要走、要认
+ */
+const GIT_INTERNAL_DIRS = new Set(['objects', 'refs', 'logs', 'hooks', 'info', 'lfs', 'branches'])
 const DEFAULT_IDLE_MS = 600_000
 
 /** 本会话临时目录(= 沙箱里的 TMPDIR);只给路径 */
@@ -264,8 +269,9 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
 
   /**
    * `.git/modules` 下的子模块 git 目录(有 config 的目录;名字可带 `/`,如 vendor/lib),
-   * 以及它们与 modules 之间的各级目录(re-review C1、R2)。每条命令现走一遍,走遍所有子目录(objects / refs / logs 除外),
-   * 不跟随符号链接。超过 MAX_MODULE_DIRS 个目录 → 抛错(命令失败,不在保护不全时跑)
+   * 以及它们与 modules 之间的各级目录(re-review C1、R2)。每条命令现走一遍,不跟随符号链接;
+   * 已认出的 git 目录里的内部子目录(GIT_INTERNAL_DIRS)不走,其余子目录都走。
+   * 只数候选目录(走到的目录);超过 MAX_MODULE_DIRS 个 → 抛错(命令失败,不在保护不全时跑)
    */
   function moduleGitDirs(g: string): { dirs: string[]; between: string[] } {
     const dirs: string[] = []
@@ -297,12 +303,14 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
       if (++visited > MAX_MODULE_DIRS) throw new Error(`sandbox: more than ${MAX_MODULE_DIRS} directories under ${JSON.stringify(join(g, 'modules'))}`)
       // 只认 config(re-review R2):modules 下新建 config 被 b 步拒绝,沙箱里伪造不出来,也删不掉;
       // HEAD / objects 都能伪造,不能用来认
-      if (has(join(d, 'config'))) {
+      const recognised = has(join(d, 'config'))
+      if (recognised) {
         dirs.push(d)
         for (const c of chain) between.add(c)
       }
-      // 认出来也接着往下走:伪造的"git 目录"不能把真的子模块藏起来。只跳过 objects / refs / logs(体量大,里面没有子模块)
-      for (const c of children(d)) if (!SKIP_MODULE_DIRS.has(posix.basename(c))) visit(c, [...chain, d])
+      // 认出来也接着往下走(modules / 其他目录):伪造的"git 目录"不能把真的子模块藏起来。
+      // 只跳过已认出的 git 目录里直接的内部子目录;没认出的目录(如 modules/vendor)的每个子目录都走
+      for (const c of children(d)) if (!(recognised && GIT_INTERNAL_DIRS.has(posix.basename(c)))) visit(c, [...chain, d])
     }
     const root = join(g, 'modules')
     if (isDir(root)) for (const c of children(root)) visit(c, [root])
