@@ -35,8 +35,20 @@ export interface SeatbeltParams {
   allowLoopback?: boolean
 }
 
-// 只读的内核信息;按名单放行时 node 启动即 abort(R1)
-// mach 服务:getpwuid、日志、通知、TMPDIR 辅助、钥匙串校验与 trustd(TLS 校验)。不含 LaunchServices / Apple Events。
+// sysctl 只读名单(R1 修订,实测 macOS 26.6):hw.* 缺了 node 启动即 abort(LowLevelAlloc arithmetic overflow);
+// kern.* 只放具体名字 —— 不放 kern.proc.*(否则能列出整张进程表;查自己的 pid 不受影响)。
+// machdep. / vm. / sysctl. 实测非必需,但只是硬件 / 内存参数,给 Go / cargo 等留余量(早上验收)
+const SYSCTL_PREFIXES = ['hw.', 'machdep.', 'vm.', 'sysctl.', 'security.mac.']
+const SYSCTL_NAMES = [
+  'kern.argmax', 'kern.boottime', 'kern.bootargs', 'kern.hostname', 'kern.hv_vmm_present', 'kern.iossupportversion',
+  'kern.maxfiles', 'kern.maxfilesperproc', 'kern.maxproc', 'kern.maxprocperuid', 'kern.ngroups', 'kern.num_files',
+  'kern.osproductversion', 'kern.osproductversioncompat', 'kern.osrelease', 'kern.ostype', 'kern.osvariant_status',
+  'kern.osversion', 'kern.secure_kernel', 'kern.tcsm_available', 'kern.tcsm_enable', 'kern.usrstack64', 'kern.version',
+  'kern.willshutdown',
+]
+
+// mach 服务:getpwuid、日志、通知、TMPDIR 辅助、trustd(TLS 校验)。不含 LaunchServices / Apple Events,
+// 不含 SecurityServer / securityd(钥匙串 API;git / node / python / npm 都不需要,Go / cargo 留给早上验收)
 const MACH_SERVICES = [
   'com.apple.system.opendirectoryd.libinfo',
   'com.apple.system.opendirectoryd.membership',
@@ -44,20 +56,27 @@ const MACH_SERVICES = [
   'com.apple.system.logger',
   'com.apple.system.notification_center',
   'com.apple.bsd.dirhelper',
-  'com.apple.SecurityServer',
-  'com.apple.securityd.xpc',
   'com.apple.trustd.agent',
 ]
 
+// /dev/tty 可写但不给 ioctl(TIOCSTI 能往父终端注入按键);调用方以 detached:true(setsid)起进程,本来就没有控制终端
 const WRITABLE_DEVICES = ['/dev/null', '/dev/stdout', '/dev/stderr', '/dev/tty', '/dev/dtracehelper']
-const IOCTL_DEVICES = ['/dev/null', '/dev/zero', '/dev/random', '/dev/urandom', '/dev/tty', '/dev/dtracehelper']
+const IOCTL_DEVICES = ['/dev/null', '/dev/zero', '/dev/random', '/dev/urandom', '/dev/dtracehelper']
+
+// 命名 POSIX IPC 是全局命名空间:不限名字就能读本机其他进程的共享内存(I1)。
+// 只放 python 的 shared_memory(/psm_)与 multiprocessing(/mp-),以及 libnotify 的共享页
+const SHM_PREFIXES = ['/psm_']
+const SHM_NAMES = ['apple.shm.notification_center']
+const SEM_PREFIXES = ['/mp-']
 
 const UNSAFE = /[\u0000-\u001f\u007f]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/
 
-/** 校验并规范化:必须是绝对路径,去掉 . / .. 段与结尾斜杠 */
+/** 校验并规范化:必须是绝对路径;去掉 . 段、重复与结尾斜杠。
+ *  `..` 段直接拒:按字面折叠会越过符号链接,拒绝规则落在错的目录上(M1);调用方传解析好的路径 */
 function clean(p: string): string {
   if (typeof p !== 'string' || !p.startsWith('/')) throw new Error(`seatbelt: path must be absolute: ${JSON.stringify(p)}`)
   if (UNSAFE.test(p)) throw new Error(`seatbelt: path contains control characters: ${JSON.stringify(p)}`)
+  if (p.split('/').includes('..')) throw new Error(`seatbelt: path must not contain '..': ${JSON.stringify(p)}`)
   const n = posix.normalize(p)
   return n.length > 1 && n.endsWith('/') ? n.slice(0, -1) : n
 }
@@ -136,10 +155,10 @@ export function seatbeltProfile(p: SeatbeltParams): string {
     '(allow process-info* (target same-sandbox))',
 
     // 系统
-    '(allow sysctl-read)',
+    `(allow sysctl-read ${SYSCTL_PREFIXES.map(n => `(sysctl-name-prefix ${str(n)})`).join(' ')} ${SYSCTL_NAMES.map(n => `(sysctl-name ${str(n)})`).join(' ')})`,
     `(allow mach-lookup ${MACH_SERVICES.map(n => `(global-name ${str(n)})`).join(' ')})`,
-    '(allow ipc-posix-shm)',
-    '(allow ipc-posix-sem)',
+    `(allow ipc-posix-shm ${SHM_PREFIXES.map(n => `(ipc-posix-name-prefix ${str(n)})`).join(' ')} ${SHM_NAMES.map(n => `(ipc-posix-name ${str(n)})`).join(' ')})`,
+    `(allow ipc-posix-sem ${SEM_PREFIXES.map(n => `(ipc-posix-name-prefix ${str(n)})`).join(' ')})`,
     `(allow file-ioctl ${filters('literal', IOCTL_DEVICES)})`,
 
     // 读

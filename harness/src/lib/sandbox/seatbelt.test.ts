@@ -107,8 +107,36 @@ describe('seatbeltProfile', () => {
     expect(rules(p).some(r => r.action === 'allow' && r.ops.includes('default'))).toBe(false)
   })
 
-  it('allows sysctl-read unrestricted (R1)', () => {
-    expect(rules(seatbeltProfile(params())).some(r => r.action === 'allow' && r.ops.join() === 'sysctl-read' && r.filters.length === 0)).toBe(true)
+  it('allows sysctl-read for hw.* and named kern.* only, never the process table (R1 revised)', () => {
+    const rs = rules(seatbeltProfile(params())).filter(r => r.ops.includes('sysctl-read'))
+    expect(rs).toHaveLength(1)
+    expect(rs[0].action).toBe('allow')
+    expect(rs[0].filters.length).toBeGreaterThan(0)
+    const prefixes = args(rs[0], 'sysctl-name-prefix')
+    const names = args(rs[0], 'sysctl-name')
+    expect(prefixes).toContain('hw.')
+    expect(names).toContain('kern.osrelease')
+    const covers = (n: string) => names.includes(n) || prefixes.some(x => n.startsWith(x))
+    for (const n of ['kern.proc.all', 'kern.proc.pid.1', 'kern.procargs2', 'kern.uuid']) expect(covers(n), n).toBe(false)
+    expect(prefixes.some(x => x.startsWith('kern'))).toBe(false)
+  })
+
+  it('limits named POSIX shm and semaphores to the runtimes\' own prefixes (I1)', () => {
+    const rs = rules(seatbeltProfile(params()))
+    const shm = rs.filter(r => r.ops.includes('ipc-posix-shm'))
+    const sem = rs.filter(r => r.ops.includes('ipc-posix-sem'))
+    expect(shm).toHaveLength(1)
+    expect(sem).toHaveLength(1)
+    expect(args(shm[0], 'ipc-posix-name-prefix')).toEqual(['/psm_'])
+    expect(args(shm[0], 'ipc-posix-name')).toEqual(['apple.shm.notification_center'])
+    expect(args(sem[0], 'ipc-posix-name-prefix')).toEqual(['/mp-'])
+    expect(rs.some(r => r.ops.some(o => o.startsWith('ipc-posix')) && r.filters.length === 0)).toBe(false)
+  })
+
+  it('gives no ioctl on /dev/tty (TIOCSTI)', () => {
+    const rs = rules(seatbeltProfile(params())).filter(r => r.ops.includes('file-ioctl'))
+    expect(rs).toHaveLength(1)
+    expect(args(rs[0], 'literal')).not.toContain('/dev/tty')
   })
 
   it('limits signal and process-info to the same sandbox', () => {
@@ -176,11 +204,22 @@ describe('seatbeltProfile', () => {
     expect(() => seatbeltProfile(params({ cwdGitFile: `${base}/a\tb/.git` }))).toThrow(/path/)
   })
 
-  it('normalises dot segments and trailing slashes', () => {
-    const p = seatbeltProfile(params({ denyRead: [`${base}/a/../home/.aws/`] }))
+  it("rejects '..' segments (lexical folding would skip symlinks, M1)", () => {
+    for (const bad of [`${base}/a/../home/.aws`, `${base}/a/..`, `${base}/..`]) {
+      for (const k of ['writable', 'gitDirs', 'denyRead', 'reAllowRead', 'denyWrite', 'reAllowWrite', 'moveBlock'] as const) {
+        expect(() => seatbeltProfile(params({ [k]: [bad] })), k).toThrow(/'\.\.'/)
+      }
+      expect(() => seatbeltProfile(params({ cwdGitFile: bad }))).toThrow(/'\.\.'/)
+    }
+    // 只是名字里含两个点的段照常接受
+    expect(() => seatbeltProfile(params({ denyRead: [`${base}/a..b/..c`] }))).not.toThrow()
+  })
+
+  it('normalises dot segments, double and trailing slashes', () => {
+    const p = seatbeltProfile(params({ denyRead: [`${base}/./home//.aws/`] }))
     const r = rules(p).find(x => x.action === 'deny' && readOps(x))!
     expect(args(r, 'subpath')).toContain(`${base}/home/.aws`)
-    expect(p).not.toContain('/../')
+    expect(p).not.toContain('/./')
   })
 
   it('escapes every regex metachar in gitDir regexes', () => {
@@ -285,7 +324,7 @@ describe('seatbeltProfile', () => {
     expect(mach).toHaveLength(1)
     const names = args(mach[0], 'global-name')
     expect(names).toContain('com.apple.trustd.agent')
-    expect(names.some(n => /lsd|launchservices|coreservices\.launch|appleevents/i.test(n))).toBe(false)
+    expect(names.some(n => /lsd|launchservices|coreservices\.launch|appleevents|SecurityServer|securityd|mDNSResponder|launchd|pasteboard/i.test(n))).toBe(false)
   })
 })
 
