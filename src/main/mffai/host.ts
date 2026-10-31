@@ -303,6 +303,8 @@ export function createMffaiHost(deps: HostDeps) {
       rssMb,
       pluginsActive,
       dataDir: dir,
+      // 旧后台的 status 没有该字段:不带
+      ...(ws?.sandbox && { sandbox: ws.sandbox }),
     }
   }
 
@@ -342,6 +344,9 @@ export function createMffaiHost(deps: HostDeps) {
     },
     approvalRespond: (approvalId: string, decision: ApprovalDecision) => requireWorker().call('approval.respond', { approvalId, decision }),
     rollback: (sessionId: string, turnId: string) => requireWorker().call('turn.rollback', { commandId: randomUUID(), sessionId, turnId }),
+    // —— 权限:有 sessionId 时默认规则按该会话展开,沙箱状态也算上该会话(代理失败只记在会话上)
+    permissionsGet: async (sessionId?: string) => requireWorker().call('permissions.get', sessionId ? { sessionId } : {}),
+    permissionsSet: async (config: object) => requireWorker().call('permissions.set', { commandId: randomUUID(), config }),
     // —— 模型 / 账号:原样转给工作进程。★参数可能带 apiKey,绝不写日志
     modelsCatalog: () => requireWorker().call('models.catalog', {}),
     modelsAccounts: () => requireWorker().call('models.accounts', {}),
@@ -396,6 +401,8 @@ export const tail = (limit: number) => h().tail(limit)
 export const prompt = (text: string, model?: ModelRef, opts?: PromptOpts) => h().prompt(text, model, opts)
 export const approvalRespond = (approvalId: string, decision: ApprovalDecision) => h().approvalRespond(approvalId, decision)
 export const rollback = (sessionId: string, turnId: string) => h().rollback(sessionId, turnId)
+export const permissionsGet = (sessionId?: string) => h().permissionsGet(sessionId)
+export const permissionsSet = (config: object) => h().permissionsSet(config)
 export const modelsCatalog = () => h().modelsCatalog()
 export const modelsAccounts = () => h().modelsAccounts()
 export const addAccount = (input: AddAccountInput) => h().addAccount(input)

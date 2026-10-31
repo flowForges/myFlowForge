@@ -20,6 +20,8 @@ function fakeDaemon(dir: string) {
     v2Auth: false, // 旧(v2)后台:v3 的 challenge 第一步就被拒
     killed: [] as Array<[number, string]>,
     sessions: 0,
+    /** worker status 里的沙箱状态;undefined = 旧后台没有该字段 */
+    sandbox: undefined as undefined | { level: string; missing: string[]; autoDegraded: boolean },
     authUrl: 'http://127.0.0.1:1455/auth/start?flow=f1',
     onRestart: undefined as undefined | (() => void),
     controlCalls: [] as Array<[string, unknown]>,
@@ -84,7 +86,7 @@ function fakeDaemon(dir: string) {
         switch (method) {
           case 'hello': return { version: '0.1.0', protocolVersion: d.compatible ? PROTOCOL_VERSION : PROTOCOL_VERSION + 1, compatible: d.compatible }
           case 'snapshot': return { status: { state: 'running', uptimeMs: 1, rssMb: 51, version: '0.1.0', plugins: [] }, sessions: [], lastSeq: d.lastSeq }
-          case 'status': return { state: 'running', uptimeMs: 1, rssMb: 51, version: '0.1.0', plugins: [{ id: 'a', state: 'active' }, { id: 'b', state: 'failed' }] }
+          case 'status': return { state: 'running', uptimeMs: 1, rssMb: 51, version: '0.1.0', plugins: [{ id: 'a', state: 'active' }, { id: 'b', state: 'failed' }], ...(d.sandbox && { sandbox: d.sandbox }) }
           case 'events.subscribe': return { ok: true }
           case 'events.tail': return { events: [] }
           case 'session.create': return { sessionId: `s${++d.sessions}` }
@@ -100,6 +102,8 @@ function fakeDaemon(dir: string) {
           case 'session.prompt': return { accepted: true, turnId: 't1' }
           case 'approval.respond': return { ok: true }
           case 'turn.rollback': return { ok: true, files: 1 }
+          case 'permissions.get': return { config: { rules: [] }, defaults: [], errors: [], sandbox: { level: 'full', missing: [], autoDegraded: false } }
+          case 'permissions.set': return { ok: true }
         }
         throw new Error(`unexpected ${method}`)
       },
@@ -702,5 +706,34 @@ describe('mffai host', () => {
       await expect(t.host.openExternal(bad as string, open)).rejects.toThrow()
     }
     expect(open).toHaveBeenCalledTimes(2)
+  })
+
+  it('getState 带出 worker status 里的沙箱状态;旧后台没有该字段 → 不带', async () => {
+    const t = setup({ up: true })
+    await t.host.ensureRunning()
+    expect('sandbox' in (await t.host.getState())).toBe(false)
+    t.d.sandbox = { level: 'partial', missing: ['netns', 'proxy'], autoDegraded: false }
+    expect((await t.host.getState()).sandbox).toEqual({ level: 'partial', missing: ['netns', 'proxy'], autoDegraded: false })
+  })
+
+  it('permissionsGet 只在有 sessionId 时带上;permissionsSet 每次新 commandId', async () => {
+    const t = setup({ up: true })
+    await t.host.ensureRunning()
+    await t.host.permissionsGet()
+    await t.host.permissionsGet('s1')
+    const config = { rules: [{ effect: 'deny', rule: 'shell(rm *)' }] }
+    expect(await t.host.permissionsSet(config)).toEqual({ ok: true })
+    await t.host.permissionsSet(config)
+    const call = (m: string) => t.d.workerCalls.filter(([x]) => x === m).map(([, p]) => p as any)
+    expect(call('permissions.get')).toEqual([{}, { sessionId: 's1' }])
+    const sets = call('permissions.set')
+    expect(sets).toEqual([{ commandId: expect.any(String), config }, { commandId: expect.any(String), config }])
+    expect(sets[0].commandId).not.toBe(sets[1].commandId)
+  })
+
+  it('未运行时 permissionsGet / permissionsSet 报错', async () => {
+    const t = setup()
+    await expect(t.host.permissionsGet()).rejects.toThrow('mff-ai not running')
+    await expect(t.host.permissionsSet({})).rejects.toThrow('mff-ai not running')
   })
 })

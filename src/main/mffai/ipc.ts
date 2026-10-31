@@ -120,6 +120,15 @@ export function registerMffaiIpc(deps: MffaiIpcDeps): void {
     return h.approvalRespond(str(id), decision as ApprovalDecision)
   }))
   deps.handle(CH.mffaiRollback, requireEnabled((h, sessionId, turnId) => h.rollback(str(sessionId), str(turnId))))
+  deps.handle(CH.mffaiPermissionsGet, requireEnabled((h, sessionId) => {
+    const sid = str(sessionId)
+    return sid ? h.permissionsGet(sid) : h.permissionsGet()
+  }))
+  // 只收普通对象;规则本身由内核严格校验
+  deps.handle(CH.mffaiPermissionsSet, requireEnabled((h, config) => {
+    if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('invalid config')
+    return h.permissionsSet(config)
+  }))
   deps.handle(CH.mffaiModelsCatalog, requireEnabled((h) => h.modelsCatalog()))
   deps.handle(CH.mffaiModelsAccounts, requireEnabled((h) => h.modelsAccounts()))
   deps.handle(CH.mffaiModelsAddAccount, requireEnabled((h, input) => h.addAccount(addAccountInput(input))))

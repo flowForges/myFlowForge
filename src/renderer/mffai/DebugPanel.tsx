@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { KernelEvent, ModelRef } from '@mffai/protocol'
+import type { KernelEvent, ModelRef, SandboxStatus } from '@mffai/protocol'
 import { ModelPicker } from './ModelPicker'
 
 const KEEP = 500
@@ -11,12 +11,13 @@ interface Payload {
   callId?: string; name?: string; argsPreview?: string; ok?: boolean
   approvalId?: string; summary?: string
   phase?: string; ref?: string; changed?: number; skipped?: unknown
+  unsandboxed?: unknown; host?: unknown; port?: unknown
 }
 const payloadOf = (e: KernelEvent) => (e.payload ?? {}) as Payload
 const textOf = (e: KernelEvent) => String(payloadOf(e).text ?? '')
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
 
-type Kind = 'user' | 'assistant' | 'tool' | 'approval' | 'snapshot'
+type Kind = 'user' | 'assistant' | 'tool' | 'approval' | 'snapshot' | 'net'
 interface Item {
   key: string
   kind: Kind
@@ -31,6 +32,7 @@ interface Item {
   ok?: boolean
   approvalId?: string
   resolved?: boolean
+  unsandboxed?: boolean
   changed?: number
   failed?: boolean
 }
@@ -39,6 +41,8 @@ interface Turn { sessionId?: string; started: boolean; terminal: boolean; failed
 interface RolledBack { skipped: string[] }
 
 interface View { items: Item[]; turns: Map<string, Turn>; rolledBack: Map<string, RolledBack>; snapOrder: string[] }
+
+const LEVEL: Record<SandboxStatus['level'], string> = { full: '完整', partial: '部分', none: '未隔离' }
 
 const visible = (it: Item) => it.kind !== 'snapshot' && !(it.kind === 'approval' && it.resolved) &&
   !(it.kind === 'assistant' && !it.text && !it.reasoning && !it.usage)
@@ -108,7 +112,12 @@ function toView(events: KernelEvent[]): View {
         break
       }
       case 'approval.requested':
-        if (p.approvalId) item(`p${p.approvalId}`, { kind: 'approval', text: String(p.summary ?? ''), approvalId: p.approvalId, ...base })
+        if (p.approvalId) {
+          item(`p${p.approvalId}`, { kind: 'approval', text: String(p.summary ?? ''), approvalId: p.approvalId, ...base, ...(p.unsandboxed === true && { unsandboxed: true }) })
+        }
+        break
+      case 'sandbox.netDenied':
+        item(`n#${e.seq}`, { kind: 'net', text: `已拦截 ${String(p.host ?? '')}:${String(p.port ?? '')}`, ...base })
         break
       case 'approval.resolved': {
         const i = p.approvalId ? at.get(`p${p.approvalId}`) : undefined
@@ -179,11 +188,18 @@ export function DebugPanel() {
   const [rolled, setRolled] = useState<Map<string, RolledBack>>(new Map())
   const [rolling, setRolling] = useState<ReadonlySet<string>>(new Set())
   const [rollFailed, setRollFailed] = useState<ReadonlySet<string>>(new Set())
+  const [sandbox, setSandbox] = useState<SandboxStatus | undefined>()
 
   useEffect(() => {
     const api = window.forge.mffai
     let alive = true
-    const off = api.onEvent(e => setEvents(es => [...es, e].slice(-KEEP)))
+    // 全局沙箱状态(不含单个会话的代理失败);旧后台没有该字段
+    const refresh = () => void api.state().then(s => { if (alive) setSandbox(s.sandbox) }).catch(() => {})
+    refresh()
+    const off = api.onEvent(e => {
+      setEvents(es => [...es, e].slice(-KEEP))
+      if (e.type === 'kernel.started') refresh()
+    })
     void api.tail(KEEP).then(r => {
       if (!alive) return
       // 订阅先于 tail 返回:按 seq 去重合并
@@ -260,6 +276,7 @@ export function DebugPanel() {
       return (
         <div key={it.key} className="mffai-line mffai-approval">
           <code>{it.text}</code>
+          {it.unsandboxed && <span className="mffai-badge mffai-unsandboxed">未隔离</span>}
           <div className="mffai-actions">
             <button className="set-btn" disabled={busy} onClick={() => respond(it.approvalId!, 'allow')}>允许</button>
             <button className="set-btn" disabled={busy} onClick={() => respond(it.approvalId!, 'allow_session')}>本会话允许</button>
@@ -269,6 +286,7 @@ export function DebugPanel() {
         </div>
       )
     }
+    if (it.kind === 'net') return <div key={it.key} className="mffai-line mffai-net">{it.text}</div>
     return (
       <div key={it.key} className={`mffai-line ${it.kind}`}>
         {it.reasoning && <details><summary>推理</summary>{it.reasoning}</details>}
@@ -285,6 +303,12 @@ export function DebugPanel() {
       <div className="mffai-opts">
         <input aria-label="工作目录" placeholder="工作目录" value={cwd} onChange={e => setCwd(e.target.value)} />
         <label><input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)} />命令自动放行</label>
+        {auto && sandbox?.autoDegraded && <span className="mffai-badge mffai-degraded">需审批</span>}
+        {sandbox && (
+          <span className={`mffai-badge mffai-sandbox ${sandbox.level}`} title={sandbox.missing.length ? sandbox.missing.join(' ') : undefined}>
+            {LEVEL[sandbox.level]}
+          </span>
+        )}
       </div>
       <div className="mffai-send">
         <ModelPicker value={model} onChange={setModel} />

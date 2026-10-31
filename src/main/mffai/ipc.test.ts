@@ -12,6 +12,7 @@ const MODEL_CHANNELS = [
   CH.mffaiChatgptBegin, CH.mffaiChatgptCancel, CH.mffaiOpenExternal,
 ]
 const CODING_CHANNELS = [CH.mffaiApprovalRespond, CH.mffaiRollback]
+const PERMISSION_CHANNELS = [CH.mffaiPermissionsGet, CH.mffaiPermissionsSet]
 
 function setup(mffai: Settings['mffai']) {
   let settings: Settings = { ...defaultSettings(), mffai }
@@ -37,6 +38,8 @@ function setup(mffai: Settings['mffai']) {
     openExternal: vi.fn(async () => {}),
     approvalRespond: vi.fn(async () => ({ ok: true })),
     rollback: vi.fn(async () => ({ ok: true, files: 2 })),
+    permissionsGet: vi.fn(async () => ({ config: {}, defaults: [], errors: [], sandbox: { level: 'full', missing: [], autoDegraded: false } })),
+    permissionsSet: vi.fn(async () => ({ ok: true })),
   }
   const openExternal = vi.fn()
   const loadHost = vi.fn(async () => host as never)
@@ -67,7 +70,7 @@ describe('registerMffaiIpc', () => {
     expect([...handlers.keys()].sort()).toEqual([
       CH.mffaiState, CH.mffaiEnable, CH.mffaiDisable, CH.mffaiRestart,
       CH.mffaiResetTrip, CH.mffaiSetAutostart, CH.mffaiTail, CH.mffaiPrompt,
-      ...MODEL_CHANNELS, ...CODING_CHANNELS,
+      ...MODEL_CHANNELS, ...CODING_CHANNELS, ...PERMISSION_CHANNELS,
     ].sort())
   })
 
@@ -177,6 +180,42 @@ describe('mffai 模型 / ChatGPT 登录通道', () => {
     expect(host.openExternal).toHaveBeenCalledWith('https://chatgpt.com/x', openExternal)
     await invoke(CH.mffaiPrompt, 'hi', { accountId: 'a', modelId: 'm', extra: 1 })
     expect(host.prompt).toHaveBeenLastCalledWith('hi', { accountId: 'a', modelId: 'm' })
+  })
+})
+
+describe('mffai 权限通道', () => {
+  it('通道名', () => {
+    expect(PERMISSION_CHANNELS).toEqual(['mffai:permissions:get', 'mffai:permissions:set'])
+  })
+
+  it('未启用:两个通道都报未启用,不加载 host', async () => {
+    const { invoke, loadHost, host } = setup({ enabled: false, autostart: true })
+    await expect(invoke(CH.mffaiPermissionsGet, 's1')).rejects.toThrow('mff-ai 未启用')
+    await expect(invoke(CH.mffaiPermissionsSet, { rules: [] })).rejects.toThrow('mff-ai 未启用')
+    expect(loadHost).not.toHaveBeenCalled()
+    expect(host.permissionsGet).not.toHaveBeenCalled()
+    expect(host.permissionsSet).not.toHaveBeenCalled()
+  })
+
+  it('get:sessionId 只认非空字符串,其余当没给', async () => {
+    const { invoke, host } = setup({ enabled: true, autostart: true })
+    await invoke(CH.mffaiPermissionsGet, 's1')
+    expect(host.permissionsGet).toHaveBeenLastCalledWith('s1')
+    for (const v of [undefined, '', 3, { sessionId: 's1' }]) {
+      await invoke(CH.mffaiPermissionsGet, v)
+      expect(host.permissionsGet).toHaveBeenLastCalledWith()
+    }
+  })
+
+  it('set:只收对象,原样转给 host;其它一律拒绝', async () => {
+    const { invoke, host } = setup({ enabled: true, autostart: true })
+    const config = { rules: [{ effect: 'deny', rule: 'shell(rm *)' }], network: { allow: ['x.test'] } }
+    expect(await invoke(CH.mffaiPermissionsSet, config)).toEqual({ ok: true })
+    expect(host.permissionsSet).toHaveBeenCalledWith(config)
+    for (const bad of [undefined, null, 'x', 3, true, [], [{ rules: [] }]]) {
+      await expect(invoke(CH.mffaiPermissionsSet, bad)).rejects.toThrow('invalid config')
+    }
+    expect(host.permissionsSet).toHaveBeenCalledTimes(1)
   })
 })
 

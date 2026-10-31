@@ -545,6 +545,10 @@ const api = {
       ipcRenderer.invoke(CH.mffaiApprovalRespond, approvalId, decision),
     rollback: (sessionId: string, turnId: string): Promise<{ ok: true; files: number; skipped?: string[] }> =>
       ipcRenderer.invoke(CH.mffaiRollback, sessionId, turnId),
+    permissionsGet: (sessionId?: string): Promise<import('@mffai/protocol').WorkerResult<'permissions.get'>> =>
+      ipcRenderer.invoke(CH.mffaiPermissionsGet, sessionId),
+    permissionsSet: (config: import('@mffai/protocol').PermissionsConfig): Promise<{ ok: true }> =>
+      ipcRenderer.invoke(CH.mffaiPermissionsSet, config),
     models: {
       catalog: (): Promise<import('@mffai/protocol').CatalogView> => ipcRenderer.invoke(CH.mffaiModelsCatalog),
       accounts: (): Promise<{ accounts: import('@mffai/protocol').AccountView[]; secretsBackend: import('@mffai/protocol').SecretsBackend }> =>

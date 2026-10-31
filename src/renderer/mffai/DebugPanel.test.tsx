@@ -13,6 +13,7 @@ beforeEach(() => {
   seq = 0
   listeners = new Set()
   mffai = {
+    state: vi.fn(async () => ({ enabled: true, autostart: true, running: true })),
     tail: vi.fn(async () => ({ events: [] })),
     prompt: vi.fn(async () => ({ accepted: true, turnId: 't1' })),
     approvalRespond: vi.fn(async () => ({ ok: true })),
@@ -272,5 +273,96 @@ describe('DebugPanel', () => {
     fireEvent.click(screen.getByText('发送'))
     expect(mffai.prompt).toHaveBeenLastCalledWith('chat', undefined, { approvalMode: 'auto' })
     await waitFor(() => expect(mffai.prompt).toHaveBeenCalledTimes(4))
+  })
+
+  describe('沙箱', () => {
+    const withSandbox = (sandbox: any) => {
+      mffai.state = vi.fn(async () => ({ enabled: true, autostart: true, running: true, ...(sandbox && { sandbox }) }))
+    }
+    const chip = (container: HTMLElement) => container.querySelector('.mffai-opts .mffai-sandbox')
+
+    it.each([
+      ['full', [], '完整', null],
+      ['partial', ['netns', 'proxy'], '部分', 'netns proxy'],
+      ['none', ['sandbox-exec'], '未隔离', 'sandbox-exec'],
+    ])('级别 %s → 选项行里的状态块', async (level, missing, label, title) => {
+      withSandbox({ level, missing, autoDegraded: false })
+      const { container } = render(<DebugPanel />)
+      await waitFor(() => expect(chip(container)).not.toBeNull())
+      expect(chip(container)!.textContent).toBe(label)
+      expect(chip(container)!.getAttribute('title')).toBe(title)
+    })
+
+    it('旧后台的状态没有 sandbox:不显示状态块,面板照常', async () => {
+      withSandbox(undefined)
+      const { container } = render(<DebugPanel />)
+      await waitFor(() => expect(mffai.state).toHaveBeenCalled())
+      await act(async () => {})
+      expect(chip(container)).toBeNull()
+      emit('message.user', { turnId: 't1', text: 'go' })
+      expect(screen.getByText('go')).toBeInTheDocument()
+      fireEvent.click(screen.getByLabelText('命令自动放行'))
+      expect(screen.queryByText('需审批')).toBeNull()
+    })
+
+    it('state 失败:不显示状态块', async () => {
+      mffai.state = vi.fn(async () => { throw new Error('x') })
+      const { container } = render(<DebugPanel />)
+      await waitFor(() => expect(mffai.state).toHaveBeenCalled())
+      await act(async () => {})
+      expect(chip(container)).toBeNull()
+    })
+
+    it('kernel.started 后重新取状态', async () => {
+      let sandbox = { level: 'full', missing: [] as string[], autoDegraded: false }
+      mffai.state = vi.fn(async () => ({ enabled: true, autostart: true, running: true, sandbox }))
+      const { container } = render(<DebugPanel />)
+      await waitFor(() => expect(chip(container)?.textContent).toBe('完整'))
+      sandbox = { level: 'none', missing: ['disabled'], autoDegraded: true }
+      emit('message.user', { turnId: 't1', text: 'x' })
+      expect(mffai.state).toHaveBeenCalledTimes(1)
+      emit('kernel.started', {}, undefined as never)
+      await waitFor(() => expect(chip(container)?.textContent).toBe('未隔离'))
+      expect(mffai.state).toHaveBeenCalledTimes(2)
+    })
+
+    it('需审批:只在勾了命令自动放行且 autoDegraded 时出现', async () => {
+      withSandbox({ level: 'none', missing: ['platform'], autoDegraded: true })
+      const { container } = render(<DebugPanel />)
+      await waitFor(() => expect(chip(container)).not.toBeNull())
+      expect(screen.queryByText('需审批')).toBeNull()
+      fireEvent.click(screen.getByLabelText('命令自动放行'))
+      expect(screen.getByText('需审批')).toBeInTheDocument()
+      fireEvent.click(screen.getByLabelText('命令自动放行'))
+      expect(screen.queryByText('需审批')).toBeNull()
+    })
+
+    it('没降级(allowUnsandboxedAuto / 有沙箱):勾了也没有需审批', async () => {
+      withSandbox({ level: 'none', missing: ['platform'], autoDegraded: false })
+      const { container } = render(<DebugPanel />)
+      await waitFor(() => expect(chip(container)).not.toBeNull())
+      fireEvent.click(screen.getByLabelText('命令自动放行'))
+      expect(screen.queryByText('需审批')).toBeNull()
+    })
+
+    it('审批卡:unsandboxed → 未隔离;没有该标记的卡不显示', async () => {
+      const { container } = render(<DebugPanel />)
+      emit('approval.requested', { approvalId: 'ap1', turnId: 't1', callId: 'c1', tool: 'shell', summary: 'npm test', unsandboxed: true })
+      emit('approval.requested', { approvalId: 'ap2', turnId: 't1', callId: 'c2', tool: 'shell', summary: 'make' })
+      const flagged = screen.getByText('npm test').closest('.mffai-approval')!
+      const plain = screen.getByText('make').closest('.mffai-approval')!
+      expect(flagged.querySelector('.mffai-unsandboxed')?.textContent).toBe('未隔离')
+      expect(plain.querySelector('.mffai-unsandboxed')).toBeNull()
+      expect(plain.textContent).not.toContain('未隔离')
+      expect(container.querySelectorAll('.mffai-unsandboxed')).toHaveLength(1)
+    })
+
+    it('sandbox.netDenied → 已拦截 host:port 一行', async () => {
+      render(<DebugPanel />)
+      emit('sandbox.netDenied', { host: 'evil.example', port: 443, reason: 'not_allowed' })
+      emit('sandbox.netDenied', { host: 'other.test', port: 80, reason: 'private' })
+      expect(screen.getByText('已拦截 evil.example:443')).toBeInTheDocument()
+      expect(screen.getByText('已拦截 other.test:80')).toBeInTheDocument()
+    })
   })
 })
