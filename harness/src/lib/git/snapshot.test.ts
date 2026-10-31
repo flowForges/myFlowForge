@@ -368,10 +368,9 @@ describe('review fixes', () => {
     const script = join(root, 'hook.sh')
     writeFileSync(script, `#!/bin/sh\necho "$0" >> '${marker}'\nexit 0\n`)
     chmodSync(script, 0o755)
-    for (const h of ['post-index-change', 'reference-transaction', 'pre-commit', 'post-commit']) {
-      writeFileSync(R(`.git/hooks/${h}`), readFileSync(script))
-      chmodSync(R(`.git/hooks/${h}`), 0o755)
-    }
+    // 钩子都是指向同一脚本的符号链接:macOS 首次执行每个新可执行文件要被扫描约 0.5 s,
+    // 满载时这些扫描排队,5 个新文件就能把本测试拖过超时;一个文件只扫一次
+    for (const h of ['post-index-change', 'reference-transaction', 'pre-commit', 'post-commit']) symlinkSync(script, R(`.git/hooks/${h}`))
     ug(['config', 'core.fsmonitor', script])
     // 对照:用户自己的 git 操作确实会触发这些钩子
     write(R('a.txt'), 'a2\n')
@@ -394,7 +393,7 @@ describe('review fixes', () => {
     expect(hidden()).toEqual([])
     expect(existsSync(marker)).toBe(false)
     expect(readdirSync(tmp)).toEqual([])
-  })
+  }, 60_000) // 单测约 4 s,但要起几十个 git 进程:全量并行时是真实负载,给它自己的上限
 
   it('I2: the copied index keeps its mtime, so a same-size edit in the same tick is still captured', async () => {
     initRepo()
