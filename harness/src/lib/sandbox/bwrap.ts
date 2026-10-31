@@ -60,6 +60,8 @@ export const KNOWN_SOCKETS = [
   '/run/podman/podman.sock',
   '/run/dbus/system_bus_socket',
   '/var/run/dbus/system_bus_socket',
+  '/run/screen',
+  '/var/run/screen',
 ]
 
 const who = 'bwrap'
@@ -88,6 +90,10 @@ function envSockets(env: Record<string, string | undefined>): string[] {
   const out: string[] = []
   if (env.SSH_AUTH_SOCK) out.push(env.SSH_AUTH_SOCK)
   if (env.GPG_AGENT_INFO) out.push(env.GPG_AGENT_INFO.split(':')[0])
+  // tmux:`<socket>,<pid>,<session>`(socket 默认在 /tmp/tmux-<uid>,TMUX_TMPDIR 可挪走)
+  if (env.TMUX) out.push(env.TMUX.split(',')[0])
+  // docker / podman:只认 unix://(tcp:// 走网络,由命名空间与代理管)
+  for (const v of [env.DOCKER_HOST, env.CONTAINER_HOST]) if (v?.startsWith('unix://')) out.push(v.slice('unix://'.length))
   for (const a of (env.DBUS_SESSION_BUS_ADDRESS ?? '').split(';')) {
     if (!a.startsWith('unix:')) continue
     for (const kv of a.slice(5).split(',')) if (kv.startsWith('path=')) out.push(decodeURIComponentSafe(kv.slice(5)))
@@ -153,6 +159,13 @@ export function bwrapArgs(p: BwrapParams): string[] {
     throw new Error(`${who}: execPath under /tmp needs an execRoot: ${JSON.stringify(execPath)}`)
   }
 
+  // git 保护的三个路径是符号链接(悬空的也算)→ 不跑:绝对链接让 bwrap 起不来;相对链接时只读挂落在目标上,
+  // 链接本身是可写 gitDir 里的普通条目,删掉换成真目录就能种钩子(R1-I1)。链接所在目录就是 gitDir,只读挂不了
+  for (const g of gitDirs) {
+    for (const f of ['hooks', 'config', 'config.worktree']) {
+      if (isSymlink(`${g}/${f}`)) throw new Error(`${who}: ${JSON.stringify(`${g}/${f}`)} is a symlink; the sandbox can't protect it (replace it with a real ${f === 'hooks' ? 'directory' : 'file'} or set core.hooksPath)`)
+    }
+  }
   // I3:存在的 gitDir 必须有 hooks 才能只读挂上;没有就不跑(调用方先 ensureGitHooksDir)
   for (const g of gitDirs) {
     if (exists(g) && !exists(`${g}/hooks`)) throw new Error(`${who}: ${JSON.stringify(g)} has no hooks dir; call ensureGitHooksDir first`)

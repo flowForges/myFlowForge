@@ -26,6 +26,7 @@ const LINKS = new Set([`${H}/.ssh`])
 
 const UNSET = [
   '--unsetenv', 'SSH_AUTH_SOCK', '--unsetenv', 'DBUS_SESSION_BUS_ADDRESS', '--unsetenv', 'GPG_AGENT_INFO', '--unsetenv', 'DOCKER_HOST',
+  '--unsetenv', 'CONTAINER_HOST', '--unsetenv', 'TMUX', '--unsetenv', 'STY',
 ]
 
 function fs(extraDirs: string[] = [], extraFiles: string[] = [], real: Record<string, string> = {}, links: string[] = []) {
@@ -190,6 +191,17 @@ describe('bwrapArgs', () => {
     expect(() => bwrapArgs(params({ gitDirs: [g], ...fs([g]) }))).toThrow(/hooks/)
   })
 
+  it('a symlinked (even dangling) .git/hooks, config or config.worktree fails closed with a clear error', () => {
+    for (const f of ['hooks', 'config', 'config.worktree']) {
+      const link = `${GIT}/${f}`
+      // 相对链接(目标存在)
+      expect(() => bwrapArgs(params({ ...fs([], [], {}, [link]) })), f).toThrow(/is a symlink/)
+      // 悬空链接:exists 跟随链接为假,仍按符号链接报错,而不是"缺 hooks"
+      const ex = new Set([...EXISTING].filter(p => p !== link))
+      expect(() => bwrapArgs(params({ ...fs([], [], {}, [link]), exists: p => ex.has(p) })), `${f} dangling`).toThrow(/is a symlink/)
+    }
+  })
+
   it('a gitDir outside cwd (worktree / subdir) is bound and protected, with the worktree .git file ro-bound', () => {
     const main = '/repos/main/.git'
     const a = bwrapArgs(params({
@@ -266,9 +278,17 @@ describe('bwrapArgs', () => {
         SSH_AUTH_SOCK: agent,
         GPG_AGENT_INFO: '/g/S.gpg-agent:123:1',
         DBUS_SESSION_BUS_ADDRESS: `unix:path=${RUN}/bus,guid=abc;unix:path=/b/bus%20x;unix:abstract=/z`,
+        DOCKER_HOST: `unix://${H}/.rd/docker.sock`,
+        CONTAINER_HOST: 'unix:///c/podman.sock',
+        TMUX: `${H}/.tmux-sock/default,1234,0`,
       },
-      ...fs(['/xdg', '/run/podman'], [agent, '/g/S.gpg-agent', '/b/bus x', `${RUN}/bus`, '/var/run/docker.sock', '/run/dbus/system_bus_socket']),
+      ...fs(['/xdg', '/run/podman', '/run/screen'], [agent, '/g/S.gpg-agent', '/b/bus x', `${RUN}/bus`, '/var/run/docker.sock', '/run/dbus/system_bus_socket',
+        `${H}/.rd/docker.sock`, '/c/podman.sock', `${H}/.tmux-sock/default`]),
     }))
+    expect(at(a, '--tmpfs', '/run/screen')).toHaveLength(1)
+    for (const f of [`${H}/.rd/docker.sock`, '/c/podman.sock', `${H}/.tmux-sock/default`]) expect(at(a, '--ro-bind', '/dev/null', f), f).toHaveLength(1)
+    // tcp:// 的 DOCKER_HOST 不是路径
+    expect(() => bwrapArgs(params({ env: { HOME: H, DOCKER_HOST: 'tcp://127.0.0.1:2375' } }))).not.toThrow()
     expect(at(a, '--tmpfs', RUN)).toHaveLength(1)
     expect(at(a, '--tmpfs', '/xdg')).toHaveLength(1)
     for (const f of [agent, '/g/S.gpg-agent', '/b/bus x', '/var/run/docker.sock', '/run/dbus/system_bus_socket']) {
@@ -278,7 +298,7 @@ describe('bwrapArgs', () => {
     expect(a).not.toContain('/run/docker.sock') // 不存在
     for (const level of ['full', 'partial'] as const) {
       const o = opts(bwrapArgs(params({ level })))
-      for (const k of ['SSH_AUTH_SOCK', 'DBUS_SESSION_BUS_ADDRESS', 'GPG_AGENT_INFO', 'DOCKER_HOST']) expect(at(o, '--unsetenv', k)).toHaveLength(1)
+      for (const k of ['SSH_AUTH_SOCK', 'DBUS_SESSION_BUS_ADDRESS', 'GPG_AGENT_INFO', 'DOCKER_HOST', 'CONTAINER_HOST', 'TMUX', 'STY']) expect(at(o, '--unsetenv', k)).toHaveLength(1)
     }
   })
 

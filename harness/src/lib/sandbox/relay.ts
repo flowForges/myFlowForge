@@ -12,7 +12,9 @@ export const RELAY_PORT = 3128
 export const RELAY_FAILED = 125
 
 /** 命令环境里删掉的变量(bwrap 也 --unsetenv 它们):agent / 总线 / docker 的入口,沙箱里不该有(C1) */
-export const RELAY_STRIP_ENV = ['SSH_AUTH_SOCK', 'DBUS_SESSION_BUS_ADDRESS', 'GPG_AGENT_INFO', 'DOCKER_HOST'] as const
+export const RELAY_STRIP_ENV = [
+  'SSH_AUTH_SOCK', 'DBUS_SESSION_BUS_ADDRESS', 'GPG_AGENT_INFO', 'DOCKER_HOST', 'CONTAINER_HOST', 'TMUX', 'STY',
+] as const
 
 export const RELAY_SOURCE = String.raw`'use strict'
 const net = require('net')

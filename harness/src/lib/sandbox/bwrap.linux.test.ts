@@ -101,7 +101,7 @@ function fakeEnv() {
 
 function run(p: BwrapParams) {
   const r = spawnSync('bwrap', bwrapArgs(p), {
-    env: { ...fakeEnv(), ELECTRON_RUN_AS_NODE: '1', DOCKER_HOST: 'unix:///x' },
+    env: { ...fakeEnv(), ELECTRON_RUN_AS_NODE: '1', DOCKER_HOST: 'unix:///x', TMUX: '/x,1,0', STY: '1.pts-0.h' },
     encoding: 'utf8',
     timeout: 20_000,
   })
@@ -143,7 +143,7 @@ describe.skipIf(!hasBwrap)('bwrap (real)', () => {
   })
 
   it('the shell never sees ELECTRON_RUN_AS_NODE or the agent / bus / docker variables', () => {
-    expect(run(params({ command: 'echo "[${ELECTRON_RUN_AS_NODE-unset}${SSH_AUTH_SOCK-}${DBUS_SESSION_BUS_ADDRESS-}${DOCKER_HOST-}]"' })).out).toBe('[unset]\n')
+    expect(run(params({ command: 'echo "[${ELECTRON_RUN_AS_NODE-unset}${SSH_AUTH_SOCK-}${DBUS_SESSION_BUS_ADDRESS-}${DOCKER_HOST-}${TMUX-}${STY-}]"' })).out).toBe('[unset]\n')
   })
 
   it('host unix sockets (runtime dir, ssh-agent) are unreachable', () => {
