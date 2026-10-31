@@ -104,7 +104,8 @@ export const WorkerMethods = {
   // 以下由插件经 ctx.rpc.register 提供
   'turn.rollback': {
     params: z.object({ commandId: z.string(), sessionId: z.string(), turnId: z.string() }),
-    result: z.object({ ok: z.literal(true), files: z.number() }),
+    // skipped:写不回的子模块路径(不算进 files)
+    result: z.object({ ok: z.literal(true), files: z.number(), skipped: z.array(z.string()).optional() }),
   },
   'turn.changes': {
     params: z.object({ sessionId: z.string(), turnId: z.string() }),

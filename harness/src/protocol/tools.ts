@@ -54,7 +54,7 @@ export const TurnSnapshotPayloadSchema = z.object({
 })
 export type TurnSnapshotPayload = z.infer<typeof TurnSnapshotPayloadSchema>
 
-export const TurnRolledBackPayloadSchema = z.object({ turnId: z.string(), files: z.number() })
+export const TurnRolledBackPayloadSchema = z.object({ turnId: z.string(), files: z.number(), skipped: z.array(z.string()).optional() })
 export type TurnRolledBackPayload = z.infer<typeof TurnRolledBackPayloadSchema>
 
 export const FileChangeSchema = z.object({ path: z.string(), status: z.enum(['A', 'M', 'D', 'T']) })

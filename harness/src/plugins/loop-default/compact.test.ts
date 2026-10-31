@@ -82,6 +82,31 @@ describe('compact', () => {
     expect(a[0]).toBe(m[0]) // 没改的消息原样复用
   })
 
+  it('paged reads of one file are different reads: both pages are kept', () => {
+    const m = [user('q'), call('c1', 'read', { path: 'big.ts', offset: 1 }), result('c1', big('1')), call('c2', 'read', { path: 'big.ts', offset: 2001 }), result('c2', big('2'))]
+    const out = compact(m, { context: 2_500, keepRecentTokens: 10_000 })
+    expect(contents(out)).toEqual([big('1'), big('2')])
+  })
+
+  it('a later failed read of the same range does not fold the earlier good one', () => {
+    const err: Message = { role: 'tool', parts: [{ type: 'tool_result', callId: 'c2', content: big('e', 100), isError: true }] }
+    const m = [user('q'), call('c1', 'read', { path: 'a' }), result('c1', big('1')), call('c2', 'read', { path: 'a' }), err]
+    const out = compact(m, { context: 1_200, keepRecentTokens: 10_000 })
+    expect(contents(out)[0]).toBe(big('1'))
+  })
+
+  it('the default recent window is min(24 000, 30 % of the context), so small contexts can still fold', () => {
+    const m = [
+      user('q'),
+      call('c1', 'grep', { pattern: 'a' }), result('c1', big('1')),
+      call('c2', 'grep', { pattern: 'b' }), result('c2', big('2')),
+      call('c3', 'grep', { pattern: 'c' }), result('c3', big('3')),
+      call('c4', 'grep', { pattern: 'd' }), result('c4', big('4')),
+    ]
+    // context 5000 → 窗口 1500:后两条受保护,前两条可折
+    expect(contents(compact(m, { context: 5_000 }))).toEqual(['[已折叠:grep a,需要时重新读取]', '[已折叠:grep b,需要时重新读取]', big('3'), big('4')])
+  })
+
   it('pairs a reused call id with its most recent call', () => {
     const m = [user('q'), call('c', 'read', { path: 'a' }), result('c', big('1')), call('c', 'grep', { pattern: 'z' }), result('c', big('2')), call('d', 'read', { path: 'a' }), result('d', big('3'))]
     const out = compact(m, { context: 4_000, keepRecentTokens: 0 })

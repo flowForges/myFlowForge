@@ -37,7 +37,7 @@ export function estimateTokens(messages: Message[]): number {
 export interface CompactOpts {
   /** 模型上下文(token) */
   context: number
-  /** 最近这么多 token 内的工具结果永不折叠 */
+  /** 最近这么多 token 内的工具结果永不折叠;默认 min(24 000, context × 0.3)(小上下文的模型也能折) */
   keepRecentTokens?: number
   /** 超过 context × high 才压缩 */
   high?: number
@@ -69,19 +69,22 @@ function summary(args: string): string {
 
 const placeholder = (name: string, args: string) => `[已折叠:${name} ${summary(args)},需要时重新读取]`
 
-function readPath(args: string, cwd: string | undefined): string | undefined {
-  const p = parseArgs(args)?.path
+/** 同一次 read 的键:解析后的路径 + offset + limit(分页读的不同段不互相顶替) */
+function readKey(args: string, cwd: string | undefined): string | undefined {
+  const a = parseArgs(args)
+  const p = a?.path
   if (typeof p !== 'string' || !p) return undefined
   const slashed = p.replace(/\\/g, '/')
-  return cwd ? posix.resolve(cwd.replace(/\\/g, '/'), slashed) : posix.normalize(slashed)
+  const path = cwd ? posix.resolve(cwd.replace(/\\/g, '/'), slashed) : posix.normalize(slashed)
+  return JSON.stringify([path, a.offset ?? null, a.limit ?? null])
 }
 
-interface Slot { msg: number; part: number; name: string; args: string; chars: number }
+interface Slot { msg: number; part: number; name: string; args: string; chars: number; isError: boolean }
 
 export function compact(messages: Message[], opts: CompactOpts): Message[] {
   const high = opts.context * (opts.high ?? 0.7)
   const low = opts.context * (opts.low ?? 0.5)
-  const keepRecent = opts.keepRecentTokens ?? 24_000
+  const keepRecent = opts.keepRecentTokens ?? Math.min(24_000, Math.floor(opts.context * 0.3))
   const out = messages.slice()
   let chars = messages.reduce((n, m) => n + messageChars(m), 0)
   if (charsToTokens(chars) <= high) return out
@@ -94,7 +97,7 @@ export function compact(messages: Message[], opts: CompactOpts): Message[] {
       if (p.type === 'tool_call') lastCall.set(p.id, { name: p.name, args: p.args })
       else if (p.type === 'tool_result') {
         const c = lastCall.get(p.callId)
-        if (c) slots.push({ msg: mi, part: pi, ...c, chars: p.content.length })
+        if (c) slots.push({ msg: mi, part: pi, ...c, chars: p.content.length, isError: p.isError === true })
       }
     }),
   )
@@ -110,15 +113,15 @@ export function compact(messages: Message[], opts: CompactOpts): Message[] {
     folded.add(s)
   }
 
-  // 第一遍:同一文件被 read 多次,只留最近一次
+  // 第一遍:同一文件同一段被 read 多次,只留最近一次成功的(失败的新结果不顶替旧内容)
   const latest = new Map<string, Slot>()
   for (const s of slots) {
-    if (s.name !== 'read') continue
-    const path = readPath(s.args, opts.cwd)
-    if (!path) continue
-    const prior = latest.get(path)
+    if (s.name !== 'read' || s.isError) continue
+    const key = readKey(s.args, opts.cwd)
+    if (!key) continue
+    const prior = latest.get(key)
     if (prior) fold(prior, placeholder(prior.name, prior.args))
-    latest.set(path, s)
+    latest.set(key, s)
   }
   if (charsToTokens(chars) <= high) return out
 

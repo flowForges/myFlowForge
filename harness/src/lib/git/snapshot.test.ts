@@ -473,6 +473,23 @@ describe('review fixes', () => {
   })
 })
 
+describe('takeSnapshot createOnly', () => {
+  it('never overwrites an existing ref', async () => {
+    initRepo()
+    write(R('a.txt'), 'a\n')
+    ug(['add', '.'])
+    commit('init')
+    const g = git()
+    const ref = 'refs/mffai/snapshots/s/t-pre-rollback-1'
+    expect(await takeSnapshot(repo, ref, g, { tmpDir: tmp, createOnly: true })).toEqual({ ref })
+    const first = ug(['rev-parse', ref]).trim()
+    write(R('a.txt'), 'changed\n')
+    expect(await takeSnapshot(repo, ref, g, { tmpDir: tmp, createOnly: true })).toEqual({ reason: 'error' })
+    expect(ug(['rev-parse', ref]).trim()).toBe(first)
+    expect(readdirSync(tmp)).toEqual([])
+  })
+})
+
 describe('pruneRefs', () => {
   it('keeps the newest 50 of 52 turns and leaves other sessions alone', async () => {
     initRepo()
@@ -484,7 +501,8 @@ describe('pruneRefs', () => {
     // 提交时间各不相同的快照提交:写成对象文件,一次 hash-object、一次 update-ref --stdin
     const refs: [string, number][] = []
     for (let i = 0; i < 52; i++) refs.push([`refs/mffai/snapshots/s1/t${i}-start`, i * 10], [`refs/mffai/snapshots/s1/t${i}-end`, i * 10 + 1])
-    refs.push(['refs/mffai/snapshots/s1/t1-pre-rollback', 15], ['refs/mffai/snapshots/s2/t0-start', 0])
+    // pre-rollback 带时间戳后缀;最新一轮的也算在它自己名下,不单独占一轮
+    refs.push(['refs/mffai/snapshots/s1/t1-pre-rollback', 15], ['refs/mffai/snapshots/s1/t51-pre-rollback-1700000000999', 600], ['refs/mffai/snapshots/s2/t0-start', 0])
     const objs = refs.map(([, sec], i) => {
       const who = `x <x@example.invalid> ${1_700_000_000 + sec} +0000`
       const f = join(root, `commit-${i}`)
@@ -499,8 +517,9 @@ describe('pruneRefs', () => {
     await pruneRefs(repo, 'refs/mffai/snapshots/s1', 50, g)
     const left = hidden()
     expect(left).toContain('refs/mffai/snapshots/s2/t0-start')
-    const turns = new Set(left.filter(r => r.startsWith('refs/mffai/snapshots/s1/')).map(r => r.slice('refs/mffai/snapshots/s1/'.length).replace(/-(start|end|pre-rollback)$/, '')))
+    const turns = new Set(left.filter(r => r.startsWith('refs/mffai/snapshots/s1/')).map(r => r.slice('refs/mffai/snapshots/s1/'.length).replace(/-(start|end|pre-rollback(?:-\d+)?)$/, '')))
     expect(turns.size).toBe(50)
+    expect(left).toContain('refs/mffai/snapshots/s1/t51-pre-rollback-1700000000999')
     expect(turns.has('t0')).toBe(false)
     expect(turns.has('t1')).toBe(false)
     expect(turns.has('t2')).toBe(true)

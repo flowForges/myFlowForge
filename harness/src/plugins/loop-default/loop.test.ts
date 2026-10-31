@@ -145,12 +145,10 @@ const prompt = async (k: Kernel, sid: string, text: string) =>
   ((await k.handle('session.prompt', { commandId: `p${Math.random()}`, sessionId: sid, text })) as { turnId: string }).turnId
 const evs = (k: Kernel, sid: string) => k.events.bySession(sid)
 const terminal = (k: Kernel, sid: string) => evs(k, sid).filter(e => e.type === 'turn.ended' || e.type === 'turn.failed')
-const snapshots = (k: Kernel, sid: string, turnId: string) => evs(k, sid).filter(e => e.type === 'turn.snapshot' && pay(e).turnId === turnId)
-/** 等终态;拍了开始快照的轮还要等结束快照(它在终态之后,拍完处理者才返回,下一轮才收) */
 async function turn(k: Kernel, sid: string, text: string) {
   const want = terminal(k, sid).length + 1
   const turnId = await prompt(k, sid, text)
-  await waitFor(() => terminal(k, sid).length === want && (snapshots(k, sid, turnId).length !== 1))
+  await waitFor(() => terminal(k, sid).length === want)
   return turnId
 }
 const pay = <T = Record<string, unknown>>(e: KernelEvent | undefined) => e?.payload as T
@@ -220,7 +218,7 @@ describe('loop-default: one coding turn', () => {
       'message.assistant', 'tool.started', 'tool.ended',
       'message.assistant', 'tool.started', 'tool.ended',
       'message.assistant', 'tool.started', 'tool.ended',
-      'message.assistant', 'turn.ended', 'turn.snapshot',
+      'message.assistant', 'turn.snapshot', 'turn.ended',
     ])
     // cwd 不是 git 仓库:两张快照都只带 reason
     expect(main.filter(e => e.type === 'turn.snapshot').map(e => pay(e))).toEqual([
@@ -237,6 +235,7 @@ describe('loop-default: one coding turn', () => {
     expect(steps[3]).toMatchObject({ step: 4, text: 'done', parts: [{ type: 'text', text: 'done' }] })
     expect(main.filter(e => e.type === 'tool.ended').map(e => pay(e).ok)).toEqual([true, true, true])
     expect(String(pay(main[10]).content)).toMatch(/^exit 0/)
+    expect(pay(main.at(-1))).toEqual({ turnId }) // turn.ended 的载荷不变
     expect(readFileSync(join(cwd, 'a.txt'), 'utf8')).toBe('hello mff\n')
 
     // 每步的 delta / usage 带 step

@@ -1,4 +1,5 @@
-// loop-default 的一轮(spec §8 第 2–6、8 步):重建历史 → 逐步 models.stream → 按顺序执行工具 → 直到模型不再调用工具
+// loop-default 的一轮(spec §8 第 2–6、8 步):重建历史 → 逐步 models.stream → 按顺序执行工具 → 直到模型不再调用工具。
+// 终态不在这里写:返回给 index.ts,拍完结束快照再写
 // 快照(第 1、7 步)在 index.ts 的 runTurn 前后;每步请求前压缩上下文(§8.4)
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -94,13 +95,19 @@ export function isGitDir(cwd: string): boolean {
   }
 }
 
-export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<void> {
+/** 一轮的终态;由调用方在结束快照之后写下(客户端看到终态时快照已在) */
+export interface TurnOutcome {
+  type: 'turn.ended' | 'turn.failed'
+  payload: { turnId: string; reason?: string; message?: string }
+}
+
+export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<TurnOutcome> {
   const { models, tools, signal } = deps
   const { sessionId, turnId, info } = req
   const ev = (type: KernelEvent['type'], payload: object): void => {
     deps.append({ type, sessionId, payload: { turnId, ...payload } })
   }
-  const fail = (reason: string, extra?: object): void => ev('turn.failed', { reason, ...extra })
+  const fail = (reason: string, extra?: { message: string }): TurnOutcome => ({ type: 'turn.failed', payload: { turnId, reason, ...extra } })
   const maxSteps = Math.max(1, deps.maxSteps ?? MAX_STEPS)
 
   // 族、工具集、系统提示词:同一会话内恒定
@@ -214,7 +221,7 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<void> {
     ev('message.assistant', { step, text: r.text, parts: logged })
     if (!r.calls.length) {
       if (r.reason === 'length') deps.log.warn('model output hit the length limit', { step })
-      return ev('turn.ended', {})
+      return { type: 'turn.ended', payload: { turnId } }
     }
     if (step === maxSteps) return fail('max_steps')
     messages.push({ role: 'assistant', parts })
@@ -234,5 +241,5 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<void> {
     messages.push({ role: 'tool', parts: results })
   }
   // 不会到这里:step === maxSteps 时上面已返回
-  fail('max_steps')
+  return fail('max_steps')
 }

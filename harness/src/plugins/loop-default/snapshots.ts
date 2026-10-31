@@ -1,7 +1,7 @@
 // 每轮的开始 / 结束快照与回滚(spec §11):git 部分在 lib/git/snapshot,这里管引用命名、事件与"哪一轮能回滚"
 import type { Logger } from '../../kernel/log'
 import { RpcError } from '../../kernel/rpcError'
-import { changes, pruneRefs, restore, takeSnapshot, type Git, type SnapshotResult } from '../../lib/git/snapshot'
+import { changes, pruneRefs, restore, submodulePaths, takeSnapshot, type Git, type SnapshotResult } from '../../lib/git/snapshot'
 import type { FileChange, KernelEvent } from '../../protocol/index'
 
 const ERR_INVALID_PARAMS = -32602
@@ -37,6 +37,14 @@ async function timed<T>(deps: SnapshotDeps, what: string, fn: () => Promise<T>):
 
 const take = (deps: SnapshotDeps, t: SnapshotTarget, turnId: string, phase: Phase): Promise<SnapshotResult> =>
   timed(deps, phase, () => takeSnapshot(t.cwd, snapshotRef(t.sessionId, turnId, phase), deps.git, { tmpDir: deps.tmpDir }))
+
+const message = (err: unknown) => (err instanceof Error ? err.message : String(err))
+
+/** 资格已查过之后的 git 失败:是服务端的问题(−32603),记日志 */
+function gitFailed(deps: SnapshotDeps, what: string, err: unknown): RpcError {
+  deps.log.warn(`${what} failed`, { error: message(err) })
+  return new RpcError(ERR_INTERNAL, `${what} failed: ${message(err)}`)
+}
 
 /** 开始快照 → `turn.snapshot {phase:'start'}`;拍到了就按会话清理旧引用。返回引用(拍不了 → undefined) */
 export async function startSnapshot(deps: SnapshotDeps, t: SnapshotTarget, turnId: string): Promise<string | undefined> {
@@ -122,31 +130,42 @@ export async function turnChanges(deps: SnapshotDeps, t: SnapshotTarget, events:
   if (!ts?.start || !ts.end) throw new RpcError(ERR_INVALID_PARAMS, 'snapshots missing')
   try {
     return await changes(t.cwd, ts.start, ts.end, deps.git, { tmpDir: deps.tmpDir })
-  } catch {
-    throw new RpcError(ERR_INVALID_PARAMS, 'snapshots missing')
+  } catch (err) {
+    throw gitFailed(deps, 'turn.changes', err)
   }
 }
 
+/** 每次回滚前的快照:`<turnId>-pre-rollback-<毫秒时间戳>`,只新建不覆盖(重试时第一次的仍在) */
+export const preRollbackRef = (sessionId: string, turnId: string, now: number) => `${snapshotRef(sessionId, turnId, 'pre-rollback')}-${now}`
+
+export interface RollbackResult { files: number; skipped: string[] }
+
 /**
  * 回滚一轮(调用方已检查会话没有进行中的轮):pre-rollback 快照 → changes(start, end) → restore → `turn.rolledBack`。
- * pre-rollback 拍不了就不回滚(用户在这之后的改动没有兜底);写回有失败的不记 turn.rolledBack,可再试
+ * pre-rollback 拍不了就不回滚(用户在这之后的改动没有兜底);子模块路径跳过并报告;
+ * 写回有失败的不记 turn.rolledBack,可再试(每次都另拍一张 pre-rollback)
  */
-export async function rollbackTurn(deps: SnapshotDeps, t: SnapshotTarget, events: KernelEvent[], turnId: string): Promise<number> {
+export async function rollbackTurn(deps: SnapshotDeps, t: SnapshotTarget, events: KernelEvent[], turnId: string): Promise<RollbackResult> {
   const refs = rollbackRefs(t.sessionId, events, turnId)
   if (!refs) throw new RpcError(ERR_INVALID_PARAMS, 'not rollbackable')
-  const pre = await take(deps, t, turnId, 'pre-rollback')
+  const preRef = preRollbackRef(t.sessionId, turnId, Date.now())
+  const pre = await timed(deps, 'pre-rollback', () => takeSnapshot(t.cwd, preRef, deps.git, { tmpDir: deps.tmpDir, createOnly: true }))
   if (!pre.ref) throw new RpcError(ERR_INTERNAL, `pre-rollback snapshot failed: ${pre.reason ?? 'error'}`)
   let files: FileChange[]
+  let skipped: string[]
   try {
-    files = await timed(deps, 'changes', () => changes(t.cwd, refs.start, refs.end, deps.git, { tmpDir: deps.tmpDir }))
-  } catch {
-    throw new RpcError(ERR_INVALID_PARAMS, 'not rollbackable')
-  }
-  try {
-    await timed(deps, 'restore', () => restore(t.cwd, refs.start, files, deps.git, { tmpDir: deps.tmpDir }))
+    const opts = { tmpDir: deps.tmpDir }
+    files = await timed(deps, 'changes', () => changes(t.cwd, refs.start, refs.end, deps.git, opts))
+    skipped = await submodulePaths(t.cwd, refs.start, refs.end, deps.git, opts)
   } catch (err) {
-    throw new RpcError(ERR_INTERNAL, err instanceof Error ? err.message : String(err))
+    throw gitFailed(deps, 'rollback diff', err)
   }
-  deps.append({ type: 'turn.rolledBack', sessionId: t.sessionId, payload: { turnId, files: files.length } })
-  return files.length
+  const restorable = files.filter(f => !skipped.includes(f.path))
+  try {
+    await timed(deps, 'restore', () => restore(t.cwd, refs.start, restorable, deps.git, { tmpDir: deps.tmpDir }))
+  } catch (err) {
+    throw gitFailed(deps, 'restore', err)
+  }
+  deps.append({ type: 'turn.rolledBack', sessionId: t.sessionId, payload: { turnId, files: restorable.length, ...(skipped.length && { skipped }) } })
+  return { files: restorable.length, skipped }
 }

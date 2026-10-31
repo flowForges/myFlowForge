@@ -118,6 +118,8 @@ const scope = (prefix: string) => (prefix ? `:(top,literal)${prefix}` : ':/')
 const splitZ = (b: Buffer) => b.toString().split('\0').filter(s => s !== '')
 
 export interface SnapshotOpts {
+  /** ref 已存在则失败(不覆盖) */
+  createOnly?: boolean
   maxFileBytes?: number
   maxTotalBytes?: number
   /** 临时索引与空钩子目录放在这里的独立子目录里,用完即删(默认系统临时目录) */
@@ -169,7 +171,8 @@ export async function takeSnapshot(cwd: string, ref: string, git: Git, opts: Sna
       const tree = (await run(g, ['write-tree'], { cwd: top, env })).toString().trim()
       const commitArgs = ['commit-tree', '--no-gpg-sign', '-m', 'mff-ai snapshot', ...(head ? ['-p', head] : []), tree]
       const commit = (await run(g, commitArgs, { cwd: top })).toString().trim()
-      await run(g, ['update-ref', ref, commit], { cwd: top })
+      // 空的旧值 = 要求 ref 还不存在
+      await run(g, ['update-ref', ref, commit, ...(opts.createOnly ? [''] : [])], { cwd: top })
       return { ref }
     })
   } catch {
@@ -202,6 +205,23 @@ export function changes(cwd: string, from: string, to: string, git: Git, opts: {
       const status = parts[i][0]
       if (!STATUSES.has(status)) throw new Error(`未知的改动状态:${parts[i]}`)
       out.push({ path: parts[i + 1], status: status as FileChange['status'] })
+    }
+    return out
+  })
+}
+
+/** from..to 之间 cwd 前缀下任一侧是子模块(gitlink,mode 160000)的路径:回滚写不回它们 */
+export function submodulePaths(cwd: string, from: string, to: string, git: Git, opts: { tmpDir?: string } = {}): Promise<string[]> {
+  return guarded(git, opts.tmpDir, async g => {
+    const info = await readRepoInfo(cwd, g)
+    if (!info) throw new Error(`不是 git 工作树:${cwd}`)
+    const parts = splitZ(
+      await run(g, ['diff', '--raw', '--no-renames', '--no-ext-diff', '--no-abbrev', '-z', from, to, '--', scope(info.prefix)], { cwd: info.top }),
+    )
+    const out: string[] = []
+    for (let i = 0; i + 1 < parts.length; i += 2) {
+      const [oldMode, newMode] = parts[i].replace(/^:/, '').split(' ')
+      if (oldMode === '160000' || newMode === '160000') out.push(parts[i + 1])
     }
     return out
   })
@@ -345,7 +365,7 @@ export function pruneRefs(cwd: string, prefixRef: string, keepTurns: number, git
     const kept = new Set<string>()
     const drop: string[] = []
     for (const ref of out.toString().split('\n').filter(Boolean)) {
-      const turn = ref.slice(base.length).replace(/-(start|end|pre-rollback)$/, '')
+      const turn = ref.slice(base.length).replace(/-(start|end|pre-rollback(?:-\d+)?)$/, '')
       if (kept.has(turn)) continue
       if (kept.size < keepTurns) kept.add(turn)
       else drop.push(ref)

@@ -9,7 +9,7 @@ import { createGit, type Git } from '../../lib/git/snapshot'
 import type { ModelsService } from '../../lib/models/types'
 import type { ToolsService } from '../../lib/tools/types'
 import { ERR_BUSY, type ModelRef, type WorkerParams } from '../../protocol/index'
-import { runTurn, type LoopDeps } from './loop'
+import { runTurn, type LoopDeps, type TurnOutcome } from './loop'
 import { manifest } from './manifest'
 import { endSnapshot, hasOpenTurn, rollbackTurn, startSnapshot, turnChanges, type SnapshotDeps } from './snapshots'
 
@@ -71,10 +71,11 @@ export function createLoopDefault(opts: LoopDefaultOpts = {}): Plugin {
         active.add(sessionId)
         const target = { sessionId, cwd }
         let startRef: string | undefined
+        let outcome: TurnOutcome | undefined
         try {
           await locks.get(sessionId) // 已开始的回滚先做完
           startRef = await startSnapshot(snap, target, turnId)
-          await runTurn(
+          outcome = await runTurn(
             {
               models, tools, signal, sessions, log: ctx.log,
               append: e => ctx.append(e),
@@ -85,13 +86,19 @@ export function createLoopDefault(opts: LoopDefaultOpts = {}): Plugin {
             { sessionId, turnId, text, info: { ...info, cwd }, ref },
           )
         } finally {
-          // 不论怎样结束(含取消、出错)都拍结束快照;内核已关库等写入失败只记日志
+          // 不论怎样结束(含取消、出错)都先拍结束快照,再写终态:客户端看到终态时快照已在。
+          // runTurn 抛错 → 没有 outcome,由内核补 turn.failed error;内核已关库等写入失败只记日志
           try {
             await endSnapshot(snap, target, turnId, startRef)
           } catch (err) {
             ctx.log.warn('end snapshot not recorded', { error: err instanceof Error ? err.message : String(err) })
           }
-          active.delete(sessionId)
+          try {
+            if (outcome) ctx.append({ type: outcome.type, sessionId, payload: outcome.payload })
+          } catch (err) {
+            ctx.log.warn('terminal event not recorded', { error: err instanceof Error ? err.message : String(err) })
+          }
+          active.delete(sessionId) // 取消宽限过后内核可能先写了 cancelled:那时快照还没拍完,仍要报忙
         }
         return true
       })
@@ -108,8 +115,8 @@ export function createLoopDefault(opts: LoopDefaultOpts = {}): Plugin {
         return exclusive(sessionId, async () => {
           const events = ctx.events.history(sessionId)
           if (active.has(sessionId) || hasOpenTurn(sessionId, events)) throw new RpcError(ERR_BUSY, 'turn in progress')
-          const files = await rollbackTurn(snap, { sessionId, cwd }, events, turnId)
-          return { ok: true as const, files }
+          const { files, skipped } = await rollbackTurn(snap, { sessionId, cwd }, events, turnId)
+          return { ok: true as const, files, ...(skipped.length && { skipped }) }
         })
       })
 
