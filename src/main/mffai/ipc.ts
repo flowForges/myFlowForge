@@ -4,6 +4,8 @@ import type { Settings } from '../config/schema'
 
 type HostModule = typeof import('./host')
 type AddAccountInput = import('./host').AddAccountInput
+type PromptOpts = import('./host').PromptOpts
+type ApprovalDecision = import('./host').ApprovalDecision
 
 export interface MffaiIpcDeps {
   handle: (ch: string, fn: (...a: unknown[]) => unknown) => void
@@ -30,6 +32,18 @@ function modelRef(v: unknown): { accountId: string; modelId: string } | undefine
   const o = obj(v)
   return typeof o.accountId === 'string' && typeof o.modelId === 'string' ? { accountId: o.accountId, modelId: o.modelId } : undefined
 }
+
+/** 调试会话选项:cwd 去空白后非空才带,approvalMode 只认 ask / auto;都没有 → undefined */
+function promptOpts(v: unknown): PromptOpts | undefined {
+  const o = obj(v)
+  const out: PromptOpts = {}
+  const cwd = str(o.cwd).trim()
+  if (cwd) out.cwd = cwd
+  if (o.approvalMode === 'ask' || o.approvalMode === 'auto') out.approvalMode = o.approvalMode
+  return Object.keys(out).length ? out : undefined
+}
+
+const DECISIONS: readonly unknown[] = ['allow', 'allow_session', 'deny'] satisfies ApprovalDecision[]
 
 /** 只挑添加账号认得的字段(commandId 由宿主生成);其余校验交给工作进程 */
 function addAccountInput(v: unknown): AddAccountInput {
@@ -95,10 +109,17 @@ export function registerMffaiIpc(deps: MffaiIpcDeps): void {
     return fn(await loadHost(), ...a)
   }
 
-  deps.handle(CH.mffaiPrompt, requireEnabled((h, text, model) => {
+  deps.handle(CH.mffaiPrompt, requireEnabled((h, text, model, opts) => {
+    const t = String(text ?? '')
     const ref = modelRef(model)
-    return ref ? h.prompt(String(text ?? ''), ref) : h.prompt(String(text ?? ''))
+    const o = promptOpts(opts)
+    return o ? h.prompt(t, ref, o) : ref ? h.prompt(t, ref) : h.prompt(t)
   }))
+  deps.handle(CH.mffaiApprovalRespond, requireEnabled((h, id, decision) => {
+    if (!DECISIONS.includes(decision)) throw new Error('invalid decision')
+    return h.approvalRespond(str(id), decision as ApprovalDecision)
+  }))
+  deps.handle(CH.mffaiRollback, requireEnabled((h, sessionId, turnId) => h.rollback(str(sessionId), str(turnId))))
   deps.handle(CH.mffaiModelsCatalog, requireEnabled((h) => h.modelsCatalog()))
   deps.handle(CH.mffaiModelsAccounts, requireEnabled((h) => h.modelsAccounts()))
   deps.handle(CH.mffaiModelsAddAccount, requireEnabled((h, input) => h.addAccount(addAccountInput(input))))

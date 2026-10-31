@@ -454,6 +454,8 @@ export const CH = {
   mffaiChatgptBegin: 'mffai:auth:chatgpt:begin',
   mffaiChatgptCancel: 'mffai:auth:chatgpt:cancel',
   mffaiOpenExternal: 'mffai:openExternal', // 只放行 https://chatgpt.com/ (用量链接)
+  mffaiApprovalRespond: 'mffai:approval:respond',
+  mffaiRollback: 'mffai:turn:rollback',
   mffaiEvent: 'mffai:event',   // main → renderer
   mffaiAlert: 'mffai:alert',   // main → renderer
 } as const

@@ -11,6 +11,7 @@ const MODEL_CHANNELS = [
   CH.mffaiModelsTestAccount, CH.mffaiModelsSetDefault, CH.mffaiModelsQuota,
   CH.mffaiChatgptBegin, CH.mffaiChatgptCancel, CH.mffaiOpenExternal,
 ]
+const CODING_CHANNELS = [CH.mffaiApprovalRespond, CH.mffaiRollback]
 
 function setup(mffai: Settings['mffai']) {
   let settings: Settings = { ...defaultSettings(), mffai }
@@ -34,6 +35,8 @@ function setup(mffai: Settings['mffai']) {
     chatgptBegin: vi.fn(async () => ({ flowId: 'f1' })),
     chatgptCancel: vi.fn(async () => ({ ok: true })),
     openExternal: vi.fn(async () => {}),
+    approvalRespond: vi.fn(async () => ({ ok: true })),
+    rollback: vi.fn(async () => ({ ok: true, files: 2 })),
   }
   const openExternal = vi.fn()
   const loadHost = vi.fn(async () => host as never)
@@ -64,7 +67,7 @@ describe('registerMffaiIpc', () => {
     expect([...handlers.keys()].sort()).toEqual([
       CH.mffaiState, CH.mffaiEnable, CH.mffaiDisable, CH.mffaiRestart,
       CH.mffaiResetTrip, CH.mffaiSetAutostart, CH.mffaiTail, CH.mffaiPrompt,
-      ...MODEL_CHANNELS,
+      ...MODEL_CHANNELS, ...CODING_CHANNELS,
     ].sort())
   })
 
@@ -174,6 +177,48 @@ describe('mffai 模型 / ChatGPT 登录通道', () => {
     expect(host.openExternal).toHaveBeenCalledWith('https://chatgpt.com/x', openExternal)
     await invoke(CH.mffaiPrompt, 'hi', { accountId: 'a', modelId: 'm', extra: 1 })
     expect(host.prompt).toHaveBeenLastCalledWith('hi', { accountId: 'a', modelId: 'm' })
+  })
+})
+
+describe('mffai 审批 / 回滚通道', () => {
+  it('通道名', () => {
+    expect(CODING_CHANNELS).toEqual(['mffai:approval:respond', 'mffai:turn:rollback'])
+  })
+
+  it('未启用:两个通道都报未启用,不加载 host', async () => {
+    const { invoke, loadHost } = setup({ enabled: false, autostart: true })
+    await expect(invoke(CH.mffaiApprovalRespond, 'ap1', 'allow')).rejects.toThrow('mff-ai 未启用')
+    await expect(invoke(CH.mffaiRollback, 's1', 't1')).rejects.toThrow('mff-ai 未启用')
+    expect(loadHost).not.toHaveBeenCalled()
+  })
+
+  it('已启用:转发;decision 只认三个值', async () => {
+    const { invoke, host } = setup({ enabled: true, autostart: true })
+    for (const d of ['allow', 'allow_session', 'deny']) {
+      expect(await invoke(CH.mffaiApprovalRespond, 'ap1', d)).toEqual({ ok: true })
+      expect(host.approvalRespond).toHaveBeenLastCalledWith('ap1', d)
+    }
+    for (const bad of ['always', '', undefined, { decision: 'allow' }]) {
+      await expect(invoke(CH.mffaiApprovalRespond, 'ap1', bad)).rejects.toThrow()
+    }
+    expect(host.approvalRespond).toHaveBeenCalledTimes(3)
+    expect(await invoke(CH.mffaiRollback, 's1', 't1')).toEqual({ ok: true, files: 2 })
+    expect(host.rollback).toHaveBeenCalledWith('s1', 't1')
+  })
+
+  it('prompt 的 opts 只放行 cwd(去空白)与 approvalMode(ask / auto)', async () => {
+    const { invoke, host } = setup({ enabled: true, autostart: true })
+    const m = { accountId: 'a', modelId: 'm' }
+    await invoke(CH.mffaiPrompt, 'hi', m, { cwd: '  /repo ', approvalMode: 'auto', toolset: 'edit', junk: 1 })
+    expect(host.prompt).toHaveBeenLastCalledWith('hi', m, { cwd: '/repo', approvalMode: 'auto' })
+    await invoke(CH.mffaiPrompt, 'hi', undefined, { cwd: '/repo', approvalMode: 'yolo' })
+    expect(host.prompt).toHaveBeenLastCalledWith('hi', undefined, { cwd: '/repo' })
+    await invoke(CH.mffaiPrompt, 'hi', m, { cwd: 3, approvalMode: 'ask' })
+    expect(host.prompt).toHaveBeenLastCalledWith('hi', m, { approvalMode: 'ask' })
+    await invoke(CH.mffaiPrompt, 'hi', m, { cwd: '   ' })
+    expect(host.prompt).toHaveBeenLastCalledWith('hi', m)
+    await invoke(CH.mffaiPrompt, 'hi', undefined, 'x')
+    expect(host.prompt).toHaveBeenLastCalledWith('hi')
   })
 })
 

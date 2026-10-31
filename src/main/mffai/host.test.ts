@@ -98,6 +98,8 @@ function fakeDaemon(dir: string) {
           case 'auth.chatgpt.begin': return { flowId: 'f1', authUrl: d.authUrl }
           case 'auth.chatgpt.cancel': return { ok: true }
           case 'session.prompt': return { accepted: true, turnId: 't1' }
+          case 'approval.respond': return { ok: true }
+          case 'turn.rollback': return { ok: true, files: 1 }
         }
         throw new Error(`unexpected ${method}`)
       },
@@ -596,6 +598,41 @@ describe('mffai host', () => {
     expect(creates.map((p) => p.model)).toEqual([a, { accountId: 'acc1', modelId: 'gpt-5-mini' }, undefined])
     const prompts = t.d.workerCalls.filter(([m]) => m === 'session.prompt').map(([, p]) => (p as any).sessionId)
     expect(prompts).toEqual(['s1', 's1', 's2', 's3'])
+  })
+
+  it('prompt 带工作目录 / 审批模式:任一变了就新建会话,approvalMode 与 cwd 进 session.create', async () => {
+    const t = setup({ up: true })
+    await t.host.ensureRunning()
+    const a = { accountId: 'acc1', modelId: 'gpt-5' }
+    await t.host.prompt('1', a)
+    await t.host.prompt('2', a, { cwd: '/repo' })
+    await t.host.prompt('3', a, { cwd: '/repo', approvalMode: 'ask' })
+    await t.host.prompt('4', a, { cwd: '/repo', approvalMode: 'auto' })
+    await t.host.prompt('5', a, { cwd: '/other', approvalMode: 'auto' })
+    await t.host.prompt('6', a, { approvalMode: 'auto' })
+    const creates = t.d.workerCalls.filter(([m]) => m === 'session.create').map(([, p]) => p as any)
+    expect(creates.map((p) => [p.cwd, p.approvalMode])).toEqual([
+      [undefined, undefined], ['/repo', 'ask'], ['/repo', 'auto'], ['/other', 'auto'], [undefined, undefined],
+    ])
+    expect(creates.every((p) => !('cwd' in p) || p.cwd)).toBe(true)
+    const prompts = t.d.workerCalls.filter(([m]) => m === 'session.prompt').map(([, p]) => (p as any).sessionId)
+    expect(prompts).toEqual(['s1', 's2', 's2', 's3', 's4', 's5'])
+  })
+
+  it('approvalRespond / rollback 转给工作进程,rollback 每次新 commandId', async () => {
+    const t = setup({ up: true })
+    await t.host.ensureRunning()
+    expect(await t.host.approvalRespond('ap1', 'allow_session')).toEqual({ ok: true })
+    expect(await t.host.rollback('s1', 't1')).toEqual({ ok: true, files: 1 })
+    await t.host.rollback('s1', 't1')
+    const call = (m: string) => t.d.workerCalls.filter(([x]) => x === m).map(([, p]) => p as any)
+    expect(call('approval.respond')).toEqual([{ approvalId: 'ap1', decision: 'allow_session' }])
+    const rb = call('turn.rollback')
+    expect(rb).toEqual([
+      { commandId: expect.any(String), sessionId: 's1', turnId: 't1' },
+      { commandId: expect.any(String), sessionId: 's1', turnId: 't1' },
+    ])
+    expect(rb[0].commandId).not.toBe(rb[1].commandId)
   })
 
   it('models.* 透传给工作进程;addAccount 原样带 apiKey / restrictionAck 并生成 commandId', async () => {

@@ -539,8 +539,12 @@ const api = {
     resetTrip: (): Promise<import('@mffai/protocol').MffaiState> => ipcRenderer.invoke(CH.mffaiResetTrip),
     setAutostart: (on: boolean): Promise<import('@mffai/protocol').MffaiState> => ipcRenderer.invoke(CH.mffaiSetAutostart, on),
     tail: (limit: number): Promise<{ events: import('@mffai/protocol').KernelEvent[] }> => ipcRenderer.invoke(CH.mffaiTail, limit),
-    prompt: (text: string, model?: import('@mffai/protocol').ModelRef): Promise<{ accepted: boolean; turnId: string }> =>
-      ipcRenderer.invoke(CH.mffaiPrompt, text, model),
+    prompt: (text: string, model?: import('@mffai/protocol').ModelRef, opts?: { cwd?: string; approvalMode?: 'ask' | 'auto' }): Promise<{ accepted: boolean; turnId: string }> =>
+      ipcRenderer.invoke(CH.mffaiPrompt, text, model, opts),
+    approvalRespond: (approvalId: string, decision: 'allow' | 'allow_session' | 'deny'): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke(CH.mffaiApprovalRespond, approvalId, decision),
+    rollback: (sessionId: string, turnId: string): Promise<{ ok: true; files: number; skipped?: string[] }> =>
+      ipcRenderer.invoke(CH.mffaiRollback, sessionId, turnId),
     models: {
       catalog: (): Promise<import('@mffai/protocol').CatalogView> => ipcRenderer.invoke(CH.mffaiModelsCatalog),
       accounts: (): Promise<{ accounts: import('@mffai/protocol').AccountView[]; secretsBackend: import('@mffai/protocol').SecretsBackend }> =>

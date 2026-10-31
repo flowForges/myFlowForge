@@ -58,6 +58,9 @@ const POLL_MS = 200
 /** 页面能填的添加账号字段;commandId 由宿主生成 */
 export type AddAccountInput = Omit<WorkerParams<'models.addAccount'>, 'commandId'>
 export type OpenExternal = (url: string) => void
+/** 调试会话选项:cwd 非空才建编码会话;审批模式建会话时定下 */
+export interface PromptOpts { cwd?: string; approvalMode?: 'ask' | 'auto' }
+export type ApprovalDecision = WorkerParams<'approval.respond'>['decision']
 
 // 只认 https + 精确主机名 + 前缀,挡住 chatgpt.com.evil.com / chatgpt.com@evil.com 之类;返回规范化后的地址
 function allowedUrl(url: unknown, prefix: string): string | undefined {
@@ -98,7 +101,7 @@ export function createMffaiHost(deps: HostDeps) {
   const kill = deps.kill ?? ((pid: number, sig: NodeJS.Signals) => void process.kill(pid, sig))
   const spec = { execPath, daemonJs: deps.daemonJs }
 
-  // 调试会话:每个模型选择一个,选择变了就新建
+  // 调试会话:模型 + 工作目录 + 审批模式,任一变了就新建
   let debugSession: { key: string; id: string } | undefined
 
   const control = <M extends ControlMethodName>(m: M, p?: ControlParams<M>): Promise<ControlResult<M>> =>
@@ -321,15 +324,24 @@ export function createMffaiHost(deps: HostDeps) {
     async tail(limit: number): Promise<WorkerResult<'events.tail'>> {
       return requireWorker().call('events.tail', { limit })
     },
-    async prompt(text: string, model?: ModelRef): Promise<WorkerResult<'session.prompt'>> {
+    async prompt(text: string, model?: ModelRef, opts?: PromptOpts): Promise<WorkerResult<'session.prompt'>> {
       const w = requireWorker()
-      const key = model ? JSON.stringify([model.accountId, model.modelId]) : ''
+      const cwd = opts?.cwd ?? ''
+      const approvalMode = opts?.approvalMode ?? 'ask'
+      const key = JSON.stringify([model?.accountId, model?.modelId, cwd, approvalMode])
       if (debugSession?.key !== key) {
-        const params = { commandId: randomUUID(), title: 'debug', ...(model ? { model: { accountId: model.accountId, modelId: model.modelId } } : {}) }
+        const params = {
+          commandId: randomUUID(),
+          title: 'debug',
+          ...(model ? { model: { accountId: model.accountId, modelId: model.modelId } } : {}),
+          ...(cwd ? { cwd, approvalMode } : {}),
+        }
         debugSession = { key, id: (await w.call('session.create', params)).sessionId }
       }
       return w.call('session.prompt', { commandId: randomUUID(), sessionId: debugSession.id, text })
     },
+    approvalRespond: (approvalId: string, decision: ApprovalDecision) => requireWorker().call('approval.respond', { approvalId, decision }),
+    rollback: (sessionId: string, turnId: string) => requireWorker().call('turn.rollback', { commandId: randomUUID(), sessionId, turnId }),
     // —— 模型 / 账号:原样转给工作进程。★参数可能带 apiKey,绝不写日志
     modelsCatalog: () => requireWorker().call('models.catalog', {}),
     modelsAccounts: () => requireWorker().call('models.accounts', {}),
@@ -381,7 +393,9 @@ export const restart = () => h().restart()
 export const resetTrip = () => h().resetTrip()
 export const setAutostart = (on: boolean) => h().setAutostart(on)
 export const tail = (limit: number) => h().tail(limit)
-export const prompt = (text: string, model?: ModelRef) => h().prompt(text, model)
+export const prompt = (text: string, model?: ModelRef, opts?: PromptOpts) => h().prompt(text, model, opts)
+export const approvalRespond = (approvalId: string, decision: ApprovalDecision) => h().approvalRespond(approvalId, decision)
+export const rollback = (sessionId: string, turnId: string) => h().rollback(sessionId, turnId)
 export const modelsCatalog = () => h().modelsCatalog()
 export const modelsAccounts = () => h().modelsAccounts()
 export const addAccount = (input: AddAccountInput) => h().addAccount(input)
