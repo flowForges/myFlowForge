@@ -25,7 +25,7 @@ import { RpcRegistry } from './rpcRegistry'
 import { openSecretStore, type OpenSecretStoreOpts } from './secrets/secretStore'
 import { ServiceRegistry } from './services'
 import { Sessions, validateCwd } from './sessions'
-import { CLOSE_GRACE_MS } from './shutdown'
+import { CLOSE_GRACE_MS, KILL_LIVE_GRACE_MS } from './shutdown'
 import { overbroadRelocations, snapshotEnv } from '../lib/fs/paths'
 import { killLive, pgidFile, PgidRegistry } from '../lib/proc/pgids'
 import { HARNESS_VERSION } from './version'
@@ -359,7 +359,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
         clearTimeout(timer)
       }
       // shell 留在后台的组(开发服务器等):无主进程比被杀更糟
-      if (pgids) await killLive(pgids).catch(err => log.error('killLive failed', { error: String(err) }))
+      if (pgids) await killLive(pgids, KILL_LIVE_GRACE_MS).catch(err => log.error('killLive failed', { error: String(err) }))
       await host.deactivateAll()
       db.close()
     },

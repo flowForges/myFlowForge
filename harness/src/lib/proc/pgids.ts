@@ -1,7 +1,7 @@
 // shell 进程组登记与孤儿回收(spec §12)。只杀能证明是自己起的组:组长或登记过的组员仍在、启动时间逐字一致
-import { execFileSync } from 'node:child_process'
-import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { execFile, execFileSync } from 'node:child_process'
+import { closeSync, constants, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
 
 /** lib 不引用 kernel:只要这一个方法 */
 export interface PgidLog {
@@ -13,117 +13,191 @@ export interface Member {
   start: string
 }
 
-/** 文件每行一条;`members` 是组长退出时组里还在的进程(组长不在后,靠它们认组) */
+/**
+ * 文件每行一条。`members`:命令跑着时定时刷新、组长退出时再记一次的组员(组长不在后,靠它们认组)。
+ * `boot`:Linux 的 boot_id —— 第 22 项是开机以来的滴答数,换一次开机就不能比
+ */
 export interface PgidEntry {
   pgid: number
   start: string
+  boot?: string
   members?: Member[]
 }
 
 export type Kill = (pid: number, signal: NodeJS.Signals | 0) => unknown
 
+/** 注入的函数:抛错 = 这次查不了(条目留到下次),返回 undefined = 进程不在 */
 export interface ProcDeps {
   kill?: Kill
   startTime?: (pid: number) => string | undefined
   groupMembers?: (pgid: number) => Member[]
+  /** 一次列出多个组的组员(定时刷新用,异步);返回 undefined = 这次列不出来 */
+  listMembers?: (pgids: number[]) => Promise<Map<number, Member[]> | undefined>
   /** 本进程所在的组;拿不到 → 一律不发信号 */
   ownPgid?: () => number | undefined
+  /** 本次开机的标识;Linux 必须有,其余平台不用 */
+  bootId?: () => string | undefined
+  /** 命令跑着时多久刷新一次组员,默认 2 s */
+  refreshMs?: number
   log?: PgidLog
 }
 
-/** 组长退出时最多记这么多组员 */
+/** 每组最多记这么多组员 */
 const MAX_MEMBERS = 32
+const REFRESH_MS = 2_000
 const PS = '/bin/ps'
-const PS_OPTS = { env: { LC_ALL: 'C' }, timeout: 5_000, stdio: ['ignore', 'pipe', 'ignore'] as ('ignore' | 'pipe')[] }
+const PS_TIMEOUT = 2_000
+const PS_OPTS = { env: { LC_ALL: 'C' }, timeout: PS_TIMEOUT, stdio: ['ignore', 'pipe', 'ignore'] as ('ignore' | 'pipe')[] }
 const nullLog: PgidLog = { warn() {} }
 
 export const pgidFile = (dataDir: string) => join(dataDir, 'run', 'shell-pgids')
 
-/** /proc/<pid>/stat 里 comm 之后的字段;fields[0] 是第 3 项 state */
+/** /proc/<pid>/stat 里 comm 之后的字段;fields[0] 是第 3 项 state。进程不在 → undefined,其余错误抛出 */
 function procStat(pid: number | 'self'): string[] | undefined {
+  let s: string
   try {
-    const s = readFileSync(`/proc/${pid}/stat`, 'utf8')
-    return s.slice(s.lastIndexOf(')') + 2).trim().split(' ')
+    s = readFileSync(`/proc/${pid}/stat`, 'utf8')
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT' || (err as NodeJS.ErrnoException).code === 'ESRCH') return undefined
+    throw err
+  }
+  return s.slice(s.lastIndexOf(')') + 2).trim().split(' ')
+}
+
+/** 进程不在 → undefined;查不了(ps 超时 / 不在)→ 抛错 */
+function startTimeStrict(pid: number, platform: NodeJS.Platform): string | undefined {
+  if (!Number.isInteger(pid) || pid <= 0) return undefined
+  if (platform === 'linux') return procStat(pid)?.[19]
+  if (platform === 'darwin') {
+    try {
+      return execFileSync(PS, ['-o', 'lstart=', '-p', String(pid)], PS_OPTS).toString().trim() || undefined
+    } catch (err) {
+      const e = err as { status?: number | null; stdout?: Buffer }
+      if (e.status === 1 && !e.stdout?.toString().trim()) return undefined // 没有这个 pid
+      throw err
+    }
+  }
+  return undefined
+}
+
+/** 进程启动时间,原样字符串;进程不在 / 读不到 → undefined。Linux 第 22 项(时钟滴答),macOS `ps -o lstart=` */
+export function startTime(pid: number, platform: NodeJS.Platform = process.platform): string | undefined {
+  try {
+    return startTimeStrict(pid, platform)
   } catch {
     return undefined
   }
 }
 
-/** 进程启动时间,原样字符串;进程不在 / 读不到 → undefined。Linux 第 22 项(时钟滴答),macOS `ps -o lstart=` */
-export function startTime(pid: number, platform: NodeJS.Platform = process.platform): string | undefined {
-  if (!Number.isInteger(pid) || pid <= 0) return undefined
-  if (platform === 'linux') return procStat(pid)?.[19]
-  if (platform === 'darwin') {
+function scanProc(wanted: Set<number>): Map<number, Member[]> {
+  const out = new Map<number, Member[]>([...wanted].map(g => [g, []]))
+  for (const n of readdirSync('/proc')) {
+    if (!/^\d+$/.test(n)) continue
+    let f: string[] | undefined
     try {
-      const out = execFileSync(PS, ['-o', 'lstart=', '-p', String(pid)], PS_OPTS).toString().trim()
-      return out || undefined
+      f = procStat(Number(n))
     } catch {
-      return undefined // ps 对不存在的 pid 退出码 1
+      continue // 扫描途中退出的进程
     }
-  }
-  return undefined
-}
-
-/** 组 pgid 里现有的进程及其启动时间 */
-export function groupMembers(pgid: number, platform: NodeJS.Platform = process.platform): Member[] {
-  const out: Member[] = []
-  if (platform === 'linux') {
-    let names: string[] = []
-    try {
-      names = readdirSync('/proc')
-    } catch {
-      return out
-    }
-    for (const n of names) {
-      if (!/^\d+$/.test(n)) continue
-      const f = procStat(Number(n))
-      if (f && Number(f[2]) === pgid && f[19]) out.push({ pid: Number(n), start: f[19] })
-    }
-  } else if (platform === 'darwin') {
-    try {
-      const text = execFileSync(PS, ['-A', '-o', 'pid=,pgid=,lstart='], PS_OPTS).toString()
-      for (const line of text.split('\n')) {
-        const m = /^\s*(\d+)\s+(\d+)\s+(.+?)\s*$/.exec(line)
-        if (m && Number(m[2]) === pgid) out.push({ pid: Number(m[1]), start: m[3] })
-      }
-    } catch {
-      // 列不出来 → 当作没有组员,不杀
-    }
+    const g = Number(f?.[2])
+    if (f && wanted.has(g) && f[19]) out.get(g)!.push({ pid: Number(n), start: f[19] })
   }
   return out
 }
 
-export function ownPgid(platform: NodeJS.Platform = process.platform): number | undefined {
-  if (platform === 'linux') {
-    const v = Number(procStat('self')?.[2])
-    return Number.isInteger(v) && v > 0 ? v : undefined
+function parsePs(text: string, wanted: Set<number>): Map<number, Member[]> {
+  const out = new Map<number, Member[]>([...wanted].map(g => [g, []]))
+  for (const line of text.split('\n')) {
+    const m = /^\s*(\d+)\s+(\d+)\s+(.+?)\s*$/.exec(line)
+    if (m && wanted.has(Number(m[2]))) out.get(Number(m[2]))!.push({ pid: Number(m[1]), start: m[3] })
   }
-  if (platform === 'darwin') {
-    try {
-      const v = Number(execFileSync(PS, ['-o', 'pgid=', '-p', String(process.pid)], PS_OPTS).toString().trim())
-      return Number.isInteger(v) && v > 0 ? v : undefined
-    } catch {
-      return undefined
+  return out
+}
+
+const PS_ALL = ['-A', '-o', 'pid=,pgid=,lstart=']
+
+function groupMembersStrict(pgid: number, platform: NodeJS.Platform): Member[] {
+  const wanted = new Set([pgid])
+  if (platform === 'linux') return scanProc(wanted).get(pgid)!
+  if (platform === 'darwin') return parsePs(execFileSync(PS, PS_ALL, PS_OPTS).toString(), wanted).get(pgid)!
+  return []
+}
+
+/** 组 pgid 里现有的进程及其启动时间;列不出来 → [] */
+export function groupMembers(pgid: number, platform: NodeJS.Platform = process.platform): Member[] {
+  try {
+    return groupMembersStrict(pgid, platform)
+  } catch {
+    return []
+  }
+}
+
+/** 一次列出多个组的组员;darwin 异步跑一次 ps。列不出来 → undefined */
+export async function listMembers(pgids: number[], platform: NodeJS.Platform = process.platform): Promise<Map<number, Member[]> | undefined> {
+  const wanted = new Set(pgids)
+  try {
+    if (platform === 'linux') return scanProc(wanted)
+    if (platform === 'darwin') {
+      const text = await new Promise<string>((res, rej) =>
+        execFile(PS, PS_ALL, { env: PS_OPTS.env, timeout: PS_TIMEOUT, maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => (err ? rej(err) : res(stdout))),
+      )
+      return parsePs(text, wanted)
     }
+  } catch {
+    // 下一轮再试
   }
   return undefined
 }
 
+export function ownPgid(platform: NodeJS.Platform = process.platform): number | undefined {
+  try {
+    const v =
+      platform === 'linux' ? Number(procStat('self')?.[2])
+      : platform === 'darwin' ? Number(execFileSync(PS, ['-o', 'pgid=', '-p', String(process.pid)], PS_OPTS).toString().trim())
+      : NaN
+    return Number.isInteger(v) && v > 0 ? v : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Linux 的 boot_id;其余平台 undefined(macOS 的 lstart 是绝对时间,不需要) */
+export function bootId(platform: NodeJS.Platform = process.platform): string | undefined {
+  if (platform !== 'linux') return undefined
+  try {
+    return readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim() || undefined
+  } catch {
+    return undefined
+  }
+}
+
 interface Resolved {
+  platform: NodeJS.Platform
   kill: Kill
   startTime: (pid: number) => string | undefined
   groupMembers: (pgid: number) => Member[]
+  listMembers: (pgids: number[]) => Promise<Map<number, Member[]> | undefined>
   ownPgid: () => number | undefined
+  bootId: () => string | undefined
+  refreshMs: number
   log: PgidLog
 }
 
+const once = <T>(fn: () => T): (() => T) => {
+  let v: { v: T } | undefined
+  return () => (v ??= { v: fn() }).v
+}
+
 function resolve(platform: NodeJS.Platform, d: ProcDeps): Resolved {
-  let own: { v: number | undefined } | undefined
   return {
+    platform,
     kill: d.kill ?? ((pid, sig) => process.kill(pid, sig)),
-    startTime: d.startTime ?? (pid => startTime(pid, platform)),
-    groupMembers: d.groupMembers ?? (pgid => groupMembers(pgid, platform)),
-    ownPgid: () => (own ??= { v: (d.ownPgid ?? (() => ownPgid(platform)))() }).v,
+    startTime: d.startTime ?? (pid => startTimeStrict(pid, platform)),
+    groupMembers: d.groupMembers ?? (pgid => groupMembersStrict(pgid, platform)),
+    listMembers: d.listMembers ?? (pgids => listMembers(pgids, platform)),
+    ownPgid: once(d.ownPgid ?? (() => ownPgid(platform))),
+    bootId: once(d.bootId ?? (() => bootId(platform))),
+    refreshMs: d.refreshMs ?? REFRESH_MS,
     log: d.log ?? nullLog,
   }
 }
@@ -140,17 +214,30 @@ function groupExists(pgid: number, kill: Kill): boolean {
   }
 }
 
+type Verdict = 'ours' | 'not' | 'unknown'
+
 /**
- * 这个组是不是登记时的那个。组长活着:它是会话首进程(detached → setsid),换不了组,启动时间一致就是;
+ * 这个组是不是登记时的那个。Linux 先比开机标识(启动时间是开机以来的滴答)。
+ * 组长活着:它是会话首进程(detached → setsid),换不了组,启动时间一致就是;
  * 不一致 = pid 已被复用(组 id 在组存续期间不会被分给新进程,所以原组已不在)。
- * 组长已死:组里得有一个登记过的组员,pid 与启动时间都对得上。
+ * 组长已死:组里得有一个登记过的组员,pid 与启动时间都对得上(setpgid 只能在同一会话里换组)。
+ * 查的过程中出错 → unknown(不杀,条目留到下次)。
  */
-function verified(e: PgidEntry, r: Resolved): boolean {
-  const lead = r.startTime(e.pgid)
-  if (lead !== undefined) return lead === e.start
-  const anchors = e.members ?? []
-  if (!anchors.length) return false
-  return r.groupMembers(e.pgid).some(m => m.pid !== e.pgid && anchors.some(a => a.pid === m.pid && a.start === m.start))
+function verify(e: PgidEntry, r: Resolved): Verdict {
+  try {
+    if (r.platform === 'linux') {
+      const boot = r.bootId()
+      if (boot === undefined) return 'unknown'
+      if (e.boot !== boot) return 'not'
+    }
+    const lead = r.startTime(e.pgid)
+    if (lead !== undefined) return lead === e.start ? 'ours' : 'not'
+    const anchors = e.members ?? []
+    if (!anchors.length) return 'not'
+    return r.groupMembers(e.pgid).some(m => m.pid !== e.pgid && anchors.some(a => a.pid === m.pid && a.start === m.start)) ? 'ours' : 'not'
+  } catch {
+    return 'unknown'
+  }
 }
 
 /** 唯一发信号的地方:不碰 pid ≤ 1、本进程、本进程所在的组;拿不到本组 id 时一律不发 */
@@ -183,10 +270,17 @@ export function parseEntries(text: string): PgidEntry[] {
     const e = v as PgidEntry
     if (!e || typeof e !== 'object' || !validPgid(e.pgid) || typeof e.start !== 'string') continue
     const members = Array.isArray(e.members) ? e.members.map(parseMember).filter((m): m is Member => !!m).slice(0, MAX_MEMBERS) : []
-    out.set(e.pgid, { pgid: e.pgid, start: e.start, ...(members.length && { members }) })
+    out.set(e.pgid, {
+      pgid: e.pgid,
+      start: e.start,
+      ...(typeof e.boot === 'string' && e.boot && { boot: e.boot }),
+      ...(members.length && { members }),
+    })
   }
   return [...out.values()]
 }
+
+const serialize = (entries: Iterable<PgidEntry>) => [...entries].map(e => JSON.stringify(e) + '\n').join('')
 
 /** 临时文件 + rename,0600 */
 function writeAtomic(file: string, text: string): void {
@@ -196,8 +290,51 @@ function writeAtomic(file: string, text: string): void {
   renameSync(tmp, file)
 }
 
+/** 只读本用户、0600 的普通文件;不跟随符号链接。不在 → undefined;不认 → 抛错 */
+function readOwnFile(file: string): string | undefined {
+  let fd: number
+  try {
+    fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw err
+  }
+  try {
+    const st = fstatSync(fd)
+    const uid = process.getuid?.()
+    if (!st.isFile() || (uid !== undefined && st.uid !== uid) || (st.mode & 0o777) !== 0o600) throw new Error('pgid file is not a private regular file')
+    return readFileSync(fd, 'utf8')
+  } finally {
+    closeSync(fd)
+  }
+}
+
+/** 上次崩在 write 与 rename 之间留下的临时文件 */
+function removeStaleTemps(file: string): void {
+  const dir = dirname(file)
+  const re = new RegExp(`^${basename(file).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.\\d+\\.tmp$`)
+  let names: string[] = []
+  try {
+    names = readdirSync(dir)
+  } catch {
+    return
+  }
+  for (const n of names) {
+    if (!re.test(n)) continue
+    try {
+      unlinkSync(join(dir, n))
+    } catch {
+      // 下次再删
+    }
+  }
+}
+
 export class PgidRegistry {
   private entries = new Map<number, PgidEntry>()
+  /** 组长还在跑的组:定时刷新组员 */
+  private running = new Set<number>()
+  private timer: NodeJS.Timeout | undefined
+  private inflight = new Set<Promise<void>>()
   private r: Resolved
 
   /** 从空开始:上一个工作进程留下的条目由 reapOrphans 在建内核之前处理掉 */
@@ -217,27 +354,34 @@ export class PgidRegistry {
         this.r.log.warn('pgid start time unavailable, not registered', { pgid })
         return
       }
-      this.entries.set(pgid, { pgid, start })
+      const boot = this.r.bootId()
+      this.entries.set(pgid, { pgid, start, ...(boot !== undefined && { boot }) })
+      this.running.add(pgid)
       this.flush()
+      this.schedule()
     } catch (err) {
       this.r.log.warn('pgid registry add failed', { error: String(err) })
     }
   }
 
-  /** 组长结束后调用:整组已不在 → 删;还有后台进程 → 留着,并记下组员(之后靠它们认组) */
+  /** 组长结束后调用:整组已不在 → 删;还有后台进程 → 留着,并(异步)记下组员,之后靠它们认组 */
   settle(pgid: number): void {
     try {
-      const e = this.entries.get(pgid)
-      if (!e) return
-      if (!groupExists(pgid, this.r.kill)) this.entries.delete(pgid)
-      else {
-        const members = this.r.groupMembers(pgid).filter(m => m.pid !== pgid).slice(0, MAX_MEMBERS)
-        if (members.length) e.members = members
-      }
-      this.flush()
+      this.running.delete(pgid)
+      this.schedule()
+      if (!this.entries.has(pgid)) return
+      if (!groupExists(pgid, this.r.kill)) {
+        this.entries.delete(pgid)
+        this.flush()
+      } else this.refresh([pgid])
     } catch (err) {
       this.r.log.warn('pgid registry settle failed', { error: String(err) })
     }
+  }
+
+  /** 等进行中的组员刷新写完 */
+  async idle(): Promise<void> {
+    while (this.inflight.size) await Promise.all([...this.inflight])
   }
 
   /** 仍存活、且能证明是自己起的组;顺手删掉已不在的 */
@@ -248,8 +392,9 @@ export class PgidRegistry {
       for (const e of [...this.entries.values()]) {
         if (!groupExists(e.pgid, this.r.kill)) {
           this.entries.delete(e.pgid)
+          this.running.delete(e.pgid)
           changed = true
-        } else if (verified(e, this.r)) out.push(e.pgid)
+        } else if (verify(e, this.r) === 'ours') out.push(e.pgid)
       }
       if (changed) this.flush()
     } catch (err) {
@@ -269,6 +414,7 @@ export class PgidRegistry {
 
   /** 全部清掉(关闭时杀完之后) */
   clear(): void {
+    this.dispose()
     try {
       this.entries.clear()
       this.flush()
@@ -277,47 +423,100 @@ export class PgidRegistry {
     }
   }
 
+  /** 停掉刷新定时器,文件不动 */
+  dispose(): void {
+    this.running.clear()
+    this.schedule()
+  }
+
+  /** 有在跑的命令就开着定时器(unref,不拖住退出),没有就停 */
+  private schedule(): void {
+    if (this.running.size && !this.timer) {
+      this.timer = setInterval(() => {
+        if (!this.inflight.size) this.refresh([...this.running]) // 上一轮还没回来就跳过
+      }, this.r.refreshMs)
+      this.timer.unref()
+    } else if (!this.running.size && this.timer) {
+      clearInterval(this.timer)
+      this.timer = undefined
+    }
+  }
+
+  /** 一次列出这些组的组员,写回条目;列不出来 → 留着旧的 */
+  private refresh(pgids: number[]): void {
+    if (!pgids.length) return
+    const p = (async () => {
+      try {
+        const map = await this.r.listMembers(pgids)
+        if (!map) return
+        let changed = false
+        for (const g of pgids) {
+          const e = this.entries.get(g)
+          const now = (map.get(g) ?? []).filter(m => m.pid !== g).slice(0, MAX_MEMBERS)
+          if (!e || !now.length || JSON.stringify(e.members) === JSON.stringify(now)) continue
+          e.members = now
+          changed = true
+        }
+        if (changed) this.flush()
+      } catch (err) {
+        this.r.log.warn('pgid member refresh failed', { error: String(err) })
+      }
+    })()
+    this.inflight.add(p)
+    void p.finally(() => this.inflight.delete(p))
+  }
+
   private flush(): void {
-    writeAtomic(this.file, [...this.entries.values()].map(e => JSON.stringify(e) + '\n').join(''))
+    writeAtomic(this.file, serialize(this.entries.values()))
   }
 }
 
 /**
  * 工作进程启动时(内核建好之前)处理上一个工作进程留下的组(spec §12):能证明是自己的 → SIGKILL 整组;
- * pid 被复用 / 认不出 → 跳过。然后清空文件。文件不在或读不了 → 什么都不做。
+ * pid 被复用 / 别的开机 / 认不出 → 跳过并丢掉;这次查不了(ps 失败等)→ 跳过并留到下次。
+ * 文件不在、不是本用户 0600 的普通文件 → 什么都不做。
  */
 export function reapOrphans(file: string, opts: ProcDeps & { platform?: NodeJS.Platform } = {}): { killed: number[]; skipped: number[] } {
   const platform = opts.platform ?? process.platform
   const r = resolve(platform, opts)
   const res = { killed: [] as number[], skipped: [] as number[] }
   if (platform === 'win32') return res
-  let text: string
+  removeStaleTemps(file)
+  let text: string | undefined
   try {
-    text = readFileSync(file, 'utf8')
+    text = readOwnFile(file)
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') r.log.warn('pgid file unreadable', { error: String(err) })
+    r.log.warn('pgid file refused', { error: String(err) })
     return res
   }
+  if (text === undefined) return res
+  const keep: PgidEntry[] = []
   try {
     for (const e of parseEntries(text)) {
       if (!groupExists(e.pgid, r.kill)) continue
-      if (verified(e, r) && signalGroup(e.pgid, 'SIGKILL', r)) res.killed.push(e.pgid)
-      else res.skipped.push(e.pgid)
+      const v = verify(e, r)
+      if (v === 'ours' && signalGroup(e.pgid, 'SIGKILL', r)) res.killed.push(e.pgid)
+      else {
+        res.skipped.push(e.pgid)
+        if (v === 'unknown' || (v === 'ours' && r.ownPgid() === undefined)) keep.push(e)
+      }
     }
   } catch (err) {
     r.log.warn('pgid reap failed', { error: String(err) })
   }
   try {
-    if (text) writeAtomic(file, '')
+    if (text) writeAtomic(file, serialize(keep))
   } catch (err) {
     r.log.warn('pgid file truncate failed', { error: String(err) })
   }
-  if (res.killed.length || res.skipped.length) r.log.warn('reaped orphan process groups', res)
+  if (res.killed.length || res.skipped.length) r.log.warn('reaped orphan process groups', { ...res, kept: keep.map(e => e.pgid) })
   return res
 }
 
 /** 正常关闭:登记中仍存活的组先 SIGTERM,graceMs 内没退净再 SIGKILL;然后清空登记 */
 export async function killLive(registry: PgidRegistry, graceMs = 1000): Promise<void> {
+  registry.dispose()
+  await registry.idle() // 组长刚退时的组员记录要先写完,否则认不出组
   const sent = registry.live().filter(g => registry.signal(g, 'SIGTERM'))
   if (sent.length) {
     const end = Date.now() + graceMs
