@@ -54,7 +54,7 @@ describe('killTree', () => {
     killTree(child)
 
     expect(await settleDead(grandPid)).toBe(false)
-    expect(alive(child.pid!)).toBe(false)
+    expect(await settleDead(child.pid!)).toBe(false) // 子进程收尸前是僵尸,kill(pid, 0) 仍成功:要等
   }, 60000)
 
   it('★★ 对照组:老写法 child.kill() 确实会漏孤儿(这就是被修掉的 bug 本身)', async () => {
