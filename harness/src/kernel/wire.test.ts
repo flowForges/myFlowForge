@@ -6,6 +6,7 @@ import { createKernel, type Kernel } from './kernel'
 import { startRpcServer } from './rpcServer'
 import { toWire, WIRE_CONTENT_MAX } from './wire'
 import { connectClient, type KernelEvent } from '../protocol/index'
+import { NO_SANDBOX } from '../../test/sandboxStub'
 
 const ev = (type: KernelEvent['type'], payload: unknown): KernelEvent => ({ seq: 1, ts: 2, type, sessionId: 's', payload })
 const ended = (content: string) => ({ turnId: 't', callId: 'c', name: 'read', ok: true, ms: 1, content })
@@ -60,7 +61,7 @@ describe('wire view in the kernel and the server', () => {
   let closers: Array<() => unknown> = []
   beforeEach(async () => {
     dir = mkdtempSync(join(tmpdir(), 'mffai-wire-'))
-    kernel = await createKernel({ dataDir: dir, plugins: [], secrets: { osBackend: false } })
+    kernel = await createKernel({ sandbox: NO_SANDBOX, dataDir: dir, plugins: [], secrets: { osBackend: false } })
     closers = [() => kernel.close()]
   })
   afterEach(async () => {

@@ -10,6 +10,7 @@ import toolsRegistry from '../tools-registry'
 import { createToolsCoding } from './index'
 import { clampTimeout, runShell, shellTool, MAX_OUTPUT } from './shell'
 import { parseEntries, pgidFile } from '../../lib/proc/pgids'
+import { NO_SANDBOX } from '../../../test/sandboxStub'
 
 const posix = process.platform !== 'win32'
 
@@ -83,7 +84,7 @@ async function boot(approvalMode: 'ask' | 'auto' = 'auto', loginPath: () => Prom
       sessions = ctx.services.get<Sessions>('sessions')
     },
   }
-  const k = await createKernel({
+  const k = await createKernel({ sandbox: NO_SANDBOX,
     dataDir, home, secrets: { osBackend: false },
     plugins: [toolsRegistry, createToolsCoding({ shellEnv: baseEnv(), loginPath, minTimeoutMs: 100 }), probe],
   })

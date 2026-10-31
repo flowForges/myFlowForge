@@ -10,6 +10,7 @@ import { Sessions, type SessionInfo } from './sessions'
 import type { KernelEvent } from '../protocol/index'
 import { createKernel, type Kernel } from './kernel'
 import type { Plugin } from './pluginHost'
+import { NO_SANDBOX } from '../../test/sandboxStub'
 
 const FULL: SandboxStatus = { level: 'full', missing: [], autoDegraded: false }
 /** 03 的判定表默认在完整沙箱下跑(auto 不降级),没有用户规则 */
@@ -427,7 +428,7 @@ describe('kernel env snapshot', () => {
 
   it('decisions and validateCwd use the env given at createKernel; later mutation changes nothing', async () => {
     const env: NodeJS.ProcessEnv = { GNUPGHOME: join(work, 'gpg') }
-    k = await createKernel({ dataDir, plugins: [probe], home, env, secrets: { osBackend: false } })
+    k = await createKernel({ sandbox: NO_SANDBOX, dataDir, plugins: [probe], home, env, secrets: { osBackend: false } })
     env.GNUPGHOME = join(work, 'elsewhere')
     env.AWS_CONFIG_FILE = join(work, 'aws', 'config')
     const code = await (k.handle('session.create', { commandId: 'c0', cwd: join(work, 'gpg') }) as Promise<unknown>).then(() => undefined, (e: { code?: number }) => e.code)
@@ -445,7 +446,7 @@ describe('kernel env snapshot', () => {
   it('logs one line naming an over-broad variable, without its value', async () => {
     const lines: [string, unknown][] = []
     const log = { info() {}, error() {}, warn: (m: string, d?: unknown) => { lines.push([m, d]) } }
-    k = await createKernel({ dataDir, plugins: [probe], home, env: { CODEX_HOME: home, DOCKER_CONFIG: '/', GNUPGHOME: join(work, 'gpg') }, log, secrets: { osBackend: false } })
+    k = await createKernel({ sandbox: NO_SANDBOX, dataDir, plugins: [probe], home, env: { CODEX_HOME: home, DOCKER_CONFIG: '/', GNUPGHOME: join(work, 'gpg') }, log, secrets: { osBackend: false } })
     const hits = lines.filter(([m]) => m.includes('covers home or root'))
     expect(hits).toHaveLength(1)
     expect(hits[0][1]).toEqual({ vars: 'DOCKER_CONFIG:root,CODEX_HOME:home' })
@@ -455,7 +456,7 @@ describe('kernel env snapshot', () => {
   it('no over-broad line for ordinary values', async () => {
     const lines: string[] = []
     const log = { info() {}, error() {}, warn: (m: string) => { lines.push(m) } }
-    k = await createKernel({ dataDir, plugins: [probe], home, env: { GNUPGHOME: join(work, 'gpg') }, log, secrets: { osBackend: false } })
+    k = await createKernel({ sandbox: NO_SANDBOX, dataDir, plugins: [probe], home, env: { GNUPGHOME: join(work, 'gpg') }, log, secrets: { osBackend: false } })
     expect(lines.filter(m => m.includes('covers home or root'))).toEqual([])
   })
 })

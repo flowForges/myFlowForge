@@ -14,6 +14,7 @@ import { buildAnthropicBody } from '../../lib/models/anthropic'
 import { buildChatBody } from '../../lib/models/chat'
 import { buildResponsesBody } from '../../lib/models/responses'
 import { createModelsRegistry, type RegistryOpts } from './index'
+import { NO_SANDBOX } from '../../../test/sandboxStub'
 
 let dir: string
 let kernels: Kernel[] = []
@@ -77,7 +78,7 @@ async function boot(opts: RegistryOpts = {}, extra: Plugin[] = [], secrets: Omit
     activate(ctx) { svc = ctx.services.get<ModelsService>('models') },
   }
   const t = manualTimers()
-  const k = await createKernel({
+  const k = await createKernel({ sandbox: NO_SANDBOX,
     dataDir: dir,
     plugins: [createModelsRegistry({ timers: t.timers, ...opts }), ...extra, capture],
     secrets,
@@ -396,7 +397,7 @@ describe('updateConfig 收紧', () => {
         ctx.updateConfig('models', { accounts: [{ id: 'a', presetId: 'p', label: 'l' }] })
       },
     }
-    kernels.push(await createKernel({ dataDir: dir, plugins: [fake], secrets: { osBackend: false } }))
+    kernels.push(await createKernel({ sandbox: NO_SANDBOX, dataDir: dir, plugins: [fake], secrets: { osBackend: false } }))
     expect(errs).toHaveLength(2)
     expect(JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')).models.accounts).toEqual([{ id: 'a', presetId: 'p', label: 'l' }])
   })

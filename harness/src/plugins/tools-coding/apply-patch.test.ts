@@ -10,6 +10,7 @@ import type { ToolContext, ToolsService } from '../../lib/tools/types'
 import toolsRegistry from '../tools-registry'
 import { createToolsCoding } from './index'
 import { deleteChecked } from './safeFs'
+import { NO_SANDBOX } from '../../../test/sandboxStub'
 
 let root: string
 let dataDir: string
@@ -49,7 +50,7 @@ async function boot() {
       sessions = ctx.services.get<Sessions>('sessions')
     },
   }
-  const k = await createKernel({ dataDir, home, secrets: { osBackend: false }, plugins: [toolsRegistry, createToolsCoding(), probe] })
+  const k = await createKernel({ sandbox: NO_SANDBOX, dataDir, home, secrets: { osBackend: false }, plugins: [toolsRegistry, createToolsCoding(), probe] })
   kernels.push(k)
   const { sessionId } = (await k.handle('session.create', { commandId: `c${Math.random()}`, cwd, approvalMode: 'ask' })) as { sessionId: string }
   let n = 0

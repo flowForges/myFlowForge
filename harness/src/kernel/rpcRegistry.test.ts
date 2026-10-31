@@ -11,6 +11,7 @@ import { ServiceRegistry } from './services'
 import { RpcError } from './rpcError'
 import { RpcRegistry } from './rpcRegistry'
 import type { WorkerMethodName } from '../protocol/index'
+import { NO_SANDBOX } from '../../test/sandboxStub'
 
 let dir: string
 let kernels: Kernel[] = []
@@ -26,7 +27,7 @@ const plugin = (id: string, activate: (ctx: PluginContext) => void | Promise<voi
   activate,
 })
 async function boot(plugins: Plugin[]) {
-  const k = await createKernel({ dataDir: dir, plugins, secrets: { osBackend: false } })
+  const k = await createKernel({ sandbox: NO_SANDBOX, dataDir: dir, plugins, secrets: { osBackend: false } })
   kernels.push(k)
   return k
 }

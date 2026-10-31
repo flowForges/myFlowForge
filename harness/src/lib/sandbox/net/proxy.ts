@@ -59,6 +59,8 @@ export interface ProxyHandle {
   touch(): void
   /** 关掉(close() 或空闲)后 resolve */
   closed: Promise<void>
+  /** 已开始关闭(close() 或空闲):不能再交给新命令 */
+  readonly closing: boolean
 }
 
 const STATUS_TEXT: Record<number, string> = { 400: 'Bad Request', 403: 'Forbidden', 502: 'Bad Gateway', 503: 'Service Unavailable' }
@@ -526,6 +528,9 @@ export async function startProxy(o: ProxyOptions): Promise<ProxyHandle> {
       if (clients.size === 0) armIdle()
     },
     closed,
+    get closing() {
+      return closing
+    },
   }
 }
 

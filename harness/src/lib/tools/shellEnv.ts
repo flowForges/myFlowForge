@@ -55,6 +55,47 @@ export function shellEnv(base: NodeJS.ProcessEnv, opts: { platform: NodeJS.Platf
   return { ...env, ...FIXED }
 }
 
+/** 沙箱里指进会话临时目录的缓存变量(spec §10);可写的全局缓存是跨项目投毒的通道 */
+export const CACHE_VARS = [
+  'npm_config_cache', 'npm_config_store_dir', 'YARN_CACHE_FOLDER', 'BUN_INSTALL_CACHE_DIR', 'PIP_CACHE_DIR', 'UV_CACHE_DIR',
+  'XDG_CACHE_HOME', 'GOCACHE', 'GOMODCACHE', 'CARGO_HOME',
+] as const
+const CACHE_DIRS: Record<(typeof CACHE_VARS)[number], string> = {
+  npm_config_cache: 'npm', npm_config_store_dir: 'pnpm-store', YARN_CACHE_FOLDER: 'yarn', BUN_INSTALL_CACHE_DIR: 'bun',
+  PIP_CACHE_DIR: 'pip', UV_CACHE_DIR: 'uv', XDG_CACHE_HOME: 'xdg', GOCACHE: 'go-build', GOMODCACHE: 'go-mod', CARGO_HOME: 'cargo',
+}
+const PROXY_NAMES = ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']
+const LOOPBACK_NO_PROXY = 'localhost,127.0.0.1,::1'
+
+export interface SandboxEnvOpts {
+  /** 本会话临时目录(TMPDIR 与各缓存) */
+  tmp: string
+  /** 子进程看到的代理端口(macOS = 会话代理端口;Linux = 命名空间里中转的端口);没有 → 不设任何代理变量(网络全断) */
+  proxyPort?: number
+  level: 'full' | 'partial'
+  /** macOS R6:本地测试服务器直连(NO_PROXY 列回环);调用方只在 darwin 上传 true */
+  allowLoopback: boolean
+}
+
+/**
+ * 03 的白名单环境之上叠沙箱的覆盖(spec §10、R8)。用户自己的代理变量(含 userinfo)一律去掉;
+ * 被覆盖的变量按大小写不敏感去掉旧值,不留两个拼写
+ */
+export function sandboxEnv(base: NodeJS.ProcessEnv, o: SandboxEnvOpts): NodeJS.ProcessEnv {
+  const over: Record<string, string> = { TMPDIR: o.tmp, MFFAI_SANDBOX: o.level }
+  for (const k of CACHE_VARS) over[k] = `${o.tmp}/${CACHE_DIRS[k]}`
+  if (o.proxyPort !== undefined) {
+    const url = `http://127.0.0.1:${o.proxyPort}`
+    for (const k of PROXY_NAMES) over[k] = over[k.toLowerCase()] = url
+    over.NO_PROXY = over.no_proxy = o.allowLoopback ? LOOPBACK_NO_PROXY : ''
+    over.NODE_USE_ENV_PROXY = '1'
+  }
+  const drop = new Set([...Object.keys(over), ...PROXY_NAMES, 'NO_PROXY', 'NODE_USE_ENV_PROXY'].map(k => k.toUpperCase()))
+  const env: NodeJS.ProcessEnv = {}
+  for (const [k, v] of Object.entries(base)) if (!drop.has(k.toUpperCase())) env[k] = v
+  return { ...env, ...over }
+}
+
 /** 运行登录 shell 的方式(测试注入);返回 stdout,失败 / 超时 → reject */
 export type ShellExec = (shell: string, args: string[], timeoutMs: number) => Promise<string>
 

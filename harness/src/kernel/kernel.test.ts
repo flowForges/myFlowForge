@@ -12,6 +12,7 @@ import loopEcho from '../plugins/loop-echo'
 import { BUILTIN_PLUGINS } from '../plugins'
 import type { Approvals } from './approvals'
 import { sessionKey } from '../lib/tools/commandKey'
+import { NO_SANDBOX } from '../../test/sandboxStub'
 
 let dir: string
 let kernels: Kernel[] = []
@@ -24,7 +25,7 @@ afterEach(async () => {
 })
 
 async function boot(plugins: Plugin[] = [loopEcho], injectTimeoutMs?: number) {
-  const k = await createKernel({ dataDir: dir, plugins, injectTimeoutMs, secrets: { osBackend: false } })
+  const k = await createKernel({ sandbox: NO_SANDBOX, dataDir: dir, plugins, injectTimeoutMs, secrets: { osBackend: false } })
   kernels.push(k)
   return k
 }
@@ -111,7 +112,7 @@ describe('kernel', () => {
       manifest: { id: 'needy', version: '1', kernel: '*', inject: ['missing'] },
       activate() {},
     }
-    const p = createKernel({ dataDir: dir, plugins: [needy], secrets: { osBackend: false } })
+    const p = createKernel({ sandbox: NO_SANDBOX, dataDir: dir, plugins: [needy], secrets: { osBackend: false } })
     await vi.advanceTimersByTimeAsync(10_001)
     const k = await p
     kernels.push(k)
@@ -168,7 +169,7 @@ describe('kernel', () => {
     writeFileSync(join(dir, 'credentials.enc'), 'x')
     const hang = () => new Promise<never>(() => {})
     const t0 = Date.now()
-    const k = await createKernel({ dataDir: dir, plugins: [loopEcho], secrets: { platform: 'darwin', exec: hang, timeoutMs: 200 } })
+    const k = await createKernel({ sandbox: NO_SANDBOX, dataDir: dir, plugins: [loopEcho], secrets: { platform: 'darwin', exec: hang, timeoutMs: 200 } })
     kernels.push(k)
     expect(Date.now() - t0).toBeLessThan(3000)
     expect(k.status()).toMatchObject({ state: 'running', secretsBackend: 'unavailable' })
@@ -373,7 +374,7 @@ describe('kernel approvals', () => {
   })
   const bootGated = async (approvalTimeoutMs?: number, key?: string) => {
     const g: Gated = { modelRequests: 0, marker: join(dir, 'marker'), key }
-    const k = await createKernel({ dataDir: dir, plugins: [gatedLoop(g)], approvalTimeoutMs, secrets: { osBackend: false } })
+    const k = await createKernel({ sandbox: NO_SANDBOX, dataDir: dir, plugins: [gatedLoop(g)], approvalTimeoutMs, secrets: { osBackend: false } })
     kernels.push(k)
     const { sessionId } = (await k.handle('session.create', { commandId: 'c' })) as { sessionId: string }
     await k.handle('session.prompt', { commandId: 'p', sessionId, text: 'go' })

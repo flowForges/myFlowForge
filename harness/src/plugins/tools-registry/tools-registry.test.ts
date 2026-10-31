@@ -12,6 +12,7 @@ import { OUTSIDE, resolveToolPath } from '../../lib/fs/paths'
 import { nullLogger } from '../../kernel/log'
 import { argsOf, type Tool, type ToolContext, type ToolResult, type ToolsService } from '../../lib/tools/types'
 import toolsRegistry, { ToolsRegistry } from './index'
+import { NO_SANDBOX } from '../../../test/sandboxStub'
 
 let root: string
 let dataDir: string
@@ -128,7 +129,7 @@ function fakeTools(probe: Probe): Plugin {
 
 async function boot(sessionCwd = cwd, approvalMode: 'ask' | 'auto' = 'ask') {
   const probe: Probe = { runs: [] }
-  const k = await createKernel({ dataDir, home, plugins: [toolsRegistry, fakeTools(probe)], secrets: { osBackend: false } })
+  const k = await createKernel({ sandbox: NO_SANDBOX, dataDir, home, plugins: [toolsRegistry, fakeTools(probe)], secrets: { osBackend: false } })
   kernels.push(k)
   const { sessionId } = (await k.handle('session.create', { commandId: `c${Math.random()}`, cwd: sessionCwd, approvalMode })) as { sessionId: string }
   let n = 0

@@ -13,6 +13,7 @@ import type { AccountView } from '../../protocol/models'
 import { fixture } from '../../../test/modelPluginHarness'
 import { createModelsRegistry } from '../models-registry/index'
 import { createModelChatgpt } from './index'
+import { NO_SANDBOX } from '../../../test/sandboxStub'
 
 // —— 假服务:记录原始请求体(zstd 用)
 interface Req { method: string; path: string; headers: IncomingMessage['headers']; raw: Buffer; form: URLSearchParams }
@@ -113,7 +114,7 @@ async function boot(o: { openPortPreferred?: number; flowTimeoutMs?: number; set
   const apiBase = `${await api.start()}/v1`
   let svc: ModelsService | undefined
   const capture: Plugin = { manifest: { id: 'capture', version: '1', kernel: '*', inject: ['models'] }, activate(ctx) { svc = ctx.services.get<ModelsService>('models') } }
-  const k = await createKernel({
+  const k = await createKernel({ sandbox: NO_SANDBOX,
     dataDir: dir,
     plugins: [createModelsRegistry({ catalogRefresh: false }), createModelChatgpt({ authBase, apiBase, now, openPortPreferred: o.openPortPreferred ?? 0, flowTimeoutMs: o.flowTimeoutMs, setTimer: o.setTimer }), capture],
     secrets: { osBackend: false },
@@ -657,7 +658,7 @@ describe('model-chatgpt 推理与令牌', () => {
     const apiBase = `${await api.start()}/v1`
     let svc2: ModelsService | undefined
     const capture: Plugin = { manifest: { id: 'capture', version: '1', kernel: '*', inject: ['models'] }, activate(ctx) { svc2 = ctx.services.get<ModelsService>('models') } }
-    const k2 = await createKernel({ dataDir: dir, plugins: [createModelsRegistry({ catalogRefresh: false }), createModelChatgpt({ authBase, apiBase, now, openPortPreferred: 0 }), capture], secrets: { osBackend: false } })
+    const k2 = await createKernel({ sandbox: NO_SANDBOX, dataDir: dir, plugins: [createModelsRegistry({ catalogRefresh: false }), createModelChatgpt({ authBase, apiBase, now, openPortPreferred: 0 }), capture], secrets: { osBackend: false } })
     kernels.push(k2)
     expect((await accounts(k2))[0].state).toBe('ok')
     const evs = await collect(svc2!.stream(ref, req()))

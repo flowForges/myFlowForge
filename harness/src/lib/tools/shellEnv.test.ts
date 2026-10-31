@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { loginShellPath, shellEnv } from './shellEnv'
+import { CACHE_VARS, loginShellPath, sandboxEnv, shellEnv } from './shellEnv'
 
 const posixBase = {
   PATH: '/usr/bin:/bin',
@@ -166,5 +166,56 @@ describe('loginShellPath', () => {
     expect(await loginShellPath(spy, {}, 'linux')).toBe('')
     expect(await loginShellPath(spy, { SHELL: '/bin/sh' }, 'win32')).toBe('')
     expect(ran).toBe(false)
+  })
+})
+
+describe('sandboxEnv (spec §10, R8)', () => {
+  const base = {
+    PATH: '/usr/bin', HOME: '/h', TMPDIR: '/var/folders/x', MFFAI: '1',
+    HTTPS_PROXY: 'http://alice:s3cret@corp:8080', http_proxy: 'http://bob:pw@corp:8080', ALL_PROXY: 'socks5://u:p@x:1080',
+    NO_PROXY: '.corp', no_proxy: 'internal', npm_config_cache: '/h/.npm', Xdg_Cache_Home: '/h/.c',
+  }
+  const tmp = '/data/sessions/s1/tmp'
+
+  it('points TMPDIR and every cache variable into tmp', () => {
+    const env = sandboxEnv(base, { tmp, level: 'full', allowLoopback: false })
+    expect(env.TMPDIR).toBe(tmp)
+    expect(CACHE_VARS).toEqual(['npm_config_cache', 'npm_config_store_dir', 'YARN_CACHE_FOLDER', 'BUN_INSTALL_CACHE_DIR', 'PIP_CACHE_DIR', 'UV_CACHE_DIR', 'XDG_CACHE_HOME', 'GOCACHE', 'GOMODCACHE', 'CARGO_HOME'])
+    for (const k of CACHE_VARS) expect(env[k]!.startsWith(`${tmp}/`), k).toBe(true)
+    expect(new Set(CACHE_VARS.map(k => env[k])).size).toBe(CACHE_VARS.length)
+    expect(env.Xdg_Cache_Home).toBeUndefined() // 不留同名不同大小写的旧值
+    expect(env.PATH).toBe('/usr/bin')
+    expect(env.HOME).toBe('/h')
+  })
+
+  it('with a proxy port: every proxy variable (both cases) is our proxy, NODE_USE_ENV_PROXY=1, NO_PROXY empty, MFFAI_SANDBOX', () => {
+    const env = sandboxEnv(base, { tmp, proxyPort: 4321, level: 'full', allowLoopback: false })
+    for (const k of ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']) expect(env[k], k).toBe('http://127.0.0.1:4321')
+    expect(env.NODE_USE_ENV_PROXY).toBe('1')
+    expect(env.NO_PROXY).toBe('')
+    expect(env.no_proxy).toBe('')
+    expect(env.MFFAI_SANDBOX).toBe('full')
+    const text = JSON.stringify(env)
+    for (const secret of ['alice', 's3cret', 'bob', 'corp', 'socks5', '.corp', 'internal']) expect(text).not.toContain(secret)
+  })
+
+  it('allowLoopback: NO_PROXY lists the loopback names', () => {
+    const env = sandboxEnv(base, { tmp, proxyPort: 4321, level: 'partial', allowLoopback: true })
+    expect(env.NO_PROXY).toBe('localhost,127.0.0.1,::1')
+    expect(env.no_proxy).toBe('localhost,127.0.0.1,::1')
+    expect(env.MFFAI_SANDBOX).toBe('partial')
+  })
+
+  it('without a proxy port: no proxy variables at all (user ones dropped), no NODE_USE_ENV_PROXY', () => {
+    const env = sandboxEnv(base, { tmp, level: 'partial', allowLoopback: false })
+    for (const k of Object.keys(env)) expect(/^(https?|all|no)_proxy$/i.test(k), k).toBe(false)
+    expect(env.NODE_USE_ENV_PROXY).toBeUndefined()
+    expect(env.MFFAI_SANDBOX).toBe('partial')
+  })
+
+  it('does not mutate the base env', () => {
+    const copy = { ...base }
+    sandboxEnv(base, { tmp, proxyPort: 1, level: 'full', allowLoopback: true })
+    expect(base).toEqual(copy)
   })
 })

@@ -11,6 +11,7 @@ import loopEcho from '../plugins/loop-echo'
 import type { Plugin } from '../kernel/pluginHost'
 import type { KernelEvent } from '../protocol/index'
 import { EarlyBuffer, runBridge } from './bridge'
+import { NO_SANDBOX } from '../../test/sandboxStub'
 
 let dir: string
 let work: string // 会话工作目录;不能是内核数据目录(在黑名单里)
@@ -56,7 +57,7 @@ const failing: Plugin = {
 }
 
 async function boot(ps: Plugin[]) {
-  kernel = await createKernel({ dataDir: join(dir, 'data'), plugins: ps, secrets: { osBackend: false } })
+  kernel = await createKernel({ sandbox: NO_SANDBOX, dataDir: join(dir, 'data'), plugins: ps, secrets: { osBackend: false } })
   closers.push(() => kernel.close())
   const addr = process.platform === 'win32' ? `\\\\.\\pipe\\mffai-acp-${process.pid}-${Date.now()}` : join(dir, 'w.sock')
   const s = await startRpcServer({ addr, token: 'tok', version: HARNESS_VERSION, events: kernel.events, handle: (m, p) => kernel.handle(m, p) })

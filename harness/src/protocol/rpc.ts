@@ -28,6 +28,16 @@ const AuthMethods = {
   'auth.verify': { params: z.object({ proof: z.string() }), result: Ok },
 } as const
 
+// 05:沙箱级别(spec §7);Missing 是稳定代码,界面直接显示
+export const SandboxMissingSchema = z.enum(['platform', 'sandbox-exec', 'bwrap', 'userns', 'netns', 'proxy', 'loopback', 'disabled'])
+export type SandboxMissing = z.infer<typeof SandboxMissingSchema>
+export const SandboxStatusSchema = z.object({
+  level: z.enum(['full', 'partial', 'none']),
+  missing: z.array(SandboxMissingSchema),
+  autoDegraded: z.boolean(),
+})
+export type SandboxStatus = z.infer<typeof SandboxStatusSchema>
+
 export const StatusResultSchema = z.object({
   state: z.enum(['starting', 'running', 'draining']),
   uptimeMs: z.number(),
@@ -41,6 +51,8 @@ export const StatusResultSchema = z.object({
     }),
   ),
   secretsBackend: SecretsBackendSchema.optional(),
+  // 05:旧后台没有该字段
+  sandbox: SandboxStatusSchema.optional(),
 })
 export type StatusResult = z.infer<typeof StatusResultSchema>
 
@@ -50,16 +62,6 @@ export const SnapshotResultSchema = z.object({
   lastSeq: z.number(),
 })
 export type SnapshotResult = z.infer<typeof SnapshotResultSchema>
-
-// 05:沙箱级别(spec §7);Missing 是稳定代码,界面直接显示
-export const SandboxMissingSchema = z.enum(['platform', 'sandbox-exec', 'bwrap', 'userns', 'netns', 'proxy', 'loopback', 'disabled'])
-export type SandboxMissing = z.infer<typeof SandboxMissingSchema>
-export const SandboxStatusSchema = z.object({
-  level: z.enum(['full', 'partial', 'none']),
-  missing: z.array(SandboxMissingSchema),
-  autoDegraded: z.boolean(),
-})
-export type SandboxStatus = z.infer<typeof SandboxStatusSchema>
 
 // 05:权限配置段(spec §4、§6)
 export const RuleSpecSchema = z.object({

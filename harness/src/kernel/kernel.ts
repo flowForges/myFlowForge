@@ -17,7 +17,7 @@ import { EventLog, openDb, transaction } from './eventLog'
 import { Approvals } from './approvals'
 import { nullLogger, type Logger } from './log'
 import { PermissionGate } from './permissionGate'
-import { PermissionsStore, SANDBOX_STUB } from './permissions'
+import { PermissionsStore } from './permissions'
 import { PluginHost, type Plugin } from './pluginHost'
 import { Receipts } from './receipts'
 import { RpcError } from './rpcError'
@@ -28,6 +28,10 @@ import { Sessions, validateCwd } from './sessions'
 import { CLOSE_GRACE_MS, KILL_LIVE_GRACE_MS } from './shutdown'
 import { overbroadRelocations, snapshotEnv } from '../lib/fs/paths'
 import { killLive, pgidFile, PgidRegistry, type PgidEntry } from '../lib/proc/pgids'
+import { createSandboxService } from './sandbox'
+import { detectSandbox, type DetectResult } from '../lib/sandbox/detect'
+import { upstreamFromEnv, type LookupFn, type Upstream } from '../lib/sandbox/net/proxy'
+import type { Git } from '../lib/git/snapshot'
 import { HARNESS_VERSION } from './version'
 import { toWire } from './wire'
 
@@ -58,6 +62,19 @@ export interface KernelOpts {
   pgidFile?: string
   /** 启动时 reapOrphans 认不了、留到下次的条目(`ReapResult.kept`),登记从它们开始 */
   pgidSeed?: PgidEntry[]
+  /**
+   * 沙箱(05 spec §7、§10)。不给 = 真实探测(生产默认);测试传 `NO_SANDBOX`(harness/test/sandboxStub.ts)或注入 detect。
+   * upstream:不给 = 从环境快照的 HTTPS_PROXY 等取;null = 没有上游
+   */
+  sandbox?: {
+    detect?: () => DetectResult | Promise<DetectResult>
+    execPath?: string
+    upstream?: Upstream | null
+    lookup?: LookupFn
+    idleMs?: number
+    /** 查 gitDir 用的 git(测试注入隔离的环境) */
+    git?: Git
+  }
 }
 
 const ERR_METHOD_NOT_FOUND = -32601
@@ -119,7 +136,32 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   }
   // 规则写坏了只记进 errors,不影响启动,也不动 config.json(spec §6)
   const permissions = new PermissionsStore({ config: configAccess, ctx: { home, platform: process.platform, realpath: realpathSync.native } })
-  const sandboxStatus = () => SANDBOX_STUB // Task 9 换成真实探测
+  // 探测一次(约 50 ms),之后缓存;enabled / allowLoopback 由服务现读配置
+  const so = opts.sandbox ?? {}
+  const detected = await (so.detect ?? (() => detectSandbox({ platform: process.platform, enabled: true })))()
+  let upstream: Upstream | undefined
+  if (so.upstream === undefined) {
+    const u = upstreamFromEnv(envSnapshot)
+    if (u.warning) log.warn('sandbox upstream proxy unsupported', { warning: u.warning })
+    upstream = u.upstream
+  } else upstream = so.upstream ?? undefined
+  const sandbox = createSandboxService({
+    platform: process.platform,
+    dataDir: opts.dataDir,
+    home,
+    env: envSnapshot,
+    detected,
+    permissions: () => permissions.get().config,
+    append: e => append(e),
+    currentTurn: sid => activeBySession.get(sid),
+    execPath: so.execPath,
+    upstream,
+    lookup: so.lookup,
+    idleMs: so.idleMs,
+    git: so.git,
+    log,
+  })
+  const sandboxStatus = () => sandbox.status()
   const gate = new PermissionGate({
     sessions, home, dataDir: opts.dataDir, platform: process.platform, env: envSnapshot, permissions: () => permissions.get(),
   })
@@ -239,6 +281,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
       version: HARNESS_VERSION,
       plugins: host.states(),
       secretsBackend: secrets.backend,
+      sandbox: sandboxStatus(),
     }
   }
 
@@ -362,6 +405,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
       }
       // shell 留在后台的组(开发服务器等):无主进程比被杀更糟
       if (pgids) await killLive(pgids, KILL_LIVE_GRACE_MS).catch(err => log.error('killLive failed', { error: String(err) }))
+      await sandbox.close().catch(err => log.error('sandbox close failed', { error: String(err) }))
       await host.deactivateAll()
       db.close()
     },
@@ -371,6 +415,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   services.provide('sessions', sessions)
   services.provide('approvals', approvals)
   if (pgids) services.provide('pgids', pgids)
+  services.provide('sandbox', sandbox)
   append({ type: 'kernel.started', payload: { version: HARNESS_VERSION } })
   await host.activateAll(opts.plugins, config.plugins.disabled)
   state = 'running'

@@ -12,6 +12,7 @@ import type { ModelRef } from '../../protocol/models'
 import { createToolsCoding } from '../tools-coding'
 import toolsRegistry from '../tools-registry'
 import { createLoopDefault } from './index'
+import { NO_SANDBOX } from '../../../test/sandboxStub'
 
 const posix = process.platform !== 'win32'
 
@@ -94,7 +95,7 @@ const logger = { info: (m: string) => { logs.push(m) }, warn: (m: string) => { l
 async function boot(calls: Message[][], script: () => Script, wrapGit?: (g: Git) => Git) {
   const g = createGit({ base: baseEnv(), extraEnv: gitInjected() })
   logs = []
-  const k = await createKernel({
+  const k = await createKernel({ sandbox: NO_SANDBOX,
     dataDir,
     home,
     log: logger,

@@ -13,6 +13,7 @@ import {
   type KernelEvent, type MffaiClient,
 } from '../protocol/index'
 import loopEcho from '../plugins/loop-echo'
+import { NO_SANDBOX } from '../../test/sandboxStub'
 
 let dir: string
 let kernel: Kernel
@@ -20,7 +21,7 @@ let closers: Array<() => unknown> = []
 const TOKEN = 'tok'
 beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), 'mffai-rpc-'))
-  kernel = await createKernel({ dataDir: dir, plugins: [loopEcho], secrets: { osBackend: false } })
+  kernel = await createKernel({ sandbox: NO_SANDBOX, dataDir: dir, plugins: [loopEcho], secrets: { osBackend: false } })
   closers = [() => kernel.close()]
 })
 afterEach(async () => {

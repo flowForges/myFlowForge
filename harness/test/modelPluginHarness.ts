@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { createKernel, type Kernel } from '../src/kernel/kernel'
 import type { Plugin } from '../src/kernel/pluginHost'
 import type { Account, ModelAdapter, ModelEvent, ModelProtocol, ModelRequest } from '../src/lib/models/types'
+import { NO_SANDBOX } from './sandboxStub'
 
 export const fixture = (name: string) => readFileSync(join(__dirname, 'fixtures/sse', name), 'utf8')
 
@@ -44,7 +45,7 @@ export async function bootAdapters(plugin: Plugin) {
       })
     },
   }
-  const k: Kernel = await createKernel({ dataDir: dir, plugins: [models, plugin], secrets: { osBackend: false } })
+  const k: Kernel = await createKernel({ sandbox: NO_SANDBOX, dataDir: dir, plugins: [models, plugin], secrets: { osBackend: false } })
   return {
     adapters,
     async close() { await k.close().catch(() => {}); rmSync(dir, { recursive: true, force: true }) },

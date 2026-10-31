@@ -14,6 +14,7 @@ import { listFiles } from './files'
 import { compileGlob, expandBraces, globMatcher } from './glob'
 import { runGrep } from './grepWorker'
 import { mkdirChecked, writeChecked } from './safeFs'
+import { NO_SANDBOX } from '../../../test/sandboxStub'
 
 let root: string
 let dataDir: string
@@ -56,7 +57,7 @@ async function boot(opts: { sessionCwd?: string; grepTimeoutMs?: number } = {}) 
       sessions = ctx.services.get<Sessions>('sessions')
     },
   }
-  const k = await createKernel({
+  const k = await createKernel({ sandbox: NO_SANDBOX,
     dataDir, home, secrets: { osBackend: false },
     plugins: [toolsRegistry, createToolsCoding({ git: testGit, grepTimeoutMs: opts.grepTimeoutMs }), probe],
   })

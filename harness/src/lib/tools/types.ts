@@ -1,5 +1,6 @@
 // 工具与 tools 服务的接口(spec §6);实现在 plugins/tools-registry
 import type { ZodType } from 'zod'
+import type { SandboxStatus } from '../../protocol/rpc'
 
 /** 权限请求;路径资源由工具解析成绝对路径后给出(lib/fs/paths 的 resolveToolPath) */
 export interface PermissionRequest {
@@ -50,4 +51,28 @@ export function argsOf<T>(schema: ZodType<T>, raw: unknown): T {
   if (r.success) return r.data
   const issues = r.error.issues.map(i => (i.path.length ? `${i.path.join('.')}: ${i.message}` : i.message))
   throw new Error(`参数无效:${issues.join('; ')}`)
+}
+
+/** 一条 shell 命令的执行计划(05 spec §10);由内核 `sandbox` 服务生成,shell 工具执行 */
+export interface ShellPlan {
+  /** sandboxed:可执行文件(sandbox-exec / bwrap);否则就是命令本身(调用方用 shell:true) */
+  file: string
+  args: string[]
+  env: NodeJS.ProcessEnv
+  sandboxed: boolean
+  /** 本条命令实际的级别(ToolResult.meta.sandbox) */
+  level: SandboxStatus['level']
+  /** 命令结束后调用一次(多调无害):会话代理从此按空闲计时。不调 → 代理一直开到内核关闭 */
+  release(): void
+}
+
+/** 内核 `sandbox` 服务(实现在 kernel/sandbox.ts) */
+export interface SandboxService {
+  status(): SandboxStatus
+  /**
+   * 生成本条命令的计划;级别 none → { file: command, args: [], env 原样, sandboxed: false }。
+   * 生成沙箱配置失败 → reject:调用方让命令失败,绝不退回无沙箱执行
+   */
+  plan(command: string, s: { sessionId: string; cwd: string; spillDir: string }, env: NodeJS.ProcessEnv): Promise<ShellPlan>
+  close(): Promise<void>
 }

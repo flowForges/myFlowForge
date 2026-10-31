@@ -4,12 +4,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DEFAULT_NETWORK_ALLOW } from '../lib/permissions/rules'
 import { resolveToolPath } from '../lib/fs/paths'
-import { parsePermissions, PermissionsStore, SANDBOX_STUB, validatePermissions, InvalidPermissions } from './permissions'
+import { parsePermissions, PermissionsStore, validatePermissions, InvalidPermissions } from './permissions'
 import { createKernel, type Kernel } from './kernel'
 import type { PermissionGate } from './permissionGate'
 import type { Plugin, PluginContext } from './pluginHost'
 import type { RpcError } from './rpcError'
 import type { KernelConfig } from './config'
+import { NO_SANDBOX } from '../../test/sandboxStub'
 
 const ctx = { home: '/h', platform: 'linux' as const }
 
@@ -152,7 +153,7 @@ const probe: Plugin = { manifest: { id: 'probe', version: '0', kernel: '^0.1.0' 
 const modelsWriter: Plugin = { manifest: { id: 'models-registry', version: '0', kernel: '^0.1.0' }, activate: c => { modelsCtx = c } }
 
 async function boot(plugins: Plugin[] = [probe]) {
-  const k = await createKernel({ dataDir, plugins, home, env: {}, secrets: { osBackend: false } })
+  const k = await createKernel({ sandbox: NO_SANDBOX, dataDir, plugins, home, env: {}, secrets: { osBackend: false } })
   kernels.push(k)
   return k
 }
@@ -272,12 +273,12 @@ describe('kernel permissions section', () => {
     expect(gate!.checkMany([{ actor: 'tools', action: 'read', resource: join(work, 'a.ts'), sessionId }])).toEqual(['allow'])
   })
 
-  it('permissions.get: defaults expand for an ask session and keep placeholders without one; sandbox is the stub', async () => {
+  it('permissions.get: defaults expand for an ask session and keep placeholders without one; sandbox is the service status', async () => {
     const k = await boot()
     const { sessionId } = await k.handle('session.create', { commandId: 'c1', cwd: work }) as { sessionId: string }
     const got = await k.handle('permissions.get', { sessionId }) as { defaults: string[]; sandbox: unknown; errors: unknown[]; config: unknown }
     expect(got.defaults).toEqual([`allow read(${work}/**)`, `allow write(${work}/**)`, 'ask shell(*)'])
-    expect(got.sandbox).toEqual(SANDBOX_STUB)
+    expect(got.sandbox).toEqual({ level: 'none', missing: ['platform'], autoDegraded: true }) // NO_SANDBOX
     expect(got.errors).toEqual([])
     expect(got.config).toEqual(parsePermissions(undefined, { home, platform: process.platform }).config)
     const auto = await k.handle('session.create', { commandId: 'c2', cwd: work, approvalMode: 'auto' }) as { sessionId: string }

@@ -1,5 +1,6 @@
 import { BUILTIN_PLUGINS } from '../plugins/index'
 import { createKernel, type Kernel } from '../kernel/kernel'
+import { wipeSessionTmp } from '../kernel/sandbox'
 import { startRpcServer } from '../kernel/rpcServer'
 import { DRAIN_MS } from '../kernel/shutdown'
 import { pgidFile, reapOrphans } from '../lib/proc/pgids'
@@ -46,6 +47,8 @@ export async function runWorker(): Promise<void> {
     // 上一个工作进程崩溃时留下的 shell 进程组:先收掉,再建内核(spec §12)
     const pgids = pgidFile(dir)
     const { kept } = reapOrphans(pgids, { platform: process.platform, log })
+    // 会话临时目录(沙箱里的 TMPDIR)不跨工作进程保留;在进程组收掉之后清,免得还在跑的命令又写回来
+    wipeSessionTmp(dir, log)
     // MFFAI_SECRETS_PLAINTEXT=1:端到端测试用,不碰系统钥匙串
     const secrets = { osBackend: process.env.MFFAI_SECRETS_PLAINTEXT !== '1' }
     kernel = await createKernel({ dataDir: dir, plugins: BUILTIN_PLUGINS, log, secrets, pgidFile: pgids, pgidSeed: kept })

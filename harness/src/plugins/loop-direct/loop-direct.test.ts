@@ -10,6 +10,7 @@ import loopDirect from './index'
 import loopEcho from '../loop-echo'
 import { createLoopDefault } from '../loop-default'
 import toolsRegistry from '../tools-registry'
+import { NO_SANDBOX } from '../../../test/sandboxStub'
 
 let dir: string
 let kernels: Kernel[] = []
@@ -42,7 +43,7 @@ async function* seq(...evs: ModelEvent[]) { for (const e of evs) yield e }
 const done = (reason: 'stop' | 'length' | 'tool_calls' | 'cancelled' = 'stop'): ModelEvent => ({ type: 'done', reason })
 
 async function boot(plugins: Plugin[]) {
-  const k = await createKernel({ dataDir: dir, plugins, secrets: { osBackend: false } })
+  const k = await createKernel({ sandbox: NO_SANDBOX, dataDir: dir, plugins, secrets: { osBackend: false } })
   kernels.push(k)
   return k
 }
@@ -183,7 +184,7 @@ describe('loop-direct', () => {
     cleanups.push(() => rmSync(root, { recursive: true, force: true }))
     writeFileSync(join(dir, 'config.json'), JSON.stringify({ plugins: { disabled: ['loop-default'] } }))
     const fake: Fake = { calls: [] }
-    const k = await createKernel({
+    const k = await createKernel({ sandbox: NO_SANDBOX,
       dataDir: dir, home: join(root, 'home'), secrets: { osBackend: false },
       plugins: [fakeModels(fake, () => seq({ type: 'text', delta: 'direct' }, done())), toolsRegistry, createLoopDefault(), loopDirect, loopEcho],
     })

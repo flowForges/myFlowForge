@@ -515,6 +515,17 @@ describe('startProxy — limits and lifecycle', () => {
     expect(await closedWithin(p.closed, 1000)).toBe(true)
   })
 
+  it('closing is false while open and true as soon as an idle or explicit close starts', async () => {
+    const idle = await proxy({ allow: () => [], idleMs: 50, onDeny: () => {} })
+    expect(idle.closing).toBe(false)
+    await idle.closed
+    expect(idle.closing).toBe(true)
+    const p = await proxy({ allow: () => [], onDeny: () => {} })
+    const done = p.close()
+    expect(p.closing).toBe(true) // 同步翻转:关闭进行中就不能再交给新命令
+    await done
+  })
+
   it('close() ends open tunnels and stops listening', async () => {
     const up = await fake('upstream')
     const p = await proxy({ allow: () => NPM, upstream: upstreamAt(up), lookup: fakeLookup({}).lookup, onDeny: () => {} })

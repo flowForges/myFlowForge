@@ -1,0 +1,450 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { connect } from 'node:net'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createGit } from '../lib/git/snapshot'
+import type { DetectResult } from '../lib/sandbox/detect'
+import { startProxy } from '../lib/sandbox/net/proxy'
+import type { SandboxService } from '../lib/tools/types'
+import type { PermissionsConfig } from '../protocol/index'
+import { createKernel, type Kernel } from './kernel'
+import type { Plugin } from './pluginHost'
+import { createSandboxService, sessionTmpDir, wipeSessionTmp, type SandboxOpts } from './sandbox'
+
+let root: string
+let home: string
+let dataDir: string
+let repo: string
+let gitEnvFile: string
+const closers: (() => Promise<void>)[] = []
+
+const gitTestEnv = () => ({ PATH: process.env.PATH ?? '', HOME: home, GIT_CONFIG_GLOBAL: gitEnvFile, GIT_CONFIG_NOSYSTEM: '1' })
+const testGit = () => createGit({ base: { PATH: process.env.PATH ?? '', HOME: home }, extraEnv: { GIT_CONFIG_GLOBAL: gitEnvFile, GIT_CONFIG_NOSYSTEM: '1' } })
+
+beforeEach(() => {
+  root = realpathSync(mkdtempSync(join(tmpdir(), 'mffai-sbx-')))
+  home = join(root, 'home')
+  dataDir = join(root, 'data')
+  repo = join(home, 'repo')
+  gitEnvFile = join(root, 'gitconfig')
+  writeFileSync(gitEnvFile, '')
+  mkdirSync(join(home, '.ssh'), { recursive: true })
+  mkdirSync(join(repo, 'sub'), { recursive: true })
+  mkdirSync(dataDir)
+  execFileSync('git', ['init', '-q', repo], { env: gitTestEnv() })
+})
+afterEach(async () => {
+  for (const c of closers.splice(0).reverse()) await c().catch(() => {})
+  rmSync(root, { recursive: true, force: true })
+})
+
+const cfg = (over: Partial<PermissionsConfig> = {}, sandbox: Partial<PermissionsConfig['sandbox']> = {}): PermissionsConfig => ({
+  rules: [], network: { allow: [] }, allowUnsandboxedAuto: false, ...over, sandbox: { enabled: true, allowLoopback: false, ...sandbox },
+})
+
+type Appended = { type: string; sessionId?: string; payload: unknown }
+function service(over: Partial<SandboxOpts> & { config?: () => PermissionsConfig } = {}) {
+  const appended: Appended[] = []
+  let config = over.config ?? (() => cfg())
+  const svc = createSandboxService({
+    platform: 'darwin',
+    dataDir,
+    home,
+    env: { HOME: home, PATH: process.env.PATH },
+    detected: { level: 'full', missing: [] },
+    permissions: () => config(),
+    append: e => appended.push(e),
+    git: testGit(),
+    upstream: undefined,
+    ...over,
+  })
+  closers.push(() => svc.close())
+  return { svc, appended, setConfig: (c: () => PermissionsConfig) => { config = c } }
+}
+
+const session = (sid = 's1', cwd = join(repo, 'sub')) => ({ sessionId: sid, cwd, spillDir: join(dataDir, 'sessions', sid, 'spill') })
+const baseEnv = { PATH: '/usr/bin:/bin', HOME: '/h', HTTPS_PROXY: 'http://alice:s3cret@corp.example:8080', MFFAI: '1' }
+const profileOf = (args: string[]) => args[1]
+const q = (s: string) => JSON.stringify(s)
+
+function canConnect(port: number): Promise<boolean> {
+  return new Promise(resolve => {
+    const s = connect({ host: '127.0.0.1', port })
+    s.once('connect', () => { s.destroy(); resolve(true) })
+    s.once('error', () => resolve(false))
+  })
+}
+const wait = (ms: number) => new Promise(r => setTimeout(r, ms))
+const portOf = (env: NodeJS.ProcessEnv) => Number(/:(\d+)$/.exec(env.HTTPS_PROXY ?? '')?.[1])
+
+function connectStatus(port: number, target: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const s = connect({ host: '127.0.0.1', port }, () => s.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n\r\n`))
+    let buf = ''
+    s.on('data', d => {
+      buf += d.toString()
+      if (buf.includes('\r\n')) { s.destroy(); resolve(buf.split('\r\n')[0]) }
+    })
+    s.on('error', reject)
+  })
+}
+
+describe('sandbox status', () => {
+  it('reports the detected level; autoDegraded only at none without allowUnsandboxedAuto', () => {
+    expect(service().svc.status()).toEqual({ level: 'full', missing: [], autoDegraded: false })
+    expect(service({ detected: { level: 'none', missing: ['sandbox-exec'] } }).svc.status()).toEqual({ level: 'none', missing: ['sandbox-exec'], autoDegraded: true })
+    expect(service({ detected: { level: 'none', missing: ['platform'] }, config: () => cfg({ allowUnsandboxedAuto: true }) }).svc.status())
+      .toEqual({ level: 'none', missing: ['platform'], autoDegraded: false })
+    expect(service({ detected: { level: 'partial', missing: ['netns'] }, platform: 'linux' }).svc.status()).toEqual({ level: 'partial', missing: ['netns'], autoDegraded: false })
+  })
+
+  it('sandbox.enabled:false → none + disabled, read live from the config', () => {
+    const s = service()
+    s.setConfig(() => cfg({}, { enabled: false }))
+    expect(s.svc.status()).toEqual({ level: 'none', missing: ['disabled'], autoDegraded: true })
+    s.setConfig(() => cfg())
+    expect(s.svc.status().level).toBe('full')
+  })
+
+  it('allowLoopback on darwin → partial + loopback; on linux the status is unchanged', () => {
+    expect(service({ config: () => cfg({}, { allowLoopback: true }) }).svc.status()).toEqual({ level: 'partial', missing: ['loopback'], autoDegraded: false })
+    expect(service({ platform: 'linux', config: () => cfg({}, { allowLoopback: true }) }).svc.status()).toEqual({ level: 'full', missing: [], autoDegraded: false })
+  })
+})
+
+describe('sandbox plan (darwin)', () => {
+  it('level none → the unsandboxed plan: command as file, base env untouched, no tmp dir', async () => {
+    const { svc } = service({ detected: { level: 'none', missing: ['sandbox-exec'] } })
+    const p = await svc.plan('echo hi', session(), baseEnv)
+    expect(p).toMatchObject({ file: 'echo hi', args: [], sandboxed: false, level: 'none' })
+    expect(p.env).toEqual(baseEnv)
+    p.release()
+    expect(existsSync(sessionTmpDir(dataDir, 's1'))).toBe(false)
+  })
+
+  it('full → sandbox-exec with the profile; tmp exists 0700; profile has cwd, tmp and the gitDir of a repo subdir cwd', async () => {
+    const { svc } = service()
+    const s = session()
+    const p = await svc.plan('echo hi', s, baseEnv)
+    expect(p.file).toBe('/usr/bin/sandbox-exec')
+    expect(p.sandboxed).toBe(true)
+    expect(p.level).toBe('full')
+    expect(p.args[0]).toBe('-p')
+    expect(p.args.slice(2)).toEqual(['/bin/sh', '-c', 'echo hi'])
+    const tmp = sessionTmpDir(dataDir, 's1')
+    expect(statSync(tmp).isDirectory()).toBe(true)
+    expect(statSync(tmp).mode & 0o777).toBe(0o700)
+    const prof = profileOf(p.args)
+    for (const x of [s.cwd, tmp, join(repo, '.git')]) expect(prof).toContain(q(x))
+    expect(prof).toMatch(new RegExp(`\\(allow file-write\\* \\(subpath ${q(s.cwd).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`))
+    // 凭据与数据目录拒读,spill 与 tmp 放回
+    expect(prof).toContain(`(subpath ${q(join(home, '.ssh'))})`)
+    expect(prof).toContain(`(subpath ${q(dataDir)})`)
+    expect(prof).toMatch(/\(allow file-read\* .*\(subpath "[^"]*\/sessions\/s1\/spill"\)/)
+    p.release()
+  })
+
+  it('env: TMPDIR, caches, HTTPS_PROXY = the session proxy port (also in the profile), NODE_USE_ENV_PROXY, empty NO_PROXY, no user userinfo', async () => {
+    const { svc } = service()
+    const p = await svc.plan('true', session(), baseEnv)
+    const tmp = sessionTmpDir(dataDir, 's1')
+    expect(p.env.TMPDIR).toBe(tmp)
+    for (const k of ['npm_config_cache', 'npm_config_store_dir', 'YARN_CACHE_FOLDER', 'BUN_INSTALL_CACHE_DIR', 'PIP_CACHE_DIR', 'UV_CACHE_DIR', 'XDG_CACHE_HOME', 'GOCACHE', 'GOMODCACHE', 'CARGO_HOME']) {
+      expect(p.env[k]!.startsWith(`${tmp}/`), k).toBe(true)
+    }
+    const port = portOf(p.env)
+    expect(port).toBeGreaterThan(0)
+    expect(p.env.HTTPS_PROXY).toBe(`http://127.0.0.1:${port}`)
+    expect(p.env.NODE_USE_ENV_PROXY).toBe('1')
+    expect(p.env.NO_PROXY).toBe('')
+    expect(p.env.MFFAI_SANDBOX).toBe('full')
+    expect(JSON.stringify(p.env)).not.toContain('s3cret')
+    expect(JSON.stringify(p.env)).not.toContain('alice')
+    expect(profileOf(p.args)).toContain(`(remote ip ${q(`localhost:${port}`)})`)
+    expect(await canConnect(port)).toBe(true)
+    p.release()
+  })
+
+  it('allowLoopback on darwin: NO_PROXY lists loopback, the profile opens localhost:*, MFFAI_SANDBOX=partial', async () => {
+    const { svc } = service({ config: () => cfg({}, { allowLoopback: true }) })
+    const p = await svc.plan('true', session(), baseEnv)
+    expect(p.env.NO_PROXY).toBe('localhost,127.0.0.1,::1')
+    expect(p.env.MFFAI_SANDBOX).toBe('partial')
+    expect(p.level).toBe('partial')
+    expect(profileOf(p.args)).toContain('(allow network-outbound (remote ip "localhost:*"))')
+    p.release()
+  })
+
+  it('reuses one proxy per session; another session gets its own', async () => {
+    const { svc } = service()
+    const a = await svc.plan('true', session('s1'), baseEnv)
+    const b = await svc.plan('true', session('s1'), baseEnv)
+    const c = await svc.plan('true', session('s2'), baseEnv)
+    expect(portOf(a.env)).toBe(portOf(b.env))
+    expect(portOf(c.env)).not.toBe(portOf(a.env))
+    for (const p of [a, b, c]) p.release()
+  })
+
+  it('an idle proxy closes; a running (unreleased) command keeps it open past the idle time', async () => {
+    const { svc } = service({ idleMs: 120 })
+    const p = await svc.plan('true', session(), baseEnv)
+    const port = portOf(p.env)
+    await wait(400)
+    expect(await canConnect(port)).toBe(true) // 命令还在跑
+    p.release()
+    await wait(400)
+    expect(await canConnect(port)).toBe(false)
+    // 关掉之后再 plan:起一个新的
+    const p2 = await svc.plan('true', session(), baseEnv)
+    expect(await canConnect(portOf(p2.env))).toBe(true)
+    p2.release()
+  })
+
+  it('release is idempotent (a double release does not let another running command lose its proxy)', async () => {
+    const { svc } = service({ idleMs: 120 })
+    const a = await svc.plan('true', session(), baseEnv)
+    const b = await svc.plan('true', session(), baseEnv)
+    a.release()
+    a.release()
+    await wait(400)
+    expect(await canConnect(portOf(b.env))).toBe(true)
+    b.release()
+  })
+
+  it('close() closes every proxy', async () => {
+    const { svc } = service()
+    const a = await svc.plan('true', session('s1'), baseEnv)
+    const b = await svc.plan('true', session('s2'), baseEnv)
+    await svc.close()
+    expect(await canConnect(portOf(a.env))).toBe(false)
+    expect(await canConnect(portOf(b.env))).toBe(false)
+  })
+
+  it('proxy start failure → no proxy port (network fully off) and status partial + proxy; a later success clears it', async () => {
+    let fail = true
+    const { svc } = service({ startProxy: async o => { if (fail) throw new Error('EADDRINUSE'); return startProxy(o) } })
+    const p = await svc.plan('true', session(), baseEnv)
+    expect(p.sandboxed).toBe(true)
+    expect(p.env.HTTPS_PROXY).toBeUndefined()
+    expect(p.env.NODE_USE_ENV_PROXY).toBeUndefined()
+    expect(profileOf(p.args)).not.toContain('network-outbound')
+    expect(svc.status()).toEqual({ level: 'partial', missing: ['proxy'], autoDegraded: false })
+    p.release()
+    fail = false
+    const p2 = await svc.plan('true', session(), baseEnv)
+    expect(portOf(p2.env)).toBeGreaterThan(0)
+    expect(svc.status()).toEqual({ level: 'full', missing: [], autoDegraded: false })
+    p2.release()
+  })
+
+  it('denied CONNECTs append sandbox.netDenied once per host:port per turn', async () => {
+    let turn = 't1'
+    const { svc, appended } = service({ currentTurn: () => turn })
+    const p = await svc.plan('true', session(), baseEnv)
+    const port = portOf(p.env)
+    expect(await connectStatus(port, 'evil.example:443')).toMatch(/^HTTP\/1\.1 403/)
+    expect(await connectStatus(port, 'evil.example:443')).toMatch(/^HTTP\/1\.1 403/)
+    expect(await connectStatus(port, 'evil.example:8443')).toMatch(/^HTTP\/1\.1 403/)
+    turn = 't2'
+    expect(await connectStatus(port, 'evil.example:443')).toMatch(/^HTTP\/1\.1 403/)
+    const denied = appended.filter(e => e.type === 'sandbox.netDenied')
+    expect(denied).toEqual([
+      { type: 'sandbox.netDenied', sessionId: 's1', payload: { host: 'evil.example', port: 443, reason: 'not_allowed' } },
+      { type: 'sandbox.netDenied', sessionId: 's1', payload: { host: 'evil.example', port: 8443, reason: 'not_allowed' } },
+      { type: 'sandbox.netDenied', sessionId: 's1', payload: { host: 'evil.example', port: 443, reason: 'not_allowed' } },
+    ])
+    p.release()
+  })
+
+  it('deny lists come from the env snapshot: a `..` credential var is dropped in favour of its resolved form and plan still works', async () => {
+    mkdirSync(join(home, 'x'))
+    const { svc } = service({ env: { HOME: home, GNUPGHOME: `${home}/x/../.gnupg`, DOCKER_CONFIG: join(root, 'docker') } })
+    const p = await svc.plan('true', session(), baseEnv)
+    const prof = profileOf(p.args)
+    expect(prof).toContain(q(join(home, '.gnupg')))
+    expect(prof).toContain(q(join(root, 'docker')))
+    expect(prof).not.toContain('/../')
+    p.release()
+  })
+
+  it('the deny lists never read process.env', async () => {
+    const before = process.env.DOCKER_CONFIG
+    process.env.DOCKER_CONFIG = join(root, 'from-process-env')
+    try {
+      const { svc } = service()
+      const p = await svc.plan('true', session(), baseEnv)
+      expect(profileOf(p.args)).not.toContain('from-process-env')
+      p.release()
+    } finally {
+      if (before === undefined) delete process.env.DOCKER_CONFIG
+      else process.env.DOCKER_CONFIG = before
+    }
+  })
+
+  it('moveBlock covers credential roots and their ancestors inside the writable cwd (cwd = HOME)', async () => {
+    mkdirSync(join(home, 'nest', 'deep'), { recursive: true })
+    const { svc } = service({ env: { HOME: home, GNUPGHOME: join(home, 'nest', 'deep', 'gpg') } })
+    const p = await svc.plan('true', session('s1', home), baseEnv)
+    const prof = profileOf(p.args)
+    const block = prof.split('\n').find(l => l.startsWith('(deny file-write-unlink file-write-create'))!
+    for (const x of [join(home, '.ssh'), join(home, 'nest', 'deep', 'gpg'), join(home, 'nest', 'deep'), join(home, 'nest'), join(home, '.zshrc')]) {
+      expect(block, x).toContain(`(literal ${q(x)})`)
+    }
+    expect(block).not.toContain(`(literal ${q(home)})`)
+    p.release()
+  })
+
+  it('a profile generator throw fails the plan (never an unsandboxed fallback)', async () => {
+    const { svc } = service()
+    const bad = join(root, 'bad\u0001dir')
+    await expect(svc.plan('true', session('s1', bad), baseEnv)).rejects.toThrow(/control characters/)
+  })
+
+  it('looks the gitDir up once per session', async () => {
+    let calls = 0
+    const g = testGit()
+    const { svc } = service({ git: (a, o) => { calls++; return g(a, o) } })
+    for (let i = 0; i < 3; i++) (await svc.plan('true', session(), baseEnv)).release()
+    const once = calls
+    expect(once).toBeGreaterThan(0)
+    ;(await svc.plan('true', session('s2'), baseEnv)).release()
+    expect(calls).toBe(once * 2)
+  })
+
+  it('a worktree cwd: the common gitDir is writable and the cwd .git file is protected', async () => {
+    execFileSync('git', ['-C', repo, 'commit', '-q', '--allow-empty', '-m', 'i'], { env: { ...gitTestEnv(), GIT_AUTHOR_NAME: 'a', GIT_AUTHOR_EMAIL: 'a@x', GIT_COMMITTER_NAME: 'a', GIT_COMMITTER_EMAIL: 'a@x' } })
+    const wt = join(home, 'wt')
+    execFileSync('git', ['-C', repo, 'worktree', 'add', '-q', wt], { env: gitTestEnv() })
+    const { svc } = service()
+    const p = await svc.plan('true', session('s1', wt), baseEnv)
+    const prof = profileOf(p.args)
+    expect(prof).toMatch(new RegExp(`\\(allow file-write\\* [^\\n]*\\(subpath ${q(join(repo, '.git')).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)`))
+    expect(prof).toContain(`(literal ${q(join(wt, '.git'))})`)
+    p.release()
+  })
+})
+
+describe('sandbox plan (injected linux)', () => {
+  it('full → bwrap with --unshare-net, the relay on the proxy unix socket, HTTPS_PROXY at the relay port; missing hooks dir is created', async () => {
+    rmSync(join(repo, '.git', 'hooks'), { recursive: true, force: true })
+    const { svc } = service({ platform: 'linux', detected: { level: 'full', missing: [], bwrap: '/usr/bin/bwrap' }, execPath: process.execPath })
+    const p = await svc.plan('echo hi', session(), baseEnv)
+    expect(p.file).toBe('/usr/bin/bwrap')
+    expect(p.sandboxed).toBe(true)
+    expect(p.args).toContain('--unshare-net')
+    expect(existsSync(join(repo, '.git', 'hooks'))).toBe(true)
+    const relayAt = p.args.indexOf(process.execPath)
+    expect(relayAt).toBeGreaterThan(0)
+    const sock = p.args[relayAt + 4]
+    expect(sock).toMatch(/mffai-net-[^/]+\/net\.sock$/)
+    expect(p.args.slice(-3)).toEqual(['/bin/sh', '-c', 'echo hi'])
+    expect(p.env.HTTPS_PROXY).toBe('http://127.0.0.1:3128')
+    expect(p.env.NO_PROXY).toBe('')
+    p.release()
+  })
+
+  it('allowLoopback on linux changes nothing: NO_PROXY stays empty', async () => {
+    const { svc } = service({ platform: 'linux', detected: { level: 'full', missing: [], bwrap: '/usr/bin/bwrap' }, config: () => cfg({}, { allowLoopback: true }) })
+    const p = await svc.plan('true', session(), baseEnv)
+    expect(p.env.NO_PROXY).toBe('')
+    expect(p.level).toBe('full')
+    p.release()
+  })
+
+  it('partial (no netns) → bwrap without --unshare-net, no relay, no proxy variables', async () => {
+    const { svc } = service({ platform: 'linux', detected: { level: 'partial', missing: ['netns'], bwrap: '/usr/bin/bwrap' } })
+    const p = await svc.plan('true', session(), baseEnv)
+    expect(p.args).not.toContain('--unshare-net')
+    expect(p.args).not.toContain(process.execPath)
+    expect(p.env.HTTPS_PROXY).toBeUndefined()
+    expect(p.env.MFFAI_SANDBOX).toBe('partial')
+    p.release()
+  })
+
+  it('full but the proxy fails → still --unshare-net, no relay, no proxy env; status partial + proxy', async () => {
+    const { svc } = service({ platform: 'linux', detected: { level: 'full', missing: [], bwrap: '/usr/bin/bwrap' }, startProxy: async () => { throw new Error('nope') } })
+    const p = await svc.plan('true', session(), baseEnv)
+    expect(p.args).toContain('--unshare-net')
+    expect(p.args).not.toContain(process.execPath)
+    expect(p.env.HTTPS_PROXY).toBeUndefined()
+    expect(svc.status()).toEqual({ level: 'partial', missing: ['proxy'], autoDegraded: false })
+    p.release()
+  })
+})
+
+describe('wipeSessionTmp', () => {
+  it('empties every sessions/*/tmp and leaves spill and other files alone', () => {
+    for (const sid of ['a', 'b']) {
+      mkdirSync(join(dataDir, 'sessions', sid, 'tmp', 'deep'), { recursive: true })
+      writeFileSync(join(dataDir, 'sessions', sid, 'tmp', 'deep', 'f'), 'x')
+      mkdirSync(join(dataDir, 'sessions', sid, 'spill'), { recursive: true })
+      writeFileSync(join(dataDir, 'sessions', sid, 'spill', 'keep'), 'x')
+    }
+    // tmp 是指向外面的链接:只删链接,不碰目标
+    const outside = join(root, 'outside')
+    mkdirSync(outside)
+    writeFileSync(join(outside, 'precious'), 'x')
+    mkdirSync(join(dataDir, 'sessions', 'c'))
+    symlinkSync(outside, join(dataDir, 'sessions', 'c', 'tmp'))
+    wipeSessionTmp(dataDir)
+    for (const sid of ['a', 'b', 'c']) expect(existsSync(join(dataDir, 'sessions', sid, 'tmp'))).toBe(false)
+    for (const sid of ['a', 'b']) expect(readdirSync(join(dataDir, 'sessions', sid, 'spill'))).toEqual(['keep'])
+    expect(readdirSync(outside)).toEqual(['precious'])
+  })
+
+  it('no sessions dir → no-op', () => {
+    expect(() => wipeSessionTmp(join(root, 'nothing'))).not.toThrow()
+  })
+})
+
+describe('kernel wiring', () => {
+  let kernels: Kernel[] = []
+  afterEach(async () => {
+    for (const k of kernels) await k.close().catch(() => {})
+    kernels = []
+  })
+  let seen: SandboxService | undefined
+  const probe: Plugin = { manifest: { id: 'probe', version: '0', kernel: '^0.1.0' }, activate: ctx => { seen = ctx.services.get<SandboxService>('sandbox') } }
+  async function boot(detect: () => DetectResult | Promise<DetectResult>, permissions?: unknown) {
+    if (permissions) writeFileSync(join(dataDir, 'config.json'), JSON.stringify({ permissions }))
+    seen = undefined
+    const k = await createKernel({
+      dataDir, home, env: { HOME: home }, plugins: [probe], secrets: { osBackend: false },
+      sandbox: { detect, upstream: null, git: testGit() },
+    })
+    kernels.push(k)
+    return k
+  }
+
+  it('provides sandbox before plugins; status, snapshot and permissions.get carry it', async () => {
+    const k = await boot(() => ({ level: 'full', missing: [] }))
+    expect(seen).toBeDefined()
+    expect(k.status().sandbox).toEqual({ level: 'full', missing: [], autoDegraded: false })
+    expect(k.snapshot().status.sandbox).toEqual({ level: 'full', missing: [], autoDegraded: false })
+    expect(((await k.handle('status', {})) as { sandbox: unknown }).sandbox).toEqual({ level: 'full', missing: [], autoDegraded: false })
+    expect(((await k.handle('permissions.get', {})) as { sandbox: unknown }).sandbox).toEqual({ level: 'full', missing: [], autoDegraded: false })
+  })
+
+  it('async detect works and none degrades auto', async () => {
+    const k = await boot(async () => ({ level: 'none', missing: ['sandbox-exec'] }))
+    expect(k.status().sandbox).toEqual({ level: 'none', missing: ['sandbox-exec'], autoDegraded: true })
+  })
+
+  it('config sandbox.enabled:false → none + disabled even when detection says full', async () => {
+    const k = await boot(() => ({ level: 'full', missing: [] }), { sandbox: { enabled: false } })
+    expect(k.status().sandbox).toEqual({ level: 'none', missing: ['disabled'], autoDegraded: true })
+  })
+
+  it('kernel.close() closes every session proxy', async () => {
+    const k = await boot(() => ({ level: 'full', missing: [] }))
+    const plan = await seen!.plan('true', session('s1'), baseEnv)
+    const plan2 = await seen!.plan('true', session('s2'), baseEnv)
+    const ports = [portOf(plan.env), portOf(plan2.env)]
+    if (process.platform === 'darwin') for (const port of ports) expect(await canConnect(port)).toBe(true)
+    await k.close()
+    kernels = []
+    if (process.platform === 'darwin') for (const port of ports) expect(await canConnect(port)).toBe(false)
+  })
+})

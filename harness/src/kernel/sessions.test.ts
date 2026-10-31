@@ -6,6 +6,7 @@ import { createKernel, type Kernel } from './kernel'
 import type { Plugin } from './pluginHost'
 import { Sessions, validateCwd } from './sessions'
 import type { KernelEvent } from '../protocol/index'
+import { NO_SANDBOX } from '../../test/sandboxStub'
 
 let dir: string // 内核数据目录
 let work: string // 放工作目录的地方
@@ -28,7 +29,7 @@ const probe: Plugin = {
 }
 async function boot() {
   seen = undefined
-  const k = await createKernel({ dataDir: dir, plugins: [probe], home: work, secrets: { osBackend: false } })
+  const k = await createKernel({ sandbox: NO_SANDBOX, dataDir: dir, plugins: [probe], home: work, secrets: { osBackend: false } })
   kernels.push(k)
   return k
 }
