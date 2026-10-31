@@ -3,11 +3,11 @@
 // 每一步(解析、直连、上游 CONNECT、NO_PROXY、拒绝事件)只用 checkHost 返回的规范主机名,不用请求原文;
 // 直连时解析一次、检查每个地址、连的就是检查过的那个 IP(不二次解析,挡 DNS rebinding)
 import { lookup as dnsLookup } from 'node:dns/promises'
-import { lstatSync, mkdirSync, rmdirSync, unlinkSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { createServer as createHttpServer, request as httpRequest, type IncomingMessage, type ServerResponse } from 'node:http'
 import { BlockList, connect, createServer as createNetServer, type Server, type Socket } from 'node:net'
-import { networkInterfaces } from 'node:os'
-import { dirname } from 'node:path'
+import { networkInterfaces, tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { deniedClass, parseIp } from './addr'
 import { checkHost, normalizeHost } from './domains'
 
@@ -33,8 +33,11 @@ export interface ProxyOptions {
   /** 直连源站;只会拿到通过了地址检查的规范 IP。上游连接不经它 */
   dial?: (host: string, port: number) => Socket
   onDeny(d: DenyEvent): void
-  /** posix:另外在这个 Unix socket 上听(Linux 沙箱里的中转用) */
-  unixPath?: string
+  /**
+   * posix:另外在 Unix socket 上听(Linux 沙箱里的中转用)。代理在 `parent`(默认 os.tmpdir())下自己 mkdtemp 一个
+   * 0700 目录 `mffai-net-XXXXXX/net.sock`,路径由 handle.unixPath 给出;close() 只删这个自己建的目录
+   */
+  unixSocket?: { parent?: string }
   /** 并发客户端连接上限,默认 64;超出回 503 */
   maxConns?: number
   /** 收齐请求头、解析、连接、上游握手各自的期限,默认 30 s */
@@ -49,6 +52,8 @@ export interface ProxyOptions {
 
 export interface ProxyHandle {
   port: number
+  /** 给了 unixSocket 时的套接字路径 */
+  unixPath?: string
   close(): Promise<void>
   /** 有新的 plan() 用到它:推迟空闲关闭 */
   touch(): void
@@ -71,31 +76,6 @@ class ProxyError extends Error {
 }
 
 const REFUSE_GRACE_MS = 1000
-
-/**
- * Unix socket 所在目录:代理自己建(0700);已存在时必须是本用户的真目录(lstat,不跟符号链接)且组 / 其他人无权限。
- * 目录保护套接字本身,所以不 chmod 套接字文件(chmod 会跟着符号链接走)。路径上已有的非套接字文件 → 拒绝启动
- */
-function prepareUnixDir(path: string): string {
-  const dir = dirname(path)
-  try {
-    mkdirSync(dir, { mode: 0o700 })
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e
-  }
-  const st = lstatSync(dir)
-  const uid = process.getuid?.()
-  if (!st.isDirectory() || (uid !== undefined && st.uid !== uid) || (st.mode & 0o077) !== 0) throw new Error('unix socket dir is not private')
-  let old
-  try {
-    old = lstatSync(path)
-  } catch {
-    return dir
-  }
-  if (!old.isSocket()) throw new Error('unix socket path is taken')
-  unlinkSync(path)
-  return dir
-}
 
 const bad = () => new ProxyError(400, { host: '', port: 0, reason: 'bad_request' })
 
@@ -495,6 +475,7 @@ export async function startProxy(o: ProxyOptions): Promise<ProxyHandle> {
 
   const servers: Server[] = []
   let unixDir: string | undefined
+  let unixPath: string | undefined
   const listen = (s: Server, ...args: unknown[]) => new Promise<void>((resolve, reject) => {
     s.once('error', reject)
     s.listen(...(args as [number, string]), () => {
@@ -513,13 +494,8 @@ export async function startProxy(o: ProxyOptions): Promise<ProxyHandle> {
     for (const s of others) s.destroy()
     for (const s of refusing) s.destroy()
     await Promise.all(servers.map(s => new Promise<void>(r => s.close(() => r()))))
-    if (unixDir) {
-      try {
-        rmdirSync(unixDir)
-      } catch {
-        // 不空或已不在:留着
-      }
-    }
+    // 只删自己 mkdtemp 出来的那个目录
+    if (unixDir) rmSync(unixDir, { recursive: true, force: true })
     resolveClosed()
   }
 
@@ -527,11 +503,13 @@ export async function startProxy(o: ProxyOptions): Promise<ProxyHandle> {
     const tcp = createNetServer(onConnection)
     servers.push(tcp)
     await listen(tcp, 0, '127.0.0.1')
-    if (o.unixPath) {
-      unixDir = prepareUnixDir(o.unixPath)
+    if (o.unixSocket) {
+      // mkdtemp 建的目录是 0700、名字不可预测,父目录是 1777 的 /tmp 也安全;套接字文件不 chmod
+      unixDir = mkdtempSync(join(o.unixSocket.parent ?? tmpdir(), 'mffai-net-'))
+      unixPath = join(unixDir, 'net.sock')
       const unix = createNetServer(onConnection)
       servers.push(unix)
-      await listen(unix, o.unixPath)
+      await listen(unix, unixPath)
     }
   } catch (e) {
     await close()
@@ -542,6 +520,7 @@ export async function startProxy(o: ProxyOptions): Promise<ProxyHandle> {
   armIdle()
   return {
     port,
+    unixPath,
     close,
     touch: () => {
       if (clients.size === 0) armIdle()

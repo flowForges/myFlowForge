@@ -1,7 +1,7 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync, existsSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { connect, isIP, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { startFakeOrigin, startFakeUpstream, type FakeServer } from '../../../../test/fakeUpstream'
 import { startProxy, upstreamFromEnv, type LookupFn, type ProxyHandle, type Upstream } from './proxy'
@@ -529,38 +529,48 @@ describe('startProxy — limits and lifecycle', () => {
   })
 
   it.skipIf(process.platform === 'win32')('the Unix-socket listener behaves the same', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'mffpx-'))
-    tmpDirs.push(dir)
-    const unixPath = join(dir, 'px', 'p.sock')
+    const parent = mkdtempSync(join(tmpdir(), 'mffpx-'))
+    tmpDirs.push(parent)
     const up = await fake('upstream')
-    const p = await proxy({ allow: () => NPM, upstream: upstreamAt(up), lookup: fakeLookup({}).lookup, unixPath, onDeny: () => {} })
+    const p = await proxy({ allow: () => NPM, upstream: upstreamAt(up), lookup: fakeLookup({}).lookup, unixSocket: { parent }, onDeny: () => {} })
+    const unixPath = p.unixPath!
+    expect(dirname(dirname(unixPath))).toBe(parent)
+    expect(basename(unixPath)).toBe('net.sock')
+    expect(basename(dirname(unixPath))).toMatch(/^mffai-net-/)
+    expect(statSync(dirname(unixPath)).mode & 0o777).toBe(0o700)
     expect((await connectReq(unixPath, 'evil.example:443')).status).toBe(403)
     const r = await connectReq(unixPath, 'registry.npmjs.org:443')
     expect(r.status).toBe(200)
     expect(await echo(r.sock, 'over unix', r.rest)).toBe('over unix')
     expect(up.connects.map(c => c.line)).toEqual(['CONNECT registry.npmjs.org:443 HTTP/1.1'])
-    expect(statSync(join(dir, 'px')).mode & 0o777).toBe(0o700)
     await p.close()
     await expect(open(unixPath)).rejects.toThrow()
-    expect(existsSync(join(dir, 'px'))).toBe(false)
+    // 只删了自己建的目录,父目录还在
+    expect(existsSync(dirname(unixPath))).toBe(false)
+    expect(existsSync(parent)).toBe(true)
   })
 
-  it.skipIf(process.platform === 'win32')('the Unix-socket dir must be private: symlinks, shared dirs and taken paths refuse to start', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'mffpx-'))
-    tmpDirs.push(dir)
-    const elsewhere = join(dir, 'elsewhere')
-    mkdirSync(elsewhere, { mode: 0o700 })
-    symlinkSync(elsewhere, join(dir, 'link'))
-    await expect(startProxy({ allow: () => [], unixPath: join(dir, 'link', 'p.sock'), onDeny: () => {} })).rejects.toThrow(/not private/)
-    mkdirSync(join(dir, 'shared'))
-    chmodSync(join(dir, 'shared'), 0o755)
-    await expect(startProxy({ allow: () => [], unixPath: join(dir, 'shared', 'p.sock'), onDeny: () => {} })).rejects.toThrow(/not private/)
-    mkdirSync(join(dir, 'taken'), { mode: 0o700 })
-    writeFileSync(join(dir, 'taken', 'p.sock'), 'x')
-    await expect(startProxy({ allow: () => [], unixPath: join(dir, 'taken', 'p.sock'), onDeny: () => {} })).rejects.toThrow(/taken/)
-    // 一个遗留的套接字文件可以被替换(上次崩溃留下的)
-    const first = await proxy({ allow: () => [], unixPath: join(dir, 'again', 'p.sock'), onDeny: () => {} })
-    await first.close()
+  it.skipIf(process.platform === 'win32')('works under a shared 1777 parent (Linux /tmp) and each proxy gets its own dir', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'mffpx-'))
+    tmpDirs.push(parent)
+    chmodSync(parent, 0o1777)
+    // 别人在父目录里预先放的东西不影响,也不会被删
+    writeFileSync(join(parent, 'net.sock'), 'planted')
+    const a = await proxy({ allow: () => [], unixSocket: { parent }, onDeny: () => {} })
+    const b = await proxy({ allow: () => [], unixSocket: { parent }, onDeny: () => {} })
+    expect(dirname(a.unixPath!)).not.toBe(dirname(b.unixPath!))
+    expect(statSync(dirname(a.unixPath!)).mode & 0o777).toBe(0o700)
+    expect((await connectReq(a.unixPath!, 'x.test:443')).status).toBe(403)
+    await a.close()
+    await b.close()
+    expect(readdirSync(parent)).toEqual(['net.sock'])
+  })
+
+  it.skipIf(process.platform === 'win32')('the socket dir defaults to os.tmpdir() and is removed on close', async () => {
+    const p = await proxy({ allow: () => [], unixSocket: {}, onDeny: () => {} })
+    expect(dirname(dirname(p.unixPath!))).toBe(tmpdir())
+    await p.close()
+    expect(existsSync(dirname(p.unixPath!))).toBe(false)
   })
 })
 
