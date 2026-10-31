@@ -60,7 +60,7 @@ export function AddAccount({ presets, onDone }: { presets: PresetView[]; onDone:
     void api.chatgpt.begin().then(r => {
       if (gen === loginGen.current) return setFlow(r.flowId)
       void api.chatgpt.cancel(r.flowId).catch((e) => console.error('mffai', e))
-    }).catch(fail)
+    }).catch((e) => { if (gen === loginGen.current) fail(e) })
   }
 
   if (!open) return <button className="set-btn" onClick={() => setOpen(true)} disabled={!presets.length}>添加账号</button>
