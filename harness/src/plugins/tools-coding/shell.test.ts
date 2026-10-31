@@ -9,6 +9,7 @@ import type { ToolContext, ToolsService } from '../../lib/tools/types'
 import toolsRegistry from '../tools-registry'
 import { createToolsCoding } from './index'
 import { clampTimeout, runShell, shellTool, MAX_OUTPUT } from './shell'
+import { parseEntries, pgidFile } from '../../lib/proc/pgids'
 
 const posix = process.platform !== 'win32'
 
@@ -216,6 +217,53 @@ describe('shell tool', () => {
     await sleep(100)
     expect(existsSync(marker)).toBe(false)
     expect(recorded()).toEqual([])
+  })
+})
+
+describe('process-group registry', () => {
+  const entries = () => (existsSync(pgidFile(dataDir)) ? parseEntries(readFileSync(pgidFile(dataDir), 'utf8')) : [])
+
+  it.skipIf(!posix)('runShell reports spawn and close with the group id', async () => {
+    const seen: string[] = []
+    const r = await runShell(track('echo hi'), {
+      cwd, env: { PATH: process.env.PATH ?? '', HOME: home }, timeoutMs: 5000, signal: new AbortController().signal, platform: process.platform,
+      onSpawn: pid => seen.push(`spawn:${pid}`),
+      onClose: pid => seen.push(`close:${pid}`),
+    })
+    expect(r.code).toBe(0)
+    const pid = recorded()[0]
+    expect(seen).toEqual([`spawn:${pid}`, `close:${pid}`])
+  })
+
+  it.skipIf(!posix)('a throwing hook never fails the command', async () => {
+    const r = await runShell(track('echo hi'), {
+      cwd, env: { PATH: process.env.PATH ?? '', HOME: home }, timeoutMs: 5000, signal: new AbortController().signal, platform: process.platform,
+      onSpawn: () => { throw new Error('boom') },
+      onClose: () => { throw new Error('boom') },
+    })
+    expect(r).toMatchObject({ code: 0, output: 'hi\n' })
+  })
+
+  it.skipIf(!posix)('a finished command leaves no entry', async () => {
+    const { call } = await boot()
+    const r = await call({ command: track('echo ok') })
+    expect(r.content).toBe('exit 0\nok\n')
+    expect(existsSync(pgidFile(dataDir))).toBe(true) // 登记过,又在结束时删掉
+    expect(entries()).toEqual([])
+  })
+
+  it.skipIf(!posix)('Review Focus 5: kernel.close() kills a group the shell left running', async () => {
+    const { k, call } = await boot()
+    const r = await call({ command: track(`sleep 60 >/dev/null 2>&1 & echo $! > pid`) })
+    expect(r.content).toBe('exit 0\n')
+    const pid = pidIn('pid')
+    const leader = recorded()[0]
+    expect(alive(pid)).toBe(true)
+    expect(entries().map(e => e.pgid)).toEqual([leader])
+    await k.close()
+    kernels = kernels.filter(x => x !== k)
+    expect(await waitFor(() => !alive(pid), 2000)).toBe(true)
+    expect(readFileSync(pgidFile(dataDir), 'utf8')).toBe('')
   })
 })
 

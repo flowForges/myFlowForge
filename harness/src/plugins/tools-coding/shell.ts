@@ -2,6 +2,7 @@
 import { spawn } from 'node:child_process'
 import { homedir } from 'node:os'
 import { z } from 'zod'
+import type { PgidRegistry } from '../../lib/proc/pgids'
 import { loginShellPath, shellEnv } from '../../lib/tools/shellEnv'
 import { argsOf, type Tool } from '../../lib/tools/types'
 import { jsonSchema } from './common'
@@ -23,6 +24,8 @@ export interface ShellDeps {
   loginPath?: () => Promise<string>
   /** timeoutMs 下限,默认 1 s;测试调小 */
   minTimeoutMs?: number
+  /** 进程组登记(spec §12);win32 不传 */
+  registry?: Pick<PgidRegistry, 'add' | 'settle'>
 }
 
 export interface ShellRun {
@@ -39,6 +42,10 @@ export interface RunShellOpts {
   timeoutMs: number
   signal: AbortSignal
   platform: NodeJS.Platform
+  /** 子进程起来后(POSIX 上 pid 即 pgid);抛错被吞掉 */
+  onSpawn?: (pid: number) => void
+  /** 子进程结束、runShell 返回前 */
+  onClose?: (pid: number) => void
 }
 
 /** 只留结尾的输出缓冲 */
@@ -85,6 +92,15 @@ export function runShell(command: string, opts: RunShellOpts): Promise<ShellRun>
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     })
+    const hook = (fn: ((pid: number) => void) | undefined) => {
+      if (!fn || child.pid === undefined) return
+      try {
+        fn(child.pid)
+      } catch {
+        // 登记失败不影响命令
+      }
+    }
+    hook(opts.onSpawn) // 同步:子进程即使已退,在事件循环回收它之前 pid 都还在
     const out = new TailBuffer()
     child.stdout!.on('data', (b: Buffer) => out.push(b))
     child.stderr!.on('data', (b: Buffer) => out.push(b))
@@ -137,6 +153,7 @@ export function runShell(command: string, opts: RunShellOpts): Promise<ShellRun>
       if (killing && !win) group('SIGKILL')
       for (const t of timers) clearTimeout(t)
       opts.signal.removeEventListener('abort', onAbort)
+      hook(opts.onClose)
       resolve({ code, signal, output: out.text(), timedOut, cancelled })
     }
 
@@ -152,6 +169,7 @@ export function runShell(command: string, opts: RunShellOpts): Promise<ShellRun>
       done = true
       for (const t of timers) clearTimeout(t)
       opts.signal.removeEventListener('abort', onAbort)
+      hook(opts.onClose)
       reject(e)
     })
     child.on('close', (code, signal) => finish(code, signal))
@@ -179,7 +197,11 @@ export function shellTool(deps: ShellDeps = {}): Tool {
       const b = base()
       const home = b.HOME ?? b.USERPROFILE ?? homedir()
       const env = shellEnv(b, { platform: process.platform, home, loginPath: await loginPath().catch(() => '') })
-      const r = await runShell(args.command, { cwd: ctx.cwd, env, timeoutMs, signal: ctx.signal, platform: process.platform })
+      const reg = deps.registry
+      const r = await runShell(args.command, {
+        cwd: ctx.cwd, env, timeoutMs, signal: ctx.signal, platform: process.platform,
+        ...(reg && { onSpawn: pid => reg.add(pid), onClose: pid => reg.settle(pid) }),
+      })
       if (r.cancelled) return { content: `已取消\n${r.output}`, isError: true } // 取消后的宽限期里超时也触发 → 仍报取消
       if (r.timedOut) return { content: `timeout after ${timeoutMs} ms\n${r.output}`, isError: true }
       return { content: `exit ${r.code ?? r.signal}\n${r.output}` }

@@ -1,6 +1,7 @@
 // tools-coding:编码工具 read / list / glob / grep / write / edit / apply_patch / shell(spec §7),注册到 tools 服务
 import type { PermissionGate } from '../../kernel/permissionGate'
 import type { Plugin } from '../../kernel/pluginHost'
+import type { PgidRegistry } from '../../lib/proc/pgids'
 import type { ToolsService } from '../../lib/tools/types'
 import { applyPatchTool } from './applyPatchTool'
 import { editTool } from './edit'
@@ -36,7 +37,9 @@ export function createToolsCoding(opts: ToolsCodingOpts = {}): Plugin {
       const gate = ctx.services.get<PermissionGate>('permissionGate')
       if (!tools || !gate) throw new Error('tools / permissionGate service missing')
       const deps = { gate, git: opts.git, grepTimeoutMs: opts.grepTimeoutMs }
-      const shell = shellTool({ env: opts.shellEnv, loginPath: opts.loginPath, minTimeoutMs: opts.minTimeoutMs })
+      // 进程组登记由内核提供(win32 没有);不在就不登记
+      const registry = process.platform === 'win32' ? undefined : ctx.services.get<PgidRegistry>('pgids')
+      const shell = shellTool({ env: opts.shellEnv, loginPath: opts.loginPath, minTimeoutMs: opts.minTimeoutMs, registry })
       for (const t of [readTool(), listTool(), globTool(deps), grepTool(deps), writeTool(deps), editTool(deps), applyPatchTool(deps), shell]) ctx.effect(tools.register(t))
     },
   }

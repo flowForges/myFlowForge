@@ -2,6 +2,7 @@ import { BUILTIN_PLUGINS } from '../plugins/index'
 import { createKernel, type Kernel } from '../kernel/kernel'
 import { startRpcServer } from '../kernel/rpcServer'
 import { DRAIN_MS } from '../kernel/shutdown'
+import { pgidFile, reapOrphans } from '../lib/proc/pgids'
 import { HARNESS_VERSION } from '../kernel/version'
 import { dataDir, ensureToken, runtimePaths } from '../protocol/index'
 import { createFileLogger } from '../supervisor/fileLog'
@@ -42,9 +43,12 @@ export async function runWorker(): Promise<void> {
   process.on('disconnect', () => void stop('supervisor gone'))
 
   startup = (async () => {
+    // 上一个工作进程崩溃时留下的 shell 进程组:先收掉,再建内核(spec §12)
+    const pgids = pgidFile(dir)
+    reapOrphans(pgids, { platform: process.platform, log })
     // MFFAI_SECRETS_PLAINTEXT=1:端到端测试用,不碰系统钥匙串
     const secrets = { osBackend: process.env.MFFAI_SECRETS_PLAINTEXT !== '1' }
-    kernel = await createKernel({ dataDir: dir, plugins: BUILTIN_PLUGINS, log, secrets })
+    kernel = await createKernel({ dataDir: dir, plugins: BUILTIN_PLUGINS, log, secrets, pgidFile: pgids })
     const k = kernel
     server = await startRpcServer({
       addr: paths.workerAddr,

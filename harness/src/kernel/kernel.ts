@@ -27,6 +27,7 @@ import { ServiceRegistry } from './services'
 import { Sessions, validateCwd } from './sessions'
 import { CLOSE_GRACE_MS } from './shutdown'
 import { overbroadRelocations, snapshotEnv } from '../lib/fs/paths'
+import { killLive, pgidFile, PgidRegistry } from '../lib/proc/pgids'
 import { HARNESS_VERSION } from './version'
 import { toWire } from './wire'
 
@@ -53,6 +54,8 @@ export interface KernelOpts {
   approvalTimeoutMs?: number
   /** 凭据黑名单 / 持久化文件读的环境;默认 process.env。启动时拷一份,之后的变化不影响判定 */
   env?: NodeJS.ProcessEnv
+  /** shell 进程组登记文件(spec §12);默认 `dataDir/run/shell-pgids`。win32 不登记 */
+  pgidFile?: string
 }
 
 const ERR_METHOD_NOT_FOUND = -32601
@@ -101,6 +104,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
     return written
   }
   const approvals = new Approvals({ append, log, timeoutMs: opts.approvalTimeoutMs ?? APPROVAL_TIMEOUT_MS })
+  const pgids = process.platform === 'win32' ? undefined : new PgidRegistry(opts.pgidFile ?? pgidFile(opts.dataDir), process.platform, { log })
   const configFile = join(opts.dataDir, 'config.json')
   let config = loadConfig(configFile)
   const configAccess = {
@@ -354,6 +358,8 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
         await Promise.race([Promise.all(running.map(t => t.settled)), new Promise<void>(r => { timer = setTimeout(r, CLOSE_GRACE_MS) })])
         clearTimeout(timer)
       }
+      // shell 留在后台的组(开发服务器等):无主进程比被杀更糟
+      if (pgids) await killLive(pgids).catch(err => log.error('killLive failed', { error: String(err) }))
       await host.deactivateAll()
       db.close()
     },
@@ -362,6 +368,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   services.provide('permissionGate', gate)
   services.provide('sessions', sessions)
   services.provide('approvals', approvals)
+  if (pgids) services.provide('pgids', pgids)
   append({ type: 'kernel.started', payload: { version: HARNESS_VERSION } })
   await host.activateAll(opts.plugins, config.plugins.disabled)
   state = 'running'
