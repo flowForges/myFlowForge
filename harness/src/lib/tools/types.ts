@@ -68,7 +68,8 @@ export interface ShellPlan {
 
 /** 内核 `sandbox` 服务(实现在 kernel/sandbox.ts) */
 export interface SandboxService {
-  status(): SandboxStatus
+  /** 不给 sessionId:探测结果 + 配置;给了:另算该会话的代理是否没起来(partial + proxy) */
+  status(sessionId?: string): SandboxStatus
   /**
    * 生成本条命令的计划;级别 none → { file: command, args: [], env 原样, sandboxed: false }。
    * 生成沙箱配置失败 → reject:调用方让命令失败,绝不退回无沙箱执行

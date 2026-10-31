@@ -230,12 +230,15 @@ describe('sandbox plan (darwin)', () => {
     expect(p.env.HTTPS_PROXY).toBeUndefined()
     expect(p.env.NODE_USE_ENV_PROXY).toBeUndefined()
     expect(profileOf(p.args)).not.toContain('network-outbound')
-    expect(svc.status()).toEqual({ level: 'partial', missing: ['proxy'], autoDegraded: false })
+    expect(p.level).toBe('partial')
+    expect(svc.status('s1')).toEqual({ level: 'partial', missing: ['proxy'], autoDegraded: false })
+    expect(svc.status()).toEqual({ level: 'full', missing: [], autoDegraded: false }) // 不带会话:不受某个会话的代理影响
     p.release()
+    expect(svc.status('s1')).toEqual({ level: 'partial', missing: ['proxy'], autoDegraded: false }) // 命令结束后仍如实报
     fail = false
     const p2 = await svc.plan('true', session(), baseEnv)
     expect(portOf(p2.env)).toBeGreaterThan(0)
-    expect(svc.status()).toEqual({ level: 'full', missing: [], autoDegraded: false })
+    expect(svc.status('s1')).toEqual({ level: 'full', missing: [], autoDegraded: false }) // 本会话下次启动成功就清掉
     p2.release()
   })
 
@@ -406,6 +409,64 @@ describe('gitDir lookup fallbacks (review I1, M6)', () => {
   })
 })
 
+describe('submodule git dirs (re-review C1)', () => {
+  /** 假的子模块 git 目录:HEAD + config + objects + hooks */
+  function fakeModule(rel: string) {
+    const m = join(repo, '.git', 'modules', ...rel.split('/'))
+    mkdirSync(join(m, 'objects', 'pack'), { recursive: true })
+    mkdirSync(join(m, 'hooks'), { recursive: true })
+    writeFileSync(join(m, 'HEAD'), 'ref: refs/heads/main\n')
+    writeFileSync(join(m, 'config'), '[core]\n')
+    return m
+  }
+  const blockLine = (prof: string) => prof.split('\n').find(l => l.startsWith('(deny file-write-unlink file-write-create'))!
+
+  it('darwin: each module gitDir (slash names, nested) and the dirs between it and modules are move-blocked; hooks/config write-denied', async () => {
+    const lib = fakeModule('vendor/lib')
+    const top = fakeModule('top')
+    const inner = fakeModule('top/modules/inner')
+    const { svc } = service()
+    const p = await svc.plan('true', session(), baseEnv)
+    const prof = profileOf(p.args)
+    const block = blockLine(prof)
+    for (const x of [lib, join(repo, '.git', 'modules', 'vendor'), top, inner, join(top, 'modules'), join(lib, 'hooks'), join(lib, 'config')]) expect(block, x).toContain(`(literal ${q(x)})`)
+    // objects 里不往下走,也不把它当成要挡的目录
+    expect(block).not.toContain(q(join(lib, 'objects')))
+    const writeDeny = prof.split('\n').find(l => l.startsWith('(deny file-write* '))!
+    for (const m of [lib, top, inner]) {
+      expect(writeDeny).toContain(`(subpath ${q(join(m, 'hooks'))})`)
+      expect(writeDeny).toContain(`(subpath ${q(join(m, 'config'))})`)
+    }
+    p.release()
+  })
+
+  it('linux: module hooks and config are ro-bound', async () => {
+    const lib = fakeModule('vendor/lib')
+    const { svc } = service({ platform: 'linux', detected: { level: 'partial', missing: ['netns'], bwrap: '/usr/bin/bwrap' } })
+    const p = await svc.plan('true', session(), baseEnv)
+    for (const f of ['hooks', 'config']) {
+      const x = join(lib, f)
+      expect(p.args.some((a, k) => a === '--ro-bind' && p.args[k + 1] === x && p.args[k + 2] === x), x).toBe(true)
+    }
+    p.release()
+  })
+
+  it('more than 200 directories under modules → the plan fails closed', async () => {
+    for (let i = 0; i < 201; i++) mkdirSync(join(repo, '.git', 'modules', `d${i}`), { recursive: true })
+    const { svc } = service()
+    await expect(svc.plan('true', session(), baseEnv)).rejects.toThrow(/more than 200 directories/)
+  })
+
+  it('a real submodule gitDir with many object dirs stays under the cap', async () => {
+    const m = fakeModule('big')
+    for (let i = 0; i < 256; i++) mkdirSync(join(m, 'objects', i.toString(16).padStart(2, '0')))
+    const { svc } = service()
+    const p = await svc.plan('true', session(), baseEnv)
+    expect(blockLine(profileOf(p.args))).toContain(`(literal ${q(m)})`)
+    p.release()
+  })
+})
+
 describe('proxy bookkeeping (review M3, M5, M8)', () => {
   it('concurrent plans of one session share one proxy start', async () => {
     let starts = 0
@@ -427,7 +488,9 @@ describe('proxy bookkeeping (review M3, M5, M8)', () => {
     expect(p1.env.HTTPS_PROXY).toBeUndefined()
     expect(p2.level).toBe('full')
     expect(portOf(p2.env)).toBeGreaterThan(0)
-    expect(svc.status()).toEqual({ level: 'partial', missing: ['proxy'], autoDegraded: false }) // 有会话的代理坏了
+    expect(svc.status('s1')).toEqual({ level: 'partial', missing: ['proxy'], autoDegraded: false })
+    expect(svc.status('s2')).toEqual({ level: 'full', missing: [], autoDegraded: false }) // re-review N1:别的会话不受影响
+    expect(svc.status()).toEqual({ level: 'full', missing: [], autoDegraded: false })
     p1.release()
     p2.release()
   })
@@ -512,7 +575,7 @@ describe('sandbox plan (injected linux)', () => {
     expect(p.args).toContain('--unshare-net')
     expect(p.args).not.toContain(process.execPath)
     expect(p.env.HTTPS_PROXY).toBeUndefined()
-    expect(svc.status()).toEqual({ level: 'partial', missing: ['proxy'], autoDegraded: false })
+    expect(svc.status('s1')).toEqual({ level: 'partial', missing: ['proxy'], autoDegraded: false })
     p.release()
   })
 })

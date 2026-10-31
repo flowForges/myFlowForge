@@ -21,6 +21,7 @@ import type { SandboxService, ShellPlan } from '../lib/tools/types'
 import { nullLogger, type Logger } from './log'
 
 const SAFE_ID = /^[A-Za-z0-9_-]+$/
+const MAX_MODULE_DIRS = 200
 const DEFAULT_IDLE_MS = 600_000
 
 /** 本会话临时目录(= 沙箱里的 TMPDIR);只给路径 */
@@ -124,9 +125,10 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
     return { level, missing }
   }
 
-  function status(): SandboxStatus {
+  /** 有 sessionId:算上该会话最近一次代理启动是否失败;没有:只看探测与配置(一个会话的代理坏了不影响别的会话,re-review N1) */
+  function status(sessionId?: string): SandboxStatus {
     const c = o.permissions()
-    const r = levelOf(c, [...proxies.values()].some(e => e.failed))
+    const r = levelOf(c, sessionId !== undefined && proxies.get(sessionId)?.failed === true)
     return { ...r, autoDegraded: r.level === 'none' && !c.allowUnsandboxedAuto }
   }
 
@@ -258,6 +260,54 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
     for (const k of repos.keys()) if (k.startsWith(`${sessionId}\0`)) repos.delete(k)
   }
 
+  /**
+   * `.git/modules` 下的子模块 git 目录(有 config,或有 HEAD 与 objects;名字可带 `/`,如 vendor/lib),
+   * 以及它们与 modules 之间的各级目录(re-review C1)。每条命令现走一遍;认出的 git 目录只往它的 modules 里走,
+   * 不进 objects。不跟随符号链接。超过 MAX_MODULE_DIRS 个目录 → 抛错(命令失败,不在保护不全时跑)
+   */
+  function moduleGitDirs(g: string): { dirs: string[]; between: string[] } {
+    const dirs: string[] = []
+    const between = new Set<string>()
+    let visited = 0
+    const isDir = (p: string) => {
+      try {
+        return lstatSync(p).isDirectory()
+      } catch {
+        return false
+      }
+    }
+    const has = (p: string) => {
+      try {
+        lstatSync(p)
+        return true
+      } catch {
+        return false
+      }
+    }
+    const children = (d: string) => {
+      try {
+        return readdirSync(d, { withFileTypes: true }).filter(c => c.isDirectory()).map(c => join(d, c.name))
+      } catch {
+        return []
+      }
+    }
+    const visit = (d: string, chain: string[]): void => {
+      if (++visited > MAX_MODULE_DIRS) throw new Error(`sandbox: more than ${MAX_MODULE_DIRS} directories under ${JSON.stringify(join(g, 'modules'))}`)
+      // 只有 config 也算:HEAD 在沙箱里可删(git 要写它),config 删不了 —— 认出来就一直认得出
+      if (has(join(d, 'config')) || (has(join(d, 'HEAD')) && has(join(d, 'objects')))) {
+        dirs.push(d)
+        for (const c of chain) between.add(c)
+        const sub = join(d, 'modules')
+        if (isDir(sub)) for (const c of children(sub)) visit(c, [...chain, d, sub])
+        return
+      }
+      for (const c of children(d)) visit(c, [...chain, d])
+    }
+    const root = join(g, 'modules')
+    if (isDir(root)) for (const c of children(root)) visit(c, [root])
+    return { dirs, between: [...between] }
+  }
+
   /** Linux:worktrees/*\/{config.worktree,commondir,gitdir} 与 cwd 的 .git 文件(bwrapArgs 只挂存在的) */
   function gitProtected(repo: RepoGit): string[] {
     const out: string[] = []
@@ -269,6 +319,7 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
         // 没有 worktree
       }
       for (const n of names) for (const f of ['config.worktree', 'commondir', 'gitdir']) out.push(join(g, 'worktrees', n, f))
+      for (const m of moduleGitDirs(g).dirs) out.push(join(m, 'hooks'), join(m, 'config'))
     }
     if (repo.cwdGitFile) out.push(repo.cwdGitFile)
     return out
@@ -410,15 +461,18 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
 
       if (platform === 'darwin') {
         const allowLoopback = cfg.sandbox.allowLoopback
+        const modules = repo.gitDirs.map(moduleGitDirs)
+        const moduleDirs = modules.flatMap(m => m.dirs)
+        const moduleGuard = moduleDirs.flatMap(m => [join(m, 'hooks'), join(m, 'config')])
         const profile = seatbeltProfile({
           writable,
           gitDirs: repo.gitDirs,
           cwdGitFile: repo.cwdGitFile,
           denyRead: [...creds, o.dataDir],
           reAllowRead: [s.spillDir, tmp],
-          denyWrite: [...creds, o.dataDir, ...persistence],
+          denyWrite: [...creds, o.dataDir, ...persistence, ...moduleGuard],
           reAllowWrite: [tmp],
-          moveBlock: withAncestors([...creds, o.dataDir, ...persistence, ...repo.gitDirs.flatMap(g => [g, `${g}/hooks`, `${g}/config`, `${g}/modules`, `${g}/worktrees`]), ...(repo.cwdGitFile ? [repo.cwdGitFile] : [])], writable),
+          moveBlock: withAncestors([...creds, o.dataDir, ...persistence, ...repo.gitDirs.flatMap(g => [g, `${g}/hooks`, `${g}/config`, `${g}/modules`, `${g}/worktrees`]), ...moduleDirs, ...moduleGuard, ...modules.flatMap(m => m.between), ...(repo.cwdGitFile ? [repo.cwdGitFile] : [])], writable),
           proxyPort: proxy?.port,
           allowLoopback,
         })
