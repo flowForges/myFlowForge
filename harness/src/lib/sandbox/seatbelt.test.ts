@@ -115,6 +115,7 @@ describe('seatbeltProfile', () => {
     const prefixes = args(rs[0], 'sysctl-name-prefix')
     const names = args(rs[0], 'sysctl-name')
     expect(prefixes).toContain('hw.')
+    expect(prefixes).toContain('net.routetable') // getifaddrs
     expect(names).toContain('kern.osrelease')
     const covers = (n: string) => names.includes(n) || prefixes.some(x => n.startsWith(x))
     for (const n of ['kern.proc.all', 'kern.proc.pid.1', 'kern.procargs2', 'kern.uuid']) expect(covers(n), n).toBe(false)

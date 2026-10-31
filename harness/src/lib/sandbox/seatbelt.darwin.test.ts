@@ -373,7 +373,7 @@ describe.skipIf(!usable)('seatbelt (real sandbox-exec)', () => {
   // ── 运行时 ──
 
   it('node, npm and python3 (incl. multiprocessing and shared_memory) run (R1 revised: sysctl list)', async () => {
-    const n = await boxed(`${node} -e "const os=require('os');os.userInfo();os.cpus();require('crypto').randomBytes(8);require('tls');require('child_process').execSync('true');process.stdout.write('ok')"`)
+    const n = await boxed(`${node} -e "const os=require('os');os.userInfo();os.cpus();if(!Object.keys(os.networkInterfaces()).includes('lo0'))throw new Error('no lo0');require('crypto').randomBytes(8);require('tls');require('child_process').execSync('true');process.stdout.write('ok')"`)
     expect(n.code, n.err).toBe(0)
     expect(n.out).toBe('ok')
     const z = await boxed(`${node} -e 1`)
@@ -386,10 +386,11 @@ describe.skipIf(!usable)('seatbelt (real sandbox-exec)', () => {
     }
     if ((await sh('python3 -c "print(1)"')).code !== 0) return
     const py = await boxed(`python3 -c "
-import multiprocessing as mp, getpass, ssl
+import multiprocessing as mp, getpass, ssl, socket
 from multiprocessing import shared_memory
 if __name__ == '__main__':
     getpass.getuser()
+    assert socket.if_nameindex()
     mp.Lock().acquire()
     with mp.Pool(2) as p: assert p.map(abs, [-1, -2]) == [1, 2]
     m = shared_memory.SharedMemory(create=True, size=16); m.buf[0] = 7; m.close(); m.unlink()

@@ -38,7 +38,8 @@ export interface SeatbeltParams {
 // sysctl 只读名单(R1 修订,实测 macOS 26.6):hw.* 缺了 node 启动即 abort(LowLevelAlloc arithmetic overflow);
 // kern.* 只放具体名字 —— 不放 kern.proc.*(否则能列出整张进程表;查自己的 pid 不受影响)。
 // machdep. / vm. / sysctl. 实测非必需,但只是硬件 / 内存参数,给 Go / cargo 等留余量(早上验收)
-const SYSCTL_PREFIXES = ['hw.', 'machdep.', 'vm.', 'sysctl.', 'security.mac.']
+// net.routetable:getifaddrs(os.networkInterfaces、Go net.Interfaces、ifconfig)要用;只是路由表与网卡地址
+const SYSCTL_PREFIXES = ['hw.', 'machdep.', 'vm.', 'sysctl.', 'security.mac.', 'net.routetable']
 const SYSCTL_NAMES = [
   'kern.argmax', 'kern.boottime', 'kern.bootargs', 'kern.hostname', 'kern.hv_vmm_present', 'kern.iossupportversion',
   'kern.maxfiles', 'kern.maxfilesperproc', 'kern.maxproc', 'kern.maxprocperuid', 'kern.ngroups', 'kern.num_files',
