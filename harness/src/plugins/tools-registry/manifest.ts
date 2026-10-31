@@ -5,5 +5,5 @@ export const manifest: PluginManifest = {
   version: '0.1.0',
   kernel: '^0.1.0',
   provides: ['tools'],
-  inject: ['permissionGate', 'approvals'],
+  inject: ['permissionGate', 'approvals', 'sandbox'],
 }

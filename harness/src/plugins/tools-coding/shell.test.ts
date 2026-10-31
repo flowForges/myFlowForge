@@ -134,7 +134,7 @@ describe('sandbox: none service', () => {
       expect(clampTimeout(5, 1000)).toBe(1000)
       expect(clampTimeout(10_000_000, 1000)).toBe(600_000)
       expect(clampTimeout(300, 100)).toBe(300)
-      expect(shellTool({ loginPath: async () => '', sandbox: undefined as never }).description.length).toBeGreaterThan(10)
+      expect(shellTool({ loginPath: async () => '', sandbox: undefined }).description.length).toBeGreaterThan(10)
     })
 
     it.skipIf(!posix)('merges stdout and stderr, reports the exit code', async () => {
@@ -383,7 +383,7 @@ describe('sandbox plan (injected service, 05 §10)', () => {
 
   it('without a sandbox service the shell refuses; it never runs unsandboxed', async () => {
     const marker = join(cwd, 'marker')
-    const t = shellTool({ env: baseEnv(), loginPath: async () => '', minTimeoutMs: 100, sandbox: undefined as never })
+    const t = shellTool({ env: baseEnv(), loginPath: async () => '', minTimeoutMs: 100, sandbox: undefined })
     const ctx: ToolContext = { sessionId: 's', turnId: 't', callId: 'c', cwd, spillDir: join(root, 'spill'), signal: new AbortController().signal }
     const r = await t.run({ command: `touch '${marker}'` }, ctx)
     expect(r).toEqual({ content: '沙箱服务不可用,命令未执行', isError: true, meta: { sandbox: 'none' } })

@@ -13,6 +13,8 @@ import { nullLogger } from '../../kernel/log'
 import { argsOf, type Tool, type ToolContext, type ToolResult, type ToolsService } from '../../lib/tools/types'
 import toolsRegistry, { ToolsRegistry } from './index'
 import { createToolsCoding } from '../tools-coding/index'
+import { shellTool } from '../tools-coding/shell'
+import type { SandboxService } from '../../lib/tools/types'
 import type { DetectResult } from '../../lib/sandbox/detect'
 import { NO_SANDBOX } from '../../../test/sandboxStub'
 
@@ -456,6 +458,60 @@ describe('tools-registry', () => {
       const { r } = await p
       expect(r.content).toMatch(/^exit 0\nhi/)
       expect(r.meta).toEqual({ sandbox: 'none' })
+    })
+
+    describe('I1: the level the gate saw travels into the run', () => {
+      type Level = 'full' | 'partial' | 'none'
+      /** 真 shellTool + 假服务:status 现读 level.now;plan 返回 planLevel 的计划(none = 无沙箱 shell:true) */
+      function rig(o: { level: Level; planLevel: Level; decision: 'allow' | 'ask'; onAsk?: () => void }) {
+        const level = { now: o.level }
+        let releases = 0
+        let asked = 0
+        const svc: Pick<SandboxService, 'plan' | 'status'> = {
+          status: () => ({ level: level.now, missing: [], autoDegraded: false }),
+          async plan(command, _s, env) {
+            const sandboxed = o.planLevel !== 'none'
+            return { file: sandboxed ? '/bin/sh' : command, args: sandboxed ? ['-c', command] : [], env, sandboxed, level: o.planLevel, release: () => { releases++ } }
+          },
+        }
+        const approvals = { request: async () => { asked++; o.onAsk?.(); return 'allow' as const } }
+        const reg = new ToolsRegistry({ gate: { check: () => o.decision }, approvals, sandbox: svc, append: () => {}, log: nullLogger })
+        const env = { PATH: process.env.PATH ?? '', HOME: home, GIT_CONFIG_GLOBAL: join(root, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1' }
+        reg.register(shellTool({ env, loginPath: async () => '', minTimeoutMs: 100, sandbox: svc }))
+        const ctx: ToolContext = { sessionId: 's', turnId: 't', callId: 'c', cwd, spillDir: join(root, 'spill'), signal: new AbortController().signal }
+        const marker = join(cwd, 'marker')
+        const run = () => reg.call('shell', JSON.stringify({ command: `touch '${marker}'` }), ctx)
+        return { level, run, marker, releases: () => releases, asked: () => asked }
+      }
+
+      it.skipIf(process.platform === 'win32')('auto-allowed at full, plan comes back none → refused, nothing runs, plan released', async () => {
+        const r = rig({ level: 'full', planLevel: 'none', decision: 'allow' })
+        expect(await r.run()).toEqual({ content: '沙箱已不可用,命令未执行', isError: true, meta: { sandbox: 'none' } })
+        await new Promise(res => setTimeout(res, 100))
+        expect(existsSync(r.marker)).toBe(false)
+        expect(r.releases()).toBe(1)
+      })
+
+      it.skipIf(process.platform === 'win32')('approved on a card without the flag, sandbox gone before the plan → refused', async () => {
+        const r = rig({ level: 'full', planLevel: 'none', decision: 'ask', onAsk: () => { r.level.now = 'none' } })
+        expect((await r.run()).content).toBe('沙箱已不可用,命令未执行')
+        expect(r.asked()).toBe(1)
+        expect(existsSync(r.marker)).toBe(false)
+      })
+
+      it.skipIf(process.platform === 'win32')('gated at none (flagged card / allowUnsandboxedAuto) → a none plan runs', async () => {
+        const r = rig({ level: 'none', planLevel: 'none', decision: 'allow' })
+        const res = await r.run()
+        expect(res.content).toMatch(/^exit 0/)
+        expect(res.meta).toEqual({ sandbox: 'none' })
+        expect(existsSync(r.marker)).toBe(true)
+      })
+
+      it.skipIf(process.platform === 'win32')('full → partial is not a downgrade to none: runs', async () => {
+        const r = rig({ level: 'full', planLevel: 'partial', decision: 'allow' })
+        expect((await r.run()).meta).toEqual({ sandbox: 'partial' })
+        expect(existsSync(r.marker)).toBe(true)
+      })
     })
 
     it('ToolsRegistry flags exec approvals when the sandbox service is missing or throws (R13)', async () => {

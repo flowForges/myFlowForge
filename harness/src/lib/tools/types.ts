@@ -19,6 +19,11 @@ export interface ToolContext {
   /** 本会话的落盘目录(内核 sessions 服务给出) */
   spillDir: string
   signal: AbortSignal
+  /**
+   * 权限门 / 审批卡看到的沙箱级别(tools-registry 填)。shell 的计划若是 none 而这里不是 none,
+   * 说明放行之后沙箱没了:不执行(review I1)。不填 = 不比较
+   */
+  sandboxLevel?: SandboxStatus['level']
 }
 
 export interface ToolResult {

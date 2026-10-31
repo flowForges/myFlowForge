@@ -132,6 +132,35 @@ describe('Approvals', () => {
     await expect(chained).resolves.toBe('deny')
   })
 
+  it('M2: an allow_session key granted inside the sandbox asks again when the run would be unsandboxed', async () => {
+    const key = sessionKey('npm test')
+    const first = ask('npm test', { key }) // 授予时有沙箱
+    approvals.respond(lastId(), 'allow_session')
+    await first
+    events = []
+    await expect(ask('npm test', { key })).resolves.toBe('allow') // 仍有沙箱:自动放行
+    expect(requested()).toHaveLength(0)
+    const p = ask('npm test', { key, unsandboxed: true }) // 现在无沙箱:再问
+    expect(requested()).toHaveLength(1)
+    approvals.respond(lastId(), 'allow_session') // 在无沙箱下授予
+    await p
+    events = []
+    await expect(ask('npm test', { key, unsandboxed: true })).resolves.toBe('allow')
+    await expect(ask('npm test', { key })).resolves.toBe('allow')
+    expect(requested()).toHaveLength(0)
+  })
+
+  it('M2: a key granted unsandboxed auto-allows at none and with a sandbox', async () => {
+    const key = sessionKey('make')
+    const first = ask('make', { key, unsandboxed: true })
+    approvals.respond(lastId(), 'allow_session')
+    await first
+    events = []
+    await expect(ask('make', { key, unsandboxed: true })).resolves.toBe('allow')
+    await expect(ask('make', { key })).resolves.toBe('allow')
+    expect(requested()).toHaveLength(0)
+  })
+
   it('the allow-set is per session', async () => {
     const first = ask('npm test', { key: 'npm test' })
     approvals.respond(lastId(), 'allow_session')

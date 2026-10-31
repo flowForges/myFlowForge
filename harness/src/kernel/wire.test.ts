@@ -51,10 +51,21 @@ describe('toWire', () => {
       ev('message.user', { turnId: 't', text: 'x'.repeat(5000) }),
       ev('tool.ended', null),
       ev('kernel.started', { version: '1' }),
-      ev('sandbox.netDenied', { host: 'evil.example', port: 443, reason: 'not_allowed' }),
-      ev('permissions.updated', { rules: 3, network: 9 }),
-      ev('approval.requested', { approvalId: 'a', turnId: 't', callId: 'c', tool: 'shell', summary: 'x'.repeat(5000), unsandboxed: true }),
     ]) expect(toWire(e)).toBe(e)
+  })
+})
+
+describe('toWire: 05 events', () => {
+  it.each([
+    ['sandbox.netDenied', { host: 'evil.example', port: 443, reason: 'not_allowed' }],
+    ['permissions.updated', { rules: 3, network: 9 }],
+    ['approval.requested', { approvalId: 'a', turnId: 't', callId: 'c', tool: 'shell', summary: 'x'.repeat(5000), unsandboxed: true }],
+  ] as const)('%s passes unchanged (type and payload)', (type, payload) => {
+    const e = ev(type, payload)
+    const w = toWire(e)
+    expect(w).toBe(e)
+    expect(w.type).toBe(type)
+    expect(w.payload).toEqual(payload)
   })
 })
 
@@ -90,6 +101,14 @@ describe('wire view in the kernel and the server', () => {
     expect((full[0].payload as { content: string }).content).toHaveLength(3000)
     expect(full[0].payload).not.toHaveProperty('truncated')
     expect((full[1].payload as typeof assistant).parts[0]).toEqual(assistant.parts[0])
+  })
+
+  it('permissions.updated from permissions.set reaches events.tail unchanged', async () => {
+    await kernel.handle('permissions.set', { commandId: 'p1', config: { rules: [{ effect: 'deny', rule: 'shell(git push*)' }], network: { allow: ['a.example', 'b.example'] } } })
+    const { events } = (await kernel.handle('events.tail', { limit: 50 })) as { events: KernelEvent[] }
+    const u = events.filter(e => e.type === 'permissions.updated')
+    expect(u.map(e => e.payload)).toEqual([{ rules: 1, network: 2 }])
+    expect(u[0]).toEqual(kernel.events.after(0).find(e => e.type === 'permissions.updated'))
   })
 
   it('subscribe push (backlog and live) is the wire view', async () => {

@@ -261,6 +261,16 @@ describe('sandbox plan (darwin)', () => {
     p.release()
   })
 
+  it('M3: a secret encoded into the denied host is redacted in sandbox.netDenied', async () => {
+    const { svc, appended } = service()
+    const p = await svc.plan('true', session(), baseEnv)
+    expect(await connectStatus(portOf(p.env), 'sk-abcdefghijklmnopqrstuvwxyz.evil.example:443')).toMatch(/^HTTP\/1\.1 403/)
+    const denied = appended.filter(e => e.type === 'sandbox.netDenied').map(e => e.payload)
+    expect(denied).toEqual([{ host: '***.evil.example', port: 443, reason: 'not_allowed' }])
+    expect(JSON.stringify(appended)).not.toContain('abcdefghijklmnop')
+    p.release()
+  })
+
   it('deny lists come from the env snapshot: a `..` credential var is dropped in favour of its resolved form and plan still works', async () => {
     mkdirSync(join(home, 'x'))
     const { svc } = service({ env: { HOME: home, GNUPGHOME: `${home}/x/../.gnupg`, DOCKER_CONFIG: join(root, 'docker') } })

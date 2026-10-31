@@ -12,6 +12,7 @@ import type { Plugin } from '../../kernel/pluginHost'
 import { OUTSIDE } from '../../lib/fs/paths'
 import { sessionKey } from '../../lib/tools/commandKey'
 import { redact } from '../../lib/tools/redact'
+import type { SandboxStatus } from '../../protocol/index'
 import type { PermissionRequest, SandboxService, Tool, ToolContext, ToolResult, ToolsService } from '../../lib/tools/types'
 import { manifest } from './manifest'
 
@@ -139,6 +140,8 @@ export class ToolsRegistry implements ToolsService {
     }
     if (reqs.length === 0) return failed('工具未声明权限请求,未执行') // 空数组 = 拒绝:漏写一行不能绕过权限门
 
+    // 级别与权限门同步读(门里 exec 的判定看的就是这个级别);审批时再读一次,以卡片上显示的为准
+    let seen = this.levelNow(ctx.sessionId)
     // 先过完全部权限门,任何一个 deny 就不再去问用户
     const checked: { req: PermissionRequest; decision: string }[] = []
     for (const req of reqs) {
@@ -151,7 +154,8 @@ export class ToolsRegistry implements ToolsService {
     for (const { req, decision } of checked) {
       if (decision !== 'ask') continue
       asked = true
-      if (!(await this.approve(req, tool.name, ctx))) return failed(DENIED_BY_USER)
+      if (req.action === 'exec') seen = this.levelNow(ctx.sessionId)
+      if (!(await this.approve(req, tool.name, ctx, req.action === 'exec' && seen === 'none'))) return failed(DENIED_BY_USER)
     }
     if (ctx.signal.aborted) return failed('已取消')
     // 等审批期间权限配置可能变了(permissions.set):新加的 deny 照样生效
@@ -161,7 +165,7 @@ export class ToolsRegistry implements ToolsService {
 
     let result: ToolResult
     try {
-      result = await tool.run(args, ctx)
+      result = await tool.run(args, { ...ctx, sandboxLevel: seen })
     } catch (e) {
       return failed(message(e))
     }
@@ -187,21 +191,20 @@ export class ToolsRegistry implements ToolsService {
     }
   }
 
-  /** exec 在本会话不进沙箱(级别 none,或拿不到级别)→ 审批卡标 `未隔离`(spec §13、R13) */
-  private unsandboxed(r: PermissionRequest, sessionId: string): boolean {
-    if (r.action !== 'exec') return false
+  /** 本会话现在的沙箱级别;服务不在或出错 = none(exec 审批卡标 `未隔离`,spec §13、R13) */
+  private levelNow(sessionId: string): SandboxStatus['level'] {
+    if (!this.deps.sandbox) return 'none'
     try {
-      return !this.deps.sandbox || this.deps.sandbox.status(sessionId).level === 'none'
+      return this.deps.sandbox.status(sessionId).level
     } catch (e) {
       this.deps.log.error('sandbox status failed', { error: message(e) })
-      return true
+      return 'none'
     }
   }
 
   /** 用户放行 → true;拒绝、取消、超时、写不了 requested(reject)→ false */
-  private async approve(r: PermissionRequest, tool: string, ctx: ToolContext): Promise<boolean> {
+  private async approve(r: PermissionRequest, tool: string, ctx: ToolContext, unsandboxed: boolean): Promise<boolean> {
     try {
-      const unsandboxed = this.unsandboxed(r, ctx.sessionId)
       const d = await this.deps.approvals.request({
         sessionId: ctx.sessionId,
         turnId: ctx.turnId,

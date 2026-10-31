@@ -16,6 +16,7 @@ import { startProxy as realStartProxy, type DenyEvent, type LookupFn, type Proxy
 import { cleanPath, realSpelling, within } from '../lib/sandbox/paths'
 import { RELAY_PORT } from '../lib/sandbox/relay'
 import { sandboxExecArgs, seatbeltProfile } from '../lib/sandbox/seatbelt'
+import { redact } from '../lib/tools/redact'
 import { sandboxEnv } from '../lib/tools/shellEnv'
 import type { SandboxService, ShellPlan } from '../lib/tools/types'
 import { nullLogger, type Logger } from './log'
@@ -343,7 +344,8 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
     if (e.denied.keys.has(key)) return
     e.denied.keys.add(key)
     try {
-      o.append({ type: 'sandbox.netDenied', sessionId, payload: { host: d.host, port: d.port, reason: d.reason } })
+      // host 来自沙箱里的命令,可能把读到的密钥编进域名标签:与工具输出一样打码(review M3)
+      o.append({ type: 'sandbox.netDenied', sessionId, payload: { host: redact(d.host), port: d.port, reason: d.reason } })
     } catch (err) {
       log.warn('sandbox.netDenied append failed', { error: String(err) })
     }

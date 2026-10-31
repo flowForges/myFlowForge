@@ -32,7 +32,8 @@ type Pending = { req: ApprovalRequest; settle(decision: ApprovalDecision, by: By
 
 export class Approvals {
   private pending = new Map<string, Pending>()
-  private allowed = new Map<string, Set<string>>() // sessionId -> 已 allow_session 的键
+  /** sessionId -> allow_session 的键 -> 授予时是否未隔离(在沙箱里授予的键,到无沙箱时不自动放行,review M2) */
+  private allowed = new Map<string, Map<string, boolean>>()
   private closed = false
   private log: Logger
 
@@ -44,7 +45,8 @@ export class Approvals {
   async request(req: ApprovalRequest): Promise<ApprovalDecision> {
     const approvalId = randomUUID()
     if (this.closed || req.signal.aborted) return this.resolved(req, approvalId, 'deny', 'cancel')
-    if (req.key !== undefined && this.allowed.get(req.sessionId)?.has(req.key)) {
+    const granted = req.key === undefined ? undefined : this.allowed.get(req.sessionId)?.get(req.key)
+    if (granted !== undefined && (granted || req.unsandboxed !== true)) {
       return this.resolved(req, approvalId, 'allow', 'session')
     }
     return new Promise((resolve, reject) => {
@@ -86,8 +88,9 @@ export class Approvals {
     const p = this.pending.get(approvalId)
     if (!p) return false
     if (decision === 'allow_session' && p.req.key !== undefined) {
-      const keys = this.allowed.get(p.req.sessionId) ?? new Set<string>()
-      keys.add(p.req.key)
+      const keys = this.allowed.get(p.req.sessionId) ?? new Map<string, boolean>()
+      // 已在无沙箱下授予过的不降回"仅沙箱"
+      keys.set(p.req.key, keys.get(p.req.key) === true || p.req.unsandboxed === true)
       this.allowed.set(p.req.sessionId, keys)
     }
     p.settle(decision === 'deny' ? 'deny' : 'allow', 'user')

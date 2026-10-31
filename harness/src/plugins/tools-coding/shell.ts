@@ -27,8 +27,8 @@ export interface ShellDeps {
   minTimeoutMs?: number
   /** 进程组登记(spec §12);win32 不传 */
   registry?: Pick<PgidRegistry, 'add' | 'settle'>
-  /** 内核 sandbox 服务(必需);不在 → 命令不执行 */
-  sandbox: Pick<SandboxService, 'plan' | 'status'>
+  /** 内核 sandbox 服务(必须显式给);undefined → 命令不执行 */
+  sandbox: Pick<SandboxService, 'plan' | 'status'> | undefined
 }
 
 export interface ShellRun {
@@ -240,6 +240,11 @@ export function shellTool(deps: ShellDeps): Tool {
       } catch (e) {
         // 沙箱配置生成失败:命令失败,绝不无沙箱执行
         return { content: `沙箱准备失败,命令未执行:${e instanceof Error ? e.message : String(e)}`, isError: true, meta: { sandbox: levelOf(sb, ctx.sessionId) } }
+      }
+      // 放行时有沙箱,计划却是无沙箱(期间关了沙箱):不执行,不能未经审批就无沙箱跑(review I1)
+      if (plan.level === 'none' && ctx.sandboxLevel !== undefined && ctx.sandboxLevel !== 'none') {
+        plan.release()
+        return { content: '沙箱已不可用,命令未执行', isError: true, meta: { sandbox: 'none' } }
       }
       const meta = { sandbox: plan.level }
       const reg = deps.registry
