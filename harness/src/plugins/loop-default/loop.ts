@@ -1,5 +1,5 @@
 // loop-default 的一轮(spec §8 第 2–6、8 步):重建历史 → 逐步 models.stream → 按顺序执行工具 → 直到模型不再调用工具
-// 快照(第 1、7 步)由 Task 12 接在 index.ts 的 runTurn 前后
+// 快照(第 1、7 步)在 index.ts 的 runTurn 前后;每步请求前压缩上下文(§8.4)
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { Logger } from '../../kernel/log'
@@ -8,6 +8,7 @@ import type { Message, ModelError, ModelEvent, ModelRequest, ModelsService, Part
 import { redact } from '../../lib/tools/redact'
 import type { ToolsService } from '../../lib/tools/types'
 import type { KernelEvent, ModelRef } from '../../protocol/index'
+import { charsToTokens, compact, contextWindow } from './compact'
 import { accountProtocol, family, toolDefs, toolsetFor } from './family'
 import { buildMessages, type ReplayOrigin } from './history'
 import { LOOP_REMINDER, LoopGuard } from './loopGuard'
@@ -111,12 +112,16 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<void> {
 
   // 回传推理 replay 只限同一账号 / 协议 / 模型('default' 换了模型或协议后,旧 replay 不再发)
   const origin: ReplayOrigin | undefined = concrete && { accountId: concrete.accountId, protocol: accountProtocol(models, concrete), modelId: concrete.modelId }
-  const messages: Message[] = buildMessages(deps.history(sessionId), turnId, req.text, {
+  let messages: Message[] = buildMessages(deps.history(sessionId), turnId, req.text, {
     origin,
     environment: environmentBlock({ cwd: info.cwd, platform: deps.platform ?? process.platform, isGit: isGitDir(info.cwd), approvalMode: info.approvalMode }),
     reminder: dateReminder,
     now: (deps.now?.() ?? new Date()).getTime(),
   })
+
+  // 压缩的预算:模型上下文减去系统提示词与工具定义
+  const fixed = charsToTokens(system.length + JSON.stringify(defs).length)
+  const context = Math.max(1, contextWindow(models, req.ref) - fixed)
 
   const guard = new LoopGuard()
   const sleep = deps.sleep ?? defaultSleep
@@ -124,6 +129,8 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<void> {
 
   /** 一次模型请求:转发 delta / 用量,收齐文本、推理 replay 与工具调用 */
   async function streamStep(step: number): Promise<StepResult> {
+    // 折叠结果留在本轮的消息里:之后几步的前缀不变,直到再次越过高水位
+    messages = compact(messages, { context, cwd: info.cwd })
     const request: Omit<ModelRequest, 'model'> = {
       system,
       messages: messages.slice(),

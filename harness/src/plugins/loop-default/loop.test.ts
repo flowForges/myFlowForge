@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createKernel, type Kernel } from '../../kernel/kernel'
+import { createGit } from '../../lib/git/snapshot'
 import type { Plugin } from '../../kernel/pluginHost'
 import type { Message, ModelEvent, ModelRequest, ModelsService } from '../../lib/models/types'
 import type { KernelEvent } from '../../protocol/index'
@@ -66,6 +67,9 @@ const baseEnv = () => ({
   GIT_CONFIG_NOSYSTEM: '1',
   ...(process.platform === 'win32' && { ComSpec: process.env.ComSpec, SystemRoot: process.env.SystemRoot, PATHEXT: process.env.PATHEXT }),
 })
+/** 快照用的 git:同样隔离,且不往临时目录之外找仓库(cwd 不是仓库 → not_git) */
+const snapshotGit = () =>
+  createGit({ base: { PATH: process.env.PATH ?? '', HOME: home, USERPROFILE: home }, extraEnv: { GIT_CONFIG_GLOBAL: join(root, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1', HOME: home, GIT_CEILING_DIRECTORIES: root } })
 const noGit = async (): Promise<string> => {
   throw new Error('git disabled in tests')
 }
@@ -76,10 +80,11 @@ type Script = (n: number, req: Req) => AsyncIterable<ModelEvent>
 const GPT: ModelRef = { accountId: 'acc', modelId: 'gpt-5' }
 const CLAUDE: ModelRef = { accountId: 'acc', modelId: 'claude-sonnet-4-5' }
 
-function fakeModels(calls: Call[], script: Script, def?: ModelRef | (() => ModelRef | undefined)): Plugin {
+function fakeModels(calls: Call[], script: Script, def?: ModelRef | (() => ModelRef | undefined), context?: number): Plugin {
+  const entry = (id: string) => ({ id, name: id, context: context!, output: 1000, image: false, reasoning: 'none', toolCall: true })
   const service = {
     catalog: () => ({ presets: [], models: {}, default: typeof def === 'function' ? def() : def }),
-    accounts: () => [],
+    accounts: () => (context ? [{ id: 'acc', presetId: 'p', label: 'acc', state: 'ok', models: [entry(GPT.modelId), entry(CLAUDE.modelId)] }] : []),
     stream(ref: ModelRef | 'default', req: Req) {
       calls.push({ ref, req, messages: structuredClone(req.messages) })
       return script(calls.length, req)
@@ -104,7 +109,7 @@ function* toolCall(id: string, name: string, args: object | string): Generator<M
 const calling = (id: string, name: string, args: object | string) => seq(...toolCall(id, name, args), done('tool_calls'))
 const say = (text: string) => seq({ type: 'text', delta: text }, { type: 'usage', input: 1, output: 1 }, done())
 
-interface BootOpts { disabled?: string[]; loop?: LoopDefaultOpts; extra?: Plugin[] }
+interface BootOpts { disabled?: string[]; loop?: LoopDefaultOpts; extra?: Plugin[]; context?: number }
 async function boot(calls: Call[], script: Script, opts: BootOpts = {}, def?: ModelRef | (() => ModelRef | undefined)) {
   if (opts.disabled) writeFileSync(join(dataDir, 'config.json'), JSON.stringify({ plugins: { disabled: opts.disabled } }))
   const k = await createKernel({
@@ -113,10 +118,10 @@ async function boot(calls: Call[], script: Script, opts: BootOpts = {}, def?: Mo
     secrets: { osBackend: false },
     injectTimeoutMs: 100,
     plugins: [
-      fakeModels(calls, script, def),
+      fakeModels(calls, script, def, opts.context),
       toolsRegistry,
       createToolsCoding({ shellEnv: baseEnv(), loginPath: async () => '', git: noGit, minTimeoutMs: 100 }),
-      createLoopDefault(opts.loop),
+      createLoopDefault({ git: snapshotGit(), ...opts.loop }),
       loopDirect,
       loopEcho,
       ...(opts.extra ?? []),
@@ -140,10 +145,12 @@ const prompt = async (k: Kernel, sid: string, text: string) =>
   ((await k.handle('session.prompt', { commandId: `p${Math.random()}`, sessionId: sid, text })) as { turnId: string }).turnId
 const evs = (k: Kernel, sid: string) => k.events.bySession(sid)
 const terminal = (k: Kernel, sid: string) => evs(k, sid).filter(e => e.type === 'turn.ended' || e.type === 'turn.failed')
+const snapshots = (k: Kernel, sid: string, turnId: string) => evs(k, sid).filter(e => e.type === 'turn.snapshot' && pay(e).turnId === turnId)
+/** 等终态;拍了开始快照的轮还要等结束快照(它在终态之后,拍完处理者才返回,下一轮才收) */
 async function turn(k: Kernel, sid: string, text: string) {
   const want = terminal(k, sid).length + 1
   const turnId = await prompt(k, sid, text)
-  await waitFor(() => terminal(k, sid).length === want)
+  await waitFor(() => terminal(k, sid).length === want && (snapshots(k, sid, turnId).length !== 1))
   return turnId
 }
 const pay = <T = Record<string, unknown>>(e: KernelEvent | undefined) => e?.payload as T
@@ -179,6 +186,7 @@ describe('loop-default: bail chain', () => {
     expect(calls).toHaveLength(0)
     expect(terminal(k, sid).map(e => [e.type, pay(e).reason])).toEqual([['turn.failed', 'tools_unavailable']])
     expect(evs(k, sid).some(e => e.type === 'message.assistant')).toBe(false)
+    expect(evs(k, sid).some(e => e.type === 'turn.snapshot')).toBe(false)
   })
 
   it('uses the registry default model when the session has none', async () => {
@@ -205,14 +213,19 @@ describe('loop-default: one coding turn', () => {
     const sid = await create(k, { model: GPT, approvalMode: 'auto' })
     const turnId = await turn(k, sid, 'fix it')
 
-    const keep = new Set(['turn.started', 'message.assistant', 'tool.started', 'tool.ended', 'turn.ended', 'turn.failed'])
+    const keep = new Set(['turn.started', 'turn.snapshot', 'message.assistant', 'tool.started', 'tool.ended', 'turn.ended', 'turn.failed'])
     const main = evs(k, sid).filter(e => keep.has(e.type))
     expect(main.map(e => e.type)).toEqual([
-      'turn.started',
+      'turn.started', 'turn.snapshot',
       'message.assistant', 'tool.started', 'tool.ended',
       'message.assistant', 'tool.started', 'tool.ended',
       'message.assistant', 'tool.started', 'tool.ended',
-      'message.assistant', 'turn.ended',
+      'message.assistant', 'turn.ended', 'turn.snapshot',
+    ])
+    // cwd 不是 git 仓库:两张快照都只带 reason
+    expect(main.filter(e => e.type === 'turn.snapshot').map(e => pay(e))).toEqual([
+      { turnId, phase: 'start', reason: 'not_git' },
+      { turnId, phase: 'end', reason: 'not_git' },
     ])
     expect(main.every(e => pay(e).turnId === turnId)).toBe(true)
     const steps = main.filter(e => e.type === 'message.assistant').map(e => pay<{ step: number; parts: unknown[] }>(e))
@@ -223,7 +236,7 @@ describe('loop-default: one coding turn', () => {
     })
     expect(steps[3]).toMatchObject({ step: 4, text: 'done', parts: [{ type: 'text', text: 'done' }] })
     expect(main.filter(e => e.type === 'tool.ended').map(e => pay(e).ok)).toEqual([true, true, true])
-    expect(String(pay(main[9]).content)).toMatch(/^exit 0/)
+    expect(String(pay(main[10]).content)).toMatch(/^exit 0/)
     expect(readFileSync(join(cwd, 'a.txt'), 'utf8')).toBe('hello mff\n')
 
     // 每步的 delta / usage 带 step
@@ -446,6 +459,28 @@ describe('loop-default: limits', () => {
     expect(evs(k, sid).filter(e => e.type === 'tool.started')).toHaveLength(4)
     const results = toolResults(calls[4].messages)
     expect(results.map(r => r.content.includes(LOOP_REMINDER))).toEqual([false, false, true, true])
+  })
+})
+
+describe('loop-default: compaction', () => {
+  it('over the model context: an older read of the same file is folded in the request, the events keep the full result', async () => {
+    const calls: Call[] = []
+    const k = await boot(calls, n => (n <= 2 ? calling(`c${n}`, 'read', { path: n === 1 ? 'a.txt' : './a.txt' }) : say('ok')), { context: 1 })
+    const sid = await create(k, { model: CLAUDE })
+    await turn(k, sid, 'go')
+    expect(calls).toHaveLength(3)
+    expect(toolResults(calls[1].messages).map(r => r.content)).toEqual([expect.stringContaining('hello')])
+    expect(toolResults(calls[2].messages).map(r => r.content)).toEqual(['[已折叠:read a.txt,需要时重新读取]', expect.stringContaining('hello')])
+    expect(calls[2].messages[0]).toEqual(calls[0].messages[0]) // 第一条用户消息(含环境块)不动
+    expect(evs(k, sid).filter(e => e.type === 'tool.ended').map(e => String(pay(e).content))).toEqual([expect.stringContaining('hello'), expect.stringContaining('hello')])
+  })
+
+  it('under the threshold nothing is folded (default 128 000 context)', async () => {
+    const calls: Call[] = []
+    const k = await boot(calls, n => (n <= 2 ? calling(`c${n}`, 'read', { path: n === 1 ? 'a.txt' : './a.txt' }) : say('ok')))
+    const sid = await create(k, { model: CLAUDE })
+    await turn(k, sid, 'go')
+    expect(toolResults(calls[2].messages).every(r => r.content.includes('hello'))).toBe(true)
   })
 })
 
