@@ -126,7 +126,7 @@ describe('parseEntries', () => {
 describe('reapOrphans', () => {
   it('missing file → no-op, nothing created', () => {
     const calls: unknown[] = []
-    expect(reapOrphans(file, { kill: (...a) => calls.push(a) })).toEqual({ killed: [], skipped: [] })
+    expect(reapOrphans(file, { kill: (...a) => calls.push(a) })).toMatchObject({ killed: [], skipped: [] })
     expect(calls).toEqual([])
     expect(existsSync(file)).toBe(false)
   })
@@ -136,7 +136,7 @@ describe('reapOrphans', () => {
     r.clear()
     writeFileSync(file, 'garbage\n{"pgid":"x"}\n\u0000\u0001')
     const calls: unknown[] = []
-    expect(reapOrphans(file, { kill: (...a) => calls.push(a) })).toEqual({ killed: [], skipped: [] })
+    expect(reapOrphans(file, { kill: (...a) => calls.push(a) })).toMatchObject({ killed: [], skipped: [] })
     expect(calls).toEqual([])
     expect(readFileSync(file, 'utf8')).toBe('')
   })
@@ -148,7 +148,7 @@ describe('reapOrphans', () => {
     reg.add(c.pid!) // 模拟上一个工作进程登记后崩溃:不 settle、不 killLive
     expect(readFileSync(file, 'utf8')).toContain(`"pgid":${c.pid}`)
     const res = reapOrphans(file)
-    expect(res).toEqual({ killed: [c.pid], skipped: [] })
+    expect(res).toMatchObject({ killed: [c.pid], skipped: [] })
     expect(await waitFor(() => !alive(pid), 2000)).toBe(true)
     expect(await waitFor(() => exited(c), 2000)).toBe(true)
     expect(readFileSync(file, 'utf8')).toBe('')
@@ -188,10 +188,10 @@ describe('reapOrphans', () => {
     await waitFor(() => exited(c))
     const f = join(root, 'f')
     writeEntries(f, JSON.stringify({ pgid: c.pid, start: 'whatever', members: [{ pid, start: 'bogus' }] }) + '\n')
-    expect(reapOrphans(f)).toEqual({ killed: [], skipped: [c.pid] })
+    expect(reapOrphans(f)).toMatchObject({ killed: [], skipped: [c.pid] })
     expect(alive(pid)).toBe(true)
     writeEntries(f, JSON.stringify({ pgid: c.pid, start: 'whatever' }) + '\n')
-    expect(reapOrphans(f)).toEqual({ killed: [], skipped: [c.pid] })
+    expect(reapOrphans(f)).toMatchObject({ killed: [], skipped: [c.pid] })
     expect(alive(pid)).toBe(true)
   })
 
@@ -206,7 +206,7 @@ describe('reapOrphans', () => {
     writeEntries(f, ['{"pgid":0,"start":"S"}', '{"pgid":-1,"start":"S"}', ...lines].join('\n'))
     const res = reapOrphans(f, { kill, startTime: () => 'S', ownPgid: () => own, groupMembers: () => [] })
     expect(sent).toEqual([-777])
-    expect(res).toEqual({ killed: [777], skipped: [own, process.pid] })
+    expect(res).toMatchObject({ killed: [777], skipped: [own, process.pid] })
   })
 
   it('own group unknown → sends nothing', () => {
@@ -222,7 +222,7 @@ describe('reapOrphans', () => {
     const f = join(root, 'f')
     writeEntries(f, JSON.stringify({ pgid: 777, start: 'S' }) + '\n')
     const sent: unknown[] = []
-    expect(reapOrphans(f, { platform: 'win32', kill: (...a) => sent.push(a), startTime: () => 'S' })).toEqual({ killed: [], skipped: [] })
+    expect(reapOrphans(f, { platform: 'win32', kill: (...a) => sent.push(a), startTime: () => 'S' })).toMatchObject({ killed: [], skipped: [] })
     expect(sent).toEqual([])
   })
 })
@@ -318,7 +318,7 @@ describe('review fixes', () => {
     writeEntries(f, line({ pgid: 777, start: 'S', boot: 'B1' }) + line({ pgid: 778, start: 'S' }) + line({ pgid: 779, start: 'S', boot: 'B2' }))
     const res = reapOrphans(f, { platform: 'linux', ...deps })
     expect(sent).toEqual([-779])
-    expect(res).toEqual({ killed: [779], skipped: [777, 778] })
+    expect(res).toMatchObject({ killed: [779], skipped: [777, 778] })
     expect(readFileSync(f, 'utf8')).toBe('')
   })
 
@@ -383,9 +383,9 @@ describe('review fixes', () => {
     writeEntries(real, line({ pgid: 779, start: 'S', boot: 'B2' }))
     const link = join(root, 'link')
     symlinkSync(real, link)
-    expect(reapOrphans(link, { platform: 'linux', ...deps })).toEqual({ killed: [], skipped: [] })
+    expect(reapOrphans(link, { platform: 'linux', ...deps })).toMatchObject({ killed: [], skipped: [] })
     chmodSync(real, 0o644)
-    expect(reapOrphans(real, { platform: 'linux', ...deps })).toEqual({ killed: [], skipped: [] })
+    expect(reapOrphans(real, { platform: 'linux', ...deps })).toMatchObject({ killed: [], skipped: [] })
     expect(sent).toEqual([])
     expect(readFileSync(real, 'utf8')).not.toBe('') // 不认的文件不动
   })
@@ -394,7 +394,7 @@ describe('review fixes', () => {
     const f = join(root, 'f')
     writeEntries(f, line({ pgid: 779, start: 'S', boot: 'B2' }))
     const broken = fake({ startTime: () => { throw new Error('ps timed out') } })
-    expect(reapOrphans(f, { platform: 'linux', ...broken.deps })).toEqual({ killed: [], skipped: [779] })
+    expect(reapOrphans(f, { platform: 'linux', ...broken.deps })).toMatchObject({ killed: [], skipped: [779] })
     expect(parseEntries(readFileSync(f, 'utf8')).map(e => e.pgid)).toEqual([779])
     const ok = fake()
     expect(reapOrphans(f, { platform: 'linux', ...ok.deps }).killed).toEqual([779])
@@ -408,5 +408,42 @@ describe('review fixes', () => {
     writeFileSync(join(dir, 'other.tmp'), 'x')
     reapOrphans(file, { platform: 'linux', ...fake().deps })
     expect(readdirSync(dir).sort()).toEqual(['other.tmp', 'shell-pgids'])
+  })
+})
+
+describe('re-review R1', () => {
+  const line = (e: object) => JSON.stringify(e) + '\n'
+
+  it('M3: entries the reap could not check are returned and survive the new registry\'s first write', () => {
+    const f = join(root, 'run', 'shell-pgids')
+    writeEntries(f, line({ pgid: 779, start: 'S', boot: 'B2' }) + line({ pgid: 780, start: 'X', boot: 'B2' }))
+    const deps: ProcDeps = {
+      kill: () => true,
+      startTime: pid => {
+        if (pid === 779) throw new Error('ps timed out')
+        return 'other'
+      },
+      groupMembers: () => [],
+      ownPgid: () => 4242,
+      bootId: () => 'B2',
+    }
+    const res = reapOrphans(f, { platform: 'linux', ...deps })
+    expect(res.kept.map(e => e.pgid)).toEqual([779])
+    const reg = newReg(f, 'linux', { ...deps, startTime: () => 'N', seed: res.kept })
+    reg.add(901)
+    expect(parseEntries(readFileSync(f, 'utf8')).map(e => e.pgid)).toEqual([779, 901])
+  })
+
+  it('umask: the registry file is 0600 even under a umask that strips owner bits', () => {
+    mkdirSync(join(file, '..'), { recursive: true }) // 目录在 umask 之前就有(真实场景里 run/ 早已建好)
+    const old = process.umask(0o277)
+    try {
+      const reg = newReg(file, 'linux', { startTime: () => 'S', bootId: () => 'B', kill: () => true })
+      reg.add(777)
+      expect(statSync(file).mode & 0o777).toBe(0o600)
+      expect(parseEntries(readFileSync(file, 'utf8')).map(e => e.pgid)).toEqual([777])
+    } finally {
+      process.umask(old)
+    }
   })
 })

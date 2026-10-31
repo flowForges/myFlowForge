@@ -27,7 +27,7 @@ import { ServiceRegistry } from './services'
 import { Sessions, validateCwd } from './sessions'
 import { CLOSE_GRACE_MS, KILL_LIVE_GRACE_MS } from './shutdown'
 import { overbroadRelocations, snapshotEnv } from '../lib/fs/paths'
-import { killLive, pgidFile, PgidRegistry } from '../lib/proc/pgids'
+import { killLive, pgidFile, PgidRegistry, type PgidEntry } from '../lib/proc/pgids'
 import { HARNESS_VERSION } from './version'
 import { toWire } from './wire'
 
@@ -56,6 +56,8 @@ export interface KernelOpts {
   env?: NodeJS.ProcessEnv
   /** shell 进程组登记文件(spec §12);默认 `dataDir/run/shell-pgids`。win32 不登记 */
   pgidFile?: string
+  /** 启动时 reapOrphans 认不了、留到下次的条目(`ReapResult.kept`),登记从它们开始 */
+  pgidSeed?: PgidEntry[]
 }
 
 const ERR_METHOD_NOT_FOUND = -32601
@@ -104,7 +106,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
     return written
   }
   const approvals = new Approvals({ append, log, timeoutMs: opts.approvalTimeoutMs ?? APPROVAL_TIMEOUT_MS })
-  const pgids = process.platform === 'win32' ? undefined : new PgidRegistry(opts.pgidFile ?? pgidFile(opts.dataDir), process.platform, { log })
+  const pgids = process.platform === 'win32' ? undefined : new PgidRegistry(opts.pgidFile ?? pgidFile(opts.dataDir), process.platform, { log, seed: opts.pgidSeed })
   const configFile = join(opts.dataDir, 'config.json')
   let config = loadConfig(configFile)
   const configAccess = {

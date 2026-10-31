@@ -1,6 +1,6 @@
 // shell 进程组登记与孤儿回收(spec §12)。只杀能证明是自己起的组:组长或登记过的组员仍在、启动时间逐字一致
 import { execFile, execFileSync } from 'node:child_process'
-import { closeSync, constants, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, constants, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 
 /** lib 不引用 kernel:只要这一个方法 */
@@ -37,6 +37,8 @@ export interface ProcDeps {
   ownPgid?: () => number | undefined
   /** 本次开机的标识;Linux 必须有,其余平台不用 */
   bootId?: () => string | undefined
+  /** PgidRegistry:起始条目(reapOrphans 这次认不了、留到下次的),第一次写文件时一并写回 */
+  seed?: PgidEntry[]
   /** 命令跑着时多久刷新一次组员,默认 2 s */
   refreshMs?: number
   log?: PgidLog
@@ -287,6 +289,7 @@ function writeAtomic(file: string, text: string): void {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
   const tmp = `${file}.${process.pid}.tmp`
   writeFileSync(tmp, text, { mode: 0o600 })
+  chmodSync(tmp, 0o600) // mode 受 umask 影响;reapOrphans 只认恰好 0600
   renameSync(tmp, file)
 }
 
@@ -337,13 +340,14 @@ export class PgidRegistry {
   private inflight = new Set<Promise<void>>()
   private r: Resolved
 
-  /** 从空开始:上一个工作进程留下的条目由 reapOrphans 在建内核之前处理掉 */
+  /** 上一个工作进程留下的条目由 reapOrphans 在建内核之前处理掉;它认不了的经 deps.seed 带进来 */
   constructor(
     private file: string,
     private platform: NodeJS.Platform = process.platform,
     deps: ProcDeps = {},
   ) {
     this.r = resolve(platform, deps)
+    for (const e of deps.seed ?? []) if (validPgid(e.pgid)) this.entries.set(e.pgid, e)
   }
 
   add(pgid: number): void {
@@ -476,10 +480,18 @@ export class PgidRegistry {
  * pid 被复用 / 别的开机 / 认不出 → 跳过并丢掉;这次查不了(ps 失败等)→ 跳过并留到下次。
  * 文件不在、不是本用户 0600 的普通文件 → 什么都不做。
  */
-export function reapOrphans(file: string, opts: ProcDeps & { platform?: NodeJS.Platform } = {}): { killed: number[]; skipped: number[] } {
+export interface ReapResult {
+  killed: number[]
+  skipped: number[]
+  /** 这次认不了、写回文件留到下次的条目;交给新的 PgidRegistry 的 seed,免得它第一次写文件时冲掉 */
+  kept: PgidEntry[]
+}
+
+export function reapOrphans(file: string, opts: ProcDeps & { platform?: NodeJS.Platform } = {}): ReapResult {
   const platform = opts.platform ?? process.platform
   const r = resolve(platform, opts)
-  const res = { killed: [] as number[], skipped: [] as number[] }
+  const keep: PgidEntry[] = []
+  const res: ReapResult = { killed: [], skipped: [], kept: keep }
   if (platform === 'win32') return res
   removeStaleTemps(file)
   let text: string | undefined
@@ -490,7 +502,6 @@ export function reapOrphans(file: string, opts: ProcDeps & { platform?: NodeJS.P
     return res
   }
   if (text === undefined) return res
-  const keep: PgidEntry[] = []
   try {
     for (const e of parseEntries(text)) {
       if (!groupExists(e.pgid, r.kill)) continue
@@ -509,7 +520,7 @@ export function reapOrphans(file: string, opts: ProcDeps & { platform?: NodeJS.P
   } catch (err) {
     r.log.warn('pgid file truncate failed', { error: String(err) })
   }
-  if (res.killed.length || res.skipped.length) r.log.warn('reaped orphan process groups', { ...res, kept: keep.map(e => e.pgid) })
+  if (res.killed.length || res.skipped.length) r.log.warn('reaped orphan process groups', { killed: res.killed, skipped: res.skipped, kept: keep.map(e => e.pgid) })
   return res
 }
 

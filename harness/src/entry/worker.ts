@@ -45,10 +45,10 @@ export async function runWorker(): Promise<void> {
   startup = (async () => {
     // 上一个工作进程崩溃时留下的 shell 进程组:先收掉,再建内核(spec §12)
     const pgids = pgidFile(dir)
-    reapOrphans(pgids, { platform: process.platform, log })
+    const { kept } = reapOrphans(pgids, { platform: process.platform, log })
     // MFFAI_SECRETS_PLAINTEXT=1:端到端测试用,不碰系统钥匙串
     const secrets = { osBackend: process.env.MFFAI_SECRETS_PLAINTEXT !== '1' }
-    kernel = await createKernel({ dataDir: dir, plugins: BUILTIN_PLUGINS, log, secrets, pgidFile: pgids })
+    kernel = await createKernel({ dataDir: dir, plugins: BUILTIN_PLUGINS, log, secrets, pgidFile: pgids, pgidSeed: kept })
     const k = kernel
     server = await startRpcServer({
       addr: paths.workerAddr,
