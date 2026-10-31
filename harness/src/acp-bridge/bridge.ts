@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto'
-import { agent, PROTOCOL_VERSION, RequestError, type AgentContext, type Stream } from '@agentclientprotocol/sdk'
+import { agent, PROTOCOL_VERSION, RequestError, type AgentContext, type PermissionOption, type SessionUpdate, type Stream, type ToolKind } from '@agentclientprotocol/sdk'
 import type { KernelEvent, MffaiClient } from '../protocol/index'
 
 interface Turn {
   sessionId: string
   deltas: Promise<void>
-  notify: AgentContext['notify']
+  client: AgentContext
   done(r: { ok: true } | { ok: false; reason: string }): void
 }
 
@@ -15,6 +15,21 @@ const turnIdOf = (e: KernelEvent): string | undefined => {
 }
 
 const EARLY_MAX_TURNS = 16
+const ROUTED = new Set(['message.assistant.delta', 'tool.started', 'tool.ended', 'approval.requested', 'turn.ended', 'turn.failed'])
+
+const TOOL_KIND: Record<string, ToolKind> = {
+  read: 'read', list: 'read', glob: 'search', grep: 'search',
+  write: 'edit', edit: 'edit', apply_patch: 'edit', shell: 'execute',
+}
+
+type Decision = 'allow' | 'allow_session' | 'deny' // optionId 即 approval.respond 的 decision
+const PERMISSION_OPTIONS: Array<PermissionOption & { optionId: Decision }> = [
+  { optionId: 'allow', name: '允许', kind: 'allow_once' },
+  { optionId: 'allow_session', name: '本会话允许', kind: 'allow_always' },
+  { optionId: 'deny', name: '拒绝', kind: 'reject_once' },
+]
+
+const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 
 /** prompt 响应(才带 turnId)之前就到的事件的暂存:只在有 prompt 在途时收,按 turnId 限量,丢最旧的 */
 export class EarlyBuffer {
@@ -54,22 +69,60 @@ export async function runBridge(opts: { stream: Stream; connect: () => Promise<M
     return worker
   }
 
-  function dispatch(t: Turn, e: KernelEvent): void {
-    const p = e.payload as { text?: string; reason?: string; message?: string }
-    if (e.type === 'message.assistant.delta' && typeof p.text === 'string') {
-      const text = p.text
-      t.deltas = t.deltas.then(() =>
-        t.notify('session/update', {
+  /** 本轮的通知按事件顺序排队发出 */
+  function send(t: Turn, update: SessionUpdate): void {
+    t.deltas = t.deltas.then(() => t.client.notify('session/update', { sessionId: t.sessionId, update }))
+  }
+
+  /** 问客户端;取消 / 出错 / 不认识的选项 → deny。请求在队列里按序发出,但不堵住后面的通知 */
+  function ask(t: Turn, approvalId: string, callId: string, summary: string): void {
+    t.deltas = t.deltas.then(() => {
+      void t.client
+        .request('session/request_permission', {
           sessionId: t.sessionId,
-          update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } },
-        }),
-      )
+          toolCall: { toolCallId: callId, title: summary },
+          options: PERMISSION_OPTIONS,
+        })
+        .then(
+          (r): Decision => {
+            const id = r.outcome.outcome === 'selected' ? r.outcome.optionId : 'deny'
+            return PERMISSION_OPTIONS.some((o) => o.optionId === id) ? (id as Decision) : 'deny'
+          },
+          (): Decision => 'deny',
+        )
+        .then((decision) => worker?.call('approval.respond', { approvalId, decision }))
+        .catch(() => {})
+    })
+  }
+
+  function dispatch(t: Turn, e: KernelEvent): void {
+    const p = e.payload as Record<string, unknown> & { text?: string; reason?: string; message?: string }
+    if (e.type === 'message.assistant.delta' && typeof p.text === 'string') {
+      send(t, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: p.text } })
+    } else if (e.type === 'tool.started') {
+      const name = str(p.name)
+      send(t, {
+        sessionUpdate: 'tool_call',
+        toolCallId: str(p.callId),
+        title: `${name} ${str(p.argsPreview).slice(0, 80)}`,
+        kind: TOOL_KIND[name] ?? 'other',
+        status: 'in_progress',
+      })
+    } else if (e.type === 'tool.ended') {
+      send(t, {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: str(p.callId),
+        status: p.ok === true ? 'completed' : 'failed',
+        content: [{ type: 'content', content: { type: 'text', text: str(p.content) } }],
+      })
+    } else if (e.type === 'approval.requested') {
+      ask(t, str(p.approvalId), str(p.callId), str(p.summary))
     } else if (e.type === 'turn.ended') t.done({ ok: true })
     else if (e.type === 'turn.failed') t.done({ ok: false, reason: p.message ?? p.reason ?? 'turn failed' })
   }
 
   function onEvent(e: KernelEvent): void {
-    if (e.type !== 'message.assistant.delta' && e.type !== 'turn.ended' && e.type !== 'turn.failed') return
+    if (!ROUTED.has(e.type)) return
     const id = turnIdOf(e)
     if (!id) return
     const t = turns.get(id)
@@ -107,8 +160,12 @@ export async function runBridge(opts: { stream: Stream; connect: () => Promise<M
       }
       return { protocolVersion: PROTOCOL_VERSION, agentCapabilities: {}, authMethods: [] }
     })
-    .onRequest('session/new', async () => {
-      const { sessionId } = await need().call('session.create', { commandId: randomUUID() })
+    .onRequest('session/new', async (ctx) => {
+      const { sessionId } = await need()
+        .call('session.create', { commandId: randomUUID(), cwd: ctx.params.cwd })
+        .catch((e: Error & { code?: number }) => {
+          throw new RequestError(e.code === -32602 ? -32602 : -32603, e.message)
+        })
       return { sessionId }
     })
     .onRequest('session/prompt', async (ctx) => {
@@ -128,7 +185,7 @@ export async function runBridge(opts: { stream: Stream; connect: () => Promise<M
 
         let t!: Turn
         const finished = new Promise<{ ok: true } | { ok: false; reason: string }>((resolve) => {
-          t = { sessionId, deltas: Promise.resolve(), notify: ctx.client.notify.bind(ctx.client) as AgentContext['notify'], done: resolve }
+          t = { sessionId, deltas: Promise.resolve(), client: ctx.client, done: resolve }
         })
         turns.set(turnId, t)
         for (const e of early.take(turnId)) dispatch(t, e)
