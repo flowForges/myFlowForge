@@ -9,6 +9,7 @@ import type { SandboxService, ShellPlan, ToolContext, ToolsService } from '../..
 import type { PgidRegistry } from '../../lib/proc/pgids'
 import toolsRegistry from '../tools-registry'
 import { createToolsCoding } from './index'
+import { manifestFor } from './manifest'
 import { clampTimeout, runShell, shellTool, unsandboxedPlan, MAX_OUTPUT } from './shell'
 import { parseEntries, pgidFile } from '../../lib/proc/pgids'
 import { NO_SANDBOX, seedUnsandboxedAuto } from '../../../test/sandboxStub'
@@ -397,6 +398,13 @@ describe('sandbox plan (injected service, 05 §10)', () => {
     const services = new Map<string, unknown>([['tools', { register: () => () => {} }], ['permissionGate', {}]])
     const ctx = { services: { get: (k: string) => services.get(k) }, effect: () => {} } as unknown as Parameters<typeof p.activate>[0]
     expect(() => p.activate(ctx)).toThrow(/sandbox/)
+  })
+
+  it('tools-coding injects pgids on posix only (win32 never provides it) (final review M3)', () => {
+    expect(manifestFor('darwin').inject).toEqual(['tools', 'permissionGate', 'sandbox', 'pgids'])
+    expect(manifestFor('linux').inject).toContain('pgids')
+    expect(manifestFor('win32').inject).toEqual(['tools', 'permissionGate', 'sandbox'])
+    expect(createToolsCoding().manifest.inject?.includes('pgids')).toBe(process.platform !== 'win32')
   })
 
   it.skipIf(!posix)('a rejected plan fails the command; it never runs unsandboxed', async () => {
