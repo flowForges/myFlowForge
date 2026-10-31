@@ -7,7 +7,8 @@ import { join, resolve } from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import { client, ndJsonStream } from '@agentclientprotocol/sdk'
 import { PROTOCOL_VERSION, connectClient, connectControlClient, runtimePaths, type KernelEvent } from '../src/protocol/index'
-import { FAKE_MODEL, startFakeOpenai } from './fakeOpenai'
+import { FAKE_MODEL, startFakeOpenai, toolCall } from './fakeOpenai'
+import { startFakeUpstream } from './fakeUpstream'
 
 // 构建产物端到端:MFFAI_E2E=1 且已 `npm run build`。环境全部封在临时目录里。
 const E2E = process.env.MFFAI_E2E === '1'
@@ -42,8 +43,8 @@ describe.skipIf(!E2E)('built daemon e2e', () => {
 
   const electron = () => process.env.ELECTRON_BIN ?? (createRequire(import.meta.url)('electron') as string)
 
-  /** 起构建产物的监管进程(临时 HOME / 数据目录 / 全局 git 配置,去掉代理变量),等到 worker running */
-  async function startDaemon() {
+  /** 起构建产物的监管进程(临时 HOME / 数据目录 / 全局 git 配置,去掉代理变量),等到 worker running。`extraEnv` 在去掉代理变量之后再加 */
+  async function startDaemon(o: { extraEnv?: NodeJS.ProcessEnv } = {}) {
     expect(existsSync(DAEMON) && existsSync(ACP)).toBe(true)
     const home = mkdtempSync(join(tmpdir(), 'mffai-e2e-home-'))
     const data = mkdtempSync(join(tmpdir(), 'mffai-e2e-data-'))
@@ -56,6 +57,7 @@ describe.skipIf(!E2E)('built daemon e2e', () => {
       MFFAI_CATALOG_OFFLINE: '1', GIT_CONFIG_GLOBAL: gitConfig, GIT_CONFIG_NOSYSTEM: '1',
     }
     for (const k of Object.keys(env)) if (/^(https?|all|no)_proxy$/i.test(k)) delete env[k]
+    Object.assign(env, o.extraEnv)
     const paths = runtimePaths(data)
     const sup = spawn(electron(), [DAEMON], { env, stdio: 'ignore', detached: true })
     procs.push(sup)
@@ -196,5 +198,75 @@ describe.skipIf(!E2E)('built daemon e2e', () => {
         if (statSync(p).isFile()) expect(readFileSync(p, 'utf8'), p).not.toContain(apiKey)
       }
     } finally { await fake.close() }
+  }, 120_000)
+
+  // 真沙箱(darwin):真实探测;"互联网" = 127.0.0.1 上的假上游代理,经 HTTPS_PROXY 走正常的 upstreamFromEnv
+  const sandboxed = process.platform === 'darwin'
+    && execFileSync('/bin/sh', ['-c', "/usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true && echo y || true"]).toString().trim() === 'y'
+  it.skipIf(!sandboxed)('sandboxed coding round: writes stay in cwd, network only through the allowlist proxy', async () => {
+    const hasCurl = existsSync('/usr/bin/curl')
+    const script = [
+      () => toolCall('call_in', 'shell', { command: 'echo ok > in.txt' }),
+      () => toolCall('call_out', 'shell', { command: 'echo x > ../outside.txt' }),
+      ...(hasCurl ? [() => toolCall('call_curl', 'shell', { command: 'curl -s -o /dev/null -w %{http_code} https://evil.example' })] : []),
+    ]
+    const fake = await startFakeOpenai({ script })
+    const up = await startFakeUpstream()
+    try {
+      const { env, data, paths, tokenOf, shutdown } = await startDaemon({
+        extraEnv: { HTTPS_PROXY: `http://127.0.0.1:${up.port}`, NO_PROXY: '127.0.0.1,localhost' },
+      })
+      const root = mkdtempSync(join(tmpdir(), 'mffai-e2e-sbx-'))
+      temps.push(root)
+      const repo = join(root, 'repo')
+      execFileSync('mkdir', [repo])
+      const git = (...args: string[]) => execFileSync('git', ['-c', 'user.email=e2e@example.invalid', '-c', 'user.name=e2e', '-c', 'commit.gpgSign=false', ...args], { cwd: repo, env, stdio: 'pipe' }).toString()
+      git('init', '-q')
+      writeFileSync(join(repo, 'a.txt'), 'a')
+      git('add', 'a.txt')
+      git('commit', '-q', '-m', 'init')
+
+      const w = await connectClient({ addr: paths.workerAddr, token: tokenOf(), timeoutMs: 5000 })
+      try {
+        expect((await w.call('hello', { clientVersion: '0.0.0', protocolVersion: PROTOCOL_VERSION })).compatible).toBe(true)
+        const events: KernelEvent[] = []
+        w.onEvent(e => events.push(e))
+        await w.call('events.subscribe', { after: 0 })
+        expect((await w.call('status')).sandbox?.level).toBe('full')
+
+        const acc = await w.call('models.addAccount', { commandId: 'e2e-sbx-add', presetId: 'custom-openai', baseUrl: fake.base, apiKey: 'sk-e2e-sandbox-0123456789' })
+        await waitFor(async () => ((await w.call('models.accounts')).accounts.find(a => a.id === acc.id)?.models ?? []).some(m => m.id === FAKE_MODEL), 10_000, 'model list')
+        await w.call('models.setDefault', { accountId: acc.id, modelId: FAKE_MODEL })
+
+        const { sessionId } = await w.call('session.create', { commandId: 'e2e-sbx', cwd: repo, approvalMode: 'auto' })
+        await w.call('session.prompt', { commandId: 'e2e-sbx-p', sessionId, text: 'run the commands' })
+        const mine = () => events.filter(e => e.sessionId === sessionId)
+        await waitFor(() => mine().some(e => e.type === 'turn.ended' || e.type === 'turn.failed'), 60_000, 'turn end')
+        const end = mine().find(e => e.type === 'turn.ended' || e.type === 'turn.failed')!
+        expect(end.type, JSON.stringify(end.payload)).toBe('turn.ended')
+        // auto + full:不弹审批
+        expect(mine().filter(e => e.type === 'approval.requested')).toEqual([])
+        const ended = mine().filter(e => e.type === 'tool.ended').map(e => e.payload as { name?: string; content?: string })
+        expect(ended.map(e => e.name)).toEqual(script.map(() => 'shell'))
+
+        expect(readFileSync(join(repo, 'in.txt'), 'utf8')).toBe('ok\n')
+        expect(existsSync(join(root, 'outside.txt'))).toBe(false)
+        if (hasCurl) {
+          const curl = ended[2].content ?? ''
+          expect(curl, curl).not.toMatch(/\b200\b/)
+          expect(mine().some(e => e.type === 'sandbox.netDenied'
+            && (e.payload as { host?: string }).host === 'evil.example' && (e.payload as { port?: number }).port === 443)).toBe(true)
+          // 被拒的主机不会到上游
+          expect(up.connects.map(c => c.line).filter(l => l.includes('evil.example'))).toEqual([])
+        }
+        // 回合结束后没有留下进程组
+        const pg = join(data, 'run', 'shell-pgids')
+        await waitFor(() => !existsSync(pg) || readFileSync(pg, 'utf8').trim() === '', 5000, 'shell-pgids empty')
+      } finally { w.close() }
+      await shutdown()
+    } finally {
+      await up.close()
+      await fake.close()
+    }
   }, 120_000)
 })

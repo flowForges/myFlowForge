@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 
 // e2e 用的假 OpenAI 兼容服务:127.0.0.1 随机端口,GET /models 列一个模型,POST /chat/completions 按请求序号回脚本化的 SSE。
-//   第 1 次 → read hello.txt;第 2 次 → edit world → mff;之后 → 文本 done
+//   默认脚本:第 1 次 → read hello.txt;第 2 次 → edit world → mff;之后 → 文本 done。`script` 换成别的工具调用序列
 
 export interface FakeOpenaiRequest { method: string; url: string; authorization?: string; body: string }
 export interface FakeOpenai { base: string; requests: FakeOpenaiRequest[]; close: () => Promise<void> }
@@ -14,7 +14,7 @@ const chunk = (delta: Record<string, unknown>, finish: string | null = null) =>
 const usage = `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 10, completion_tokens: 5 } })}\n\n`
 const DONE = 'data: [DONE]\n\n'
 
-function toolCall(id: string, name: string, args: Record<string, unknown>): string {
+export function toolCall(id: string, name: string, args: Record<string, unknown>): string {
   return chunk({ role: 'assistant', tool_calls: [{ index: 0, id, type: 'function', function: { name, arguments: '' } }] })
     + chunk({ tool_calls: [{ index: 0, function: { arguments: JSON.stringify(args) } }] })
     + chunk({}, 'tool_calls') + usage + DONE
@@ -32,7 +32,8 @@ const bodyOf = (req: IncomingMessage) => new Promise<string>((resolve) => {
   req.on('end', () => resolve(Buffer.concat(parts).toString('utf8')))
 })
 
-export async function startFakeOpenai(): Promise<FakeOpenai> {
+export async function startFakeOpenai(o: { script?: Array<() => string> } = {}): Promise<FakeOpenai> {
+  const script = o.script ?? SCRIPT
   const requests: FakeOpenaiRequest[] = []
   let chats = 0
   const server: Server = createServer((req, res) => {
@@ -44,7 +45,7 @@ export async function startFakeOpenai(): Promise<FakeOpenai> {
         return res.end(JSON.stringify({ object: 'list', data: [{ id: FAKE_MODEL, object: 'model', owned_by: 'fake' }] }))
       }
       if (req.method === 'POST' && url.endsWith('/chat/completions')) {
-        const step = SCRIPT[chats++] ?? finalText
+        const step = script[chats++] ?? finalText
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
         return res.end(step())
       }
