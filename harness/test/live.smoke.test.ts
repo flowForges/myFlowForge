@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from 'vitest'
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -9,7 +9,11 @@ import { PROTOCOL_VERSION, connectClient, connectControlClient, runtimePaths, ty
 // 真实网络的手动冒烟:MFFAI_LIVE=1 且已 `npm run build`。数据目录是临时的,密钥明文存在其中,结束即删。
 //   MFFAI_LIVE_PRESET=deepseek MFFAI_LIVE_KEY_FILE=~/key.txt [MFFAI_LIVE_MODEL=...]   API Key 账号
 //   MFFAI_LIVE_CHATGPT=1 [MFFAI_LIVE_CHATGPT_MODEL=...]                                 ChatGPT 登录
+//   MFFAI_LIVE_CODING=1                                                                  再用上面登过的账号各跑一轮编程任务
+// 例:MFFAI_LIVE=1 MFFAI_LIVE_CODING=1 MFFAI_LIVE_PRESET=deepseek MFFAI_LIVE_KEY_FILE=~/key.txt npx vitest run harness/test/live.smoke.test.ts
+//    MFFAI_LIVE=1 MFFAI_LIVE_CHATGPT=1 MFFAI_LIVE_CODING=1 npx vitest run harness/test/live.smoke.test.ts
 const LIVE = process.env.MFFAI_LIVE === '1'
+const CODING = process.env.MFFAI_LIVE_CODING === '1'
 const DAEMON = resolve(__dirname, '../../out/main/mffaiDaemon.js')
 const log = (s: string) => process.stderr.write(`[live] ${s}\n`)
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
@@ -18,7 +22,18 @@ describe.skipIf(!LIVE)('live smoke', () => {
   let sup: ChildProcess | undefined
   // describe 体在跳过时也会执行:没开 MFFAI_LIVE 就别建临时目录(afterAll 不会跑,删不掉)
   const data = LIVE ? mkdtempSync(join(tmpdir(), 'mffai-live-')) : ''
+  // 前面用例用过的账号 + 模型,编程用例逐个复用;ChatGPT 账号等编程用例跑完再删(撤销 refresh token)
+  const used: { kind: 'api-key' | 'chatgpt'; accountId: string; modelId: string }[] = []
+  const toRemove: string[] = []
+  const repos: string[] = []
   afterAll(async () => {
+    for (const accountId of toRemove.splice(0)) {
+      try {
+        const w = await connectClient({ addr: runtimePaths(data).workerAddr, token: readFileSync(runtimePaths(data).token, 'utf8').trim() })
+        try { await w.call('models.removeAccount', { commandId: `rm-${accountId}`, accountId }); log(`removed account ${accountId}`) } finally { w.close() }
+      } catch (err) { log(`remove ${accountId} failed: ${err instanceof Error ? err.message : String(err)}`) }
+    }
+    for (const r of repos) rmSync(r, { recursive: true, force: true })
     // 删目录前把守护进程日志里的 warn / error 打出来(日志不含密钥)
     try {
       const dir = runtimePaths(data).logs
@@ -98,6 +113,7 @@ describe.skipIf(!LIVE)('live smoke', () => {
     expect(modelId).toBeTruthy()
     log(`quota: ${JSON.stringify(await w.call('models.quota', { accountId: a.id }))}`)
     expect(await chat(w, events, a.id, modelId!)).toBe('turn.ended')
+    used.push({ kind: 'api-key', accountId: a.id, modelId: modelId! })
     w.close()
   }, 300_000)
 
@@ -122,8 +138,63 @@ describe.skipIf(!LIVE)('live smoke', () => {
     log(`quota: ${JSON.stringify(await w.call('models.quota', { accountId: accountId! }))}`)
     const modelId = process.env.MFFAI_LIVE_CHATGPT_MODEL ?? acc?.models?.find(m => m.id.startsWith('gpt-5'))?.id ?? acc?.models?.[0]?.id
     expect(modelId).toBeTruthy()
+    toRemove.push(accountId!) // afterAll 里删(撤销 refresh token);编程用例要先用它
     expect(await chat(w, events, accountId!, modelId!)).toBe('turn.ended')
-    await w.call('models.removeAccount', { commandId: 'rm-chatgpt', accountId: accountId! }) // 撤销 refresh token
+    used.push({ kind: 'chatgpt', accountId: accountId!, modelId: modelId! })
     w.close()
+  }, 900_000)
+
+  // 编程任务:math.js 的 add 写成了减法,让模型跑测试、修好、再跑通
+  it('coding task', async () => {
+    if (!CODING) return log('skip coding (set MFFAI_LIVE_CODING=1)')
+    if (!used.length || !sup) return log('skip coding (no account from the cases above)')
+    const w = await connectClient({ addr: runtimePaths(data).workerAddr, token: readFileSync(runtimePaths(data).token, 'utf8').trim() })
+    const events: KernelEvent[] = []
+    w.onEvent(e => events.push(e))
+    await w.call('events.subscribe', { after: 0 })
+    const MATH = 'exports.add = (a, b) => a - b\n'
+    const TEST = "const { add } = require('./math')\nif (add(2, 3) !== 5) { console.error('add(2, 3) = ' + add(2, 3) + ', expected 5'); process.exit(1) }\nconsole.log('ok')\n"
+    const failures: string[] = []
+    try {
+      for (const u of used) {
+        const repo = mkdtempSync(join(tmpdir(), 'mffai-live-repo-'))
+        repos.push(repo)
+        const git = (...args: string[]) => execFileSync('git', ['-c', 'user.email=live@example.invalid', '-c', 'user.name=live', '-c', 'commit.gpgSign=false', ...args], { cwd: repo, stdio: 'pipe' })
+        git('init', '-q')
+        writeFileSync(join(repo, 'math.js'), MATH)
+        writeFileSync(join(repo, 'test.js'), TEST)
+        git('add', '.')
+        git('commit', '-q', '-m', 'init')
+        const original = readFileSync(join(repo, 'math.js'))
+
+        const t0 = Date.now()
+        const { sessionId } = await w.call('session.create', { commandId: `code-${u.kind}-${t0}`, cwd: repo, approvalMode: 'auto', model: { accountId: u.accountId, modelId: u.modelId } })
+        const { turnId } = await w.call('session.prompt', { commandId: `code-p-${t0}`, sessionId, text: '运行 node test.js,找出并修好 bug,直到测试通过。' })
+        const end = await waitEvent(events, e => e.sessionId === sessionId && (e.type === 'turn.ended' || e.type === 'turn.failed'), 300_000, 'coding turn end')
+        const mine = events.filter(e => e.sessionId === sessionId)
+        const tools = mine.filter(e => e.type === 'tool.started').map(e => (e.payload as { name?: string }).name)
+        const usage = mine.filter(e => e.type === 'turn.usage').map(e => e.payload)
+        log(`coding ${u.kind} model=${u.modelId} result=${end.type} ms=${Date.now() - t0} ${end.type === 'turn.failed' ? JSON.stringify(end.payload) : ''}`)
+        log(`  steps=${usage.length} tools (${tools.length}): ${tools.join(' → ')}`)
+        log(`  usage=${JSON.stringify(usage)}`)
+        if (u.kind === 'chatgpt') log(`  chatgpt tool round-trip: ${tools.length > 0 && end.type === 'turn.ended' ? 'yes' : 'NO'} (tool calls=${tools.length}, end=${end.type})`)
+        try {
+          expect(end.type).toBe('turn.ended')
+          const run = spawnSync(process.execPath, ['test.js'], { cwd: repo, encoding: 'utf8' })
+          log(`  node test.js → exit ${run.status} ${(run.stdout + run.stderr).trim().slice(0, 200)}`)
+          expect(run.status).toBe(0)
+          const snap = mine.find(e => e.type === 'turn.snapshot' && (e.payload as { phase?: string }).phase === 'end')?.payload as { ref?: string; changed?: number } | undefined
+          log(`  end snapshot ${JSON.stringify(snap)} changes=${JSON.stringify((await w.call('turn.changes', { sessionId, turnId })).files)}`)
+          expect(snap?.ref).toBeTruthy()
+          expect(snap?.changed ?? 0).toBeGreaterThanOrEqual(1)
+          const rb = await w.call('turn.rollback', { commandId: `code-rb-${t0}`, sessionId, turnId })
+          log(`  rollback ${JSON.stringify(rb)}`)
+          expect(readFileSync(join(repo, 'math.js')).equals(original)).toBe(true)
+        } catch (err) {
+          failures.push(`${u.kind}: ${err instanceof Error ? err.message : String(err)}`)
+        }
+      }
+    } finally { w.close() }
+    expect(failures).toEqual([])
   }, 900_000)
 })
