@@ -1,12 +1,13 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import { client, ndJsonStream } from '@agentclientprotocol/sdk'
 import { PROTOCOL_VERSION, connectClient, connectControlClient, runtimePaths, type KernelEvent } from '../src/protocol/index'
+import { startTime } from '../src/lib/proc/pgids'
 import { FAKE_MODEL, startFakeOpenai, toolCall } from './fakeOpenai'
 import { startFakeUpstream } from './fakeUpstream'
 
@@ -83,6 +84,28 @@ describe.skipIf(!E2E)('built daemon e2e', () => {
     }
     return { env, home, data, paths, sup, tokenOf, workerPid, shutdown }
   }
+
+  it.skipIf(process.platform === 'win32')('worker start removes stale proxy socket dirs under TMPDIR, keeps ones a live process owns (final review M4)', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'mffai-e2e-tmp-'))
+    temps.push(tmp)
+    const old = (Date.now() - 3_600_000) / 1000
+    const plant = (name: string, owner?: object) => {
+      const d = join(tmp, name)
+      mkdirSync(d, { mode: 0o700 })
+      writeFileSync(join(d, 'net.sock'), '')
+      if (owner) writeFileSync(join(d, 'owner'), JSON.stringify(owner))
+      utimesSync(d, old, old)
+      return d
+    }
+    const stale = plant('mffai-net-stale1')
+    const deadOwner = plant('mffai-net-dead01', { pid: process.pid, start: 'not the real start' })
+    const live = plant('mffai-net-live01', { pid: process.pid, start: startTime(process.pid) })
+    const { shutdown } = await startDaemon({ extraEnv: { TMPDIR: tmp } })
+    expect(existsSync(stale)).toBe(false)
+    expect(existsSync(deadOwner)).toBe(false)
+    expect(existsSync(live)).toBe(true)
+    await shutdown()
+  })
 
   it('supervisor + worker + ACP bridge work from the built bundles', async () => {
     const { env, paths, sup, tokenOf, shutdown } = await startDaemon()

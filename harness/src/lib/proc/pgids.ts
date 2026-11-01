@@ -67,7 +67,7 @@ function procStat(pid: number | 'self'): string[] | undefined {
 }
 
 /** 进程不在 → undefined;查不了(ps 超时 / 不在)→ 抛错 */
-function startTimeStrict(pid: number, platform: NodeJS.Platform): string | undefined {
+export function startTimeStrict(pid: number, platform: NodeJS.Platform): string | undefined {
   if (!Number.isInteger(pid) || pid <= 0) return undefined
   if (platform === 'linux') return procStat(pid)?.[19]
   if (platform === 'darwin') {

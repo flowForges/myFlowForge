@@ -56,6 +56,11 @@ export function wipeSessionTmp(dataDir: string, log: Logger = nullLogger): void 
   }
 }
 
+/** 代理 Unix socket 的候选父目录(按顺序);工作进程启动时也在这些目录里清残留(final review M4) */
+export function proxySocketParents(proxyParent?: string): string[] {
+  return [...new Set([proxyParent ?? tmpdir(), '/tmp'])]
+}
+
 export interface SandboxOpts {
   platform: NodeJS.Platform
   dataDir: string
@@ -362,7 +367,7 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
   /** 不在任何可写根里(两种拼写)的 socket 父目录;都不行 → 抛错(review M2) */
   function socketParent(writable: string[]): string {
     const roots = [...new Set(writable.flatMap(w => [w, realSpelling(w)]))]
-    for (const c of new Set([o.proxyParent ?? tmpdir(), '/tmp'])) {
+    for (const c of proxySocketParents(o.proxyParent)) {
       const spells = [c, realSpelling(c)]
       if (!spells.some(x => roots.some(r => within(x, r)))) return c
     }

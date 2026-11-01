@@ -1,9 +1,10 @@
 import { BUILTIN_PLUGINS } from '../plugins/index'
 import { createKernel, type Kernel } from '../kernel/kernel'
-import { wipeSessionTmp } from '../kernel/sandbox'
+import { proxySocketParents, wipeSessionTmp } from '../kernel/sandbox'
 import { startRpcServer } from '../kernel/rpcServer'
 import { DRAIN_MS } from '../kernel/shutdown'
 import { pgidFile, reapOrphans } from '../lib/proc/pgids'
+import { sweepStaleNetDirs } from '../lib/sandbox/net/proxy'
 import { HARNESS_VERSION } from '../kernel/version'
 import { dataDir, ensureToken, runtimePaths } from '../protocol/index'
 import { createFileLogger } from '../supervisor/fileLog'
@@ -49,6 +50,11 @@ export async function runWorker(): Promise<void> {
     const { kept } = reapOrphans(pgids, { platform: process.platform, log })
     // 会话临时目录(沙箱里的 TMPDIR)不跨工作进程保留;在进程组收掉之后清,免得还在跑的命令又写回来
     wipeSessionTmp(dir, log)
+    // 崩溃的工作进程留下的代理 socket 目录(本用户、owner 进程已不在):内核建代理之前清
+    if (process.platform !== 'win32') {
+      const swept = sweepStaleNetDirs(proxySocketParents(), { log })
+      if (swept.length) log.info('stale proxy socket dirs removed', { count: swept.length })
+    }
     // MFFAI_SECRETS_PLAINTEXT=1:端到端测试用,不碰系统钥匙串
     const secrets = { osBackend: process.env.MFFAI_SECRETS_PLAINTEXT !== '1' }
     kernel = await createKernel({ dataDir: dir, plugins: BUILTIN_PLUGINS, log, secrets, pgidFile: pgids, pgidSeed: kept })

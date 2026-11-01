@@ -3,11 +3,12 @@
 // 每一步(解析、直连、上游 CONNECT、NO_PROXY、拒绝事件)只用 checkHost 返回的规范主机名,不用请求原文;
 // 直连时解析一次、检查每个地址、连的就是检查过的那个 IP(不二次解析,挡 DNS rebinding)
 import { lookup as dnsLookup } from 'node:dns/promises'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer as createHttpServer, request as httpRequest, type IncomingMessage, type ServerResponse } from 'node:http'
 import { BlockList, connect, createServer as createNetServer, type Server, type Socket } from 'node:net'
 import { networkInterfaces, tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { startTime, startTimeStrict } from '../../proc/pgids'
 import { deniedClass, parseIp } from './addr'
 import { checkHost, normalizeHost } from './domains'
 
@@ -35,7 +36,8 @@ export interface ProxyOptions {
   onDeny(d: DenyEvent): void
   /**
    * posix:另外在 Unix socket 上听(Linux 沙箱里的中转用)。代理在 `parent`(默认 os.tmpdir())下自己 mkdtemp 一个
-   * 0700 目录 `mffai-net-XXXXXX/net.sock`,路径由 handle.unixPath 给出;close() 只删这个自己建的目录
+   * 0700 目录 `mffai-net-XXXXXX/net.sock`,路径由 handle.unixPath 给出;close() 只删这个自己建的目录。
+   * 目录里另有 `owner`(本进程 pid + 启动时间):工作进程崩溃后,下次启动的 sweepStaleNetDirs 据此认出没人用的目录
    */
   unixSocket?: { parent?: string }
   /** 并发客户端连接上限,默认 64;超出回 503 */
@@ -508,6 +510,8 @@ export async function startProxy(o: ProxyOptions): Promise<ProxyHandle> {
     if (o.unixSocket) {
       // mkdtemp 建的目录是 0700、名字不可预测,父目录是 1777 的 /tmp 也安全;套接字文件不 chmod
       unixDir = mkdtempSync(join(o.unixSocket.parent ?? tmpdir(), 'mffai-net-'))
+      const start = ownStart()
+      if (start !== undefined) writeFileSync(join(unixDir, OWNER_FILE), JSON.stringify({ pid: process.pid, start }), { mode: 0o600 })
       unixPath = join(unixDir, 'net.sock')
       const unix = createNetServer(onConnection)
       servers.push(unix)
@@ -532,6 +536,74 @@ export async function startProxy(o: ProxyOptions): Promise<ProxyHandle> {
       return closing
     },
   }
+}
+
+const NET_DIR = /^mffai-net-[A-Za-z0-9]+$/
+const OWNER_FILE = 'owner'
+/** 没有 owner 的目录多新算"可能正在建"(mkdtemp 与写 owner 之间,或 owner 没写成) */
+const OWNERLESS_GRACE_MS = 60_000
+let ownStartCache: string | undefined
+function ownStart(): string | undefined {
+  return (ownStartCache ??= startTime(process.pid))
+}
+
+export interface SweepOpts {
+  /** 默认 process.getuid() */
+  uid?: number
+  /** 抛错 = 这次查不了(目录留着);undefined = 进程不在。默认读 /proc 或 ps */
+  startTime?: (pid: number) => string | undefined
+  now?: number
+  log?: { warn(msg: string, data?: unknown): void }
+}
+
+/**
+ * 工作进程启动时清掉上一个工作进程崩溃留下的代理 socket 目录(final review M4)。只动 `parents` 下直接的
+ * `mffai-net-*` 目录:不是链接、属于本用户;owner 记的进程(pid + 启动时间逐字一致)还在 → 留着(可能是另一个数据目录的实例);
+ * owner 的进程不在 / pid 被复用 / owner 坏了 → 删;没有 owner → 超过宽限期才删。返回删掉的目录
+ */
+export function sweepStaleNetDirs(parents: string[], so: SweepOpts = {}): string[] {
+  const uid = so.uid ?? process.getuid?.()
+  if (uid === undefined) return []
+  const st = so.startTime ?? (pid => startTimeStrict(pid, process.platform))
+  const now = so.now ?? Date.now()
+  const removed: string[] = []
+  for (const parent of new Set(parents)) {
+    let names: string[]
+    try {
+      names = readdirSync(parent)
+    } catch {
+      continue
+    }
+    for (const n of names) {
+      if (!NET_DIR.test(n)) continue
+      const d = join(parent, n)
+      try {
+        const s = lstatSync(d)
+        if (!s.isDirectory() || s.uid !== uid) continue
+        let owner: unknown
+        let hasOwner = true
+        try {
+          owner = JSON.parse(readFileSync(join(d, OWNER_FILE), 'utf8'))
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === 'ENOENT') hasOwner = false
+          else owner = undefined // 坏的 owner:当成没人
+        }
+        if (!hasOwner) {
+          if (now - s.mtimeMs < OWNERLESS_GRACE_MS) continue
+        } else {
+          const m = owner as { pid?: unknown; start?: unknown } | undefined
+          if (m && typeof m === 'object' && Number.isInteger(m.pid) && (m.pid as number) > 0 && typeof m.start === 'string') {
+            if (st(m.pid as number) === m.start) continue
+          }
+        }
+        rmSync(d, { recursive: true, force: true })
+        removed.push(d)
+      } catch (err) {
+        so.log?.warn('stale proxy socket dir not swept', { dir: d, error: String(err) })
+      }
+    }
+  }
+  return removed
 }
 
 const PROXY_VARS = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']

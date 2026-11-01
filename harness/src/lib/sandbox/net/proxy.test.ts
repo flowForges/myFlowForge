@@ -1,10 +1,11 @@
-import { chmodSync, existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { connect, isIP, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { startFakeOrigin, startFakeUpstream, type FakeServer } from '../../../../test/fakeUpstream'
-import { startProxy, upstreamFromEnv, type LookupFn, type ProxyHandle, type Upstream } from './proxy'
+import { startProxy, sweepStaleNetDirs, upstreamFromEnv, type LookupFn, type ProxyHandle, type Upstream } from './proxy'
+import { startTime } from '../../proc/pgids'
 
 // 不碰真网络:域名全走注入的 lookup,"互联网"是 127.0.0.1 上的假上游 / 假源站
 
@@ -582,6 +583,76 @@ describe('startProxy — limits and lifecycle', () => {
     expect(dirname(dirname(p.unixPath!))).toBe(tmpdir())
     await p.close()
     expect(existsSync(dirname(p.unixPath!))).toBe(false)
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('sweepStaleNetDirs (final review M4)', () => {
+  const mk = (parent: string, name: string, owner?: unknown, ageMs = 0) => {
+    const d = join(parent, name)
+    mkdirSync(d, { mode: 0o700 })
+    writeFileSync(join(d, 'net.sock'), '') // 死掉的套接字留下的文件
+    if (owner !== undefined) writeFileSync(join(d, 'owner'), typeof owner === 'string' ? owner : JSON.stringify(owner))
+    if (ageMs) {
+      const t = (Date.now() - ageMs) / 1000
+      utimesSync(d, t, t)
+    }
+    return d
+  }
+  const parentDir = () => {
+    const p = mkdtempSync(join(tmpdir(), 'mffpx-sweep-'))
+    tmpDirs.push(p)
+    return p
+  }
+  const LIVE = 4242
+  const st = (pid: number) => (pid === LIVE ? 'S' : undefined)
+
+  it('removes dirs whose owner is dead or a reused pid, and old ownerless dirs; keeps live owners and fresh ownerless dirs', () => {
+    const parent = parentDir()
+    const live = mk(parent, 'mffai-net-live01', { pid: LIVE, start: 'S' }, 3_600_000)
+    const reused = mk(parent, 'mffai-net-reuse1', { pid: LIVE, start: 'other' }, 3_600_000)
+    const dead = mk(parent, 'mffai-net-dead01', { pid: 999_999, start: 'S' })
+    const bad = mk(parent, 'mffai-net-bad001', 'not json', 3_600_000)
+    const oldNoOwner = mk(parent, 'mffai-net-old001', undefined, 3_600_000)
+    const fresh = mk(parent, 'mffai-net-fresh1')
+    const removed = sweepStaleNetDirs([parent], { startTime: st })
+    expect(removed.sort()).toEqual([bad, dead, oldNoOwner, reused].sort())
+    for (const d of [live, fresh]) expect(existsSync(d)).toBe(true)
+    for (const d of [reused, dead, bad, oldNoOwner]) expect(existsSync(d)).toBe(false)
+  })
+
+  it('leaves other names, plain files, symlinks (and their targets) and dirs of other users alone', () => {
+    const parent = parentDir()
+    const other = mk(parent, 'other-dir', undefined, 3_600_000)
+    writeFileSync(join(parent, 'mffai-net-file01'), 'x')
+    const target = mk(parent, 'target', undefined, 3_600_000)
+    symlinkSync(target, join(parent, 'mffai-net-link01'))
+    const notMine = mk(parent, 'mffai-net-nmine1', undefined, 3_600_000)
+    expect(sweepStaleNetDirs([parent], { startTime: st, uid: (process.getuid?.() ?? 0) + 1 })).toEqual([])
+    expect(existsSync(notMine)).toBe(true)
+    expect(sweepStaleNetDirs([parent], { startTime: st })).toEqual([notMine])
+    expect(existsSync(other)).toBe(true)
+    expect(existsSync(join(parent, 'mffai-net-file01'))).toBe(true)
+    expect(existsSync(join(target, 'net.sock'))).toBe(true)
+  })
+
+  it('a start-time lookup that throws keeps the dir; a missing parent is a no-op', () => {
+    const parent = parentDir()
+    const d = mk(parent, 'mffai-net-err001', { pid: LIVE, start: 'S' }, 3_600_000)
+    expect(sweepStaleNetDirs([parent, join(parent, 'nope')], { startTime: () => { throw new Error('ps timed out') } })).toEqual([])
+    expect(existsSync(d)).toBe(true)
+  })
+
+  it('a running proxy marks its socket dir with pid + start time and survives a sweep; close() removes it', async () => {
+    const parent = parentDir()
+    const p = await proxy({ allow: () => [], unixSocket: { parent }, onDeny: () => {} })
+    const dir = dirname(p.unixPath!)
+    expect(JSON.parse(readFileSync(join(dir, 'owner'), 'utf8'))).toEqual({ pid: process.pid, start: startTime(process.pid) })
+    const t = (Date.now() - 3_600_000) / 1000
+    utimesSync(dir, t, t)
+    expect(sweepStaleNetDirs([parent])).toEqual([])
+    expect(existsSync(p.unixPath!)).toBe(true)
+    await p.close()
+    expect(readdirSync(parent)).toEqual([])
   })
 })
 
