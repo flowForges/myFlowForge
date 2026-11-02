@@ -42,6 +42,19 @@ export function parseTaskNotification(obj: any): TaskNotification | null {
   }
 }
 
+/**
+ * ★★`--resume` 一个上次带着后台任务被杀掉的会话时,claude 先把那些任务的 `task_notification`(stopped)
+ *  重放一遍,接着为这条通知空跑一轮、吐一个**空的** `result`(num_turns 0、result ""),然后才轮到
+ *  我们刚写进去的那条用户消息(真 claude 2.1.312 实测)。chat() 见 result 就收尾杀进程 ——
+ *  于是用户的新消息根本没被处理,界面上是「claude 无输出 (退出码 143)」,只能再发一遍。
+ *  这种 result 不是这一轮的结束,跳过它。
+ */
+export function isReplayedNotificationResult(obj: any, ctx: { sawNotification: boolean; sawActivity: boolean }): boolean {
+  if (obj?.type !== 'result' || !ctx.sawNotification || ctx.sawActivity) return false
+  if (obj.subtype !== 'success' || obj.is_error === true || obj.num_turns !== 0) return false
+  return typeof obj.result !== 'string' || obj.result.trim() === ''
+}
+
 export interface BackgroundGate {
   /** 每一条解析出来的 stdout 事件都喂进来(主代理的、子代理的都要)。 */
   feed(obj: any): void

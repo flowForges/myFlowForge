@@ -12,6 +12,7 @@ import type { CouncilApi } from '../../state/useCouncil'
 import type { CouncilConfig } from '@shared/council'
 import { CouncilSetup, councilStartError, type CouncilSetupHandle } from './council/CouncilSetup'
 import { flashToast } from '../../components/flashToast'
+import { Lightbox } from '../../components/Lightbox'
 
 // ---- module-level SVG consts (1:1 with the prototype markup) ----
 const CHEV_DD = (
@@ -203,6 +204,20 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
     }
   }, [attachments, thumbs])
   useEffect(() => { if (dk) draftStore[dk] = { text, attachments } }, [dk, text, attachments])
+  // 点输入框里的图片格子看大图(复用对话气泡里那个 Lightbox)。
+  // ★超过 THUMB_AUTOLOAD_MAX 的大图没有缩略图,点了才按需读一次;读来的 dataURL 只给灯箱用,关掉就丢,
+  //  不塞进 thumbs —— 否则点开过几张相机原图就又回到常驻内存的老问题。
+  const [preview, setPreview] = useState<{ src: string; alt: string } | null>(null)
+  function openPreview(a: Attachment) {
+    const cached = thumbs[a.path]
+    if (cached) { setPreview({ src: cached, alt: a.name }); return }
+    const read = (window.forge as typeof window.forge | undefined)?.imageFile
+    const [dir, base] = splitPath(a.path)
+    if (!read || !dir) return
+    void read([dir], base).then((r) => {
+      if (r && 'dataUrl' in r) setPreview({ src: r.dataUrl, alt: a.name })
+    }).catch(() => { /* 读不到就不开 */ })
+  }
   // The last message we sent, so stopping the turn BEFORE the AI produced any output restores it to the
   // box for editing/resending (the user would otherwise retype/copy it back). Once the AI has output —
   // and possibly executed irreversible changes — we don't restore. Also skip if the box isn't empty.
@@ -630,11 +645,17 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
             //   名字仍留在 DOM 里(视觉隐藏 + title),屏幕阅读器和悬停都看得到。
             if (isImage) return (
               <span className="attach-chip is-image" key={a.path + '::' + i} title={label}>
-                {thumbs[a.path]
-                  ? <img className="attach-thumb" src={thumbs[a.path]} alt="" />
-                  : <span className="attach-ph" aria-hidden="true">{(a.name.split('.').pop() || '').toUpperCase()}</span>}
+                <span
+                  className="attach-view" role="button" tabIndex={0} aria-label={`查看 ${a.name}`}
+                  onClick={() => openPreview(a)}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPreview(a) } }}
+                >
+                  {thumbs[a.path]
+                    ? <img className="attach-thumb" src={thumbs[a.path]} alt="" />
+                    : <span className="attach-ph" aria-hidden="true">{(a.name.split('.').pop() || '').toUpperCase()}</span>}
+                </span>
                 <span className="attach-name">{a.name}</span>
-                <button title={`移除 ${a.name}`} onClick={() => removeAttach(i)}>{X_ICON}</button>
+                <button title={`移除 ${a.name}`} onClick={e => { e.stopPropagation(); removeAttach(i) }}>{X_ICON}</button>
               </span>
             )
             return (
@@ -646,6 +667,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
             )
           })}
         </div>
+        {preview ? <Lightbox src={preview.src} alt={preview.alt} onClose={() => setPreview(null)} /> : null}
         {showSlash && (
           <div className="slash-pop" role="listbox" aria-label="斜杠命令" ref={slashPopRef}>
             <div className="slash-hd">命令 · {agent?.displayName ?? agentId}</div>

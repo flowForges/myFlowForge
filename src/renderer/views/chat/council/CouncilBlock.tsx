@@ -24,9 +24,11 @@ type Props = {
 type SeatInfo = { provider: string; label: string; color: string }
 
 // 席位左侧色条:按席位在配置里的顺序取色;同一家 CLI 的两个模型也能分开。领导者固定用强调色。
+// ★最多 10 位讨论方(COUNCIL_MAX_SEATS),每位一种颜色,不循环撞色
 const SEAT_COLORS = [
   'oklch(68% .15 250)', 'oklch(70% .15 150)', 'oklch(72% .15 60)',
   'oklch(66% .17 20)', 'oklch(68% .14 300)', 'oklch(72% .12 200)',
+  'oklch(74% .14 100)', 'oklch(68% .16 340)', 'oklch(64% .12 280)', 'oklch(70% .13 40)',
 ]
 const LEADER_COLOR = 'var(--accent)'
 const isLeader = (seat?: string) => !!seat && seat.startsWith('leader:')
@@ -131,8 +133,13 @@ function WaitingCell({ sid, seat }: { sid: string; seat: SeatInfo }) {
   )
 }
 
-/** ⤢ 放大:单条发言全尺寸。挂到 body 上 —— 不受区块的滚动 / 裁剪影响。 */
-function FocusOverlay({ msg, seat, streaming, onClose }: { msg: ChatMessage; seat: SeatInfo; streaming: boolean; onClose: () => void }) {
+/**
+ * ⤢ 放大:单条发言全尺寸。挂到 body 上 —— 不受区块的滚动 / 裁剪影响;居中靠 council.css(见 .council-focus-backdrop)。
+ * ‹ / › 和 ← / → 切到上一位 / 下一位的发言(顺序同区块里的阅读顺序),不用关了再点。
+ */
+function FocusOverlay({ msg, seat, streaming, onClose, onPrev, onNext }: {
+  msg: ChatMessage; seat: SeatInfo; streaming: boolean; onClose: () => void; onPrev?: () => void; onNext?: () => void
+}) {
   const leader = isLeader(msg.council?.seat)
   const closeBtn = useRef<HTMLButtonElement>(null)
   // 焦点移进来;关掉时还给打开它的那个 ⤢
@@ -146,10 +153,15 @@ function FocusOverlay({ msg, seat, streaming, onClose }: { msg: ChatMessage; sea
       <div className="council-focus" role="dialog" aria-modal="true" aria-label={seat.label} style={{ '--seat': seat.color } as React.CSSProperties}>
         <div className="council-who-line">
           {leader && <span aria-hidden="true">👑</span>}<Logo id={seat.provider} /><span className="council-who-label">{seat.label}</span>
+          <span className="council-focus-nav">
+            <button type="button" className="council-more" aria-label="上一个" disabled={!onPrev} onClick={onPrev}>‹</button>
+            <button type="button" className="council-more" aria-label="下一个" disabled={!onNext} onClick={onNext}>›</button>
+          </span>
           <button ref={closeBtn} type="button" className="council-more council-zoom" aria-label="关闭" onClick={onClose}>✕</button>
         </div>
-        <UtteranceThink msg={msg} streaming={streaming} />
-        <div className="council-focus-body msg-body ans"><Markdown text={msg.text} streaming={streaming} />{streaming && <span className="pending" />}</div>
+        {/* ★按发言换 key:切到下一位时思考 / 正文从头看,不沿用上一位的滚动位置 */}
+        <UtteranceThink key={`t-${msg.id}`} msg={msg} streaming={streaming} />
+        <div key={msg.id} className="council-focus-body msg-body ans"><Markdown text={msg.text} streaming={streaming} />{streaming && <span className="pending" />}</div>
       </div>
     </div>,
     document.body,
@@ -197,6 +209,9 @@ function Followups({ list, seatOf, streamingIds }: {
 /** 投票(含投票时失败的那条:failed 消息的 id 里还留着原阶段)—— 投票排在领导者草稿下面那一排。 */
 const isVote = (m: ChatMessage) =>
   m.council?.stage === 'consensus-vote' || (m.council?.stage === 'failed' && m.id.includes(':consensus-vote'))
+
+type RoundParts = { inter: ChatMessage[]; leader: ChatMessage[]; said: Map<string, ChatMessage[]>; votes: Map<string, ChatMessage[]> }
+const EMPTY_PARTS: RoundParts = { inter: [], leader: [], said: new Map(), votes: new Map() }
 
 /** 这一轮没有这位席位的发言(已除名 / 没轮到):占住列位,各轮的列才对得齐。 */
 function EmptyCell({ sid }: { sid: string }) {
@@ -277,13 +292,63 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
     return list.sort((a, b) => a - b)
   }, [rounds, placeholderRound])
 
+  // 每一轮拆成:插话 / 席位发言 / 领导者 / 投票(网格和 ⤢ 的上一个 / 下一个共用这一份)
+  const parts = useMemo(() => {
+    const out = new Map<number, RoundParts>()
+    for (const r of roundList) {
+      const list = rounds.get(r) ?? []
+      const said = new Map<string, ChatMessage[]>()
+      const votes = new Map<string, ChatMessage[]>()
+      for (const m of list) {
+        const sid = m.council?.seat
+        if (m.who !== 'ai' || !sid || isLeader(sid)) continue
+        const into = isVote(m) ? votes : said
+        into.set(sid, [...(into.get(sid) ?? []), m])
+      }
+      out.set(r, {
+        inter: list.filter(m => m.who === 'user'),
+        leader: list.filter(m => m.who === 'ai' && isLeader(m.council?.seat)),
+        said, votes,
+      })
+    }
+    return out
+  }, [rounds, roundList])
+
+  // ⤢ 能放大的发言,按区块里的阅读顺序:每轮 席位发言(列序)→ 领导者 → 投票(列序);最后是流式中的最终结果。失败的没有 ⤢,跳过
+  const focusOrder = useMemo(() => {
+    const ids: string[] = []
+    const push = (ms: ChatMessage[] | undefined) => ms?.forEach(m => { if (m.council?.stage !== 'failed') ids.push(m.id) })
+    for (const r of roundList) {
+      const p = parts.get(r)
+      if (!p) continue
+      for (const sid of columns) push(p.said.get(sid))
+      push(p.leader)
+      for (const sid of columns) push(p.votes.get(sid))
+    }
+    if (final && finalStreaming) push([final])
+    return ids
+  }, [roundList, parts, columns, final, finalStreaming])
+
   // ⤢ 放大的那条发言(存 id:流式中它继续长)/ 整块全屏。Esc 先关放大,再退全屏。
   const [focusId, setFocusId] = useState<string | null>(null)
   const [fullscreen, setFullscreen] = useState(false)
   const closeFocus = useCallback(() => setFocusId(null), [])
+  const focusAt = focusId ? focusOrder.indexOf(focusId) : -1
+  const prevId = focusAt > 0 ? focusOrder[focusAt - 1] : undefined
+  const nextId = focusAt >= 0 && focusAt < focusOrder.length - 1 ? focusOrder[focusAt + 1] : undefined
   useEffect(() => {
     if (!focusId && !fullscreen) return
     const onKey = (e: KeyboardEvent) => {
+      // ← / →:放大时切到上一位 / 下一位(输入框里的方向键不抢)
+      if (focusId && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        const t = e.target as HTMLElement | null
+        if (t?.closest?.('input, textarea, select, [contenteditable="true"]')) return
+        const to = e.key === 'ArrowLeft' ? prevId : nextId
+        e.preventDefault()
+        e.stopPropagation()
+        if (to) setFocusId(to)
+        return
+      }
       if (e.key !== 'Escape') return
       e.stopPropagation()
       if (focusId) setFocusId(null)
@@ -291,7 +356,7 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [focusId, fullscreen])
+  }, [focusId, fullscreen, prevId, nextId])
   const focusMsg = focusId ? messages.find(m => m.id === focusId) : undefined
 
   const ended = status ? !LIVE.has(status) : !!final && !finalStreaming
@@ -436,11 +501,12 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
             {status === 'paused' && (breakAfter
               ? !fullscreen && <button type="button" className="council-ctl primary" onClick={() => controls.resume(id)}>继续下一轮</button>
               : <button type="button" className="council-ctl" onClick={() => controls.resume(id, newLeader)}>继续</button>)}
+            {/* ★共识模式不会自己收尾(只等用户),这个按钮就是「要结论」:说清楚会出总结 */}
             <button
               type="button"
               className="council-ctl council-end"
               onClick={() => controls.stop(id, status === 'finalizing' ? 'abort' : 'finalize')}
-            >结束</button>
+            >{state.config.mode.kind === 'consensus' && status !== 'finalizing' ? '结束并总结' : '结束'}</button>
           </div>
         )}
 
@@ -465,17 +531,7 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
               <div className="council-grid-scroll">
                 <div className="council-grid" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(260px, 1fr))` }}>
                   {roundList.map(r => {
-                    const list = rounds.get(r) ?? []
-                    const inter = list.filter(m => m.who === 'user')
-                    const leader = list.filter(m => m.who === 'ai' && isLeader(m.council?.seat))
-                    const said = new Map<string, ChatMessage[]>()
-                    const votes = new Map<string, ChatMessage[]>()
-                    for (const m of list) {
-                      const sid = m.council?.seat
-                      if (m.who !== 'ai' || !sid || isLeader(sid)) continue
-                      const into = isVote(m) ? votes : said
-                      into.set(sid, [...(into.get(sid) ?? []), m])
-                    }
+                    const { inter, leader, said, votes } = parts.get(r) ?? EMPTY_PARTS
                     const current = r === placeholderRound
                     const row = (by: Map<string, ChatMessage[]>, kind: string) => columns.map(sid => {
                       const own = by.get(sid)
@@ -560,7 +616,16 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
         </div>
       )}
 
-      {focusMsg && <FocusOverlay msg={focusMsg} seat={seatOf(focusMsg)} streaming={streamingIds.has(focusMsg.id)} onClose={closeFocus} />}
+      {focusMsg && (
+        <FocusOverlay
+          msg={focusMsg}
+          seat={seatOf(focusMsg)}
+          streaming={streamingIds.has(focusMsg.id)}
+          onClose={closeFocus}
+          onPrev={prevId ? () => setFocusId(prevId) : undefined}
+          onNext={nextId ? () => setFocusId(nextId) : undefined}
+        />
+      )}
     </section>
   )
 }

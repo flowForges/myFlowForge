@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import type { CouncilConfig, CouncilSeat, CouncilStage, CouncilState } from '@shared/council'
+import { COUNCIL_CONSENSUS_SAFETY_ROUNDS, type CouncilConfig, type CouncilSeat, type CouncilStage, type CouncilState } from '@shared/council'
 import type { Attachment, ChatEvent, ChatMessage } from '@shared/types'
 import { Transcript, type Utterance } from './transcript'
 import {
@@ -409,7 +409,7 @@ export class CouncilEngine {
 
   /**
    * 本轮结束:最后一轮不再总结,由最终结果代替(只有 1 轮 = 各自作答后直接出结果,§5.1);§7.3:讨论方只剩 1 个也直接出结果。
-   * ★共识模式每轮都要总结(草稿和下一轮都要用),轮数 / 时间上限放到投票之后判断。
+   * ★共识模式每轮都要总结(草稿和下一轮都要用);共识模式不按轮数收尾,只等用户「结束」(见 consensusVote)。
    */
   private endRound(): void {
     if (this.active().length <= 1) this.phase = 'final'
@@ -417,14 +417,15 @@ export class CouncilEngine {
     else this.phase = this.st.round >= this.cfg.mode.rounds ? 'final' : 'summary'
   }
 
-  private nextRound(): void {
+  /** wait:不管「每轮结束后等我」开没开都停在轮间(共识模式全员同意 / 到防失控轮数时)。 */
+  private nextRound(wait = false): void {
     this.st.round++
     this.spokenThisRound = []
     this.phase = 'critique'
     // ★「每轮结束后等我」:游标先进到下一轮再停 —— 等待期间的补充按当前轮次落进下一轮,下一轮的席位和总结都看得到。
     //  最后一轮之后没有总结、直接出结果,也就走不到这里。用户先点的暂停由这次停顿兑现。
     //  已经点了「结束」(总结恰好在取消前跑完)就不停,直接去出结果
-    if (this.cfg.pauseBetweenRounds !== false && !this.stopMode) {
+    if ((wait || this.cfg.pauseBetweenRounds !== false) && !this.stopMode) {
       this.pauseRequested = false
       this.st.status = 'paused'
       this.st.waitingForUser = true
@@ -484,8 +485,11 @@ export class CouncilEngine {
   }
 
   /**
-   * 全部在场席位并行对草稿投票。全员「同意」→ 出最终结果;否则到上限也出结果,没到就进下一轮。
-   * ★「无法识别」和投票失败都算不同意;投票失败和其他发言一样计入连续失败。
+   * 全部在场席位并行对草稿投票。★共识模式只有用户点「结束」才出最终结果(2026-11 用户要求,原先 maxRounds /
+   *  maxMinutes 一到就自动收尾,讨论常在第 3 轮左右被截断):
+   *  全员「同意」→ 进下一轮但一定停在轮间等用户(结束 = 出结论;继续 = 接着讨论);
+   *  否则进下一轮(开了「每轮结束后等我」照常停);每满 COUNCIL_CONSENSUS_SAFETY_ROUNDS 轮也强制停一次,防失控。
+   * ★「无法识别」和投票失败都算不同意;投票失败和其他发言一样计入连续失败。只剩 1 位讨论方时没法再讨论,直接出结果。
    */
   private async consensusVote(round: number): Promise<void> {
     const draft = this.latestDraft(round)
@@ -495,12 +499,9 @@ export class CouncilEngine {
     seats.forEach((s, i) => this.record(s, round, 'consensus-vote', results[i]))
     // 被「结束」取消的投票:主循环顶部会转去出结果,这里不判定
     if (this.stopMode) return
+    if (this.active().length <= 1) { this.phase = 'final'; return }
     const agreed = results.every(r => r.ok && parseVote(r.text) === 'agree')
-    const mode = this.cfg.mode
-    const capped = mode.kind === 'consensus'
-      && (round >= mode.maxRounds || this.activeMs() >= mode.maxMinutes * 60_000)
-    if (agreed || capped || this.active().length <= 1) this.phase = 'final'
-    else this.nextRound()
+    this.nextRound(agreed || round % COUNCIL_CONSENSUS_SAFETY_ROUNDS === 0)
   }
 
   /** 该轮最后一份共同点草稿(重试 / 继续可能写过多份)。 */
@@ -560,12 +561,6 @@ export class CouncilEngine {
     if (this.pausedSince === null) return
     this.pausedMs += this.deps.now() - this.pausedSince
     this.pausedSince = null
-  }
-
-  /** 讨论真正在跑的时长:墙钟减去停着的时间。 */
-  private activeMs(): number {
-    const pausedNow = this.pausedSince !== null ? this.deps.now() - this.pausedSince : 0
-    return this.deps.now() - this.st.startedAt - this.pausedMs - pausedNow
   }
 
   // ---- 发言 ----

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  COUNCIL_PROVIDERS, councilTitle, validateCouncilConfig, estimateCouncilMinutes, isCouncilProvider,
+  COUNCIL_MAX_SEATS, COUNCIL_PROVIDERS, councilTitle, validateCouncilConfig, estimateCouncilMinutes, isCouncilProvider,
   type CouncilConfig, type CouncilSeat,
 } from './council'
 
@@ -16,14 +16,17 @@ const cfg = (over: Partial<CouncilConfig> = {}): CouncilConfig => ({
 
 describe('validateCouncilConfig', () => {
   it('合法配置返回 null', () => expect(validateCouncilConfig(cfg())).toBeNull())
-  it('1 个席位 / 7 个席位不通过', () => {
+  it('1 个席位 / 11 个席位不通过', () => {
     expect(validateCouncilConfig(cfg({ seats: [seat('claude', 'a')] }))).not.toBeNull()
-    const seven = Array.from({ length: 7 }, (_, i) => seat(COUNCIL_PROVIDERS[i % COUNCIL_PROVIDERS.length], `m${i}`))
-    expect(validateCouncilConfig(cfg({ seats: seven }))).not.toBeNull()
+    const eleven = Array.from({ length: 11 }, (_, i) => seat(COUNCIL_PROVIDERS[i % COUNCIL_PROVIDERS.length], `m${i}`))
+    expect(validateCouncilConfig(cfg({ seats: eleven }))).toBe('seats-too-many')
   })
-  it('6 个席位通过', () => {
-    const six = Array.from({ length: 6 }, (_, i) => seat(COUNCIL_PROVIDERS[i % COUNCIL_PROVIDERS.length], `m${i}`))
-    expect(validateCouncilConfig(cfg({ seats: six }))).toBeNull()
+  it('最多 10 个席位通过(7 个也通过)', () => {
+    expect(COUNCIL_MAX_SEATS).toBe(10)
+    for (const n of [7, 10]) {
+      const list = Array.from({ length: n }, (_, i) => seat(COUNCIL_PROVIDERS[i % COUNCIL_PROVIDERS.length], `m${i}`))
+      expect(validateCouncilConfig(cfg({ seats: list }))).toBeNull()
+    }
   })
   it('席位 (provider, model) 重复不通过;同 provider 不同 model 通过', () => {
     expect(validateCouncilConfig(cfg({ seats: [seat('claude', 'a'), seat('claude', 'a')] }))).not.toBeNull()

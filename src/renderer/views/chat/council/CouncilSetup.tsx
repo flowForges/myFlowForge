@@ -2,7 +2,7 @@ import { useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react
 import type { Attachment, ProviderInfo } from '@shared/types'
 import { getBuiltinProvider } from '@shared/providerCatalog'
 import {
-  COUNCIL_CONSENSUS_CAPS, COUNCIL_DEFAULT_ROUNDS, estimateCouncilMinutes, isCouncilProvider, validateCouncilConfig,
+  COUNCIL_CONSENSUS_CAPS, COUNCIL_DEFAULT_ROUNDS, COUNCIL_MAX_SEATS, estimateCouncilMinutes, isCouncilProvider, validateCouncilConfig,
   type CouncilConfig, type CouncilMaterials, type CouncilMode, type CouncilSeat,
 } from '@shared/council'
 import type { CouncilLastConfig } from '../../../state/useCouncil'
@@ -288,7 +288,7 @@ export function CouncilSetup({ ref, onCanStartChange, providers, lastConfig, pro
             <button type="button" aria-label={`移除 ${s.label}`} onClick={() => removeSeat(s.id)}>✕</button>
           </span>
         ))}
-        {seats.length < 6 && (
+        {seats.length < COUNCIL_MAX_SEATS && (
           <SeatPicker className="council-add" label="添加讨论方" trigger="＋ 添加" providers={pickable} taken={taken} onPick={addSeat} />
         )}
       </div>
@@ -333,7 +333,8 @@ export function CouncilSetup({ ref, onCanStartChange, providers, lastConfig, pro
           <button type="button" className="council-text-btn" onClick={() => { touch(); setMaterialsOpen(true) }}>＋ 附加代码改动</button>
         )}
         <div className="council-spacer" />
-        <span className="council-eta">约 {minutes} 分钟</span>
+        {/* ★共识模式没有轮数上限(只等用户结束),估不出时长,不显示 */}
+        {mode.kind === 'rounds' && <span className="council-eta">约 {minutes} 分钟</span>}
       </div>
     </div>
   )
