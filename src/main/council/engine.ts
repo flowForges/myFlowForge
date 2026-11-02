@@ -436,10 +436,13 @@ export class CouncilEngine {
    * ★共识模式每轮都要总结(草稿和下一轮都要用);共识模式不按轮数收尾,只等用户「结束」(见 consensusVote)。
    */
   private endRound(): void {
-    if (this.active().length <= 1) this.phase = 'final'
+    // ★这一轮被用户停空了(没有任何席位留下一个字):没东西可总结 / 投票,领导者只能编;直接停到轮间等用户。
+    //  最后一轮 / 只剩 1 位也一样,除非前面的轮次有总结可以拿来出结果
+    const empty = this.stoppedEmpty()
+    if (empty && !this.summaries().length) this.nextRound(true)
+    else if (this.active().length <= 1) this.phase = 'final'
     else if (this.cfg.mode.kind === 'rounds' && this.st.round >= this.cfg.mode.rounds) this.phase = 'final'
-    // ★这一轮被用户停空了(没有任何席位留下一个字):没东西可总结 / 投票,领导者只能编;直接停到轮间等用户
-    else if (this.stoppedEmpty()) this.nextRound(true)
+    else if (empty) this.nextRound(true)
     else this.phase = 'summary'
   }
 

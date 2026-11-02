@@ -215,6 +215,39 @@ describe('stopSeat: the stuck seat', () => {
     expect(h.engine.state.status).toBe('done')
   })
 
+  it('a 1-round council with every seat stopped and nothing to finalize from waits instead of inventing a result', async () => {
+    const h = harness(rounds(['A', 'B'], 1), c => (c.kind === 'answer' ? { hang: true } : undefined))
+    const run = h.engine.start()
+    await h.until(() => speaking(h, 'A') && speaking(h, 'B'))
+    h.engine.stopSeat('A')
+    h.engine.stopSeat('B')
+    await run
+
+    expect(h.calls.some(c => c.seat === 'L')).toBe(false)
+    expect(h.engine.state).toMatchObject({ status: 'paused', waitingForUser: true })
+    expect(h.engine.state.resultFile).toBeUndefined()
+
+    // 继续 = 席位再来一次,说完了才出结果
+    await h.engine.resume()
+    expect(seq(h).slice(2)).toEqual(['A:critique', 'B:critique', 'L:final'])
+    expect(h.engine.state.status).toBe('done')
+  })
+
+  it('last round of a longer council stopped empty: finalizes from the earlier summaries, no waiting', async () => {
+    const h = harness(rounds(['A', 'B'], 2), c => (c.kind === 'critique' ? { hang: true } : undefined))
+    const run = h.engine.start()
+    for (const id of ['A', 'B']) {
+      await h.until(() => speaking(h, id) && h.calls.at(-1)!.seat === id && h.calls.at(-1)!.kind === 'critique')
+      expect(h.engine.stopSeat(id)).toBe(true)
+    }
+    await run
+
+    expect(seq(h).slice(-3)).toEqual(['A:critique', 'B:critique', 'L:final'])
+    expect(h.calls.at(-1)!.prompt).toContain('<<L#1>>')
+    expect(h.engine.state.status).toBe('done')
+    expect(h.engine.state.waitingForUser).toBeUndefined()
+  })
+
   it('a stopped seat that already finished a turn is still treated as resumed', async () => {
     const h = harness(rounds(['A', 'B'], 3), c => (c.seat === 'A' && c.kind === 'critique' && c.n === 2 ? { hang: true } : undefined), { seatResumed: () => true })
     const run = h.engine.start()
