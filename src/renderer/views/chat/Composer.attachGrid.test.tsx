@@ -75,3 +75,50 @@ describe('输入框附件区 —— 图片多了也不能盖住输入框', () =>
     expect(container.querySelector('.attach-chip.is-image img')).toBeNull()
   })
 })
+
+// 2026-11 用户报:点输入框里的图片缩略图没反应,看不了大图。
+describe('输入框图片格子 —— 点开看大图', () => {
+  it('点缩略图打开灯箱显示原图,Esc 关闭', async () => {
+    const { container } = setup([{ name: 'a.png', path: '/Users/me/Desktop/a.png', size: 120_000 }])
+    await attach(container)
+    await waitFor(() => expect(container.querySelector('.attach-chip.is-image img.attach-thumb')).toBeTruthy())
+    fireEvent.click(container.querySelector('.attach-chip.is-image .attach-view') as HTMLElement)
+    const img = document.querySelector('.lightbox img.lightbox-img') as HTMLImageElement
+    expect(img).toBeTruthy()
+    expect(img.getAttribute('src')).toBe('data:image/png;base64,a.png')
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(document.querySelector('.lightbox')).toBeNull()
+  })
+
+  it('点灯箱外的遮罩关闭,点图片本身不关', async () => {
+    const { container } = setup([{ name: 'a.png', path: '/x/a.png', size: 10 }])
+    await attach(container)
+    await waitFor(() => expect(container.querySelector('img.attach-thumb')).toBeTruthy())
+    fireEvent.click(container.querySelector('.attach-view') as HTMLElement)
+    fireEvent.click(document.querySelector('.lightbox-img') as HTMLElement)
+    expect(document.querySelector('.lightbox')).toBeTruthy()
+    fireEvent.click(document.querySelector('.lightbox') as HTMLElement)
+    expect(document.querySelector('.lightbox')).toBeNull()
+  })
+
+  it('★点 × 只移除附件,不打开灯箱', async () => {
+    const { container } = setup([{ name: 'a.png', path: '/x/a.png', size: 10 }])
+    await attach(container)
+    await waitFor(() => expect(container.querySelector('img.attach-thumb')).toBeTruthy())
+    fireEvent.click(container.querySelector('.attach-chip.is-image button[title^="移除"]') as HTMLElement)
+    expect(container.querySelector('.attach-chip')).toBeNull()
+    expect(document.querySelector('.lightbox')).toBeNull()
+  })
+
+  it('没有缩略图的大图,点占位格时才按需读图并打开灯箱', async () => {
+    const { container } = setup([{ name: 'huge.jpg', path: '/Users/me/huge.jpg', size: 20_000_000 }])
+    await attach(container)
+    await waitFor(() => expect(container.querySelector('.attach-chip.is-image .attach-ph')).toBeTruthy())
+    expect(imageFile).not.toHaveBeenCalled()
+    await act(async () => { fireEvent.click(container.querySelector('.attach-view') as HTMLElement) })
+    expect(imageFile).toHaveBeenCalledWith(['/Users/me'], 'huge.jpg')
+    await waitFor(() => expect(document.querySelector('.lightbox img.lightbox-img')?.getAttribute('src')).toBe('data:image/png;base64,huge.jpg'))
+    // 按需读来的图不进缩略图缓存,输入框里仍是占位格
+    expect(container.querySelector('.attach-chip.is-image img.attach-thumb')).toBeNull()
+  })
+})
