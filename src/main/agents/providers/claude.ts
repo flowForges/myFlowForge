@@ -1,6 +1,6 @@
 import { execa, type ResultPromise } from 'execa'
 import { spawnAgent, killTree } from '../procGroup'
-import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, ChatTask, ChatCallbacks, ConfirmDecision } from '../types'
+import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, AgentResult, Model, ChatTask, ChatCallbacks, ConfirmDecision } from '../types'
 import type { AskAnswers } from '@shared/types'
 import { providerSupportsBrowserUse } from '@shared/browserUse'
 import { parseChatStreamActions, buildChatPrompt, extractContextTokens, extractTurnTokens, makeUsageTracker, splitThinkLines } from '../chatStream'
@@ -11,7 +11,7 @@ import { readClaudeModelsLive } from './claudeModels'
 import { logError, appLog } from '../../log/appLog'
 import { makeIdleWatchdog, CHAT_IDLE_MS, CHAT_STALL_KILL_MS } from '../idleWatchdog'
 import { makeHookWatch, HOOK_SLOW_MS } from './claudeHooks'
-import { makeBackgroundGate, parseTaskNotification } from './claudeBackground'
+import { makeBackgroundGate, parseTaskNotification, isReplayedNotificationResult } from './claudeBackground'
 import { CLAUDE_CONTROL_FLAGS, controlInitLine, userMessageLine, parseCanUseTool, toolTarget, controlAllowLine, controlDenyLine, parseAskQuestions, controlAnswerLine, askGateTitle, gateTitle, unhandledControlRequest, controlErrorLine, type CanUseTool } from './claudeControl'
 
 // The claude CLI's `--model` only accepts an alias ('opus'/'sonnet'/'haiku'/'fable') or a
@@ -32,6 +32,16 @@ function now() { return new Date().toISOString().slice(11, 19) }
 export function isClaudeBenignStderr(line: string): boolean {
   return /no stdin data received/i.test(line) || /^\(node:\d+\)\s/.test(line)
 }
+
+/**
+ * 一轮已经在界面上结束、但进程还留在后台把后台任务跑完的 claude(见 chat() 里的 detach)。
+ * 键是 cwd + claude 的会话 id:下一条消息要在同一个会话上起新进程之前,必须先把它收掉。
+ */
+interface LingeringChat { stop(): Promise<void> }
+const lingering = new Map<string, LingeringChat>()
+const lingerKey = (cwd: string, sessionId: string) => `${cwd}\0${sessionId}`
+/** 收掉留在后台的进程时最多等它退出多久(实测 SIGTERM 后 ~1s 退出)。 */
+const LINGER_STOP_WAIT_MS = 5_000
 
 export interface ClaudeSpec { bin?: string; preArgs?: string[]; defaultModels: Model[] }
 
@@ -97,7 +107,7 @@ export function buildClaudeChatArgs(task: ChatTask, env: NodeJS.ProcessEnv, chat
 export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
   const bin = spec.bin ?? 'claude'
   const defaultModels: Model[] = spec.defaultModels ?? []
-  return {
+  const provider: AgentProvider = {
     id: 'claude',
     displayName: 'Claude Code',
     bin,
@@ -298,26 +308,26 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
        */
       const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => {
         const waiting = hooks.pending()
-        cb.onStatus?.(bg.parked
-          ? `⏳ 已经 ${Math.round(CHAT_IDLE_MS / 1000)}s 没有任何输出，还有 ${bg.running} 个后台任务没跑完（后台命令可能本来就不出声）。要停就点上面的停止。`
-          : waiting.length
+        cb.onStatus?.(waiting.length
           ? `⏳ 已经 ${Math.round(CHAT_IDLE_MS / 1000)}s 没有任何输出，还在等 ${waiting.join('、')} 钩子 —— 它可能正在别处等你确认。要停就点上面的停止。`
           : `⏳ 已经 ${Math.round(CHAT_IDLE_MS / 1000)}s 没有任何输出。可能在等一个 Forge 看不见的确认（外部钩子 / 浏览器授权 / sudo）。要停就点上面的停止。`)
       }, undefined, {
         hardMs: CHAT_STALL_KILL_MS,
-        onDeadline: () => { cb.onStatus?.(bg.parked ? '⚠ 后台任务太久没有任何动静，已回收这一轮。' : '⚠ 太久没有任何输出，已回收这一轮。'); try { killTree(child) } catch { /* already gone */ } },
+        onDeadline: () => { cb.onStatus?.('⚠ 太久没有任何输出，已回收这一轮。'); try { killTree(child) } catch { /* already gone */ } },
       })
       /**
        * ★★后台子代理/后台命令比主代理这一轮活得久时,`result` 不能直接杀进程 —— 见 claudeBackground.ts。
-       *  停车期间 CLI 会在任务完成后自己起下一轮,那一轮的回复接在同一条消息后面(needSep 补一个空段)。
+       * ★★但这一轮在界面上必须就此结束(detach):原来是停车等后台任务,整轮一直显示「运行中」——
+       *  主代理最后给了一张 A/B/C 选项表等用户挑,用户打的字却只能排队,只好手动停止(用户 2026-10-30)。
+       *  后台 Monitor / 常驻命令根本不会结束,那就是半小时。现在 result 一到就收尾,进程留在后台把任务跑完,
+       *  CLI 自己起的下一轮也在后台跑完(结果写进会话记录,下一条消息 --resume 时模型看得到);
+       *  下一条消息来时先把它收掉再起新进程(见 chat())。
        */
-      let needSep = false
+      let detached = false
+      let lingerCap: ReturnType<typeof setTimeout> | null = null
       const bg = makeBackgroundGate({
         onFinish: () => { try { killTree(child) } catch { /* already gone */ } },
-        onPark: (n) => cb.onStatus?.(n > 0
-          ? `⏳ 后台还有 ${n} 个任务在跑（子代理 / 后台命令）。它们完成后主代理会接着回复；要停就点上面的停止。`
-          : '⏳ 后台任务刚完成，等主代理接着回复…'),
-        onResume: () => { flushThink(); needSep = sawAssistant },
+        onPark: () => detach(),
       })
       /**
        * ★★钩子把这一轮拖住时,界面上和「模型在思考」完全一样 —— 用户 2026-09-07 是靠**另一个软件**
@@ -331,6 +341,37 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         onError: (name, msg) => cb.onStatus?.(`⚠ ${name} 钩子失败：${msg}`),
       })
       const start = Date.now()
+      let settled = false
+      let settle: (r: AgentResult) => void = () => {}
+      const done = new Promise<AgentResult>((res) => { settle = (r) => { if (settled) return; settled = true; res(r) } })
+      let nativeSid: string | null = task.sessionId ?? null
+      const detach = () => {
+        if (detached) return
+        detached = true
+        wd.clear(); hooks.clear()
+        flushThink()
+        const elapsed = Math.round((Date.now() - start) / 1000)
+        appLog('info', 'claude', `chat 结束 · result 收尾 · ${elapsed}s · 后台还有 ${bg.running} 个任务,进程留在后台跑完`)
+        cb.onDone({ elapsed })
+        settle({ ok: turnOk ?? true, summary: '完成' })
+        const self: LingeringChat = {
+          stop: () => {
+            try { killTree(child) } catch { /* already gone */ }
+            return Promise.race([child.then(() => {}, () => {}), new Promise<void>(r => setTimeout(r, LINGER_STOP_WAIT_MS))])
+          },
+        }
+        if (nativeSid) {
+          const key = lingerKey(task.cwd, nativeSid)
+          const old = lingering.get(key)
+          if (old) void old.stop()
+          lingering.set(key, self)
+          void child.then(() => {}, () => {}).then(() => { if (lingering.get(key) === self) lingering.delete(key) })
+        }
+        // 常驻的后台命令 / Monitor 不会自己结束:后台留得再久也有个头。
+        lingerCap = setTimeout(() => { try { killTree(child) } catch { /* already gone */ } }, CHAT_STALL_KILL_MS)
+      }
+      // --resume 时 claude 先重放上个进程留下的后台任务通知,并为它空跑一轮(见 isReplayedNotificationResult)。
+      let sawNotification = false
       let buf = ''
       let streamed = false
       let sawAssistant = false   // any assistant text produced this turn
@@ -373,12 +414,23 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         cb.onSubagent?.({ id: a.id, phase, subagentType: a.subagentType, description: a.description, prompt: a.prompt })
       }
       const handle = async (obj: any) => {
+        // 界面上这一轮已经结束:只跟踪后台任务、回答控制请求(没人能看门 → 拒绝),其余一律不再往外报。
+        if (detached) {
+          bg.feed(obj)
+          const stray = unhandledControlRequest(obj)
+          if (stray) { try { child.stdin?.write(controlErrorLine(stray.requestId, `myFlowForge does not support control_request ${stray.subtype}`) + '\n') } catch { /* stdin gone */ } return }
+          const cut = parseCanUseTool(obj)
+          if (cut) { respond(cut, false); return }
+          if (obj?.type === 'result') bg.result()
+          return
+        }
         // 钩子事件先过一道:它只影响「现在在等谁」的播报,不参与下面任何解析分支。
         if (hooks.feed(obj)) return
         // 后台任务的生命周期事件(主代理的、子代理的都要看),同步跟踪;子代理事件下面会提前 return,所以放这里。
         bg.feed(obj)
         // 后台子代理真正跑完:它那张卡这时才算完成(启动时的 tool_result 只是回执,见下面 subagent-result)。
         const tn = parseTaskNotification(obj)
+        if (tn) sawNotification = true
         if (tn?.toolUseId && subagentIds.has(tn.toolUseId)) cb.onSubagent?.({ id: tn.toolUseId, phase: 'done', result: tn.summary, isError: !tn.ok })
         // ★★同 run():两个调用方都要接 —— 见 [[trap-two-call-sites-run-vs-chat]]。只接一处的话,
         //   工作流那边不挂了、聊天这边照旧是个不动的光标,而聊天才是天天在用的那条。
@@ -453,17 +505,20 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         // queues) and has to hit 停止. Terminate on the `result` event (claude's authoritative end-of-turn
         // signal), mirroring run(). It arrives only AFTER every tool/permission gate, so this never cuts a
         // pending gate short. Success comes from the raw result so the SIGTERM exit (143) isn't misread.
-        // ★后台任务还没跑完时 bg 不杀、停车等 CLI 起下一轮(那一轮的 result 会再走到这里);turnOk 以最后一轮为准。
+        // ★后台任务还没跑完时 bg 不杀,这一轮照样收尾,进程留在后台(见上面 detach)。
         if (obj?.type === 'result') {
+          if (isReplayedNotificationResult(obj, { sawNotification, sawActivity: sawAssistant || sawTool })) {
+            appLog('info', 'claude', 'chat 跳过重放的后台任务通知那一轮的空 result,继续等这条消息的回复')
+            return
+          }
           turnOk = (obj as { subtype?: string; is_error?: boolean }).subtype === 'success' && (obj as { is_error?: boolean }).is_error !== true
           bg.result()
           return
         }
         for (const action of parseChatStreamActions(obj)) {
-          if (action.kind === 'session') cb.onSession(action.id)
+          if (action.kind === 'session') { nativeSid = action.id; cb.onSession(action.id) }
           else if (action.kind === 'assistant') {
             flushThink()
-            if (needSep) { needSep = false; cb.onAssistantDelta('\n\n') }
             sawAssistant = true; cb.onAssistantDelta(action.text)
           }
           else if (action.kind === 'think') pushThink(action.text)
@@ -491,7 +546,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         const line = raw.trim()
         if (!line) return
         let obj: unknown
-        try { obj = JSON.parse(line) } catch { sawAssistant = true; cb.onAssistantDelta(line); return }
+        try { obj = JSON.parse(line) } catch { if (!detached) { sawAssistant = true; cb.onAssistantDelta(line) } return }
         handle(obj).catch((err) => { cb.onError(err instanceof Error ? err : new Error(String(err))) })
       }
       child.stdout?.on('data', (b: Buffer) => {
@@ -507,12 +562,14 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         // Stream stderr live, line by line, into the think block so startup/handshake activity shows.
         errBuf += s
         let nl: number
-        while ((nl = errBuf.indexOf('\n')) >= 0) { const line = errBuf.slice(0, nl).trim(); errBuf = errBuf.slice(nl + 1); if (line && !isClaudeBenignStderr(line)) cb.onStatus?.(line) }
+        while ((nl = errBuf.indexOf('\n')) >= 0) { const line = errBuf.slice(0, nl).trim(); errBuf = errBuf.slice(nl + 1); if (line && !isClaudeBenignStderr(line) && !detached) cb.onStatus?.(line) }
       })
-      const done = child.then((res) => {
+      void child.then((res): AgentResult | null => {
         wd.clear(); hooks.clear()
         processLine(buf); buf = ''
         bg.clear()     // after the final flush: a trailing `result` line must still be judged, but nothing may fire after exit
+        // 界面上早已收尾(detach):后台跑完退出,不再往这一轮报任何东西。
+        if (detached) { if (lingerCap) clearTimeout(lingerCap); return null }
         flushThink()   // surface any trailing reasoning line that never got a closing newline
         if (errBuf.trim() && !isClaudeBenignStderr(errBuf.trim())) { cb.onStatus?.(errBuf.trim()) } errBuf = ''
         const elapsed = Math.round((Date.now() - start) / 1000)
@@ -537,8 +594,29 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         // process (exit 143); fall back to the exit code only when no result arrived.
         const ok = turnOk ?? (res.exitCode === 0)
         return { ok, summary: ok ? '完成' : `退出码 ${res.exitCode}` }
-      }).catch((err) => { wd.clear(); hooks.clear(); bg.clear(); cb.onError(err as Error); return { ok: false } })
+      }).catch((err): AgentResult | null => {
+        wd.clear(); hooks.clear(); bg.clear()
+        if (lingerCap) clearTimeout(lingerCap)
+        if (detached) return null
+        cb.onError(err as Error); return { ok: false }
+      }).then((r) => { if (r) settle(r) })
       return { id: task.id, cancel: () => { wd.clear(); hooks.clear(); bg.clear(); killTree(child) }, done }
     }
   }
+  // ★同一个会话上一轮留在后台跑后台任务的进程(见 chat() 里的 detach):先把它收掉、等它真退出,
+  //  再用 --resume 起新进程 —— 两个进程同时写一个会话会互相踩。
+  const startChat = provider.chat!.bind(provider)
+  provider.chat = (task, cb, env) => {
+    const prior = task.sessionId ? lingering.get(lingerKey(task.cwd, task.sessionId)) : undefined
+    if (!prior) return startChat(task, cb, env)
+    let inner: AgentSession | null = null
+    let cancelled = false
+    const done = prior.stop().then(() => {
+      if (cancelled) { cb.onError(new Error('已停止')); return { ok: false } }
+      inner = startChat(task, cb, env)
+      return inner.done
+    })
+    return { id: task.id, cancel: () => { cancelled = true; inner?.cancel() }, done }
+  }
+  return provider
 }

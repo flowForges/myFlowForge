@@ -60,7 +60,7 @@ const turn2: Step[] = [
 const settle = (p: Promise<unknown>, ms: number) => Promise.race([p, new Promise(r => setTimeout(() => r('HANG'), ms))])
 
 describe('claude chat() — 后台子代理比主代理这一轮活得久', () => {
-  it('★result #1 时不杀进程;子代理跑完、CLI 起第二轮,回复接在同一条消息后面;卡片 运行中 → 完成', async () => {
+  it('★result #1 时这一轮就收尾(不再停车挂着「运行中」),但不杀进程;后台那一轮不再往这一轮里写', async () => {
     const provider = makeClaudeProvider({ bin: 'node', preArgs: [timedBin([...turn1, ...turn2])], defaultModels: [] })
     let text = ''
     let doneAt = 0
@@ -79,17 +79,17 @@ describe('claude chat() — 后台子代理比主代理这一轮活得久', () =
     const r = await settle(live.done, 30_000)
     expect(r).not.toBe('HANG')
     expect((r as { ok: boolean }).ok).toBe(true)
-    // 修之前:result #1(~70ms)就 killTree,第二轮永远不会来
-    expect(doneAt).toBeGreaterThan(1400)
-    expect(text).toBe('两路调研还在跑\n\n调研结果:Snapseed 有 29 个工具')
-    expect(statuses.some(s => s.includes('后台还有 1 个任务在跑'))).toBe(true)
+    // 停车那一版:要等到第二轮(~1650ms)才 done,整段时间界面都是「运行中」
+    expect(doneAt).toBeGreaterThan(0)
+    expect(doneAt).toBeLessThan(1400)
+    const statusCount = statuses.length
+    await new Promise(r => setTimeout(r, 1900))   // 后台那一轮跑完
+    expect(text).toBe('两路调研还在跑')
+    expect(statuses.length).toBe(statusCount)
     // 回执不能把卡片置完成,也不能把内部回执原文塞进结果
     const tu1 = subs.filter(s => s.id === 'tu1')
-    const firstDone = tu1.findIndex(s => s.phase === 'done')
-    expect(tu1.slice(0, firstDone).some(s => s.step === '已转入后台运行')).toBe(true)
-    expect(tu1.filter(s => s.phase === 'done')).toEqual([{ id: 'tu1', phase: 'done', result: 'Snapseed 有 29 个工具', isError: false }])
-    // 后台期间子代理的工具调用照旧挂在它的卡片上
-    expect(tu1.some(s => s.step && s.step !== '已转入后台运行')).toBe(true)
+    expect(tu1.some(s => s.step === '已转入后台运行')).toBe(true)
+    expect(tu1.some(s => s.phase === 'done')).toBe(false)
   })
 
   it('子代理在这一轮中途就完成并被消化:result 照旧立即收尾(不多等)', async () => {
@@ -114,14 +114,14 @@ describe('claude chat() — 后台子代理比主代理这一轮活得久', () =
     expect(Date.now() - t0).toBeLessThan(20_000)
   })
 
-  it('停车期间点「停止」:进程被回收,done 照常结束', async () => {
-    const provider = makeClaudeProvider({ bin: 'node', preArgs: [timedBin(turn1)], defaultModels: [] })
+  it('后台子代理还在跑时点「停止」(result 之前):进程被回收,done 照常结束', async () => {
+    const provider = makeClaudeProvider({ bin: 'node', preArgs: [timedBin(turn1.slice(0, 7))], defaultModels: [] })
     live = provider.chat!(
       { id: 'm3', prompt: 'x', model: 'opus-4.8', cwd: dir },
       { onSession: () => {}, onAssistantDelta: () => {}, onThinkDelta: () => {}, onDone: () => {}, onError: () => {} },
       process.env,
     )
-    expect(await settle(live.done, 600)).toBe('HANG')   // 停着在等后台子代理
+    expect(await settle(live.done, 600)).toBe('HANG')   // 还没有 result
     live.cancel()
     expect(await settle(live.done, 30_000)).not.toBe('HANG')
   })
