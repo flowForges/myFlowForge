@@ -96,6 +96,14 @@ describe('CouncilBlock', () => {
     expect(ctl.stop).toHaveBeenCalledWith('c1', 'finalize')
   })
 
+  it('consensus mode: the end button reads 结束并总结 and asks for the summary (the discussion never ends on its own)', () => {
+    const consensus = (st: CouncilState): CouncilState => ({ ...st, totalRounds: null, config: { ...st.config, mode: { kind: 'consensus', maxRounds: 5, maxMinutes: 30 } } })
+    const ctl = renderBlock([topic], consensus(state('paused', { round: 4, waitingForUser: true })))
+    expect(screen.getByRole('button', { name: '继续下一轮' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '结束并总结' }))
+    expect(ctl.stop).toHaveBeenCalledWith('c1', 'finalize')
+  })
+
   it('finalizing: 结束 aborts', () => {
     const ctl = renderBlock([topic], state('finalizing'))
     expect(screen.queryByRole('button', { name: '暂停' })).toBeNull()

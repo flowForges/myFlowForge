@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { CouncilEngine, type EngineDeps, type PersistedCouncil } from './engine'
 import { COUNCIL_RESULT_FENCE } from './prompts'
 import type { SeatRunCallbacks, SeatRunResult } from './seatRunner'
-import type { CouncilConfig, CouncilSeat, CouncilState } from '@shared/council'
+import { COUNCIL_CONSENSUS_SAFETY_ROUNDS, type CouncilConfig, type CouncilSeat, type CouncilState } from '@shared/council'
 import type { ChatEvent, ChatMessage } from '@shared/types'
 
 const WS = '/tmp/ws-council'
@@ -92,6 +92,11 @@ function harness(c: CouncilConfig, script: Script = () => undefined, over: Parti
 }
 
 const seq = (calls: Call[]) => calls.map(c => `${c.seat}:${c.kind}`)
+/** 用户点「结束」:共识模式唯一的收尾方式。等最终结果写完。 */
+async function endByUser(h: ReturnType<typeof harness>) {
+  h.engine.stop('finalize')
+  for (let i = 0; i < 50 && h.engine.state.status !== 'done'; i++) await new Promise(r => setTimeout(r, 5))
+}
 const uniqueIds = (ms: ChatMessage[]) => new Set(ms.map(m => m.id)).size === ms.length
 function unclosedStreams(events: ChatEvent[]): string[] {
   const closed = new Set(events.flatMap(e => (e.type === 'done' ? [e.message.id] : e.type === 'error' ? [e.id] : [])))
@@ -99,10 +104,15 @@ function unclosedStreams(events: ChatEvent[]): string[] {
 }
 
 describe('CouncilEngine consensus mode', () => {
-  it('all agree after round 1 → summary, draft, parallel votes, then final after 1 round', async () => {
+  it('all agree after round 1 → summary, draft, parallel votes, then waits for the user (even with the break off); 结束 writes the final', async () => {
     const h = harness(cfg(['A', 'B']))
     await h.engine.start()
-    expect(seq(h.calls)).toEqual(['A:answer', 'B:answer', 'L:summary', 'L:draft', 'A:vote', 'B:vote', 'L:final'])
+    expect(seq(h.calls)).toEqual(['A:answer', 'B:answer', 'L:summary', 'L:draft', 'A:vote', 'B:vote'])
+    // ★全员同意也不自动出结论:停在轮间,只有用户能结束
+    expect(h.engine.state).toMatchObject({ status: 'paused', waitingForUser: true, round: 2, totalRounds: null })
+    expect(h.files).toHaveLength(0)
+    await endByUser(h)
+    expect(seq(h.calls).at(-1)).toBe('L:final')
     expect(h.engine.state).toMatchObject({ status: 'done', round: 1, totalRounds: null })
     const draft = h.appended.find(m => m.council?.stage === 'consensus-draft')!
     expect(draft).toMatchObject({ who: 'ai', text: '<<L#2>>', council: { id: CID, seat: 'L', round: 1 } })
@@ -123,8 +133,9 @@ describe('CouncilEngine consensus mode', () => {
     const h = harness(cfg(['A', 'B', 'C']), c =>
       (c.kind === 'vote' && c.seat === 'A' && c.n === 2 ? { ok: true, text: '不同意,没考虑并发写' } : undefined))
     await h.engine.start()
-    expect(h.engine.state.status).toBe('done')
-    expect(h.engine.state.round).toBe(2)
+    expect(h.engine.state).toMatchObject({ status: 'paused', waitingForUser: true, round: 3 })
+    await endByUser(h)
+    expect(h.engine.state).toMatchObject({ status: 'done', round: 2 })
     const r2 = h.calls.filter(c => c.kind === 'critique')
     expect(r2.map(c => c.seat)).toEqual(['A', 'B', 'C'])
     for (const c of r2.slice(1)) expect(c.prompt).toContain('没考虑并发写')
@@ -153,60 +164,63 @@ describe('CouncilEngine consensus mode', () => {
     expect(h.calls.filter(c => c.kind === 'draft')[0].prompt).not.toContain('未获同意的理由')
   })
 
-  it('never agreeing stops at maxRounds with unresolved reasons passed to the final', async () => {
+  it('never agreeing runs past maxRounds; only the safety round count makes it wait, and 结束 passes the unresolved reasons', async () => {
+    // ★maxRounds = 3 不再收尾(用户:讨论在第 3 轮就停了)
     const h = harness(cfg(['A', 'B'], 3), c =>
       (c.kind === 'vote' && c.seat === 'B' ? { ok: true, text: `**不同意**:第 ${c.n} 次还是不行` } : undefined))
     await h.engine.start()
-    expect(h.engine.state.status).toBe('done')
-    expect(h.engine.state.round).toBe(3)
-    expect(h.calls.filter(c => c.seat === 'L').map(c => c.kind)).toEqual([
-      'summary', 'draft', 'summary', 'draft', 'summary', 'draft', 'final',
-    ])
-    const final = h.calls.at(-1)!.prompt
-    expect(final).toContain('未能达成共识的点')
-    // 只带最近一轮的不同意理由
-    expect(final).toContain('- codex · B: 第 6 次还是不行')
-    expect(final).not.toContain('- codex · B: 第 4 次')
-    expect(final).not.toContain('codex · A:')
+    expect(h.calls.some(c => c.kind === 'final')).toBe(false)
+    expect(h.engine.state).toMatchObject({ status: 'paused', waitingForUser: true, round: COUNCIL_CONSENSUS_SAFETY_ROUNDS + 1 })
+    expect(h.calls.filter(c => c.kind === 'draft')).toHaveLength(COUNCIL_CONSENSUS_SAFETY_ROUNDS)
+    // 继续 → 接着讨论,到下一个防失控点再停
+    await h.engine.resume()
+    expect(h.engine.state).toMatchObject({ status: 'paused', waitingForUser: true, round: 2 * COUNCIL_CONSENSUS_SAFETY_ROUNDS + 1 })
+    await endByUser(h)
+    expect(h.engine.state).toMatchObject({ status: 'done', round: 2 * COUNCIL_CONSENSUS_SAFETY_ROUNDS })
+    const final = h.calls.at(-1)!
+    expect(final.kind).toBe('final')
+    expect(final.prompt).toContain('未能达成共识的点')
+    // 只带最近一轮的不同意理由(B 每轮 2 次发言:点评 + 投票)
+    const last = 4 * COUNCIL_CONSENSUS_SAFETY_ROUNDS
+    expect(final.prompt).toContain(`- codex · B: 第 ${last} 次还是不行`)
+    expect(final.prompt).not.toContain(`- codex · B: 第 ${last - 2} 次`)
+    expect(final.prompt).not.toContain('codex · A:')
   })
 
-  it('time cap via fake now stops early and the final receives unresolved reasons', async () => {
+  it('going past maxMinutes does not end the discussion; the next round still runs', async () => {
     let t = T0
     const h = harness(cfg(['A', 'B'], 5, 30), c => {
-      if (c.kind === 'vote' && c.seat === 'A') {
+      if (c.kind === 'vote' && c.seat === 'A' && c.n === 2) {
         t = T0 + 31 * MIN
         return { ok: true, text: '不同意 缺少失效策略' }
       }
       return undefined
     }, { now: () => t })
     await h.engine.start()
-    expect(h.engine.state.status).toBe('done')
-    expect(h.engine.state.round).toBe(1)
-    expect(h.calls.some(c => c.kind === 'critique')).toBe(false)
-    expect(h.calls.at(-1)!.kind).toBe('final')
-    expect(h.calls.at(-1)!.prompt).toContain('- codex · A: 缺少失效策略')
+    expect(h.calls.filter(c => c.kind === 'critique').map(c => c.seat)).toEqual(['A', 'B'])
+    expect(h.calls.some(c => c.kind === 'final')).toBe(false)
+    expect(h.engine.state).toMatchObject({ status: 'paused', waitingForUser: true, round: 3 })
   })
 
   it('an unknown vote counts as not agreeing → another round', async () => {
     const h = harness(cfg(['A', 'B']), c =>
       (c.kind === 'vote' && c.seat === 'B' && c.n === 2 ? { ok: true, text: '基本可以吧' } : undefined))
     await h.engine.start()
-    expect(h.engine.state.round).toBe(2)
     expect(h.calls.filter(c => c.kind === 'critique').map(c => c.seat)).toEqual(['A', 'B'])
     expect(h.calls.find(c => c.kind === 'critique' && c.seat === 'A')!.prompt).toContain('基本可以吧')
-    expect(h.engine.state.status).toBe('done')
+    // 第 2 轮全员同意 → 停在第 3 轮前等用户
+    expect(h.engine.state).toMatchObject({ status: 'paused', waitingForUser: true, round: 3 })
   })
 
   it('a failed vote counts as not agreeing and toward the seat drop rule', async () => {
     const h = harness(cfg(['A', 'B', 'C']), c =>
       (c.seat === 'C' && (c.kind === 'vote' || c.kind === 'critique') ? { ok: false } : undefined))
     await h.engine.start()
-    // 第 1 轮 C 投票失败 → 不算同意;第 2 轮 C 发言再失败 → 连续 2 次,除名;之后 A、B 同意即出结果
-    expect(h.engine.state.round).toBe(2)
+    // 第 1 轮 C 投票失败 → 不算同意;第 2 轮 C 发言再失败 → 连续 2 次,除名;之后 A、B 同意 → 停下等用户
     expect(h.persisted.at(-1)!.dropped).toEqual(['C'])
     const r2votes = h.calls.filter(c => c.kind === 'vote').slice(3)
     expect(r2votes.map(c => c.seat)).toEqual(['A', 'B'])
-    expect(h.engine.state.status).toBe('done')
+    expect(h.engine.state).toMatchObject({ status: 'paused', waitingForUser: true, round: 3 })
   })
 
   it('pause during the vote lets every vote finish, then resume continues', async () => {
@@ -224,8 +238,8 @@ describe('CouncilEngine consensus mode', () => {
     expect(h.appended.filter(m => m.council?.stage === 'consensus-vote')).toHaveLength(2)
     const before = h.calls.length
     await h.engine.resume()
-    expect(seq(h.calls.slice(before))).toEqual(['A:critique', 'B:critique', 'L:summary', 'L:draft', 'A:vote', 'B:vote', 'L:final'])
-    expect(h.engine.state.status).toBe('done')
+    expect(seq(h.calls.slice(before))).toEqual(['A:critique', 'B:critique', 'L:summary', 'L:draft', 'A:vote', 'B:vote'])
+    expect(h.engine.state).toMatchObject({ status: 'paused', waitingForUser: true })
     expect(uniqueIds(h.appended)).toBe(true)
   })
 
@@ -257,7 +271,9 @@ describe('CouncilEngine consensus mode', () => {
     fail = false
     const before = h.calls.length
     await h.engine.resume()
-    expect(seq(h.calls.slice(before))).toEqual(['L:draft', 'A:vote', 'B:vote', 'L:final'])
+    expect(seq(h.calls.slice(before))).toEqual(['L:draft', 'A:vote', 'B:vote'])
+    expect(h.engine.state).toMatchObject({ status: 'paused', waitingForUser: true })
+    await endByUser(h)
     expect(h.engine.state.status).toBe('done')
     expect(uniqueIds(h.appended)).toBe(true)
   })

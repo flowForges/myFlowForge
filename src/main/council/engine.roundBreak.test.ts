@@ -196,7 +196,7 @@ describe('CouncilEngine round break (pauseBetweenRounds)', () => {
     expect(seq(h.calls.slice(3))).toEqual(['A:critique', 'B:critique', 'L:summary'])
   })
 
-  it('consensus mode waits after a disagreeing vote, not after an agreeing one', async () => {
+  it('consensus mode waits after a disagreeing vote and after an agreeing one; it never finalizes on its own', async () => {
     const h = harness(cfg(['A', 'B'], { kind: 'consensus', maxRounds: 5, maxMinutes: 30 }), c =>
       (c.kind === 'vote' && c.seat === 'A' && c.n === 2 ? { ok: true, text: '不同意,没考虑并发写' } : undefined))
     await h.engine.start()
@@ -204,16 +204,19 @@ describe('CouncilEngine round break (pauseBetweenRounds)', () => {
     expect(h.engine.state).toMatchObject({ status: 'paused', waitingForUser: true, round: 2 })
     h.engine.interject('先别管并发')
     await h.engine.resume()
-    expect(h.engine.state.status).toBe('done')
+    // 第 2 轮全员同意:仍停在轮间等用户
+    expect(h.engine.state).toMatchObject({ status: 'paused', waitingForUser: true, round: 3 })
+    expect(h.calls.some(c => c.kind === 'final')).toBe(false)
     const r2 = h.calls.filter(c => c.kind === 'critique')
     for (const c of r2) expect(c.prompt).toContain('先别管并发')
   })
 
-  it('consensus mode does not wait when the round cap ends the discussion', async () => {
+  it('consensus mode ignores the old round cap: maxRounds = 1 still goes on to round 2', async () => {
     const h = harness(cfg(['A', 'B'], { kind: 'consensus', maxRounds: 1, maxMinutes: 30 }), c =>
       (c.kind === 'vote' && c.seat === 'A' ? { ok: true, text: '不同意' } : undefined))
     await h.engine.start()
-    expect(h.engine.state.status).toBe('done')
+    expect(h.engine.state).toMatchObject({ status: 'paused', waitingForUser: true, round: 2 })
+    expect(h.calls.some(c => c.kind === 'final')).toBe(false)
   })
 
   it('the flag survives persist + restore; the restored engine accepts the interjection and resumes', async () => {
@@ -233,7 +236,7 @@ describe('CouncilEngine round break (pauseBetweenRounds)', () => {
 })
 
 describe('CouncilEngine round break: review fixes', () => {
-  it('consensus time cap excludes time spent waiting in the break', async () => {
+  it('consensus mode: time spent waiting in the break is tracked and does not end the discussion', async () => {
     let t = T0
     const h = harness(cfg(['A', 'B'], { kind: 'consensus', maxRounds: 5, maxMinutes: 10 }), c =>
       (c.kind === 'vote' && c.seat === 'A' ? { ok: true, text: '不同意' } : undefined), { now: () => t })
@@ -246,7 +249,7 @@ describe('CouncilEngine round break: review fixes', () => {
     expect(h.persisted.at(-1)!.pausedMs).toBe(60 * 60_000)
   })
 
-  it('a user pause does not count toward the time cap either, and the paused time survives restore', async () => {
+  it('a user pause survives restore and the restored consensus run keeps going until the user ends it', async () => {
     let t = T0
     let h!: ReturnType<typeof harness>
     h = harness(cfg(['A', 'B'], { kind: 'consensus', maxRounds: 5, maxMinutes: 10 }, { pauseBetweenRounds: false }), c => {
@@ -261,9 +264,8 @@ describe('CouncilEngine round break: review fixes', () => {
     const r = harness(cfg(['A', 'B'], { kind: 'consensus', maxRounds: 5, maxMinutes: 10 }, { pauseBetweenRounds: false }), c =>
       (c.kind === 'vote' && c.seat === 'A' && c.n === 1 ? { ok: true, text: '不同意' } : undefined), { now: () => t, readMessages: () => appended }, snap)
     await r.engine.resume()
-    expect(r.engine.state.status).toBe('done')
-    // 第 1 轮投了不同意且没超时 → 进了第 2 轮
-    expect(r.engine.state.round).toBe(2)
+    // 第 1 轮投了不同意 → 进了第 2 轮;第 2 轮全员同意 → 停在第 3 轮前等用户
+    expect(r.engine.state).toMatchObject({ status: 'paused', waitingForUser: true, round: 3 })
   })
 
   it("stop('finalize') during the break finalizes the round that ran, with the break's interjections", async () => {

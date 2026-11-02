@@ -253,3 +253,77 @@ describe('全屏底栏 / 追问框:输入框长高有上限,按钮居中', () =>
     expect(rule('.council-fs-bottom textarea')).toMatch(/max-height:\s*calc\(6 \* 20px/)
   })
 })
+
+describe('⤢ 放大弹窗:总在窗口正中,能切上一位 / 下一位', () => {
+  it('★列轨道钉死 minmax(0, 1fr)、弹窗宽按视口算且 min-width:0 —— 宽代码块 / 表格不会把弹窗撑偏', () => {
+    const backdrop = councilCss.match(/\.council-focus-backdrop\s*\{[^}]*\}/)?.[0] ?? ''
+    expect(backdrop).toMatch(/position:\s*fixed/)
+    expect(backdrop).toMatch(/inset:\s*0/)
+    expect(backdrop).toMatch(/grid-template-columns:\s*minmax\(0,\s*1fr\)/)
+    expect(backdrop).toMatch(/place-items:\s*center/)
+    const rule = councilCss.match(/\.council-focus\s*\{[^}]*\}/)?.[0] ?? ''
+    expect(rule).toMatch(/width:\s*min\(960px,\s*calc\(100vw/)
+    expect(rule).toMatch(/min-width:\s*0/)
+    const body = councilCss.match(/\.council-focus-body\s*\{[^}]*\}/)?.[0] ?? ''
+    expect(body).toMatch(/min-width:\s*0/)
+  })
+
+  it('the dialog is portaled straight to document.body (no transformed / scrolled ancestor)', () => {
+    render(el({ messages: [topic, ai(A, 1, 'answer', '甲'), ai(B, 1, 'answer', '乙')], st: state('running') }))
+    fireEvent.click(document.querySelector(`.council-cell[data-seat="${A.id}"] .council-zoom`)!)
+    expect(document.querySelector('.council-focus-backdrop')!.parentElement).toBe(document.body)
+  })
+
+  // 阅读顺序:每轮 列序(B, A)的发言 → 领导者 → 列序的投票;失败的跳过
+  const msgs = () => [
+    topic,
+    ai(A, 1, 'answer', '甲一'), ai(B, 1, 'answer', '乙一'), ai(L, 1, 'summary', '小结一'),
+    ai(A, 2, 'critique', '甲二'), ai(B, 2, 'failed', ''), ai(L, 2, 'consensus-draft', '草稿二'),
+    ai(B, 2, 'consensus-vote', '同意'), ai(A, 2, 'consensus-vote', '不同意'),
+  ]
+  const dlgText = () => screen.getByRole('dialog').querySelector('.council-focus-body')!.textContent
+
+  it('‹ / › buttons step through every zoomable utterance in reading order; disabled at the ends', () => {
+    render(el({ messages: msgs(), st: state('running', { round: 3 }) }))
+    fireEvent.click(document.querySelector(`.council-round-sec[data-round="1"] .council-cell[data-seat="${B.id}"] .council-zoom`)!)
+    const prev = () => screen.getByRole('button', { name: '上一个' }) as HTMLButtonElement
+    const next = () => screen.getByRole('button', { name: '下一个' }) as HTMLButtonElement
+    expect(dlgText()).toBe('乙一')
+    expect(prev().disabled).toBe(true)
+    const seen = [dlgText()]
+    while (!next().disabled) { fireEvent.click(next()); seen.push(dlgText()) }
+    expect(seen).toEqual(['乙一', '甲一', '小结一', '甲二', '草稿二', '同意', '不同意'])
+    fireEvent.click(prev())
+    expect(dlgText()).toBe('同意')
+    // 标题行跟着换成那一位
+    expect(screen.getByRole('dialog').getAttribute('aria-label')).toBe(B.label)
+  })
+
+  it('← / → keys switch too; Esc still closes', () => {
+    render(el({ messages: msgs(), st: state('running', { round: 3 }) }))
+    fireEvent.click(document.querySelector(`.council-round-sec[data-round="1"] .council-cell[data-seat="${A.id}"] .council-zoom`)!)
+    expect(dlgText()).toBe('甲一')
+    fireEvent.keyDown(document, { key: 'ArrowRight' })
+    expect(dlgText()).toBe('小结一')
+    fireEvent.keyDown(document, { key: 'ArrowLeft' })
+    fireEvent.keyDown(document, { key: 'ArrowLeft' })
+    expect(dlgText()).toBe('乙一')
+    fireEvent.keyDown(document, { key: 'ArrowLeft' })   // 已是第一条:不动
+    expect(dlgText()).toBe('乙一')
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+})
+
+describe('最多 10 位讨论方', () => {
+  it('10 seats → 10 columns, each seat its own colour', () => {
+    const ten: CouncilSeat[] = Array.from({ length: 10 }, (_, i) => ({ id: `codex:m${i}`, provider: 'codex', model: `m${i}`, label: `Codex · M${i}` }))
+    const st = state('running', { config: { ...state('running').config, seats: ten } })
+    render(el({ messages: [topic, ...ten.map(s => ai(s, 1, 'answer', s.label))], st }))
+    expect((document.querySelector('.council-grid') as HTMLElement).style.gridTemplateColumns).toBe('repeat(10, minmax(260px, 1fr))')
+    const colors = Array.from(document.querySelectorAll('.council-round-sec[data-round="1"] .council-cell'))
+      .map(c => (c as HTMLElement).style.getPropertyValue('--seat'))
+    expect(colors).toHaveLength(10)
+    expect(new Set(colors).size).toBe(10)
+  })
+})

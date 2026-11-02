@@ -243,6 +243,16 @@ describe('CouncilSetup', () => {
     expect(screen.getByText('约 12 分钟')).toBeTruthy()
   })
 
+  it('consensus mode has no round cap, so no minute estimate is shown', () => {
+    setup()
+    addSeat('claude', 'opus')
+    addSeat('codex', 'gpt-6')
+    fireEvent.click(screen.getByRole('button', { name: '讨论到共识' }))
+    expect(document.querySelector('.council-eta')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '按轮次' }))
+    expect(document.querySelector('.council-eta')).not.toBeNull()
+  })
+
   it('leader is its own row (amber label), not inside the seat grid, with a hover tooltip and no caption', () => {
     setup()
     addSeat('claude', 'opus')
@@ -280,16 +290,19 @@ describe('CouncilSetup', () => {
     expect(onStart.mock.calls[1][0].pauseBetweenRounds).toBe(true)
   })
 
-  it('seat grid ends with a same-size 「＋ 添加」 cell, hidden at 6 seats', () => {
-    setup({ providers: [{ id: 'claude', displayName: 'Claude Code', installed: true, models: Array.from({ length: 7 }, (_, i) => ({ id: `m${i}`, label: `M${i}` })) }] })
+  it('seat grid ends with a same-size 「＋ 添加」 cell, hidden at 10 seats; 10 seats can start', () => {
+    const { onStart } = setup({ providers: [{ id: 'claude', displayName: 'Claude Code', installed: true, models: Array.from({ length: 11 }, (_, i) => ({ id: `m${i}`, label: `M${i}` })) }] })
     const grid = document.querySelector('.council-seats')!
     expect(grid.lastElementChild!.classList.contains('council-add')).toBe(true)
     expect(screen.getByRole('button', { name: '添加讨论方' }).textContent).toBe('＋ 添加')
-    for (let i = 0; i < 5; i++) addSeat('claude', `m${i}`)
+    for (let i = 0; i < 9; i++) addSeat('claude', `m${i}`)
+    expect(seatIds()).toHaveLength(9)
     expect(grid.lastElementChild!.classList.contains('council-add')).toBe(true)
-    addSeat('claude', 'm5')
-    expect(seatIds()).toHaveLength(6)
+    addSeat('claude', 'm9')
+    expect(seatIds()).toHaveLength(10)
     expect(screen.queryByRole('button', { name: '添加讨论方' })).toBeNull()
+    start()
+    expect(onStart.mock.calls[0][0].seats).toHaveLength(10)
   })
 
   it('materials are hidden by default; 「＋ 附加代码改动」 expands them, ✕ collapses and clears them', async () => {

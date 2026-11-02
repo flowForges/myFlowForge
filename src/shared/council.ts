@@ -93,9 +93,15 @@ export const COUNCIL_TURN_TIMEOUT_MS = 300_000
 export const COUNCIL_DIFF_CAP_BYTES = 200 * 1024
 export const COUNCIL_DEFAULT_ROUNDS = 2
 export const COUNCIL_CONSENSUS_CAPS = { maxRounds: 5, maxMinutes: 30 }
+/**
+ * 共识模式没有轮数 / 时间上限:讨论一直进行,只有用户点「结束」才出结论(2026-11 用户要求)。
+ * ★maxRounds / maxMinutes 仍留在配置里(老快照 / 校验兼容),引擎不再据此收尾。
+ * 防失控:每满这么多轮强制停在轮间等用户(即便关了「每轮结束后等我」),不会自动出结论。
+ */
+export const COUNCIL_CONSENSUS_SAFETY_ROUNDS = 20
 
 const MIN_SEATS = 2
-const MAX_SEATS = 6
+export const COUNCIL_MAX_SEATS = 10
 const MIN_ROUNDS = 1
 const MAX_ROUNDS = 5
 
@@ -127,7 +133,7 @@ export function isCouncilProvider(id: string): boolean {
 export function validateCouncilConfig(c: CouncilConfig): string | null {
   if (!c.topic || !c.topic.trim()) return 'topic-empty'
   if (c.seats.length < MIN_SEATS) return 'seats-too-few'
-  if (c.seats.length > MAX_SEATS) return 'seats-too-many'
+  if (c.seats.length > COUNCIL_MAX_SEATS) return 'seats-too-many'
   const seen = new Set<string>()
   for (const s of c.seats) {
     if (!isCouncilProvider(s.provider)) return 'seat-provider-invalid'
