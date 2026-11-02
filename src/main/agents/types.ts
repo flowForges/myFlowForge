@@ -115,6 +115,19 @@ export interface ChatTask {
    *  在这条分支之前对这些 provider 本来就不跑。
    */
   beforeFallback?: () => Promise<boolean>
+  /** 这一轮结束后进程可能留着跑后台任务:那之后发生的事走这里。不给 = 没人看得见,输出丢弃(见 ChatBackgroundHooks)。 */
+  background?: ChatBackgroundHooks
+}
+/**
+ * 一轮在界面上结束之后,进程还活着(claude 的后台任务)。交互聊天那条路才给:它有输入框、有停止、有地方放回复。
+ */
+export interface ChatBackgroundHooks {
+  /** 还在跑的后台任务数变了。stop 杀掉整棵进程树;n=0 时是 null。 */
+  onRunning(count: number, stop: (() => void) | null): void
+  /** 没有这一轮的时候后台子代理要权限。 */
+  onConfirm?(req: ConfirmReq): Promise<ConfirmDecision>
+  /** CLI 没等用户说话自己起了一轮(后台任务完成了)。调 attach 把这一轮的回调接上,可以晚一点调(事件会攒着)。 */
+  openTurn(attach: (cb: ChatCallbacks) => AgentSession): void
 }
 export interface ChatCallbacks {
   onSession(id: string): void

@@ -447,7 +447,7 @@ export interface ChatSendPayload {
   /** 这一轮用 codex 快速档(会话级设置,一路带到 ChatTask.fast)。 */
   fast?: boolean
 }
-export interface ChatQueueEvent { workspacePath: string; busy: boolean; queue: { id: string; text: string; source: string; sessionId: string }[]; running: { id: string; text: string; sessionId: string } | null; runningTurns: { id: string; text: string; sessionId: string }[]; runningSessionId: string | null; runningSessionIds: string[] }
+export interface ChatQueueEvent { workspacePath: string; busy: boolean; queue: { id: string; text: string; source: string; sessionId: string }[]; running: { id: string; text: string; sessionId: string } | null; runningTurns: { id: string; text: string; sessionId: string }[]; runningSessionId: string | null; runningSessionIds: string[]; backgroundTasks?: Record<string, number> }
 export type ChatEvent = { workspacePath: string; sessionId: string } & (
   | { type: 'user'; message: ChatMessage }
   // council:共商发言带上它在共商里的位置,渲染端在流式阶段就能把它归进共商区块(落盘后 done 的 message 里也有)。

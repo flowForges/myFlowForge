@@ -161,4 +161,28 @@ describe('parseTaskNotification', () => {
     expect(parseTaskNotification(requesting())).toBeNull()
     expect(parseTaskNotification(null)).toBeNull()
   })
+
+  it('通知到了却一直不起新一轮:同样宽限期满回收(不能永远空转)', () => {
+    const finish = vi.fn()
+    const g = makeBackgroundGate({ onFinish: finish })
+    g.feed(tasksChanged('a1')); g.feed(started('a1', 'tu1')); g.feed(requesting())
+    g.feed(tasksChanged()); g.feed(notified('a1', 'tu1'))
+    g.result()
+    vi.advanceTimersByTime(BG_GRACE_MS)
+    expect(finish).toHaveBeenCalledTimes(1)
+  })
+
+  it('任务还在跑:多久都不回收;unpark(接下一条消息)撤掉回收计时', () => {
+    const finish = vi.fn()
+    const g = makeBackgroundGate({ onFinish: finish })
+    g.feed(tasksChanged('a1')); g.feed(started('a1', 'tu1')); g.feed(requesting())
+    g.result()
+    vi.advanceTimersByTime(24 * 3600_000)
+    expect(finish).not.toHaveBeenCalled()
+    g.feed(tasksChanged()); g.feed(notified('a1', 'tu1'))
+    g.unpark()
+    expect(g.parked).toBe(false)
+    vi.advanceTimersByTime(BG_GRACE_MS * 2)
+    expect(finish).not.toHaveBeenCalled()
+  })
 })

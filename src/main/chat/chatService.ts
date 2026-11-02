@@ -3,7 +3,7 @@ import { userMessageOf } from './userMessage'
 import { appendMessage, readMessages, readSession, readWatermark, writeSession, writeWatermark } from './chatStore'
 import { setLive, clearLive } from './liveTurns'
 import { setNativeSubagents } from './nativeSubagentRegistry'
-import type { AgentProvider, AgentSession, ConfirmReq, ConfirmDecision } from '../agents/types'
+import type { AgentProvider, AgentSession, ChatBackgroundHooks, ChatCallbacks, ConfirmReq, ConfirmDecision } from '../agents/types'
 import type { ChatSendPayload, ChatMessage, ChatEvent, ChatAnswerAnchor, SubagentCard, ToolActivity, TurnPhase, ContextUsage } from '@shared/types'
 import { phaseLabel } from '@shared/types'
 import { buildMemoryPreamble } from './memory/preamble'
@@ -37,6 +37,13 @@ export interface SendTurnDeps {
   onSessionStart?: (session: AgentSession) => void
   /** 原样带进 ChatTask.beforeFallback:ACP provider 回落到没门的 run() 之前问一次(见 agents/types.ts)。 */
   beforeFallback?: () => Promise<boolean>
+  /** 原样带进 ChatTask.background:一轮结束后进程还留着跑后台任务时的出口。 */
+  background?: ChatBackgroundHooks
+  /**
+   * CLI 自己起的一轮(后台任务完成后主代理接着说话):没有用户消息,也不再 spawn,把回调接到活进程上就行。
+   * 其余(流式、落盘、收尾事件、提醒)和普通一轮走同一条路。见 ChatBackgroundHooks.openTurn。
+   */
+  adopt?: (cb: ChatCallbacks) => AgentSession
 }
 
 let seq = 0
@@ -147,7 +154,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     // 用 preambleDoneIndex 记账,保证每阶段只注入一次(不每轮重复)。
     let stagePre = ''
     const wfs = meta?.workflowSession
-    if (wfs && wfs.phase === 'chatting') {
+    if (wfs && wfs.phase === 'chatting' && !deps.adopt) {
       const stage = wfs.stages[wfs.currentIndex]
       if (stage && wfs.currentIndex !== wfs.preambleDoneIndex) {
         stagePre = `【工作流「${wfs.flowName}」· 第 ${wfs.currentIndex + 1}/${wfs.stages.length} 步:${stage.name}】\n${stage.preamble ?? ''}\n（本阶段内你都在与用户就这一步对话、按需迭代；用户点「下一步」才进入下一阶段，届时会另行告知。）`
@@ -159,12 +166,14 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
 
     // ★从别的设备发来的带 `via`(见 ChatMessage.via)。★★注意它**没有**混进上面那个 `promptText` ——
     //  那是它「绝不污染上下文」这条承诺的实现方式:两个字段,从不相加。被拒的那一轮也用同一份(userMessage.ts)。
-    const userMsg = userMessageOf(payload)
-    appendMessage(ws, sid, userMsg)
-    // 会话自动命名:普通聊天用首条用户消息命名(仍是 '新会话' 才改,导入会话有真实标题不受影响)。工作流
-    // 会话不在这里命名——它在 workflow:enter 用 seed(原始需求)命名,避免被 "请开始「…」" 这类 kick 消息覆盖。
-    if (!wfs && payload.text?.trim()) autoNameIfDefault(ws, sid, payload.text)
-    emit({ workspacePath: ws, sessionId: sid, type: 'user', message: userMsg })
+    if (!deps.adopt) {
+      const userMsg = userMessageOf(payload)
+      appendMessage(ws, sid, userMsg)
+      // 会话自动命名:普通聊天用首条用户消息命名(仍是 '新会话' 才改,导入会话有真实标题不受影响)。工作流
+      // 会话不在这里命名——它在 workflow:enter 用 seed(原始需求)命名,避免被 "请开始「…」" 这类 kick 消息覆盖。
+      if (!wfs && payload.text?.trim()) autoNameIfDefault(ws, sid, payload.text)
+      emit({ workspacePath: ws, sessionId: sid, type: 'user', message: userMsg })
+    }
 
     const aid = mkId('a')
     // Whole-turn start (≈ LLM begins). Stamped main-side so it survives into the live mirror + persisted
@@ -497,7 +506,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
         flushPaced = paced.flushPaced
         // ★provider 同步抛错(起不来)时没有任何收尾路径会跑 —— 自己把「你的选择」入口关掉再抛。
         let session: AgentSession
-        try { session = provider.chat!({ id: aid, prompt: promptText, model: payload.model, cwd: ws, sessionId, attachments: payload.attachments, permissionMode: payload.permissionMode, browserUse: payload.browserUse, fast: payload.fast, beforeFallback: deps.beforeFallback }, paced, env) }
+        try { session = deps.adopt ? deps.adopt(paced) : provider.chat!({ id: aid, prompt: promptText, model: payload.model, cwd: ws, sessionId, attachments: payload.attachments, permissionMode: payload.permissionMode, browserUse: payload.browserUse, fast: payload.fast, beforeFallback: deps.beforeFallback, background: deps.background }, paced, env) }
         catch (err) { closeAnswers(); throw err }
         deps.onSessionStart?.(wrapSession(session))
       })

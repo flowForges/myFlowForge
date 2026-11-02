@@ -65,7 +65,7 @@ import { pushService } from '../push/pushService'
 import type { BotBridgeConfig, BotPlatform } from '../bot/botTypes'
 import { distillModelFor } from '../chat/memory/distillModel'
 import type { CreateWorkspaceOpts, ChatSendPayload, ChatEvent, Attachment, AskAnswers, AskQuestion, ChangesEvent, ChatGateSnapshot, ChatMessage, SessionsFile } from '@shared/types'
-import type { AgentProvider, ConfirmDecision } from '../agents/types'
+import type { AgentProvider, AgentSession, ChatBackgroundHooks, ConfirmDecision } from '../agents/types'
 import { confirmAllowed } from '../agents/types'
 import type { Settings, CustomAgent } from '../config/schema'
 import { watch as chokidarWatch } from 'chokidar'
@@ -1138,13 +1138,27 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         authBroker = null
       }
     }
+    const onSessionStart = (session: AgentSession) => chatQueue.registerActive(payload.workspacePath, payload.sessionId, () => session.cancel())
+    // ★这一轮结束后进程还留着跑后台任务:任务数给输入框那个停止,CLI 自己起的下一轮走同一条泳道、开一条新回复。
+    const background: ChatBackgroundHooks = {
+      onRunning: (n, stop) => chatQueue.setBackground(payload.workspacePath, payload.sessionId, n, stop),
+      onConfirm: toolConfirm,
+      openTurn: (attach) => {
+        // 会话已经删了:回复没地方放,后台活也没人要了。
+        if (!getSession(payload.workspacePath, payload.sessionId)) { chatQueue.stopBackground(payload.workspacePath, payload.sessionId); return }
+        chatQueue.adoptTurn(payload.workspacePath, payload.sessionId, payload.agent, () =>
+          sendTurn({ ...payload, text: '', attachments: [] }, { provider, env, emit: chatEmit, confirm: toolConfirm, onSessionStart, background, adopt: attach })
+            .finally(() => drainChatGates(payload.workspacePath, { sessionId: payload.sessionId, type: 'confirm' })))
+      },
+    }
     try {
       const msg = await sendTurn(payload, {
         provider,
         env,
         emit: chatEmit,
         confirm: toolConfirm,
-        onSessionStart: (session) => chatQueue.registerActive(payload.workspacePath, payload.sessionId, () => session.cancel()),
+        onSessionStart,
+        background,
         // ★★ACP 握手没成、要回落到 run()(没门、全放行)的那一刻,补上面那道「完全访问」授权 —— 首轮
         //  ACP 状态未知时按「有门」放过了预授权门,不补的话老版本 CLI 会不经同意就以完全访问跑。
         beforeFallback: ensureFullAccess,
@@ -1312,6 +1326,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       && (councils.hasLive(workspacePath, sessionId, a.councilId) || chatQueue.sessionBusy(workspacePath, sessionId))) throw new Error('busy')
     engine.stop(a.mode)
   })
+  // ★单独一条而不是给 council:stop 加参数:老 daemon 收到不认识的方法会报错,给 council:stop 带 seatId 却会被当成「结束整场」
+  on(CH.councilStopSeat, (_e, a: { councilId: string; seatId: string }) => {
+    const engine = councilOf(a.councilId)
+    const { seats, leader } = engine.state.config
+    if (![...seats, leader].some(s => s.id === a.seatId)) throw new Error('target-invalid')
+    // 席位恰好已经说完 / 这场已经结束是正常竞态,不报错
+    engine.stopSeat(a.seatId)
+  })
   on(CH.councilInterject, (_e, a: { councilId: string; text: string }) => {
     // via 同 chat:send:由这里按连接填,不信客户端自报;本机不填
     const via = _e?.client && _e.client.id !== 'local' ? _e.client.label : undefined
@@ -1358,6 +1380,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   })
   on(CH.sessionClose, (_e, a: { workspacePath: string; sessionId: string }) => {
     const file = closeSession(a.workspacePath, a.sessionId)
+    // 关掉 = 从列表里删掉,回不来:它留在后台的进程一起收掉(切走不算,切走它照常跑,回复照常落盘)。
+    if (!file.sessions.some(s => s.id === a.sessionId)) chatQueue.stopBackground(a.workspacePath, a.sessionId)
     broadcastSessions(a.workspacePath, file)
     return sessionsOut(a.workspacePath, file)
   })

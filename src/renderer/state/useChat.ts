@@ -24,6 +24,8 @@ export interface ChatApi {
   busy: boolean
   queue: ChatQueueItem[]
   running: { id: string; text: string } | null
+  /** 这个会话留在后台还在跑的任务数(这一轮已经结束)。 */
+  backgroundTasks: number
   send: (payload: Omit<ChatSendPayload, 'workspacePath' | 'sessionId'>) => void
   // answers/response 只在「请回答」的门(claude AskUserQuestion)上出现,它们就是用户选的选项 / 自己写的
   // 答案,必须一路带回 provider —— 光 decision:'allow' 等于没回答。
@@ -89,6 +91,7 @@ export function useChat(
   const [plans, setPlans] = useState<PlanReq[]>([])
   const [busy, setBusy] = useState(false)
   const [queue, setQueue] = useState<ChatQueueItem[]>([])
+  const [backgroundTasks, setBackgroundTasks] = useState(0)
   const [running, setRunning] = useState<{ id: string; text: string } | null>(null)
   const api = useRef(window.forge)
   /**
@@ -141,8 +144,8 @@ export function useChat(
   useEffect(() => {
     // asks 一直漏在重置之外 —— 换会话后上一个会话的提问卡还挂在新会话里(卡片本身按 workspace+session
     // 过滤事件,但已经进了 state 的那张不会自己走)。和 confirms 一起清。
-    if (!workspacePath || !sessionId) { setMessages([]); setConfirms([]); setAsks([]); setPlans([]); setBusy(false); setQueue([]); setRunning(null); setHistoryLoading(false); return }
-    setMessages([]); setStreamingIds(new Set()); setConfirms([]); setAsks([]); setPlans([]); setBusy(false); setQueue([]); setRunning(null)
+    if (!workspacePath || !sessionId) { setMessages([]); setConfirms([]); setAsks([]); setPlans([]); setBusy(false); setQueue([]); setRunning(null); setBackgroundTasks(0); setHistoryLoading(false); return }
+    setMessages([]); setStreamingIds(new Set()); setConfirms([]); setAsks([]); setPlans([]); setBusy(false); setQueue([]); setRunning(null); setBackgroundTasks(0)
     // ★★★进会话到历史回来之间,这一屏是**空的**。本机那个 RPC 几乎瞬时,所以一直没人注意到;
     //  走中转时同一个往返被放大成两秒,于是用户看到「点进去先是空白,过两秒才有内容」
     //  (2026-09-17 真机:另一台电脑连过来时)。空白和「这个会话本来就没消息」长得一模一样 ——
@@ -178,6 +181,7 @@ export function useChat(
       setQueue(e.queue.filter(q => q.sessionId === sid).map(q => ({ id: q.id, text: q.text, source: q.source })))
       const mine = e.runningTurns.find(r => r.sessionId === sid)
       setRunning(mine ? { id: mine.id, text: mine.text } : null)
+      setBackgroundTasks(e.backgroundTasks?.[sid] ?? 0)
     })
     // ★★大段工具输出**不跟着历史下发**,点开那张工具卡时再单独取(见 chat/toolOutput.ts)。
     //  用户 2026-10-03 报「点开会话都要加载一下」,剖了那个 1.2MB 的真会话:90% 的字节是
@@ -214,6 +218,7 @@ export function useChat(
       setQueue(e.queue.filter(q => q.sessionId === sid).map(q => ({ id: q.id, text: q.text, source: q.source })))
       const mine = e.runningTurns.find(r => r.sessionId === sid)
       setRunning(mine ? { id: mine.id, text: mine.text } : null)
+      setBackgroundTasks(e.backgroundTasks?.[sid] ?? 0)
     })
     return () => { off() }
   }, [workspacePath, sessionId])
@@ -414,5 +419,5 @@ export function useChat(
     void api.current.chatStop({ workspacePath, sessionId })
   }, [workspacePath, sessionId])
 
-  return { messages, streamingIds, historyLoading, confirms, asks, plans, busy, queue, running, send, resolveConfirm, resolveAsk, resolvePlan, cancelQueued, clearQueue, stop }
+  return { messages, streamingIds, historyLoading, confirms, asks, plans, busy, queue, running, backgroundTasks, send, resolveConfirm, resolveAsk, resolvePlan, cancelQueued, clearQueue, stop }
 }

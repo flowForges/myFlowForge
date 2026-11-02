@@ -22,6 +22,20 @@ export function userMessageLine(prompt: string): string {
   })
 }
 
+// 活进程上现场改模型 / 权限档(实测 2.1.312,一轮之间和后台任务在跑时都立刻生效;下一轮的 system/init 已是新值)。
+// ★set_permission_mode 切 bypassPermissions 只在进程本来就带它启动时才行,否则回 error(bypass_not_launched)。
+export function setModelLine(requestId: string, model: string): string {
+  return JSON.stringify({ type: 'control_request', request_id: requestId, request: { subtype: 'set_model', model } })
+}
+export function setPermissionModeLine(requestId: string, mode: string): string {
+  return JSON.stringify({ type: 'control_request', request_id: requestId, request: { subtype: 'set_permission_mode', mode } })
+}
+export function parseControlResponse(obj: any): { requestId: string; error: string | null } | null {
+  const r = obj?.type === 'control_response' ? obj.response : null
+  if (typeof r?.request_id !== 'string') return null
+  return { requestId: r.request_id, error: r.subtype === 'error' ? String(r.error ?? 'error') : null }
+}
+
 export interface CanUseTool {
   requestId: string; toolName: string; input: any; toolUseId?: string; agentId?: string
   // The CLI sets requires_user_interaction on tools that are a QUESTION for the human rather than an

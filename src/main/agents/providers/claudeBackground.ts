@@ -22,7 +22,8 @@
  * 老版本 CLI 不发这些事件 → 什么都没记录 → result 立即收尾,和原来的行为一模一样。
  */
 
-/** 停车后后台任务已经全部结束、但 CLI 还没起新一轮时,最多再等多久。实测新一轮在通知后 ~0.2s 内开始。 */
+/** 停车后后台任务已经全部结束、但 CLI 还没起新一轮时,最多再等多久。实测新一轮在通知后 ~0.2s 内开始。
+ *  ★这也是空转进程的上限:后台任务还在跑时没有任何墙钟上限,跑完了没动静才回收。 */
 export const BG_GRACE_MS = 15_000
 
 /** 后台启动回执的开头(2.1.285 原文:「Async agent launched successfully. (This tool result is internal metadata …」)。 */
@@ -68,6 +69,8 @@ export interface BackgroundGate {
   readonly parked: boolean
   /** 还在跑的后台任务数。 */
   readonly running: number
+  /** 下一条用户消息要接到这个进程上了:解除停车、撤掉回收计时,这一轮的 result 再重新判。 */
+  unpark(): void
   clear(): void
 }
 
@@ -96,9 +99,10 @@ export function makeBackgroundGate(opts: {
     opts.onFinish()
   }
   // 停车期间:后台活全干完了还没起新一轮 → 起宽限计时;又有活了 → 撤掉。
+  // ★通知没被带走也一样计时:实测新一轮 ~0.2s 就起,一直不起就是 CLI 不打算再说话,不能让进程永远空转。
   const reviewGrace = () => {
     if (!parked) return
-    if (running.size === 0 && undelivered.size === 0) { if (!grace) grace = setTimeout(finish, graceMs) }
+    if (running.size === 0) { if (!grace) grace = setTimeout(finish, graceMs) }
     else cancelGrace()
   }
 
@@ -159,6 +163,7 @@ export function makeBackgroundGate(opts: {
     isBackgroundLaunch: (id, text) => bgToolUseIds.has(id) || (typeof text === 'string' && LAUNCH_RECEIPT.test(text)),
     get parked() { return parked },
     get running() { return running.size },
+    unpark() { if (!finished) { parked = false; cancelGrace() } },
     clear() { finished = true; parked = false; cancelGrace() },
   }
 }
