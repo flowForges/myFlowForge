@@ -384,6 +384,11 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     const bumpWatermark = () => { if (provider.chat && !deps.discard?.()) writeWatermark(ws, sid, payload.agent, readMessages(ws, sid).length) }
     const finishOk = (elapsed?: number): ChatMessage => {
       closeAnswers()
+      if (deps.adopt && !text.trim() && !tools.size && !subagents.size) {
+        clearLive(ws, sid, aid)
+        emit({ workspacePath: ws, sessionId: sid, type: 'assistant-dropped', id: aid })
+        return { id: aid, who: 'ai', text: '', model: label, provider: payload.agent, ts: now() }
+      }
       // Fold in skills the agent explicitly NAMED in its reply (home/plugin skills the workspace scan +
       // path-regex miss, e.g. superpowers/brainstorming) so the context panel reflects what it used.
       context = mergeAgentContext(context, { skills: mentionedSkills(text + '\n' + think, cachedInstalledSkills()), rules: [], mcps: [] })

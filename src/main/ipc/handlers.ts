@@ -5,7 +5,7 @@ import { capToolOutput, capToolOutputs, readCap } from '../chat/toolOutputCap'
 import { createTerminalService, type TerminalService } from '../terminal/terminalService'
 import type { HostCapabilities } from '../host/capabilities'
 import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, readHookLibrary, writeHookLibrary, readCustomStages, upsertCustomStage, deleteCustomStage, upsertProject, setProjectDefaultBranch, setProjectAlias, registerWorkspace, unregisterWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setStageModel, isFullAccessAcked, ackFullAccess } from '../config/store'
-import { providerSupportsPermissions, providerEnforcesReadonly, providerUsesCommandShim, permissionAppliesMidRun, permissionModeLabel, DEFAULT_PERMISSION_MODE } from '@shared/permissions'
+import { providerSupportsPermissions, providerEnforcesReadonly, providerUsesCommandShim, permissionAppliesMidRun, permissionModeLabel, stricterPermissionMode, DEFAULT_PERMISSION_MODE } from '@shared/permissions'
 import { acpKnownUnavailable, withAcpAvailability } from '../agents/acp/acpAvailability'
 import { isAcpUnavailable } from '../agents/acp/acpChat'
 import { browserPermissionConflict, providerSupportsBrowserUse, DEFAULT_BROWSER_USE, BROWSER_TOOL_PREFIX } from '@shared/browserUse'
@@ -890,7 +890,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // provider —— 对它们说「下一条消息生效」是骗人的,它永远不生效(picker 上已经标了"不支持")。
     const running = chatQueue.runningProvider(wsPath, sessionId)
     const runningAcpDown = !!running && acpKnownUnavailable(providers[running]?.bin)
-    if (running && providerSupportsPermissions(running, runningAcpDown) && !permissionAppliesMidRun(running, mode, runningAcpDown, chatQueue.runningPermissionMode(wsPath, sessionId), readSettings().codexTransport === 'app-server')) {
+    if (running && !providers[running]?.setChatPermission && providerSupportsPermissions(running, runningAcpDown) && !permissionAppliesMidRun(running, mode, runningAcpDown, chatQueue.runningPermissionMode(wsPath, sessionId), readSettings().codexTransport === 'app-server')) {
       const who = providers[running]?.displayName ?? running
       emitNote(wsPath, sessionId,
         `🛡 已切到「${permissionModeLabel(mode)}」· ${who} 不支持运行中改档，当前这一轮仍按「${permissionModeLabel(prev)}」跑完，下一条消息才生效。`)
@@ -916,6 +916,12 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   const runDelegate = makeRunDelegate({ providers, proxy: () => readSettings().agentProxy, mcpEntry, readWorkspace })
   const sealedWorkspaces = new Set<string>()
   const runTurn = async (payload: ChatSendPayload) => {
+    // ★排队的消息带的是发送那一刻的档:排队期间用户切严了,不能拿旧档把它放回去(活进程上刚切好的只读会被这条消息撤销)。
+    //  取更严的而不是直接用落盘的:工作流阶段有自己的档,可能比会话的更严。没带档的载荷(机器人 / 宠物)只在切到只读时才补上。
+    //  下面的发车检查(浏览器冲突、完全访问授权)仍按载荷原样判,这里只决定进程实际跑在哪一档。
+    const storedMode = getSession(payload.workspacePath, payload.sessionId)?.permissionMode
+    const effectiveMode = storedMode ? stricterPermissionMode(payload.permissionMode ?? DEFAULT_PERMISSION_MODE, storedMode) : payload.permissionMode
+    const turnPayload = effectiveMode === (payload.permissionMode ?? DEFAULT_PERMISSION_MODE) || effectiveMode === payload.permissionMode ? payload : { ...payload, permissionMode: effectiveMode }
     removeWorkspaceSkill(payload.workspacePath)   // pure chat (P5 T1): forge-workflow skill has no reader anymore
     // ★★设计 §4.3「Forge 拒绝『完全访问』+『每次询问』」必须守在**发车的地方**,不能只靠 Composer:
     //  工作流阶段起手一轮、机器人桥、宠物窗这三条路都带着会话的 browserUse,却一条都不经过 Composer ——
@@ -1163,9 +1169,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       openTurn: (attach, isCurrent) => {
         // 会话已经删了:回复没地方放,后台活也没人要了。
         if (!getSession(payload.workspacePath, payload.sessionId)) { chatQueue.stopBackground(payload.workspacePath, payload.sessionId); return }
-        // ★CLI 自己那一轮卡在主代理的门上时,用户排着的消息就发不出去:用户已经往下说了,这道门直接拒。
+        // ★CLI 自己那一轮卡在门上时(主代理或它的前台子代理),用户排着的消息就发不出去:用户已经往下说了,这道门直接拒。
         const adoptedConfirm = (req: Parameters<typeof toolConfirm>[0]) =>
-          !req.agentId && chatQueue.hasQueued(payload.workspacePath, payload.sessionId) ? Promise.resolve<ConfirmDecision>('deny') : toolConfirm(req)
+          chatQueue.hasQueued(payload.workspacePath, payload.sessionId) ? Promise.resolve<ConfirmDecision>('deny') : toolConfirm(req)
         chatQueue.adoptTurn(payload.workspacePath, payload.sessionId, payload.agent, async () => {
           if (!isCurrent()) return   // 排队期间已经被用户消息接走了:什么都不开,不占泳道
           await sendTurn({ ...payload, text: '', attachments: [] }, { provider, env, emit: chatEmit, confirm: adoptedConfirm, onSessionStart, background, adopt: attach, discard: discardTurn })
@@ -1174,13 +1180,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       },
     }
     try {
-      const msg = await sendTurn(payload, {
+      const msg = await sendTurn(turnPayload, {
         provider,
         env,
         emit: chatEmit,
         confirm: toolConfirm,
         onSessionStart,
         background,
+        discard: () => sealedWorkspaces.has(payload.workspacePath),
         // ★★ACP 握手没成、要回落到 run()(没门、全放行)的那一刻,补上面那道「完全访问」授权 —— 首轮
         //  ACP 状态未知时按「有门」放过了预授权门,不补的话老版本 CLI 会不经同意就以完全访问跑。
         beforeFallback: ensureFullAccess,

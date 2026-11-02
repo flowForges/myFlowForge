@@ -462,6 +462,8 @@ export type ChatEvent = { workspacePath: string; sessionId: string } & (
   | { type: 'phase'; id: string; phase: TurnPhase }
   // 已经收尾的那条消息上,后台子代理的卡片跑完了。和 subagent 不同:那条消息不会因此变回「流式中」。
   | { type: 'subagent-settled'; id: string; sub: SubagentCard }
+  // CLI 自己起的那一轮到头什么都没产出:这条在途消息撤掉,不留空气泡,也不落盘。
+  | { type: 'assistant-dropped'; id: string }
   // questions 非空 = 这不是「批准执行」而是「请回答」(claude AskUserQuestion),渲染成可点的选项卡片。
   | { type: 'confirm-request'; id: string; title: string; where?: string; questions?: AskQuestion[] }
   | { type: 'confirm-resolved'; id: string }

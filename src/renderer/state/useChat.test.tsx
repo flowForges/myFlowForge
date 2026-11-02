@@ -49,6 +49,16 @@ describe('useChat', () => {
     expect(result.current.messages.map(m => m.id)).toEqual(['h1', 'u1', 'a1'])
   })
 
+  it('assistant-dropped 撤掉在途消息', async () => {
+    const { result } = renderHook(() => useChat('/ws', 's1'))
+    await waitFor(() => expect(result.current.messages).toHaveLength(1))
+    act(() => { handler!({ workspacePath: '/ws', sessionId: 's1', type: 'assistant-start', id: 'a8', model: 'm' }) })
+    await waitFor(() => expect(result.current.messages.some(m => m.id === 'a8')).toBe(true))
+    act(() => { handler!({ workspacePath: '/ws', sessionId: 's1', type: 'assistant-dropped', id: 'a8' }) })
+    await waitFor(() => expect(result.current.messages.some(m => m.id === 'a8')).toBe(false))
+    expect(result.current.streamingIds.has('a8')).toBe(false)
+  })
+
   it('#11 subagent-settled 更新已收尾消息上的卡片,但不把它变回流式', async () => {
     const { result } = renderHook(() => useChat('/ws', 's1'))
     await waitFor(() => expect(result.current.messages).toHaveLength(1))

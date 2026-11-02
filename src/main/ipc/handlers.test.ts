@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { mkdtempSync, rmSync, writeFileSync, chmodSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { CH } from './channels'
 import { fakeHost } from '../host/fakeHost'
 import { tableCalls } from './testTable'
@@ -190,6 +193,89 @@ afterEach(() => {
   REREAD_SETTINGS.termProxy = originalTermProxy
 })
 
+describe('排队的消息和活进程上切的权限档(假 CLI + 真 provider)', () => {
+  const tick = (ms = 0) => new Promise(r => setTimeout(r, ms))
+  it('★排队时是完全访问,排队期间切只读:这条消息按只读跑,活进程不被切回去', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'h-queued-'))
+    try {
+      const cli = join(dir, 'fake.js')
+      const sys = (subtype: string, extra: object = {}) => ({ type: 'system', subtype, session_id: 'native-1', ...extra })
+      const firstTurn = [
+        [0, sys('init')], [0, sys('status', { status: 'requesting' })],
+        [10, sys('background_tasks_changed', { tasks: [{ task_id: 'b1' }] })], [10, sys('task_started', { task_id: 'b1', tool_use_id: 't', is_backgrounded: true })],
+        [20, { type: 'stream_event', session_id: 'native-1', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'one' } } }],
+        [1200, { type: 'result', subtype: 'success', is_error: false, result: 'one', num_turns: 1, session_id: 'native-1' }],
+      ]
+      const secondTurn = [[0, sys('init')], [10, { type: 'stream_event', session_id: 'native-1', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'two' } } }], [20, { type: 'result', subtype: 'success', is_error: false, result: 'two', num_turns: 1, session_id: 'native-1' }]]
+      writeFileSync(cli, `#!/usr/bin/env node
+const fs = require('fs')
+const log = (s) => fs.appendFileSync(${JSON.stringify(join(dir, 'log'))}, s + '\\n')
+log('argv ' + process.argv.slice(2).join(' '))
+const script = ${JSON.stringify([firstTurn, secondTurn])}
+let n = 0, buf = ''
+process.on('SIGTERM', () => process.exit(143))
+process.stdin.on('data', (b) => {
+  buf += b
+  let i
+  while ((i = buf.indexOf('\\n')) >= 0) {
+    const m = JSON.parse(buf.slice(0, i)); buf = buf.slice(i + 1)
+    if (m.type === 'control_request' && m.request.subtype !== 'initialize') {
+      log('ctl ' + (m.request.mode ?? m.request.model))
+      process.stdout.write(JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: {} } }) + '\\n')
+    }
+    if (m.type === 'user') { log('user ' + m.message.content[0].text); for (const [at, o] of script[n++] ?? []) setTimeout(() => process.stdout.write(JSON.stringify(o) + '\\n'), at) }
+  }
+})
+setInterval(() => {}, 1000)
+`)
+      chmodSync(cli, 0o755)
+      const { makeClaudeProvider } = await vi.importActual<typeof import('../agents/providers/claude')>('../agents/providers/claude')
+      const provider = makeClaudeProvider({ bin: cli, defaultModels: [] })
+      const { registerIpc } = await import('./handlers')
+      const { sendTurn } = await import('../chat/chatService') as any
+      const { getSession } = await import('../chat/sessionStore') as any
+      let stored: string = 'full'
+      getSession.mockImplementation((_ws: string, id: string) => ({ id, title: 't', mode: 'chat', createdAt: 0, permissionMode: stored }))
+      const tasks: any[] = []
+      const sessions: any[] = []
+      // chatService 在这个文件里是假的:只留下真正决定进程怎么跑的那几步,把 payload 原样交给真 provider。
+      sendTurn.mockReset().mockImplementation((p: any, d: any) => new Promise((resolve) => {
+        const task = { id: p.text, prompt: p.text, model: p.model, cwd: p.workspacePath, sessionId: p.text === 'first' ? undefined : 'native-1', permissionMode: p.permissionMode, background: d.background }
+        tasks.push(task)
+        const s = d.provider.chat(task, { onSession: () => {}, onAssistantDelta: () => {}, onThinkDelta: () => {}, onDone: () => resolve({}), onError: () => resolve({}) }, d.env)
+        sessions.push(s)
+      }))
+      const calls = tableCalls(registerIpc(() => {}, { claude: provider } as any, fakeHost()))
+      const call = (ch: string, ...a: unknown[]) => calls.find((c: any[]) => c[0] === ch)![1]({}, ...a)
+      const base = { workspacePath: dir, sessionId: 's1', agent: 'claude', agentLabel: 'C', model: 'opus-4.8', attachments: [], permissionMode: 'full' }
+      call(CH.chatSend, { ...base, text: 'first' })
+      await vi.waitFor(() => expect(readFileSync(join(dir, 'log'), 'utf8')).toContain('user first'), { timeout: 20_000 })
+      await tick(400)
+      call(CH.chatSend, { ...base, text: 'queued' })     // 排队,载荷写的还是 full
+      stored = 'readonly'
+      call(CH.sessionSetPermission, { workspacePath: dir, sessionId: 's1', mode: 'readonly' })
+      await vi.waitFor(() => expect(readFileSync(join(dir, 'log'), 'utf8')).toContain('user queued'), { timeout: 20_000 })
+      const log = readFileSync(join(dir, 'log'), 'utf8').trim().split('\n')
+      expect(log.filter(l => l.startsWith('ctl '))).toEqual(['ctl plan'])
+      expect(tasks[1].permissionMode).toBe('readonly')
+      expect(log.filter(l => l.startsWith('argv '))).toHaveLength(1)
+      // 没有活进程的那条路(下一条消息要新起进程)拿到的是同一个收严后的档。
+      for (const s of sessions) s.cancel()
+      await tick(300)
+      call(CH.chatSend, { ...base, text: 'fresh' })
+      await vi.waitFor(() => expect(tasks.some(t => t.id === 'fresh')).toBe(true), { timeout: 20_000 })
+      expect(tasks.find(t => t.id === 'fresh').permissionMode).toBe('readonly')
+      await vi.waitFor(() => expect(readFileSync(join(dir, 'log'), 'utf8')).toContain('--permission-mode plan'), { timeout: 20_000 })
+      for (const s of sessions) s.cancel()
+      await tick(200)
+    } finally {
+      const { getSession } = await import('../chat/sessionStore') as any
+      getSession.mockImplementation((_ws: string, id: string) => sessionFile1.sessions.find(s => s.id === id))
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5 })
+    }
+  }, 60_000)
+})
+
 describe('后台任务留下的进程(claude 那条路接到 IPC 的部分)', () => {
   const base = { workspacePath: '/ws/bg', sessionId: 's1', agent: 'claude', agentLabel: 'C', model: 'm', attachments: [] }
   const tick = () => new Promise(r => setTimeout(r, 0))
@@ -306,7 +392,6 @@ describe('后台任务留下的进程(claude 那条路接到 IPC 的部分)', ()
     const deps = await firstTurn(t)
     const stop = vi.fn()
     deps.background.onRunning(1, stop)
-    expect(deps.discard).toBeUndefined()
     let adopted: any
     t.sendTurn.mockImplementationOnce(async (_p: any, d: any) => { adopted = d; return {} })
     deps.background.openTurn(vi.fn(), () => true)

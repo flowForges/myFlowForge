@@ -296,6 +296,10 @@ export function useChat(
       else if (e.type === 'phase') {
         setMessages(m => upsertMsg(m, e.id, x => x.think ? { ...x, think: { ...x.think, label: phaseLabel(e.phase) } } : x))
       }
+      else if (e.type === 'assistant-dropped') {
+        setStreamingIds(s => { if (!s.has(e.id)) return s; const n = new Set(s); n.delete(e.id); return n })
+        setMessages(m => m.filter(x => x.id !== e.id))
+      }
       else if (e.type === 'subagent-settled') {
         setMessages(m => m.map(x => x.id === e.id ? { ...x, subagents: x.subagents?.map(s => s.id === e.sub.id ? e.sub : s) } : x))
       }

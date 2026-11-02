@@ -69,6 +69,8 @@ export interface BackgroundGate {
   readonly parked: boolean
   /** 还在跑的后台任务数。 */
   readonly running: number
+  /** 这个 id 是不是一个还在跑的后台任务。实测 2.1.312:后台子代理的 can_use_tool.agent_id 就是它的 task_id。 */
+  isRunningTask(id: string): boolean
   /** 下一条用户消息要接到这个进程上了:解除停车、撤掉回收计时,这一轮的 result 再重新判。 */
   unpark(): void
   clear(): void
@@ -163,6 +165,7 @@ export function makeBackgroundGate(opts: {
     isBackgroundLaunch: (id, text) => bgToolUseIds.has(id) || (typeof text === 'string' && LAUNCH_RECEIPT.test(text)),
     get parked() { return parked },
     get running() { return running.size },
+    isRunningTask: (id) => running.has(id),
     unpark() { if (!finished) { parked = false; cancelGrace() } },
     clear() { finished = true; parked = false; cancelGrace() },
   }

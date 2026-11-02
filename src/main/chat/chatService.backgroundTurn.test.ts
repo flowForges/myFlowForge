@@ -75,6 +75,22 @@ describe('sendTurn — 接上活进程自己起的一轮(deps.adopt)', () => {
     } finally { rmSync(ws, { recursive: true, force: true }) }
   })
 
+  it('阻断 #3 CLI 自己那一轮什么都没产出:撤掉在途消息,不落盘,不发 done', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'cs-bgturn-'))
+    try {
+      const provider = { id: 'claude', displayName: 'Claude Code', capabilities: {}, chat: vi.fn() } as unknown as AgentProvider
+      const events: ChatEvent[] = []
+      await sendTurn({ ...payload(ws), text: '' }, {
+        provider, env: {}, emit: (e) => events.push(e),
+        adopt: (cb: ChatCallbacks) => { cb.onThinkDelta('嗯'); setTimeout(() => cb.onDone({ elapsed: 0 }), 0); return { id: 'x', cancel() {}, done: Promise.resolve({ ok: true }) } },
+      })
+      expect(readMessages(ws, 's1')).toEqual([])
+      expect(readLive(ws, 's1')).toBeUndefined()
+      expect(events.map(e => e.type)).toContain('assistant-dropped')
+      expect(events.some(e => e.type === 'done')).toBe(false)
+    } finally { rmSync(ws, { recursive: true, force: true }) }
+  })
+
   it('#10 discard:工作区封存后不再落盘,界面照常收尾', async () => {
     const ws = mkdtempSync(join(tmpdir(), 'cs-bgturn-'))
     try {

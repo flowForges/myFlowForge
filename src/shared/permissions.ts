@@ -28,6 +28,12 @@ export const PERMISSION_MODES: PermissionModeSpec[] = [
 // Default matches the app's prior behaviour (workspace-scoped auto edits).
 export const DEFAULT_PERMISSION_MODE: PermissionMode = 'auto'
 
+/** 两档里更严的那个。排队的消息带的是发送那一刻的档,用户之后可能已经切严了。 */
+export function stricterPermissionMode(a: PermissionMode, b: PermissionMode): PermissionMode {
+  const rank: Record<PermissionMode, number> = { readonly: 0, auto: 1, full: 2 }
+  return rank[a] <= rank[b] ? a : b
+}
+
 export function permissionModeLabel(mode: PermissionMode): string {
   return PERMISSION_MODES.find(m => m.id === mode)?.label ?? mode
 }

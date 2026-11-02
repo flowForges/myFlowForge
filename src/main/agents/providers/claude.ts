@@ -498,6 +498,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       let autoActive = false
       let autoBuf: any[] = []
       let adoptionRequested = false
+      let autoTurn = false     // 这一轮是 CLI 自己起的,没有用户消息在等回复
       // 接管的代数:排着队的开消息请求发出之后,这一轮可能已经被用户消息接走了,那个请求就作废。
       let adoptGen = 0
       // 后台启动的子代理卡片 → 开它的那一轮的回调。完成通知可能隔了好几轮才到,得回到原来那条消息上。
@@ -588,7 +589,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         settled = false
         done = new Promise<AgentResult>((res) => { settle = (r) => { if (settled) return; settled = true; res(r) } })
         sawNotification = false; streamed = false; sawAssistant = false; sawTool = false; turnOk = null; resultError = ''
-        rawErr = ''; thinkBuf = ''; needSep = false
+        rawErr = ''; thinkBuf = ''; needSep = false; autoTurn = false
         subagentIds = new Set<string>()
         usage = makeTurnUsage()
         hooks = makeTurnHooks()
@@ -665,6 +666,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
           const held = autoBuf
           autoBuf = []; autoActive = false
           beginTurn(nextCb)
+          autoTurn = true
           const seq = turnSeq
           const turnDone = done
           appLog('info', 'claude', 'chat 后台任务完成后 CLI 自己起了一轮,开一条新回复')
@@ -694,11 +696,12 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         const stray = unhandledControlRequest(obj)
         if (stray) { try { child.stdin?.write(controlErrorLine(stray.requestId, `myFlowForge does not support control_request ${stray.subtype}`) + '\n') } catch { /* stdin gone */ } return }
         const cut = parseCanUseTool(obj)
-        // 带 agentId 的是后台子代理;不带的是 CLI 自己那一轮卡在主代理的工具上,算开口了,跟着那一轮走(见下面)。
-        if (cut && (cut.agentId || !background)) { await raiseBackgroundGate(cut); return }
+        // 后台子代理的门不属于任何一轮;其余的(主代理、它的前台子代理)是 CLI 自己那一轮卡住了,算开口,跟着那一轮走。
+        if (cut && (!background || (cut.agentId && bg.isRunningTask(cut.agentId)))) { await raiseBackgroundGate(cut); return }
         if (!background) { if (obj?.type === 'result') bg.result(); return }
         if (typeof obj?.parent_tool_use_id === 'string') return   // 后台子代理自己的事件,不算主代理开口
-        const hasContent = !!cut || parseChatStreamActions(obj).some(a => a.kind === 'assistant' || a.kind === 'think' || a.kind === 'tool' || a.kind === 'file' || a.kind === 'subagent-start')
+        // ★只想不说不算开口:想完返回一个空的成功 result 是常事,为它开一条空消息毫无意义。真开口时想的内容会一起回放。
+        const hasContent = !!cut || parseChatStreamActions(obj).some(a => a.kind === 'assistant' || a.kind === 'tool' || a.kind === 'file' || a.kind === 'subagent-start')
         const starts = obj?.type === 'system' && (obj.subtype === 'init' || (obj.subtype === 'status' && obj.status === 'requesting'))
         if (!autoActive && !starts && !hasContent) {
           if (obj?.type === 'result') bg.result()
@@ -708,7 +711,8 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         autoBuf.push(obj)
         if (obj?.type === 'result') {
           if (adoptionRequested) return
-          // 一个字都没说的一轮:不留空气泡,按 result 再判一次要不要留着进程。
+          // 报错的 result 要让人看见;一个字都没说的成功一轮不留空气泡,按 result 再判一次要不要留着进程。
+          if (obj.is_error === true) { clearAutoWatch(); requestAdoption(); return }
           autoActive = false; autoBuf = []; clearAutoWatch()
           bg.result()
           return
@@ -733,10 +737,10 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         }
         const cut = parseCanUseTool(obj)
         if (cut && browserBlocked && cut.toolName?.startsWith(BROWSER_TOOL_PREFIX)) { respond(cut, false); return }
-        // ★后台任务在跑时带 agentId 的门是后台子代理的:这一轮结束它还得等着,不能挂在这一轮身上被一起收掉。
-        if (cut?.agentId && bg.running > 0 && background?.onConfirm) { await raiseBackgroundGate(cut); return }
+        // ★后台子代理的门:这一轮结束它还得等着,不能挂在这一轮身上被一起收掉。前台子代理的门和主代理的一样卡着这一轮。
+        if (cut?.agentId && bg.isRunningTask(cut.agentId) && background?.onConfirm) { await raiseBackgroundGate(cut); return }
         // ★CLI 自己那一轮卡在门上,而用户消息正压着等它结束:用户已经往下说了,拒掉这道门让那一轮收尾,消息才发得出去。
-        if (cut && !cut.agentId && pendingLine && holdForAuto) {
+        if (cut && pendingLine && holdForAuto) {
           appLog('info', 'claude', `chat 拒掉 CLI 自己那一轮的门(${cut.toolName}):用户消息在等它结束`)
           respond(cut, false)
           return
@@ -861,7 +865,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         // ★只有主代理(和它正等着的前台子代理)的动静才算这一轮活着:后台子代理吵个不停时,卡死的这一轮也该报出来。
         const parent = typeof obj?.parent_tool_use_id === 'string' ? obj.parent_tool_use_id : null
         const backgroundNoise = (parent !== null && bg.isBackgroundLaunch(parent))
-          || (obj?.type === 'system' && (obj.subtype === 'task_started' || obj.subtype === 'task_updated' || obj.subtype === 'task_notification' || obj.subtype === 'background_tasks_changed'))
+          || (obj?.type === 'system' && (obj.subtype === 'task_started' || obj.subtype === 'task_progress' || obj.subtype === 'task_updated' || obj.subtype === 'task_notification' || obj.subtype === 'background_tasks_changed'))
         if (!backgroundNoise) wd.beat()
         bg.feed(obj)
         reportRunning(dying ? 0 : bg.running)
@@ -912,11 +916,18 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         flushThink()   // surface any trailing reasoning line that never got a closing newline
         if (errBuf.trim() && !isClaudeBenignStderr(errBuf.trim())) { cb.onStatus?.(errBuf.trim()) } errBuf = ''
         const elapsed = Math.round((Date.now() - start) / 1000)
+        // CLI 自己那一轮只想不说、成功结束:什么都没坏,没有要告诉用户的。
+        if (autoTurn && turnOk === true && !sawAssistant && !sawTool) {
+          cb.onDone({ elapsed })
+          return { ok: true, summary: '完成' }
+        }
         // No assistant text at all → surface a diagnostic instead of a silent blank bubble (and leave
         // a trail in the debug log, mirroring codex/opencode). Killed-for-silence gets the clearest note.
         if (!sawAssistant && !sawTool) {
           const clip = args.map(a => { const s = String(a); return s.length > 160 ? s.slice(0, 160) + `…(+${s.length - 160})` : s }).join(' ')
-          let diag = wd.firedFlag
+          // ★result 明明成功:143 是我们收尾时杀进程杀出来的,不是它的错,不能报成退出码。
+          let diag = turnOk === true ? 'claude 这一轮没有返回内容'
+            : wd.firedFlag
             ? 'claude 长时间无响应（240s 无任何输出）已终止 —— 可尝试拆分过长的输入或检查网络'
             : resultError ? `claude 报错:${resultError}`
             : rawErr.trim() ? `claude stderr:\n${rawErr.trim()}`

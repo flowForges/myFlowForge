@@ -314,7 +314,7 @@ describe('claude chat() — 后台任务完成后 CLI 自己起的一轮', () =>
   })
 
   it('没有这一轮时后台子代理要权限:走 background 的门,答案回给 CLI', async () => {
-    const gate = { type: 'control_request', request_id: 'g1', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'ls' }, tool_use_id: 't9', agent_id: 'sub1' } }
+    const gate = { type: 'control_request', request_id: 'g1', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'ls' }, tool_use_id: 't9', agent_id: 'b1' } }
     const provider = makeClaudeProvider({ bin: scripted('g', [[...lingeringTurn, { at: 100, obj: gate }]]), defaultModels: [] })
     const confirm = vi.fn(async () => 'allow' as const)
     const s1 = provider.chat!(task({ background: { onRunning: () => {}, openTurn: () => {}, onConfirm: confirm } }), collect().cb, process.env)
@@ -664,7 +664,7 @@ describe('claude chat() — 独立审查找到的问题(都走假 CLI + 真 prov
   })
 
   it('#7 这一轮还开着时后台子代理升的门走 background,不挂在这一轮身上', async () => {
-    const gate = { type: 'control_request', request_id: 'g1', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'ls' }, tool_use_id: 't9', agent_id: 'sub1' } }
+    const gate = { type: 'control_request', request_id: 'g1', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'ls' }, tool_use_id: 't9', agent_id: 'b1' } }
     const turn: Step[] = [...lingeringTurn.slice(0, 4), { at: 15, obj: gate }, ...lingeringTurn.slice(4).map(s => ({ ...s, at: s.at + 20 }))]
     const provider = makeClaudeProvider({ bin: scripted('r10', [turn]), defaultModels: [] })
     const bgConfirm = vi.fn(async () => 'allow' as const), one = collect()
@@ -774,5 +774,116 @@ describe('claude chat() — 独立审查找到的问题(都走假 CLI + 真 prov
     await waitIo(() => exitedProc('r16') && onExit.mock.calls.length > 0)
     expect(exitedProc('r16')).toBe(true)
     expect(onExit).toHaveBeenCalled()
+  })
+
+  it('阻断 #2 前台子代理卡住 CLI 自己那一轮,用户消息在等:拒掉门(任务数 0 和后台还在跑两种情况)', async () => {
+    const fgGate = { type: 'control_request', request_id: 'g5', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'x' }, tool_use_id: 't5', agent_id: 'fg-agent' } }
+    const follow: Step[] = [
+      { at: 100, obj: sys('init') }, { at: 100, obj: sys('status', { status: 'requesting' }) },
+      { at: 2_000, obj: fgGate },
+      { at: 2_300, obj: { ...result('FOLLOW'), ...origin } },
+    ]
+    for (const [tag, turn] of [['s1', [...lingeringTurn, ...taskDone(50), ...follow]], ['s2', [...lingeringTurn, ...follow]]] as const) {
+      const provider = makeClaudeProvider({ bin: scripted(tag, [[...turn], replyTurn('USER2')]), defaultModels: [] })
+      const bgConfirm = vi.fn(async () => 'allow' as const)
+      const background: ChatBackgroundHooks = { onRunning: () => {}, openTurn: () => {}, onConfirm: bgConfirm }
+      const s1 = provider.chat!(task({ background }), collect().cb, process.env)
+      lives.push(s1)
+      await settle(s1.done, 30_000)
+      await until(() => logLines(tag).filter(l => l === 'out init').length === 2)
+      await sleep(500)
+      const two = collect()
+      two.cb.onConfirm = vi.fn(async () => 'allow' as const)
+      const s2 = provider.chat!(task({ id: 'm2', prompt: 'USER2', sessionId: S, background }), two.cb, process.env)
+      lives.push(s2)
+      expect(await settle(s2.done, 30_000)).toMatchObject({ ok: true })
+      expect(logLines(tag)).toContain('answer deny')
+      expect(logLines(tag)).toContain('user USER2')
+      expect(two.cb.onConfirm).not.toHaveBeenCalled()
+      expect(bgConfirm).not.toHaveBeenCalled()
+      s2.cancel()
+    }
+  })
+
+  it('阻断 #2 真正的后台子代理的门:用户消息在等也不拒(它不卡这一轮)', async () => {
+    const bgGate = { type: 'control_request', request_id: 'g6', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'x' }, tool_use_id: 't6', agent_id: 'b1' } }
+    const follow: Step[] = [
+      { at: 100, obj: sys('init') }, { at: 100, obj: sys('status', { status: 'requesting' }) },
+      { at: 2_000, obj: bgGate },
+      { at: 2_300, obj: { ...result('FOLLOW'), ...origin } },
+    ]
+    const provider = makeClaudeProvider({ bin: scripted('s3', [[...lingeringTurn, ...follow], replyTurn('USER2')]), defaultModels: [] })
+    let answerGate: ((d: 'allow') => void) | null = null
+    const background: ChatBackgroundHooks = { onRunning: () => {}, openTurn: () => {}, onConfirm: () => new Promise((res) => { answerGate = res }) }
+    const s1 = provider.chat!(task({ background }), collect().cb, process.env)
+    lives.push(s1)
+    await settle(s1.done, 30_000)
+    await until(() => logLines('s3').filter(l => l === 'out init').length === 2)
+    await sleep(500)
+    const s2 = provider.chat!(task({ id: 'm2', prompt: 'USER2', sessionId: S, background }), collect().cb, process.env)
+    lives.push(s2)
+    expect(await settle(s2.done, 30_000)).toMatchObject({ ok: true })
+    expect(logLines('s3')).toContain('user USER2')
+    expect(logLines('s3')).not.toContain('answer deny')
+    expect(answerGate).not.toBeNull()
+    answerGate!('allow')
+    await until(() => logLines('s3').includes('answer allow'))
+  })
+
+  const thinkOnly = (at: number): Step[] => [
+    { at, obj: sys('init') }, { at, obj: sys('status', { status: 'requesting' }) },
+    { at: at + 10, obj: { type: 'stream_event', session_id: S, event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: '嗯\n' } } } },
+    { at: at + 20, obj: { ...result(''), ...origin } },
+  ]
+
+  it('阻断 #3 跟进轮只想不说、成功结束:没有错误、没有消息,进程照常回收', async () => {
+    const provider = makeClaudeProvider({ bin: scripted('s4', [[...lingeringTurn, ...taskDone(100), ...thinkOnly(110)]]), defaultModels: [] })
+    const bgh = hooks()
+    const s1 = provider.chat!(task({ background: bgh.h }), collect().cb, process.env)
+    lives.push(s1)
+    await settle(s1.done, 30_000)
+    await until(() => exitedProc('s4'))
+    expect(bgh.st.opened).toBe(0)
+    expect(bgh.follow.st.errors).toEqual([])
+  })
+
+  it('阻断 #3 已经开了消息的跟进轮(卡过门)最后没有文字、result 成功:不报错;还有后台任务时同样', async () => {
+    const mainGate = { type: 'control_request', request_id: 'g7', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: {}, tool_use_id: 't7' } }
+    const auto = (at: number): Step[] => [{ at, obj: sys('init') }, { at, obj: sys('status', { status: 'requesting' }) }, { at: at + 10, obj: mainGate }, { at: at + 40, obj: { ...result(''), ...origin } }]
+    for (const [tag, turn] of [['s5', [...lingeringTurn, ...taskDone(100), ...auto(110)]], ['s6', [...lingeringTurn, { at: 100, obj: sys('task_notification', { task_id: 'zz', status: 'completed' }) }, ...auto(110)]]] as const) {
+      const provider = makeClaudeProvider({ bin: scripted(tag, [[...turn]]), defaultModels: [] })
+      const bgh = hooks()
+      bgh.follow.cb.onConfirm = async () => 'deny'
+      const s1 = provider.chat!(task({ background: bgh.h }), collect().cb, process.env)
+      lives.push(s1)
+      await settle(s1.done, 30_000)
+      await until(() => bgh.st.opened === 1)
+      expect(await settle(bgh.st.session!.done, 30_000)).toMatchObject({ ok: true })
+      expect(bgh.follow.st.errors).toEqual([])
+      expect(bgh.follow.st.doneAt).toBeGreaterThan(0)
+      bgh.st.session!.cancel()
+    }
+  })
+
+  it('阻断 #3 用户自己那一轮 result 成功但没字:提示没有内容,不提退出码 143', async () => {
+    const provider = makeClaudeProvider({ bin: scripted('s7', [[{ at: 0, obj: sys('init') }, { at: 10, obj: result('') }]]), defaultModels: [] })
+    const one = collect()
+    const s1 = provider.chat!(task({ background: hooks().h }), one.cb, process.env)
+    lives.push(s1)
+    await settle(s1.done, 30_000)
+    expect(one.st.errors.join()).toContain('没有返回内容')
+    expect(one.st.errors.join()).not.toContain('143')
+  })
+
+  it('跟进轮的 result 报错、一个字没有:开消息把错误说出来,不吞掉', async () => {
+    const err = { type: 'result', subtype: 'error_during_execution', is_error: true, result: 'API Error: 529', num_turns: 1, session_id: S }
+    const provider = makeClaudeProvider({ bin: scripted('s8', [[...lingeringTurn, ...taskDone(100), { at: 110, obj: sys('init') }, { at: 120, obj: err }]]), defaultModels: [] })
+    const bgh = hooks()
+    const s1 = provider.chat!(task({ background: bgh.h }), collect().cb, process.env)
+    lives.push(s1)
+    await settle(s1.done, 30_000)
+    await until(() => bgh.follow.st.errors.length > 0)
+    expect(bgh.follow.st.errors.join()).toContain('API Error: 529')
+    bgh.st.session!.cancel()
   })
 })
