@@ -31,7 +31,7 @@ function ai(seat: CouncilSeat, round: number, stage: CouncilStage, text: string,
 }
 
 function controls(): CouncilControls {
-  return { pause: vi.fn(), resume: vi.fn(), stop: vi.fn(), followup: vi.fn(), choose: vi.fn(), interject: vi.fn() }
+  return { pause: vi.fn(), resume: vi.fn(), stop: vi.fn(), stopSeat: vi.fn(), followup: vi.fn(), choose: vi.fn(), interject: vi.fn() }
 }
 
 const finalMsg = ai(L, 2, 'final', '结论正文', {
@@ -115,8 +115,8 @@ describe('CouncilBlock', () => {
     const failed = ai(L, 1, 'failed', '')
     const ctl = renderBlock([topic, ai(A, 1, 'answer', 'a'), ai(B, 1, 'answer', 'b'), failed], state('paused'))
     fireEvent.click(screen.getByRole('button', { name: /👑/ }))
-    fireEvent.click(document.querySelector('.council-status [data-cprov="codex"]')!)
-    fireEvent.click(document.querySelector('.council-status [data-cmodel="gpt-6"]')!)
+    fireEvent.click(document.querySelector('.council-pop [data-cprov="codex"]')!)
+    fireEvent.click(document.querySelector('.council-pop [data-cmodel="gpt-6"]')!)
     fireEvent.click(screen.getByRole('button', { name: '继续' }))
     expect(ctl.resume).toHaveBeenCalledWith('c1', { id: 'leader:codex:gpt-6', provider: 'codex', model: 'gpt-6', label: 'Codex · GPT-6' })
   })
@@ -254,5 +254,85 @@ describe('CouncilBlock', () => {
   it('no follow-up input while running', () => {
     renderBlock([topic], state('running'))
     expect(document.querySelector('.council-followup')).toBeNull()
+  })
+
+  describe('per-seat stop', () => {
+    const stopOf = (sid: string) => document.querySelector(`.council-col [data-stop-seat="${sid}"]`)
+    const barStopOf = (sid: string) => document.querySelector(`.council-status [data-stop-seat="${sid}"]`)
+
+    it('only the seat running right now gets ■, in its cell and in the status bar; clicking stops just that seat', () => {
+      const running = ai(A, 1, 'answer', '')
+      const finished = ai(B, 1, 'answer', '说完了')
+      const ctl = renderBlock([topic, running, finished], state('running', { speaking: [A.id] }), [running.id])
+      expect(stopOf(A.id)).not.toBeNull()
+      expect(barStopOf(A.id)).not.toBeNull()
+      expect(stopOf(B.id)).toBeNull()
+      expect(barStopOf(B.id)).toBeNull()
+      expect(stopOf(A.id)!.textContent).toBe('■')
+      fireEvent.click(stopOf(A.id)!)
+      expect(ctl.stopSeat).toHaveBeenCalledTimes(1)
+      expect(ctl.stopSeat).toHaveBeenCalledWith('c1', A.id)
+      expect(ctl.stop).not.toHaveBeenCalled()
+    })
+
+    it('a running seat with no message yet (history reloaded mid-hang) can still be stopped from its placeholder', () => {
+      const ctl = renderBlock([topic], state('running', { speaking: [A.id] }))
+      expect(document.querySelector(`.council-cell.waiting[data-seat="${A.id}"] [data-stop-seat="${A.id}"]`)).not.toBeNull()
+      expect(document.querySelector(`.council-cell.waiting[data-seat="${B.id}"] [data-stop-seat]`)).toBeNull()
+      fireEvent.click(stopOf(A.id)!)
+      expect(ctl.stopSeat).toHaveBeenCalledWith('c1', A.id)
+    })
+
+    it('reachable from the status bar when the block is collapsed', () => {
+      const ctl = renderBlock([topic], state('running', { speaking: [A.id] }))
+      fireEvent.click(toggle())
+      expect(stopOf(A.id)).toBeNull()
+      fireEvent.click(barStopOf(A.id)!)
+      expect(ctl.stopSeat).toHaveBeenCalledWith('c1', A.id)
+    })
+
+    it('a running leader gets ■ too', () => {
+      const m = ai(L, 1, 'summary', '总结')
+      renderBlock([topic, ai(A, 1, 'answer', 'a'), ai(B, 1, 'answer', 'b'), m], state('running', { speaking: [L.id] }), [m.id])
+      expect(document.querySelector(`.council-leader-card [data-stop-seat="${L.id}"]`)).not.toBeNull()
+    })
+
+    it.each<[CouncilStatus]>([['paused'], ['finalizing'], ['done'], ['aborted']])('no ■ when %s, even if the snapshot still lists a speaker', (status) => {
+      const m = ai(A, 1, 'answer', '')
+      renderBlock([topic, m], state(status, { speaking: [A.id] }), [m.id])
+      expect(document.querySelector('[data-stop-seat]')).toBeNull()
+    })
+
+    it('a stopped seat with no output shows 已停止 instead of the failure mark, with no explanation', () => {
+      const m = ai(A, 1, 'failed', '', { council: { id: 'c1', seat: A.id, round: 1, stage: 'failed', stopped: true } })
+      renderBlock([topic, m, ai(B, 1, 'answer', 'b')], state('running'))
+      const cell = document.querySelector(`.council-cell.failed[data-seat="${A.id}"]`)!
+      expect(cell.querySelector('.council-stopped')!.textContent).toBe('已停止')
+      expect(cell.querySelector('.council-x')).toBeNull()
+    })
+
+    it('plain failures keep the ✕', () => {
+      renderBlock([topic, ai(A, 1, 'failed', ''), ai(B, 1, 'answer', 'b')], state('running'))
+      expect(document.querySelector(`.council-cell.failed[data-seat="${A.id}"] .council-x`)).not.toBeNull()
+    })
+
+    it('stopped partial output stays readable and is marked; a stopped half-vote shows no ✓/✕', () => {
+      const answer = ai(A, 1, 'answer', '写到一半', { council: { id: 'c1', seat: A.id, round: 1, stage: 'answer', stopped: true } })
+      const vote = ai(A, 1, 'consensus-vote', '同意,但', { council: { id: 'c1', seat: A.id, round: 1, stage: 'consensus-vote', stopped: true } })
+      renderBlock([topic, answer, vote], state('running'))
+      const cell = document.querySelector(`.council-cell[data-seat="${A.id}"][data-stage="answer"]`)!
+      expect(cell.textContent).toContain('写到一半')
+      expect(cell.querySelector('.council-stopped')).not.toBeNull()
+      const voteCell = document.querySelector(`.council-cell[data-seat="${A.id}"][data-stage="consensus-vote"]`)!
+      expect(voteCell.querySelector('.council-vote')).toBeNull()
+      expect(voteCell.querySelector('.council-stopped')).not.toBeNull()
+    })
+
+    it('a stopped leader: partial stays readable, and the pause offers another leader', () => {
+      const m = ai(L, 1, 'failed', '总结了一半', { council: { id: 'c1', seat: L.id, round: 1, stage: 'failed', stopped: true } })
+      renderBlock([topic, ai(A, 1, 'answer', 'a'), ai(B, 1, 'answer', 'b'), m], state('paused'))
+      expect(document.querySelector('.council-leader-card')!.textContent).toContain('总结了一半')
+      expect(screen.getByRole('button', { name: /👑/ })).toBeTruthy()
+    })
   })
 })

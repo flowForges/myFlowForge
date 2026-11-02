@@ -323,7 +323,7 @@ export function makeQoderProvider(spec: QoderSpec): AgentProvider {
         cb.onDone({ elapsed: Math.round((Date.now() - start) / 1000) })
         return { ok: r.ok, summary: r.ok ? '完成' : '失败' }
       }).catch((err) => { cb.onError(err instanceof Error ? err : new Error(String(err))); return { ok: false } })
-      return { id: task.id, cancel: () => { cancelled = true; activeChild?.kill('SIGTERM') }, done }
+      return { id: task.id, cancel: () => { cancelled = true; if (activeChild) killTree(activeChild) }, done }
     }
   }
 }

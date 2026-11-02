@@ -50,7 +50,14 @@ export type CouncilStage =
   | 'consensus-draft' | 'consensus-vote'
   | 'final' | 'followup' | 'interject' | 'failed'
 
-export type CouncilTag = { id: string; seat?: string; round?: number; stage: CouncilStage }
+export type CouncilTag = {
+  id: string; seat?: string; round?: number; stage: CouncilStage
+  /**
+   * 用户手动停掉了这位席位的这次发言。★可选字段,老客户端不认也能解析:
+   * 有半截输出 = 原阶段 + 半截正文(照常显示);没有输出(以及领导者)= stage 'failed'(老客户端显示失败标记)。
+   */
+  stopped?: boolean
+}
 
 export type CouncilCandidate = {
   name: string

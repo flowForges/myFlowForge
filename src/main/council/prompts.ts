@@ -11,7 +11,7 @@ const READONLY_RULE = '你处于只读讨论环境:不要修改、创建或删�
 export const COUNCIL_RESULT_FENCE = '```forge:council-result'
 
 export function labelLine(u: Utterance): string {
-  return `【${u.label}】\n${u.text}`
+  return `【${u.label}${u.stopped ? '(被用户中止,内容不完整)' : ''}】\n${u.text}`
 }
 
 function joinItems(items: Utterance[]): string {

@@ -19,7 +19,7 @@ function councilApi(status?: CouncilStatus, over: Partial<CouncilState> = {}): C
   const active = status ? ({ id: 'c1', status, ...over } as CouncilState) : undefined
   return {
     states: active ? [active] : [], active, lastConfig: null,
-    start: vi.fn(async () => {}), pause: vi.fn(), resume: vi.fn(), stop: vi.fn(),
+    start: vi.fn(async () => {}), pause: vi.fn(), resume: vi.fn(), stop: vi.fn(), stopSeat: vi.fn(),
     interject: vi.fn(), followup: vi.fn(), choose: vi.fn(),
     projects: vi.fn(async () => []),
   }
@@ -35,8 +35,8 @@ const toggle = () => screen.getByRole('button', { name: 'AI 共商' })
 
 function addSeat(provider: string, model: string) {
   fireEvent.click(screen.getByRole('button', { name: '添加讨论方' }))
-  fireEvent.click(document.querySelector(`.council-add [data-cprov="${provider}"]`)!)
-  fireEvent.click(document.querySelector(`.council-add [data-cmodel="${model}"]`)!)
+  fireEvent.click(document.querySelector(`.council-pop [data-cprov="${provider}"]`)!)
+  fireEvent.click(document.querySelector(`.council-pop [data-cmodel="${model}"]`)!)
 }
 
 describe('Composer · AI 共商', () => {

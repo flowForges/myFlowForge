@@ -16,6 +16,8 @@ export type CouncilApi = {
   /** newLeader:领导者失败暂停后换一位接着跑(§7.3)。 */
   resume(id: string, newLeader?: CouncilSeat): Promise<boolean>
   stop(id: string, mode: 'finalize' | 'abort'): Promise<boolean>
+  /** 只停一位席位的这次发言,这一轮接着跑。 */
+  stopSeat(id: string, seatId: string): Promise<boolean>
   interject(id: string, text: string): Promise<boolean>
   followup(id: string, q: string, target: 'all' | string): Promise<boolean>
   choose(id: string, name: string): Promise<boolean>
@@ -102,6 +104,7 @@ export function useCouncil(workspacePath?: string, sessionId?: string): CouncilA
   const resume = useCallback((id: string, newLeader?: CouncilSeat) =>
     settle(() => api.current.councilResume(newLeader ? { councilId: id, newLeader } : { councilId: id }), 'resume'), [])
   const stop = useCallback((id: string, mode: 'finalize' | 'abort') => settle(() => api.current.councilStop({ councilId: id, mode })), [])
+  const stopSeat = useCallback((id: string, seatId: string) => settle(() => api.current.councilStopSeat({ councilId: id, seatId })), [])
   const interject = useCallback((id: string, text: string) => settle(() => api.current.councilInterject({ councilId: id, text })), [])
   const followup = useCallback((id: string, q: string, target: 'all' | string) =>
     settle(() => api.current.councilFollowup({ councilId: id, question: q, target }), 'followup'), [])
@@ -114,5 +117,5 @@ export function useCouncil(workspacePath?: string, sessionId?: string): CouncilA
   // ★暂停的那场不挡新开的:有正在跑的就取正在跑的,否则才取暂停的那场
   const active = useMemo(() => states.find(s => HOLDING.has(s.status)) ?? states.find(s => s.status === 'paused'), [states])
 
-  return { states, active, lastConfig, start, pause, resume, stop, interject, followup, choose, projects }
+  return { states, active, lastConfig, start, pause, resume, stop, stopSeat, interject, followup, choose, projects }
 }

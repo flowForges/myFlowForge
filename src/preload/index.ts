@@ -163,6 +163,7 @@ const api = {
   councilPause: (a: { councilId: string }): Promise<void> => ipcRenderer.invoke(CH.councilPause, a),
   councilResume: (a: { councilId: string; newLeader?: CouncilSeat }): Promise<void> => ipcRenderer.invoke(CH.councilResume, a),
   councilStop: (a: { councilId: string; mode: 'finalize' | 'abort' }): Promise<void> => ipcRenderer.invoke(CH.councilStop, a),
+  councilStopSeat: (a: { councilId: string; seatId: string }): Promise<void> => ipcRenderer.invoke(CH.councilStopSeat, a),
   councilInterject: (a: { councilId: string; text: string }): Promise<void> => ipcRenderer.invoke(CH.councilInterject, a),
   councilFollowup: (a: { councilId: string; question: string; target: 'all' | string }): Promise<void> => ipcRenderer.invoke(CH.councilFollowup, a),
   councilChoose: (a: { councilId: string; candidate: string }): Promise<void> => ipcRenderer.invoke(CH.councilChoose, a),

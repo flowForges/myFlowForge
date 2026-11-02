@@ -27,6 +27,7 @@ beforeEach(() => {
     councilPause: vi.fn(async () => {}),
     councilResume: vi.fn(async () => {}),
     councilStop: vi.fn(async () => {}),
+    councilStopSeat: vi.fn(async () => {}),
     councilInterject: vi.fn(async () => {}),
     councilFollowup: vi.fn(async () => {}),
     councilChoose: vi.fn(async () => {}),
@@ -132,6 +133,7 @@ describe('useCouncil', () => {
       result.current.pause('c1')
       result.current.resume('c1')
       result.current.stop('c1', 'finalize')
+      result.current.stopSeat('c1', 'A')
       result.current.interject('c1', '补充一点')
       result.current.followup('c1', '再说说', 'A')
       result.current.choose('c1', '方案一')
@@ -139,6 +141,7 @@ describe('useCouncil', () => {
     expect(forge.councilPause).toHaveBeenCalledWith({ councilId: 'c1' })
     expect(forge.councilResume).toHaveBeenCalledWith({ councilId: 'c1' })
     expect(forge.councilStop).toHaveBeenCalledWith({ councilId: 'c1', mode: 'finalize' })
+    expect(forge.councilStopSeat).toHaveBeenCalledWith({ councilId: 'c1', seatId: 'A' })
     expect(forge.councilInterject).toHaveBeenCalledWith({ councilId: 'c1', text: '补充一点' })
     expect(forge.councilFollowup).toHaveBeenCalledWith({ councilId: 'c1', question: '再说说', target: 'A' })
     expect(forge.councilChoose).toHaveBeenCalledWith({ councilId: 'c1', candidate: '方案一' })

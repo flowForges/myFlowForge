@@ -52,9 +52,14 @@ export type EngineDeps = {
 const DROP_AFTER_FAILURES = 2
 /** 思考用时(秒,至少 1):从第一段思考到落盘。渲染端「思考」折叠块的秒数就是它。 */
 const thinkElapsed = (since: number, now: number) => Math.max(1, Math.round((now - since) / 1000))
+const isStopped = (r: Spoken) => !r.ok && r.stopped === true
 
-type Spoken = { ok: true; text: string } | { ok: false; cancelled: boolean }
-type Inflight = { cancelled: boolean; cancel(): void }
+type Spoken =
+  | { ok: true; text: string }
+  | { ok: false; cancelled: boolean; stopped?: false }
+  // 用户单独停掉了这位席位:不算失败(不进连续失败计数),也不是被「结束」取消(要落盘、不重跑);text = 已有的半截输出
+  | { ok: false; cancelled: false; stopped: true; text: string }
+type Inflight = { seat: string; cancelled: boolean; stopped: boolean; cancel(): void; stop(): void }
 type Shape = (text: string) => Pick<ChatMessage, 'text' | 'councilResult'>
 type SpeakOpts = {
   /** 拼在消息 id 后面(领导者的继续 / 重试、第几次追问),避免和已落盘的撞 id */
@@ -86,6 +91,8 @@ export class CouncilEngine {
   // ★共识的时间上限只算讨论真正在跑的时间:停着等用户(轮间 / 暂停)的时间累计在这里,判上限时扣掉
   private pausedMs = 0
   private pausedSince: number | null = null
+  // 本轮被用户单独停掉的次数,只用来判断「这一轮是被停空的」;不落盘
+  private roundStops = 0
   // app 退出时被挂起:正在收尾的这次 run 不能再推进游标或记账(见 suspend())
   private suspended = false
   // ★已经写进会话、却还没进 transcript 的发言(第 1 轮 / 投票是整批结束才记账;崩溃或挂起时整批作废),按消息 id 索引。
@@ -132,7 +139,9 @@ export class CouncilEngine {
     this.prepared = p.state.round > 0
     for (const m of this.deps.readMessages(this.ws, this.sid)) {
       if (m.who !== 'ai' || m.council?.id !== this.id) continue
-      this.replay.set(m.id, m.council.stage === 'failed' ? { ok: false, cancelled: false } : { ok: true, text: m.text })
+      // ★被停掉的发言带半截正文,不能当成正常发言重放(半张票会被算成票);也不能当成失败(会进连续失败计数)
+      this.replay.set(m.id, m.council.stopped ? { ok: false, cancelled: false, stopped: true, text: m.text }
+        : m.council.stage === 'failed' ? { ok: false, cancelled: false } : { ok: true, text: m.text })
     }
   }
 
@@ -227,6 +236,21 @@ export class CouncilEngine {
       return
     }
     this.cancelInflight()
+  }
+
+  /**
+   * 只停一位席位的这次发言:杀掉他的进程树,这一轮其他人照常,批次跑完照常进总结 / 投票。
+   * 只在 running 时生效,返回有没有真的停:席位已经自己说完(竞态)、重复点、暂停 / 取消 / 结束后都是空操作;
+   * 出最终结果时也不接(领导者的最后一步,界面上「结束」= abort 负责);追问不算一轮,不接。
+   * ★停的是这一次发言,不是这个人:不进连续失败计数,下一轮还叫他。
+   * 领导者同理可停,但他没有「下一位」可以接着:走领导者失败那条路 —— 不重试,暂停,可换人继续。
+   */
+  stopSeat(seatId: string): boolean {
+    if (this.st.status !== 'running') return false
+    const h = [...this.inflight].find(x => x.seat === seatId)
+    if (!h || h.cancelled || h.stopped) return false
+    h.stop()
+    return true
   }
 
   /**
@@ -413,14 +437,22 @@ export class CouncilEngine {
    */
   private endRound(): void {
     if (this.active().length <= 1) this.phase = 'final'
-    else if (this.cfg.mode.kind === 'consensus') this.phase = 'summary'
-    else this.phase = this.st.round >= this.cfg.mode.rounds ? 'final' : 'summary'
+    else if (this.cfg.mode.kind === 'rounds' && this.st.round >= this.cfg.mode.rounds) this.phase = 'final'
+    // ★这一轮被用户停空了(没有任何席位留下一个字):没东西可总结 / 投票,领导者只能编;直接停到轮间等用户
+    else if (this.stoppedEmpty()) this.nextRound(true)
+    else this.phase = 'summary'
+  }
+
+  private stoppedEmpty(): boolean {
+    return this.roundStops > 0
+      && !this.transcript.round(this.st.round).some(u => u.stage === 'answer' || u.stage === 'critique')
   }
 
   /** wait:不管「每轮结束后等我」开没开都停在轮间(共识模式全员同意 / 到防失控轮数时)。 */
   private nextRound(wait = false): void {
     this.st.round++
     this.spokenThisRound = []
+    this.roundStops = 0
     this.phase = 'critique'
     // ★「每轮结束后等我」:游标先进到下一轮再停 —— 等待期间的补充按当前轮次落进下一轮,下一轮的席位和总结都看得到。
     //  最后一轮之后没有总结、直接出结果,也就走不到这里。用户先点的暂停由这次停顿兑现。
@@ -451,7 +483,8 @@ export class CouncilEngine {
     // ★critiquePrompt 只留本轮及以后的发言;共识模式上一轮的不同意理由必须进本轮上下文(§5.2),把它们当本轮的带进去
     const delta = this.transcript.unseenFor(s.id).map(u =>
       (u.stage === 'consensus-vote' && u.round === round - 1 && parseVote(u.text) !== 'agree' ? { ...u, round } : u))
-    const resumed = this.deps.seatResumed(s.id)
+    // ★从没完整说完过的席位(第 1 轮就被停 / 失败)不算续上:被杀的那次提示词可能根本没送到,议题和附件要重带
+    const resumed = this.deps.seatResumed(s.id) && this.transcript.toJSON().items.some(u => u.seat === s.id && !u.stopped)
     // ★不同意的理由只有对着被否的那份草稿才看得懂(「第二点漏了回滚」—— 哪个第二点?),草稿单独成节、标明是领导者的
     const rejectedDraft = this.latestDraft(round - 1)
     const prompt = critiquePrompt(this.cfg, s, round, this.transcript.latestSummary(), delta, resumed, this.materials, rejectedDraft)
@@ -500,7 +533,9 @@ export class CouncilEngine {
     // 被「结束」取消的投票:主循环顶部会转去出结果,这里不判定
     if (this.stopMode) return
     if (this.active().length <= 1) { this.phase = 'final'; return }
-    const agreed = results.every(r => r.ok && parseVote(r.text) === 'agree')
+    // ★被停掉的席位算缺席,不算不同意;全员都被停不算同意
+    const votes = results.filter(r => !isStopped(r))
+    const agreed = votes.length > 0 && votes.every(r => r.ok && parseVote(r.text) === 'agree')
     this.nextRound(agreed || round % COUNCIL_CONSENSUS_SAFETY_ROUNDS === 0)
   }
 
@@ -573,8 +608,8 @@ export class CouncilEngine {
     // 领导者的提示词每次都重带议题,附件也每次都给
     const attachments = this.cfg.attachments
     const first = await this.speak(this.cfg.leader, round, stage, prompt, { suffix: tag, shape, attachments })
-    // 被「结束」取消的不重试
-    if (first.ok || first.cancelled) return first
+    // 被「结束」取消的不重试;用户亲手停掉的更不重试
+    if (first.ok || first.cancelled || first.stopped) return first
     // ★重试用不同的消息 id:第一次失败已经以 failed 消息落盘,不能和重试那条撞 id
     return this.speak(this.cfg.leader, round, stage, prompt, { suffix: `${tag}:retry`, shape, attachments })
   }
@@ -595,6 +630,7 @@ export class CouncilEngine {
     }
     let think = ''
     let thinkSince: number | null = null
+    let partial = ''
     let started = false
     const council = { id: this.id, seat: seat.id, round, stage }
     // ★runSeat 在超时/失败 settle 之后仍可能漏出回调;结果一到就关门,之后的一律丢弃
@@ -604,17 +640,23 @@ export class CouncilEngine {
     const run = this.deps.runSeat(this.id, seat, prompt, { ...this.deps.seatDeps, workspacePath: this.ws, sessionId: this.sid, cwd: this.cwd() }, {
       // ★每个流式事件都带 council:渲染端重拉历史会丢掉在途的共商发言,之后的增量要能把它重建回共商块里
       onStart: () => { if (!live) return; started = true; this.emit({ type: 'assistant-start', id, model: seat.label, council }) },
-      onDelta: (_m, t) => { if (!live) return; this.emit({ type: 'assistant-delta', id, text: t, council }) },
+      onDelta: (_m, t) => { if (!live) return; partial += t; this.emit({ type: 'assistant-delta', id, text: t, council }) },
       onThink: (_m, t) => { if (!live) return; think += t; thinkSince ??= this.deps.now(); this.emit({ type: 'think-delta', id, text: t, council }) },
-      onReplace: (_m, t) => { if (!live) return; this.emit({ type: 'assistant-replace', id, text: t, council }) },
+      onReplace: (_m, t) => { if (!live) return; partial = t; this.emit({ type: 'assistant-replace', id, text: t, council }) },
     }, attachments)
-    const handle: Inflight = { cancelled: false, cancel: () => { handle.cancelled = true; run.cancel() } }
+    const handle: Inflight = {
+      seat: seat.id, cancelled: false, stopped: false,
+      cancel: () => { handle.cancelled = true; run.cancel() },
+      stop: () => { handle.stopped = true; run.cancel() },
+    }
     this.inflight.add(handle)
     const r = await run.done
     this.inflight.delete(handle)
     live = false
     this.st.speaking = this.st.speaking.filter(x => x !== seat.id)
-    if (!r.ok && handle.cancelled) {
+    // ★r.ok 优先:席位在停止到达前已经自己说完了,就是正常发言
+    const stopped = !r.ok && handle.stopped
+    if (!r.ok && handle.cancelled && !stopped) {
       // ★已经广播过 assistant-start 的流必须有终结事件,否则全局的流式状态(宠物忙碌、streamingIds)永远不清;
       //  只广播不落盘 —— 被取消不算失败,不留 failed 消息
       if (started) this.emit({ type: 'error', id, error: 'cancelled' })
@@ -623,17 +665,21 @@ export class CouncilEngine {
     }
 
     const steps = think.split('\n').map(s => s.trim()).filter(Boolean)
+    const thought = steps.length ? { think: { label: '已思考', steps, ...(thinkSince !== null ? { elapsed: thinkElapsed(thinkSince, this.deps.now()) } : {}) } } : {}
     const base: ChatMessage = {
       id, who: 'ai', text: '', provider: seat.provider, model: seat.label,
       council: { id: this.id, seat: seat.id, round, stage: r.ok ? stage : 'failed' },
       ts: new Date(this.deps.now()).toISOString(),
     }
-    const msg: ChatMessage = r.ok
-      ? { ...base, ...(shape ? shape(r.text) : { text: r.text }), ...(steps.length ? { think: { label: '已思考', steps, ...(thinkSince !== null ? { elapsed: thinkElapsed(thinkSince, this.deps.now()) } : {}) } } : {}) }
-      : base
+    const kept = stopped && partial.trim() ? partial : ''
+    let msg: ChatMessage = base
+    if (r.ok) msg = { ...base, ...(shape ? shape(r.text) : { text: r.text }), ...thought }
+    // ★领导者的半截一律记 failed:他的总结 / 草稿不完整就不能算数,界面也靠 failed 给出「换领导者」
+    else if (stopped) msg = { ...base, text: kept, ...thought, council: { ...base.council!, stage: kept && seat.id !== this.cfg.leader.id ? stage : 'failed', stopped: true } }
     this.deps.append(this.ws, this.sid, msg)
     this.emit({ type: 'done', message: msg })
     this.changed()
+    if (stopped) return { ok: false, cancelled: false, stopped: true, text: kept }
     return r.ok ? { ok: true, text: r.text } : { ok: false, cancelled: false }
   }
 
@@ -648,6 +694,13 @@ export class CouncilEngine {
   /** 席位发言结果记进 transcript / 失败计数;连续失败到上限即本场除名。被取消的不算失败。 */
   private record(seat: CouncilSeat, round: number, stage: CouncilStage, r: Spoken): void {
     if (!r.ok && r.cancelled) return
+    if (!r.ok && r.stopped) {
+      this.roundStops++
+      // ★半截的票不进 transcript:parseVote 认不出来就成了「不同意的理由」。消息里还留着,人看得到
+      if (r.text && stage !== 'consensus-vote') this.transcript.add({ seat: seat.id, label: seat.label, round, stage, text: r.text, stopped: true })
+      this.changed()
+      return
+    }
     if (r.ok) {
       this.failures[seat.id] = 0
       this.transcript.add({ seat: seat.id, label: seat.label, round, stage, text: r.text })
