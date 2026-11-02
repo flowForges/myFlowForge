@@ -38,4 +38,9 @@ describe('SubagentCards', () => {
     const { container } = render(<SubagentCards subagents={[]} />)
     expect(container.firstChild).toBeNull()
   })
+
+  it('#11 后台子代理:消息已经收尾(不是 live)也继续显示运行中,直到完成通知改掉它', () => {
+    render(<SubagentCards subagents={[{ id: 'b', state: 'running', background: true, description: '后台调研' }]} />)
+    expect(screen.getByText('运行中')).toBeInTheDocument()
+  })
 })

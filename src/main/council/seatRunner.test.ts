@@ -53,6 +53,7 @@ describe('runSeat', () => {
     const r = await runSeat('c1', seat('a'), 'p', deps({ codex: provider }, { env: { PATH: '/bin', FORGE_SOCKET: 's', FORGE_AGENT_ID: 'x', FORGE_MCP_ENTRY: 'e' } }), noopCb()).done
     expect(r.ok).toBe(true)
     expect(cap.task!.permissionMode).toBe('readonly')
+    expect(cap.task!.endWithTurn).toBe(true)   // 席位没人看得见也没人停得了:一轮结束不留进程
     expect(cap.task!.model).toBe('m1')
     expect('beforeFallback' in cap.task!).toBe(false)
     expect(cap.env!.FORGE_SOCKET).toBeUndefined()

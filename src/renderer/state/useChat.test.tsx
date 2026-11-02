@@ -49,6 +49,15 @@ describe('useChat', () => {
     expect(result.current.messages.map(m => m.id)).toEqual(['h1', 'u1', 'a1'])
   })
 
+  it('#11 subagent-settled 更新已收尾消息上的卡片,但不把它变回流式', async () => {
+    const { result } = renderHook(() => useChat('/ws', 's1'))
+    await waitFor(() => expect(result.current.messages).toHaveLength(1))
+    act(() => { handler!({ workspacePath: '/ws', sessionId: 's1', type: 'done', message: { id: 'a7', who: 'ai', text: 'x', ts: '', subagents: [{ id: 'b', state: 'running', background: true }] } }) })
+    act(() => { handler!({ workspacePath: '/ws', sessionId: 's1', type: 'subagent-settled', id: 'a7', sub: { id: 'b', state: 'done', result: 'r' } }) })
+    await waitFor(() => expect(result.current.messages.find(m => m.id === 'a7')?.subagents?.[0].state).toBe('done'))
+    expect(result.current.streamingIds.has('a7')).toBe(false)
+  })
+
   it('joins a turn mid-flight: assembles delta/done even when assistant-start was missed', async () => {
     // The chat view mounted AFTER the turn began (e.g. a pet command sent while on the home view), so it
     // never saw assistant-start. delta/think/done must still create + fill the reply, not silently drop it.

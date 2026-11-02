@@ -234,4 +234,11 @@ describe('ChatQueue', () => {
     q.stop('/w')                                           // 工作区级停止(宠物)也算上
     expect(stopB).toHaveBeenCalledOnce()
   })
+
+  it('#13 listBackground 给更新前的检查:只算还有任务在跑的会话', () => {
+    const q = new ChatQueue(vi.fn(), () => {})
+    q.setBackground('/w', 'a', 2, () => {})
+    q.setBackground('/w', 'b', 0, () => {})
+    expect(q.listBackground()).toEqual([{ workspacePath: '/w', sessionId: 'a', count: 2 }])
+  })
 })

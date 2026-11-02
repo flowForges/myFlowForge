@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync, chmodSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { makeClaudeProvider } from './claude'
+import { makeClaudeProvider, chatSpawnSignature } from './claude'
 import { BG_GRACE_MS } from './claudeBackground'
 import { CHAT_STALL_KILL_MS } from '../idleWatchdog'
 import type { AgentSession, ChatBackgroundHooks, ChatCallbacks } from '../types'
@@ -152,7 +152,7 @@ const replyTurn = (text: string): Step[] => [
  * 假 claude(第 n 条用户消息吐 script[n])。记下一切可断言的:每次 spawn 的 argv、收到的每一行 stdin。
  * 控制请求按 ctl 回答,默认成功。bin 直接用它就能走真实的 buildClaudeChatArgs 分支。
  */
-function scripted(tag: string, script: Step[][], ctl: Record<string, string> = {}): string {
+function scripted(tag: string, script: Step[][], ctl: Record<string, string> = {}, onFirstCtl: Step[] = []): string {
   const cli = join(dir, `${tag}.js`)
   writeFileSync(cli, `#!/usr/bin/env node
 const fs = require('fs')
@@ -163,6 +163,7 @@ const out = (o) => { log('out ' + (o.type === 'result' ? 'result' : o.subtype ??
 process.on('SIGTERM', () => { fs.writeFileSync(base + '.exit', 'x'); process.exit(143) })
 const script = ${JSON.stringify(script)}
 const ctl = ${JSON.stringify(ctl)}
+let onFirstCtl = ${JSON.stringify(onFirstCtl)}
 let n = 0, buf = ''
 process.stdin.on('data', (b) => {
   buf += b
@@ -175,9 +176,14 @@ process.stdin.on('data', (b) => {
       if (st === 'initialize') continue
       log('ctl ' + st + ' ' + (m.request.model ?? m.request.mode))
       const key = st + ':' + (m.request.model ?? m.request.mode)
-      process.stdout.write(JSON.stringify({ type: 'control_response', response: ctl[key]
+      for (const s of onFirstCtl) setTimeout(() => out(s.obj), s.at)
+      onFirstCtl = []
+      if (ctl[key] === 'silent') continue
+      const reply = () => process.stdout.write(JSON.stringify({ type: 'control_response', response: ctl[key] && !ctl[key].startsWith('delay:')
         ? { subtype: 'error', request_id: m.request_id, error: ctl[key] }
         : { subtype: 'success', request_id: m.request_id, response: {} } }) + '\\n')
+      if (ctl[key]?.startsWith('delay:')) setTimeout(reply, Number(ctl[key].slice(6)))
+      else reply()
       continue
     }
     if (m.type === 'control_response') { log('answer ' + m.response.response?.behavior); continue }
@@ -201,7 +207,7 @@ function hooks() {
   const follow = collect()
   const st = { opened: 0, stop: null as null | (() => void), session: null as AgentSession | null }
   const h: ChatBackgroundHooks = {
-    onRunning: (n, stop) => { counts.push(n); st.stop = stop },
+    onRunning: (n, stop) => { if (counts[counts.length - 1] !== n) counts.push(n); st.stop = stop },
     openTurn: (attach) => { st.opened++; st.session = attach(follow.cb) },
   }
   return { h, counts, follow, st }
@@ -244,13 +250,14 @@ describe('claude chat() — 下一条消息接到活进程上', () => {
   })
 
   it('★CLI 自己那一轮还没开口时来了用户消息:压到它的 result 之后才写,不被吸进那一轮', async () => {
-    const script = [[...lingeringTurn, ...taskDone(300), ...autoTurn(310, 'FOLLOW', 500)], replyTurn('SECOND')]
+    const script = [[...lingeringTurn, ...taskDone(300), ...autoTurn(310, 'FOLLOW', 2_000)], replyTurn('SECOND')]
     const provider = makeClaudeProvider({ bin: scripted('c', script), defaultModels: [] })
     const bgh = hooks(), two = collect()
     const s1 = provider.chat!(task({ background: bgh.h }), collect().cb, process.env)
     lives.push(s1)
     await settle(s1.done, 30_000)
     await until(() => logLines('c').filter(l => l === 'out init').length === 2)
+    await sleep(500)                              // 假 CLI 写了不等于 provider 读到了:写进管道那一刻的竞争不是这里要测的
     const s2 = provider.chat!(task({ id: 'm2', prompt: '第二条', sessionId: S, background: bgh.h }), two.cb, process.env)
     lives.push(s2)
     expect(await settle(s2.done, 30_000)).toMatchObject({ ok: true })
@@ -485,7 +492,7 @@ describe('claude chat() — 下一条消息带着不一样的参数', () => {
     expect(await settle(s2.done, 30_000)).toMatchObject({ ok: true })
     expect(spawns('p')).toHaveLength(1)
     expect(exitedProc('p')).toBe(false)
-    expect(two.st.statuses.join()).toContain('浏览器开关')
+    expect(two.st.statuses.join()).toContain('新设置')
     expect(confirm).not.toHaveBeenCalled()
     expect(logLines('p')).toContain('answer deny')
   })
@@ -508,5 +515,264 @@ describe('claude chat() — 下一条消息带着不一样的参数', () => {
     expect(spawns('q')).toHaveLength(2)
     expect(spawns('q')[1].argv).toContain('--chrome')
     expect(spawns('q')[1].argv.slice(-2)).toEqual(['--resume', S])
+  })
+})
+
+describe('claude chat() — 独立审查找到的问题(都走假 CLI + 真 provider)', () => {
+  const waitIo = async (cond: () => boolean) => { const t = Date.now(); while (!cond() && Date.now() - t < 30_000) await new Promise(r => setImmediate(r)) }
+  const realSleep = async (ms: number) => { const t = Date.now(); while (Date.now() - t < ms) await new Promise(r => setImmediate(r)) }
+  const fakeClock = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  const parked = async (provider: ReturnType<typeof makeClaudeProvider>, over: object = {}) => {
+    const bgh = hooks()
+    const s1 = provider.chat!(task({ background: bgh.h, ...over }), collect().cb, process.env)
+    lives.push(s1)
+    await settle(s1.done, 30_000)
+    return bgh
+  }
+
+  it('#1 排队的开消息请求被用户消息抢先接走后作废:isCurrent=false,再调 attach 也不开新一轮', async () => {
+    const script = [[...lingeringTurn, ...taskDone(100), ...autoTurn(110, 'FOLLOW', 300)], replyTurn('SECOND')]
+    const provider = makeClaudeProvider({ bin: scripted('r1', script), defaultModels: [] })
+    let attach: Parameters<ChatBackgroundHooks['openTurn']>[0] | null = null
+    let isCurrent: () => boolean = () => true
+    const background: ChatBackgroundHooks = { onRunning: () => {}, openTurn: (a, c) => { attach = a; isCurrent = c } }
+    const s1 = provider.chat!(task({ background }), collect().cb, process.env)
+    lives.push(s1)
+    await settle(s1.done, 30_000)
+    await until(() => attach !== null)           // 跟进轮开口了,开消息请求在排队(泳道正被下面这条消息占着)
+    expect(isCurrent()).toBe(true)
+    const two = collect()
+    const s2 = provider.chat!(task({ id: 'm2', prompt: '第二条', sessionId: S, background }), two.cb, process.env)
+    lives.push(s2)
+    expect(await settle(s2.done, 30_000)).toMatchObject({ ok: true })
+    expect(two.st.text).toContain('FOLLOW')      // 那段话进了这条回复
+    expect(isCurrent()).toBe(false)
+    const stale = collect()
+    const s = attach!(stale.cb)
+    expect(await settle(s.done, 1_000)).toMatchObject({ ok: true })
+    expect(stale.st.text).toBe('')
+    // 进程没有被这个过期请求接走:下一条消息还能接上
+    expect(spawns('r1')).toHaveLength(1)
+  })
+
+  it('#2 攒的事件里已经有 result:消息要在回放时写出去,不能丢', async () => {
+    const script = [[...lingeringTurn, ...taskDone(100), ...autoTurn(110, 'FOLLOW')], replyTurn('SECOND')]
+    const provider = makeClaudeProvider({ bin: scripted('r2', script), defaultModels: [] })
+    let attach: unknown = null
+    const background: ChatBackgroundHooks = { onRunning: () => {}, openTurn: (a) => { attach = a } }
+    const s1 = provider.chat!(task({ background }), collect().cb, process.env)
+    lives.push(s1)
+    await settle(s1.done, 30_000)
+    await until(() => attach !== null)
+    await until(() => logLines('r2').filter(l => l === 'out result').length === 2)   // 跟进轮的 result 已经攒着了
+    const two = collect()
+    const s2 = provider.chat!(task({ id: 'm2', prompt: '第二条', sessionId: S, background }), two.cb, process.env)
+    lives.push(s2)
+    expect(await settle(s2.done, 30_000)).toMatchObject({ ok: true })
+    expect(logLines('r2')).toContain('user 第二条')
+    expect(two.st.text).toBe('FOLLOW\n\nSECOND')
+  })
+
+  it('#2 等控制回复期间来了 result:这一轮不收尾,消息照写', async () => {
+    const provider = makeClaudeProvider({ bin: scripted('r3', [lingeringTurn, replyTurn('SECOND')], { 'set_model:sonnet': 'delay:300' }, [{ at: 0, obj: result('stray') }]), defaultModels: [] })
+    const bgh = await parked(provider)
+    const two = collect()
+    const s2 = provider.chat!(task({ id: 'm2', prompt: '第二条', sessionId: S, model: 'sonnet-4.6', background: bgh.h }), two.cb, process.env)
+    lives.push(s2)
+    expect(await settle(s2.done, 30_000)).toMatchObject({ ok: true })
+    expect(logLines('r3')).toContain('user 第二条')
+    expect(two.st.text).toBe('SECOND')
+  })
+
+  it('#2 压着消息时 CLI 那一轮 30 分钟没动静:报错说没发出,后台任务不动', async () => {
+    const hung: Step[] = [...lingeringTurn, { at: 100, obj: sys('init') }, { at: 100, obj: sys('status', { status: 'requesting' }) }]
+    const provider = makeClaudeProvider({ bin: scripted('r4', [hung]), defaultModels: [] })
+    fakeClock()
+    const bgh = hooks()
+    const one = collect()
+    const s1 = provider.chat!(task({ background: bgh.h }), one.cb, process.env)
+    lives.push(s1)
+    await waitIo(() => one.st.doneAt > 0)
+    await waitIo(() => logLines('r4').filter(l => l === 'out init').length === 2)
+    await realSleep(100)
+    const two = collect()
+    const s2 = provider.chat!(task({ id: 'm2', prompt: '第二条', sessionId: S, background: bgh.h }), two.cb, process.env)
+    lives.push(s2)
+    await vi.advanceTimersByTimeAsync(240_000)
+    await vi.advanceTimersByTimeAsync(CHAT_STALL_KILL_MS + 1)
+    await waitIo(() => two.st.errors.length > 0)
+    expect(two.st.errors.join()).toContain('没有发出')
+    expect(two.st.doneAt).toBe(0)
+    expect(logLines('r4')).not.toContain('user 第二条')
+    expect(exitedProc('r4')).toBe(false)
+  })
+
+  it('#3 切严失败(完全访问→自动):不发,这一轮报错,后台不动', async () => {
+    const provider = makeClaudeProvider({ bin: scripted('r5', [lingeringTurn], { 'set_permission_mode:acceptEdits': 'nope' }), defaultModels: [] })
+    const bgh = await parked(provider, { permissionMode: 'full' })
+    const two = collect()
+    const s2 = provider.chat!(task({ id: 'm2', prompt: '改文件', sessionId: S, permissionMode: 'auto', background: bgh.h }), two.cb, process.env)
+    lives.push(s2)
+    expect(await settle(s2.done, 30_000)).toMatchObject({ ok: false })
+    expect(two.st.errors.join()).toContain('没有发出')
+    expect(logLines('r5')).not.toContain('user 改文件')
+    expect(exitedProc('r5')).toBe(false)
+  })
+
+  it('#3 切严一直没回复(超时)同样不发', async () => {
+    const provider = makeClaudeProvider({ bin: scripted('r6', [lingeringTurn], { 'set_permission_mode:acceptEdits': 'silent' }), defaultModels: [] })
+    const bgh = await parked(provider, { permissionMode: 'full' })
+    const two = collect()
+    const s2 = provider.chat!(task({ id: 'm2', prompt: '改文件', sessionId: S, permissionMode: 'auto', background: bgh.h }), two.cb, process.env)
+    lives.push(s2)
+    expect(await settle(s2.done, 30_000)).toMatchObject({ ok: false })
+    expect(logLines('r6')).not.toContain('user 改文件')
+  })
+
+  it('#4 只读→完全访问被拒(bypass_not_launched):退到 acceptEdits,说一声,消息照发', async () => {
+    const provider = makeClaudeProvider({ bin: scripted('r7', [lingeringTurn, replyTurn('OK')], { 'set_permission_mode:bypassPermissions': 'bypass_not_launched' }), defaultModels: [] })
+    const bgh = await parked(provider, { permissionMode: 'readonly' })
+    const two = collect()
+    const s2 = provider.chat!(task({ id: 'm2', sessionId: S, permissionMode: 'full', background: bgh.h }), two.cb, process.env)
+    lives.push(s2)
+    expect(await settle(s2.done, 30_000)).toMatchObject({ ok: true })
+    expect(logLines('r7')).toContain('ctl set_permission_mode acceptEdits')
+    expect(two.st.statuses.join()).toContain('自动')
+    expect(two.st.text).toBe('OK')
+  })
+
+  it('#5 不发消息只切档:活进程当场切;切严失败要返回说明;没有活进程就是 null', async () => {
+    const provider = makeClaudeProvider({ bin: scripted('r8', [lingeringTurn], { 'set_permission_mode:plan': 'nope' }), defaultModels: [] })
+    await parked(provider, { permissionMode: 'full' })
+    expect(await provider.setChatPermission!(dir, S, 'auto')).toBeNull()
+    expect(logLines('r8')).toContain('ctl set_permission_mode acceptEdits')
+    expect(await provider.setChatPermission!(dir, S, 'readonly')).toContain('只读')
+    expect(await provider.setChatPermission!(dir, 'no-such-session', 'readonly')).toBeNull()
+  })
+
+  it('#6 后台子代理吵个不停不算这一轮活着:卡死的这一轮照样报出来', async () => {
+    const noise = (at: number): Step => ({ at, obj: { type: 'assistant', session_id: S, parent_tool_use_id: 'tb1', message: { role: 'assistant', content: [{ type: 'tool_use', id: `n${at}`, name: 'Read', input: {} }] } } })
+    const stuck: Step[] = [...lingeringTurn.slice(0, 4), ...[100, 300, 500, 700, 900, 1100, 1300, 1500].map(noise)]
+    const provider = makeClaudeProvider({ bin: scripted('r9', [stuck]), defaultModels: [] })
+    fakeClock()
+    const bgh = hooks(), one = collect()
+    const s1 = provider.chat!(task({ background: bgh.h }), one.cb, process.env)
+    lives.push(s1)
+    await waitIo(() => bgh.counts.includes(1))
+    for (let i = 0; i < 5; i++) { await realSleep(200); await vi.advanceTimersByTimeAsync(60_000) }
+    expect(one.st.statuses.join()).toContain('没有任何输出')
+  })
+
+  it('#7 这一轮还开着时后台子代理升的门走 background,不挂在这一轮身上', async () => {
+    const gate = { type: 'control_request', request_id: 'g1', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'ls' }, tool_use_id: 't9', agent_id: 'sub1' } }
+    const turn: Step[] = [...lingeringTurn.slice(0, 4), { at: 15, obj: gate }, ...lingeringTurn.slice(4).map(s => ({ ...s, at: s.at + 20 }))]
+    const provider = makeClaudeProvider({ bin: scripted('r10', [turn]), defaultModels: [] })
+    const bgConfirm = vi.fn(async () => 'allow' as const), one = collect()
+    one.cb.onConfirm = vi.fn(async () => 'deny' as const)
+    const s1 = provider.chat!(task({ background: { onRunning: () => {}, openTurn: () => {}, onConfirm: bgConfirm } }), one.cb, process.env)
+    lives.push(s1)
+    await settle(s1.done, 30_000)
+    await until(() => logLines('r10').includes('answer allow'))
+    expect(bgConfirm).toHaveBeenCalledOnce()
+    expect(one.cb.onConfirm).not.toHaveBeenCalled()
+  })
+
+  it('#7 用户消息压着等 CLI 自己那一轮,而那一轮卡在主代理的门上:拒掉门,消息发得出去', async () => {
+    const mainGate = { type: 'control_request', request_id: 'g3', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'rm x' }, tool_use_id: 't3' } }
+    const follow: Step[] = [
+      { at: 100, obj: sys('init') }, { at: 100, obj: sys('status', { status: 'requesting' }) },
+      { at: 2_000, obj: mainGate },
+      { at: 2_300, obj: { ...result('FOLLOW'), ...origin } },
+    ]
+    const provider = makeClaudeProvider({ bin: scripted('r11', [[...lingeringTurn, ...follow], replyTurn('SECOND')]), defaultModels: [] })
+    const bgh = hooks(), two = collect()
+    two.cb.onConfirm = vi.fn(async () => 'allow' as const)
+    const s1 = provider.chat!(task({ background: bgh.h }), collect().cb, process.env)
+    lives.push(s1)
+    await settle(s1.done, 30_000)
+    await until(() => logLines('r11').filter(l => l === 'out init').length === 2)
+    await sleep(500)
+    const s2 = provider.chat!(task({ id: 'm2', prompt: '第二条', sessionId: S, background: bgh.h }), two.cb, process.env)
+    lives.push(s2)
+    expect(await settle(s2.done, 30_000)).toMatchObject({ ok: true })
+    expect(two.cb.onConfirm).not.toHaveBeenCalled()
+    expect(logLines('r11')).toContain('answer deny')
+    expect(logLines('r11')).toContain('user 第二条')
+  })
+
+  it('#8 任务数归零后 stop 还在:CLI 自己那一轮期间关会话也停得掉,不靠宽限期', async () => {
+    const script = [[...lingeringTurn, ...taskDone(100), { at: 110, obj: sys('init') }, { at: 110, obj: sys('status', { status: 'requesting' }) }, { at: 120, obj: textDelta('半句') }]]
+    const provider = makeClaudeProvider({ bin: scripted('r12', script), defaultModels: [] })
+    let stop: (() => void) | null = null
+    const counts: number[] = []
+    const s1 = provider.chat!(task({ background: { onRunning: (n: number, st: (() => void) | null) => { counts.push(n); if (st) stop = st }, openTurn: () => {} } }), collect().cb, process.env)
+    lives.push(s1)
+    await settle(s1.done, 30_000)
+    await until(() => counts.includes(0))
+    await until(() => logLines('r12').includes('out stream_event'))
+    stop!()
+    await until(() => exitedProc('r12'))
+  })
+
+  it('#9 报错的 result 一个字没有,而后台还在跑:报错,不留空气泡', async () => {
+    const err = { type: 'result', subtype: 'error_during_execution', is_error: true, result: 'API Error: 500', num_turns: 1, session_id: S }
+    const provider = makeClaudeProvider({ bin: scripted('r13', [[...lingeringTurn.slice(0, 4), { at: 30, obj: err }]]), defaultModels: [] })
+    const bgh = hooks(), one = collect()
+    const s1 = provider.chat!(task({ background: bgh.h }), one.cb, process.env)
+    lives.push(s1)
+    expect(await settle(s1.done, 30_000)).toMatchObject({ ok: false })
+    expect(one.st.errors.join()).toContain('API Error: 500')
+    expect(one.st.doneAt).toBe(0)
+    expect(exitedProc('r13')).toBe(false)         // 后台任务还留着
+  })
+
+  it('#14 代理变了(env 钉死在 spawn 时):后台在跑就沿用并说一声,没活了就 --resume 换上', async () => {
+    const bin = scripted('r14', [lingeringTurn, replyTurn('OK')])
+    const provider = makeClaudeProvider({ bin, defaultModels: [] })
+    const bgh = await parked(provider)
+    const two = collect()
+    const s2 = provider.chat!(task({ id: 'm2', sessionId: S, background: bgh.h }), two.cb, { ...process.env, HTTPS_PROXY: 'http://127.0.0.1:1' })
+    lives.push(s2)
+    expect(await settle(s2.done, 30_000)).toMatchObject({ ok: true })
+    expect(two.st.statuses.join()).toContain('新设置')
+    expect(spawns('r14')).toHaveLength(1)
+    expect(chatSpawnSignature(['-p'], { HTTPS_PROXY: 'a', PATH: 'x' })).toBe(chatSpawnSignature(['-p'], { HTTPS_PROXY: 'a', PATH: 'y' }))
+    expect(chatSpawnSignature(['-p'], { HTTPS_PROXY: 'a' })).not.toBe(chatSpawnSignature(['-p'], { HTTPS_PROXY: 'b' }))
+  })
+
+  it('#15 共商席位(endWithTurn):一轮结束连后台任务一起杀,不留', async () => {
+    const provider = makeClaudeProvider({ bin: scripted('r15', [lingeringTurn]), defaultModels: [] })
+    const one = collect()
+    const s1 = provider.chat!(task({ endWithTurn: true }), one.cb, process.env)
+    lives.push(s1)
+    expect(await settle(s1.done, 30_000)).toMatchObject({ ok: true })
+    expect(one.st.errors).toEqual([])
+    expect(exitedProc('r15')).toBe(true)
+  })
+
+  it('#16 致命失败之后后台已经没活:进程照常回收;进程退出通知 onExit(门不留)', async () => {
+    const bin = scripted('r16', [[...lingeringTurn, ...taskDone(50)]], { 'set_permission_mode:plan': 'nope' })
+    const provider = makeClaudeProvider({ bin, defaultModels: [] })
+    const onExit = vi.fn()
+    const counts: number[] = []
+    const background: ChatBackgroundHooks = { onRunning: (n) => { counts.push(n) }, openTurn: () => {}, onExit }
+    const s1 = provider.chat!(task({ background }), collect().cb, process.env)
+    lives.push(s1)
+    await settle(s1.done, 30_000)
+    await until(() => counts.includes(0))
+    fakeClock()
+    const two = collect()
+    // 接下一条消息时回收计时撤掉了;切严失败之后必须重新判,否则这个空进程就再也没人回收。
+    const s2 = provider.chat!(task({ id: 'm2', sessionId: S, permissionMode: 'readonly', background }), two.cb, process.env)
+    lives.push(s2)
+    let r: { ok: boolean } | null = null
+    void s2.done.then((x) => { r = x })
+    await waitIo(() => r !== null)
+    expect(r).toMatchObject({ ok: false })
+    expect(exitedProc('r16')).toBe(false)
+    await vi.advanceTimersByTimeAsync(BG_GRACE_MS + 1)
+    await waitIo(() => exitedProc('r16') && onExit.mock.calls.length > 0)
+    expect(exitedProc('r16')).toBe(true)
+    expect(onExit).toHaveBeenCalled()
   })
 })

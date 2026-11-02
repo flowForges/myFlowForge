@@ -203,6 +203,7 @@ export interface SubagentCard {
   description?: string       // short label the model gave the task
   prompt?: string            // the full task prompt handed to the sub-agent
   result?: string            // the sub-agent's returned text (on done)
+  background?: boolean       // 后台启动的:这一轮结束时它还在跑,完成通知到了才置完成(见 chatService onSubagent)
   // The sub-agent's OWN tool calls as it runs (Read/Bash/Grep…), attributed via the stream's
   // parent_tool_use_id. Lets the card show WHAT each sub-agent is doing live, not just running/done —
   // so multiple探查 sub-agents don't look like a frozen cursor. Titles only (claude streams subagent
@@ -459,6 +460,8 @@ export type ChatEvent = { workspacePath: string; sessionId: string } & (
   | { type: 'think-delta'; id: string; text: string; context?: AgentContextMeta; council?: CouncilTag }
   // 这一轮换了阶段(在想 ↔ 在压缩)。只在轮次进行中广播,不落盘。
   | { type: 'phase'; id: string; phase: TurnPhase }
+  // 已经收尾的那条消息上,后台子代理的卡片跑完了。和 subagent 不同:那条消息不会因此变回「流式中」。
+  | { type: 'subagent-settled'; id: string; sub: SubagentCard }
   // questions 非空 = 这不是「批准执行」而是「请回答」(claude AskUserQuestion),渲染成可点的选项卡片。
   | { type: 'confirm-request'; id: string; title: string; where?: string; questions?: AskQuestion[] }
   | { type: 'confirm-resolved'; id: string }

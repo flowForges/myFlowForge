@@ -296,6 +296,9 @@ export function useChat(
       else if (e.type === 'phase') {
         setMessages(m => upsertMsg(m, e.id, x => x.think ? { ...x, think: { ...x.think, label: phaseLabel(e.phase) } } : x))
       }
+      else if (e.type === 'subagent-settled') {
+        setMessages(m => m.map(x => x.id === e.id ? { ...x, subagents: x.subagents?.map(s => s.id === e.sub.id ? e.sub : s) } : x))
+      }
       else if (e.type === 'subagent') {
         setStreamingIds(s => s.has(e.id) ? s : new Set(s).add(e.id))
         const upsert = (x: ChatMessage): ChatMessage => {

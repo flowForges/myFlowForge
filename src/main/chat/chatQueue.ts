@@ -3,7 +3,7 @@ import { CH } from '../ipc/channels'
 
 interface QueuedTask { id: string; source: string; payload: ChatSendPayload }
 // ★runningPayload 不放进 running:running 原样广播给渲染端/手机,这里只是主进程自己要查的那份载荷。
-interface Lane { busy: boolean; queue: QueuedTask[]; running: { id: string; text: string; sessionId: string; provider: string } | null; runningPayload?: ChatSendPayload; activeCancel: (() => void) | null; background: number; backgroundStop: (() => void) | null; adopted: { provider: string; run: () => Promise<unknown> }[] }
+interface Lane { busy: boolean; queue: QueuedTask[]; running: { id: string; text: string; sessionId: string; provider: string } | null; runningPayload?: ChatSendPayload; activeCancel: (() => void) | null; background: number; backgroundStop: (() => void) | null; adopted: { provider: string; run: () => Promise<unknown> }[]; runningAdopted: boolean }
 
 export type RunTurn = (payload: ChatSendPayload) => Promise<unknown>
 export type Broadcast = (channel: string, payload: unknown) => void
@@ -25,7 +25,7 @@ export class ChatQueue {
   private lane(ws: string, sid: string): Lane {
     const m = this.lanes(ws)
     let l = m.get(sid)
-    if (!l) { l = { busy: false, queue: [], running: null, activeCancel: null, background: 0, backgroundStop: null, adopted: [] }; m.set(sid, l) }
+    if (!l) { l = { busy: false, queue: [], running: null, activeCancel: null, background: 0, backgroundStop: null, adopted: [], runningAdopted: false }; m.set(sid, l) }
     return l
   }
 
@@ -66,6 +66,22 @@ export class ChatQueue {
 
   stopBackground(ws: string, sid: string): void {
     this.map.get(ws)?.get(sid)?.backgroundStop?.()
+  }
+
+  /** 正在跑的是 CLI 自己起的那一轮(不是用户发的)。 */
+  runningAdopted(ws: string, sid: string): boolean {
+    return !!this.map.get(ws)?.get(sid)?.runningAdopted
+  }
+
+  hasQueued(ws: string, sid: string): boolean {
+    return (this.map.get(ws)?.get(sid)?.queue.length ?? 0) > 0
+  }
+
+  /** 还有后台任务在跑的会话(更新前要算进「退出会打断什么」)。 */
+  listBackground(): Array<{ workspacePath: string; sessionId: string; count: number }> {
+    const out: Array<{ workspacePath: string; sessionId: string; count: number }> = []
+    for (const [ws, m] of this.map) for (const [sid, lane] of m) if (lane.background > 0) out.push({ workspacePath: ws, sessionId: sid, count: lane.background })
+    return out
   }
 
   // Kept as a no-op so Run2Manager's terminal-state call site (manager.ts) still compiles; a running
@@ -133,11 +149,13 @@ export class ChatQueue {
     lane.busy = true
     lane.running = { id: task.id, text: task.payload.text, sessionId: sid, provider: task.payload.agent }
     lane.runningPayload = task.payload
+    lane.runningAdopted = !!run
     this.emit(ws)
     Promise.resolve(run ? run() : this.runTurn(task.payload)).catch(() => {}).finally(() => {
       lane.busy = false
       lane.running = null
       lane.runningPayload = undefined
+      lane.runningAdopted = false
       lane.activeCancel = null
       this.pump(ws, sid)
       this.emit(ws)

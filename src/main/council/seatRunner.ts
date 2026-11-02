@@ -93,7 +93,7 @@ export function runSeat(
   try {
     // ★故意不传 beforeFallback:ACP 握手失败时直接报错,不退回不受控的 run()。
     session = chat(
-      { id: msgId, prompt, model: seat.model, cwd: deps.cwd, sessionId: resumeId, permissionMode: 'readonly', attachments },
+      { id: msgId, prompt, model: seat.model, cwd: deps.cwd, sessionId: resumeId, permissionMode: 'readonly', attachments, endWithTurn: true },
       callbacks, envWithoutForge(deps.env),
     )
   } catch (e) {
