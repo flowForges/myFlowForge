@@ -1,6 +1,7 @@
 // loop-default:接管带工作目录的会话(spec §8);没有 cwd / 没有模型时让位给 loop-direct / loop-echo。
 // 每轮前后拍快照(spec §11),并注册 turn.rollback / turn.changes
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, realpathSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Plugin } from '../../kernel/pluginHost'
 import { RpcError } from '../../kernel/rpcError'
@@ -35,7 +36,14 @@ export function createLoopDefault(opts: LoopDefaultOpts = {}): Plugin {
       if (!sessions) throw new Error('sessions service missing')
       const tmpDir = opts.snapshotTmpDir ?? join(ctx.dataDir, 'tmp')
       mkdirSync(tmpDir, { recursive: true })
-      const snap: SnapshotDeps = { git: opts.git ?? createGit(), tmpDir, log: ctx.log, append: e => ctx.append(e) }
+      const snap: SnapshotDeps = {
+        git: opts.git ?? createGit(),
+        tmpDir,
+        log: ctx.log,
+        append: e => ctx.append(e),
+        // 会话 tmp 在数据目录里;运行的 TMPDIR 在系统临时目录;其他 worktree 在 -worktrees(executor-cli)
+        writableRoots: [ctx.dataDir, `${ctx.dataDir}-worktrees`, realpathSync(tmpdir())],
+      }
 
       /** 本插件正在跑的轮(从接管到结束快照拍完),按会话 */
       const active = new Set<string>()

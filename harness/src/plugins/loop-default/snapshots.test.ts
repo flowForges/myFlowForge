@@ -13,7 +13,7 @@ import type { ModelRef } from '../../protocol/models'
 import { createToolsCoding } from '../tools-coding'
 import toolsRegistry from '../tools-registry'
 import { createLoopDefault } from './index'
-import { hasOpenTurn, rollbackRefs, snapshotRef } from './snapshots'
+import { endSnapshot, hasOpenTurn, rollbackRefs, snapshotRef, startSnapshot, turnChanges, type SnapshotDeps } from './snapshots'
 import { NO_SANDBOX, seedUnsandboxedAuto } from '../../../test/sandboxStub'
 
 const posix = process.platform !== 'win32'
@@ -616,5 +616,54 @@ describe('Review Focus 3a: a follow-up stays in the same turn (real kernel inbox
     expect(history).toContain('FIRST-MESSAGE')
     expect(history).toContain('SECOND-MESSAGE')
     expect(interrupted(k3)).toEqual(['interrupted'])
+  })
+})
+
+describe('unsafe_filter: rollback is unavailable for that turn (Task 9 review C3)', () => {
+  const mark = () => join(root, 'filter-ran')
+  const deps = (events: KernelEvent[]): SnapshotDeps => {
+    mkdirSync(snapTmp, { recursive: true })
+    return {
+      git: createGit({ base: baseEnv(), extraEnv: gitInjected() }),
+      tmpDir: snapTmp,
+      log: { info() {}, warn() {}, error() {} },
+      append: e => void events.push({ ...e, seq: events.length, ts: 0 } as KernelEvent),
+    }
+  }
+  const plant = () => {
+    writeFileSync(R('tool.sh'), `#!/bin/sh\ntouch "${mark()}"\ncat\n`)
+    chmodSync(R('tool.sh'), 0o755)
+    writeFileSync(R('.gitattributes'), '*.txt filter=f\n')
+    ug(['config', 'filter.f.clean', './tool.sh'])
+  }
+  const t = () => ({ sessionId: 's', cwd: repo })
+  const opened = (turnId: string): KernelEvent[] => [{ type: 'message.user', sessionId: 's', seq: 0, ts: 0, payload: { turnId, text: 'x' } } as unknown as KernelEvent]
+
+  it('both snapshots report the reason, no ref, no marker, not rollbackable', async () => {
+    initRepo()
+    plant()
+    const events = opened('t1')
+    const d = deps(events)
+    const start = await startSnapshot(d, t(), 't1')
+    writeFileSync(R('a.txt'), 'changed\n')
+    await endSnapshot(d, t(), 't1', start)
+    expect(start).toBeUndefined()
+    expect(events.filter(e => e.type === 'turn.snapshot').map(e => (e.payload as { reason?: string }).reason)).toEqual(['unsafe_filter', 'unsafe_filter'])
+    expect(rollbackRefs('s', events, 't1')).toBeUndefined()
+    expect(hidden()).toEqual([])
+    expect(existsSync(mark())).toBe(false)
+  })
+
+  it('a filter that turned up after the turn: turn.changes fails, the marker never appears', async () => {
+    initRepo()
+    const events = opened('t1')
+    const d = deps(events)
+    const start = await startSnapshot(d, t(), 't1')
+    writeFileSync(R('a.txt'), 'changed\n')
+    await endSnapshot(d, t(), 't1', start)
+    expect(rollbackRefs('s', events, 't1')).toBeDefined()
+    plant()
+    await expect(turnChanges(d, t(), events, 't1')).rejects.toThrow(/unsafe_filter/)
+    expect(existsSync(mark())).toBe(false)
   })
 })

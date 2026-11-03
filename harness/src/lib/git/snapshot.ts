@@ -1,10 +1,10 @@
 // 每轮的 git 快照与回滚(spec §11):快照写在隐藏引用 refs/mffai/…,用临时索引拍,
 // 不碰用户的索引、分支、stash、工作区;回滚只写回本轮改过的文件,不跟随链接、不出 cwd、不写 .git
 import { spawn } from 'node:child_process'
-import { lstatSync, realpathSync, rmdirSync } from 'node:fs'
+import { accessSync, constants as fsConstants, lstatSync, realpathSync, rmdirSync, statSync } from 'node:fs'
 import { copyFile, lstat, mkdir, mkdtemp, rm, stat, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import type { FileChange } from '../../protocol/tools'
 import { hasGitSegment, isInside, OUTSIDE, resolveToolPath } from '../fs/paths'
 import { lexists, mkdirChecked, removeLeaf, replaceFile, replaceSymlink, samePath } from '../fs/safeFs'
@@ -127,6 +127,102 @@ export function repoInfo(cwd: string, git: Git, opts: { tmpDir?: string } = {}):
   return guarded(git, opts.tmpDir, g => readRepoInfo(cwd, g))
 }
 
+/** 拆成词;引号外有 shell 才懂的字符,或者引号里有展开 → undefined:看不懂的命令不算安全 */
+function shellWords(command: string): string[] | undefined {
+  const words: string[] = []
+  let cur: string | undefined
+  let quote: string | undefined
+  for (const ch of command) {
+    if (quote) {
+      if (ch === quote) quote = undefined
+      else if (quote === '"' && /[$`\\]/.test(ch)) return undefined
+      else cur += ch
+    } else if (ch === "'" || ch === '"') {
+      quote = ch
+      cur ??= ''
+    } else if (/[ \t]/.test(ch)) {
+      if (cur !== undefined) words.push(cur)
+      cur = undefined
+    } else if (/[;&|<>()`$\n\\*?[\]{}~#!]/.test(ch)) return undefined
+    else cur = (cur ?? '') + ch
+  }
+  if (quote) return undefined
+  if (cur !== undefined) words.push(cur)
+  return words
+}
+
+/**
+ * 这些程序的行为取决于 cwd 里的文件(`python -m x` 从 cwd 加载,`make` 读 Makefile,`sh x` 跑脚本),
+ * 或者参数就是程序。git 跑过滤器时 cwd 是工作树,所以绝对路径也一样不安全。名单不可能全,见 spec §16
+ */
+const CWD_DRIVEN = /^(sh|bash|zsh|dash|ksh|fish|csh|tcsh|env|xargs|nohup|exec|time|sudo|python[\d.]*|pypy[\d.]*|node|nodejs|deno|bun|ruby|perl|php|lua|java|npx|npm|pnpm|yarn|uv|uvx|pipx|make|gmake|rake|just|cargo|go|gradle|mvn)$/
+
+export interface FilterContext {
+  /** 工作树根:git 跑过滤器时的 cwd */
+  top: string
+  /** 沙箱写得到的根 */
+  roots: string[]
+  /** 给 git 的 PATH */
+  path: string
+}
+
+/**
+ * 过滤器命令会不会跑到沙箱写得到的东西。过滤器在沙箱外跑,所以这等于沙箱逃逸。
+ * 看不懂的、相对路径、解析到可写根里的,都不安全;沙箱外的绝对路径和 PATH 上的程序(git-lfs、git-crypt)是安全的
+ */
+export function unsafeFilterCommand(command: string, o: FilterContext): boolean {
+  const words = shellWords(command)
+  if (!words) return true
+  if (words.length === 0) return false
+  const inRoots = (p: string) => {
+    const real = resolveToolPath(o.top, p)
+    return real === OUTSIDE || o.roots.some(r => isInside(p, r, process.platform) || isInside(real, resolveToolPath(o.top, r), process.platform))
+  }
+  const [program, ...args] = words
+  if (/\s/.test(program) || program.includes('=') || CWD_DRIVEN.test(basename(program))) return true
+  if (program.includes('/')) {
+    if (!isAbsolute(program) || inRoots(program)) return true
+  } else {
+    for (const dir of o.path.split(':')) {
+      if (!isAbsolute(dir)) return true // 空条目和 `.` 就是 cwd
+      const candidate = join(dir, program)
+      try {
+        accessSync(candidate, fsConstants.X_OK)
+        if (!statSync(candidate).isFile()) continue
+      } catch {
+        continue
+      }
+      if (inRoots(candidate)) return true
+      break
+    }
+  }
+  return args.some(arg => {
+    if (/\s/.test(arg)) return true
+    const value = arg.startsWith('-') ? (arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : '') : arg
+    if (value === '' || value === '%f') return false
+    if (value.includes('/')) return !isAbsolute(value) || inRoots(value)
+    return lexists(join(o.top, value))
+  })
+}
+
+const FILTER_KEY = /^filter\..+\.(clean|smudge|process)$/i
+
+/** 现读 `filter.*`:用户配置、全局配置都算;属性文件 CLI 改得了,所以不看这个过滤器现在用没用上。读不了 = 不安全 */
+async function hasUnsafeFilter(g: Git, cwd: string, top: string, gitDir: string, writableRoots: string[] = []): Promise<boolean> {
+  const config = await g(['config', '-z', '--get-regexp', '^filter\\.'], { cwd })
+  if (config.code === 1) return false
+  if (config.code !== 0) return true
+  const common = await g(['rev-parse', '--git-common-dir'], { cwd })
+  if (common.code !== 0) return true
+  const commonDir = resolve(cwd, common.stdout.toString().split('\n')[0])
+  const roots = [top, gitDir, commonDir, ...(basename(commonDir) === '.git' ? [dirname(commonDir)] : []), ...writableRoots]
+  const o: FilterContext = { top, roots, path: process.env.PATH ?? '' }
+  return splitZ(config.stdout).some(entry => {
+    const nl = entry.indexOf('\n')
+    return nl > 0 && FILTER_KEY.test(entry.slice(0, nl)) && unsafeFilterCommand(entry.slice(nl + 1), o)
+  })
+}
+
 /** 前缀 → 从仓库根算的字面路径规格(前缀里的 `*` 等不当通配) */
 const scope = (prefix: string) => (prefix ? `:(top,literal)${prefix}` : ':/')
 
@@ -139,9 +235,14 @@ export interface SnapshotOpts {
   maxTotalBytes?: number
   /** 临时索引与空钩子目录放在这里的独立子目录里,用完即删(默认系统临时目录) */
   tmpDir?: string
+  /** 除仓库之外,沙箱还写得到的根:过滤器落在里面就不跑 */
+  writableRoots?: string[]
 }
 
-export type SnapshotResult = { ref?: string; reason?: 'not_git' | 'too_large' | 'error' }
+/** unsafe_filter:配置里有沙箱写得到的过滤器;拍不了这一轮就回滚不了 */
+export type SnapshotResult = { ref?: string; reason?: 'not_git' | 'too_large' | 'unsafe_filter' | 'error' }
+
+export interface GitReadOpts { tmpDir?: string; writableRoots?: string[] }
 
 /** 一次并发 lstat 的个数 */
 const STAT_BATCH = 64
@@ -168,6 +269,7 @@ export async function takeSnapshot(cwd: string, ref: string, git: Git, opts: Sna
       const info = await readRepoInfo(cwd, g)
       if (!info) return { reason: 'not_git' }
       const { top, prefix, gitDir, head } = info
+      if (await hasUnsafeFilter(g, cwd, top, gitDir, opts.writableRoots)) return { reason: 'unsafe_filter' }
       // 未跟踪且未忽略的文件:单个或合计过大 → 不拍(不把大文件塞进用户的对象库)
       const untracked = splitZ(await run(g, ['ls-files', '-o', '--exclude-standard', '-z', '--full-name', '--', scope(prefix)], { cwd: top }))
       if (await tooLarge(top, untracked, maxFile, maxTotal)) return { reason: 'too_large' }
@@ -182,6 +284,7 @@ export async function takeSnapshot(cwd: string, ref: string, git: Git, opts: Sna
         await utimes(index, st.atime, st.mtime)
         await clearAssumeUnchanged(g, top, prefix, env)
       } else if (head) await run(g, ['read-tree', head], { cwd: top, env })
+      await stripPopulatedGitlinks(g, top, prefix, env)
       await run(g, ['add', '-A', '--', scope(prefix)], { cwd: top, env })
       const tree = (await run(g, ['write-tree'], { cwd: top, env })).toString().trim()
       const commitArgs = ['commit-tree', '--no-gpg-sign', '-m', 'mff-ai snapshot', ...(head ? ['-p', head] : []), tree]
@@ -193,6 +296,17 @@ export async function takeSnapshot(cwd: string, ref: string, git: Git, opts: Sna
   } catch {
     return { reason: 'error' }
   }
+}
+
+/**
+ * 临时索引里去掉目录里有 `.git` 的 gitlink。否则 add -A 进去跑 `git status`,读的是那个嵌套仓库的配置,
+ * 它的 clean 过滤器就在沙箱外跑了(review C1)。去掉之后 add -A 把目录当新的嵌套仓库,按它的 HEAD 记 gitlink,不进去。
+ * 没填充的不动:去掉就成了"已删除"
+ */
+async function stripPopulatedGitlinks(g: Git, top: string, prefix: string, env: Record<string, string>): Promise<void> {
+  const listed = splitZ(await run(g, ['ls-files', '-s', '-z', '--full-name', '--', scope(prefix)], { cwd: top, env }))
+  const populated = listed.filter(l => l.startsWith('160000 ')).map(l => l.slice(l.indexOf('\t') + 1)).filter(p => lexists(join(top, p, '.git')))
+  if (populated.length) await run(g, ['update-index', '-z', '--force-remove', '--stdin'], { cwd: top, env, input: Buffer.from(populated.join('\0') + '\0') })
 }
 
 /**
@@ -208,10 +322,11 @@ async function clearAssumeUnchanged(g: Git, top: string, prefix: string, env: Re
 const STATUSES = new Set(['A', 'M', 'D', 'T'])
 
 /** from..to 之间 cwd 前缀下变化的文件(路径相对仓库根,`/` 分隔) */
-export function changes(cwd: string, from: string, to: string, git: Git, opts: { tmpDir?: string } = {}): Promise<FileChange[]> {
+export function changes(cwd: string, from: string, to: string, git: Git, opts: GitReadOpts = {}): Promise<FileChange[]> {
   return guarded(git, opts.tmpDir, async g => {
     const info = await readRepoInfo(cwd, g)
     if (!info) throw new Error(`不是 git 工作树:${cwd}`)
+    if (await hasUnsafeFilter(g, cwd, info.top, info.gitDir, opts.writableRoots)) throw new Error('unsafe_filter')
     const parts = splitZ(
       await run(g, ['diff', '--name-status', '--no-renames', '--no-ext-diff', '-z', from, to, '--', scope(info.prefix)], { cwd: info.top }),
     )
@@ -327,10 +442,12 @@ function pruneEmptyDirs(from: string, realCwd: string): void {
  * 把 files 按 from 的内容写回:from 里没有的删除,其余按 from 的内容与权限位写回(符号链接按链接重建)。
  * 先从 git 取齐全部内容再动文件;逐个处理,失败的(含无法写回的子模块)汇总后抛出
  */
-export function restore(cwd: string, from: string, files: FileChange[], git: Git, opts: { tmpDir?: string } = {}): Promise<void> {
+export function restore(cwd: string, from: string, files: FileChange[], git: Git, opts: GitReadOpts = {}): Promise<void> {
   return guarded(git, opts.tmpDir, async g => {
     const info = await readRepoInfo(cwd, g)
     if (!info) throw new Error(`不是 git 工作树:${cwd}`)
+    // cat-file --filters 会跑 smudge
+    if (await hasUnsafeFilter(g, cwd, info.top, info.gitDir, opts.writableRoots)) throw new Error('unsafe_filter')
     const realCwd = realpathSync.native(cwd)
     const targets = files.map(f => {
       return { f, p: target(realCwd, info.top, f.path) }
@@ -370,6 +487,11 @@ export function restore(cwd: string, from: string, files: FileChange[], git: Git
     put(links, linkData, (p, buf) => replaceSymlink(p, buf.toString()))
     if (errors.length) throw new Error(`回滚有 ${errors.length} 个文件失败:\n${errors.join('\n')}`)
   })
+}
+
+/** 引用在不在;走隔离 git,cwd 可能是 CLI 写过的树 */
+export function refExists(cwd: string, ref: string, git: Git, opts: { tmpDir?: string } = {}): Promise<boolean> {
+  return guarded(git, opts.tmpDir, async g => (await g(['rev-parse', '-q', '--verify', ref], { cwd })).code === 0)
 }
 
 /** 一个会话(prefixRef 下)只留最近 keepTurns 轮的引用;按提交时间从新到旧,同一轮的 start / end / pre-rollback 算一轮 */

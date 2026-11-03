@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createGit, takeSnapshot, type Git } from './snapshot'
-import { addWorktree, MAX_WORKTREES, removeWorktree, reserveWorktree, sessionRepo, userGitState, worktreeIntact } from './worktree'
+import { addWorktree, MAX_WORKTREES, removeInWorktree, removeWorktree, reserveWorktree, rootConflict, sessionRepo, userGitState, worktreeIntact } from './worktree'
 
 let base: string
 let home: string
@@ -105,6 +105,8 @@ describe('the path has to be under the root', () => {
   it.each([
     ['traversal', () => join(wtRoot, 's1') + '/../../escape'],
     ['the root itself', () => wtRoot],
+    ['a session directory: would take every worktree in it', () => join(wtRoot, 's1')],
+    ['deeper than a run', () => join(wtRoot, 's1', 'r', 'deep')],
     ['a sibling sharing the prefix', () => `${wtRoot}-other/s1/r`],
     ['elsewhere', () => join(base, 'repo')],
     ['relative', () => '../escape'],
@@ -168,6 +170,30 @@ describe('removeWorktree', () => {
     rmSync(repo, { recursive: true, force: true })
     await removeWorktree(repo, path, git, o())
     expect(existsSync(path)).toBe(false)
+  })
+
+  it('a user\'s own entry whose path is missing survives: only ours goes', async () => {
+    const external = join(base, 'external-drive')
+    ug(['worktree', 'add', '-q', '--detach', external])
+    rmSync(external, { recursive: true, force: true }) // 移动硬盘没插
+    const path = await added()
+    await removeWorktree(repo, path, git, o())
+    expect(readdirSync(join(repo, '.git', 'worktrees'))).toEqual(['external-drive'])
+    expect(worktrees()).toContain(external)
+  })
+
+  it('never runs a global prune, on the fallback path either', async () => {
+    const calls: string[][] = []
+    const spy: Git = (args, opts) => (calls.push(args), git(args, opts))
+    const external = join(base, 'external-drive')
+    ug(['worktree', 'add', '-q', '--detach', external])
+    rmSync(external, { recursive: true, force: true })
+    const path = await added()
+    writeFileSync(join(path, '.git'), 'gitdir: /nonexistent\n')
+    await removeWorktree(repo, path, spy, o())
+    expect(calls.some(a => a.includes('prune'))).toBe(false)
+    expect(existsSync(path)).toBe(false)
+    expect(readdirSync(join(repo, '.git', 'worktrees'))).toEqual(['external-drive'])
   })
 
   it('a directory someone already deleted: the entry is pruned, no throw', async () => {
@@ -234,14 +260,11 @@ describe('sessionRepo and userGitState', () => {
     expect(info.commonDir).toBe(join(repo, '.git'))
     expect(info.gitDir).toBe(join(repo, '.git', 'worktrees', 'linked'))
     const state = userGitState(info)
-    for (const p of ['HEAD', 'index', 'refs', 'packed-refs', 'logs/refs']) expect(state).toContain(join(repo, '.git', p))
-    for (const p of ['HEAD', 'index']) expect(state).toContain(join(repo, '.git', 'worktrees', 'linked', p))
+    expect(state).toEqual([join(repo, '.git'), join(repo, '.git', 'worktrees', 'linked')])
   })
 
-  it('never lists what a commit in the worktree needs', async () => {
-    const state = userGitState((await sessionRepo(repo, git, { tmpDir: tmp }))!)
-    expect(state).not.toContain(join(repo, '.git'))
-    expect(state.some(p => p.startsWith(join(repo, '.git', 'objects')) || p.startsWith(join(repo, '.git', 'worktrees')))).toBe(false)
+  it('a plain repo: the whole common dir is read-only', async () => {
+    expect(userGitState((await sessionRepo(repo, git, { tmpDir: tmp }))!)).toEqual([join(repo, '.git')])
   })
 })
 
@@ -305,10 +328,112 @@ describe('worktreeIntact', () => {
     expect(await check(path, join(path, 'sub', 'deep'))).toBe(false)
   })
 
+  it('an admin dir outside this repo, however well forged → not intact', async () => {
+    const path = await added()
+    const forged = join(base, 'forged')
+    mkdirSync(forged)
+    writeFileSync(join(forged, 'gitdir'), `${join(path, '.git')}\n`)
+    writeFileSync(join(forged, 'commondir'), `${join(repo, '.git')}\n`)
+    writeFileSync(join(path, '.git'), `gitdir: ${forged}\n`)
+    expect(await check(path)).toBe(false)
+  })
+
+  it('commondir pointing elsewhere → not intact', async () => {
+    const path = await added()
+    expect(await check(path)).toBe(true)
+    writeFileSync(join(repo, '.git', 'worktrees', 'r', 'commondir'), `${join(base, 'evil')}\n`)
+    mkdirSync(join(base, 'evil'))
+    expect(await check(path)).toBe(false)
+  })
+
   it('gone, or not a repo → not intact, no throw', async () => {
     const path = await added()
     expect(await worktreeIntact(tmp, path, path, git, { tmpDir: tmp })).toBe(false)
     rmSync(path, { recursive: true, force: true })
     expect(await check(path)).toBe(false)
+  })
+})
+
+describe('rootConflict', () => {
+  const info = async (cwd = repo) => (await sessionRepo(cwd, git, { tmpDir: tmp }))!
+
+  it('a root beside the repo is fine, existing or not', async () => {
+    expect(rootConflict(wtRoot, await info(), repo)).toBe(false)
+    mkdirSync(wtRoot)
+    expect(rootConflict(wtRoot, await info(), repo)).toBe(false)
+  })
+
+  it('inside the repo, inside its git dir, or the repo itself', async () => {
+    expect(rootConflict(join(repo, '.wt'), await info(), repo)).toBe(true)
+    expect(rootConflict(join(repo, '.git', 'wt'), await info(), repo)).toBe(true)
+    expect(rootConflict(repo, await info(), repo)).toBe(true)
+  })
+
+  it('linked into the repo: the real path decides', async () => {
+    mkdirSync(join(repo, 'real'))
+    symlinkSync(join(repo, 'real'), wtRoot)
+    expect(rootConflict(wtRoot, await info(), repo)).toBe(true)
+  })
+
+  it('a session running inside the root', async () => {
+    mkdirSync(wtRoot)
+    const inner = join(wtRoot, 'repo')
+    mkdirSync(inner)
+    ug(['init', '-q'], inner)
+    expect(rootConflict(wtRoot, await info(inner), inner)).toBe(true)
+  })
+
+  it('a linked-worktree session: the common dir of the main repo counts', async () => {
+    const linked = join(base, 'linked')
+    ug(['worktree', 'add', '-q', '--detach', linked])
+    expect(rootConflict(join(repo, '.git', 'wt'), await info(linked), linked)).toBe(true)
+  })
+})
+
+describe('removeInWorktree', () => {
+  const tree = () => {
+    const path = join(wtRoot, 's1', 'r')
+    mkdirSync(join(path, 'hidden', 'deep'), { recursive: true })
+    writeFileSync(join(path, 'hidden', 'deep', 'h.txt'), 'h')
+    writeFileSync(join(path, 'keep.txt'), 'k')
+    return path
+  }
+
+  it('removes a directory or a file under the worktree, keeps the rest; a missing root is no failure', () => {
+    const path = tree()
+    writeFileSync(join(path, 'one.txt'), 'o')
+    expect(removeInWorktree(path, [join(path, 'hidden'), join(path, 'one.txt'), join(path, 'nope', 'x')])).toEqual([])
+    expect(existsSync(join(path, 'hidden'))).toBe(false)
+    expect(existsSync(join(path, 'one.txt'))).toBe(false)
+    expect(existsSync(join(path, 'keep.txt'))).toBe(true)
+  })
+
+  it('roots that are not strictly inside are ignored: the worktree itself, the session\'s copy', () => {
+    const path = tree()
+    writeFileSync(join(repo, 'hidden.txt'), 'session')
+    expect(removeInWorktree(path, [path, join(repo, 'hidden.txt'), wtRoot])).toEqual([])
+    expect(existsSync(join(path, 'keep.txt'))).toBe(true)
+    expect(existsSync(join(repo, 'hidden.txt'))).toBe(true)
+  })
+
+  it('a link planted on the way is not followed out of the worktree, and is reported', () => {
+    const path = tree()
+    const outside = join(base, 'outside')
+    mkdirSync(join(outside, 'secret'), { recursive: true })
+    writeFileSync(join(outside, 'secret', 'keep'), 'keep')
+    symlinkSync(outside, join(path, 'a'))
+    expect(removeInWorktree(path, [join(path, 'a', 'secret')])).toEqual([join(path, 'a', 'secret')])
+    expect(existsSync(join(outside, 'secret', 'keep'))).toBe(true)
+  })
+
+  it('a root that is itself a link: the link goes, not what it points at', () => {
+    const path = tree()
+    const outside = join(base, 'outside')
+    mkdirSync(outside)
+    writeFileSync(join(outside, 'keep'), 'keep')
+    symlinkSync(outside, join(path, 'linked'))
+    expect(removeInWorktree(path, [join(path, 'linked')])).toEqual([])
+    expect(existsSync(join(path, 'linked'))).toBe(false)
+    expect(existsSync(join(outside, 'keep'))).toBe(true)
   })
 })

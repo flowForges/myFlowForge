@@ -8,8 +8,8 @@ import type { PermissionGate } from '../../kernel/permissionGate'
 import type { Logger } from '../../kernel/log'
 import { RpcError } from '../../kernel/rpcError'
 import { isInside, resolveToolPath } from '../../lib/fs/paths'
-import { changes as gitChanges, pruneRefs, repoInfo, takeSnapshot, type Git } from '../../lib/git/snapshot'
-import { addWorktree, removeWorktree, reserveWorktree, sessionRepo, userGitState, worktreeIntact } from '../../lib/git/worktree'
+import { changes as gitChanges, pruneRefs, refExists, repoInfo, takeSnapshot, type Git } from '../../lib/git/snapshot'
+import { addWorktree, removeInWorktree, removeWorktree, reserveWorktree, rootConflict, sessionRepo, userGitState, worktreeIntact } from '../../lib/git/worktree'
 import type { PgidRegistry } from '../../lib/proc/pgids'
 import { runCli as realRunCli, type CliPlan, type CliResult } from '../../lib/proc/runCli'
 import { redact } from '../../lib/tools/redact'
@@ -386,7 +386,7 @@ interface Run {
   /** CLI 跑的地方;s.cwd 始终是会话的目录 */
   cwd: string
   /** 进了 worktree。有它不代表 CLI 跑过:没跑的在 finish 里删掉,字段也清掉 */
-  worktree?: { path: string; sessionTop: string; userState: string[] }
+  worktree?: { path: string; sessionTop: string; userState: string[]; denyRead: string[] }
   writer: boolean
   concurrent: boolean
   startRef?: string
@@ -445,6 +445,11 @@ const BINARY_CHANGED = 'Not started: the CLI program changed since it was checke
 const BINARY_GONE = 'Not started: the CLI program is gone. It is being looked for again; install it, or try again.'
 const BINARY_UNTRUSTED = 'Not started: the CLI program failed the trust check. Fix its owner and permissions, then try again.'
 const RECHECK_WIDER = 'Not started: the CLI program changed, and its re-check came out less isolated than this run was approved for. Call the tool again to ask for approval.'
+
+/** 落在 worktree 里的 `deny read` 根 */
+const denyReadCopies = (policy: ExecPolicy, path: string, platform = process.platform) => policy.ruleDenyRead.filter(r => r !== path && isInside(r, path, platform))
+
+const inRoots = (file: string, roots: string[], platform = process.platform) => roots.some(r => isInside(file, r, platform))
 
 const runRef = (sessionId: string, runId: string, phase: 'start' | 'end') => `refs/mffai/runs/${sessionId}/${runId}-${phase}`
 
@@ -627,7 +632,7 @@ export class RunManager implements BackgroundRuns {
     const protect = protectDirs({
       kind: adapter.isolationKind, pathDirs, binary: binaryDirs(info), cwd: run.cwd, keepWritable: [run.cwd, s.spillDir, ...allowWrite], platform,
     })
-    // worktree 的 .git 文件决定沙箱外的 git 认哪个仓库。用户的分支、索引、stash 在共用的 git 目录里,只有沙箱才可能写得到:
+    // worktree 的 .git 文件决定沙箱外的 git 认哪个仓库。共用的 git 目录在沙箱里是可写根,要盖成只读:
     // Codex 的 :root 本来只读,写上去只会多一条可能让权限档不可信的路径
     const guard = wt ? [join(wt.path, '.git'), ...(adapter.isolationKind === 'wrap' ? wt.userState : [])] : []
     const t = translate(policy, [...protect, ...guard])
@@ -712,6 +717,7 @@ export class RunManager implements BackgroundRuns {
       view = this.assess(run, view.info, pathDirs, allowWrite)
       const again = settle(view)
       if (again) return again
+      run.worktree!.denyRead = denyReadCopies(view.policy, run.worktree!.path)
     }
     const { info, policy, t, isolation } = view
 
@@ -838,17 +844,20 @@ export class RunManager implements BackgroundRuns {
     const { s } = run
     const unavailable = failed('worktree_unavailable', REFUSALS.worktree_unavailable!)
     if (!worktreeRoot) return unavailable
-    await this.startSnapshot(run)
-    if (run.abort.signal.aborted) return this.stoppedAttempt(run)
-    if (!run.startRef) return unavailable
     try {
       const repo = await sessionRepo(s.cwd, git, { tmpDir })
       if (!repo) return unavailable
+      if (rootConflict(worktreeRoot, repo, s.cwd)) {
+        this.log.warn('worktree root overlaps the session repo', { runId: run.runId })
+        return unavailable
+      }
+      await this.startSnapshot(run)
       if (run.abort.signal.aborted) return this.stoppedAttempt(run)
+      if (!run.startRef) return unavailable
       const path = reserveWorktree(worktreeRoot, s.sessionId, run.runId)
       if (!path) return failed('worktree_limit', REFUSALS.worktree_limit!)
       // 从这里起 finish 负责收拾:没跑就删
-      run.worktree = { path, sessionTop: repo.top, userState: userGitState(repo) }
+      run.worktree = { path, sessionTop: repo.top, userState: userGitState(repo), denyRead: [] }
       await addWorktree(s.cwd, path, run.startRef, git, { tmpDir, root: worktreeRoot })
       if (run.abort.signal.aborted) return this.stoppedAttempt(run)
       // 会话的子目录在快照里可能没有(空目录、全被忽略)
@@ -875,12 +884,39 @@ export class RunManager implements BackgroundRuns {
     }
   }
 
+  /** 跑过的 worktree 要留着,`deny read` 的副本不留:别的运行和会话的 shell 都读得到它。结束快照之前删,内核关闭时也删 */
+  private removeDeniedCopies(run: Run): void {
+    const wt = run.worktree
+    if (!wt || !run.spawned) return
+    try {
+      const refused = removeInWorktree(wt.path, wt.denyRead)
+      if (refused.length > 0) this.log.warn('worktree copy of a denied path not removed', { runId: run.runId, count: refused.length })
+    } catch (e) {
+      this.log.warn('worktree copy of a denied path not removed', { runId: run.runId, error: e instanceof Error ? redact(e.message) : 'unknown' })
+    }
+  }
+
+  /** 沙箱写得到的根(仓库之外):过滤器落在这些地方就不跑。重启后也能算,所以不看运行 */
+  private gitOpts(): { tmpDir?: string; writableRoots: string[] } {
+    const { adapters, env, tmpDir, worktreeRoot } = this.deps
+    const writableRoots = [...adapters.values()].flatMap(a => a.allowWrite(this.home, env))
+    if (worktreeRoot) writableRoots.push(worktreeRoot)
+    try {
+      writableRoots.push(realpathSync(tmpdir()))
+    } catch {
+      // 系统临时目录不在:运行的 TMPDIR 也建不了
+    }
+    return { tmpDir, writableRoots: [...writableRoots, ...(tmpDir ? [tmpDir] : [])] }
+  }
+
   private async startSnapshot(run: Run): Promise<void> {
     const { git, tmpDir } = this.deps
     const { log } = this
     const { sessionId } = run.s
-    const r = await takeSnapshot(run.cwd, runRef(sessionId, run.runId, 'start'), git, { tmpDir })
+    const roots = this.gitOpts()
+    const r = await takeSnapshot(run.cwd, runRef(sessionId, run.runId, 'start'), git, { ...roots, writableRoots: [...roots.writableRoots, run.s.cwd] })
     if (r.reason === 'error') log.warn('run start snapshot failed', { runId: run.runId })
+    if (r.reason === 'unsafe_filter') log.warn('run snapshot skipped: a git filter is writable from the sandbox', { runId: run.runId })
     if (!r.ref) return
     run.startRef = r.ref
     await pruneRefs(run.cwd, `refs/mffai/runs/${sessionId}`, KEEP_RUNS, git, { tmpDir }).catch(() => log.warn('run ref prune failed', { runId: run.runId }))
@@ -964,6 +1000,7 @@ export class RunManager implements BackgroundRuns {
       this.log.warn('run raw log not closed', { error: e instanceof Error ? redact(e.message) : 'unknown' })
     }
     await this.dropUnusedWorktree(run)
+    this.removeDeniedCopies(run)
     const changed = await this.collectChanges(run)
     const violations = await this.violations(run, changed)
     this.conclude(run, attempt, changed, violations)
@@ -981,12 +1018,16 @@ export class RunManager implements BackgroundRuns {
           log.warn('worktree .git changed, no end snapshot', { runId: run.runId })
           return run.files.size > 0 ? none('cli', [...run.files]) : none('none', [])
         }
-        const end = await takeSnapshot(run.cwd, runRef(run.s.sessionId, run.runId, 'end'), git, { tmpDir })
+        const roots = this.gitOpts()
+        const end = await takeSnapshot(run.cwd, runRef(run.s.sessionId, run.runId, 'end'), git, roots)
         if (end.ref) {
-          const list = await gitChanges(run.cwd, run.startRef, end.ref, git, { tmpDir })
-          return none('git', list.map(f => f.path))
+          const list = await gitChanges(run.cwd, run.startRef, end.ref, git, roots)
+          const wt = run.worktree
+          // 副本是我们删的,不是 CLI 的改动
+          return none('git', list.map(f => f.path).filter(f => !wt || !inRoots(join(wt.path, f), wt.denyRead)))
         }
         if (end.reason === 'error') log.warn('run end snapshot failed', { runId: run.runId })
+        if (end.reason === 'unsafe_filter') log.warn('run snapshot skipped: a git filter is writable from the sandbox', { runId: run.runId })
       } catch (e) {
         log.warn('run changes failed', { runId: run.runId, error: e instanceof Error ? redact(e.message) : 'unknown' })
       }
@@ -1166,7 +1207,7 @@ export class RunManager implements BackgroundRuns {
       return e?.payload as T | undefined
     }
     if (!find('executor.run.queued')) throw new RpcError(-32602, 'unknown run')
-    const started = find<{ cwd: string; worktree?: string }>('executor.run.started')
+    const started = find<{ cwd: string; worktree?: string; executor?: string }>('executor.run.started')
     const ended = find<{ changed?: { files: string[]; source: ExecutorChangesSource; concurrent?: boolean } }>('executor.run.ended')
     const concurrent = ended?.changed?.concurrent ? { concurrent: true } : {}
     /** 算不了就报 run.ended 记下的。没有状态,一律按改过算 */
@@ -1179,7 +1220,7 @@ export class RunManager implements BackgroundRuns {
     const { cwd } = started
     const startRef = runRef(sessionId, runId, 'start')
     const endRef = runRef(sessionId, runId, 'end')
-    const exists = async (ref: string) => (await git(['rev-parse', '-q', '--verify', ref], { cwd })).code === 0
+    const exists = (ref: string) => refExists(cwd, ref, git, { tmpDir })
     try {
       if (started.worktree) {
         const repoCwd = this.deps.sessions.get(sessionId)?.cwd
@@ -1187,15 +1228,27 @@ export class RunManager implements BackgroundRuns {
       }
       if (!(await exists(startRef))) return reported()
       if (!(await exists(endRef))) {
-        const end = await takeSnapshot(cwd, endRef, git, { tmpDir })
+        const end = await takeSnapshot(cwd, endRef, git, this.gitOpts())
         if (!end.ref) return reported()
       }
-      const files = await gitChanges(cwd, startRef, endRef, git, { tmpDir })
-      return { files: files.map(f => ({ ...f, path: redact(f.path) })), source: 'git', ...concurrent }
+      const files = await gitChanges(cwd, startRef, endRef, git, this.gitOpts())
+      const denied = await this.deniedForChanges(sessionId, runId, started)
+      return { files: files.filter(f => !inRoots(join(started.worktree ?? cwd, f.path), denied)).map(f => ({ ...f, path: redact(f.path) })), source: 'git', ...concurrent }
     } catch (e) {
       log.warn('executor.changes failed', { runId, error: e instanceof Error ? redact(e.message) : 'unknown' })
       return reported()
     }
+  }
+
+  /** run.ended 里已经滤掉了;这里按现在的规则再算一遍,重启后 Run 不在了 */
+  private async deniedForChanges(sessionId: string, runId: string, started: { cwd: string; worktree?: string; executor?: string }): Promise<string[]> {
+    const { worktree } = started
+    const sessionCwd = this.deps.sessions.get(sessionId)?.cwd
+    if (!worktree || sessionCwd === undefined) return []
+    const repo = await sessionRepo(sessionCwd, this.deps.git, { tmpDir: this.deps.tmpDir })
+    if (!repo) return []
+    const policy = treePolicy(cwd => this.deps.sandbox.execPolicy(sessionId, cwd, started.executor), sessionCwd, started.cwd, { session: repo.top, run: worktree })
+    return denyReadCopies(policy, worktree)
   }
 
   /**

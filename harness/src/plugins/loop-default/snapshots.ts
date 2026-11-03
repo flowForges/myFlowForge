@@ -15,6 +15,8 @@ export interface SnapshotDeps {
   tmpDir: string
   log: Logger
   append(e: Omit<KernelEvent, 'seq' | 'ts'>): unknown
+  /** 沙箱写得到的根(仓库之外):过滤器落在里面,快照就不拍 */
+  writableRoots?: string[]
   /** 超过这么久记日志;默认 5 s */
   slowMs?: number
 }
@@ -35,8 +37,10 @@ async function timed<T>(deps: SnapshotDeps, what: string, fn: () => Promise<T>):
   }
 }
 
+const gitOpts = (deps: SnapshotDeps) => ({ tmpDir: deps.tmpDir, writableRoots: deps.writableRoots })
+
 const take = (deps: SnapshotDeps, t: SnapshotTarget, turnId: string, phase: Phase): Promise<SnapshotResult> =>
-  timed(deps, phase, () => takeSnapshot(t.cwd, snapshotRef(t.sessionId, turnId, phase), deps.git, { tmpDir: deps.tmpDir }))
+  timed(deps, phase, () => takeSnapshot(t.cwd, snapshotRef(t.sessionId, turnId, phase), deps.git, gitOpts(deps)))
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err))
 
@@ -65,7 +69,7 @@ export async function endSnapshot(deps: SnapshotDeps, t: SnapshotTarget, turnId:
   if (r.reason === 'error') deps.log.warn('end snapshot failed', { turnId })
   let changed: number | undefined
   if (startRef && r.ref) {
-    changed = await timed(deps, 'changes', () => changes(t.cwd, startRef, r.ref!, deps.git, { tmpDir: deps.tmpDir })).then(
+    changed = await timed(deps, 'changes', () => changes(t.cwd, startRef, r.ref!, deps.git, gitOpts(deps))).then(
       f => f.length,
       err => {
         deps.log.warn('snapshot diff failed', { error: err instanceof Error ? err.message : String(err) })
@@ -129,7 +133,7 @@ export async function turnChanges(deps: SnapshotDeps, t: SnapshotTarget, events:
   const ts = scan(t.sessionId, events).turns.get(turnId)
   if (!ts?.start || !ts.end) throw new RpcError(ERR_INVALID_PARAMS, 'snapshots missing')
   try {
-    return await changes(t.cwd, ts.start, ts.end, deps.git, { tmpDir: deps.tmpDir })
+    return await changes(t.cwd, ts.start, ts.end, deps.git, gitOpts(deps))
   } catch (err) {
     throw gitFailed(deps, 'turn.changes', err)
   }
@@ -149,12 +153,12 @@ export async function rollbackTurn(deps: SnapshotDeps, t: SnapshotTarget, events
   const refs = rollbackRefs(t.sessionId, events, turnId)
   if (!refs) throw new RpcError(ERR_INVALID_PARAMS, 'not rollbackable')
   const preRef = preRollbackRef(t.sessionId, turnId, Date.now())
-  const pre = await timed(deps, 'pre-rollback', () => takeSnapshot(t.cwd, preRef, deps.git, { tmpDir: deps.tmpDir, createOnly: true }))
+  const pre = await timed(deps, 'pre-rollback', () => takeSnapshot(t.cwd, preRef, deps.git, { ...gitOpts(deps), createOnly: true }))
   if (!pre.ref) throw new RpcError(ERR_INTERNAL, `pre-rollback snapshot failed: ${pre.reason ?? 'error'}`)
   let files: FileChange[]
   let skipped: string[]
   try {
-    const opts = { tmpDir: deps.tmpDir }
+    const opts = gitOpts(deps)
     files = await timed(deps, 'changes', () => changes(t.cwd, refs.start, refs.end, deps.git, opts))
     skipped = await submodulePaths(t.cwd, refs.start, refs.end, deps.git, opts)
   } catch (err) {
@@ -162,7 +166,7 @@ export async function rollbackTurn(deps: SnapshotDeps, t: SnapshotTarget, events
   }
   const restorable = files.filter(f => !skipped.includes(f.path))
   try {
-    await timed(deps, 'restore', () => restore(t.cwd, refs.start, restorable, deps.git, { tmpDir: deps.tmpDir }))
+    await timed(deps, 'restore', () => restore(t.cwd, refs.start, restorable, deps.git, gitOpts(deps)))
   } catch (err) {
     throw gitFailed(deps, 'restore', err)
   }

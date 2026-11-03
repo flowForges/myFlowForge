@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { changes, createGit, gitEnv, pruneRefs, repoInfo, restore, takeSnapshot, type Git } from './snapshot'
+import { changes, createGit, gitEnv, pruneRefs, refExists, repoInfo, restore, takeSnapshot, unsafeFilterCommand, type Git } from './snapshot'
 
 let root: string
 let home: string
@@ -548,5 +548,243 @@ describe('pruneRefs', () => {
     expect(turns.has('t2')).toBe(true)
     expect(turns.has('t51')).toBe(true)
     expect(left.filter(r => r.startsWith('refs/mffai/snapshots/s1/t1-'))).toEqual([])
+  })
+})
+
+describe('a nested repo never gets entered by our add -A (Task 9 review C1)', () => {
+  const g = () => createGit({ base: base(), extraEnv: injected() })
+  const lsTree = (ref: string, p: string) => ug(['ls-tree', ref, p])
+  const filter = (mark: string) => `touch "${mark}"; cat`
+
+  /** Route A:新建的嵌套仓库,配置在 --separate-git-dir 里,绕开沙箱对 .git/config 的拦截;gitlink 写进索引 */
+  const routeA = (mark: string) => {
+    ug(['init', '-q', '--separate-git-dir', R('.sg'), R('sub')])
+    write(R('sub/f.txt'), 'one\n')
+    ug(['add', 'f.txt'], R('sub'))
+    commit('s', R('sub'))
+    const head = ug(['rev-parse', 'HEAD'], R('sub')).trim()
+    ug(['config', 'filter.x.clean', filter(mark)], R('sub'))
+    write(R('sub/.gitattributes'), '* filter=x\n')
+    write(R('sub/f.txt'), 'ONE\n') // 同样大小:git 只能读内容
+    ug(['add', 'sub'])
+    return head
+  }
+
+  /** Route B:仓库里本来就有 gitlink,不用写索引:在那个目录建仓库,HEAD 写成 gitlink 的 sha,对象经 alternates 拿到 */
+  const routeB = (mark: string) => {
+    const source = join(root, 'source')
+    mkdirSync(source)
+    initRepo(source)
+    write(join(source, 'f.txt'), 'one\n')
+    ug(['add', 'f.txt'], source)
+    commit('s', source)
+    const sha = ug(['rev-parse', 'HEAD'], source).trim()
+    ug(['update-index', '--add', '--cacheinfo', `160000,${sha},sub`])
+    commit('link')
+    mkdirSync(R('sub'))
+    ug(['init', '-q', '--separate-git-dir', R('.sg2'), R('sub')])
+    write(R('.sg2/objects/info/alternates'), `${join(source, '.git', 'objects')}\n`)
+    write(R('.sg2/HEAD'), `${sha}\n`)
+    ug(['config', 'filter.x.clean', filter(mark)], R('sub'))
+    ug(['reset', '-q', '--hard'], R('sub'))
+    write(R('sub/.gitattributes'), '* filter=x\n')
+    write(R('sub/f.txt'), 'ONE\n')
+    return sha
+  }
+
+  beforeEach(() => {
+    initRepo()
+    write(R('a.txt'), 'a\n')
+    ug(['add', 'a.txt'])
+    commit('init')
+  })
+
+  it('Route A: the filter does not run, and the gitlink is recorded at the nested HEAD', async () => {
+    const mark = join(root, 'ran')
+    const head = routeA(mark)
+    const r = await takeSnapshot(repo, 'refs/mffai/x/t-end', g(), { tmpDir: tmp })
+    expect(r.reason).toBeUndefined()
+    expect(existsSync(mark)).toBe(false)
+    expect(lsTree(r.ref!, 'sub')).toContain(`160000 commit ${head}`)
+  })
+
+  it('Route B: the filter does not run, and the gitlink stays', async () => {
+    const mark = join(root, 'ran')
+    const sha = routeB(mark)
+    const r = await takeSnapshot(repo, 'refs/mffai/x/t-end', g(), { tmpDir: tmp })
+    expect(r.reason).toBeUndefined()
+    expect(existsSync(mark)).toBe(false)
+    expect(lsTree(r.ref!, 'sub')).toContain(`160000 commit ${sha}`)
+  })
+
+  it('the user\'s index keeps the gitlink: only the temp index loses it', async () => {
+    routeA(join(root, 'ran'))
+    const before = readFileSync(R('.git/index')).toString('hex')
+    await takeSnapshot(repo, 'refs/mffai/x/t-end', g(), { tmpDir: tmp })
+    expect(readFileSync(R('.git/index')).toString('hex')).toBe(before)
+    expect(ug(['ls-files', '-s', 'sub'])).toContain('160000')
+  })
+
+  it('an unpopulated gitlink stays as it is, not recorded as deleted', async () => {
+    const sha = '1'.repeat(40)
+    ug(['update-index', '--add', '--cacheinfo', `160000,${sha},vendor/lib`])
+    commit('link')
+    mkdirSync(R('vendor/lib'), { recursive: true }) // git submodule init 之后、update 之前的样子
+    const r = await takeSnapshot(repo, 'refs/mffai/x/t-end', g(), { tmpDir: tmp })
+    expect(lsTree(r.ref!, 'vendor/lib')).toContain(`160000 commit ${sha}`)
+  })
+
+  it('a real submodule that moved on is recorded at its new HEAD', async () => {
+    routeA(join(root, 'ran'))
+    ug(['config', '--unset', 'filter.x.clean'], R('sub'))
+    commit('with sub')
+    ug(['add', '-A'], R('sub'))
+    commit('moved', R('sub'))
+    const head = ug(['rev-parse', 'HEAD'], R('sub')).trim()
+    const r = await takeSnapshot(repo, 'refs/mffai/x/t-end', g(), { tmpDir: tmp })
+    expect(lsTree(r.ref!, 'sub')).toContain(`160000 commit ${head}`)
+  })
+
+  it('a gitlink outside a subdirectory session is left alone', async () => {
+    const mark = join(root, 'ran')
+    routeA(mark)
+    mkdirSync(R('work'))
+    write(R('work/w.txt'), 'w\n')
+    const r = await takeSnapshot(R('work'), 'refs/mffai/x/t-end', g(), { tmpDir: tmp })
+    expect(existsSync(mark)).toBe(false)
+    expect(lsTree(r.ref!, 'sub')).toContain('160000 commit')
+  })
+})
+
+describe('a filter a sandboxed CLI could rewrite never runs (Task 9 review C3)', () => {
+  const g = () => createGit({ base: base(), extraEnv: injected() })
+  const mark = () => join(root, 'filter-ran')
+
+  const fixture = (key: 'clean' | 'smudge' | 'process' = 'clean', command = './tool.sh') => {
+    initRepo()
+    write(R('tool.sh'), `#!/bin/sh\ntouch "${mark()}"\ncat\n`)
+    chmodSync(R('tool.sh'), 0o755)
+    write(R('.gitattributes'), '*.dat filter=f\n')
+    write(R('x.dat'), 'data\n')
+    ug(['add', 'tool.sh', '.gitattributes'])
+    commit('init')
+    ug(['config', `filter.f.${key}`, command])
+  }
+
+  it.each(['clean', 'smudge', 'process'] as const)('takeSnapshot: a repo-relative %s → unsafe_filter, no ref, no marker', async key => {
+    fixture(key)
+    const r = await takeSnapshot(repo, 'refs/mffai/x/t-start', g(), { tmpDir: tmp })
+    expect(r).toEqual({ reason: 'unsafe_filter' })
+    expect(hidden()).toEqual([])
+    expect(existsSync(mark())).toBe(false)
+  })
+
+  it('a filter in the user\'s global config counts too', async () => {
+    initRepo()
+    write(R('a.txt'), 'a\n')
+    writeFileSync(join(root, 'gitconfig'), '[filter "g"]\n\tclean = ./tool.sh\n')
+    const r = await takeSnapshot(repo, 'refs/mffai/x/t-start', g(), { tmpDir: tmp })
+    expect(r.reason).toBe('unsafe_filter')
+  })
+
+  it('changes and restore refuse too, and the marker never appears', async () => {
+    initRepo()
+    write(R('.gitattributes'), '*.dat filter=f\n')
+    write(R('x.dat'), 'one\n')
+    ug(['add', '-A'])
+    commit('init')
+    const a = (await takeSnapshot(repo, 'refs/mffai/x/t-start', g(), { tmpDir: tmp })).ref!
+    write(R('x.dat'), 'two\n')
+    const b = (await takeSnapshot(repo, 'refs/mffai/x/t-end', g(), { tmpDir: tmp })).ref!
+    write(R('tool.sh'), `#!/bin/sh\ntouch "${mark()}"\ncat\n`)
+    chmodSync(R('tool.sh'), 0o755)
+    ug(['config', 'filter.f.smudge', './tool.sh'])
+    await expect(changes(repo, a, b, g(), { tmpDir: tmp })).rejects.toThrow(/unsafe_filter/)
+    await expect(restore(repo, a, [{ path: 'x.dat', status: 'M' }], g(), { tmpDir: tmp })).rejects.toThrow(/unsafe_filter/)
+    expect(readFileSync(R('x.dat'), 'utf8')).toBe('two\n')
+    expect(existsSync(mark())).toBe(false)
+  })
+
+  it('an absolute filter outside the writable roots still runs', async () => {
+    fixture('clean', '/usr/bin/tr a-z a-z')
+    const r = await takeSnapshot(repo, 'refs/mffai/x/t-start', g(), { tmpDir: tmp })
+    expect(r.reason).toBeUndefined()
+    expect(r.ref).toBeDefined()
+  })
+
+  it('an absolute filter inside a writable root the caller named is refused', async () => {
+    const writable = join(root, 'writable')
+    mkdirSync(writable)
+    fixture('clean', `${join(writable, 'tool.sh')} --x`)
+    const r = await takeSnapshot(repo, 'refs/mffai/x/t-start', g(), { tmpDir: tmp, writableRoots: [writable] })
+    expect(r.reason).toBe('unsafe_filter')
+  })
+
+  describe('unsafeFilterCommand', () => {
+    const o = () => ({ top: repo, roots: [repo, join(root, 'w')], path: `/usr/bin:/bin:${join(root, 'pathdir')}` })
+
+    it.each([
+      ['./tool.sh'], ['../tool.sh'], ['tools/clean.sh'], ['"./tool.sh" clean'],
+      ['sh tool.sh'], ['bash -c cat'], ['python3 tools/clean.py'], ['python3 -m stripper'], ['/usr/bin/python3 -m stripper'], ['node x'], ['env FOO=1 tr a b'], ['make clean'],
+      ['/usr/bin/tr a b; touch /x'], ['cat | sh'], ['$(./x)'], ['`./x`'], ['FOO=1 tr a b'], ['~/bin/x'], ['tr a b > out'], ['"$PWD/x"'], ['a\\ b'], ["'unterminated"],
+      ['tr a/b c'], ['awk -f tools/x.awk'], ['cat --file=tools/x'], ['"tr" "a b"'],
+    ])('%s is unsafe', command => {
+      expect(unsafeFilterCommand(command, o())).toBe(true)
+    })
+
+    it.each([
+      ['cat'], ['tr a-z A-Z'], ['git-lfs clean -- %f'], ['git-lfs filter-process'], ['"/usr/bin/tr" a b'], ['/usr/bin/tr a b'], ["'/usr/bin/tr' a b"], ['cat --x=y -- "%f"'], ['/usr/local/bin/git-crypt clean'],
+    ])('%s is fine', command => {
+      expect(unsafeFilterCommand(command, o())).toBe(false)
+    })
+
+    it('an empty command does nothing', () => {
+      expect(unsafeFilterCommand('', o())).toBe(false)
+    })
+
+    it('an absolute path inside the repo, inside a root, or linked into one', () => {
+      mkdirSync(join(root, 'links'))
+      symlinkSync(R('tool.sh'), join(root, 'links', 'tool'))
+      writeFileSync(R('tool.sh'), 'x')
+      for (const c of [R('tool.sh'), join(root, 'w', 'x'), join(root, 'links', 'tool'), `/usr/bin/tr ${R('tool.sh')}`, `/usr/bin/tr --from=${R('tool.sh')}`]) {
+        expect(unsafeFilterCommand(c, o())).toBe(true)
+      }
+    })
+
+    it('a bare word that names a file in the tree is a path', () => {
+      writeFileSync(R('rules'), 'x')
+      expect(unsafeFilterCommand('sed -f rules', o())).toBe(true)
+      expect(unsafeFilterCommand('sed -f other', o())).toBe(false)
+    })
+
+    it('a bare program is resolved on PATH: inside a writable root it is refused, a relative PATH entry too', () => {
+      const dir = join(root, 'w', 'bin')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, 'tool-x'), '#!/bin/sh\n')
+      chmodSync(join(dir, 'tool-x'), 0o755)
+      expect(unsafeFilterCommand('tool-x', { ...o(), path: `/usr/bin:${dir}` })).toBe(true)
+      expect(unsafeFilterCommand('cat', { ...o(), path: `.:/bin` })).toBe(true)
+      expect(unsafeFilterCommand('cat', { ...o(), path: `:/bin` })).toBe(true)
+      // 前面的条目先找到:后面那个可写目录轮不到
+      expect(unsafeFilterCommand('cat', { ...o(), path: `/bin:${dir}` })).toBe(false)
+      // 哪里都没有:什么也跑不起来
+      expect(unsafeFilterCommand('no-such-program-x', { ...o(), path: '/usr/bin' })).toBe(false)
+    })
+  })
+})
+
+describe('refExists', () => {
+  it('goes through the guarded wrapper, and answers yes or no', async () => {
+    initRepo()
+    write(R('a.txt'), 'a\n')
+    ug(['add', 'a.txt'])
+    commit('init')
+    const calls: string[][] = []
+    const real = createGit({ base: base(), extraEnv: injected() })
+    const g: Git = (args, o) => (calls.push(args), real(args, o))
+    await takeSnapshot(repo, 'refs/mffai/x/there', real, { tmpDir: tmp })
+    expect(await refExists(repo, 'refs/mffai/x/there', g, { tmpDir: tmp })).toBe(true)
+    expect(await refExists(repo, 'refs/mffai/x/gone', g, { tmpDir: tmp })).toBe(false)
+    expect(calls.every(a => a.some(x => x.startsWith('core.hooksPath=')))).toBe(true)
   })
 })

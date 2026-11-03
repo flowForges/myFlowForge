@@ -2369,8 +2369,8 @@ describe('worktrees', () => {
       expect(profile).toContain(`"${join(repo, 'hidden')}"="none"`)
       expect(profile).toContain(`"${join(wtPath(), 'gen')}"="read"`)
       expect(profile).toContain(`"${join(wtPath(), '.git')}"="read"`)
-      // :root 已经只读:用户的 refs 不用再写一遍
-      expect(profile).not.toContain(join(repo, '.git', 'refs'))
+      // :root 已经只读:用户的 git 目录不用再写一遍
+      expect(profile).not.toContain(`"${join(repo, '.git')}"`)
     })
 
     it('a subdirectory session: a rule root elsewhere in the repo has a copy in the checkout too, and it is mapped', async () => {
@@ -2401,8 +2401,7 @@ describe('worktrees', () => {
       await one(rig, sched({ adapter: 'qoder', isolation: 'wrapped' }))
       expect(cwds).toEqual([wtPath()])
       expect(captured!.denyRead).toEqual(expect.arrayContaining([join(wtPath(), 'hidden'), join(repo, 'hidden')]))
-      const g = join(repo, '.git')
-      expect(captured!.denyWrite).toEqual(expect.arrayContaining([join(wtPath(), 'gen'), join(repo, 'gen'), join(wtPath(), '.git'), join(g, 'index'), join(g, 'HEAD'), join(g, 'refs'), join(g, 'packed-refs'), join(g, 'logs', 'refs')]))
+      expect(captured!.denyWrite).toEqual(expect.arrayContaining([join(wtPath(), 'gen'), join(repo, 'gen'), join(wtPath(), '.git'), join(repo, '.git')]))
       const argv = fake.calls()[0].argv
       expect(argv[argv.indexOf('--cwd') + 1]).toBe(wtPath())
     })
@@ -2786,6 +2785,208 @@ describe('worktrees', () => {
     })
   })
 
+  describe('a filter the CLI could rewrite (C3)', () => {
+    const plant = (mark: string) => {
+      writeFileSync(join(repo, 'tool.sh'), `#!/bin/sh\ntouch "${mark}"\ncat\n`)
+      chmodSync(join(repo, 'tool.sh'), 0o755)
+      writeFileSync(join(repo, '.gitattributes'), '*.dat filter=f\n')
+      writeFileSync(join(repo, 'x.dat'), 'one\n')
+      ug(['config', 'filter.f.clean', './tool.sh'])
+    }
+
+    it('a schedule session: no snapshot, so no worktree, so no run; never in place', async () => {
+      const mark = join(root, 'filter-ran')
+      plant(mark)
+      const fake = installFake({ writeFiles: { 'n.txt': 'n\n' }, lines: CODEX_OK })
+      const rig = setup([fake], { deps: deps() })
+      const { end } = await one(rig, sched())
+      expect(end).toMatchObject({ status: 'failed', reason: 'worktree_unavailable' })
+      expect(fake.calls()).toEqual([])
+      expect(existsSync(mark)).toBe(false)
+      expect(existsSync(wtRoot())).toBe(false)
+    })
+
+    it('an app session: the run goes ahead, without git changes', async () => {
+      const mark = join(root, 'filter-ran')
+      plant(mark)
+      const fake = installFake({ writeFiles: { 'n.txt': 'n\n' }, lines: CODEX_OK })
+      const rig = setup([fake], { deps: deps() })
+      const { end } = await one(rig)
+      expect(end.status).toBe('ok')
+      expect(end.changed.source).toBe('none')
+      expect(existsSync(mark)).toBe(false)
+      expect(rig.warnings.some(w => w.includes('filter'))).toBe(true)
+    })
+
+    it('executor.changes: with or without an end ref, it reports what run.ended recorded and runs nothing', async () => {
+      const mark = join(root, 'filter-ran')
+      const fake = installFake({ writeFiles: { 'n.txt': 'n\n' }, lines: CODEX_OK })
+      const rig = setup([fake], { deps: deps() })
+      const { runId } = await one(rig, sched())
+      plant(mark)
+      writeFileSync(join(wtPath(), '.gitattributes'), '*.txt filter=f\n')
+      const restarted = setup([fake], { deps: deps({ history: () => rig.events as never }) })
+      const reported = { files: [{ path: 'n.txt', status: 'M' }], source: 'git' }
+      expect(await restarted.manager.changes(SID, runId)).toEqual(reported)
+      ug(['update-ref', '-d', `refs/mffai/runs/${SID}/${runId}-end`])
+      expect(await restarted.manager.changes(SID, runId)).toEqual(reported)
+      expect(existsSync(mark)).toBe(false)
+    })
+
+    it('a filter inside the worktree root or a CLI-writable dir is caught from the manager\'s own list', async () => {
+      const fake = installFake({ lines: CODEX_OK })
+      let n = 0
+      const rig = setup([fake], { deps: deps({ newId: () => `run_${n++}` }) })
+      for (const [i, place] of [join(wtRoot(), 'tool.sh'), join(home, '.qoder', 'cache', 'tool.sh')].entries()) {
+        ug(['config', 'filter.f.clean', place])
+        const { end } = await one(rig, sched({ turnId: `t${i}` }))
+        expect(end.reason).toBe('worktree_unavailable')
+      }
+      expect(fake.calls()).toEqual([])
+    })
+
+    it('an absolute filter outside the writable roots does not stop the run', async () => {
+      ug(['config', 'filter.f.clean', '/usr/bin/tr a-z a-z'])
+      const fake = installFake({ writeFiles: { 'n.txt': 'n\n' }, lines: CODEX_OK })
+      const rig = setup([fake], { deps: deps() })
+      const { end } = await one(rig, sched())
+      expect(end).toMatchObject({ status: 'ok', worktree: wtPath() })
+      expect(end.changed.source).toBe('git')
+    })
+  })
+
+  describe('the worktree root may not overlap the session repo (I4)', () => {
+    it('inside the repo → worktree_unavailable, nothing made, no snapshot taken', async () => {
+      const inside = join(repo, '.wt-root')
+      const fake = installFake({ lines: CODEX_OK })
+      const rig = setup([fake], { deps: deps({ worktreeRoot: inside }) })
+      const { end } = await one(rig, sched())
+      expect(end).toMatchObject({ status: 'failed', reason: 'worktree_unavailable' })
+      expect(fake.calls()).toEqual([])
+      expect(existsSync(inside)).toBe(false)
+      expect(ug(['for-each-ref', 'refs/mffai'])).toBe('')
+    })
+
+    it('the session cwd inside the root → the same', async () => {
+      const inner = join(root, 'wt', 'inner')
+      mkdirSync(inner, { recursive: true })
+      ug(['init', '-q'], inner)
+      const fake = installFake({ lines: CODEX_OK })
+      const rig = setup([fake], { deps: deps(), sessionCwd: { [SID]: inner } })
+      const { end } = await one(rig, sched({ cwd: inner }))
+      expect(end.reason).toBe('worktree_unavailable')
+      expect(fake.calls()).toEqual([])
+    })
+  })
+
+  describe('deny-read copies do not outlive the run (I2)', () => {
+    const policy = (cwd: string) => ({ ...POLICY, ruleDenyRead: [join(cwd, 'hidden')] })
+    const withHidden = () => {
+      mkdirSync(join(repo, 'hidden'))
+      writeFileSync(join(repo, 'hidden', 'h.txt'), 'HIDDENTEXT\n')
+    }
+
+    it('gone from the retained worktree, out of the diff, and still in the session', async () => {
+      withHidden()
+      const fake = installFake({ writeFiles: { 'n.txt': 'n\n' }, lines: CODEX_OK })
+      const rig = setup([fake], { policy, deps: deps() })
+      const { end, runId } = await one(rig, sched())
+      expect(existsSync(join(wtPath(), 'hidden'))).toBe(false)
+      expect(end.changed.files).toEqual(['n.txt'])
+      expect(existsSync(join(repo, 'hidden', 'h.txt'))).toBe(true)
+      const restarted = setup([fake], { policy, deps: deps({ history: () => rig.events as never }) })
+      ug(['update-ref', '-d', `refs/mffai/runs/${SID}/${runId}-end`])
+      expect((await restarted.manager.changes(SID, runId)).files).toEqual([{ path: 'n.txt', status: 'A' }])
+    })
+
+    it('a tracked file: the deletion does not show as a change', async () => {
+      withHidden()
+      ug(['add', '-A'])
+      ug(['commit', '-qm', 'hidden tracked'])
+      const fake = installFake({ writeFiles: { 'n.txt': 'n\n' }, lines: CODEX_OK })
+      const rig = setup([fake], { policy, deps: deps() })
+      const { end } = await one(rig, sched())
+      expect(existsSync(join(wtPath(), 'hidden'))).toBe(false)
+      expect(end.changed.files).toEqual(['n.txt'])
+    })
+
+    it('a subdirectory session: a root elsewhere in the repo goes too', async () => {
+      const sub = join(repo, 'sub')
+      mkdirSync(sub)
+      mkdirSync(join(repo, 'other', 'hidden'), { recursive: true })
+      writeFileSync(join(repo, 'other', 'hidden', 'h.txt'), 'h\n')
+      ug(['add', '-A'])
+      ug(['commit', '-qm', 'other'])
+      const fake = installFake({ lines: CODEX_OK })
+      const rig = setup([fake], { policy: () => ({ ...POLICY, ruleDenyRead: [join(repo, 'other', 'hidden')] }), deps: deps(), sessionCwd: { [SID]: sub } })
+      await one(rig, sched({ cwd: sub }))
+      expect(existsSync(join(wtPath(), 'other', 'hidden'))).toBe(false)
+    })
+
+    it('a failed run, and a cancelled one, too', async () => {
+      withHidden()
+      const fake = installFake({ exit: 3 })
+      let n = 0
+      const rig = setup([fake], { policy, deps: deps({ newId: () => `run_${n++}` }) })
+      const failedRun = await one(rig, sched())
+      expect(failedRun.end.status).toBe('failed')
+      expect(failedRun.end.worktree).toBeDefined()
+      expect(existsSync(join(wtPath(failedRun.runId), 'hidden'))).toBe(false)
+
+      const alive = installFake({ forwarding: true })
+      const rig2 = setup([alive], { policy, deps: deps({ newId: () => `run_c${n++}` }) })
+      const running = submit(rig2, sched({ turnId: 't2' }))
+      await alive.waitPid('cli')
+      rig2.manager.cancel(SID, running)
+      await drain(rig2, 't2')
+      expect(existsSync(join(wtPath(running), 'hidden'))).toBe(false)
+      expect(existsSync(join(wtPath(running), 'a.txt'))).toBe(true)
+    }, 30_000)
+
+    it('a kernel stop too: no end snapshot runs, the copies still go', async () => {
+      withHidden()
+      const alive = installFake({ forwarding: true })
+      const rig = setup([alive], { policy, deps: deps() })
+      const running = submit(rig, sched())
+      await alive.waitPid('cli')
+      await rig.manager.abandonAll('kernel_stopping')
+      expect(rig.ended(running)).toMatchObject({ status: 'interrupted', worktree: wtPath() })
+      expect(existsSync(join(wtPath(), 'hidden'))).toBe(false)
+    }, 30_000)
+
+    it('a link planted on the way: nothing outside the worktree is deleted, and it warns', async () => {
+      const outside = join(root, 'outside')
+      mkdirSync(join(outside, 'hidden'), { recursive: true })
+      writeFileSync(join(outside, 'hidden', 'keep'), 'keep\n')
+      const fake = installFake({ run: `ln -s "${outside}" a; exit 0` })
+      const rig = setup([fake], { policy: cwd => ({ ...POLICY, ruleDenyRead: [join(cwd, 'a', 'hidden')] }), deps: deps() })
+      await one(rig, sched())
+      expect(existsSync(join(outside, 'hidden', 'keep'))).toBe(true)
+      expect(rig.warnings.some(w => w.includes('worktree'))).toBe(true)
+    })
+  })
+
+  it('discard after a user worktree went missing leaves the user\'s entry (I1)', async () => {
+    const external = join(root, 'external-drive')
+    ug(['worktree', 'add', '-q', '--detach', external])
+    rmSync(external, { recursive: true, force: true })
+    const fake = installFake({ lines: CODEX_OK })
+    const rig = setup([fake], { deps: deps() })
+    const { runId } = await one(rig, sched())
+    expect(await rig.manager.discard(SID, runId)).toEqual({ ok: true })
+    expect(readdirSync(join(repo, '.git', 'worktrees'))).toEqual(['external-drive'])
+  })
+
+  it('an unused worktree beside a user worktree that went missing: the same', async () => {
+    const external = join(root, 'external-drive')
+    ug(['worktree', 'add', '-q', '--detach', external])
+    rmSync(external, { recursive: true, force: true })
+    const fake = installFake({ lines: CODEX_OK })
+    const rig = setup([fake], { deps: deps() })
+    await one(rig, sched({ model: '--nope' }))
+    expect(readdirSync(join(repo, '.git', 'worktrees'))).toEqual(['external-drive'])
+  })
+
   it('two worktree writers are not concurrent: they do not share a tree', async () => {
     const fake = installFake({ writeFiles: { 'made.txt': 'made\n' }, lines: CODEX_OK, sleep: 300 })
     let n = 0
@@ -2842,7 +3043,9 @@ describe('worktrees', () => {
         // 对照:这段脚本确实跑了,worktree 里那份确实存在
         expect(raw).toContain('VISIBLETEXT')
         expect(raw).toContain('WROTE-WORKTREE')
-        expect(readFileSync(join(wtPath(), 'hidden', 'h.txt'), 'utf8')).toBe('HIDDENTEXT\n')
+        // 跑的时候副本在,跑完就删了(I2);差异里也不出现
+        expect(ug(['ls-tree', '-r', '--name-only', `refs/mffai/runs/${SID}/${RUN}-start`])).toContain('hidden/h.txt')
+        expect(existsSync(join(wtPath(), 'hidden'))).toBe(false)
         expect(digest(repo)).toEqual(before)
         expect(end).toMatchObject({ worktree: wtPath() })
         expect(end.changed).toMatchObject({ source: 'git', files: ['out.txt'] })
@@ -2851,15 +3054,18 @@ describe('worktrees', () => {
       }
     }, 30_000)
 
-    it.skipIf(!usable)('the git dir stays protected: config, hooks, the .git file and the admin files; the user\'s branch, index and stash too. A commit in the worktree still works', async () => {
+    const session = () => {
       stashSomething()
       writeFileSync(join(repo, 'a.txt'), 'dirty\n')
       ug(['add', 'a.txt'])
+    }
+
+    it.skipIf(!usable)('the git dir stays protected: config, hooks, the .git file and the admin files; all of the common dir is read-only, so git add and commit fail too', async () => {
+      session()
       const g = join(repo, '.git')
       const admin = join(g, 'worktrees', RUN)
       const script = [
         'export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.invalid GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.invalid',
-        // 不该成功的
         `(echo x >> "${join(g, 'config')}") && echo WROTE-CONFIG`,
         `(echo x > "${join(g, 'hooks', 'post-commit')}") && echo WROTE-HOOK`,
         '(echo x >> .git) && echo WROTE-GITFILE',
@@ -2871,17 +3077,15 @@ describe('worktrees', () => {
         `(mv "${admin}" "${admin}-moved") && echo MOVED-ADMIN`,
         `(mkdir "${join(g, 'worktrees', 'planted')}") && echo PLANTED-ADMIN`,
         `(git worktree add -q --detach "${join(root, 'second')}") && echo WORKTREE-ADDED`,
-        `(echo x >> "${join(g, 'index')}") && echo WROTE-INDEX`,
-        `(echo x >> "${join(g, 'HEAD')}") && echo WROTE-HEAD`,
         '(git update-ref refs/heads/stolen HEAD) && echo MADE-BRANCH',
         '(git update-ref -d refs/stash) && echo DROPPED-STASH',
         '(echo changed > b.txt; git stash push -q) && echo STASHED',
-        'git checkout -q -- b.txt',
-        // 该成功的
+        '(git checkout -q -b branch-here) && echo CHECKED-OUT-BRANCH',
         'echo x > out.txt',
-        'git add out.txt && git commit -qm in-worktree && echo COMMITTED',
-        'git rev-parse HEAD',
-        'git log -1 --format=%s',
+        '(git add out.txt) && echo ADDED',
+        '(git commit -qm in-worktree) && echo COMMITTED',
+        // 读没问题
+        'git rev-parse HEAD && echo READ-OK',
         'exit 0',
       ].join('\n')
       const fake = installFake({ run: script }, 'qodercli')
@@ -2889,29 +3093,210 @@ describe('worktrees', () => {
       try {
         const rig = setup([fake], { deps: deps({ sandbox }) })
         const bytes = userGit()
-        const refs = ug(['for-each-ref', '--format=%(refname) %(objectname)'])
+        const refs = () => ug(['for-each-ref', '--format=%(refname) %(objectname)']).split('\n').filter(l => !l.startsWith('refs/mffai/')).join('\n')
+        const before = refs()
         const config = readFileSync(join(g, 'config'), 'utf8')
         const { end, runId } = await one(rig, sched({ adapter: 'qoder', isolation: 'wrapped' }))
         const raw = rawLogOf(end)
-        for (const word of ['WROTE-CONFIG', 'WROTE-HOOK', 'WROTE-GITFILE', 'REMOVED-GITFILE', 'MOVED-GITFILE', 'WROTE-COMMONDIR', 'WROTE-GITDIR', 'WROTE-CONFIGWT', 'MOVED-ADMIN', 'PLANTED-ADMIN', 'WORKTREE-ADDED', 'WROTE-INDEX', 'WROTE-HEAD', 'MADE-BRANCH', 'DROPPED-STASH', 'STASHED']) {
+        for (const word of ['WROTE-CONFIG', 'WROTE-HOOK', 'WROTE-GITFILE', 'REMOVED-GITFILE', 'MOVED-GITFILE', 'WROTE-COMMONDIR', 'WROTE-GITDIR', 'WROTE-CONFIGWT', 'MOVED-ADMIN', 'PLANTED-ADMIN', 'WORKTREE-ADDED', 'MADE-BRANCH', 'DROPPED-STASH', 'STASHED', 'CHECKED-OUT-BRANCH', 'ADDED', 'COMMITTED']) {
           expect(raw, word).not.toContain(word)
         }
-        expect(raw).toContain('COMMITTED')
-        expect(raw).toContain('in-worktree')
-        // 提交就在 worktree 的游离 HEAD 上,用户的分支没动
-        expect(ug(['log', '-1', '--format=%s'], wtPath()).trim()).toBe('in-worktree')
+        expect(raw).toContain('READ-OK')
         expect(userGit()).toEqual(bytes)
+        expect(refs()).toBe(before)
         expect(readFileSync(join(g, 'config'), 'utf8')).toBe(config)
         expect(existsSync(join(g, 'hooks', 'post-commit'))).toBe(false)
         expect(readdirSync(join(g, 'worktrees'))).toEqual([RUN])
-        const after = ug(['for-each-ref', '--format=%(refname) %(objectname)']).split('\n').filter(l => !l.startsWith('refs/mffai/'))
-        expect(after.join('\n')).toBe(refs.split('\n').filter(l => !l.startsWith('refs/mffai/')).join('\n'))
-        // 跑完的结果照常:差异算得出,丢弃也干净
+        // 改动没进提交,快照照样算得出
         expect(end.changed).toMatchObject({ source: 'git' })
         expect(end.changed.files).toContain('out.txt')
         expect(await rig.manager.discard(SID, runId)).toEqual({ ok: true })
         expect(worktreeList()).toEqual([repo])
         expect(userGit()).toEqual(bytes)
+      } finally {
+        await sandbox.close()
+      }
+    }, 60_000)
+
+    it.skipIf(!usable)('each of the direct writes that used to get through is denied, and the user\'s git works afterwards', async () => {
+      session()
+      const g = join(repo, '.git')
+      const userTree = join(root, 'user-tree')
+      ug(['worktree', 'add', '-q', '--detach', userTree])
+      mkdirSync(join(g, 'rebase-merge'))
+      writeFileSync(join(g, 'rebase-merge', 'git-rebase-todo'), 'noop\n')
+      mkdirSync(join(g, 'info'), { recursive: true })
+      writeFileSync(join(g, 'info', 'exclude'), '')
+      const objects = readdirSync(join(g, 'objects')).find(n => /^[0-9a-f]{2}$/.test(n))!
+      const objectFile = readdirSync(join(g, 'objects', objects))[0]
+      const own = join(g, 'worktrees', RUN)
+      const user = join(g, 'worktrees', 'user-tree')
+      const probes: [string, string][] = [
+        ['OBJECTS', `rm -rf "${join(g, 'objects', objects)}"`],
+        ['USER-HEAD', `echo x >> "${join(user, 'HEAD')}"`],
+        ['USER-INDEX', `echo x >> "${join(user, 'index')}"`],
+        ['USER-LOCKED', `echo x > "${join(user, 'locked')}"`],
+        ['INDEX-LOCK', `echo x > "${join(g, 'index.lock')}"`],
+        ['HEAD-LOCK', `echo x > "${join(g, 'HEAD.lock')}"`],
+        ['SHALLOW', `echo x > "${join(g, 'shallow')}"`],
+        ['REBASE-TODO', `echo "exec touch x" >> "${join(g, 'rebase-merge', 'git-rebase-todo')}"`],
+        ['INFO-EXCLUDE', `echo "plant.env" >> "${join(g, 'info', 'exclude')}"`],
+        ['INFO-ATTRIBUTES', `echo "* filter=x" > "${join(g, 'info', 'attributes')}"`],
+        ['ALTERNATES', `echo /nowhere > "${join(g, 'objects', 'info', 'alternates')}"`],
+        ['MERGE-HEAD', `echo x > "${join(g, 'MERGE_HEAD')}"`],
+        ['OWN-HEAD', `echo "ref: refs/heads/main" > "${join(own, 'HEAD')}"`],
+        ['OWN-INDEX', `echo x >> "${join(own, 'index')}"`],
+        ['USER-INDEX-MAIN', `echo x >> "${join(g, 'index')}"`],
+        ['USER-HEAD-MAIN', `echo x >> "${join(g, 'HEAD')}"`],
+      ]
+      const script = [...probes.map(([word, cmd]) => `(${cmd}) 2>/dev/null && echo DID-${word}`), 'echo x > out.txt && echo WROTE-TREE', 'exit 0'].join('\n')
+      const fake = installFake({ run: script }, 'qodercli')
+      const sandbox = service()
+      try {
+        const rig = setup([fake], { deps: deps({ sandbox }) })
+        const bytes = userGit()
+        const { end } = await one(rig, sched({ adapter: 'qoder', isolation: 'wrapped' }))
+        const raw = rawLogOf(end)
+        for (const [word] of probes) expect(raw, word).not.toContain(`DID-${word}`)
+        expect(raw).toContain('WROTE-TREE')
+        expect(userGit()).toEqual(bytes)
+        expect(existsSync(join(g, 'objects', objects, objectFile))).toBe(true)
+        expect(existsSync(join(g, 'index.lock'))).toBe(false)
+        expect(existsSync(join(g, 'shallow'))).toBe(false)
+        expect(readFileSync(join(g, 'info', 'exclude'), 'utf8')).toBe('')
+        expect(readFileSync(join(g, 'rebase-merge', 'git-rebase-todo'), 'utf8')).toBe('noop\n')
+        expect(end.changed.files).toContain('out.txt')
+      } finally {
+        await sandbox.close()
+      }
+    }, 60_000)
+
+    /** gitlink 的来源仓库,在沙箱看得到的地方 */
+    const nestedSource = () => {
+      const source = join(root, 'source')
+      mkdirSync(source)
+      const sg = (args: string[]) => execFileSync('git', args, { cwd: source, env: gitBase, stdio: 'ignore' })
+      sg(['init', '-q'])
+      writeFileSync(join(source, 'f.txt'), 'one\n')
+      sg(['add', 'f.txt'])
+      sg(['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-qm', 's'])
+      return { objects: join(source, '.git', 'objects'), sha: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: source, env: gitBase }).toString().trim() }
+    }
+    const IDENT = 'export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.invalid GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.invalid'
+
+    /** C1 Route B:不写索引,只在 gitlink 的目录里建仓库 */
+    const routeB = (mark: string, objects: string, sha: string) => [
+      IDENT,
+      'mkdir -p sub',
+      'git init -q --separate-git-dir "$PWD/.sg2" sub',
+      `echo "${objects}" > .sg2/objects/info/alternates`,
+      `echo "${sha}" > .sg2/HEAD`,
+      `git -C sub config filter.x.clean 'touch "${mark}"; cat'`,
+      'git -C sub reset -q --hard',
+      `echo '* filter=x' > sub/.gitattributes`,
+      'echo ONE > sub/f.txt',
+      'echo PLANTED',
+      'exit 0',
+    ].join('\n')
+
+    /** C1 Route A:新的嵌套仓库,gitlink 进索引 */
+    const routeA = (mark: string) => [
+      IDENT,
+      'git init -q --separate-git-dir "$PWD/.sg" sub',
+      'cd sub',
+      'echo one > f.txt',
+      'git add f.txt',
+      'git commit -qm s',
+      `git config filter.x.clean 'touch "${mark}"; cat'`,
+      `echo '* filter=x' > .gitattributes`,
+      'echo ONE > f.txt',
+      'cd ..',
+      'git add sub && echo PLANTED',
+      'exit 0',
+    ].join('\n')
+
+    it.skipIf(!usable)('C1 Route B in a worktree: a planted repo at an existing gitlink never runs its filter outside the sandbox', async () => {
+      const { objects, sha } = nestedSource()
+      ug(['update-index', '--add', '--cacheinfo', `160000,${sha},sub`])
+      ug(['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-qm', 'link'])
+      const mark = join(root, 'filter-ran')
+      const fake = installFake({ run: routeB(mark, objects, sha) }, 'qodercli')
+      const sandbox = service()
+      try {
+        const rig = setup([fake], { deps: deps({ sandbox }) })
+        const { end } = await one(rig, sched({ adapter: 'qoder', isolation: 'wrapped' }))
+        expect(rawLogOf(end)).toContain('PLANTED')
+        expect(existsSync(mark)).toBe(false)
+        expect(end.changed.source).toBe('git')
+      } finally {
+        await sandbox.close()
+      }
+    }, 60_000)
+
+    it.skipIf(!usable)('C1 Route B in place: the same plant, an app session', async () => {
+      const { objects, sha } = nestedSource()
+      ug(['update-index', '--add', '--cacheinfo', `160000,${sha},sub`])
+      ug(['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-qm', 'link'])
+      const mark = join(root, 'filter-ran')
+      const fake = installFake({ run: routeB(mark, objects, sha) }, 'qodercli')
+      const sandbox = service()
+      try {
+        const rig = setup([fake], { deps: deps({ sandbox }) })
+        const { end } = await one(rig, { adapter: 'qoder', isolation: 'wrapped' })
+        expect(rawLogOf(end)).toContain('PLANTED')
+        expect(existsSync(mark)).toBe(false)
+        expect(end.changed.source).toBe('git')
+      } finally {
+        await sandbox.close()
+      }
+    }, 60_000)
+
+    it.skipIf(!usable)('C1 Route A in place: a new nested repo whose gitlink the CLI added itself', async () => {
+      const mark = join(root, 'filter-ran')
+      const fake = installFake({ run: routeA(mark) }, 'qodercli')
+      const sandbox = service()
+      try {
+        const rig = setup([fake], { deps: deps({ sandbox }) })
+        const { end } = await one(rig, { adapter: 'qoder', isolation: 'wrapped' })
+        expect(rawLogOf(end)).toContain('PLANTED')
+        expect(existsSync(mark)).toBe(false)
+        expect(end.changed.source).toBe('git')
+      } finally {
+        await sandbox.close()
+      }
+    }, 60_000)
+
+    it.skipIf(!usable)('C1 Route A in a worktree: blocked earlier, at git add', async () => {
+      const mark = join(root, 'filter-ran')
+      const fake = installFake({ run: routeA(mark) }, 'qodercli')
+      const sandbox = service()
+      try {
+        const rig = setup([fake], { deps: deps({ sandbox }) })
+        const { end } = await one(rig, sched({ adapter: 'qoder', isolation: 'wrapped' }))
+        expect(rawLogOf(end)).not.toContain('PLANTED')
+        expect(existsSync(mark)).toBe(false)
+      } finally {
+        await sandbox.close()
+      }
+    }, 60_000)
+
+    it.skipIf(!usable)('C3: the CLI rewrites a repo-relative filter script; in place it never runs outside the sandbox', async () => {
+      const mark = join(root, 'filter-ran')
+      writeFileSync(join(repo, 'tool.sh'), '#!/bin/sh\ncat\n')
+      chmodSync(join(repo, 'tool.sh'), 0o755)
+      writeFileSync(join(repo, '.gitattributes'), '*.dat filter=f\n')
+      writeFileSync(join(repo, 'x.dat'), 'one\n')
+      ug(['config', 'filter.f.clean', './tool.sh'])
+      const script = [`printf '#!/bin/sh\\ntouch "%s"\\ncat\\n' "${mark}" > tool.sh`, 'echo two > x.dat', 'echo DONE', 'exit 0'].join('\n')
+      const fake = installFake({ run: script }, 'qodercli')
+      const sandbox = service()
+      try {
+        const rig = setup([fake], { deps: deps({ sandbox }) })
+        const { end } = await one(rig, { adapter: 'qoder', isolation: 'wrapped' })
+        expect(rawLogOf(end)).toContain('DONE')
+        expect(readFileSync(join(repo, 'tool.sh'), 'utf8')).toContain('touch')
+        expect(existsSync(mark)).toBe(false)
+        expect(end.changed.source).not.toBe('git')
       } finally {
         await sandbox.close()
       }
