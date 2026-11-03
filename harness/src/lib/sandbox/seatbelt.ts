@@ -1,7 +1,7 @@
 // 设计参考 anthropic-experimental/sandbox-runtime(Apache-2.0)
 // macOS Seatbelt 配置(spec §8,评审修订 R1–R4、R6)。纯拼字符串;唯一的 I/O 是给每个路径取 realpath 拼写。
 // Seatbelt 后写的规则生效,所以顺序即语义:读 = 全放 → 拒 denyRead → 放回 reAllowRead → 拒 finalDenyRead;
-// 写 = a 放 writable → b 拒 denyWrite 与 git 保护 → c 放回 reAllowWrite → c2 拒 finalDenyWrite → d 拒改名 / 删除 moveBlock。
+// 写 = a 放 writable → b 拒 denyWrite 与 git 保护 → c 放回 reAllowWrite → c2 拒 finalDenyWrite → d 拒改名 / 删除 moveBlock → e 拒新建 .git。
 //
 // 转义(安全关键,已在 macOS 26.6 实测):
 // - 一律用普通字符串 "…"(JSON.stringify),SBPL 能正确解码其中的 \" \\ \n \t;
@@ -175,6 +175,9 @@ export function seatbeltProfile(p: SeatbeltParams): string {
     ]),
     // 写 d
     ...rule('deny', 'file-write-unlink file-write-create', [filters('literal', moveBlock), regexes(gitMoveRegex)]),
+    // 写 e:任何地方都不能新建叫 .git 的东西(文件、目录、链接、改名过来):下一个会话和用户自己的 git 都会认它(re-review R1-I1)。
+    // git init、clone 本来就因为写不了 .git/config 跑不成
+    `(deny file-write-create (regex ${str(`/${anyCase('.git')}$`)}))`,
   ]
 
   // 网络:只有代理端口;R6 时整个回环。任何情况都不放 AF_UNIX

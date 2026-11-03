@@ -6,7 +6,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, wr
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createGit, NO_REPO, pinRepo, takeSnapshot, type Git, type RepoPin } from '../lib/git/snapshot'
+import { createGit, NO_REPO, pinFromPaths, pinRepo, takeSnapshot, type Git, type RepoPin } from '../lib/git/snapshot'
 import type { SandboxService } from '../lib/tools/types'
 import { endSnapshot, rollbackTurn, startSnapshot, turnChanges, type SnapshotDeps } from '../plugins/loop-default/snapshots'
 import type { KernelEvent } from '../protocol/index'
@@ -83,9 +83,8 @@ async function shell(command: string, cwd: string): Promise<number | null> {
   }
 }
 
-/** 评审的 PoC,字面照抄:clean = tclsh,程序从 stdin 读,就是 payload 的内容 */
+/** 评审的 PoC,除了 `.git`:clean = tclsh,程序从 stdin 读,就是 payload 的内容 */
 const plantScript = (filter = 'tclsh') => [
-  `printf 'gitdir: evil\\n' > .git`,
   `mkdir -p evil/objects evil/refs`,
   `printf 'ref: refs/heads/main\\n' > evil/HEAD`,
   `printf '[filter "x"]\\n\\tclean = ${filter}\\n' > evil/config`,
@@ -93,11 +92,18 @@ const plantScript = (filter = 'tclsh') => [
   `printf 'exec /usr/bin/touch ${marker}\\n' > payload`,
 ].join(' && ')
 
+/**
+ * 沙箱里写得出来的都写;`.git` 本身 Seatbelt 不让建(R1-I1),这里断言。
+ * 之后从沙箱外补上:代表 Seatbelt 管不到的来路(Codex 的 sub/.git、bwrap、修复之前种下的)
+ */
 async function plant(cwd: string, filter?: string): Promise<void> {
   // 对照:沙箱确实拦着直接写
   expect(await shell(`/usr/bin/touch ${JSON.stringify(marker)}`, cwd)).not.toBe(0)
   expect(existsSync(marker)).toBe(false)
   expect(await shell(plantScript(filter), cwd)).toBe(0)
+  expect(await shell(`printf 'gitdir: evil\\n' > .git`, cwd)).not.toBe(0)
+  expect(existsSync(join(cwd, '.git'))).toBe(false)
+  writeFileSync(join(cwd, '.git'), 'gitdir: evil\n')
   expect(lstatSync(join(cwd, '.git')).isFile()).toBe(true)
   expect(existsSync(join(cwd, 'evil', 'config'))).toBe(true)
 }
@@ -146,13 +152,28 @@ describe.skipIf(!usable)('a planted .git, real Seatbelt (final review C-1)', () 
     expect(existsSync(marker)).toBe(false)
   })
 
-  it.each(['tclsh', 'osascript', 'sqlite3', 'expect', '/usr/bin/tclsh'])('a later session that pins the planted repo: the allowlist still refuses %s', async filter => {
+  it('the next session in that cwd does not pin the planted repo, from a non-git cwd or a repo subdirectory', async () => {
+    const plain = join(root, 'plain')
+    mkdirSync(plain)
+    pin = NO_REPO
+    await plant(plain)
+    expect(await pinRepo(plain, git)).toEqual(NO_REPO)
+    const sub = join(repo, 'sub')
+    pin = await pinRepo(sub, git)
+    await plant(sub)
+    gitCalls = 0
+    const next = await pinRepo(sub, git)
+    expect(next).toEqual(NO_REPO)
+    expect(await takeSnapshot(sub, 'refs/mffai/x/t-start', git, { pin: next })).toEqual({ reason: 'not_git' })
+    expect(existsSync(marker)).toBe(false)
+  })
+
+  it.each(['tclsh', 'osascript', 'sqlite3', 'expect', '/usr/bin/tclsh'])('second layer, if a planted repo were pinned anyway: the allowlist refuses %s', async filter => {
     const cwd = join(root, 'plain')
     mkdirSync(cwd)
     pin = NO_REPO
     await plant(cwd, filter)
-    const later = await pinRepo(cwd, git)
-    expect(later.kind).toBe('repo')
+    const later = pinFromPaths(cwd, join(cwd, 'evil'), join(cwd, 'evil'))
     expect(await takeSnapshot(cwd, 'refs/mffai/x/t-start', git, { pin: later })).toEqual({ reason: 'unsafe_filter' })
     expect(existsSync(marker)).toBe(false)
   })
@@ -162,6 +183,39 @@ describe.skipIf(!usable)('a planted .git, real Seatbelt (final review C-1)', () 
     expect(await shell(`printf 'evil\\n' > .git/commondir`, repo)).not.toBe(0)
     expect(existsSync(join(repo, '.git', 'commondir'))).toBe(false)
     expect(await shell(`printf 'x\\n' > .git/description`, repo)).toBe(0) // 对照:git 目录的其余部分照常可写
+  })
+})
+
+describe.skipIf(!usable)('nothing named .git can be created in the sandbox (re-review R1-I1)', () => {
+  it.each([
+    ['a file', `printf 'gitdir: evil\\n' > .git`],
+    ['a directory', 'mkdir .git'],
+    ['a symlink', 'ln -s evil .git'],
+    ['a rename', 'mkdir z && mv z .git'],
+    ['another letter case', 'mkdir .GIT'],
+    ['a nested file', `mkdir -p a/b && printf 'gitdir: evil\\n' > a/b/.git`],
+  ])('%s fails', async (_name, command) => {
+    const cwd = join(root, 'plain')
+    mkdirSync(cwd)
+    pin = NO_REPO
+    expect(await shell(command, cwd)).not.toBe(0)
+    expect(existsSync(join(cwd, '.git'))).toBe(false)
+    expect(existsSync(join(cwd, 'a', 'b', '.git'))).toBe(false)
+  })
+
+  it('.gitignore, .github, .gitattributes and x.git still work', async () => {
+    const cwd = join(root, 'plain')
+    mkdirSync(cwd)
+    pin = NO_REPO
+    expect(await shell('printf x > .gitignore && mkdir .github && printf x > .gitattributes && mkdir x.git && printf x > a.git', cwd)).toBe(0)
+  })
+
+  it('pin "none" over a real repo: moving .git aside, planting a hook and moving it back fails at the move back', async () => {
+    pin = NO_REPO
+    const hook = join(repo, '.git', 'hooks', 'pre-commit')
+    expect(await shell('mv .git g; mkdir -p g/hooks; printf x > g/hooks/pre-commit; mv g .git', repo)).not.toBe(0)
+    expect(existsSync(hook)).toBe(false)
+    expect(existsSync(join(repo, '.git'))).toBe(false)
   })
 })
 

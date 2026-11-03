@@ -671,6 +671,31 @@ describe('the session pin, through the real kernel (final review C-1)', () => {
     expect(snaps(k, sid, second).map(s => s.reason)).toEqual(['unsafe_repo', 'unsafe_repo'])
   })
 
+  it('the next session route: session B in a cwd where A planted a repo records no repo; a data-dir git dir neither (re-review R1-I1)', async () => {
+    const plain = join(root, 'plain')
+    const plantIn = (dir: string) => {
+      mkdirSync(join(dir, 'objects'), { recursive: true })
+      mkdirSync(join(dir, 'refs'))
+      writeFileSync(join(dir, 'HEAD'), 'ref: refs/heads/main\n')
+      writeFileSync(join(dir, 'config'), '[core]\n')
+    }
+    mkdirSync(plain)
+    const k = await boot([], () => oneTool('write', { path: 'n.txt', content: 'n\n' }))
+    plantIn(join(plain, 'evil'))
+    writeFileSync(join(plain, '.git'), 'gitdir: evil\n')
+    const b = await create(k, CLAUDE, plain)
+    expect(createdPin(k, b)).toEqual({ kind: 'none' })
+    const turnId = await turn(k, b, 'go')
+    expect(snaps(k, b, turnId).map(s => s.reason)).toEqual(['not_git', 'not_git'])
+    expect(existsSync(join(plain, 'evil', 'refs', 'mffai'))).toBe(false)
+    plantIn(join(dataDir, 'evil'))
+    writeFileSync(join(plain, '.git'), `gitdir: ${join(dataDir, 'evil')}\n`)
+    expect(createdPin(k, await create(k, CLAUDE, plain))).toEqual({ kind: 'none' })
+    plantIn(join(home, '.qoder', 'tmp', 'evil'))
+    writeFileSync(join(plain, '.git'), `gitdir: ${join(home, '.qoder', 'tmp', 'evil')}\n`)
+    expect(createdPin(k, await create(k, CLAUDE, plain))).toEqual({ kind: 'none' })
+  })
+
   it('a session in the log with no recorded repo (older log) counts as no repo', () => {
     const s = new Sessions(dataDir)
     s.observe({ type: 'session.created', sessionId: 'old', seq: 1, ts: 0, payload: { title: 't', cwd: repo } } as KernelEvent)

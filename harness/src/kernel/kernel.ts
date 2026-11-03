@@ -402,7 +402,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
             if (dir !== undefined) {
               const tmpDir = join(opts.dataDir, 'tmp')
               mkdirSync(tmpDir, { recursive: true })
-              repo = await pinRepo(dir, kernelGit, { tmpDir })
+              repo = await pinRepo(dir, kernelGit, { tmpDir, untrusted: [opts.dataDir, join(home, '.qoder')] })
             }
           }
           return command(name, p.commandId, () => {

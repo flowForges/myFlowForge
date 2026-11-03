@@ -1302,6 +1302,7 @@ describe('a repo planted by a wrapped in-place run, real Seatbelt (final review 
       expect(raw).not.toContain('DIRECT')
       expect(raw).toContain('PLANTED-OK')
       expect(existsSync(join(cwd, 'evil', 'config'))).toBe(true)
+      expect(existsSync(join(cwd, '.git'))).toBe(false) // Seatbelt 不让建(R1-I1)
       // 拍快照、算改动都已经跑过;executor.changes 再来一遍
       await rig.manager.changes(SID, runId).catch(() => {})
       expect(existsSync(marker)).toBe(false)

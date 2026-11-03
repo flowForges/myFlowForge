@@ -112,6 +112,71 @@ describe('pinRepo', () => {
     expect(await pinRepo(tmp, (async () => { throw new Error('spawn git ENOENT') }) as Git)).toEqual(NO_REPO)
   })
 
+  describe('a planted shape is no repo (re-review R1-I1)', () => {
+    const evil = (dir: string) => {
+      write(join(dir, 'evil/HEAD'), 'ref: refs/heads/main\n')
+      mkdirSync(join(dir, 'evil/objects'), { recursive: true })
+      mkdirSync(join(dir, 'evil/refs'), { recursive: true })
+      write(join(dir, 'evil/config'), '[core]\n')
+    }
+
+    it('.git file with gitdir inside its own tree, in a plain dir and in a repo subdirectory', async () => {
+      const plain = join(root, 'plain')
+      evil(plain)
+      write(join(plain, '.git'), 'gitdir: evil\n')
+      expect(await pinRepo(plain, git())).toEqual(NO_REPO)
+      initRepo()
+      evil(R('sub'))
+      write(R('sub/.git'), 'gitdir: evil\n')
+      expect(await pinRepo(R('sub'), git())).toEqual(NO_REPO)
+      expect(await pinRepo(repo, git())).toMatchObject({ kind: 'repo', top: repo })
+    })
+
+    it('a commondir file leading to a directory inside the tree', async () => {
+      initRepo()
+      evil(repo)
+      write(join(repo, '.git', 'commondir'), '../evil\n')
+      expect(await pinRepo(repo, git())).toEqual(NO_REPO)
+    })
+
+    it('a git dir inside the data dir or ~/.qoder, also through a linked spelling', async () => {
+      const data = join(root, 'data')
+      const plain = join(root, 'plain')
+      mkdirSync(plain)
+      evil(data)
+      write(join(plain, '.git'), `gitdir: ${join(data, 'evil')}\n`)
+      expect((await pinRepo(plain, git())).kind).toBe('repo')
+      expect(await pinRepo(plain, git(), { untrusted: [data] })).toEqual(NO_REPO)
+      symlinkSync(data, join(root, 'data-link'))
+      expect(await pinRepo(plain, git(), { untrusted: [join(root, 'data-link')] })).toEqual(NO_REPO)
+    })
+
+    it('still pins: a plain repo, a linked worktree, a worktree inside the repo, a submodule, a linked .git dir', async () => {
+      initRepo()
+      write(R('a.txt'), 'a\n')
+      ug(['add', '.'])
+      commit('init')
+      const linked = join(root, 'linked')
+      ug(['worktree', 'add', '-q', '--detach', linked])
+      expect(await pinRepo(linked, git(), { untrusted: [join(root, 'data')] })).toMatchObject({ kind: 'repo', top: linked })
+      const inner = R('wts/x')
+      ug(['worktree', 'add', '-q', '--detach', inner])
+      expect(await pinRepo(inner, git())).toMatchObject({ kind: 'repo', top: inner })
+      const lib = join(root, 'lib')
+      mkdirSync(lib)
+      ug(['init', '-q'], lib)
+      write(join(lib, 'l.txt'), 'l\n')
+      ug(['add', '.'], lib)
+      commit('lib', lib)
+      ug(['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', lib, 'vendor'])
+      expect(await pinRepo(R('vendor'), git())).toMatchObject({ kind: 'repo', top: R('vendor'), gitDir: join(repo, '.git', 'modules', 'vendor') })
+      const apart = join(root, 'apart')
+      mkdirSync(apart)
+      ug(['init', '-q', `--separate-git-dir=${join(root, 'apart.git')}`], apart)
+      expect(await pinRepo(apart, git())).toMatchObject({ kind: 'repo', top: apart, gitDir: join(root, 'apart.git') })
+    })
+  })
+
   it('a stored pin of the wrong shape reads back as no repo', async () => {
     initRepo()
     const pin = await pinRepo(repo, git())

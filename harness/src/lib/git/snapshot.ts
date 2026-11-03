@@ -130,8 +130,20 @@ export function pinFromPaths(top: string, gitDir: string, commonDir: string): Pi
   return { kind: 'repo', top: t, gitDir: g, commonDir: c, ids: { top: idOf(t), gitDir: idOf(g), commonDir: idOf(c) } }
 }
 
-/** 建会话时用。不在工作树内(含 .git 目录里、裸仓库)、git 不在、答不上来 → 没有仓库 */
-export async function pinRepo(cwd: string, git: Git, opts: { tmpDir?: string } = {}): Promise<RepoPin> {
+/**
+ * git 目录在工作树里(又不是 <top>/.git),或在沙箱写得到的状态目录里:这是种出来的形状。
+ * 正常的 linked worktree、子模块的 git 目录都在工作树外面(re-review R1-I1)
+ */
+function plantedShape(top: string, gitDir: string, commonDir: string, untrusted: string[]): boolean {
+  const own = join(top, '.git')
+  return [gitDir, commonDir].some(d => (isInside(d, top, process.platform) && !samePath(d, own)) || untrusted.some(u => isInside(d, u, process.platform)))
+}
+
+/**
+ * 建会话时用。不在工作树内(含 .git 目录里、裸仓库)、git 不在、答不上来 → 没有仓库。
+ * 上一个会话可能在这个 cwd 里种过仓库,所以形状不对的也算没有;untrusted:沙箱写得到的状态目录(数据目录、~/.qoder)
+ */
+export async function pinRepo(cwd: string, git: Git, opts: { tmpDir?: string; untrusted?: string[] } = {}): Promise<RepoPin> {
   try {
     return await guarded(git, opts.tmpDir, async g => {
       const r = await g(['rev-parse', '--show-toplevel', '--absolute-git-dir', '--git-common-dir'], { cwd })
@@ -139,7 +151,9 @@ export async function pinRepo(cwd: string, git: Git, opts: { tmpDir?: string } =
       const [top, gitDir, common] = r.stdout.toString().split('\n')
       // 老 git 不认 --git-common-dir 时原样回显
       if (!top || !gitDir || !common || common.startsWith('-')) return NO_REPO
-      return pinFromPaths(top, gitDir, resolve(cwd, common))
+      const pin = pinFromPaths(top, gitDir, resolve(cwd, common))
+      const untrusted = (opts.untrusted ?? []).map(u => resolveToolPath(u, '.')).filter(u => u !== OUTSIDE)
+      return plantedShape(pin.top, pin.gitDir, pin.commonDir, [...(opts.untrusted ?? []), ...untrusted]) ? NO_REPO : pin
     })
   } catch {
     return NO_REPO
