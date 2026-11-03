@@ -362,6 +362,109 @@ describe('bwrapArgs', () => {
   })
 })
 
+describe('bwrapArgs for a wrapped CLI (04 Task 7)', () => {
+  const QODER = `${H}/.qoder`
+  const AUTH = `${QODER}/.auth`
+  const LOGS = `${QODER}/logs`
+  const GEN = `${CWD}/src/gen`
+  const SECRET_DIR = `${CWD}/secret`
+  const SECRET_FILE = `${CWD}/secret.txt`
+  const qfs = (extraDirs: string[] = [], extraFiles: string[] = []) => fs([QODER, AUTH, LOGS, `${QODER}/bin`, GEN, SECRET_DIR, ...extraDirs], [SECRET_FILE, `${QODER}/settings.json`, ...extraFiles])
+
+  it('allowWrite: existing paths are bound after the hides, missing ones skipped, ~/.qoder itself never', () => {
+    const a = bwrapArgs(params({ extraWritable: [AUTH, LOGS, `${QODER}/cache`], ...qfs() }))
+    expect(first(a, '--bind', AUTH, AUTH)).toBeGreaterThan(last(a, '--tmpfs', DATA))
+    expect(first(a, '--bind', LOGS, LOGS)).toBeGreaterThan(last(a, '--tmpfs', DATA))
+    expect(a).not.toContain(`${QODER}/cache`)
+    expect(at(a, '--bind', QODER, QODER)).toHaveLength(0)
+    expect(at(a, '--tmpfs', AUTH)).toHaveLength(0)
+  })
+
+  it('a credential or persistence path inside allowWrite stays covered after the bind', () => {
+    const cred = `${LOGS}/creds`
+    const rc = `${LOGS}/.zshrc`
+    const a = bwrapArgs(params({ extraWritable: [LOGS], hideDirs: [cred], persistence: [rc], ...qfs([cred], [rc]) }))
+    expect(last(a, '--tmpfs', cred)).toBeGreaterThan(first(a, '--bind', LOGS, LOGS))
+    expect(last(a, '--ro-bind', rc, rc)).toBeGreaterThan(first(a, '--bind', LOGS, LOGS))
+  })
+
+  it('readOnly: cwd and the git dir are ro-bound, never bound; --chdir stays; tmp and allowWrite stay writable', () => {
+    const a = bwrapArgs(params({ readOnly: true, extraWritable: [LOGS], ...qfs() }))
+    expect(at(a, '--bind', CWD, CWD)).toHaveLength(0)
+    expect(at(a, '--bind', GIT, GIT)).toHaveLength(0)
+    expect(at(a, '--ro-bind', CWD, CWD)).toHaveLength(1)
+    expect(at(a, '--ro-bind', GIT, GIT)).toHaveLength(1)
+    expect(a[a.indexOf('--chdir') + 1]).toBe(CWD)
+    expect(at(a, '--bind', TMP, TMP).length).toBeGreaterThan(0)
+    expect(at(a, '--bind', LOGS, LOGS)).toHaveLength(1)
+  })
+
+  it('readOnly at cwd = HOME: the hides still come after the ro-bind', () => {
+    const a = bwrapArgs(params({ readOnly: true, cwd: H, gitDirs: [], gitProtected: [] }))
+    expect(first(a, '--tmpfs', '/data/ssh')).toBeGreaterThan(first(a, '--ro-bind', H, H))
+    expect(at(a, '--bind', H, H)).toHaveLength(0)
+  })
+
+  it('ruleDenyWrite is ro-bound onto itself after every bind, also over allowWrite', () => {
+    const a = bwrapArgs(params({ extraWritable: [AUTH, LOGS], ruleDenyWrite: [GEN, LOGS], ...qfs() }))
+    expect(last(a, '--ro-bind', GEN, GEN)).toBeGreaterThan(last(a, '--bind', TMP, TMP))
+    expect(last(a, '--ro-bind', GEN, GEN)).toBeGreaterThan(first(a, '--bind', CWD, CWD))
+    expect(last(a, '--ro-bind', LOGS, LOGS)).toBeGreaterThan(first(a, '--bind', LOGS, LOGS))
+  })
+
+  it('ruleDenyRead goes the way credentials do, by real type, after every bind, also over allowWrite', () => {
+    const a = bwrapArgs(params({ extraWritable: [AUTH], ruleDenyRead: [SECRET_DIR, SECRET_FILE, AUTH], ...qfs() }))
+    expect(first(a, '--tmpfs', SECRET_DIR)).toBeGreaterThan(last(a, '--bind', TMP, TMP))
+    expect(first(a, '--ro-bind', '/dev/null', SECRET_FILE)).toBeGreaterThan(last(a, '--bind', TMP, TMP))
+    expect(last(a, '--tmpfs', AUTH)).toBeGreaterThan(first(a, '--bind', AUTH, AUTH))
+  })
+
+  it('a ruleDenyWrite root over a hidden credential does not read it back from the host', () => {
+    // --ro-bind 的源是宿主:~/.ssh 这时又露出来了,要再隐藏一次;数据目录同理,之后盖回 tmp(只读)与 spill
+    const a = bwrapArgs(params({ cwd: `${H}/proj`, ruleDenyWrite: [H], ...qfs() }))
+    const ro = last(a, '--ro-bind', H, H)
+    expect(last(a, '--tmpfs', '/data/ssh')).toBeGreaterThan(-1)
+    expect(a.indexOf('--tmpfs', ro)).toBeGreaterThan(ro)
+    expect(at(a, '--ro-bind', '/dev/null', `${H}/.npmrc`).at(-1)).toBeGreaterThan(ro)
+    expect(last(a, '--tmpfs', DATA)).toBeGreaterThan(ro)
+    expect(last(a, '--ro-bind', TMP, TMP)).toBeGreaterThan(last(a, '--tmpfs', DATA))
+    expect(last(a, '--ro-bind', SPILL, SPILL)).toBeGreaterThan(last(a, '--tmpfs', DATA))
+    expect(at(a, '--bind', TMP, TMP).at(-1)).toBeLessThan(ro)
+    // /run/user/<uid> 不在 ~ 下,不用重来
+    expect(at(a, '--tmpfs', RUN)).toHaveLength(1)
+  })
+
+  it('without the new params the argv is exactly what it was', () => {
+    const plain = bwrapArgs(params())
+    expect(bwrapArgs(params({ extraWritable: [], ruleDenyRead: [], ruleDenyWrite: [], readOnly: false }))).toEqual(plain)
+  })
+
+  it('a rule root under the private /tmp is not read back from the host; one inside a bound root is', () => {
+    const inner = '/tmp/work/gen'
+    const a = bwrapArgs(params({ ruleDenyWrite: ['/tmp/other'], ...fs([], ['/tmp/other']) }))
+    expect(at(a, '--ro-bind', '/tmp/other', '/tmp/other')).toHaveLength(0)
+    const b = bwrapArgs(params({ cwd: '/tmp/work', gitDirs: [], gitProtected: [], ruleDenyWrite: [inner], ...fs(['/tmp/work', inner]) }))
+    expect(at(b, '--ro-bind', inner, inner)).toHaveLength(1)
+  })
+
+  it.each(['/', '/proc', '/proc/1', '/dev', '/dev/shm'])('a rule root at %s fails closed: mounting it would bring the host view back', root => {
+    const f = fs(['/proc', '/proc/1', '/dev', '/dev/shm'])
+    expect(() => bwrapArgs(params({ ruleDenyWrite: [root], ...f })), 'write').toThrow(/rule/)
+    expect(() => bwrapArgs(params({ ruleDenyRead: [root], ...f })), 'read').toThrow(/rule/)
+  })
+
+  it('rejects / or an ancestor of HOME in allowWrite, a socket under it, and bad paths in the new fields', () => {
+    expect(() => bwrapArgs(params({ extraWritable: ['/'] }))).toThrow(/too broad/)
+    expect(() => bwrapArgs(params({ extraWritable: ['/home'] }))).toThrow(/too broad/)
+    expect(() => bwrapArgs(params({ extraWritable: ['/tmp/mffai-net-abc'] }))).toThrow(/socket/)
+    for (const bad of ['rel/x', `${H}/a/../b`, `${H}/a\nb`]) {
+      for (const k of ['extraWritable', 'ruleDenyRead', 'ruleDenyWrite'] as const) {
+        expect(() => bwrapArgs(params({ [k]: [bad] })), `${k} ${JSON.stringify(bad)}`).toThrow(/path/)
+      }
+    }
+  })
+})
+
 describe('execRootFor', () => {
   it('returns the first-level dir under /tmp, otherwise undefined', () => {
     expect(execRootFor('/tmp/.mount_mffXYZ/usr/bin/mff')).toBe('/tmp/.mount_mffXYZ')

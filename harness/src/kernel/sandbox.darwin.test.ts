@@ -46,7 +46,7 @@ describe.skipIf(!usable)('kernel sandbox, real sandbox-exec: submodule git dirs'
     svc = createSandboxService({
       platform: 'darwin', dataDir: join(root, 'data'), home, env: { HOME: home }, detected: { level: 'full', missing: [] },
       permissions: () => ({ rules: [], network: { allow: [] }, sandbox: { enabled: true, allowLoopback: false }, allowUnsandboxedAuto: false }),
-      append: () => {}, git: missingGit,
+      rules: () => [], append: () => {}, git: missingGit,
     })
   })
   afterAll(async () => {

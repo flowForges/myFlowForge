@@ -4,12 +4,14 @@
 //   含 `..` 等坏值的条目丢掉(其解析后的形态已在清单里):一个坏环境变量不能让所有命令都跑不了;
 // - cwd / 临时目录等自身路径坏了照样抛错:plan reject,调用方让命令失败,绝不退回无沙箱执行;
 // - 代理每会话一个,按需启动;命令在跑(plan 之后、release 之前)时保持不关,之后按空闲关闭。
+//   04:委派的运行各有一个(键 `sessionId\0scope`),多出它自己的主机,release 时立刻关。
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, type Dirent } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, posix, resolve } from 'node:path'
 import type { KernelEvent, PermissionsConfig, SandboxStatus } from '../protocol/index'
 import { canonicalRoots, credentialRoots, persistenceRoots, type EnvSnapshot } from '../lib/fs/paths'
 import { createGit, type Git } from '../lib/git/snapshot'
+import { literalRoots, matches, type MatchCtx, type Rule } from '../lib/permissions/rules'
 import { bwrapArgs, ensureGitHooksDir, execRootFor } from '../lib/sandbox/bwrap'
 import type { DetectResult } from '../lib/sandbox/detect'
 import { startProxy as realStartProxy, type DenyEvent, type LookupFn, type ProxyHandle, type ProxyOptions, type Upstream } from '../lib/sandbox/net/proxy'
@@ -17,8 +19,9 @@ import { cleanPath, realSpelling, within } from '../lib/sandbox/paths'
 import { RELAY_PORT } from '../lib/sandbox/relay'
 import { sandboxExecArgs, seatbeltProfile } from '../lib/sandbox/seatbelt'
 import { redact } from '../lib/tools/redact'
+import { shellQuote } from '../lib/tools/shellQuote'
 import { sandboxEnv } from '../lib/tools/shellEnv'
-import type { SandboxService, ShellPlan } from '../lib/tools/types'
+import type { ExecPlanOpts, ExecPolicy, SandboxService, ShellPlan } from '../lib/tools/types'
 import { nullLogger, type Logger } from './log'
 
 const SAFE_ID = /^[A-Za-z0-9_-]+$/
@@ -30,6 +33,8 @@ const MAX_MODULE_DIRS = 2000
  */
 const GIT_INTERNAL_DIRS = new Set(['objects', 'refs', 'logs', 'hooks', 'info', 'lfs', 'branches'])
 const DEFAULT_IDLE_MS = 600_000
+/** shell 工具:什么都不豁免 */
+const SHELL_PLAN: Omit<ExecPlanOpts, 'proxyScope'> & { proxyScope?: string } = { allowRead: [], allowWrite: [], allowHosts: [], readOnly: false, denyRead: [], denyWrite: [] }
 
 /** 本会话临时目录(= 沙箱里的 TMPDIR);只给路径 */
 export function sessionTmpDir(dataDir: string, sessionId: string): string {
@@ -70,6 +75,8 @@ export interface SandboxOpts {
   detected: DetectResult
   /** 现读的权限配置 */
   permissions: () => PermissionsConfig
+  /** 现读的用户规则(execPolicy 翻译用);必填:漏接等于用户规则悄悄失效 */
+  rules: () => Rule[]
   append: (e: Omit<KernelEvent, 'seq' | 'ts'>) => void
   /** 会话当前的 turn(拦截事件按 turn 去重) */
   currentTurn?: (sessionId: string) => string | undefined
@@ -90,6 +97,8 @@ export interface SandboxOpts {
 }
 
 interface SessionProxy {
+  /** 有 = 一次运行的代理:只给这次运行的主机,release 时立刻关 */
+  scoped?: { allowHosts: string[] }
   handle?: ProxyHandle
   /** 本会话最近一次启动代理失败(级别按会话算,review M3) */
   failed: boolean
@@ -341,9 +350,10 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
 
   // ---- 代理 ----
 
-  function entryFor(sessionId: string): SessionProxy {
-    let e = proxies.get(sessionId)
-    if (!e) proxies.set(sessionId, (e = { holds: 0, failed: false, denied: { keys: new Set() } }))
+  /** 主机名单在建条目时定下,一个条目一份 */
+  function entryFor(key: string, scoped: SessionProxy['scoped']): SessionProxy {
+    let e = proxies.get(key)
+    if (!e) proxies.set(key, (e = { scoped, holds: 0, failed: false, denied: { keys: new Set() } }))
     return e
   }
 
@@ -374,22 +384,25 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
     throw new Error('sandbox: no proxy socket directory outside the writable roots')
   }
 
-  /** 代理已关、没有命令在跑:整条记录连同 git 缓存丢掉(review M5);失败标记要留着给 status */
-  function prune(sessionId: string, e: SessionProxy): void {
-    if (e.holds === 0 && !e.handle && !e.starting && !e.failed && proxies.get(sessionId) === e) {
-      proxies.delete(sessionId)
-      forgetRepo(sessionId)
+  /**
+   * 代理已关、没有命令在跑:整条记录连同 git 缓存丢掉(review M5);失败标记要留着给 status。
+   * 运行的条目没人再问 status,失败了也删;git 缓存是会话的,不动
+   */
+  function prune(key: string, sessionId: string, e: SessionProxy): void {
+    if (e.holds === 0 && !e.handle && !e.starting && (!e.failed || e.scoped) && proxies.get(key) === e) {
+      proxies.delete(key)
+      if (!e.scoped) forgetRepo(sessionId)
     }
   }
 
-  async function proxyFor(sessionId: string, e: SessionProxy, writable: string[]): Promise<ProxyHandle | undefined> {
+  async function proxyFor(key: string, sessionId: string, e: SessionProxy, writable: string[]): Promise<ProxyHandle | undefined> {
     if (e.handle && !e.handle.closing) {
       e.handle.touch()
       return e.handle
     }
     if (e.starting) return e.starting
     const starting = start({
-      allow: () => o.permissions().network.allow,
+      allow: () => (e.scoped ? [...o.permissions().network.allow, ...e.scoped.allowHosts] : o.permissions().network.allow),
       upstream: o.upstream,
       lookup: o.lookup,
       onDeny: d => onDeny(sessionId, e, d),
@@ -405,7 +418,7 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
         e.handle = h
         void h.closed.then(() => {
           if (e.handle === h) e.handle = undefined
-          prune(sessionId, e)
+          prune(key, sessionId, e)
         })
         return h
       },
@@ -424,7 +437,7 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
   }
 
   /** 命令在跑:定期 touch,空闲计时从命令结束才开始 */
-  function hold(sessionId: string, e: SessionProxy): () => void {
+  function hold(key: string, sessionId: string, e: SessionProxy): () => void {
     e.holds++
     if (e.holds === 1) {
       e.keepalive = setInterval(() => e.handle?.touch(), Math.max(5, Math.floor(idleMs / 2)))
@@ -438,8 +451,12 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
       if (e.holds === 0) {
         clearInterval(e.keepalive)
         e.keepalive = undefined
-        e.handle?.touch()
-        prune(sessionId, e)
+        if (e.scoped) {
+          const closing = (h?: ProxyHandle) => h?.close().catch(err => log.warn('sandbox run proxy close failed', { error: String(err) }))
+          void closing(e.handle)
+          void e.starting?.then(closing)
+        } else e.handle?.touch()
+        prune(key, sessionId, e)
       }
     }
   }
@@ -459,20 +476,78 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
     const cfg = o.permissions()
     const base = levelOf(cfg, false).level
     if (base === 'none') return { file: command, args: [], env, sandboxed: false, level: 'none', release: () => {} }
+    return buildPlan(command, s, env, SHELL_PLAN, cfg, base)
+  }
 
+  async function planExec(file: string, args: string[], s: { sessionId: string; cwd: string; spillDir: string }, env: NodeJS.ProcessEnv, x: ExecPlanOpts): Promise<ShellPlan> {
+    if (closed) throw new Error('sandbox closed')
+    const cfg = o.permissions()
+    const base = levelOf(cfg, false).level
+    if (base === 'none') return { file, args, env, sandboxed: false, level: 'none', release: () => {} }
+    if (!file.startsWith('/')) throw new Error('sandbox: the program path must be absolute')
+    if (!SAFE_ID.test(x.proxyScope)) throw new Error('sandbox: invalid proxy scope')
+    return buildPlan(shellQuote([file, ...args]), s, env, x, cfg, base)
+  }
+
+  /**
+   * 从黑名单拿掉 allowRead 的两种拼写。豁免本身是链接且落在别的凭据根里 → 抛错:`~/.qoder/.auth → ~/.ssh` 时
+   * ~/.ssh 正是 .auth 的 realpath 拼写,不拦就被一起放出来了。比较用没展开过的根,展开后的清单里已经分不清谁是谁
+   */
+  function exemptFrom(creds: string[], allowRead: string[]): string[] {
+    const named = new Set(allowRead)
+    const others = [...usable(credentialRoots(o.home, platform, o.env)).filter(c => !named.has(c)), o.dataDir]
+    for (const a of allowRead) {
+      const real = realSpelling(a)
+      if (real === posix.join(realSpelling(posix.dirname(a)), posix.basename(a))) continue // 不是链接
+      if (others.some(c => within(real, c) || within(real, realSpelling(c)))) throw new Error(`sandbox: ${JSON.stringify(a)} leads into a credential root`)
+    }
+    const exempt = new Set(allowRead.flatMap(a => [a, realSpelling(a)]))
+    return creds.filter(c => !exempt.has(c))
+  }
+
+  /** 是链接的可写项丢掉:cwd = ~/.qoder 的会话能把 logs 换成指向别处的链接,下次运行就写到那里去了 */
+  function plainDirs(paths: string[]): string[] {
+    return paths.filter(p => {
+      try {
+        if (!lstatSync(p).isSymbolicLink()) return true
+      } catch {
+        return true // 不存在:Seatbelt 按路径生效,bwrap 不挂
+      }
+      log.warn('sandbox dropped a symlinked writable path', { path: p })
+      return false
+    })
+  }
+
+  async function buildPlan(
+    command: string,
+    s: { sessionId: string; cwd: string; spillDir: string },
+    env: NodeJS.ProcessEnv,
+    raw: Omit<ExecPlanOpts, 'proxyScope'> & { proxyScope?: string },
+    cfg: PermissionsConfig,
+    base: 'full' | 'partial',
+  ): Promise<ShellPlan> {
+    // 都先校验并规范化:坏路径在起代理之前就抛错
+    const cleaned = (list: string[]) => list.map(q => cleanPath(q, 'sandbox'))
+    const x = { ...raw, allowRead: cleaned(raw.allowRead), allowWrite: cleaned(raw.allowWrite), denyRead: cleaned(raw.denyRead), denyWrite: cleaned(raw.denyWrite) }
     const tmp = sessionTmpDir(o.dataDir, s.sessionId)
     ensureTmp(tmp)
     const repo = await repoFor(s.sessionId, s.cwd)
-    const writable = [s.cwd, ...repo.gitDirs, tmp]
-    const e = usesProxy() ? entryFor(s.sessionId) : undefined
-    const release = e ? hold(s.sessionId, e) : () => {}
+    // 只读运行:连同"cwd 就在它里面"的额外可写项一起去掉
+    const allowWrite = plainDirs(x.allowWrite).filter(a => !x.readOnly || !(within(s.cwd, a) || within(realSpelling(s.cwd), realSpelling(a))))
+    const writable = [...(x.readOnly ? [] : [s.cwd, ...repo.gitDirs]), tmp, ...allowWrite]
+    const key = x.proxyScope === undefined ? s.sessionId : `${s.sessionId}\0${x.proxyScope}`
+    const e = usesProxy() ? entryFor(key, x.proxyScope === undefined ? undefined : { allowHosts: x.allowHosts }) : undefined
+    const release = e ? hold(key, s.sessionId, e) : () => {}
     try {
-      const proxy = e ? await proxyFor(s.sessionId, e, writable) : undefined
+      const proxy = e ? await proxyFor(key, s.sessionId, e, writable) : undefined
       if (closed) throw new Error('sandbox closed')
       // 本会话的代理没起来 → 网络全断,级别如实报 partial
       const level: 'full' | 'partial' = e?.failed ? 'partial' : base
       const creds = credentialList()
       const persistence = persistenceList()
+      const hidden = exemptFrom(creds, x.allowRead)
+      // 豁免目录里嵌套的凭据不跟着放出来
+      const nested = [...hidden, o.dataDir].filter(c => x.allowRead.some(a => within(c, a) || within(c, realSpelling(a))))
 
       if (platform === 'darwin') {
         const allowLoopback = cfg.sandbox.allowLoopback
@@ -483,11 +558,14 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
           writable,
           gitDirs: repo.gitDirs,
           cwdGitFile: repo.cwdGitFile,
-          denyRead: [...creds, o.dataDir],
-          reAllowRead: [s.spillDir, tmp],
+          denyRead: [...hidden, o.dataDir],
+          reAllowRead: [s.spillDir, tmp, ...x.allowRead],
           denyWrite: [...creds, o.dataDir, ...persistence, ...moduleGuard],
-          reAllowWrite: [tmp],
-          moveBlock: withAncestors([...creds, o.dataDir, ...persistence, ...repo.gitDirs.flatMap(g => [g, `${g}/hooks`, `${g}/config`, `${g}/modules`, `${g}/worktrees`]), ...moduleDirs, ...moduleGuard, ...modules.flatMap(m => m.between), ...(repo.cwdGitFile ? [repo.cwdGitFile] : [])], writable),
+          reAllowWrite: [tmp, ...x.allowRead.filter(a => allowWrite.some(w => within(a, w) || within(realSpelling(a), realSpelling(w))))],
+          finalDenyRead: [...x.denyRead, ...nested],
+          // 读规则也拒写:否则 `mv secret/a ./a`、`ln` 就把它带出来了(与 Codex 的 `none` 一致)
+          finalDenyWrite: [...x.denyRead, ...x.denyWrite, ...nested],
+          moveBlock: withAncestors([...creds, o.dataDir, ...persistence, ...x.denyRead, ...x.denyWrite, ...repo.gitDirs.flatMap(g => [g, `${g}/hooks`, `${g}/config`, `${g}/modules`, `${g}/worktrees`]), ...moduleDirs, ...moduleGuard, ...modules.flatMap(m => m.between), ...(repo.cwdGitFile ? [repo.cwdGitFile] : [])], writable),
           proxyPort: proxy?.port,
           allowLoopback,
         })
@@ -499,7 +577,7 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
       for (const g of repo.gitDirs) ensureGitHooksDir(g)
       const hideDirs: string[] = []
       const hideFiles: string[] = []
-      for (const c of creds) {
+      for (const c of hidden) {
         let dir = false
         try {
           dir = statSync(c).isDirectory()
@@ -524,6 +602,10 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
         unixSock,
         execPath,
         execRoot: execRootFor(execPath),
+        readOnly: x.readOnly,
+        extraWritable: allowWrite,
+        ruleDenyRead: x.denyRead,
+        ruleDenyWrite: x.denyWrite,
         command,
         env: o.env,
         uid: o.uid ?? process.getuid?.(),
@@ -557,12 +639,37 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
     proxies.clear()
   }
 
-  // 04 Task 7 实现;在那之前谁误调都立刻失败
-  const execPolicy: SandboxService['execPolicy'] = () => {
-    throw new Error('not implemented')
-  }
-  const planExec: SandboxService['planExec'] = () => {
-    throw new Error('not implemented')
+  /**
+   * 给执行器翻译隔离用的策略(04 spec §8.4)。literalRoots 的根都翻译过;
+   * bwrap 只能挂存在的路径,所以 Linux 上根还不存在的规则另算"翻译不了",根照样列着(Codex 的权限档按路径生效)
+   */
+  function execPolicy(sessionId: string, cwd: string, resource?: string): ExecPolicy {
+    const rules = o.rules()
+    const ctx: MatchCtx = { cwd, home: o.home, platform, realpath: realpathSync.native }
+    const translated = (subject: 'read' | 'write') => {
+      const r = literalRoots(rules, subject, ctx)
+      if (platform !== 'linux') return r
+      const unmountable = rules.filter(rule => {
+        const { roots } = literalRoots([rule], subject, ctx)
+        return roots.length > 0 && !roots.some(existsSync)
+      })
+      return { roots: r.roots, untranslated: r.untranslated + unmountable.length }
+    }
+    const read = translated('read')
+    const write = translated('write')
+    const restrictive = rules.filter(r => r.effect !== 'allow')
+    // 本身就命中这个执行器的 shell 规则,权限门已经判过了
+    const shell = restrictive.filter(r => r.subject === 'shell' && !(resource !== undefined && matches(r, resource, ctx)))
+    return {
+      denyRead: [...credentialList(), o.dataDir],
+      persistence: persistenceList(),
+      dataDir: o.dataDir,
+      level: status(sessionId).level,
+      ruleDenyRead: read.roots,
+      ruleDenyWrite: write.roots,
+      untranslatedRules: read.untranslated + write.untranslated + shell.length,
+      totalRules: restrictive.length,
+    }
   }
 
   return { status, plan, execPolicy, planExec, close }

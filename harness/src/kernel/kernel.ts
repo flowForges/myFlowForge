@@ -169,6 +169,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
     env: envSnapshot,
     detected,
     permissions: () => permissions.get().config,
+    rules: () => permissions.get().rules,
     append: e => append(e),
     currentTurn: sid => activeBySession.get(sid),
     execPath: so.execPath,

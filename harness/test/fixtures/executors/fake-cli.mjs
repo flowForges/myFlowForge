@@ -9,6 +9,7 @@
 //             'run':真的跑 `--` 后面的命令(cwd 取 -C),不加任何隔离,用来验自检脚本本身
 //   selftestExit(`sandbox` 的退出码)、selftestConnect(打印之前连一次最后一个参数给的本机端口,行照样报 r=1)
 //   writeFiles {相对 cwd 的路径: 内容}、deleteFiles [路径]
+//   run:用 /bin/sh -c 跑这段脚本,把读到的 stdin 交给它,输出直通,脚本的退出码就是假 CLI 的退出码(验沙箱里 CLI 能做什么)
 //   lines [字符串 | {line, delayMs}]、flood(行数)、stderr(字符串 | 字符串数组)、sleep(ms)、exit(退出码)
 //   forwarding:起一个自成一会话的 sleep 300。SIGINT → 杀掉它再退;SIGTERM → 只有自己退,它活下来(实测的 Codex)
 //   stubborn:忽略 SIGINT / SIGTERM,再起一个同样忽略两者、自成一会话的孙进程
@@ -158,13 +159,18 @@ async function main() {
     logPid('background', bg.pid)
   }
 
-  call(await readStdin())
+  const stdin = await readStdin()
+  call(stdin)
 
   for (const [rel, content] of Object.entries(sc.writeFiles ?? {})) {
     mkdirSync(dirname(rel), { recursive: true })
     writeFileSync(rel, content)
   }
   for (const rel of sc.deleteFiles ?? []) rmSync(rel, { force: true })
+  if (sc.run !== undefined) {
+    const r = spawnSync('/bin/sh', ['-c', sc.run], { input: stdin, stdio: ['pipe', 'inherit', 'inherit'] })
+    process.exit(r.status ?? 1)
+  }
 
   for (const item of sc.lines ?? []) {
     const { line, delayMs } = typeof item === 'string' ? { line: item } : item

@@ -329,6 +329,45 @@ describe('seatbeltProfile', () => {
   })
 })
 
+describe('seatbeltProfile final denies (04 Task 7)', () => {
+  const AUTH = `${base}/home/.qoder/.auth`
+  const lastTouching = (p: string, path: string, on: (r: Rule) => boolean) =>
+    rules(p).filter(r => on(r) && args(r, 'subpath').includes(path)).at(-1)
+
+  it('a final deny comes after the re-allow, so the re-allow cannot undo it', () => {
+    const p = seatbeltProfile(params({
+      denyRead: [`${base}/home/.ssh`],
+      reAllowRead: [AUTH],
+      denyWrite: [AUTH],
+      reAllowWrite: [AUTH],
+      finalDenyRead: [AUTH],
+      finalDenyWrite: [AUTH],
+    }))
+    expect(lastTouching(p, AUTH, readOps)?.action).toBe('deny')
+    expect(lastTouching(p, AUTH, writeOps)?.action).toBe('deny')
+  })
+
+  it('without final denies the re-allow is the last word, and no empty rule is written', () => {
+    const p = seatbeltProfile(params({ denyWrite: [AUTH], reAllowWrite: [AUTH], reAllowRead: [AUTH] }))
+    expect(lastTouching(p, AUTH, readOps)?.action).toBe('allow')
+    expect(lastTouching(p, AUTH, writeOps)?.action).toBe('allow')
+    expect(rules(p).filter(r => r.filters.length === 0 && (readOps(r) || writeOps(r))).map(r => r.ops)).toEqual([['file-read*']])
+  })
+
+  it('the move block still comes last', () => {
+    const rs = rules(seatbeltProfile(params({ finalDenyWrite: [AUTH] })))
+    const move = rs.findIndex(r => r.ops.includes('file-write-unlink'))
+    const final = rs.findIndex(r => writeOps(r) && r.action === 'deny' && args(r, 'subpath').includes(AUTH))
+    expect(final).toBeGreaterThan(0)
+    expect(move).toBeGreaterThan(final)
+  })
+
+  it('bad paths in a final deny throw', () => {
+    expect(() => seatbeltProfile(params({ finalDenyRead: ['rel'] }))).toThrow(/path/)
+    expect(() => seatbeltProfile(params({ finalDenyWrite: [`${base}/a\nb`] }))).toThrow(/path/)
+  })
+})
+
 describe('sandboxExecArgs', () => {
   it('runs /bin/sh -c under sandbox-exec -p', () => {
     expect(sandboxExecArgs('(version 1)', 'echo hi')).toEqual({ file: '/usr/bin/sandbox-exec', args: ['-p', '(version 1)', '/bin/sh', '-c', 'echo hi'] })

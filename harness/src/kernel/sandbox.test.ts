@@ -5,9 +5,11 @@ import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createGit } from '../lib/git/snapshot'
+import { parseRule, type Rule } from '../lib/permissions/rules'
+import { runCli } from '../lib/proc/runCli'
 import type { DetectResult } from '../lib/sandbox/detect'
 import { startProxy } from '../lib/sandbox/net/proxy'
-import type { SandboxService } from '../lib/tools/types'
+import type { ExecPlanOpts, SandboxService } from '../lib/tools/types'
 import type { PermissionsConfig } from '../protocol/index'
 import { createKernel, type Kernel } from './kernel'
 import type { Plugin } from './pluginHost'
@@ -45,7 +47,7 @@ const cfg = (over: Partial<PermissionsConfig> = {}, sandbox: Partial<Permissions
 })
 
 type Appended = { type: string; sessionId?: string; payload: unknown }
-function service(over: Partial<SandboxOpts> & { config?: () => PermissionsConfig } = {}) {
+function service(over: Partial<Omit<SandboxOpts, 'rules'>> & { config?: () => PermissionsConfig; rules?: () => Rule[] } = {}) {
   const appended: Appended[] = []
   let config = over.config ?? (() => cfg())
   const svc = createSandboxService({
@@ -55,6 +57,7 @@ function service(over: Partial<SandboxOpts> & { config?: () => PermissionsConfig
     env: { HOME: home, PATH: process.env.PATH },
     detected: { level: 'full', missing: [] },
     permissions: () => config(),
+    rules: () => [],
     append: e => appended.push(e),
     git: testGit(),
     upstream: undefined,
@@ -589,7 +592,7 @@ describe('proxy bookkeeping (review M3, M5, M8)', () => {
     let flip = false
     const svc2 = createSandboxService({
       platform: 'darwin', dataDir, home, env: { HOME: home }, detected: { level: 'full', missing: [] },
-      permissions: () => (flip ? cfg({}, { enabled: false }) : cfg()), append: () => {},
+      permissions: () => (flip ? cfg({}, { enabled: false }) : cfg()), rules: () => [], append: () => {},
       git: async (a, o) => { flip = true; return g(a, o) },
     })
     closers.push(() => svc2.close())
@@ -609,6 +612,465 @@ describe('proxy bookkeeping (review M3, M5, M8)', () => {
     await wait(300)
     ;(await svc.plan('true', session(), baseEnv)).release()
     expect(n).toBe(once * 2)
+  })
+})
+
+describe('planExec', () => {
+  const FILE = '/opt/q/qodercli'
+  const ARGS = ['-p', "it's $HOME", '--flag']
+  const QUOTED = "'/opt/q/qodercli' '-p' 'it'\\''s $HOME' '--flag'"
+  const qoder = () => join(home, '.qoder')
+  const auth = () => join(qoder(), '.auth')
+  const logs = () => join(qoder(), 'logs')
+  const opts = (over: Partial<ExecPlanOpts> = {}): ExecPlanOpts => ({
+    allowRead: [auth()], allowWrite: [auth(), logs()], allowHosts: ['*.qoder.sh'], proxyScope: 'run_1', readOnly: false, denyRead: [], denyWrite: [], ...over,
+  })
+  const LINUX: Partial<SandboxOpts> = { platform: 'linux', detected: { level: 'partial', missing: ['netns'], bwrap: '/usr/bin/bwrap' } }
+  /** SBPL 的 subpath 规则:每条 {action, ops, paths},按配置里的顺序 */
+  const profileRules = (profile: string) =>
+    profile.split('\n').flatMap(line => {
+      const m = /^\((allow|deny) (file-[a-z*\- ]+) (.*)\)$/.exec(line)
+      if (!m) return []
+      return [{ action: m[1], ops: m[2], subpaths: [...m[3].matchAll(/\(subpath ("(?:[^"\\]|\\.)*")\)/g)].map(x => JSON.parse(x[1]) as string), literals: [...m[3].matchAll(/\(literal ("(?:[^"\\]|\\.)*")\)/g)].map(x => JSON.parse(x[1]) as string) }]
+    })
+  const lastWord = (profile: string, path: string, ops: string) =>
+    profileRules(profile).filter(r => r.ops.startsWith(ops) && r.subpaths.includes(path)).at(-1)?.action
+
+  beforeEach(() => {
+    mkdirSync(auth(), { recursive: true })
+    mkdirSync(logs(), { recursive: true })
+  })
+
+  it('level none: file and args as given, not a shell string; env untouched; no proxy', async () => {
+    const started: unknown[] = []
+    const { svc } = service({ config: () => cfg({}, { enabled: false }), startProxy: async o => { started.push(o); throw new Error('no proxy at level none') } })
+    const env = { PATH: '/usr/bin', HTTPS_PROXY: 'http://x' }
+    const p = await svc.planExec(FILE, ARGS, session(), env, opts())
+    expect(p).toMatchObject({ file: FILE, args: ARGS, sandboxed: false, level: 'none' })
+    expect(p.env).toBe(env)
+    expect(started).toEqual([])
+    p.release()
+  })
+
+  it('level none: runCli runs it without a shell, so $ and spaces stay literal', async () => {
+    const { svc } = service({ config: () => cfg({}, { enabled: false }) })
+    const p = await svc.planExec('/bin/echo', ['$HOME', 'a  b', '; touch /nope'], session(), { PATH: '/usr/bin:/bin' }, opts())
+    const lines: string[] = []
+    const r = await runCli(p, { cwd: repo, timeoutMs: 15_000, idleMs: 15_000, signal: new AbortController().signal, onLine: l => lines.push(l) })
+    expect(r.code).toBe(0)
+    expect(lines).toEqual(['$HOME a  b ; touch /nope'])
+  })
+
+  it('darwin: the whole command is quoted, under sh -c in sandbox-exec, with the proxy env', async () => {
+    const { svc } = service()
+    const p = await svc.planExec(FILE, ARGS, session(), baseEnv, opts())
+    expect(p.file).toBe('/usr/bin/sandbox-exec')
+    expect(p.args.slice(2)).toEqual(['/bin/sh', '-c', QUOTED])
+    expect(p.sandboxed).toBe(true)
+    expect(p.env.HTTPS_PROXY).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/)
+    expect(p.env.TMPDIR).toBe(sessionTmpDir(dataDir, 's1'))
+    p.release()
+  })
+
+  it('a relative file is refused: it would be looked up through PATH inside the sandbox', async () => {
+    const { svc } = service()
+    await expect(svc.planExec('qodercli', [], session(), baseEnv, opts())).rejects.toThrow(/absolute/)
+  })
+
+  it.each([['linux'], ['darwin']] as const)('bad input rejects before a proxy starts, never unsandboxed (%s)', async platform => {
+    const started: unknown[] = []
+    const { svc } = service({ ...(platform === 'linux' ? LINUX : {}), startProxy: async o => { started.push(o); return startProxy(o) } })
+    for (const bad of [{ allowWrite: ['rel/path'] }, { allowRead: ['rel/path'] }, { denyRead: [`${home}/a\nb`] }, { denyWrite: [`${home}/a/../b`] }]) {
+      await expect(svc.planExec(FILE, ARGS, session(), baseEnv, opts(bad)), JSON.stringify(bad)).rejects.toThrow(/path/)
+    }
+    await expect(svc.planExec(FILE, ['a\0b'], session(), baseEnv, opts())).rejects.toThrow(/NUL/)
+    expect(started).toEqual([])
+  })
+
+  it.each([
+    ['seatbelt', {} as Partial<SandboxOpts>],
+    ['bwrap', { platform: 'linux', detected: { level: 'full', missing: [], bwrap: '/usr/bin/bwrap' } } as Partial<SandboxOpts>],
+  ])('a %s profile that throws after the proxy started: rejects, the run proxy closes, nothing runs unsandboxed', async (_name, over) => {
+    const closed: string[] = []
+    const { svc } = service({
+      ...over,
+      startProxy: async o => {
+        const h = await startProxy(o)
+        const close = h.close.bind(h)
+        h.close = async () => { closed.push('closed'); await close() }
+        return h
+      },
+    })
+    rmSync(auth(), { recursive: true })
+    symlinkSync(join(home, '.ssh'), auth())
+    await expect(svc.planExec(FILE, ARGS, session(), baseEnv, opts())).rejects.toThrow(/credential/)
+    await vi.waitFor(() => expect(closed).toEqual(['closed']))
+  })
+
+  it('a bad scope is refused', async () => {
+    const { svc } = service()
+    for (const proxyScope of ['', 'a\0b', 'a/b']) await expect(svc.planExec(FILE, ARGS, session(), baseEnv, opts({ proxyScope }))).rejects.toThrow(/scope/)
+  })
+
+  describe('darwin profile', () => {
+    it('allowRead leaves denyRead and is re-allowed; denyWrite keeps it, then re-allows it; others stay denied', async () => {
+      const { svc } = service()
+      const p = await svc.planExec(FILE, ARGS, session(), baseEnv, opts())
+      const profile = profileOf(p.args)
+      const read = profileRules(profile).filter(r => r.ops === 'file-read*')
+      expect(read.filter(r => r.action === 'deny').flatMap(r => r.subpaths)).not.toContain(auth())
+      expect(lastWord(profile, auth(), 'file-read')).toBe('allow')
+      expect(lastWord(profile, join(home, '.ssh'), 'file-read')).toBe('deny')
+      const denyAt = profileRules(profile).findIndex(r => r.action === 'deny' && r.ops === 'file-write*' && r.subpaths.includes(auth()))
+      const allowAt = profileRules(profile).findIndex((r, i) => i > denyAt && r.action === 'allow' && r.ops === 'file-write*' && r.subpaths.includes(auth()))
+      expect(denyAt).toBeGreaterThan(-1)
+      expect(allowAt).toBeGreaterThan(denyAt)
+      expect(lastWord(profile, logs(), 'file-write')).toBe('allow')
+      expect(lastWord(profile, join(qoder(), 'bin'), 'file-write')).toBe('deny')
+      expect(lastWord(profile, join(qoder(), 'settings.json'), 'file-write')).toBe('deny')
+      expect(lastWord(profile, join(qoder(), 'external-commands'), 'file-write')).toBe('deny')
+      p.release()
+    })
+
+    it('readOnly drops cwd and the git dirs from the writable roots, keeps tmp and allowWrite', async () => {
+      const { svc } = service()
+      const cwd = join(repo, 'sub')
+      const p = await svc.planExec(FILE, ARGS, session(), baseEnv, opts({ readOnly: true }))
+      const allow = profileRules(profileOf(p.args)).filter(r => r.action === 'allow' && r.ops === 'file-write*').flatMap(r => r.subpaths)
+      expect(allow).not.toContain(cwd)
+      expect(allow).not.toContain(join(repo, '.git'))
+      expect(allow).toContain(sessionTmpDir(dataDir, 's1'))
+      expect(allow).toContain(logs())
+      p.release()
+    })
+
+    it('readOnly: an allowWrite entry holding cwd is dropped', async () => {
+      const { svc } = service()
+      const cwd = join(logs(), 'deep')
+      mkdirSync(cwd)
+      const p = await svc.planExec(FILE, ARGS, session('s1', cwd), baseEnv, opts({ readOnly: true }))
+      const allow = profileRules(profileOf(p.args)).filter(r => r.action === 'allow' && r.ops === 'file-write*').flatMap(r => r.subpaths)
+      expect(allow).not.toContain(logs())
+      expect(allow).toContain(auth())
+      p.release()
+    })
+
+    it('user rules come after the re-allows, block writes too, and join the move block with their ancestors', async () => {
+      const { svc } = service()
+      const secret = join(repo, 'sub', 'a', 'secret')
+      const gen = join(repo, 'sub', 'b', 'gen')
+      const p = await svc.planExec(FILE, ARGS, session(), baseEnv, opts({ denyRead: [secret, auth()], denyWrite: [gen, logs()] }))
+      const profile = profileOf(p.args)
+      expect(lastWord(profile, auth(), 'file-read')).toBe('deny')
+      expect(lastWord(profile, auth(), 'file-write')).toBe('deny')
+      expect(lastWord(profile, logs(), 'file-write')).toBe('deny')
+      expect(lastWord(profile, secret, 'file-read')).toBe('deny')
+      expect(lastWord(profile, secret, 'file-write')).toBe('deny')
+      expect(lastWord(profile, gen, 'file-write')).toBe('deny')
+      const moved = profileRules(profile).filter(r => r.ops.includes('file-write-unlink')).flatMap(r => r.literals)
+      for (const x of [secret, dirname(secret), gen, dirname(gen)]) expect(moved).toContain(x)
+      p.release()
+    })
+
+    it('a credential nested inside the exemption stays hidden', async () => {
+      const nested = join(auth(), 'inner')
+      const { svc } = service({ env: { HOME: home, CODEX_HOME: nested } })
+      const p = await svc.planExec(FILE, ARGS, session(), baseEnv, opts())
+      expect(lastWord(profileOf(p.args), nested, 'file-read')).toBe('deny')
+      expect(lastWord(profileOf(p.args), nested, 'file-write')).toBe('deny')
+      p.release()
+    })
+
+    it('an exemption whose realpath lands in another credential root is refused', async () => {
+      const { svc } = service()
+      rmSync(auth(), { recursive: true })
+      symlinkSync(join(home, '.ssh'), auth())
+      await expect(svc.planExec(FILE, ARGS, session(), baseEnv, opts())).rejects.toThrow(/credential/)
+    })
+
+    it('an exemption inside a wider credential root is fine: it was named on purpose', async () => {
+      const { svc } = service({ env: { HOME: home, QODER_CONFIG_DIR: qoder() } })
+      const p = await svc.planExec(FILE, ARGS, session(), baseEnv, opts())
+      const profile = profileOf(p.args)
+      expect(lastWord(profile, qoder(), 'file-read')).toBe('deny')
+      expect(lastWord(profile, auth(), 'file-read')).toBe('allow')
+      p.release()
+    })
+
+    it('a symlinked allowWrite entry is dropped: replacing ~/.qoder/logs with a link must not widen the run', async () => {
+      const { svc } = service()
+      rmSync(logs(), { recursive: true })
+      symlinkSync(root, logs())
+      const p = await svc.planExec(FILE, ARGS, session(), baseEnv, opts())
+      const allow = profileRules(profileOf(p.args)).filter(r => r.action === 'allow' && r.ops === 'file-write*').flatMap(r => r.subpaths)
+      expect(allow).not.toContain(root)
+      expect(allow).not.toContain(logs())
+      expect(allow).toContain(auth())
+      p.release()
+    })
+
+    it('the shell plan is unchanged: empty options leave no exemption, no extra root, no final deny', async () => {
+      const { svc } = service()
+      const p = await svc.plan('echo hi', session(), baseEnv)
+      const profile = profileOf(p.args)
+      expect(lastWord(profile, auth(), 'file-read')).toBe('deny')
+      expect(lastWord(profile, auth(), 'file-write')).toBe('deny')
+      expect(p.args.slice(2)).toEqual(['/bin/sh', '-c', 'echo hi'])
+      p.release()
+    })
+  })
+
+  describe('linux argv', () => {
+    const lastIdx = (a: string[], ...seq: string[]) => {
+      let out = -1
+      for (let i = 0; i + seq.length <= a.length; i++) if (seq.every((s, j) => a[i + j] === s)) out = i
+      return out
+    }
+
+    it('no --tmpfs on the exemption; it and the other existing subdirectories are bound after the hides; ~/.qoder never', async () => {
+      mkdirSync(join(qoder(), 'bin'))
+      const { svc } = service(LINUX)
+      const p = await svc.planExec(FILE, ARGS, session(), baseEnv, opts({ allowWrite: [auth(), logs(), join(qoder(), 'tmp')] }))
+      expect(p.file).toBe('/usr/bin/bwrap')
+      expect(lastIdx(p.args, '--tmpfs', auth())).toBe(-1)
+      const hides = lastIdx(p.args, '--tmpfs', dataDir)
+      expect(hides).toBeGreaterThan(0)
+      expect(lastIdx(p.args, '--bind', auth(), auth())).toBeGreaterThan(hides)
+      expect(lastIdx(p.args, '--bind', logs(), logs())).toBeGreaterThan(hides)
+      expect(p.args).not.toContain(join(qoder(), 'tmp'))
+      expect(lastIdx(p.args, '--bind', qoder(), qoder())).toBe(-1)
+      expect(p.args.at(-1)).toBe(QUOTED)
+      p.release()
+    })
+
+    it('the shell plan still hides the exemption', async () => {
+      const { svc } = service(LINUX)
+      const p = await svc.plan('true', session(), baseEnv)
+      expect(lastIdx(p.args, '--tmpfs', auth())).toBeGreaterThan(0)
+      expect(lastIdx(p.args, '--bind', auth(), auth())).toBe(-1)
+      p.release()
+    })
+
+    it('readOnly: no --bind cwd; chdir stays', async () => {
+      const { svc } = service(LINUX)
+      const cwd = join(repo, 'sub')
+      const p = await svc.planExec(FILE, ARGS, session(), baseEnv, opts({ readOnly: true }))
+      expect(lastIdx(p.args, '--bind', cwd, cwd)).toBe(-1)
+      expect(p.args[p.args.indexOf('--chdir') + 1]).toBe(cwd)
+      p.release()
+    })
+
+    it('rule paths reach bwrap: read hidden, write read-only after the binds', async () => {
+      const { svc } = service(LINUX)
+      const secret = join(repo, 'sub', 'secret')
+      const gen = join(repo, 'sub', 'gen')
+      mkdirSync(secret)
+      mkdirSync(gen)
+      const p = await svc.planExec(FILE, ARGS, session(), baseEnv, opts({ denyRead: [secret], denyWrite: [gen] }))
+      const binds = lastIdx(p.args, '--bind', logs(), logs())
+      expect(lastIdx(p.args, '--tmpfs', secret)).toBeGreaterThan(binds)
+      expect(lastIdx(p.args, '--ro-bind', gen, gen)).toBeGreaterThan(binds)
+      p.release()
+    })
+
+    it("~/.qoder's bin, settings.json and external-commands are ro-bound at cwd = ~/.qoder, after the cwd bind", async () => {
+      mkdirSync(join(qoder(), 'bin'))
+      mkdirSync(join(qoder(), 'external-commands'))
+      writeFileSync(join(qoder(), 'settings.json'), '{}')
+      const { svc } = service(LINUX)
+      const p = await svc.planExec(FILE, ARGS, session('s1', qoder()), baseEnv, opts())
+      const cwdBind = lastIdx(p.args, '--bind', qoder(), qoder())
+      expect(cwdBind).toBeGreaterThan(0)
+      for (const x of ['bin', 'settings.json', 'external-commands']) {
+        expect(lastIdx(p.args, '--ro-bind', join(qoder(), x), join(qoder(), x)), x).toBeGreaterThan(cwdBind)
+      }
+      p.release()
+    })
+  })
+
+  describe('per-run proxies', () => {
+    const connectable = async (env: NodeJS.ProcessEnv) => canConnect(portOf(env))
+
+    it('a run gets its own proxy; its hosts are not the session shell\'s; denials land on the session', async () => {
+      const { svc, appended } = service({ config: () => cfg({ network: { allow: ['shared.example'] } }) })
+      const shellPlan = await svc.plan('true', session(), baseEnv)
+      const run = await svc.planExec(FILE, ARGS, session(), baseEnv, opts())
+      expect(portOf(run.env)).not.toBe(portOf(shellPlan.env))
+      expect(await connectStatus(portOf(shellPlan.env), 'center.qoder.sh:443')).toMatch(/ 403 /)
+      expect(await connectStatus(portOf(run.env), 'evil.example:443')).toMatch(/ 403 /)
+      const denied = appended.filter(e => e.type === 'sandbox.netDenied')
+      expect(denied.map(e => e.sessionId)).toEqual(['s1', 's1'])
+      expect(denied.map(e => (e.payload as { host: string }).host)).toEqual(['center.qoder.sh', 'evil.example'])
+      shellPlan.release()
+      run.release()
+    })
+
+    it('the run proxy also obeys the global allow list, read live, plus its own hosts', async () => {
+      const seen: (() => string[])[] = []
+      let allow = ['a.example']
+      const { svc } = service({
+        config: () => cfg({ network: { allow } }),
+        startProxy: async o => { seen.push(o.allow); return startProxy({ ...o, lookup: async () => [] }) },
+      })
+      const run = await svc.planExec(FILE, ARGS, session(), baseEnv, opts({ allowHosts: ['*.qoder.sh'] }))
+      expect(seen[0]()).toEqual(['a.example', '*.qoder.sh'])
+      allow = ['b.example']
+      expect(seen[0]()).toEqual(['b.example', '*.qoder.sh'])
+      run.release()
+    })
+
+    it("release() closes the run's proxy at once and leaves the session's alone", async () => {
+      const { svc } = service()
+      const shellPlan = await svc.plan('true', session(), baseEnv)
+      shellPlan.release()
+      const run = await svc.planExec(FILE, ARGS, session(), baseEnv, opts())
+      expect(await connectable(run.env)).toBe(true)
+      run.release()
+      await vi.waitFor(async () => expect(await connectable(run.env)).toBe(false))
+      expect(await connectable(shellPlan.env)).toBe(true)
+      run.release() // 多调无害
+      const again = await svc.plan('true', session(), baseEnv)
+      expect(portOf(again.env)).toBe(portOf(shellPlan.env))
+      again.release()
+    })
+
+    it('two runs of one session are separate; one releasing leaves the other', async () => {
+      const { svc } = service()
+      const a = await svc.planExec(FILE, ARGS, session(), baseEnv, opts({ proxyScope: 'run_a' }))
+      const b = await svc.planExec(FILE, ARGS, session(), baseEnv, opts({ proxyScope: 'run_b' }))
+      expect(portOf(a.env)).not.toBe(portOf(b.env))
+      a.release()
+      await vi.waitFor(async () => expect(await connectable(a.env)).toBe(false))
+      expect(await connectable(b.env)).toBe(true)
+      b.release()
+    })
+
+    it('the release of a run does not forget the session\'s git lookup; the plain entry still does', async () => {
+      let n = 0
+      const g = testGit()
+      const { svc } = service({ git: (a, o) => { n++; return g(a, o) } })
+      const shellPlan = await svc.plan('true', session(), baseEnv)
+      const once = n
+      const run = await svc.planExec(FILE, ARGS, session(), baseEnv, opts())
+      run.release()
+      await vi.waitFor(async () => expect(await connectable(run.env)).toBe(false))
+      await wait(20)
+      ;(await svc.plan('true', session(), baseEnv)).release()
+      expect(n).toBe(once)
+      shellPlan.release()
+    })
+
+    it('close() closes run proxies still held', async () => {
+      const { svc } = service()
+      const run = await svc.planExec(FILE, ARGS, session(), baseEnv, opts())
+      expect(await connectable(run.env)).toBe(true)
+      await svc.close()
+      expect(await connectable(run.env)).toBe(false)
+    })
+
+    it('a run proxy that fails: network off and partial for that plan; session status unaffected; nothing left behind', async () => {
+      let fail = true
+      const { svc } = service({ startProxy: async o => { if (fail) throw new Error('nope'); return startProxy(o) } })
+      const run = await svc.planExec(FILE, ARGS, session(), baseEnv, opts())
+      expect(run.sandboxed).toBe(true)
+      expect(run.level).toBe('partial')
+      expect(run.env.HTTPS_PROXY).toBeUndefined()
+      expect(profileOf(run.args)).not.toMatch(/network-outbound/)
+      expect(svc.status('s1').level).toBe('full')
+      run.release()
+      fail = false
+      const next = await svc.planExec(FILE, ARGS, session(), baseEnv, opts())
+      expect(next.level).toBe('full')
+      next.release()
+    })
+  })
+})
+
+describe('execPolicy', () => {
+  const rule = (effect: 'deny' | 'ask' | 'allow', text: string): Rule => {
+    const r = parseRule({ effect, rule: text })
+    if (!('subject' in r)) throw new Error(`bad rule ${text}`)
+    return r
+  }
+  const cwd = () => join(repo, 'sub')
+  const policy = (rules: Rule[], over: Parameters<typeof service>[0] = {}, resource?: string) =>
+    service({ rules: () => rules, ...over }).svc.execPolicy('s1', cwd(), resource)
+
+  it('lists come from the env snapshot; no rules → nothing to translate', () => {
+    const p = policy([], { env: { HOME: home, CODEX_HOME: join(root, 'codex-home') } })
+    expect(p.denyRead).toEqual(expect.arrayContaining([join(home, '.ssh'), join(home, '.qoder', '.auth'), join(root, 'codex-home'), dataDir]))
+    expect(p.persistence).toEqual(expect.arrayContaining([join(home, '.zshrc'), join(home, '.qoder', 'bin'), join(home, '.qoder', 'settings.json'), join(home, '.qoder', 'external-commands')]))
+    expect(p).toMatchObject({ dataDir, level: 'full', ruleDenyRead: [], ruleDenyWrite: [], untranslatedRules: 0, totalRules: 0 })
+  })
+
+  it('level is the session level, read live', () => {
+    expect(policy([], { config: () => cfg({}, { enabled: false }) }).level).toBe('none')
+    expect(policy([], { config: () => cfg({}, { allowLoopback: true }) }).level).toBe('partial')
+  })
+
+  it('rules are read at each call', () => {
+    let rules: Rule[] = []
+    const { svc } = service({ rules: () => rules })
+    expect(svc.execPolicy('s1', cwd()).ruleDenyWrite).toEqual([])
+    rules = [rule('deny', 'write(gen/**)')]
+    expect(svc.execPolicy('s1', cwd()).ruleDenyWrite).toEqual([join(cwd(), 'gen')])
+  })
+
+  // policy.test.ts 的 policyOf 是替身;这几行走真的 execPolicy
+  it('deny write(src/gen/**) and deny read(hidden/**) translate', () => {
+    expect(policy([rule('deny', 'write(src/gen/**)'), rule('deny', 'read(hidden/**)')])).toMatchObject({
+      ruleDenyWrite: [join(cwd(), 'src/gen')], ruleDenyRead: [join(cwd(), 'hidden')], untranslatedRules: 0, totalRules: 2,
+    })
+  })
+
+  it('ask write(src/gen/**) translates like deny', () => {
+    expect(policy([rule('ask', 'write(src/gen/**)')])).toMatchObject({ ruleDenyWrite: [join(cwd(), 'src/gen')], untranslatedRules: 0, totalRules: 1 })
+  })
+
+  it.each(['write(**/*.env)', 'read(**/*.env)', 'shell(git push*)'])('deny %s is not translated', text => {
+    expect(policy([rule('deny', text)])).toMatchObject({ ruleDenyRead: [], ruleDenyWrite: [], untranslatedRules: 1, totalRules: 1 })
+  })
+
+  it('allow rules count for nothing', () => {
+    expect(policy([rule('allow', 'shell(codex)'), rule('allow', 'write(**)')])).toMatchObject({ untranslatedRules: 0, totalRules: 0 })
+  })
+
+  it("deny write(**) becomes cwd; ask write(**) doesn't", () => {
+    expect(policy([rule('deny', 'write(**)')])).toMatchObject({ ruleDenyWrite: [cwd()], untranslatedRules: 0 })
+    expect(policy([rule('ask', 'write(**)')])).toMatchObject({ ruleDenyWrite: [], untranslatedRules: 1 })
+  })
+
+  it('a shell rule that hits the executor itself was decided by the gate: only with its resource is it exempt', () => {
+    const rules = [rule('deny', 'shell(codex*)'), rule('ask', 'shell(qoder)'), rule('deny', 'shell(git push*)')]
+    expect(policy(rules)).toMatchObject({ untranslatedRules: 3, totalRules: 3 })
+    expect(policy(rules, {}, 'codex')).toMatchObject({ untranslatedRules: 2, totalRules: 3 })
+    expect(policy(rules, {}, 'qoder')).toMatchObject({ untranslatedRules: 2, totalRules: 3 })
+    expect(policy(rules, {}, 'unknown')).toMatchObject({ untranslatedRules: 3, totalRules: 3 })
+  })
+
+  it('a symlinked rule path comes in both spellings', () => {
+    const real = join(root, 'real')
+    mkdirSync(real)
+    symlinkSync(real, join(repo, 'sub', 'link'))
+    expect(policy([rule('deny', 'write(link/**)')]).ruleDenyWrite).toEqual(expect.arrayContaining([join(cwd(), 'link'), real]))
+  })
+
+  describe('a rule root that does not exist', () => {
+    const LINUX: Partial<SandboxOpts> = { platform: 'linux', detected: { level: 'full', missing: [], bwrap: '/usr/bin/bwrap' } }
+
+    it('linux: bwrap cannot mount it, so the rule counts as untranslated; the root stays listed for Codex', () => {
+      expect(policy([rule('deny', 'write(later/**)')], LINUX)).toMatchObject({ ruleDenyWrite: [join(cwd(), 'later')], untranslatedRules: 1, totalRules: 1 })
+      expect(policy([rule('deny', 'read(later/**)')], LINUX)).toMatchObject({ ruleDenyRead: [join(cwd(), 'later')], untranslatedRules: 1, totalRules: 1 })
+    })
+
+    it('linux: an existing root is translated as usual', () => {
+      mkdirSync(join(cwd(), 'now'))
+      expect(policy([rule('deny', 'write(now/**)')], LINUX)).toMatchObject({ untranslatedRules: 0 })
+    })
+
+    it('darwin: Seatbelt holds a path that is not there yet, so it stays translated', () => {
+      expect(policy([rule('deny', 'write(later/**)')])).toMatchObject({ ruleDenyWrite: [join(cwd(), 'later')], untranslatedRules: 0 })
+    })
   })
 })
 
@@ -741,6 +1203,14 @@ describe('kernel wiring', () => {
   it('config sandbox.enabled:false → none + disabled even when detection says full', async () => {
     const k = await boot(() => ({ level: 'full', missing: [] }), { sandbox: { enabled: false } })
     expect(k.status().sandbox).toEqual({ level: 'none', missing: ['disabled'], autoDegraded: true })
+  })
+
+  it('execPolicy sees the rules the permission store holds, live', async () => {
+    const k = await boot(() => ({ level: 'full', missing: [] }), { rules: [{ effect: 'deny', rule: 'write(gen/**)' }] })
+    const cwd = join(repo, 'sub')
+    expect(seen!.execPolicy('s1', cwd).ruleDenyWrite).toEqual([join(cwd, 'gen')])
+    await k.handle('permissions.set', { commandId: 'p1', config: { rules: [{ effect: 'deny', rule: 'read(hidden/**)' }], network: { allow: [] }, sandbox: { enabled: true, allowLoopback: false }, allowUnsandboxedAuto: false } })
+    expect(seen!.execPolicy('s1', cwd)).toMatchObject({ ruleDenyWrite: [], ruleDenyRead: [join(cwd, 'hidden')], totalRules: 1 })
   })
 
   it('kernel.close() closes every session proxy', async () => {

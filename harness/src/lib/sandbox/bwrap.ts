@@ -2,7 +2,8 @@
 // Linux bubblewrap 参数(spec §9,评审修订 R5、R9,Task 8 评审 C1 / I1–I4)。纯函数:文件系统查询可注入,默认读真实文件系统。
 // bwrap 按参数顺序挂载,后挂的盖住先挂的,所以顺序即语义:
 //   只读根 + 私有 /tmp → [execRoot] → 可写根(cwd、各 gitDir、tmp)与只读 spill → git 保护 → 持久化文件只读 →
-//   隐藏(运行时目录、已知 Unix socket、凭据、数据目录)→ 盖回 tmp / spill → 代理 socket → 命令(full 时经中转)。
+//   隐藏(运行时目录、已知 Unix socket、凭据、数据目录)→ 盖回 tmp / spill →
+//   [04:额外可写 → 规则只读 → 被这两步盖回来的隐藏与持久化再挂一次 → 规则隐藏] → 代理 socket → 命令(full 时经中转)。
 // - 只挂 realpath:bwrap 先 pivot_root 再 mount(2),目标里的符号链接按新根解析 —— 绝对链接会 ENOENT 让 bwrap 起不来,
 //   相对链接落到目标上、链接本身仍可删可换。挂载按 inode 生效,一个 realpath 就覆盖所有拼写(I1)。
 // - 持久化文件在隐藏之前挂:它们的源是宿主,挂在隐藏之后会把被隐藏根里的内容读回来(M1)。
@@ -51,6 +52,14 @@ export interface BwrapParams {
   isDir?: (p: string) => boolean
   /** 不跟随符号链接 */
   isSymlink?: (p: string) => boolean
+  /** 04:cwd 与各 gitDir 只读挂(不存在 --bind);--chdir 不变 */
+  readOnly?: boolean
+  /** 04:额外可写,在隐藏之后 --bind;不存在的跳过 */
+  extraWritable?: string[]
+  /** 04:用户规则,按真实类型隐藏,谁也盖不回来 */
+  ruleDenyRead?: string[]
+  /** 04:用户规则,只读挂回自己,在所有 --bind 之后 */
+  ruleDenyWrite?: string[]
 }
 
 /** 宿主上常见的高权限 Unix socket(文件 → /dev/null,目录 → tmpfs) */
@@ -66,6 +75,8 @@ export const KNOWN_SOCKETS = [
 
 const who = 'bwrap'
 const clean = (p: string) => cleanPath(p, who)
+/** 规则根不能是这些:挂上去等于把宿主的 /dev、/proc、/ 换回来 */
+const HOST_VIEW = ['/dev', '/proc']
 
 /** execPath 在 /tmp 下时 /tmp 的第一层目录(AppImage 挂在 /tmp/.mount_xxx),否则 undefined */
 export function execRootFor(execPath: string): string | undefined {
@@ -134,8 +145,15 @@ export function bwrapArgs(p: BwrapParams): string[] {
   const persistence = p.persistence.map(clean)
   const unixSock = p.unixSock === undefined ? undefined : R(p.unixSock)
   const execRoot = p.execRoot === undefined ? undefined : R(p.execRoot)
+  const readOnly = p.readOnly ?? false
+  const extra = (p.extraWritable ?? []).map(R)
+  const ruleRead = (p.ruleDenyRead ?? []).map(R)
+  const ruleWrite = (p.ruleDenyWrite ?? []).map(R)
+  for (const r of [...ruleRead, ...ruleWrite]) {
+    if (r === '/' || HOST_VIEW.some(h => within(r, h))) throw new Error(`${who}: can't enforce a rule on ${JSON.stringify(r)}`)
+  }
 
-  const writableRoots = [cwd, ...gitDirs, tmp]
+  const writableRoots = [...(readOnly ? [] : [cwd, ...gitDirs]), tmp, ...extra]
   const inWritable = (x: string) => writableRoots.some(r => within(x, r))
 
   // 可写根不能是 / 或家目录的祖先(纵深防御;会话层已有同样的检查)
@@ -186,12 +204,18 @@ export function bwrapArgs(p: BwrapParams): string[] {
     out.push(flag, ...xs)
   }
   const self = (flag: '--bind' | '--ro-bind', x: string) => mount(flag, x, x)
+  /** bwrap 允许同一路径再挂一次,这里不去重 */
+  const again = (flag: '--bind' | '--ro-bind' | '--tmpfs', ...xs: string[]) => {
+    seen.delete([flag, ...xs].join('\0'))
+    mount(flag, ...xs)
+  }
 
   if (relay && execRoot !== undefined) self('--ro-bind', execRoot)
 
-  // 可写根与只读 spill
-  self('--bind', cwd)
-  for (const g of gitDirs) self('--bind', g)
+  // 可写根与只读 spill。只读运行照样要挂 cwd 与 gitDir:它们可能在私有的 /tmp 下
+  const project = readOnly ? '--ro-bind' : '--bind'
+  self(project, cwd)
+  for (const g of gitDirs) self(project, g)
   self('--bind', tmp)
   self('--ro-bind', spill)
 
@@ -230,18 +254,42 @@ export function bwrapArgs(p: BwrapParams): string[] {
     targets.push({ path: t, dir: isDir(t) })
   }
   // 已在某个被隐藏目录里的不再单独挂(目标在 tmpfs 里已不存在)
-  const hiddenDirs = targets.filter(t => t.dir).map(t => t.path)
-  for (const t of targets) {
-    if (hiddenDirs.some(d => d !== t.path && within(t.path, d))) continue
-    if (t.dir) mount('--tmpfs', t.path)
-    else mount('--ro-bind', '/dev/null', t.path)
+  const hide = (list: { path: string; dir: boolean }[]) => {
+    const dirs = list.filter(t => t.dir).map(t => t.path)
+    for (const t of list) {
+      if (dirs.some(d => d !== t.path && within(t.path, d))) continue
+      if (t.dir) again('--tmpfs', t.path)
+      else again('--ro-bind', '/dev/null', t.path)
+    }
+  }
+  hide(targets)
+
+  // 盖回数据目录里本会话的两个目录
+  again('--bind', tmp, tmp)
+  again('--ro-bind', spill, spill)
+
+  // 额外可写;之后是规则只读:它们挂在所有 --bind 之后,额外可写也盖不掉规则
+  const extraMounted = extra.filter(exists)
+  for (const x of extraMounted) again('--bind', x, x)
+  // /tmp 是私有的,宿主那边本来就碰不到;只有落在挂进来的根里才算数。否则挂上去反而把宿主的内容读回来
+  const ruleWriteMounted = ruleWrite.filter(r => exists(r) && (!within(r, '/tmp') || [cwd, ...gitDirs, tmp, ...extraMounted].some(w => within(r, w))))
+  for (const r of ruleWriteMounted) again('--ro-bind', r, r)
+
+  // 这两步的源是宿主,盖在里面的东西又露出来了:隐藏再来一遍,持久化文件也是;隐藏了数据目录就再盖回 tmp / spill
+  const layered = [...extraMounted, ...ruleWriteMounted]
+  const uncovered = targets.filter(t => layered.some(m => within(t.path, m)))
+  hide(uncovered)
+  if (uncovered.some(t => t.dir && (within(tmp, t.path) || within(spill, t.path)))) {
+    again(ruleWriteMounted.some(r => within(tmp, r)) ? '--ro-bind' : '--bind', tmp, tmp)
+    again('--ro-bind', spill, spill)
+  }
+  for (const lit of persistence) {
+    const r = R(lit)
+    if (extraMounted.some(x => within(r, x))) again('--ro-bind', r, r)
   }
 
-  // 盖回数据目录里本会话的两个目录(bwrap 允许同一路径再挂一次,所以这里不去重)
-  seen.delete(['--bind', tmp, tmp].join('\0'))
-  seen.delete(['--ro-bind', spill, spill].join('\0'))
-  self('--bind', tmp)
-  self('--ro-bind', spill)
+  // 规则隐藏最后:谁都盖不回来;写进 tmpfs 的东西也到不了宿主
+  hide(ruleRead.filter(exists).map(path => ({ path, dir: isDir(path) })))
 
   // 代理 socket:只绑文件本身;只读挂载上 connect() 照样可用(EROFS 只针对普通文件 / 目录 / 符号链接)
   if (relay) self('--ro-bind', unixSock!)

@@ -1,7 +1,7 @@
 // 设计参考 anthropic-experimental/sandbox-runtime(Apache-2.0)
 // macOS Seatbelt 配置(spec §8,评审修订 R1–R4、R6)。纯拼字符串;唯一的 I/O 是给每个路径取 realpath 拼写。
-// Seatbelt 后写的规则生效,所以顺序即语义:读 = 全放 → 拒 denyRead → 放回 reAllowRead;
-// 写 = a 放 writable → b 拒 denyWrite 与 git 保护 → c 放回 reAllowWrite → d 拒改名 / 删除 moveBlock。
+// Seatbelt 后写的规则生效,所以顺序即语义:读 = 全放 → 拒 denyRead → 放回 reAllowRead → 拒 finalDenyRead;
+// 写 = a 放 writable → b 拒 denyWrite 与 git 保护 → c 放回 reAllowWrite → c2 拒 finalDenyWrite → d 拒改名 / 删除 moveBlock。
 //
 // 转义(安全关键,已在 macOS 26.6 实测):
 // - 一律用普通字符串 "…"(JSON.stringify),SBPL 能正确解码其中的 \" \\ \n \t;
@@ -26,6 +26,9 @@ export interface SeatbeltParams {
   denyWrite: string[]
   /** 本会话临时目录(R3:必须在 denyWrite 之后) */
   reAllowWrite: string[]
+  /** 04:在放回之后再拒,放回盖不掉(用户规则、豁免目录里嵌套的凭据) */
+  finalDenyRead?: string[]
+  finalDenyWrite?: string[]
   /** 拒改名 / 删除的路径(literal),调用方已加上它们在可写根内的各级父目录;gitDir 及其 hooks / config / modules / worktrees 由这里自己加 */
   moveBlock: string[]
   /** 本会话代理的 TCP 端口(127.0.0.1);没有 → 网络全断 */
@@ -146,6 +149,7 @@ export function seatbeltProfile(p: SeatbeltParams): string {
     '(allow file-read*)',
     ...rule('deny', 'file-read*', [filters('subpath', spellings(p.denyRead))]),
     ...rule('allow', 'file-read*', [filters('subpath', spellings(p.reAllowRead))]),
+    ...rule('deny', 'file-read*', [filters('subpath', spellings(p.finalDenyRead ?? []))]),
 
     // 写 a
     ...rule('allow', 'file-write*', [filters('subpath', spellings(p.writable)), filters('literal', WRITABLE_DEVICES)]),
@@ -157,6 +161,8 @@ export function seatbeltProfile(p: SeatbeltParams): string {
     ]),
     // 写 c
     ...rule('allow', 'file-write*', [filters('subpath', spellings(p.reAllowWrite))]),
+    // 写 c2
+    ...rule('deny', 'file-write*', [filters('subpath', spellings(p.finalDenyWrite ?? []))]),
     // 写 d
     ...rule('deny', 'file-write-unlink file-write-create', [filters('literal', moveBlock), regexes(gitMoveRegex)]),
   ]
