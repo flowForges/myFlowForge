@@ -576,6 +576,18 @@ describe('mffai host', () => {
     expect(t.d.workerCalls).toContainEqual(['events.tail', { limit: 10 }])
   })
 
+  it('prompt 带 sessionId:发给那个会话,不看键、不建会话,之后的调试会话照旧', async () => {
+    const t = setup({ up: true })
+    await t.host.ensureRunning()
+    await t.host.prompt('first', undefined, { cwd: '/repo', approvalMode: 'auto' })
+    await t.host.prompt('to open turn', { accountId: 'a', modelId: 'm' }, { sessionId: 'parked', cwd: '/other' })
+    await t.host.prompt('next', undefined, { cwd: '/repo', approvalMode: 'auto' })
+    const methods = t.d.workerCalls.map(([m]) => m)
+    expect(methods.filter((m) => m === 'session.create')).toHaveLength(1)
+    const prompts = t.d.workerCalls.filter(([m]) => m === 'session.prompt').map(([, p]) => p as any)
+    expect(prompts.map((p) => [p.sessionId, p.text])).toEqual([['s1', 'first'], ['parked', 'to open turn'], ['s1', 'next']])
+  })
+
   it('setAutostart / refreshAutostart 经控制口下发', async () => {
     const t = setup({ up: true })
     await t.host.setAutostart(false)

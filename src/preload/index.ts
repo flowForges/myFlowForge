@@ -540,7 +540,7 @@ const api = {
     resetTrip: (): Promise<import('@mffai/protocol').MffaiState> => ipcRenderer.invoke(CH.mffaiResetTrip),
     setAutostart: (on: boolean): Promise<import('@mffai/protocol').MffaiState> => ipcRenderer.invoke(CH.mffaiSetAutostart, on),
     tail: (limit: number): Promise<{ events: import('@mffai/protocol').KernelEvent[] }> => ipcRenderer.invoke(CH.mffaiTail, limit),
-    prompt: (text: string, model?: import('@mffai/protocol').ModelRef, opts?: { cwd?: string; approvalMode?: 'ask' | 'auto' }): Promise<{ accepted: boolean; turnId: string }> =>
+    prompt: (text: string, model?: import('@mffai/protocol').ModelRef, opts?: { cwd?: string; approvalMode?: 'ask' | 'auto'; sessionId?: string }): Promise<{ accepted: boolean; turnId: string }> =>
       ipcRenderer.invoke(CH.mffaiPrompt, text, model, opts),
     approvalRespond: (approvalId: string, decision: 'allow' | 'allow_session' | 'deny'): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke(CH.mffaiApprovalRespond, approvalId, decision),

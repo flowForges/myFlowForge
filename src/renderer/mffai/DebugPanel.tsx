@@ -11,7 +11,7 @@ interface Payload {
   callId?: string; name?: string; argsPreview?: string; ok?: boolean
   approvalId?: string; summary?: string
   phase?: string; ref?: string; changed?: unknown; skipped?: unknown
-  unsandboxed?: unknown; host?: unknown; port?: unknown
+  unsandboxed?: unknown; key?: unknown; host?: unknown; port?: unknown
   runId?: unknown; executor?: unknown; status?: unknown
 }
 const payloadOf = (e: KernelEvent) => (e.payload ?? {}) as Payload
@@ -68,6 +68,8 @@ interface Item {
   approvalId?: string
   resolved?: boolean
   unsandboxed?: boolean
+  /** 审批能不能本会话放行:内核给了 key 才能 */
+  sessionKey?: boolean
   changed?: number
   failed?: boolean
 }
@@ -179,7 +181,7 @@ function toView(events: KernelEvent[]): View {
       }
       case 'approval.requested':
         if (p.approvalId) {
-          item(`p${p.approvalId}`, { kind: 'approval', text: String(p.summary ?? ''), approvalId: p.approvalId, ...base, ...(p.unsandboxed === true && { unsandboxed: true }) })
+          item(`p${p.approvalId}`, { kind: 'approval', text: String(p.summary ?? ''), approvalId: p.approvalId, ...base, ...(p.unsandboxed === true && { unsandboxed: true }), ...(typeof p.key === 'string' && { sessionKey: true }) })
         }
         break
       case 'sandbox.netDenied':
@@ -243,12 +245,13 @@ function rollbackable(v: View, local: Map<string, RolledBack>): Set<string> {
 }
 
 /**
- * 当前会话进行中的轮。当前会话 = 本面板最后发出的那一轮所在的会话;
- * 还没发过(重开面板、app 重启,后台的轮还开着)就取日志里最新的进行中的轮
+ * 进行中的轮:消息和停止都发给它所在的会话。优先本面板最后发出的那一轮的会话;
+ * 那个会话没有开着的轮(或者没发过:重开面板、app 重启,后台的轮还开着)就取日志里最新的进行中的轮
  */
 function currentTurn(v: View, sent: string | undefined): (Turn & { sessionId: string }) | undefined {
   const open = [...v.turns.values()].filter((t): t is Turn & { sessionId: string } => t.started && !t.terminal && !!t.sessionId)
-  const session = (sent ? v.turns.get(sent)?.sessionId : undefined) ?? open.at(-1)?.sessionId
+  const sentSession = sent ? v.turns.get(sent)?.sessionId : undefined
+  const session = open.some(t => t.sessionId === sentSession) ? sentSession : open.at(-1)?.sessionId
   return open.filter(t => t.sessionId === session).at(-1)
 }
 
@@ -300,14 +303,17 @@ export function DebugPanel() {
     setText('')
     setFailed(false)
     const dir = cwd.trim()
-    const opts = dir || auto ? { ...(dir && { cwd: dir }), approvalMode: auto ? 'auto' as const : 'ask' as const } : undefined
+    // 有开着的轮:消息归它,工作目录、模型、自动放行这几个控件只管下一次新开的轮
+    const opts = current ? { sessionId: current.sessionId }
+      : dir || auto ? { ...(dir && { cwd: dir }), approvalMode: auto ? 'auto' as const : 'ask' as const } : undefined
+    const ref = current ? undefined : model
     const api = window.forge.mffai
     // 没发出去(ERR_BUSY 等):打的字放回去;这期间又打了字就接在后面
     const restore = () => {
       setText(cur => (cur ? `${text} ${cur}` : text))
       setFailed(true)
     }
-    void (opts ? api.prompt(t, model, opts) : model ? api.prompt(t, model) : api.prompt(t))
+    void (opts ? api.prompt(t, ref, opts) : ref ? api.prompt(t, ref) : api.prompt(t))
       .then(r => { if (r.accepted) setSentTurn(r.turnId); else restore() })
       .catch((e) => { console.error('mffai prompt', e); restore() })
   }
@@ -373,7 +379,7 @@ export function DebugPanel() {
           {it.unsandboxed && <span className="mffai-badge mffai-unsandboxed">未隔离</span>}
           <div className="mffai-actions">
             <button className="set-btn" disabled={busy} onClick={() => respond(it.approvalId!, 'allow')}>允许</button>
-            <button className="set-btn" disabled={busy} onClick={() => respond(it.approvalId!, 'allow_session')}>本会话允许</button>
+            {it.sessionKey && <button className="set-btn" disabled={busy} onClick={() => respond(it.approvalId!, 'allow_session')}>本会话允许</button>}
             <button className="set-btn" disabled={busy} onClick={() => respond(it.approvalId!, 'deny')}>拒绝</button>
           </div>
           {fail}

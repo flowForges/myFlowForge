@@ -89,7 +89,9 @@ export async function runBridge(opts: { stream: Stream; connect: () => Promise<M
   }
 
   /** 问客户端;取消 / 出错 / 不认识的选项 → deny。请求在队列里按序发出,但不堵住后面的通知 */
-  function ask(t: Turn, approvalId: string, callId: string, summary: string): void {
+  /** key:内核给了才能本会话放行;没有 key 的卡(未隔离、落实不了的规则)点了也只算一次,不给这个选项 */
+  function ask(t: Turn, approvalId: string, callId: string, summary: string, key: unknown): void {
+    const options = typeof key === 'string' ? PERMISSION_OPTIONS : PERMISSION_OPTIONS.filter(o => o.optionId !== 'allow_session')
     const ac = new AbortController()
     t.prompts.set(approvalId, ac)
     t.deltas = t.deltas.then(() => {
@@ -98,7 +100,7 @@ export async function runBridge(opts: { stream: Stream; connect: () => Promise<M
         .then(() =>
           t.client.request(
             'session/request_permission',
-            { sessionId: t.sessionId, toolCall: { toolCallId: callId, title: summary }, options: PERMISSION_OPTIONS },
+            { sessionId: t.sessionId, toolCall: { toolCallId: callId, title: summary }, options },
             { cancellationSignal: ac.signal },
           ),
         )
@@ -108,7 +110,7 @@ export async function runBridge(opts: { stream: Stream; connect: () => Promise<M
         .then(
           (r): Decision => {
             const id = r.outcome.outcome === 'selected' ? r.outcome.optionId : 'deny'
-            return PERMISSION_OPTIONS.some((o) => o.optionId === id) ? (id as Decision) : 'deny'
+            return options.some((o) => o.optionId === id) ? (id as Decision) : 'deny'
           },
           (): Decision => 'deny',
         )
@@ -144,7 +146,7 @@ export async function runBridge(opts: { stream: Stream; connect: () => Promise<M
         content: [{ type: 'content', content: { type: 'text', text: str(p.content) } }],
       })
     } else if (e.type === 'approval.requested') {
-      ask(t, str(p.approvalId), str(p.callId), str(p.summary))
+      ask(t, str(p.approvalId), str(p.callId), str(p.summary), p.key)
     } else if (e.type === 'approval.resolved') {
       withdraw(t, str(p.approvalId)) // 任何 by:自己应答引起的已结束,abort 无副作用
     } else if (e.type === 'turn.ended') t.done({ ok: true })

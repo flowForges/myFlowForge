@@ -209,7 +209,7 @@ function fakeWorker(script: { beforeReply?: KernelEvent[]; afterReply?: KernelEv
 }
 const ev = (type: string, payload: Record<string, unknown>): KernelEvent => ({ seq: 0, ts: 0, type, sessionId: 'S', payload: { turnId: 'T', ...payload } } as KernelEvent)
 const ended = ev('turn.ended', {})
-const asked = ev('approval.requested', { approvalId: 'A1', callId: 'c1', tool: 'shell', summary: 'npm test' })
+const asked = ev('approval.requested', { approvalId: 'A1', callId: 'c1', tool: 'shell', summary: 'npm test', key: 'npm test' })
 const resolvedBy = (by: string) => ev('approval.resolved', { approvalId: 'A1', callId: 'c1', decision: 'deny', by })
 
 async function runFake(w: ReturnType<typeof fakeWorker>, answer?: (p: any, signal: AbortSignal) => any, onStop?: () => void) {
@@ -285,6 +285,14 @@ describe('ACP bridge: tools and approvals', () => {
       expect(w.calls.filter(c => c.method === 'approval.respond').map(c => c.params)).toEqual([{ approvalId: 'A1', decision }])
     })
   }
+
+  it('a card with no key does not offer allow_session, and picking it anyway is a deny', async () => {
+    const keyless = ev('approval.requested', { approvalId: 'A1', callId: 'c1', tool: 'delegate_codex', summary: 'codex: x', unsandboxed: true })
+    const w = fakeWorker({ afterReply: [keyless], onRespond: () => [ended] })
+    const { perms } = await runFake(w, () => ({ outcome: { outcome: 'selected', optionId: 'allow_session' } }))
+    expect((perms[0] as { options: { optionId: string }[] }).options.map(o => o.optionId)).toEqual(['allow', 'deny'])
+    expect(w.calls.filter(c => c.method === 'approval.respond').map(c => c.params)).toEqual([{ approvalId: 'A1', decision: 'deny' }])
+  })
 
   it('a failing permission request -> deny', async () => {
     const w = fakeWorker({ afterReply: [asked], onRespond: () => [ended] })

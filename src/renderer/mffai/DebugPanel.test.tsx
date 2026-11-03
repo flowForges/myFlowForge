@@ -67,9 +67,117 @@ describe('DebugPanel', () => {
     expect(two.textContent).toContain('✗')
   })
 
+  it('没有 key 的审批卡不给本会话允许', async () => {
+    render(<DebugPanel />)
+    emit('approval.requested', { approvalId: 'ap1', turnId: 't1', callId: 'c1', tool: 'delegate_codex', summary: 'codex: x', unsandboxed: true })
+    expect(screen.getByText('允许')).toBeInTheDocument()
+    expect(screen.getByText('拒绝')).toBeInTheDocument()
+    expect(screen.queryByText('本会话允许')).toBeNull()
+  })
+
+  describe('开着的轮:消息和停止都归它(final review I-3)', () => {
+    const say = (text: string) => {
+      fireEvent.change(document.querySelector('.mffai-send input')!, { target: { value: text } })
+      fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    }
+    const stopButton = () => screen.queryByRole('button', { name: '停止' })
+    const parked = (turnId = 't1', sessionId = 's1') => {
+      emit('message.user', { turnId, text: 'go' }, sessionId)
+      emit('turn.parked', { turnId, step: 1, active: 1, pending: 0 }, sessionId)
+    }
+
+    it('切走再回来(面板重新挂载),控件都清了:消息还是发给挂起的轮,停止也还在', async () => {
+      const first = render(<DebugPanel />)
+      fireEvent.change(screen.getByLabelText('工作目录'), { target: { value: '/repo' } })
+      say('start')
+      await waitFor(() => expect(mffai.prompt).toHaveBeenCalledTimes(1))
+      parked()
+      first.unmount()
+      mffai.tail = vi.fn(async () => ({ events: [
+        { seq: 1, ts: 1, type: 'message.user', sessionId: 's1', payload: { turnId: 't1', text: 'go' } },
+        { seq: 2, ts: 1, type: 'turn.parked', sessionId: 's1', payload: { turnId: 't1', step: 1, active: 1, pending: 0 } },
+      ] }))
+      render(<DebugPanel />)
+      await waitFor(() => expect(stopButton()).not.toBeNull())
+      mffai.prompt.mockResolvedValueOnce({ accepted: true, turnId: 't1', followUp: true })
+      say('follow up')
+      await waitFor(() => expect(mffai.prompt).toHaveBeenCalledTimes(2))
+      expect(mffai.prompt).toHaveBeenLastCalledWith('follow up', undefined, { sessionId: 's1' })
+      await waitFor(() => expect(stopButton()).not.toBeNull())
+      fireEvent.click(stopButton()!)
+      expect(mffai.cancel).toHaveBeenCalledWith('s1')
+    })
+
+    it('中途改工作目录:发给开着的轮;轮结束后才用新的目录', async () => {
+      render(<DebugPanel />)
+      parked()
+      fireEvent.change(screen.getByLabelText('工作目录'), { target: { value: '/other' } })
+      say('still here')
+      await waitFor(() => expect(mffai.prompt).toHaveBeenLastCalledWith('still here', undefined, { sessionId: 's1' }))
+      fireEvent.click(stopButton()!)
+      expect(mffai.cancel).toHaveBeenLastCalledWith('s1')
+      emit('turn.ended', { turnId: 't1' })
+      say('new turn')
+      await waitFor(() => expect(mffai.prompt).toHaveBeenLastCalledWith('new turn', undefined, { cwd: '/other', approvalMode: 'ask' }))
+    })
+
+    it('中途勾自动放行:同样只管下一次新开的轮', async () => {
+      render(<DebugPanel />)
+      parked()
+      fireEvent.click(screen.getByLabelText('命令自动放行'))
+      say('still here')
+      await waitFor(() => expect(mffai.prompt).toHaveBeenLastCalledWith('still here', undefined, { sessionId: 's1' }))
+      emit('turn.ended', { turnId: 't1' })
+      say('new turn')
+      await waitFor(() => expect(mffai.prompt).toHaveBeenLastCalledWith('new turn', undefined, { approvalMode: 'auto' }))
+    })
+
+    it('中途换模型:发给开着的轮,不带模型;轮结束后才用新模型', async () => {
+      const ref = { accountId: 'a1', modelId: 'm1' }
+      const other = { accountId: 'a1', modelId: 'm0' }
+      mffai.models.catalog = vi.fn(async () => ({ presets: [], models: { p1: [{ id: 'm0', label: 'M0' }, { id: 'm1', label: 'M1' }] }, default: other }))
+      mffai.models.accounts = vi.fn(async () => ({ accounts: [{ id: 'a1', label: 'A', presetId: 'p1' }], secretsBackend: 'keychain' }))
+      render(<DebugPanel />)
+      parked()
+      const picker = await waitFor(() => {
+        const el = document.querySelector<HTMLSelectElement>('.mffai-send select')
+        if (!el || el.options.length < 2) throw new Error('models not loaded')
+        return el
+      })
+      fireEvent.change(picker, { target: { value: picker.options[picker.options.length - 1].value } })
+      say('still here')
+      await waitFor(() => expect(mffai.prompt).toHaveBeenLastCalledWith('still here', undefined, { sessionId: 's1' }))
+      emit('turn.ended', { turnId: 't1' })
+      say('new turn')
+      await waitFor(() => expect(mffai.prompt).toHaveBeenLastCalledWith('new turn', ref))
+    })
+
+    it('发过的那一轮结束了,别的会话还开着:消息和停止归开着的那个', async () => {
+      render(<DebugPanel />)
+      say('one')
+      await waitFor(() => expect(mffai.prompt).toHaveBeenCalledTimes(1))
+      emit('message.user', { turnId: 't1', text: 'one' }, 's1')
+      emit('turn.ended', { turnId: 't1' }, 's1')
+      parked('t9', 's9')
+      fireEvent.click(stopButton()!)
+      expect(mffai.cancel).toHaveBeenLastCalledWith('s9')
+      say('to the open one')
+      await waitFor(() => expect(mffai.prompt).toHaveBeenLastCalledWith('to the open one', undefined, { sessionId: 's9' }))
+    })
+
+    it('发给开着的轮被拒(ERR_BUSY):打的字放回去', async () => {
+      render(<DebugPanel />)
+      emit('message.user', { turnId: 't1', text: 'go' })
+      mffai.prompt.mockRejectedValueOnce(new Error('turn in progress'))
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      say('too soon')
+      await waitFor(() => expect((document.querySelector('.mffai-send input') as HTMLInputElement).value).toBe('too soon'))
+    })
+  })
+
   it('审批卡:本会话允许 → approvalRespond(id, allow_session);approval.resolved 后消失', async () => {
     render(<DebugPanel />)
-    emit('approval.requested', { approvalId: 'ap1', turnId: 't1', callId: 'c1', tool: 'shell', summary: 'npm test' })
+    emit('approval.requested', { approvalId: 'ap1', turnId: 't1', callId: 'c1', tool: 'shell', summary: 'npm test', key: 'npm test' })
     expect(screen.getByText('npm test')).toBeInTheDocument()
     expect(screen.getByText('允许')).toBeInTheDocument()
     expect(screen.getByText('拒绝')).toBeInTheDocument()
@@ -456,6 +564,11 @@ describe('DebugPanel', () => {
       expect(mffai.cancel).toHaveBeenLastCalledWith('s1')
       await waitFor(() => expect((stop() as HTMLButtonElement).disabled).toBe(false))
       emit('turn.ended', { turnId: 'a' }, 's1')
+      // 发过的会话没有开着的轮了:停止归还开着的 s2
+      fireEvent.click(stop()!)
+      expect(mffai.cancel).toHaveBeenLastCalledWith('s2')
+      await waitFor(() => expect((stop() as HTMLButtonElement).disabled).toBe(false))
+      emit('turn.ended', { turnId: 'b' }, 's2')
       expect(stop()).toBeNull()
     })
 

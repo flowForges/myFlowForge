@@ -36,6 +36,8 @@ function modelRef(v: unknown): { accountId: string; modelId: string } | undefine
 /** 调试会话选项:cwd 去空白后非空才带,approvalMode 只认 ask / auto;都没有 → undefined */
 function promptOpts(v: unknown): PromptOpts | undefined {
   const o = obj(v)
+  const sessionId = str(o.sessionId)
+  if (sessionId) return { sessionId }
   const out: PromptOpts = {}
   const cwd = str(o.cwd).trim()
   if (cwd) out.cwd = cwd

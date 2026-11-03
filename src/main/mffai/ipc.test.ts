@@ -269,6 +269,10 @@ describe('mffai 审批 / 回滚通道', () => {
     expect(host.prompt).toHaveBeenLastCalledWith('hi', m)
     await invoke(CH.mffaiPrompt, 'hi', undefined, 'x')
     expect(host.prompt).toHaveBeenLastCalledWith('hi')
+    await invoke(CH.mffaiPrompt, 'hi', undefined, { sessionId: 's9', cwd: '/repo', approvalMode: 'auto' })
+    expect(host.prompt).toHaveBeenLastCalledWith('hi', undefined, { sessionId: 's9' })
+    await invoke(CH.mffaiPrompt, 'hi', undefined, { sessionId: 7, cwd: '/repo' })
+    expect(host.prompt).toHaveBeenLastCalledWith('hi', undefined, { cwd: '/repo' })
   })
 })
 

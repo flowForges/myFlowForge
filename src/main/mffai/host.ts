@@ -59,7 +59,8 @@ const POLL_MS = 200
 export type AddAccountInput = Omit<WorkerParams<'models.addAccount'>, 'commandId'>
 export type OpenExternal = (url: string) => void
 /** 调试会话选项:cwd 非空才建编码会话;审批模式建会话时定下 */
-export interface PromptOpts { cwd?: string; approvalMode?: 'ask' | 'auto' }
+/** sessionId:发给这个会话开着的轮,其余选项不看 */
+export interface PromptOpts { cwd?: string; approvalMode?: 'ask' | 'auto'; sessionId?: string }
 export type ApprovalDecision = WorkerParams<'approval.respond'>['decision']
 
 // 只认 https + 精确主机名 + 前缀,挡住 chatgpt.com.evil.com / chatgpt.com@evil.com 之类;返回规范化后的地址
@@ -328,6 +329,7 @@ export function createMffaiHost(deps: HostDeps) {
     },
     async prompt(text: string, model?: ModelRef, opts?: PromptOpts): Promise<WorkerResult<'session.prompt'>> {
       const w = requireWorker()
+      if (opts?.sessionId) return w.call('session.prompt', { commandId: randomUUID(), sessionId: opts.sessionId, text })
       const cwd = opts?.cwd ?? ''
       const approvalMode = opts?.approvalMode ?? 'ask'
       const key = JSON.stringify([model?.accountId, model?.modelId, cwd, approvalMode])
