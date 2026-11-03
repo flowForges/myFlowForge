@@ -60,7 +60,34 @@ const turn2: Step[] = [
 const settle = (p: Promise<unknown>, ms: number) => Promise.race([p, new Promise(r => setTimeout(() => r('HANG'), ms))])
 
 describe('claude chat() — 后台子代理比主代理这一轮活得久', () => {
-  it('★result #1 时这一轮就收尾(不再停车挂着「运行中」),但不杀进程;后台那一轮不再往这一轮里写', async () => {
+  it('★交互聊天:CLI 自己起的第二轮开一条新回复,摘要不串到第一轮,卡片照旧不把回执当完成', async () => {
+    const provider = makeClaudeProvider({ bin: 'node', preArgs: [timedBin([...turn1, ...turn2])], defaultModels: [] })
+    let first = ''
+    let second = ''
+    const subs: { id: string; phase: string; step?: string }[] = []
+    let followDone: Promise<unknown> | null = null
+    live = provider.chat!(
+      { id: 'm1', prompt: 'x', model: 'opus-4.8', cwd: dir, background: {
+        onRunning: () => {},
+        openTurn: (attach) => {
+          followDone = attach({ onSession: () => {}, onAssistantDelta: (t) => { second += t }, onThinkDelta: () => {}, onDone: () => {}, onError: () => {} }).done
+        },
+      } },
+      { onSession: () => {}, onAssistantDelta: (t) => { first += t }, onThinkDelta: () => {}, onSubagent: (ev) => subs.push(ev), onDone: () => {}, onError: () => {} },
+      process.env,
+    )
+    expect(await settle(live.done, 30_000)).not.toBe('HANG')
+    await new Promise(r => setTimeout(r, 1900))
+    expect(followDone).not.toBeNull()
+    expect(await settle(followDone!, 5_000)).not.toBe('HANG')
+    expect(first).toBe('两路调研还在跑')
+    expect(second).toBe('调研结果:Snapseed 有 29 个工具')
+    // 回执不算完成;完成通知到了,卡片回到开它的第一轮的回调上置完成,带通知里的摘要。
+    expect(subs.filter(s => s.id === 'tu1' && s.phase === 'done')).toEqual([{ id: 'tu1', phase: 'done', result: 'Snapseed 有 29 个工具', isError: false }])
+    expect(subs.some(s => s.step === '已转入后台运行' && (s as { background?: boolean }).background === true)).toBe(true)
+  })
+
+  it('★没给 background 的调用方:result #1 时这一轮就收尾,但不杀进程;后台那一轮不再往这一轮里写', async () => {
     const provider = makeClaudeProvider({ bin: 'node', preArgs: [timedBin([...turn1, ...turn2])], defaultModels: [] })
     let text = ''
     let doneAt = 0
@@ -89,7 +116,7 @@ describe('claude chat() — 后台子代理比主代理这一轮活得久', () =
     // 回执不能把卡片置完成,也不能把内部回执原文塞进结果
     const tu1 = subs.filter(s => s.id === 'tu1')
     expect(tu1.some(s => s.step === '已转入后台运行')).toBe(true)
-    expect(tu1.some(s => s.phase === 'done')).toBe(false)
+    expect(tu1.filter(s => s.phase === 'done').map(s => s.result)).toEqual(['Snapseed 有 29 个工具'])
   })
 
   it('子代理在这一轮中途就完成并被消化:result 照旧立即收尾(不多等)', async () => {

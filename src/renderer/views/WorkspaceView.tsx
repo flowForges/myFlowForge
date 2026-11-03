@@ -1835,9 +1835,10 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
           busy={chat.busy}
           running={chat.busy && chat.running != null}
           onStop={() => chat.stop()}
+          backgroundTasks={chat.backgroundTasks}
           // Has the running turn produced assistant text yet? Stopping before any output restores the
           // sent message to the box; stopping after output (possible changes) does not.
-          turnHasOutput={liveMessages.some(m => m.who === 'ai' && chat.streamingIds.has(m.id) && !!m.text.trim())}
+          turnHasOutput={chat.running?.text === '' || liveMessages.some(m => m.who === 'ai' && chat.streamingIds.has(m.id) && !!m.text.trim())}
           readOnly={isReadOnlySession}
           archived={!!archived}
           seedText={quickSeed}

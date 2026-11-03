@@ -151,6 +151,7 @@ export const CH = {
   councilPause: 'council:pause',
   councilResume: 'council:resume',
   councilStop: 'council:stop',
+  councilStopSeat: 'council:stop-seat',
   councilInterject: 'council:interject',
   councilFollowup: 'council:followup',
   councilChoose: 'council:choose',

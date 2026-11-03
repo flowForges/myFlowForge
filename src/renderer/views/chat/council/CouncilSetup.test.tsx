@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createRef } from 'react'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
-import { CouncilSetup, councilStartError, type CouncilSetupHandle } from './CouncilSetup'
+import { CouncilSetup, SeatPicker, councilStartError, placeSeatMenu, type CouncilSetupHandle } from './CouncilSetup'
 import type { ProviderInfo } from '@shared/types'
 import type { CouncilLastConfig } from '../../../state/useCouncil'
 
@@ -42,8 +42,8 @@ function setup(over: Partial<React.ComponentProps<typeof CouncilSetup>> = {}) {
 
 function addSeat(provider: string, model: string) {
   fireEvent.click(screen.getByRole('button', { name: '添加讨论方' }))
-  fireEvent.click(document.querySelector(`.council-add [data-cprov="${provider}"]`)!)
-  fireEvent.click(document.querySelector(`.council-add [data-cmodel="${model}"]`)!)
+  fireEvent.click(document.querySelector(`.council-pop [data-cprov="${provider}"]`)!)
+  fireEvent.click(document.querySelector(`.council-pop [data-cmodel="${model}"]`)!)
 }
 
 const seatIds = () => Array.from(document.querySelectorAll('.council-seat')).map(e => e.getAttribute('data-seat'))
@@ -52,7 +52,7 @@ describe('CouncilSetup', () => {
   it('provider picker lists only installed council-eligible CLIs (never cursor)', () => {
     setup()
     fireEvent.click(screen.getByRole('button', { name: '添加讨论方' }))
-    const ids = Array.from(document.querySelectorAll('.council-add [data-cprov]')).map(e => e.getAttribute('data-cprov'))
+    const ids = Array.from(document.querySelectorAll('.council-pop [data-cprov]')).map(e => e.getAttribute('data-cprov'))
     expect(ids).toEqual(['claude', 'codex'])
   })
 
@@ -76,9 +76,9 @@ describe('CouncilSetup', () => {
     setup()
     addSeat('claude', 'opus')
     fireEvent.click(screen.getByRole('button', { name: '添加讨论方' }))
-    fireEvent.click(document.querySelector('.council-add [data-cprov="claude"]')!)
-    expect(document.querySelector('.council-add [data-cmodel="opus"]')).toBeNull()
-    expect(document.querySelector('.council-add [data-cmodel="sonnet"]')).toBeTruthy()
+    fireEvent.click(document.querySelector('.council-pop [data-cprov="claude"]')!)
+    expect(document.querySelector('.council-pop [data-cmodel="opus"]')).toBeNull()
+    expect(document.querySelector('.council-pop [data-cmodel="sonnet"]')).toBeTruthy()
   })
 
   it('start disabled when blocked or topic empty', () => {
@@ -134,8 +134,8 @@ describe('CouncilSetup', () => {
     addSeat('claude', 'opus')
     addSeat('codex', 'gpt-6')
     fireEvent.click(screen.getByRole('button', { name: /👑/ }))
-    fireEvent.click(document.querySelector('.council-leader [data-cprov="claude"]')!)
-    fireEvent.click(document.querySelector('.council-leader [data-cmodel="opus"]')!)
+    fireEvent.click(document.querySelector('.council-pop [data-cprov="claude"]')!)
+    fireEvent.click(document.querySelector('.council-pop [data-cmodel="opus"]')!)
     fireEvent.click(screen.getByRole('button', { name: '＋' }))
     start()
     expect(onStart.mock.calls[0][0].leader).toMatchObject({ id: 'leader:claude:opus', provider: 'claude', model: 'opus', label: 'Claude Code · Opus' })
@@ -356,5 +356,149 @@ describe('CouncilSetup', () => {
     const { container } = setup({ projects: async () => [{ name: 'app', cwd: '/ws/app' }] })
     addSeat('claude', 'opus')
     expect(container.querySelector('.hint, [class*="hint"], small')).toBeNull()
+  })
+})
+
+describe('placeSeatMenu', () => {
+  const view = { width: 1200, height: 800 }
+  const rect = (top: number, left = 100, h = 30, w = 120) => ({ top, bottom: top + h, left, right: left + w })
+  const pop = (height: number, width = 240) => ({ width, height })
+  const inside = (p: { top: number; left: number; maxHeight: number }, popH: number, v = view) => {
+    expect(p.top).toBeGreaterThanOrEqual(8)
+    expect(p.left).toBeGreaterThanOrEqual(8)
+    expect(p.top + Math.min(popH, p.maxHeight)).toBeLessThanOrEqual(v.height - 8)
+  }
+
+  it('room below: opens downward at its natural size', () => {
+    const p = placeSeatMenu(rect(100), pop(300), view)
+    expect(p.top).toBe(136)
+    expect(p.maxHeight).toBeGreaterThanOrEqual(300)
+    inside(p, 300)
+  })
+
+  it('the reported case: anchor near the window bottom, long model list → opens upward, bottom edge above the anchor', () => {
+    const anchor = rect(700)
+    const p = placeSeatMenu(anchor, pop(1200), view)
+    expect(p.maxHeight).toBe(440)
+    expect(p.top + p.maxHeight).toBe(anchor.top - 6)
+    inside(p, 1200)
+  })
+
+  it('a short list that fits below stays below even near the bottom', () => {
+    const p = placeSeatMenu(rect(650), pop(90), view)
+    expect(p.top).toBe(686)
+  })
+
+  it('not enough room on either side: takes the roomier side and scrolls inside', () => {
+    const v = { width: 800, height: 300 }
+    const up = placeSeatMenu(rect(200), pop(1000), v)
+    expect(up.maxHeight).toBe(186)
+    expect(up.top).toBe(8)
+    inside(up, 1000, v)
+    const down = placeSeatMenu(rect(50), pop(1000), v)
+    expect(down.top).toBe(86)
+    expect(down.maxHeight).toBe(206)
+    inside(down, 1000, v)
+  })
+
+  it('tiny window / anchor scrolled out of view: still inside the window with a usable list', () => {
+    const v = { width: 400, height: 200 }
+    for (const top of [-500, 90, 180, 900]) {
+      const p = placeSeatMenu(rect(top), pop(1000), v)
+      expect(p.maxHeight).toBeGreaterThan(0)
+      inside(p, 1000, v)
+    }
+    const h = { width: 400, height: 100 }
+    const p = placeSeatMenu(rect(40), pop(1000), h)
+    expect(p.maxHeight).toBe(84)
+    inside(p, 1000, h)
+  })
+
+  it('right edge: aligns to the anchor right edge; narrow window clamps to the left edge', () => {
+    expect(placeSeatMenu(rect(100, 1050, 30, 120), pop(100, 300), view).left).toBe(870)
+    expect(placeSeatMenu(rect(100, 20, 30, 120), pop(100, 500), { width: 400, height: 800 }).left).toBe(8)
+  })
+})
+
+describe('SeatPicker popover', () => {
+  const many: ProviderInfo[] = [{
+    id: 'qoder', displayName: 'Qoder', installed: true,
+    models: Array.from({ length: 40 }, (_, i) => ({ id: `m${i}`, label: `Model ${i}` })),
+  }, { id: 'codex', displayName: 'Codex', installed: true, models: [{ id: 'gpt-6', label: 'GPT-6' }] }]
+
+  // jsdom 没有布局:量到的矩形和内容高度都是假的,这里只验证「量了什么、写到了哪」,真实布局没验证
+  function mockLayout(anchorTop: number, contentH = 1200) {
+    const spies = [
+      vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+        return { top: anchorTop, bottom: anchorTop + 30, left: 100, right: 220, width: 120, height: 30, x: 100, y: anchorTop, toJSON() {} } as DOMRect
+      }),
+      vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(() => contentH),
+      vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(() => 240),
+      vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(() => 0),
+      vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(() => 0),
+    ]
+    return () => spies.forEach(s => s.mockRestore())
+  }
+  const pick = (over: Partial<React.ComponentProps<typeof SeatPicker>> = {}) => {
+    const onPick = vi.fn()
+    render(<div style={{ overflow: 'hidden' }} data-testid="clip"><SeatPicker className="council-add" label="添加讨论方" trigger="＋" providers={many} onPick={onPick} {...over} /></div>)
+    fireEvent.click(screen.getByRole('button', { name: '添加讨论方' }))
+    return onPick
+  }
+  const popEl = () => document.querySelector('.council-pop') as HTMLElement
+
+  it('renders outside every clipping ancestor, on body', () => {
+    pick()
+    expect(popEl().parentElement).toBe(document.body)
+    expect(screen.getByTestId('clip').contains(popEl())).toBe(false)
+  })
+
+  it('anchor near the bottom: positioned above it, capped, every model is rendered and pickable', () => {
+    const restore = mockLayout(window.innerHeight - 60)
+    const onPick = pick()
+    fireEvent.click(popEl().querySelector('[data-cprov="qoder"]')!)
+    const top = window.innerHeight - 60
+    expect(popEl().style.maxHeight).toBe('440px')
+    expect(parseFloat(popEl().style.top)).toBe(top - 6 - 440)
+    expect(popEl().style.visibility).toBe('')
+    expect(popEl().querySelectorAll('[data-cmodel]')).toHaveLength(40)
+    fireEvent.click(popEl().querySelector('[data-cmodel="m39"]')!)
+    expect(onPick).toHaveBeenCalledWith(many[0], 'm39')
+    expect(popEl()).toBeNull()
+    restore()
+  })
+
+  it('remeasures on window resize, and on outside scroll, but not on its own scroll', () => {
+    let top = 100
+    const restoreBase = mockLayout(top)
+    const spy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({ top, bottom: top + 30, left: 100, right: 220, width: 120, height: 30, x: 100, y: top, toJSON() {} }) as DOMRect)
+    pick()
+    fireEvent.click(popEl().querySelector('[data-cprov="qoder"]')!)
+    expect(parseFloat(popEl().style.top)).toBe(136)
+    top = 200
+    fireEvent.scroll(popEl())
+    expect(parseFloat(popEl().style.top)).toBe(136)
+    fireEvent.scroll(document.body)
+    expect(parseFloat(popEl().style.top)).toBe(236)
+    top = 50
+    fireEvent(window, new Event('resize'))
+    expect(parseFloat(popEl().style.top)).toBe(86)
+    spy.mockRestore()
+    restoreBase()
+  })
+
+  it('clicking inside the portal does not count as an outside click; clicking elsewhere closes it', () => {
+    pick()
+    fireEvent.mouseDown(popEl().querySelector('[data-cprov="qoder"]')!)
+    expect(popEl()).not.toBeNull()
+    fireEvent.mouseDown(document.body)
+    expect(popEl()).toBeNull()
+  })
+
+  it('back from the model list returns to the providers', () => {
+    pick()
+    fireEvent.click(popEl().querySelector('[data-cprov="qoder"]')!)
+    fireEvent.click(popEl().querySelector('.council-back')!)
+    expect(popEl().querySelector('[data-cprov="codex"]')).not.toBeNull()
   })
 })

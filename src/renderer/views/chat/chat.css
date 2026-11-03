@@ -395,6 +395,13 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
   background: color-mix(in oklab, var(--accent) 8%, transparent);
   border: 1px solid color-mix(in oklab, var(--accent) 20%, transparent);
 }
+.composer-bg-chip {
+  align-self: flex-start; margin: 4px 14px 0; padding: 2px 8px; border-radius: 6px; cursor: pointer;
+  font-size: 11.5px; line-height: 1.4; color: var(--muted);
+  background: color-mix(in oklab, var(--accent) 8%, transparent);
+  border: 1px solid color-mix(in oklab, var(--accent) 20%, transparent);
+}
+.composer-bg-chip:hover { color: inherit; }
 .composer-bar { display: flex; align-items: center; gap: 8px; padding: 8px 10px 10px; flex-wrap: nowrap; }
 /* Keep the control row on ONE line at any pane width. The three text dropdowns (model/version/
    permission) are the only shrinkable items — they truncate their labels with an ellipsis when

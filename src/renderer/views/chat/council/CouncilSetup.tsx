@@ -1,4 +1,5 @@
-import { useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { Attachment, ProviderInfo } from '@shared/types'
 import { getBuiltinProvider } from '@shared/providerCatalog'
 import {
@@ -57,7 +58,41 @@ export function councilStartError(e: unknown): string {
 
 export const CHEV = <svg className="dd-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 12 15 18 9" /></svg>
 
-/** 「CLI → 模型」两级选择,复用 Composer 的 .menu / .menu-pop / .menu-item。 */
+const MENU_GAP = 6
+const MENU_EDGE = 8
+// 同 .menu-pop 的上限:再长就在弹层里滚
+const MENU_MAX_H = 440
+// 两边都很挤(窗口极矮)时至少留这么高,贴着窗口放,可以盖住触发按钮
+const MENU_MIN_H = 120
+
+export type MenuPlace = { left: number; top: number; maxHeight: number }
+
+/**
+ * 弹层放哪(fixed 坐标):下方放得下就朝下,放不下且上方更宽裕就朝上;高度限制在那一侧的空间内、内部滚动,
+ * 整个弹层一定留在窗口里,所以任何窗口大小下每一项都够得着。
+ */
+export function placeSeatMenu(
+  anchor: { top: number; bottom: number; left: number; right: number },
+  pop: { width: number; height: number },
+  view: { width: number; height: number },
+): MenuPlace {
+  const below = view.height - anchor.bottom - MENU_GAP - MENU_EDGE
+  const above = anchor.top - MENU_GAP - MENU_EDGE
+  const want = Math.min(pop.height, MENU_MAX_H)
+  const up = want > below && above > below
+  const maxHeight = Math.max(0, Math.min(MENU_MAX_H, Math.max(up ? above : below, MENU_MIN_H), view.height - 2 * MENU_EDGE))
+  const h = Math.min(pop.height, maxHeight)
+  const top = Math.max(MENU_EDGE, Math.min(up ? anchor.top - MENU_GAP - h : anchor.bottom + MENU_GAP, view.height - MENU_EDGE - h))
+  // 默认和触发按钮左对齐;右边放不下就和它右对齐
+  const left = anchor.left + pop.width <= view.width - MENU_EDGE ? anchor.left : anchor.right - pop.width
+  return { left: Math.max(MENU_EDGE, Math.min(left, view.width - MENU_EDGE - pop.width)), top, maxHeight }
+}
+
+/**
+ * 「CLI → 模型」两级选择,复用 Composer 的 .menu / .menu-item。
+ * ★弹层挂到 body、fixed 定位:设置区贴着窗口底部的输入框,原来朝下展开,被窗口下沿和 .chat 的 overflow:hidden 裁掉,
+ *  长列表(qoder / opencode)底部的模型点不到;共商区块里的那个还会被 .council-block 的 overflow:hidden 裁掉。
+ */
 export function SeatPicker({ className, label, trigger, providers, taken, onPick }: {
   className: string
   label: string
@@ -68,19 +103,55 @@ export function SeatPicker({ className, label, trigger, providers, taken, onPick
 }) {
   const [open, setOpen] = useState(false)
   const [prov, setProv] = useState<ProviderInfo | null>(null)
+  const [place, setPlace] = useState<MenuPlace | null>(null)
   const ref = useRef<HTMLDivElement>(null)
+  const popRef = useRef<HTMLDivElement>(null)
+  const models = prov ? prov.models.filter(m => !taken?.has(`${prov.id}:${m.id}`)) : []
+  const reposition = useCallback(() => {
+    const anchor = ref.current, pop = popRef.current
+    if (!anchor || !pop) return
+    // scrollHeight 是内容的自然高度(不受当前 max-height 影响),再加上边框
+    setPlace(placeSeatMenu(
+      anchor.getBoundingClientRect(),
+      { width: pop.offsetWidth, height: pop.scrollHeight + pop.offsetHeight - pop.clientHeight },
+      { width: window.innerWidth, height: window.innerHeight },
+    ))
+  }, [])
+  // 在绘制前量:打开、切到模型那一层(列表长短不同)都重新量
+  useLayoutEffect(() => {
+    if (!open) { setPlace(null); return }
+    reposition()
+  }, [open, prov, models.length, providers.length, reposition])
   useEffect(() => {
     if (!open) return
-    const onDoc = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false) }
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as Node
+      // 弹层已 portal 出去,不再是 ref 的后代
+      if (!ref.current?.contains(t) && !popRef.current?.contains(t)) setOpen(false)
+    }
+    // ★跟着走而不是关掉:外面的共商区块流式时会一直滚,关掉的话选到一半就没了;弹层自己的滚动不算
+    const onScroll = (e: Event) => { if (!popRef.current?.contains(e.target as Node)) reposition() }
     document.addEventListener('mousedown', onDoc)
-    return () => document.removeEventListener('mousedown', onDoc)
-  }, [open])
-  const models = prov ? prov.models.filter(m => !taken?.has(`${prov.id}:${m.id}`)) : []
+    document.addEventListener('scroll', onScroll, true)
+    window.addEventListener('resize', reposition)
+    return () => {
+      document.removeEventListener('mousedown', onDoc)
+      document.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('resize', reposition)
+    }
+  }, [open, reposition])
   return (
     <div ref={ref} className={`menu ${className}${open ? ' open' : ''}`}>
       <button type="button" className="cb-btn" aria-label={label} onClick={() => { setProv(null); setOpen(o => !o) }}>{trigger}</button>
-      {open && (
-        <div className="menu-pop">
+      {open && createPortal(
+        // ★按层换 key:从滚到底的 CLI 列表点进模型列表,要从头看
+        <div
+          key={prov?.id ?? ''}
+          ref={popRef}
+          className="menu-pop council-pop"
+          // 首帧还没量出位置(useLayoutEffect 在绘制前补上),先藏起来,不在左上角闪一下
+          style={place ?? { visibility: 'hidden' }}
+        >
           {prov ? (
             <>
               <button type="button" className="menu-item council-back" onClick={() => setProv(null)}>
@@ -97,7 +168,8 @@ export function SeatPicker({ className, label, trigger, providers, taken, onPick
               <Logo id={p.id} />{p.displayName}
             </button>
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )

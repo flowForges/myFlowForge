@@ -200,4 +200,45 @@ describe('ChatQueue', () => {
     await Promise.resolve(); await Promise.resolve()
     expect(q.sessionBusy('/a', 's1')).toBe(false)
   })
+
+  it('CLI 自己起的一轮占同一条泳道:先于排队的用户消息,跑完才轮到它们', async () => {
+    const calls: string[] = []
+    let releaseAuto: (() => void) | null = null
+    let releaseUser: (() => void) | null = null
+    const q = new ChatQueue(vi.fn((p: ChatSendPayload) => { calls.push(p.text); return new Promise<void>(res => { releaseUser = res }) }), () => {})
+    q.enqueue(mk('/w', 'A'), '你')                 // 泳道被占着
+    q.enqueue(mk('/w', 'B'), '你')
+    q.adoptTurn('/w', 's1', 'claude', () => { calls.push('auto'); return new Promise<void>(res => { releaseAuto = res }) })
+    expect(calls).toEqual(['A'])
+    releaseUser!(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve()
+    expect(calls).toEqual(['A', 'auto'])
+    expect(q.sessionBusy('/w', 's1')).toBe(true)
+    expect(q.snapshot('/w').queue.map(x => x.text)).toEqual(['B'])
+    releaseAuto!(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve()
+    expect(calls).toEqual(['A', 'auto', 'B'])
+  })
+
+  it('后台任务数进事件;停止不要求有在跑的一轮,按会话隔离', () => {
+    const events: any[] = []
+    const q = new ChatQueue(vi.fn(), (_ch, e) => events.push(e))
+    const stopA = vi.fn(), stopB = vi.fn()
+    q.setBackground('/w', 'a', 2, stopA)
+    q.setBackground('/w', 'b', 1, stopB)
+    expect(events[events.length - 1].backgroundTasks).toEqual({ a: 2, b: 1 })
+    expect(events[events.length - 1].busy).toBe(false)     // 后台任务不算忙:输入框是空闲的
+    q.stop('/w', 'a')
+    expect(stopA).toHaveBeenCalledOnce()
+    expect(stopB).not.toHaveBeenCalled()
+    q.setBackground('/w', 'a', 0, null)
+    expect(q.snapshot('/w').backgroundTasks).toEqual({ b: 1 })
+    q.stop('/w')                                           // 工作区级停止(宠物)也算上
+    expect(stopB).toHaveBeenCalledOnce()
+  })
+
+  it('#13 listBackground 给更新前的检查:只算还有任务在跑的会话', () => {
+    const q = new ChatQueue(vi.fn(), () => {})
+    q.setBackground('/w', 'a', 2, () => {})
+    q.setBackground('/w', 'b', 0, () => {})
+    expect(q.listBackground()).toEqual([{ workspacePath: '/w', sessionId: 'a', count: 2 }])
+  })
 })

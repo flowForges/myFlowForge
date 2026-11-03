@@ -115,6 +115,26 @@ export interface ChatTask {
    *  在这条分支之前对这些 provider 本来就不跑。
    */
   beforeFallback?: () => Promise<boolean>
+  /** 这一轮结束后进程可能留着跑后台任务:那之后发生的事走这里。不给 = 没人看得见,输出丢弃(见 ChatBackgroundHooks)。 */
+  background?: ChatBackgroundHooks
+  /** 一轮结束就连后台任务一起杀掉、不留进程(共商席位:没人看得见也没人停得了)。 */
+  endWithTurn?: boolean
+}
+/**
+ * 一轮在界面上结束之后,进程还活着(claude 的后台任务)。交互聊天那条路才给:它有输入框、有停止、有地方放回复。
+ */
+export interface ChatBackgroundHooks {
+  /** 还在跑的后台任务数变了。stop 杀掉整棵进程树;任务数是 0 但进程还在时也给(CLI 自己那一轮可能还在跑);进程退出后是 null。 */
+  onRunning(count: number, stop: (() => void) | null): void
+  /** 没有这一轮的时候后台子代理要权限。 */
+  onConfirm?(req: ConfirmReq): Promise<ConfirmDecision>
+  /**
+   * CLI 没等用户说话自己起了一轮(后台任务完成了)。调 attach 把这一轮的回调接上,可以晚一点调(事件会攒着)。
+   * ★晚调之前先看 isCurrent:排队期间这一轮可能已经被用户消息接走,false 时什么都别开。
+   */
+  openTurn(attach: (cb: ChatCallbacks) => AgentSession, isCurrent: () => boolean): void
+  /** 进程退出了:它的门不会再有人等。 */
+  onExit?(): void
 }
 export interface ChatCallbacks {
   onSession(id: string): void
@@ -144,7 +164,7 @@ export interface ChatCallbacks {
   // (fields may be partial), 'update' to enrich once the full input is seen, 'done' on the tool_result.
   // `step` (with phase 'update') appends one of the sub-agent's OWN tool calls (attributed via the
   // stream's parent_tool_use_id) so the card shows its live internal activity.
-  onSubagent?(ev: { id: string; phase: 'start' | 'update' | 'done'; subagentType?: string; description?: string; prompt?: string; result?: string; isError?: boolean; step?: string }): void
+  onSubagent?(ev: { id: string; phase: 'start' | 'update' | 'done'; subagentType?: string; description?: string; prompt?: string; result?: string; isError?: boolean; step?: string; background?: boolean }): void
   // The main agent's OWN tool call (Read/Bash/Edit/…), surfaced live as the "执行" block. phase 'start'
   // when the tool_use appears (title known), 'done' on its result (output/isError known, where the
   // provider streams tool output). `id` = the tool_use id, correlating start↔done.
@@ -165,4 +185,6 @@ export interface AgentProvider {
   listModelsLive?(env: NodeJS.ProcessEnv): Promise<Model[]>
   run(task: AgentTask, cb: AgentCallbacks, env: NodeJS.ProcessEnv): AgentSession
   chat?(task: ChatTask, cb: ChatCallbacks, env: NodeJS.ProcessEnv): AgentSession
+  /** 把权限档切到这个会话还活着的进程上(claude 的控制协议)。返回要告诉用户的话;没有活进程就是 null。 */
+  setChatPermission?(cwd: string, nativeSessionId: string, mode: import('@shared/permissions').PermissionMode): Promise<string | null>
 }

@@ -233,6 +233,28 @@ describe('chat:send while a council runs (M2)', () => {
 })
 
 describe('council controls', () => {
+  it('stop-seat: validates the council and the seat, stops only that seat, and never ends the council', async () => {
+    const id = await call(CH.councilStart, { workspacePath: ws, sessionId: 's1', config: cfg({ mode: { kind: 'rounds', rounds: 1 } }) }) as string
+    await flush()
+    await expect(call(CH.councilStopSeat, { councilId: 'nope', seatId: 'A' })).rejects.toThrow('council-not-found')
+    await expect(call(CH.councilStopSeat, { councilId: id, seatId: 'nobody' })).rejects.toThrow('target-invalid')
+    await expect(call(CH.councilStopSeat, { councilId: id })).rejects.toThrow('target-invalid')
+
+    await call(CH.councilStopSeat, { councilId: id, seatId: 'A' })
+    await flush()
+    expect(appended.find(m => m.council?.seat === 'A')!.council).toMatchObject({ stage: 'failed', stopped: true })
+    let st = (await call(CH.councilList, { workspacePath: ws, sessionId: 's1' }) as CouncilState[]).find(s => s.id === id)!
+    expect(st).toMatchObject({ status: 'running', speaking: ['B'] })
+
+    // 重复点 / 席位已停:正常竞态,不报错
+    await expect(call(CH.councilStopSeat, { councilId: id, seatId: 'A' })).resolves.toBeUndefined()
+    pending.find(p => p.seat === 'B')!.finish()
+    await flush()
+    st = (await call(CH.councilList, { workspacePath: ws, sessionId: 's1' }) as CouncilState[]).find(s => s.id === id)!
+    expect(st).toMatchObject({ status: 'finalizing', speaking: ['L'] })
+    await call(CH.councilStop, { councilId: id, mode: 'abort' })
+  })
+
   it('interject from a remote client carries via; from this machine it does not', async () => {
     const id = await call(CH.councilStart, { workspacePath: ws, sessionId: 's1', config: cfg() })
     await flush()

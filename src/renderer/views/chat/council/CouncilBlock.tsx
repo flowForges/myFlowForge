@@ -9,7 +9,7 @@ import { Logo, SeatPicker, makeSeat, asLeader, CHEV } from './CouncilSetup'
 import { CouncilResultCard } from './CouncilResultCard'
 import './council.css'
 
-export type CouncilControls = Pick<CouncilApi, 'pause' | 'resume' | 'stop' | 'followup' | 'choose' | 'interject'>
+export type CouncilControls = Pick<CouncilApi, 'pause' | 'resume' | 'stop' | 'stopSeat' | 'followup' | 'choose' | 'interject'>
 
 type Props = {
   id: string
@@ -50,6 +50,11 @@ function voteOf(text: string): 'agree' | 'disagree' | 'unknown' {
   return 'unknown'
 }
 
+/** ■ 只停这一位的这次发言。只在他正在发言时画(见 stoppable)。 */
+function SeatStop({ sid, label, onStop }: { sid: string; label: string; onStop: (sid: string) => void }) {
+  return <button type="button" className="council-more council-stop" data-stop-seat={sid} aria-label={`停止 ${label}`} title="停止" onClick={() => onStop(sid)}>■</button>
+}
+
 const EXPAND_ICON = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 12 15 18 9" /></svg>
 
 // ---- 单条发言:按消息 memo(同 Message),流式时只有那一条重渲染 ----
@@ -82,18 +87,22 @@ function useFollow(text: string, streaming: boolean) {
  * ★全文直接画出来,格子内部滚动(不再截断再「展开」)—— 用户要逐轮看全每个 AI 的输出。
  * ★全屏时格子不限高、不自己滚(scroll=false):滚轮落在哪都滚整个正文,不会卡在某一格里。
  */
-const Cell = memo(function Cell({ msg, seat, streaming, scroll, onFocus }: { msg: ChatMessage; seat: SeatInfo; streaming: boolean; scroll: boolean; onFocus: (id: string) => void }) {
+const Cell = memo(function Cell({ msg, seat, streaming, scroll, onFocus, onStop }: { msg: ChatMessage; seat: SeatInfo; streaming: boolean; scroll: boolean; onFocus: (id: string) => void; onStop?: (sid: string) => void }) {
   const stage = msg.council?.stage
+  const stopped = !!msg.council?.stopped
   const follow = useFollow(msg.text, streaming)
   if (stage === 'failed') {
     return <div className="council-cell failed" data-seat={msg.council?.seat} data-stage={stage}><FailedChip msg={msg} seat={seat} /></div>
   }
-  const vote = stage === 'consensus-vote' ? (streaming ? 'unknown' : voteOf(msg.text)) : null
+  // 被停掉的半张票不算票,不画 ✓ / ✕
+  const vote = stage === 'consensus-vote' && !stopped ? (streaming ? 'unknown' : voteOf(msg.text)) : null
   return (
     <div className={`council-cell${streaming ? ' live' : ''}`} data-seat={msg.council?.seat} data-stage={stage} style={{ '--seat': seat.color } as React.CSSProperties}>
       <div className="council-who-line">
         <Logo id={seat.provider} /><span className="council-who-label">{seat.label}</span>
         {vote && <span className="council-vote" data-vote={vote} data-seat={msg.council?.seat}>{vote === 'agree' ? '✓' : vote === 'disagree' ? '✕' : '…'}</span>}
+        {stopped && <span className="council-stopped">已停止</span>}
+        {onStop && msg.council?.seat && <SeatStop sid={msg.council.seat} label={seat.label} onStop={onStop} />}
         <button type="button" className="council-more council-zoom" aria-label="放大" onClick={() => onFocus(msg.id)}>{ZOOM}</button>
       </div>
       <UtteranceThink msg={msg} streaming={streaming} />
@@ -105,15 +114,18 @@ const Cell = memo(function Cell({ msg, seat, streaming, scroll, onFocus }: { msg
 })
 
 /** 领导者(总结 / 共识草稿 / 流式中的最终结果):整行宽,挂在那一轮的格子下面。 */
-const LeaderCard = memo(function LeaderCard({ msg, seat, streaming, scroll, onFocus }: { msg: ChatMessage; seat: SeatInfo; streaming: boolean; scroll: boolean; onFocus: (id: string) => void }) {
+const LeaderCard = memo(function LeaderCard({ msg, seat, streaming, scroll, onFocus, onStop }: { msg: ChatMessage; seat: SeatInfo; streaming: boolean; scroll: boolean; onFocus: (id: string) => void; onStop?: (sid: string) => void }) {
   const follow = useFollow(msg.text, streaming)
-  if (msg.council?.stage === 'failed') {
+  // ★被停掉的领导者记成 failed(界面靠它给「换领导者」),有半截正文就照常显示
+  if (msg.council?.stage === 'failed' && !msg.text) {
     return <div className="council-failed-row" data-seat={msg.council?.seat}><FailedChip msg={msg} seat={seat} /></div>
   }
   return (
     <div className={`council-summary council-leader-card${streaming ? ' live' : ''}`} data-seat={msg.council?.seat} data-stage={msg.council?.stage}>
       <div className="council-who-line">
         <span aria-hidden="true">👑</span><Logo id={seat.provider} /><span className="council-who-label">{seat.label}</span>
+        {msg.council?.stopped && <span className="council-stopped">已停止</span>}
+        {onStop && msg.council?.seat && <SeatStop sid={msg.council.seat} label={seat.label} onStop={onStop} />}
         <button type="button" className="council-more council-zoom" aria-label="放大" onClick={() => onFocus(msg.id)}>{ZOOM}</button>
       </div>
       <UtteranceThink msg={msg} streaming={streaming} />
@@ -125,10 +137,13 @@ const LeaderCard = memo(function LeaderCard({ msg, seat, streaming, scroll, onFo
 })
 
 /** 还没发言的席位:虚线占位,只有席位名。 */
-function WaitingCell({ sid, seat }: { sid: string; seat: SeatInfo }) {
+function WaitingCell({ sid, seat, onStop }: { sid: string; seat: SeatInfo; onStop?: (sid: string) => void }) {
   return (
     <div className="council-cell waiting" data-seat={sid} style={{ '--seat': seat.color } as React.CSSProperties}>
-      <div className="council-who-line"><Logo id={seat.provider} /><span className="council-who-label">{seat.label}</span></div>
+      <div className="council-who-line">
+        <Logo id={seat.provider} /><span className="council-who-label">{seat.label}</span>
+        {onStop && <SeatStop sid={sid} label={seat.label} onStop={onStop} />}
+      </div>
     </div>
   )
 }
@@ -171,7 +186,8 @@ function FocusOverlay({ msg, seat, streaming, onClose, onPrev, onNext }: {
 function FailedChip({ msg, seat }: { msg: ChatMessage; seat: SeatInfo }) {
   return (
     <span className="council-failed" data-seat={msg.council?.seat}>
-      <Logo id={seat.provider} /><span>{seat.label}</span><span className="council-x" aria-hidden="true">✕</span>
+      <Logo id={seat.provider} /><span>{seat.label}</span>
+      {msg.council?.stopped ? <span className="council-stopped">已停止</span> : <span className="council-x" aria-hidden="true">✕</span>}
     </span>
   )
 }
@@ -256,6 +272,10 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
   const seatLabel = useCallback((sid: string) => seats.get(sid)?.label ?? sid, [seats])
   const { choose } = controls
   const onChoose = useCallback((name: string) => choose(id, name), [choose, id])
+  const { stopSeat } = controls
+  const onStop = useCallback((sid: string) => { void stopSeat(id, sid) }, [stopSeat, id])
+  // 能停的席位 = 这一刻正在发言的(引擎为准):暂停 / 出最终结果 / 结束 / 追问时都没有
+  const stoppable = status === 'running' ? state?.speaking ?? [] : []
 
   // ★追问在最终结果之后:第一条追问起的全部消息都归「追问」段,不混进最后一轮
   const { topicMsg, rounds, final, followups } = useMemo(() => {
@@ -317,7 +337,7 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
   // ⤢ 能放大的发言,按区块里的阅读顺序:每轮 席位发言(列序)→ 领导者 → 投票(列序);最后是流式中的最终结果。失败的没有 ⤢,跳过
   const focusOrder = useMemo(() => {
     const ids: string[] = []
-    const push = (ms: ChatMessage[] | undefined) => ms?.forEach(m => { if (m.council?.stage !== 'failed') ids.push(m.id) })
+    const push = (ms: ChatMessage[] | undefined) => ms?.forEach(m => { if (m.council?.stage !== 'failed' || m.text) ids.push(m.id) })
     for (const r of roundList) {
       const p = parts.get(r)
       if (!p) continue
@@ -482,7 +502,11 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
             }</span>
             <span className="council-speaking">
               {state.speaking.map(sid => (
-                <span key={sid} data-speaking={sid}><Logo id={seats.get(sid)?.provider ?? ''} /></span>
+                <span key={sid} data-speaking={sid}>
+                  <Logo id={seats.get(sid)?.provider ?? ''} />
+                  {/* ★这里的 ■ 永远够得着:区块收起、格子滚出视野、重拉历史后挂住的席位没有格子时都靠它 */}
+                  {stoppable.includes(sid) && <SeatStop sid={sid} label={seatLabel(sid)} onStop={onStop} />}
+                </span>
               ))}
             </span>
             <span className="council-elapsed">{mmss(elapsed)}</span>
@@ -539,8 +563,8 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
                       return (
                         <div className={`council-col ${kind}`} key={`${kind}-${sid}`} data-seat={sid}>
                           {own
-                            ? own.map(m => <Cell key={m.id} msg={m} seat={seat} streaming={streamingIds.has(m.id)} scroll={!fullscreen} onFocus={setFocusId} />)
-                            : current && !dropped.has(sid) ? <WaitingCell sid={sid} seat={seat} /> : <EmptyCell sid={sid} />}
+                            ? own.map(m => <Cell key={m.id} msg={m} seat={seat} streaming={streamingIds.has(m.id)} scroll={!fullscreen} onFocus={setFocusId} onStop={streamingIds.has(m.id) && stoppable.includes(sid) ? onStop : undefined} />)
+                            : current && !dropped.has(sid) ? <WaitingCell sid={sid} seat={seat} onStop={stoppable.includes(sid) ? onStop : undefined} /> : <EmptyCell sid={sid} />}
                         </div>
                       )
                     })
@@ -551,7 +575,7 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
                         {(said.size > 0 || current) && row(said, 'speech')}
                         {leader.map(m => (
                           <div className="council-span" key={m.id}>
-                            <LeaderCard msg={m} seat={seatOf(m)} streaming={streamingIds.has(m.id)} scroll={!fullscreen} onFocus={setFocusId} />
+                            <LeaderCard msg={m} seat={seatOf(m)} streaming={streamingIds.has(m.id)} scroll={!fullscreen} onFocus={setFocusId} onStop={streamingIds.has(m.id) && stoppable.includes(m.council?.seat ?? '') ? onStop : undefined} />
                           </div>
                         ))}
                         {/* ★投票是对上面那份草稿的表态,排在草稿下面,按席位列对齐 */}

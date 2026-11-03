@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { mkdtempSync, rmSync, writeFileSync, chmodSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { CH } from './channels'
 import { fakeHost } from '../host/fakeHost'
 import { tableCalls } from './testTable'
@@ -129,6 +132,7 @@ const { appendMessageMock } = vi.hoisted(() => ({ appendMessageMock: vi.fn() }))
 vi.mock('../chat/chatStore', () => ({
   appendMessage: appendMessageMock,
   readMessages: vi.fn(() => []),
+  readSession: vi.fn(() => 'native-1'),
   // 会话出 IPC 前统一补 lastMessageAt(sessionsView),没有消息文件时回落 createdAt。
   sessionLastMessageMtime: vi.fn(() => undefined),
 }))
@@ -187,6 +191,216 @@ beforeEach(async () => {
 
 afterEach(() => {
   REREAD_SETTINGS.termProxy = originalTermProxy
+})
+
+describe('排队的消息和活进程上切的权限档(假 CLI + 真 provider)', () => {
+  const tick = (ms = 0) => new Promise(r => setTimeout(r, ms))
+  it('★排队时是完全访问,排队期间切只读:这条消息按只读跑,活进程不被切回去', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'h-queued-'))
+    try {
+      const cli = join(dir, 'fake.js')
+      const sys = (subtype: string, extra: object = {}) => ({ type: 'system', subtype, session_id: 'native-1', ...extra })
+      const firstTurn = [
+        [0, sys('init')], [0, sys('status', { status: 'requesting' })],
+        [10, sys('background_tasks_changed', { tasks: [{ task_id: 'b1' }] })], [10, sys('task_started', { task_id: 'b1', tool_use_id: 't', is_backgrounded: true })],
+        [20, { type: 'stream_event', session_id: 'native-1', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'one' } } }],
+        [1200, { type: 'result', subtype: 'success', is_error: false, result: 'one', num_turns: 1, session_id: 'native-1' }],
+      ]
+      const secondTurn = [[0, sys('init')], [10, { type: 'stream_event', session_id: 'native-1', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'two' } } }], [20, { type: 'result', subtype: 'success', is_error: false, result: 'two', num_turns: 1, session_id: 'native-1' }]]
+      writeFileSync(cli, `#!/usr/bin/env node
+const fs = require('fs')
+const log = (s) => fs.appendFileSync(${JSON.stringify(join(dir, 'log'))}, s + '\\n')
+log('argv ' + process.argv.slice(2).join(' '))
+const script = ${JSON.stringify([firstTurn, secondTurn])}
+let n = 0, buf = ''
+process.on('SIGTERM', () => process.exit(143))
+process.stdin.on('data', (b) => {
+  buf += b
+  let i
+  while ((i = buf.indexOf('\\n')) >= 0) {
+    const m = JSON.parse(buf.slice(0, i)); buf = buf.slice(i + 1)
+    if (m.type === 'control_request' && m.request.subtype !== 'initialize') {
+      log('ctl ' + (m.request.mode ?? m.request.model))
+      process.stdout.write(JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: {} } }) + '\\n')
+    }
+    if (m.type === 'user') { log('user ' + m.message.content[0].text); for (const [at, o] of script[n++] ?? []) setTimeout(() => process.stdout.write(JSON.stringify(o) + '\\n'), at) }
+  }
+})
+setInterval(() => {}, 1000)
+`)
+      chmodSync(cli, 0o755)
+      const { makeClaudeProvider } = await vi.importActual<typeof import('../agents/providers/claude')>('../agents/providers/claude')
+      const provider = makeClaudeProvider({ bin: cli, defaultModels: [] })
+      const { registerIpc } = await import('./handlers')
+      const { sendTurn } = await import('../chat/chatService') as any
+      const { getSession } = await import('../chat/sessionStore') as any
+      let stored: string = 'full'
+      getSession.mockImplementation((_ws: string, id: string) => ({ id, title: 't', mode: 'chat', createdAt: 0, permissionMode: stored }))
+      const tasks: any[] = []
+      const sessions: any[] = []
+      // chatService 在这个文件里是假的:只留下真正决定进程怎么跑的那几步,把 payload 原样交给真 provider。
+      sendTurn.mockReset().mockImplementation((p: any, d: any) => new Promise((resolve) => {
+        const task = { id: p.text, prompt: p.text, model: p.model, cwd: p.workspacePath, sessionId: p.text === 'first' ? undefined : 'native-1', permissionMode: p.permissionMode, background: d.background }
+        tasks.push(task)
+        const s = d.provider.chat(task, { onSession: () => {}, onAssistantDelta: () => {}, onThinkDelta: () => {}, onDone: () => resolve({}), onError: () => resolve({}) }, d.env)
+        sessions.push(s)
+      }))
+      const calls = tableCalls(registerIpc(() => {}, { claude: provider } as any, fakeHost()))
+      const call = (ch: string, ...a: unknown[]) => calls.find((c: any[]) => c[0] === ch)![1]({}, ...a)
+      const base = { workspacePath: dir, sessionId: 's1', agent: 'claude', agentLabel: 'C', model: 'opus-4.8', attachments: [], permissionMode: 'full' }
+      call(CH.chatSend, { ...base, text: 'first' })
+      await vi.waitFor(() => expect(readFileSync(join(dir, 'log'), 'utf8')).toContain('user first'), { timeout: 20_000 })
+      await tick(400)
+      call(CH.chatSend, { ...base, text: 'queued' })     // 排队,载荷写的还是 full
+      stored = 'readonly'
+      call(CH.sessionSetPermission, { workspacePath: dir, sessionId: 's1', mode: 'readonly' })
+      await vi.waitFor(() => expect(readFileSync(join(dir, 'log'), 'utf8')).toContain('user queued'), { timeout: 20_000 })
+      const log = readFileSync(join(dir, 'log'), 'utf8').trim().split('\n')
+      expect(log.filter(l => l.startsWith('ctl '))).toEqual(['ctl plan'])
+      expect(tasks[1].permissionMode).toBe('readonly')
+      expect(log.filter(l => l.startsWith('argv '))).toHaveLength(1)
+      // 没有活进程的那条路(下一条消息要新起进程)拿到的是同一个收严后的档。
+      for (const s of sessions) s.cancel()
+      await tick(300)
+      call(CH.chatSend, { ...base, text: 'fresh' })
+      await vi.waitFor(() => expect(tasks.some(t => t.id === 'fresh')).toBe(true), { timeout: 20_000 })
+      expect(tasks.find(t => t.id === 'fresh').permissionMode).toBe('readonly')
+      await vi.waitFor(() => expect(readFileSync(join(dir, 'log'), 'utf8')).toContain('--permission-mode plan'), { timeout: 20_000 })
+      for (const s of sessions) s.cancel()
+      await tick(200)
+    } finally {
+      const { getSession } = await import('../chat/sessionStore') as any
+      getSession.mockImplementation((_ws: string, id: string) => sessionFile1.sessions.find(s => s.id === id))
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5 })
+    }
+  }, 60_000)
+})
+
+describe('后台任务留下的进程(claude 那条路接到 IPC 的部分)', () => {
+  const base = { workspacePath: '/ws/bg', sessionId: 's1', agent: 'claude', agentLabel: 'C', model: 'm', attachments: [] }
+  const tick = () => new Promise(r => setTimeout(r, 0))
+  const setup = async (providers: Record<string, unknown> = {}) => {
+    const { registerIpc } = await import('./handlers')
+    const { sendTurn } = await import('../chat/chatService') as any
+    sendTurn.mockReset()
+    const sent: [string, any][] = []
+    const calls = tableCalls(registerIpc((ch: string, p: unknown) => sent.push([ch, p]), providers as any, fakeHost()))
+    const call = (ch: string, ...a: unknown[]) => calls.find((c: any[]) => c[0] === ch)![1]({}, ...a)
+    return { sendTurn, sent, call }
+  }
+  // 跑完一轮,拿到这一轮的 deps(background 钩子就在里面)。
+  const firstTurn = async (t: Awaited<ReturnType<typeof setup>>) => {
+    let deps: any
+    t.sendTurn.mockImplementationOnce(async (_p: any, d: any) => { deps = d; return {} })
+    t.call(CH.chatSend, { ...base, text: 'first' })
+    await tick(); await tick()
+    return deps
+  }
+
+  it('#7 后台子代理的门:后面哪一轮结束都不把它拒掉;进程退出才收', async () => {
+    const t = await setup()
+    const deps = await firstTurn(t)
+    let answer: unknown = 'pending'
+    void deps.background.onConfirm({ title: 'Bash', toolName: 'Bash', agentId: 'sub' }).then((d: unknown) => { answer = d })
+    await tick()
+    await firstTurn(t)                                       // 下一轮跑完了
+    await tick()
+    expect(answer).toBe('pending')
+    deps.background.onExit()
+    await tick()
+    expect(answer).toBe('deny')
+    expect(t.sent.some(([, p]) => p?.type === 'confirm-resolved')).toBe(true)
+  })
+
+  it('#7 明确停止仍然连后台的门一起收', async () => {
+    const t = await setup()
+    const deps = await firstTurn(t)
+    let answer: unknown = 'pending'
+    void deps.background.onConfirm({ title: 'Bash', toolName: 'Bash', agentId: 'sub' }).then((d: unknown) => { answer = d })
+    await tick()
+    t.call(CH.chatStop, { workspacePath: base.workspacePath, sessionId: 's1' })
+    await tick()
+    expect(answer).toBe('deny')
+  })
+
+  it('#1 排队期间被用户消息接走的开消息请求:不开消息,不占泳道', async () => {
+    const t = await setup()
+    const deps = await firstTurn(t)
+    deps.background.openTurn(vi.fn(), () => false)
+    await tick(); await tick()
+    expect(t.sendTurn).toHaveBeenCalledTimes(1)
+    t.sendTurn.mockImplementationOnce(async () => ({}))
+    t.call(CH.chatSend, { ...base, text: 'second' })
+    await tick(); await tick()
+    expect(t.sendTurn).toHaveBeenCalledTimes(2)
+  })
+
+  it('#7 CLI 自己那一轮卡在主代理的门上,用户发了消息:门被拒,那一轮才收得了尾', async () => {
+    const t = await setup()
+    const deps = await firstTurn(t)
+    let adoptedDeps: any
+    let finishAdopted!: () => void
+    t.sendTurn.mockImplementationOnce((_p: any, d: any) => { adoptedDeps = d; return new Promise<void>(r => { finishAdopted = r }) })
+    deps.background.openTurn(vi.fn(), () => true)
+    await tick(); await tick()
+    expect(adoptedDeps.adopt).toBeTypeOf('function')
+    let answer: unknown = 'pending'
+    void adoptedDeps.confirm({ title: 'Bash', toolName: 'Bash' }).then((d: unknown) => { answer = d })
+    await tick()
+    t.sendTurn.mockImplementationOnce(async () => ({}))
+    t.call(CH.chatSend, { ...base, text: 'second' })
+    await tick()
+    expect(answer).toBe('deny')
+    // 消息排着时再来的主代理门直接拒;后台子代理的门照常升
+    await expect(adoptedDeps.confirm({ title: 'Bash', toolName: 'Bash' })).resolves.toBe('deny')
+    finishAdopted()
+    await tick(); await tick()
+    expect(t.sendTurn).toHaveBeenCalledTimes(3)
+  })
+
+  it('#5 只切档不发消息:切到活进程上;切不成要说出来', async () => {
+    const setChatPermission = vi.fn(async () => '⚠ 还在跑的进程没能切到「只读」')
+    const t = await setup({ claude: { id: 'claude', setChatPermission } })
+    t.call(CH.sessionSetPermission, { workspacePath: base.workspacePath, sessionId: 's1', mode: 'readonly' })
+    await tick()
+    expect(setChatPermission).toHaveBeenCalledWith(base.workspacePath, 'native-1', 'readonly')
+    expect(t.sent.some(([, p]) => p?.type === 'done' && String(p.message?.text).includes('没能切到'))).toBe(true)
+  })
+
+  it('#8 关掉会话:进程和门一起收(任务数是 0 也停得掉)', async () => {
+    const { closeSession } = await import('../chat/sessionStore') as any
+    closeSession.mockReturnValueOnce({ sessions: [{ id: 's2', title: 'x', mode: 'chat', createdAt: 0 }], activeSessionId: 's2' })
+    const t = await setup()
+    const deps = await firstTurn(t)
+    const stop = vi.fn()
+    deps.background.onRunning(0, stop)
+    let answer: unknown = 'pending'
+    void deps.background.onConfirm({ title: 'Bash', toolName: 'Bash', agentId: 'sub' }).then((d: unknown) => { answer = d })
+    await tick()
+    t.call(CH.sessionClose, { workspacePath: base.workspacePath, sessionId: 's1' })
+    await tick()
+    expect(stop).toHaveBeenCalledOnce()
+    expect(answer).toBe('deny')
+  })
+
+  it.each([
+    ['归档', CH.workspaceArchive],
+    ['删除', CH.workspaceDelete],
+    ['移除', CH.workspaceRemove],
+  ])('#10 %s工作区:停掉后台进程,收尾不再落盘', async (_n, ch) => {
+    const t = await setup()
+    const deps = await firstTurn(t)
+    const stop = vi.fn()
+    deps.background.onRunning(1, stop)
+    let adopted: any
+    t.sendTurn.mockImplementationOnce(async (_p: any, d: any) => { adopted = d; return {} })
+    deps.background.openTurn(vi.fn(), () => true)
+    await tick(); await tick()
+    expect(adopted.discard()).toBe(false)
+    try { await t.call(ch, base.workspacePath) } catch { /* 假路径上的磁盘操作失败不影响这里要证明的事 */ }
+    expect(stop).toHaveBeenCalledOnce()
+    expect(adopted.discard()).toBe(true)
+  })
 })
 
 describe('registerIpc broadcast wiring', () => {

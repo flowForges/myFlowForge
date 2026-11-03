@@ -101,6 +101,8 @@ interface Props {
   running?: boolean
   /** Called when the user clicks the stop button or presses Escape while running. */
   onStop?: () => void
+  /** 这个会话留在后台还在跑的任务数:这时可能没有在跑的一轮,停止按钮不在,得有个地方能停。 */
+  backgroundTasks?: number
   /** True once the running turn has produced assistant output. Stopping BEFORE any output restores the
       sent message to the box (edit/resend); stopping AFTER output does not (changes may be irreversible). */
   turnHasOutput?: boolean
@@ -141,7 +143,7 @@ interface Props {
   council?: CouncilApi
 }
 
-export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, turnHasOutput, onSend, onPaste, seedText, onSeedConsumed, selection, onSelectionChange, dynamicCommands, onPickWorkflow, onOpenMcp, draftKey, lockedReason, fast, onFastChange, council }: Props) {
+export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, backgroundTasks, turnHasOutput, onSend, onPaste, seedText, onSeedConsumed, selection, onSelectionChange, dynamicCommands, onPickWorkflow, onOpenMcp, draftKey, lockedReason, fast, onFastChange, council }: Props) {
   // Per-chat unsent draft, persisted in a module-level store keyed by draftKey. The parent remounts the
   // Composer per session (key={draftKey}), so draftKey is CONSTANT for this instance — no effect reacts
   // to it changing (that caused a re-render storm). We seed from the store on mount and write back on
@@ -756,6 +758,9 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
             (provider 一轮里可能分多次输出,「看起来答完了」并不等于回合结束,所以这个错觉很常见。) */}
         {busy && !runQueued && !archived && !readOnly && text.trim() !== '' && (
           <div className="composer-queue-hint">当前回合仍在进行 · 这条会排队,结束后自动发送</div>
+        )}
+        {!!backgroundTasks && (
+          <button className="composer-bg-chip" onClick={() => onStop?.()}>后台 {backgroundTasks} · 停止</button>
         )}
         <div className="composer-bar">
           {/* 模型选择 */}

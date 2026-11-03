@@ -93,7 +93,7 @@ export function runSeat(
   try {
     // ★故意不传 beforeFallback:ACP 握手失败时直接报错,不退回不受控的 run()。
     session = chat(
-      { id: msgId, prompt, model: seat.model, cwd: deps.cwd, sessionId: resumeId, permissionMode: 'readonly', attachments },
+      { id: msgId, prompt, model: seat.model, cwd: deps.cwd, sessionId: resumeId, permissionMode: 'readonly', attachments, endWithTurn: true },
       callbacks, envWithoutForge(deps.env),
     )
   } catch (e) {
@@ -104,5 +104,6 @@ export function runSeat(
   // 进程没发 onDone/onError 就退出(done 先 settle)也要收场。
   void session?.done.then((r) => { if (!settled) finish(r.ok ? { ok: true, msgId, text } : { ok: false, msgId, error: 'exited' }) }, (e) => finish({ ok: false, msgId, error: e instanceof Error ? e.message : String(e) }))
 
-  return { done, cancel() { cancelSession(); finish({ ok: false, msgId, error: 'cancelled' }) }, resumed: resumeId !== undefined }
+  // ★先定结果再杀:provider 的 cancel() 里同步报 onDone 也不能把「被停掉」变成正常结束
+  return { done, cancel() { finish({ ok: false, msgId, error: 'cancelled' }); cancelSession() }, resumed: resumeId !== undefined }
 }

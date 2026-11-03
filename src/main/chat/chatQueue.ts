@@ -3,7 +3,7 @@ import { CH } from '../ipc/channels'
 
 interface QueuedTask { id: string; source: string; payload: ChatSendPayload }
 // ★runningPayload 不放进 running:running 原样广播给渲染端/手机,这里只是主进程自己要查的那份载荷。
-interface Lane { busy: boolean; queue: QueuedTask[]; running: { id: string; text: string; sessionId: string; provider: string } | null; runningPayload?: ChatSendPayload; activeCancel: (() => void) | null }
+interface Lane { busy: boolean; queue: QueuedTask[]; running: { id: string; text: string; sessionId: string; provider: string } | null; runningPayload?: ChatSendPayload; activeCancel: (() => void) | null; background: number; backgroundStop: (() => void) | null; adopted: { provider: string; run: () => Promise<unknown> }[]; runningAdopted: boolean }
 
 export type RunTurn = (payload: ChatSendPayload) => Promise<unknown>
 export type Broadcast = (channel: string, payload: unknown) => void
@@ -25,7 +25,7 @@ export class ChatQueue {
   private lane(ws: string, sid: string): Lane {
     const m = this.lanes(ws)
     let l = m.get(sid)
-    if (!l) { l = { busy: false, queue: [], running: null, activeCancel: null }; m.set(sid, l) }
+    if (!l) { l = { busy: false, queue: [], running: null, activeCancel: null, background: 0, backgroundStop: null, adopted: [], runningAdopted: false }; m.set(sid, l) }
     return l
   }
 
@@ -39,8 +39,49 @@ export class ChatQueue {
   private pump(ws: string, sid: string): void {
     const lane = this.lane(ws, sid)
     if (lane.busy) return
+    // CLI 已经开口说话的那一轮排在用户消息前面:它的回复本来就先于这些消息产生。
+    const auto = lane.adopted.shift()
+    if (auto) { this.runOne(ws, sid, { id: `q-${++this.seq}`, source: '后台', payload: { agent: auto.provider, text: '' } as ChatSendPayload }, auto.run); return }
     const next = lane.queue.shift()
     if (next) this.runOne(ws, sid, next)
+  }
+
+  /**
+   * 不是用户发起、而是 CLI 自己起的一轮(后台任务完成后):占同一条泳道,所以它在跑时用户的消息照常排队,
+   * 正在说话的是谁、停止按钮管谁都和普通一轮一样。
+   */
+  adoptTurn(ws: string, sid: string, provider: string, run: () => Promise<unknown>): void {
+    this.lane(ws, sid).adopted.push({ provider, run })
+    this.pump(ws, sid)
+  }
+
+  /** 这个会话还有几个后台任务在跑(这一轮已经结束,进程还留着)。stop 杀掉它们。 */
+  setBackground(ws: string, sid: string, count: number, stop: (() => void) | null): void {
+    const lane = this.lane(ws, sid)
+    lane.backgroundStop = stop
+    if (lane.background === count) return
+    lane.background = count
+    this.emit(ws)
+  }
+
+  stopBackground(ws: string, sid: string): void {
+    this.map.get(ws)?.get(sid)?.backgroundStop?.()
+  }
+
+  /** 正在跑的是 CLI 自己起的那一轮(不是用户发的)。 */
+  runningAdopted(ws: string, sid: string): boolean {
+    return !!this.map.get(ws)?.get(sid)?.runningAdopted
+  }
+
+  hasQueued(ws: string, sid: string): boolean {
+    return (this.map.get(ws)?.get(sid)?.queue.length ?? 0) > 0
+  }
+
+  /** 还有后台任务在跑的会话(更新前要算进「退出会打断什么」)。 */
+  listBackground(): Array<{ workspacePath: string; sessionId: string; count: number }> {
+    const out: Array<{ workspacePath: string; sessionId: string; count: number }> = []
+    for (const [ws, m] of this.map) for (const [sid, lane] of m) if (lane.background > 0) out.push({ workspacePath: ws, sessionId: sid, count: lane.background })
+    return out
   }
 
   // Kept as a no-op so Run2Manager's terminal-state call site (manager.ts) still compiles; a running
@@ -71,8 +112,10 @@ export class ChatQueue {
   // pet's workspace-wide stop) still cancel every lane, as before.
   stop(ws: string, sessionId?: string): void {
     const m = this.map.get(ws); if (!m) return
-    if (sessionId !== undefined) { m.get(sessionId)?.activeCancel?.(); return }
-    for (const lane of m.values()) lane.activeCancel?.()
+    // ★这一轮结束后留着跑后台任务的进程也归「停止」管:那时 activeCancel 已经没了。
+    const stopLane = (lane?: Lane) => { lane?.activeCancel?.(); lane?.backgroundStop?.() }
+    if (sessionId !== undefined) { stopLane(m.get(sessionId)); return }
+    for (const lane of m.values()) stopLane(lane)
   }
 
   /** 所有工作区里【正在跑】的轮次(卡在确认/提问门上的也算 —— 门是 runTurn 里 await 的 Promise)。
@@ -101,16 +144,18 @@ export class ChatQueue {
     return lane?.running ? lane.runningPayload?.permissionMode : undefined
   }
 
-  private runOne(ws: string, sid: string, task: QueuedTask): void {
+  private runOne(ws: string, sid: string, task: QueuedTask, run?: () => Promise<unknown>): void {
     const lane = this.lane(ws, sid)
     lane.busy = true
     lane.running = { id: task.id, text: task.payload.text, sessionId: sid, provider: task.payload.agent }
     lane.runningPayload = task.payload
+    lane.runningAdopted = !!run
     this.emit(ws)
-    Promise.resolve(this.runTurn(task.payload)).catch(() => {}).finally(() => {
+    Promise.resolve(run ? run() : this.runTurn(task.payload)).catch(() => {}).finally(() => {
       lane.busy = false
       lane.running = null
       lane.runningPayload = undefined
+      lane.runningAdopted = false
       lane.activeCancel = null
       this.pump(ws, sid)
       this.emit(ws)
@@ -136,6 +181,7 @@ export class ChatQueue {
       runningTurns: running.map(r => ({ id: r.id, text: r.text, sessionId: r.sessionId })),
       runningSessionId: running[0]?.sessionId ?? null,
       runningSessionIds: running.map(r => r.sessionId),
+      backgroundTasks: Object.fromEntries([...this.lanes(ws)].filter(([, l]) => l.background > 0).map(([sid, l]) => [sid, l.background])),
     }
   }
 

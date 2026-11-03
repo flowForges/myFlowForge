@@ -59,7 +59,8 @@ describe('频道分类', () => {
     // 170 → 180:AI 共商十条(council:start / pause / resume / stop / interject / followup / choose /
     //   list / last-config / projects)。引擎、状态文件、会话都在主机上 ⇒ host。
     //   council:state 是广播不是方法,不在这张表里。
-    expect(host.length).toBe(180)
+    // 180 → 181:council:stop-seat。同上 ⇒ host。
+    expect(host.length).toBe(181)
     expect(client.length + host.length).toBe(keys.length)
   })
 

@@ -51,9 +51,6 @@
 .council-add { min-width: 0; }
 /* ★glass 模式会给 .menu 壳上底色([data-glass="on"] .menu:not(…) = 0,3,0,这里要压过它);这两个按钮自带虚线 / 琥珀边框,壳要透明 */
 .council-setup .council-seats > .menu.council-add, .council-setup .council-leader-slot > .menu.council-leader { background: none; }
-/* ★「＋ 添加」在第 2、3 列时弹层右对齐,不越出面板右边;在第 1 列时左对齐 */
-.council-setup .council-add .menu-pop { left: auto; right: 0; }
-.council-setup .council-seats > .council-add:nth-child(3n+1) .menu-pop { left: 0; right: auto; }
 .council-add > .cb-btn {
   width: 100%; height: 30px; justify-content: center; border-radius: 8px;
   font-size: 12.5px; color: var(--muted); border: 1px dashed var(--border-2);
@@ -68,8 +65,12 @@
 }
 .council-leader-slot .council-leader > .cb-btn:hover { background: color-mix(in oklab, var(--warn) 18%, var(--surface)); }
 .council-leader-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.council-setup .menu-pop { bottom: auto; top: calc(100% + 6px); max-width: calc(100vw - 32px); }
-.council-setup .council-leader .menu-pop { left: 0; right: auto; }
+/* 席位选择弹层:挂在 body 上,top / left / max-height 由 placeSeatMenu 算好写在行内(见 SeatPicker)。
+   盖过全屏区块(150)和放大浮层(160);无边框窗口顶部是拖拽区,朝上展开时不能落进去 */
+.menu-pop.council-pop {
+  display: block; position: fixed; bottom: auto; z-index: 170; box-sizing: border-box;
+  min-width: min(230px, calc(100vw - 16px)); max-width: calc(100vw - 16px); -webkit-app-region: no-drag;
+}
 .council-back { color: var(--muted); }
 
 .council-foot { grid-column: 1 / -1; }
@@ -108,10 +109,11 @@
   display: flex; align-items: center; gap: 10px; padding: 6px 12px;
   border-top: 1px solid var(--border-2); font-size: 12px; color: var(--fg-2);
 }
-.council-status .menu-pop { bottom: auto; top: calc(100% + 6px); right: 0; left: auto; }
 .council-round, .council-elapsed { font-variant-numeric: tabular-nums; }
 .council-elapsed { font-family: var(--mono); color: var(--muted); }
-.council-speaking { display: inline-flex; gap: 4px; }
+.council-speaking { display: inline-flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.council-speaking > span { display: inline-flex; align-items: center; gap: 1px; }
+.council-speaking .council-stop { width: 16px; height: 16px; font-size: 8px; }
 .council-ctl {
   height: 26px; padding: 0 10px; border-radius: 7px; font-size: 12px; font-weight: 500;
   border: 1px solid var(--border-2); background: var(--surface); color: var(--fg-2);
@@ -153,6 +155,12 @@
 .council-cell.empty { background: transparent; border: 1px dashed transparent; color: var(--faint); text-align: center; font-size: 12px; padding: 6px 10px; }
 .council-who-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .council-who-line .council-zoom { margin-left: auto; font-size: 13px; line-height: 1; }
+/* ■ 停止这一位:挨着 ⤢,一起靠右 */
+.council-who-line .council-stop { margin-left: auto; flex: none; }
+.council-who-line .council-stop + .council-zoom { margin-left: 2px; }
+.council-stop { font-size: 10px; line-height: 1; }
+.council-stop:hover { color: var(--err); }
+.council-stopped { flex: none; font-size: 11px; font-weight: 500; color: var(--faint); }
 .council-cell-body { font-size: 13px; }
 /* 普通模式格子自己滚;全屏时不加这个类,整列内容全高,只滚正文 */
 .council-cell-scroll { max-height: 420px; overflow: auto; overscroll-behavior: contain; }

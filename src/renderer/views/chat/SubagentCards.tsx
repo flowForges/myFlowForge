@@ -16,7 +16,7 @@ function Card({ sub, live }: { sub: SubagentCard; live: boolean }) {
   // A sub-agent card can only be genuinely '运行中' while the turn is still streaming. On a settled
   // (persisted / reloaded) message a 'running' state is a lost terminal event — the turn is over, so the
   // sub-agent is too. Render it as ended ('已完成') instead of a card frozen at 运行中 forever.
-  const state: SubagentCard['state'] = !live && sub.state === 'running' ? 'done' : sub.state
+  const state: SubagentCard['state'] = !live && sub.state === 'running' && !sub.background ? 'done' : sub.state
   return (
     <div className={`subagent-card s-${state}`}>
       <button className="sac-head" onClick={() => setOpen(o => !o)} aria-expanded={open}>

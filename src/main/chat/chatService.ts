@@ -1,9 +1,9 @@
 import { existsSync } from 'node:fs'
 import { userMessageOf } from './userMessage'
-import { appendMessage, readMessages, readSession, readWatermark, writeSession, writeWatermark } from './chatStore'
+import { appendMessage, readMessages, readSession, readWatermark, updateMessage, writeSession, writeWatermark } from './chatStore'
 import { setLive, clearLive } from './liveTurns'
 import { setNativeSubagents } from './nativeSubagentRegistry'
-import type { AgentProvider, AgentSession, ConfirmReq, ConfirmDecision } from '../agents/types'
+import type { AgentProvider, AgentSession, ChatBackgroundHooks, ChatCallbacks, ConfirmReq, ConfirmDecision } from '../agents/types'
 import type { ChatSendPayload, ChatMessage, ChatEvent, ChatAnswerAnchor, SubagentCard, ToolActivity, TurnPhase, ContextUsage } from '@shared/types'
 import { phaseLabel } from '@shared/types'
 import { buildMemoryPreamble } from './memory/preamble'
@@ -37,6 +37,15 @@ export interface SendTurnDeps {
   onSessionStart?: (session: AgentSession) => void
   /** 原样带进 ChatTask.beforeFallback:ACP provider 回落到没门的 run() 之前问一次(见 agents/types.ts)。 */
   beforeFallback?: () => Promise<boolean>
+  /** 原样带进 ChatTask.background:一轮结束后进程还留着跑后台任务时的出口。 */
+  background?: ChatBackgroundHooks
+  /**
+   * CLI 自己起的一轮(后台任务完成后主代理接着说话):没有用户消息,也不再 spawn,把回调接到活进程上就行。
+   * 其余(流式、落盘、收尾事件、提醒)和普通一轮走同一条路。见 ChatBackgroundHooks.openTurn。
+   */
+  adopt?: (cb: ChatCallbacks) => AgentSession
+  /** 会话 / 工作区已经没了或封存了:这一轮收尾时不再往里写任何东西,只把界面收掉。 */
+  discard?: () => boolean
 }
 
 let seq = 0
@@ -45,7 +54,18 @@ function mkId(prefix: string) { return `${prefix}-${Date.now()}-${++seq}` }
 // UTC clock-only "HH:MM:SS", which showed the wrong timezone and carried no date; this fixes both.)
 function now() { return new Date().toISOString() }
 
-export function history(wsPath: string, sessionId: string): ChatMessage[] { return readMessages(wsPath, sessionId) }
+/** 这次 app 运行里确实还在跑的后台子代理卡片。不在这里的 = 进程早没了(重启过),再也等不到完成通知。 */
+const liveBackgroundCards = new Set<string>()
+const cardKey = (ws: string, sid: string, id: string) => `${ws}\u0000${sid}\u0000${id}`
+
+export function history(wsPath: string, sessionId: string): ChatMessage[] {
+  return readMessages(wsPath, sessionId).map((m) => {
+    if (!m.subagents?.some(c => c.background && c.state === 'running' && !liveBackgroundCards.has(cardKey(wsPath, sessionId, c.id)))) return m
+    return { ...m, subagents: m.subagents.map(c => c.background && c.state === 'running' && !liveBackgroundCards.has(cardKey(wsPath, sessionId, c.id))
+      ? { ...c, state: 'error' as const, background: undefined, result: c.result ?? '已中断' }
+      : c) }
+  })
+}
 
 /**
  * 正在跑的那一轮(按 ws+sid)收「你的选择」的入口。见 addTurnAnswer。
@@ -147,7 +167,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     // 用 preambleDoneIndex 记账,保证每阶段只注入一次(不每轮重复)。
     let stagePre = ''
     const wfs = meta?.workflowSession
-    if (wfs && wfs.phase === 'chatting') {
+    if (wfs && wfs.phase === 'chatting' && !deps.adopt) {
       const stage = wfs.stages[wfs.currentIndex]
       if (stage && wfs.currentIndex !== wfs.preambleDoneIndex) {
         stagePre = `【工作流「${wfs.flowName}」· 第 ${wfs.currentIndex + 1}/${wfs.stages.length} 步:${stage.name}】\n${stage.preamble ?? ''}\n（本阶段内你都在与用户就这一步对话、按需迭代；用户点「下一步」才进入下一阶段，届时会另行告知。）`
@@ -159,12 +179,14 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
 
     // ★从别的设备发来的带 `via`(见 ChatMessage.via)。★★注意它**没有**混进上面那个 `promptText` ——
     //  那是它「绝不污染上下文」这条承诺的实现方式:两个字段,从不相加。被拒的那一轮也用同一份(userMessage.ts)。
-    const userMsg = userMessageOf(payload)
-    appendMessage(ws, sid, userMsg)
-    // 会话自动命名:普通聊天用首条用户消息命名(仍是 '新会话' 才改,导入会话有真实标题不受影响)。工作流
-    // 会话不在这里命名——它在 workflow:enter 用 seed(原始需求)命名,避免被 "请开始「…」" 这类 kick 消息覆盖。
-    if (!wfs && payload.text?.trim()) autoNameIfDefault(ws, sid, payload.text)
-    emit({ workspacePath: ws, sessionId: sid, type: 'user', message: userMsg })
+    if (!deps.adopt) {
+      const userMsg = userMessageOf(payload)
+      appendMessage(ws, sid, userMsg)
+      // 会话自动命名:普通聊天用首条用户消息命名(仍是 '新会话' 才改,导入会话有真实标题不受影响)。工作流
+      // 会话不在这里命名——它在 workflow:enter 用 seed(原始需求)命名,避免被 "请开始「…」" 这类 kick 消息覆盖。
+      if (!wfs && payload.text?.trim()) autoNameIfDefault(ws, sid, payload.text)
+      emit({ workspacePath: ws, sessionId: sid, type: 'user', message: userMsg })
+    }
 
     const aid = mkId('a')
     // Whole-turn start (≈ LLM begins). Stamped main-side so it survives into the live mirror + persisted
@@ -206,7 +228,8 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     // `done` on success (assume it completed), `error` on cancel/error.
     const finalizeRunning = (outcome: 'done' | 'error') => {
       let changed = false
-      for (const [id, c] of subagents) if (c.state === 'running') { subagents.set(id, { ...c, state: outcome, result: outcome === 'error' ? (c.result ?? '已取消') : c.result }); changed = true }
+      // ★这一轮结束不等于后台子代理结束:正常收尾时它们保持运行中,等完成通知(onSubagent)。
+      for (const [id, c] of subagents) if (c.state === 'running' && !(outcome === 'done' && c.background)) { subagents.set(id, { ...c, state: outcome, result: outcome === 'error' ? (c.result ?? '已取消') : c.result }); changed = true }
       for (const [id, t] of tools) if (t.status === 'run') { tools.set(id, { ...t, status: outcome === 'done' ? 'ok' : 'error' }); changed = true }
       if (changed) syncNativeSubagents()
     }
@@ -275,7 +298,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
           : req)
       : undefined
     publishLive()
-    const onSubagent = (ev: { id: string; phase: 'start' | 'update' | 'done'; subagentType?: string; description?: string; prompt?: string; result?: string; isError?: boolean; step?: string }) => {
+    const onSubagent = (ev: { id: string; phase: 'start' | 'update' | 'done'; subagentType?: string; description?: string; prompt?: string; result?: string; isError?: boolean; step?: string; background?: boolean }) => {
       const prev = subagents.get(ev.id) ?? { id: ev.id, state: 'running' as const }
       // A `step` appends one of the sub-agent's own tool calls (its live internal activity). Cap the
       // list so a very busy sub-agent can't grow the message unbounded.
@@ -288,8 +311,17 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
         result: ev.result ?? prev.result,
         steps,
         state: ev.phase === 'done' ? (ev.isError ? 'error' : 'done') : prev.state,
+        background: ev.phase === 'done' ? undefined : (ev.background ?? prev.background),
       }
       subagents.set(ev.id, next)
+      // 这条消息早就收尾落盘了:改盘上那一条,告诉界面,别的都不动。
+      if (!answersOpen) {
+        liveBackgroundCards.delete(cardKey(ws, sid, ev.id))
+        if (deps.discard?.()) return
+        updateMessage(ws, sid, aid, m => ({ ...m, subagents: m.subagents?.map(c => c.id === ev.id ? next : c) }))
+        emit({ workspacePath: ws, sessionId: sid, type: 'subagent-settled', id: aid, sub: next })
+        return
+      }
       syncNativeSubagents()
       publishLive()
       emit({ workspacePath: ws, sessionId: sid, type: 'subagent', id: aid, sub: next })
@@ -324,8 +356,10 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
         ),
       }, env)
     })
+    const discarded = () => deps.discard?.() ?? false
+    const persistMessage = (m: ChatMessage) => { if (!discarded()) appendMessage(ws, sid, m) }
     const scheduleDistill = () => {
-      if (!memoryOn) return
+      if (!memoryOn || discarded()) return
       const deps: DistillDeps = { oneShot }
       const msgCount = readMessages(ws, sid).length
       if (estimateMessagesTokens(readMessages(ws, sid)) > SESSION_DISTILL_THRESHOLD) void distillSession(ws, sid, deps)
@@ -347,9 +381,14 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     // absorbed the injected context, so advancing the watermark would let a later switch-back see
     // wm >= latest → skip the preamble → silently lose that context with no recovery. Leaving it at the
     // last successful value re-triggers the incremental catch-up next time (a little overlap is fine).
-    const bumpWatermark = () => { if (provider.chat) writeWatermark(ws, sid, payload.agent, readMessages(ws, sid).length) }
+    const bumpWatermark = () => { if (provider.chat && !deps.discard?.()) writeWatermark(ws, sid, payload.agent, readMessages(ws, sid).length) }
     const finishOk = (elapsed?: number): ChatMessage => {
       closeAnswers()
+      if (deps.adopt && !text.trim() && !tools.size && !subagents.size) {
+        clearLive(ws, sid, aid)
+        emit({ workspacePath: ws, sessionId: sid, type: 'assistant-dropped', id: aid })
+        return { id: aid, who: 'ai', text: '', model: label, provider: payload.agent, ts: now() }
+      }
       // Fold in skills the agent explicitly NAMED in its reply (home/plugin skills the workspace scan +
       // path-regex miss, e.g. superpowers/brainstorming) so the context panel reflects what it used.
       context = mergeAgentContext(context, { skills: mentionedSkills(text + '\n' + think, cachedInstalledSkills()), rules: [], mcps: [] })
@@ -379,7 +418,8 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
         answers: answerList(),
         startedAt, endedAt: Date.now(),
       }
-      appendMessage(ws, sid, msg)
+      for (const c of subagents.values()) if (c.background && c.state === 'running') liveBackgroundCards.add(cardKey(ws, sid, c.id))
+      persistMessage(msg)
       // 成长宠物的实时信号 —— tokens 上面刚算好(真实上报优先,否则 CJK 估算),直接喂给今日计数器。
       // 注意不要改用 aggregateTokenUsage:那是全量扫盘,不能每轮调。
       addDailyTokens((tokens.input || 0) + (tokens.output || 0))
@@ -402,7 +442,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       // 退出/stderr 收尾),app 显示的就是这段正文;不带 msg 的话下游只看得到 err.message,只能一律当彻底
       // 失败处理 —— 机器人就是这么把一次有答案的回合报成 ❌ 的。
       emit({ workspacePath: ws, sessionId: sid, type: 'error', id: aid, error: err.message, message: msg })
-      appendMessage(ws, sid, msg)
+      persistMessage(msg)
       clearLive(ws, sid, aid)
       scheduleDistill()
       return msg
@@ -411,7 +451,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       closeAnswers()
       finalizeRunning('error')
       const msg: ChatMessage = { id: aid, who: 'ai', text, model: label, provider: payload.agent, ts: now(), subagents: subagentList(), tools: toolList(), answers: answerList(), startedAt, endedAt: Date.now() }
-      appendMessage(ws, sid, msg)
+      persistMessage(msg)
       clearLive(ws, sid, aid)
       emit({ workspacePath: ws, sessionId: sid, type: 'done', message: msg })
       scheduleDistill()
@@ -497,7 +537,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
         flushPaced = paced.flushPaced
         // ★provider 同步抛错(起不来)时没有任何收尾路径会跑 —— 自己把「你的选择」入口关掉再抛。
         let session: AgentSession
-        try { session = provider.chat!({ id: aid, prompt: promptText, model: payload.model, cwd: ws, sessionId, attachments: payload.attachments, permissionMode: payload.permissionMode, browserUse: payload.browserUse, fast: payload.fast, beforeFallback: deps.beforeFallback }, paced, env) }
+        try { session = deps.adopt ? deps.adopt(paced) : provider.chat!({ id: aid, prompt: promptText, model: payload.model, cwd: ws, sessionId, attachments: payload.attachments, permissionMode: payload.permissionMode, browserUse: payload.browserUse, fast: payload.fast, beforeFallback: deps.beforeFallback, background: deps.background }, paced, env) }
         catch (err) { closeAnswers(); throw err }
         deps.onSessionStart?.(wrapSession(session))
       })

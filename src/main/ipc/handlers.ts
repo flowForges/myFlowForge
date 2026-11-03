@@ -5,7 +5,7 @@ import { capToolOutput, capToolOutputs, readCap } from '../chat/toolOutputCap'
 import { createTerminalService, type TerminalService } from '../terminal/terminalService'
 import type { HostCapabilities } from '../host/capabilities'
 import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, readHookLibrary, writeHookLibrary, readCustomStages, upsertCustomStage, deleteCustomStage, upsertProject, setProjectDefaultBranch, setProjectAlias, registerWorkspace, unregisterWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setStageModel, isFullAccessAcked, ackFullAccess } from '../config/store'
-import { providerSupportsPermissions, providerEnforcesReadonly, providerUsesCommandShim, permissionAppliesMidRun, permissionModeLabel, DEFAULT_PERMISSION_MODE } from '@shared/permissions'
+import { providerSupportsPermissions, providerEnforcesReadonly, providerUsesCommandShim, permissionAppliesMidRun, permissionModeLabel, stricterPermissionMode, DEFAULT_PERMISSION_MODE } from '@shared/permissions'
 import { acpKnownUnavailable, withAcpAvailability } from '../agents/acp/acpAvailability'
 import { isAcpUnavailable } from '../agents/acp/acpChat'
 import { browserPermissionConflict, providerSupportsBrowserUse, DEFAULT_BROWSER_USE, BROWSER_TOOL_PREFIX } from '@shared/browserUse'
@@ -65,7 +65,7 @@ import { pushService } from '../push/pushService'
 import type { BotBridgeConfig, BotPlatform } from '../bot/botTypes'
 import { distillModelFor } from '../chat/memory/distillModel'
 import type { CreateWorkspaceOpts, ChatSendPayload, ChatEvent, Attachment, AskAnswers, AskQuestion, ChangesEvent, ChatGateSnapshot, ChatMessage, SessionsFile } from '@shared/types'
-import type { AgentProvider, ConfirmDecision } from '../agents/types'
+import type { AgentProvider, AgentSession, ChatBackgroundHooks, ConfirmDecision } from '../agents/types'
 import { confirmAllowed } from '../agents/types'
 import type { Settings, CustomAgent } from '../config/schema'
 import { watch as chokidarWatch } from 'chokidar'
@@ -244,6 +244,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       runningKeys.add(`${r.workspacePath}\0${r.sessionId}`)
       const title = getSession(r.workspacePath, r.sessionId)?.title || r.text.slice(0, 24)
       busy.push({ kind: 'chat', workspacePath: r.workspacePath, label: `${wsName(r.workspacePath)} · ${title}` })
+    }
+    // ★这一轮结束了但进程还留着跑后台任务:可能已经跑了几个小时,升级重启会把它们一起杀掉。
+    for (const b of chatQueue.listBackground()) {
+      if (runningKeys.has(`${b.workspacePath}\0${b.sessionId}`)) continue
+      busy.push({ kind: 'chat', workspacePath: b.workspacePath, label: `${wsName(b.workspacePath)} · ${getSession(b.workspacePath, b.sessionId)?.title ?? ''} · 后台任务 ×${b.count}` })
     }
     for (const ws of run2Manager.listActive()) busy.push({ kind: 'workflow', workspacePath: ws, label: `${wsName(ws)} · 工作流` })
     for (const d of listActiveDelegates()) busy.push({ kind: 'delegate', workspacePath: d.workspacePath, label: `${wsName(d.workspacePath)} · 后台子代理 ×${d.count}` })
@@ -768,13 +773,16 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
      * LLM 输出的地方」。有了它就挂卡上。
      */
     onAutoAllow?: () => void
+    /** 后台子代理升的门:不属于任何一轮,哪一轮结束都不该把它拒掉,只跟着停止 / 进程退出 / 关会话走。 */
+    background?: boolean
   }
   const chatGateOwner = new Map<string, GateMeta>()
-  const drainChatGates = (wsPath: string, opts: { sessionId?: string; type?: 'confirm' | 'ask' } = {}) => {
+  const drainChatGates = (wsPath: string, opts: { sessionId?: string; type?: 'confirm' | 'ask'; scope?: 'turn' | 'background' } = {}) => {
     for (const [id, meta] of [...chatGateOwner]) {
       if (meta.ws !== wsPath) continue
       if (opts.sessionId && meta.sessionId !== opts.sessionId) continue
       if (opts.type && meta.type !== opts.type) continue
+      if (opts.scope && (opts.scope === 'background') !== !!meta.background) continue
       chatGateOwner.delete(id)
       if (meta.type === 'confirm') {
         const r = chatConfirms.get(id)
@@ -871,13 +879,18 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const file = setSessionPermission(wsPath, sessionId, mode)
     broadcastSessions(wsPath, file)
     if (mode === 'full') allowPendingConfirms(wsPath, sessionId, by)
+    // ★这个会话还有活进程(后台任务 / CLI 自己起的一轮)时,切档要真的切到它身上:不然界面写只读,它还按完全访问跑。
+    for (const [id, p] of Object.entries(providers)) {
+      const native = p.setChatPermission ? readChatSession(wsPath, sessionId, id) : undefined
+      if (native) void p.setChatPermission!(wsPath, native, mode).then((note) => { if (note) emitNote(wsPath, sessionId, note) }).catch(() => { /* 进程刚好没了 */ })
+    }
     // 运行中改档,但这个 provider 的沙箱是启动参数、进程起来就钉死了(见 agents/permissionArgs.ts)——
     // 不说一声,用户只会以为「我切了但没反应 = 这功能坏了」。
     // 不提示的两种情况:① claude 切到完全访问,门重读后当场就兑现了;② cursor 这类压根不吃权限档的
     // provider —— 对它们说「下一条消息生效」是骗人的,它永远不生效(picker 上已经标了"不支持")。
     const running = chatQueue.runningProvider(wsPath, sessionId)
     const runningAcpDown = !!running && acpKnownUnavailable(providers[running]?.bin)
-    if (running && providerSupportsPermissions(running, runningAcpDown) && !permissionAppliesMidRun(running, mode, runningAcpDown, chatQueue.runningPermissionMode(wsPath, sessionId), readSettings().codexTransport === 'app-server')) {
+    if (running && !providers[running]?.setChatPermission && providerSupportsPermissions(running, runningAcpDown) && !permissionAppliesMidRun(running, mode, runningAcpDown, chatQueue.runningPermissionMode(wsPath, sessionId), readSettings().codexTransport === 'app-server')) {
       const who = providers[running]?.displayName ?? running
       emitNote(wsPath, sessionId,
         `🛡 已切到「${permissionModeLabel(mode)}」· ${who} 不支持运行中改档，当前这一轮仍按「${permissionModeLabel(prev)}」跑完，下一条消息才生效。`)
@@ -901,7 +914,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // workflow gate. Runs are ephemeral (no run slot). The legacy orchestrator + its chat-triggered
   // proposeRun gate are gone — the only workflow-run entry point is now the run2 「工作流运行」launcher.
   const runDelegate = makeRunDelegate({ providers, proxy: () => readSettings().agentProxy, mcpEntry, readWorkspace })
+  const sealedWorkspaces = new Set<string>()
   const runTurn = async (payload: ChatSendPayload) => {
+    // ★排队的消息带的是发送那一刻的档:排队期间用户切严了,不能拿旧档把它放回去(活进程上刚切好的只读会被这条消息撤销)。
+    //  取更严的而不是直接用落盘的:工作流阶段有自己的档,可能比会话的更严。没带档的载荷(机器人 / 宠物)只在切到只读时才补上。
+    //  下面的发车检查(浏览器冲突、完全访问授权)仍按载荷原样判,这里只决定进程实际跑在哪一档。
+    const storedMode = getSession(payload.workspacePath, payload.sessionId)?.permissionMode
+    const effectiveMode = storedMode ? stricterPermissionMode(payload.permissionMode ?? DEFAULT_PERMISSION_MODE, storedMode) : payload.permissionMode
+    const turnPayload = effectiveMode === (payload.permissionMode ?? DEFAULT_PERMISSION_MODE) || effectiveMode === payload.permissionMode ? payload : { ...payload, permissionMode: effectiveMode }
     removeWorkspaceSkill(payload.workspacePath)   // pure chat (P5 T1): forge-workflow skill has no reader anymore
     // ★★设计 §4.3「Forge 拒绝『完全访问』+『每次询问』」必须守在**发车的地方**,不能只靠 Composer:
     //  工作流阶段起手一轮、机器人桥、宠物窗这三条路都带着会话的 browserUse,却一条都不经过 Composer ——
@@ -938,10 +958,10 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       }
     }
     const provider = providers[payload.agent] ?? providers['claude'] ?? Object.values(providers)[0]
-    const confirm = (req: { title: string; where?: string; questions?: AskQuestion[]; toolName?: string; onAutoAllow?: () => void }) => new Promise<ConfirmDecision>((resolve) => {
+    const confirm = (req: { title: string; where?: string; questions?: AskQuestion[]; toolName?: string; onAutoAllow?: () => void; background?: boolean }) => new Promise<ConfirmDecision>((resolve) => {
       const id = `cc-${++chatConfirmSeq}`
       chatConfirms.set(id, resolve)
-      chatGateOwner.set(id, { ws: payload.workspacePath, sessionId: payload.sessionId, type: 'confirm', ts: new Date().toISOString(), title: req.title, where: req.where, questions: req.questions, toolName: req.toolName, onAutoAllow: req.onAutoAllow })
+      chatGateOwner.set(id, { ws: payload.workspacePath, sessionId: payload.sessionId, type: 'confirm', ts: new Date().toISOString(), title: req.title, where: req.where, questions: req.questions, toolName: req.toolName, onAutoAllow: req.onAutoAllow, background: req.background })
       broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: payload.sessionId, type: 'confirm-request', id, title: req.title, where: req.where, questions: req.questions })
     })
     // CLI 的逐操作确认门专用出口:升门【之前】先读一次会话当前的权限档,已经是「完全访问」就直接放行,
@@ -950,7 +970,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // ★ 只给 provider 的逐操作门用,不能给下面那个「无沙箱 provider 预授权门」用:那个门已经自己按
     //   payload.permissionMode !== 'full' 守过了,再叠一层等于替用户默默写下 fullAccessAck ——
     //   那是另一件事的授权,不是同一件。
-    const toolConfirm = (req: { title: string; where?: string; questions?: AskQuestion[]; toolName?: string; toolUseId?: string; readOnly?: boolean; onAutoAllow?: () => void }): Promise<ConfirmDecision> => {
+    const toolConfirm = (req: { title: string; where?: string; questions?: AskQuestion[]; toolName?: string; toolUseId?: string; readOnly?: boolean; onAutoAllow?: () => void; background?: boolean; agentId?: string }): Promise<ConfirmDecision> => {
       const mode = getSession(payload.workspacePath, payload.sessionId)?.permissionMode
       // ★★「自动(工作区)」档下,**确定是只读**的请求不升门。
       //  这个档的原话是「自动修改工作区内的文件」—— 而读比改弱,为一次纯读去问一遍,
@@ -1138,13 +1158,36 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         authBroker = null
       }
     }
+    sealedWorkspaces.delete(payload.workspacePath)   // 又有人在这里发消息了(比如移除后重新添加)
+    const discardTurn = () => sealedWorkspaces.has(payload.workspacePath) || !getSession(payload.workspacePath, payload.sessionId)
+    const onSessionStart = (session: AgentSession) => chatQueue.registerActive(payload.workspacePath, payload.sessionId, () => session.cancel())
+    // ★这一轮结束后进程还留着跑后台任务:任务数给输入框那个停止,CLI 自己起的下一轮走同一条泳道、开一条新回复。
+    const background: ChatBackgroundHooks = {
+      onRunning: (n, stop) => chatQueue.setBackground(payload.workspacePath, payload.sessionId, n, stop),
+      onConfirm: (req) => toolConfirm({ ...req, background: true }),
+      onExit: () => drainChatGates(payload.workspacePath, { sessionId: payload.sessionId, type: 'confirm', scope: 'background' }),
+      openTurn: (attach, isCurrent) => {
+        // 会话已经删了:回复没地方放,后台活也没人要了。
+        if (!getSession(payload.workspacePath, payload.sessionId)) { chatQueue.stopBackground(payload.workspacePath, payload.sessionId); return }
+        // ★CLI 自己那一轮卡在门上时(主代理或它的前台子代理),用户排着的消息就发不出去:用户已经往下说了,这道门直接拒。
+        const adoptedConfirm = (req: Parameters<typeof toolConfirm>[0]) =>
+          chatQueue.hasQueued(payload.workspacePath, payload.sessionId) ? Promise.resolve<ConfirmDecision>('deny') : toolConfirm(req)
+        chatQueue.adoptTurn(payload.workspacePath, payload.sessionId, payload.agent, async () => {
+          if (!isCurrent()) return   // 排队期间已经被用户消息接走了:什么都不开,不占泳道
+          await sendTurn({ ...payload, text: '', attachments: [] }, { provider, env, emit: chatEmit, confirm: adoptedConfirm, onSessionStart, background, adopt: attach, discard: discardTurn })
+            .finally(() => drainChatGates(payload.workspacePath, { sessionId: payload.sessionId, type: 'confirm', scope: 'turn' }))
+        })
+      },
+    }
     try {
-      const msg = await sendTurn(payload, {
+      const msg = await sendTurn(turnPayload, {
         provider,
         env,
         emit: chatEmit,
         confirm: toolConfirm,
-        onSessionStart: (session) => chatQueue.registerActive(payload.workspacePath, payload.sessionId, () => session.cancel()),
+        onSessionStart,
+        background,
+        discard: () => sealedWorkspaces.has(payload.workspacePath),
         // ★★ACP 握手没成、要回落到 run()(没门、全放行)的那一刻,补上面那道「完全访问」授权 —— 首轮
         //  ACP 状态未知时按「有门」放过了预授权门,不补的话老版本 CLI 会不经同意就以完全访问跑。
         beforeFallback: ensureFullAccess,
@@ -1161,8 +1204,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       // timeout, error, or the user moved on — drain THIS turn's confirm gates so the pet's 需确认
       // indicator (and the main-window card) don't stay stuck forever awaiting a confirm-resolved that
       // would never come. Scoped to confirm + this session so background delegate asks (which outlive
-      // the turn) are untouched.
-      drainChatGates(payload.workspacePath, { sessionId: payload.sessionId, type: 'confirm' })
+      // the turn) are untouched. 后台子代理升的门同样比这一轮活得久,也不动(scope)。
+      drainChatGates(payload.workspacePath, { sessionId: payload.sessionId, type: 'confirm', scope: 'turn' })
       await bridge?.close().catch(() => {})
       // Fire-and-forget delegates outlive the main turn on their OWN bridge (the close above is the chat
       // bridge, unrelated). Keep the turn — and thus ChatQueue.busy for this workspace — alive until every
@@ -1173,6 +1216,12 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     }
   }
   const chatQueue = new ChatQueue(runTurn, broadcast)
+  // 归档 / 删除 / 移除:在途的一轮和后台进程都要停,而它们是异步退出的,收尾那一下不能再往里写。
+  const stopWorkspaceChats = (path: string) => {
+    sealedWorkspaces.add(path)
+    chatQueue.clear(path); chatQueue.stop(path)
+    drainChatGates(path)
+  }
   on(CH.chatSend, (_e, payload: ChatSendPayload, source?: string) => {
     if (isArchivedWorkspace(payload.workspacePath)) throw new Error('工作区已归档，恢复后才能继续。')
     // ★共商进行中(running / finalizing)这个会话不收普通对话:界面会把输入转成插话,这里兜住老客户端和竞态,
@@ -1190,6 +1239,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // 快速档是会话级的:载荷没带(手机 / 远程客户端不认识这个开关)就按落盘的会话补上。
     const fast = payload.fast ?? getSession(payload.workspacePath, payload.sessionId)?.fast
     chatQueue.enqueue({ ...payload, via, fast }, source ?? '你')
+    // CLI 自己那一轮正卡在主代理的门上:拒掉,那一轮收尾了这条消息才轮得到。后台子代理的门不动。
+    if (chatQueue.runningAdopted(payload.workspacePath, payload.sessionId)) drainChatGates(payload.workspacePath, { sessionId: payload.sessionId, type: 'confirm', scope: 'turn' })
   })
   on(CH.chatQueueState, (_e, a: { workspacePath: string }) => chatQueue.snapshot(a.workspacePath))
   // 还挂着的确认/提问门快照。聊天视图每次挂载都拉一次,把主进程仍在阻塞等待的门重建成卡片。
@@ -1312,6 +1363,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       && (councils.hasLive(workspacePath, sessionId, a.councilId) || chatQueue.sessionBusy(workspacePath, sessionId))) throw new Error('busy')
     engine.stop(a.mode)
   })
+  // ★单独一条而不是给 council:stop 加参数:老 daemon 收到不认识的方法会报错,给 council:stop 带 seatId 却会被当成「结束整场」
+  on(CH.councilStopSeat, (_e, a: { councilId: string; seatId: string }) => {
+    const engine = councilOf(a.councilId)
+    const { seats, leader } = engine.state.config
+    if (![...seats, leader].some(s => s.id === a.seatId)) throw new Error('target-invalid')
+    // 席位恰好已经说完 / 这场已经结束是正常竞态,不报错
+    engine.stopSeat(a.seatId)
+  })
   on(CH.councilInterject, (_e, a: { councilId: string; text: string }) => {
     // via 同 chat:send:由这里按连接填,不信客户端自报;本机不填
     const via = _e?.client && _e.client.id !== 'local' ? _e.client.label : undefined
@@ -1358,6 +1417,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   })
   on(CH.sessionClose, (_e, a: { workspacePath: string; sessionId: string }) => {
     const file = closeSession(a.workspacePath, a.sessionId)
+    // 关掉 = 从列表里删掉,回不来:它留在后台的进程和挂着的门一起收掉(切走不算,切走它照常跑,回复照常落盘)。
+    if (!file.sessions.some(s => s.id === a.sessionId)) {
+      chatQueue.stopBackground(a.workspacePath, a.sessionId)
+      drainChatGates(a.workspacePath, { sessionId: a.sessionId })
+    }
     broadcastSessions(a.workspacePath, file)
     return sessionsOut(a.workspacePath, file)
   })
@@ -2205,6 +2269,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   }
   on(CH.workspaceArchive, (_e, path: string) => {
     cancelWorkspaceDelegates(path)   // 归档=只读封存,先停掉该工作区后台还在跑的 delegate 子代理
+    stopWorkspaceChats(path)
     // 描述在 archiveWorkspaceLifecycle 里就地取自最后一个聊过的会话标题 —— 归档不再起「摘要 agent」
     // (那会在刚封存的目录里拉起一个 CLI 进程,被外部 agent 监控看见并推通知)。
     archiveWorkspaceLifecycle(path)
@@ -2212,18 +2277,21 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     return wsList()
   })
   on(CH.workspaceRestore, (_e, path: string) => {
+    sealedWorkspaces.delete(path)
     restoreWorkspaceLifecycle(path)
     broadcast(CH.workspacesChanged, {})
     return wsList()
   })
   on(CH.workspaceDelete, async (_e, path: string) => {
     cancelWorkspaceDelegates(path)   // 删除前先停掉后台 delegate 子代理,避免孤儿进程仍在读/写将被删的目录
+    stopWorkspaceChats(path)
     const r = await deleteWorkspace(path)
     broadcast(CH.workspacesChanged, {})
     return { ...r, list: wsList() }
   })
   // 移除:仅从列表移除,保留磁盘文件(可重新添加目录恢复)。
   on(CH.workspaceRemove, (_e, path: string) => {
+    stopWorkspaceChats(path)
     removeWorkspaceFromList(path)
     broadcast(CH.workspacesChanged, {})
     return wsList()

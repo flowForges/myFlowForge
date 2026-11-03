@@ -35,11 +35,25 @@ const deps = (providers: Record<string, AgentProvider>, extra: Partial<SeatRunDe
 const okScript = (_t: ChatTask, cb: ChatCallbacks) => { cb.onSession('native-1'); cb.onAssistantDelta('hi'); cb.onDone({ elapsed: 1 }) }
 
 describe('runSeat', () => {
+  it('cancel is final even if the provider reports done from inside cancel(): stop must not read as a normal finish', async () => {
+    const { provider, cap } = fakeProvider('codex', (_t, cb) => { cb.onAssistantDelta('半句') })
+    const inner = provider.chat!.bind(provider)
+    provider.chat = (task, cb, env) => {
+      const session = inner(task, cb, env)
+      return { ...session, cancel() { session.cancel(); cb.onDone({ elapsed: 1 }) } }
+    }
+    const run = runSeat('c1', seat('a'), 'p', deps({ codex: provider }), noopCb())
+    run.cancel()
+    expect(await run.done).toMatchObject({ ok: false, error: 'cancelled' })
+    expect(cap.cancelled).toBe(1)
+  })
+
   it('passes readonly + model, no beforeFallback key, strips FORGE_* env', async () => {
     const { provider, cap } = fakeProvider('codex', okScript)
     const r = await runSeat('c1', seat('a'), 'p', deps({ codex: provider }, { env: { PATH: '/bin', FORGE_SOCKET: 's', FORGE_AGENT_ID: 'x', FORGE_MCP_ENTRY: 'e' } }), noopCb()).done
     expect(r.ok).toBe(true)
     expect(cap.task!.permissionMode).toBe('readonly')
+    expect(cap.task!.endWithTurn).toBe(true)   // 席位没人看得见也没人停得了:一轮结束不留进程
     expect(cap.task!.model).toBe('m1')
     expect('beforeFallback' in cap.task!).toBe(false)
     expect(cap.env!.FORGE_SOCKET).toBeUndefined()

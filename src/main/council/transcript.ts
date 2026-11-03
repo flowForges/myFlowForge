@@ -1,7 +1,11 @@
 import type { CouncilStage } from '@shared/council'
 
 /** label 形如 "Codex · 6.1",由席位 label 带入,用于给发言标注发言者。 */
-export type Utterance = { seat: string; label: string; round: number; stage: CouncilStage; text: string }
+export type Utterance = {
+  seat: string; label: string; round: number; stage: CouncilStage; text: string
+  /** 被用户中途停掉的半截发言;提示词里要标明不完整。老快照没有 = 完整发言 */
+  stopped?: boolean
+}
 
 /**
  * 全场发言记录 + 每个席位「已经看过多少条」。

@@ -20,6 +20,19 @@ export function appendMessage(wsPath: string, sessionId: string, msg: ChatMessag
   appendFileSync(sessionMessagesFile(wsPath, sessionId), JSON.stringify(msg) + '\n')
 }
 
+/** 改一条已经落盘的消息(后台子代理的卡片晚于消息收尾才跑完)。找不到就什么都不做。 */
+export function updateMessage(wsPath: string, sessionId: string, id: string, fn: (m: ChatMessage) => ChatMessage): void {
+  const f = sessionMessagesFile(wsPath, sessionId)
+  if (!existsSync(f)) return
+  const lines = readFileSync(f, 'utf8').split('\n').filter(Boolean).map((line) => {
+    try {
+      const m = JSON.parse(line) as ChatMessage
+      return m.id === id ? JSON.stringify(fn(m)) : line
+    } catch { return line }
+  })
+  writeFileSync(f, lines.join('\n') + '\n')
+}
+
 export function readMessages(wsPath: string, sessionId: string): ChatMessage[] {
   const f = sessionMessagesFile(wsPath, sessionId)
   if (!existsSync(f)) return []

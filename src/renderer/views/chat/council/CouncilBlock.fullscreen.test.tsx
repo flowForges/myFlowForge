@@ -43,7 +43,7 @@ function ai(seat: CouncilSeat, round: number, stage: CouncilStage, text: string,
   }
 }
 const controls = (): CouncilControls => ({
-  pause: vi.fn(), resume: vi.fn(), stop: vi.fn(), followup: vi.fn(), choose: vi.fn(), interject: vi.fn(),
+  pause: vi.fn(), resume: vi.fn(), stop: vi.fn(), stopSeat: vi.fn(), followup: vi.fn(), choose: vi.fn(), interject: vi.fn(),
 })
 const finalMsg = ai(L, 2, 'final', '结论正文', { councilResult: { conclusion: '采用单一 store', candidates: [], disagreements: [] } })
 const r1 = [ai(A, 1, 'answer', '甲一'), ai(B, 1, 'answer', '乙一'), ai(L, 1, 'summary', '小结一')]
