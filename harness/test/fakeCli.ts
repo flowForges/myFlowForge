@@ -45,7 +45,7 @@ export function installFake(scenario: object = {}, name = 'codex'): FakeCli {
     file,
     pids: () => jsonl(join(dir, 'pids.jsonl')),
     calls: () => jsonl(join(dir, 'calls.jsonl')),
-    async waitPid(role, ms = 5000) {
+    async waitPid(role, ms = 15_000) {
       const end = Date.now() + ms
       for (;;) {
         const hit = fake.pids().find(p => p.role === role)

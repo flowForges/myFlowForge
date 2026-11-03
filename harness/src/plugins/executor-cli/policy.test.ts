@@ -102,6 +102,13 @@ describe('translate', () => {
     expect(translate(policyOf([])).denyWrite).toEqual([])
   })
 
+  it('write-protects the directories of the chosen binary, on both kinds of isolation', () => {
+    const t = translate(policyOf([]), ['/h/.local/bin', '/opt/codex/bin'])
+    expect(t.readOnlyPaths).toEqual(['/h/.zshrc', '/h/.local/bin', '/opt/codex/bin'])
+    expect(t.denyWrite).toEqual(['/h/.local/bin', '/opt/codex/bin'])
+    expect(t.denyRead).toEqual(['/h/.ssh', '/h/data'])
+  })
+
   it('removes duplicates', () => {
     const t = translate(policyOf([], { denyRead: ['/a', '/a'], ruleDenyRead: ['/a'], persistence: ['/b'], ruleDenyWrite: ['/b', '/b'] }))
     expect(t).toMatchObject({ denyRead: ['/a'], readOnlyPaths: ['/b'], denyWrite: ['/b'] })

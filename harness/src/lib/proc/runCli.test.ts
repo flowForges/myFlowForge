@@ -207,31 +207,31 @@ describe.skipIf(!posix)('runCli', () => {
     expect(r).toMatchObject({ timedOut: true, stalled: false, cancelled: false })
     expect(Date.now() - t0).toBeLessThan(4000)
     expect(isAlive(pid)).toBe(false)
-  }, 10_000)
+  })
 
   it('no output for idleMs gives stalled', async () => {
     const r = await runCli(sh('sleep 60'), opts({ idleMs: 200 }))
     expect(r).toMatchObject({ stalled: true, timedOut: false, cancelled: false })
-  }, 10_000)
+  })
 
   it('stdout output resets the idle timer', async () => {
     const c = collect()
     const r = await runCli(sh('for i in 1 2 3 4 5 6 7 8; do echo $i; sleep 0.25; done'), opts({ ...c.cb, idleMs: 1000 })) // 跑 2 s,超过 idleMs
     expect(r).toMatchObject({ code: 0, stalled: false })
     expect(c.lines).toHaveLength(8)
-  }, 10_000)
+  })
 
   it('stderr output does not reset the idle timer', async () => {
     const r = await runCli(sh('while :; do echo x >&2; sleep 0.05; done'), opts({ idleMs: 300 }))
     expect(r.stalled).toBe(true)
-  }, 10_000)
+  })
 
   it('the first cause wins: a later abort does not relabel a timeout', async () => {
     const ac = new AbortController()
     const p = runCli(sh(`trap '' INT TERM; while :; do sleep 0.1; done`), opts({ timeoutMs: 100, signal: ac.signal, fast: () => true }))
     setTimeout(() => ac.abort(), 400)
     expect(await p).toMatchObject({ timedOut: true, cancelled: false, stalled: false })
-  }, 12_000)
+  })
 
   describe('cancel leaves no process behind (Review Focus 1)', () => {
     it('forwarding: cancel → the own-session child is dead within 3 s, the fake exited by its SIGINT handler', async () => {
@@ -249,7 +249,7 @@ describe.skipIf(!posix)('runCli', () => {
       expect(isAlive(child)).toBe(false)
       expect(isAlive(cli)).toBe(false)
       expect(plan.released).toBe(1)
-    }, 10_000)
+    })
 
     it('stubborn: cancel → leader and own-session grandchild dead, onClose after the kill', async () => {
       const fake = installFake({ stubborn: true })
@@ -267,7 +267,7 @@ describe.skipIf(!posix)('runCli', () => {
       expect(await waitDead(grandchildPid, 500)).toBe(true)
       expect(isAlive(cli)).toBe(false)
       expect(closedWhile).toHaveLength(1)
-    }, 12_000)
+    })
 
     it('stubborn with fast(): the 2.5 s ladder, read at kill time', async () => {
       const fake = installFake({ stubborn: true })
@@ -281,14 +281,14 @@ describe.skipIf(!posix)('runCli', () => {
       await p
       expect(Date.now() - t0).toBeLessThan(2500 + 1000)
       expect(await waitDead(grandchild, 500)).toBe(true)
-    }, 12_000)
+    })
 
     it('cancel while stdin is still being read still ends the run', async () => {
       const ac = new AbortController()
       const p = runCli(sh('sleep 60'), opts({ signal: ac.signal, stdin: 'x'.repeat(4 * 1024 * 1024) }))
       setTimeout(() => ac.abort(), 200)
       expect(await p).toMatchObject({ cancelled: true })
-    }, 10_000)
+    })
   })
 
   describe('a pipe held open does not hang it', () => {
@@ -306,7 +306,7 @@ describe.skipIf(!posix)('runCli', () => {
       expect(r).toMatchObject({ code: 130, cancelled: true, leftovers: 'kept' })
       expect(plan.released).toBe(1)
       expect(isAlive(escaped)).toBe(true) // 进程树找不到它(spec §16):只保证不挂住。清理靠 cleanupFakes
-    }, 10_000)
+    })
 
     it('leader exits by itself with an escaped process holding stdout: resolves with the real exit code', async () => {
       const fake = installFake({ escape: true, exit: 5, lines: ['done'] })
@@ -315,7 +315,7 @@ describe.skipIf(!posix)('runCli', () => {
       expect(r).toMatchObject({ code: 5, timedOut: false, stalled: false, cancelled: false, leftovers: 'kept' })
       expect(c.lines).toContain('done')
       expect(isAlive(await fake.waitPid('escaped'))).toBe(true) // 还拿着管道、杀不到:如实报 kept
-    }, 10_000)
+    })
 
     it('leader exits leaving a same-group process holding stdout: the ladder kills it, reported as killed', async () => {
       const pidFile = join(cwd, 'bg')
@@ -324,7 +324,7 @@ describe.skipIf(!posix)('runCli', () => {
       expect(r.killFailed).toBeUndefined()
       const bg = Number(readFileSync(pidFile, 'utf8').trim())
       expect(await waitDead(bg, 1000)).toBe(true)
-    }, 10_000)
+    })
   })
 
   describe('a CLI that exits by itself leaves what let go of its pipes (I-1)', () => {
@@ -340,7 +340,7 @@ describe.skipIf(!posix)('runCli', () => {
       expect(isAlive(await fake.waitPid('background'))).toBe(true)
       expect(closes).toHaveLength(1)
       expect(plan.released).toBe(1)
-    }, 10_000)
+    })
 
     it('nothing left over → no leftovers field', async () => {
       expect((await runCli(sh('exit 0'), opts())).leftovers).toBeUndefined()
@@ -359,12 +359,12 @@ describe.skipIf(!posix)('runCli', () => {
       expect(r).toMatchObject({ cancelled: false, killFailed: true, leftovers: 'kept' })
       expect(isAlive(cli)).toBe(true)
       expect(plan.released).toBe(1)
-    }, 10_000)
+    })
 
     it('a timeout that could not kill says both', async () => {
       const r = await runCli(sh('sleep 30'), opts({ timeoutMs: 50, fast: () => true, procDeps: { ownPgid: () => undefined } }))
       expect(r).toMatchObject({ timedOut: true, killFailed: true })
-    }, 10_000)
+    })
   })
 
   it('leaves its abort listener off the signal once finished', async () => {
@@ -398,7 +398,7 @@ describe.skipIf(!posix)('fake-cli probes', () => {
 
   it('answers sandbox with one marker per row; fail:<row> flips that row', async () => {
     const pass = await output(installFake({ selftest: 'pass' }), ['sandbox', '-P', 'mffai'])
-    expect(pass.out.split('\n')).toEqual(['secret_read r=1', 'cwd_write r=0', 'outside_write r=1', 'git_write r=1', 'tmp_write r=0', 'net_connect r=1'])
+    expect(pass.out.split('\n')).toEqual(['secret_read r=1', 'cwd_write r=0', 'outside_write r=1', 'git_write r=1', 'tmp_write r=0', 'rule_write r=1', 'rule_read r=1', 'secret_dir_read r=1', 'net_connect r=1'])
     const bad = await output(installFake({ selftest: 'fail:outside_write' }), ['sandbox'])
     expect(bad.out).toContain('outside_write r=0')
     expect(bad.out).toContain('secret_read r=1')

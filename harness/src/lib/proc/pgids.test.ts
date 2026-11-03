@@ -429,7 +429,7 @@ describe('reapOrphans walks the process tree (04 Review Focus 1)', () => {
     expect(await waitFor(() => !alive(grandchild), 2000)).toBe(true)
     expect(await waitFor(() => exited(c), 2000)).toBe(true)
     cleanupFakes()
-  }, 10_000)
+  })
 
   const rowsOf = (...r: [pid: number, ppid: number, pgid: number, start?: string][]) => r.map(([pid, ppid, pgid, start = 'S']) => ({ pid, ppid, pgid, start }))
   const TREE = rowsOf([777, 1, 777], [801, 777, 801], [802, 801, 802])

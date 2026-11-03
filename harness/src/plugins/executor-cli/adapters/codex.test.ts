@@ -241,7 +241,7 @@ describe('a read entry cannot reopen a none root', () => {
 })
 
 describe('glob characters in a profile path', () => {
-  const GLOBS = ['/w/cw[1]d', '/w/a*b', '/w/a?b', '/w/[x', '/w/a]b']
+  const GLOBS = ['/w/cw[1]d', '/w/a*b', '/w/a?b', '/w/[x', '/w/a]b', '/w/{p}', '/w/a{b,c}']
 
   it('a cwd like cw[1]d is unenforceable: never own, and reported', () => {
     const i = input({ cwd: '/w/cw[1]d', denyRead: ['/w/cw[1]d/hid'], isolation: 'none' })
@@ -261,7 +261,7 @@ describe('glob characters in a profile path', () => {
   })
 
   it('characters Codex takes literally do not count', () => {
-    for (const p of ['/w/{p}', '/w/a\\b', '/w/a b', '/w/a"b', '/w/a,b', '/w/空白']) {
+    for (const p of ['/w/a\\b', '/w/a b', '/w/a"b', '/w/a,b', '/w/空白']) {
       const i = input({ cwd: p, denyRead: [p], isolation: 'own' })
       expect(codexAdapter.profileGaps!(i)).toEqual([])
       expect(codexAdapter.buildArgs(i).unenforceable).toBeUndefined()
@@ -299,14 +299,14 @@ describe('codex selfTest', () => {
     expect(fsTable(args)['/tmp/st-secret/key']).toBe('none')
   })
 
-  const good = 'secret_read r=1\ncwd_write r=0\noutside_write r=1\ngit_write r=1\ntmp_write r=0\nnet_connect r=1\n'
+  const good = 'secret_read r=1\ncwd_write r=0\noutside_write r=1\ngit_write r=1\ntmp_write r=0\nrule_write r=1\nrule_read r=1\nsecret_dir_read r=1\nnet_connect r=1\n'
 
   it('all rows as expected → nothing failed', () => {
     expect(st().parse(good)).toEqual([])
   })
 
   it('each row that went the wrong way is reported', () => {
-    for (const row of ['secret_read', 'outside_write', 'git_write', 'net_connect']) {
+    for (const row of ['secret_read', 'outside_write', 'git_write', 'rule_write', 'rule_read', 'secret_dir_read', 'net_connect']) {
       expect(st().parse(good.replace(`${row} r=1`, `${row} r=0`))).toEqual([row])
     }
     for (const row of ['cwd_write', 'tmp_write']) {
@@ -314,15 +314,41 @@ describe('codex selfTest', () => {
     }
   })
 
-  it('a missing marker fails; garbage fails every row', () => {
-    expect(st().parse(good.replace('git_write r=1\n', ''))).toEqual(['git_write'])
-    expect(st().parse('').length).toBe(6)
-    expect(st().parse('nope').length).toBe(6)
+  it('a missing marker fails, for every row; garbage fails every row', () => {
+    for (const row of ['secret_read', 'cwd_write', 'outside_write', 'git_write', 'tmp_write', 'rule_write', 'rule_read', 'secret_dir_read', 'net_connect']) {
+      const without = good.split('\n').filter(l => !l.startsWith(`${row} `)).join('\n')
+      expect(st().parse(without)).toEqual([row])
+    }
+    expect(st().parse('').length).toBe(9)
+    expect(st().parse('nope').length).toBe(9)
   })
 
   it('a second marker saying otherwise fails the row', () => {
     expect(st().parse(`${good}secret_read r=0\n`)).toEqual(['secret_read'])
     expect(st().parse(`secret_read r=0\n${good}`)).toEqual(['secret_read'])
+  })
+
+  it('takes the entries rule translation relies on, through the same map a real run uses', () => {
+    const t = fsTable(st({ denyRead: ['/tmp/st/hidden', '/tmp/secdir'], readOnlyPaths: ['/tmp/st/ro'] }).args)
+    expect(t).toMatchObject({ '/tmp/st/hidden': 'none', '/tmp/secdir': 'none', '/tmp/st/ro': 'read', ':project_roots': { '.': 'write' } })
+  })
+
+  describe('the read-only pass', () => {
+    const ro = (over = {}) => st({ readOnly: true, ...over })
+    const goodRo = 'ro_cwd_write r=1\nro_cwd_read r=0\n'
+
+    it('has no :project_roots, like a real read-only run', () => {
+      expect(fsTable(ro().args)[':project_roots']).toBeUndefined()
+      expect(fsTable(ro().args)[':root']).toBe('read')
+    })
+
+    it('has its own rows', () => {
+      expect(ro().parse(goodRo)).toEqual([])
+      expect(ro().parse('ro_cwd_write r=0\nro_cwd_read r=0\n')).toEqual(['ro_cwd_write'])
+      expect(ro().parse('ro_cwd_write r=1\nro_cwd_read r=1\n')).toEqual(['ro_cwd_read'])
+      expect(ro().parse('ro_cwd_read r=0\n')).toEqual(['ro_cwd_write'])
+      expect(ro().parse(good)).toEqual(['ro_cwd_write', 'ro_cwd_read'])
+    })
   })
 })
 

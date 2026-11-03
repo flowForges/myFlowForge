@@ -285,7 +285,7 @@ describe.skipIf(!posix)('killLadder against real fakes (Review Focus 1)', () => 
     expect(await waitDead(c.pid!, 3000)).toBe(true)
     await new Promise(res => setTimeout(res, 200))
     expect(isAlive(child)).toBe(true)
-  }, 10_000)
+  })
 
   it('forwarding: the own-session child dies within 3 s on SIGINT and the ladder never needed SIGTERM or SIGKILL', async () => {
     const fake = installFake({ forwarding: true })
@@ -298,7 +298,7 @@ describe.skipIf(!posix)('killLadder against real fakes (Review Focus 1)', () => 
     expect(isAlive(child)).toBe(false)
     expect(groupExists(c.pid!)).toBe(false)
     expect(r.sent).toEqual([[-c.pid!, 'SIGINT']])
-  }, 10_000)
+  })
 
   it('a wrapper that dies on SIGINT does not save its own-session grandchild: the pre-SIGINT snapshot still has it', async () => {
     const fake = installFake({ grandchild: true, sleep: 60_000 })
@@ -308,14 +308,14 @@ describe.skipIf(!posix)('killLadder against real fakes (Review Focus 1)', () => 
     await killLadder(c.pid!, { kill: r.kill, procTable: () => procTable(), alive: () => groupExists(c.pid!) })
     expect(await waitDead(grandchild, 500)).toBe(true)
     expect(r.sent).toContainEqual([grandchild, 'SIGKILL'])
-  }, 12_000)
+  })
 
   it('I-2: a group of 40 stubborn processes gets SIGKILL inside the budget', async () => {
     const c = spawn('/bin/sh', ['-c', `trap '' INT TERM; i=0; while [ $i -lt 40 ]; do sleep 60 & i=$((i+1)); done; wait`], { detached: true, stdio: 'ignore' })
     c.on('error', () => {})
     trackPid(c.pid!)
     try {
-      await vi.waitFor(() => expect(descendants(c.pid!).length).toBe(40), { timeout: 5000 })
+      await vi.waitFor(() => expect(descendants(c.pid!).length).toBe(40), { timeout: 15_000 })
       const t0 = Date.now()
       let killedAt = 0
       const kill: Kill = (pid, sig) => {
@@ -333,7 +333,7 @@ describe.skipIf(!posix)('killLadder against real fakes (Review Focus 1)', () => 
         // 已经没了
       }
     }
-  }, 15_000)
+  })
 
   for (const { fast, budget } of [{ fast: false, budget: 5000 }, { fast: true, budget: 2500 }]) {
     it(`stubborn${fast ? ' (fast)' : ''}: leader and own-session grandchild dead within ${budget} ms, grandchild killed by pid`, async () => {
@@ -349,6 +349,6 @@ describe.skipIf(!posix)('killLadder against real fakes (Review Focus 1)', () => 
       expect(r.sent.map(x => x[1])).toEqual(expect.arrayContaining(['SIGINT', 'SIGTERM', 'SIGKILL']))
       expect(r.sent).toContainEqual([grandchild, 'SIGKILL'])
       expect(r.sent[0]).toEqual([-c.pid!, 'SIGINT'])
-    }, 12_000)
+    })
   }
 })

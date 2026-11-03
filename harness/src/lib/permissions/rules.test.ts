@@ -349,6 +349,11 @@ describe('literalRoots', () => {
   it('ask on the whole cwd stays untranslated: approving it must leave the run able to work', () => {
     expect(roots('write', ctx, rule('ask', 'write(**)'))).toEqual({ roots: [], untranslated: 1 })
     expect(roots('read', ctx, rule('ask', 'read(**)'))).toEqual({ roots: [], untranslated: 1 })
+    for (const text of ['write(./**)', 'write(/**)', 'write(/w/**)', 'write(/w)', 'write(/w/repo)', 'write(~/../w/**)'.replace('~/../w', '/w/repo')]) {
+      expect(roots('write', ctx, rule('ask', text))).toEqual({ roots: [], untranslated: 1 })
+    }
+    expect(roots('write', ctx, rule('ask', 'write(src/**)'))).toEqual({ roots: ['/w/repo/src'], untranslated: 0 })
+    expect(roots('write', ctx, rule('ask', 'write(/w/repository/**)'))).toEqual({ roots: ['/w/repository'], untranslated: 0 })
   })
 
   it('takes only the asked subject, and never a shell rule', () => {

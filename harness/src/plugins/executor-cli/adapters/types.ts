@@ -72,9 +72,10 @@ export interface Adapter {
   /**
    * args 停在 `--`,调用方接上 `/bin/sh -c <脚本>`(脚本在 detect.ts)。
    * denyRead 是这台机器真实的黑名单,跑的就是真实运行那一份;flags 接在共用的 -c 之后。
+   * readOnlyPaths、denyRead 是规则翻译依赖的条目;readOnly 是只读运行那份档,行也不同。
    * parse 返回没过的行,没出现的行也算没过
    */
-  selfTest?(i: { dir: string; secret: string; flags: string[]; denyRead?: string[] }): { args: string[]; parse(out: string): string[] }
+  selfTest?(i: { dir: string; secret: string; flags: string[]; denyRead?: string[]; readOnlyPaths?: string[]; readOnly?: boolean }): { args: string[]; parse(out: string): string[] }
 }
 
 /** 写模式运行的提示词结尾 */

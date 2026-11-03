@@ -16,11 +16,12 @@ export interface TranslatedPolicy {
   untranslated: number
 }
 
-export function translate(p: ExecPolicy): TranslatedPolicy {
+/** protect:选中的程序所在的目录(binaryDirs)。cwd 盖住它们时,不能让运行改掉下次在沙箱外跑的东西 */
+export function translate(p: ExecPolicy, protect: string[] = []): TranslatedPolicy {
   return {
     denyRead: uniq([...p.denyRead, ...p.ruleDenyRead]),
-    readOnlyPaths: uniq([...p.persistence, ...p.ruleDenyWrite]),
-    denyWrite: uniq(p.ruleDenyWrite),
+    readOnlyPaths: uniq([...p.persistence, ...p.ruleDenyWrite, ...protect]),
+    denyWrite: uniq([...p.ruleDenyWrite, ...protect]),
     untranslated: p.untranslatedRules,
   }
 }

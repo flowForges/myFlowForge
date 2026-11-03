@@ -22,8 +22,11 @@ function pathKey(p: string, what: string): string {
   return n.length > 1 && n.endsWith('/') ? n.slice(0, -1) : n
 }
 
-/** 实测 0.154:路径里有这些字符时 Codex 按 glob 解释,none 悄悄失效且不报错,read 直接拒绝(exit 1) */
-const GLOB = /[*?[\]]/
+/**
+ * 实测 0.154:路径里有 `* ? [ ]` 时 Codex 按 glob 解释,none 悄悄失效且不报错,read 直接拒绝(exit 1)。
+ * `{ }` 只测过 `{p}`(按字面),`{a,b}` 没测:实测前按这一类算,代价只是多问一次
+ */
+const GLOB = /[*?[\]{}]/
 export const PATH_GLOB_GAP = 'codex_path_glob'
 
 const atOrUnder = (p: string, root: string) => p === root || p.startsWith(root === '/' ? '/' : `${root}/`)
@@ -73,16 +76,25 @@ const SELF_TEST_ROWS: Record<string, boolean> = {
   outside_write: false,
   git_write: false,
   tmp_write: true,
+  rule_write: false,
+  rule_read: false,
+  secret_dir_read: false,
   net_connect: false,
 }
 
-function failedRows(out: string): string[] {
+/** 只读那一遍:没有 :project_roots,cwd 写不了但读得了 */
+const SELF_TEST_READ_ONLY_ROWS: Record<string, boolean> = {
+  ro_cwd_write: false,
+  ro_cwd_read: true,
+}
+
+function failedRows(rows: Record<string, boolean>, out: string): string[] {
   const seen = new Map<string, boolean>()
   for (const [, row, r] of out.matchAll(/^(\w+) r=(\d+)\s*$/gm)) {
-    const good = (r === '0') === SELF_TEST_ROWS[row]
+    const good = (r === '0') === rows[row]
     seen.set(row, (seen.get(row) ?? true) && good)
   }
-  return Object.keys(SELF_TEST_ROWS).filter(row => seen.get(row) !== true)
+  return Object.keys(rows).filter(row => seen.get(row) !== true)
 }
 
 function itemEvents(type: string, item: Record<string, unknown>): RunEvent[] {
@@ -176,10 +188,12 @@ export const codexAdapter: Adapter = {
   },
 
   selfTest(i) {
-    const flags = configFlags({ denyRead: [...(i.denyRead ?? []), i.secret], readOnlyPaths: [], readOnly: false, network: false })
+    const readOnly = i.readOnly === true
+    const flags = configFlags({ denyRead: [...(i.denyRead ?? []), i.secret], readOnlyPaths: i.readOnlyPaths ?? [], readOnly, network: false })
+    const rows = readOnly ? SELF_TEST_READ_ONLY_ROWS : SELF_TEST_ROWS
     return {
       args: ['sandbox', '-C', requireAbsolute(i.dir, 'dir'), ...flags, ...i.flags, '-P', PROFILE, '--'],
-      parse: failedRows,
+      parse: out => failedRows(rows, out),
     }
   },
 }

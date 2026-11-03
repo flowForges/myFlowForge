@@ -2,7 +2,7 @@
 // 路径与命令都走 lib/fs/glob 的段匹配(多项式时间,无回溯)
 import { posix, win32 } from 'node:path'
 import { basicSegments, pathMatch, type Seg, starMatcher } from '../fs/glob'
-import { foldedSegments, isComparablePath } from '../fs/paths'
+import { foldedSegments, isComparablePath, isInside } from '../fs/paths'
 import { isPlainCommand } from '../tools/commandKey'
 
 export type Effect = 'deny' | 'ask' | 'allow'
@@ -159,7 +159,7 @@ function patternForms(pattern: string, ctx: MatchCtx): PatternForm[] {
 /**
  * deny / ask 规则里能化成字面路径根的(04 spec §8.4),其余只计数,由调用方按 mustAsk 处理。
  * 字面 = 没有通配符,或只有结尾的 `/**`、`/`;`**` 按 `<cwd>/**` 算,代入的 cwd / home 不算通配符。
- * `ask` 的 `**` 例外:人放行之后整个 cwd 仍被挡住,这次运行就白跑了,所以留给 mustAsk 和事后检查。
+ * `ask` 盖住整个 cwd 的例外(`**`、`./**`、`/**`、cwd 的祖先):人放行之后整个 cwd 仍被挡住,这次运行就白跑了,所以留给 mustAsk 和事后检查。
  * `[` 在规则引擎里是字面量,照样进 roots;Codex 那边由 profileGaps 降级。
  * 根比规则宽(`a` 也盖住 `a/x`),只会多拒。两种写法都给:Codex 的权限档自己不取 realpath
  */
@@ -172,7 +172,7 @@ export function literalRoots(rules: Rule[], subject: 'read' | 'write', ctx: Matc
     if (rule.subject !== subject || rule.effect === 'allow') continue
     const forms = patternForms(rule.pattern, ctx)
     const [{ path: abs, literal }] = forms
-    const askAboutAll = rule.effect === 'ask' && rule.pattern.trim() === '**'
+    const askAboutAll = rule.effect === 'ask' && forms.some(f => isInside(ctx.cwd, withoutSep(f.literal), ctx.platform))
     if (!askAboutAll && (abs === literal || abs === path.join(literal, '**'))) for (const f of forms) roots.add(withoutSep(f.literal))
     else untranslated++
   }
