@@ -1,17 +1,18 @@
 // loop-default 的一轮(spec §8 第 2–6、8 步):重建历史 → 逐步 models.stream → 按顺序执行工具 → 直到模型不再调用工具。
 // 终态不在这里写:返回给 index.ts,拍完结束快照再写
 // 快照(第 1、7 步)在 index.ts 的 runTurn 前后;每步请求前压缩上下文(§8.4)
+// 委派(04 §7):每步请求前送达后续消息和运行通知;模型停了而运行没完时挂起,不结束轮
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { Logger } from '../../kernel/log'
 import type { SessionInfo, Sessions } from '../../kernel/sessions'
 import type { Message, ModelError, ModelEvent, ModelRequest, ModelsService, Part } from '../../lib/models/types'
 import { redact } from '../../lib/tools/redact'
-import type { ToolsService } from '../../lib/tools/types'
+import type { BackgroundRuns, FollowUp, ToolsService, TurnInbox } from '../../lib/tools/types'
 import type { KernelEvent, ModelRef } from '../../protocol/index'
 import { charsToTokens, compact, contextWindow } from './compact'
 import { accountProtocol, family, toolDefs, toolsetFor } from './family'
-import { buildMessages, type ReplayOrigin } from './history'
+import { buildMessages, followUpMessage, INTERRUPTED, noticeMessage, type BuildOpts, type ReplayOrigin } from './history'
 import { LOOP_REMINDER, LoopGuard } from './loopGuard'
 import { dateReminder, environmentBlock, systemPrompt } from './prompts/index'
 
@@ -58,6 +59,10 @@ export interface LoopDeps {
   maxSteps?: number
   now?(): Date
   platform?: NodeJS.Platform
+  /** `executors` 服务;没有 = 没有后台运行,不挂起 */
+  background?: BackgroundRuns
+  /** 本轮的收件箱;没有 = 挂起时只有通知能叫醒 */
+  inbox?: TurnInbox
 }
 
 export interface TurnRequest {
@@ -102,7 +107,7 @@ export interface TurnOutcome {
 }
 
 export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<TurnOutcome> {
-  const { models, tools, signal } = deps
+  const { models, tools, signal, background, inbox } = deps
   const { sessionId, turnId, info } = req
   const ev = (type: KernelEvent['type'], payload: object): void => {
     deps.append({ type, sessionId, payload: { turnId, ...payload } })
@@ -119,18 +124,23 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<TurnOut
 
   // 回传推理 replay 只限同一账号 / 协议 / 模型('default' 换了模型或协议后,旧 replay 不再发)
   const origin: ReplayOrigin | undefined = concrete && { accountId: concrete.accountId, protocol: accountProtocol(models, concrete), modelId: concrete.modelId }
-  let messages: Message[] = buildMessages(deps.history(sessionId), turnId, req.text, {
+  const buildOpts: BuildOpts = {
     origin,
     environment: environmentBlock({ cwd: info.cwd, platform: deps.platform ?? process.platform, isGit: isGitDir(info.cwd), approvalMode: info.approvalMode }),
     reminder: dateReminder,
     now: (deps.now?.() ?? new Date()).getTime(),
-  })
+  }
+  let messages: Message[] = buildMessages(deps.history(sessionId), turnId, req.text, buildOpts)
 
   // 压缩的预算:模型上下文减去系统提示词与工具定义
   const fixed = charsToTokens(system.length + JSON.stringify(defs).length)
   const context = Math.max(1, contextWindow(models, req.ref) - fixed)
 
-  const guard = new LoopGuard()
+  // 只有 step 往上数;后续消息把上限推后,并重置死循环检测(§7.6)
+  let limit = maxSteps
+  let guard = new LoopGuard()
+  /** 挂起时收下、还没进本轮消息的后续消息;不为空时即使过了上限也还要再走一步 */
+  const received: FollowUp[] = []
   const sleep = deps.sleep ?? defaultSleep
   let retries = 0
 
@@ -142,7 +152,7 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<TurnOut
       system,
       messages: messages.slice(),
       ...(defs.length && { tools: defs }),
-      ...(step === maxSteps && { toolChoice: 'none' as const }),
+      ...(step === limit && { toolChoice: 'none' as const }),
       reasoning: 'medium',
       interactive: true,
       signal,
@@ -192,8 +202,68 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<TurnOut
     return { kind: 'ok', text, replays, calls: list, reason: doneEvent.reason }
   }
 
-  for (let step = 1; step <= maxSteps; step++) {
+  const runsOpen = (): boolean => !!background && background.active(turnId) + background.pending(turnId) > 0
+
+  /** 取走已结束运行的通知:写事件并进本轮消息(两边 seq 顺序一致,之后的请求和重建逐字节相同) */
+  const deliverNotices = (step: number): void => {
+    for (const n of background?.take(turnId) ?? []) {
+      ev('executor.notice', { step, runId: n.runId, text: n.text })
+      messages.push(noticeMessage(n.text))
+    }
+  }
+
+  /**
+   * 等运行结束或用户发消息。parked 先置、事件后写,都在第一个 await 之前:客户端看到 turn.parked 时发的消息一定收得下。
+   * 叫醒的原因不看 race 谁赢:wait 先 resolve、续延还没跑时消息也可能进来。unpark 之后不会再有消息,这时取到的就是全部
+   */
+  async function park(step: number, runs: BackgroundRuns): Promise<'notice' | 'message' | 'abort'> {
+    const stopWaiting = new AbortController()
+    const parked = inbox?.park() ?? new Promise<void>(() => {})
+    try {
+      ev('turn.parked', { step, active: runs.active(turnId), pending: runs.pending(turnId) })
+      await Promise.race([parked, runs.wait(turnId, AbortSignal.any([signal, stopWaiting.signal]))])
+    } finally {
+      inbox?.unpark()
+      stopWaiting.abort()
+    }
+    received.push(...(inbox?.take() ?? []))
+    const cause = signal.aborted ? 'abort' : received.length ? 'message' : 'notice'
+    ev('turn.resumed', { step, cause })
+    return cause
+  }
+
+  /**
+   * 模型不会再被请求了(失败或到了上限),但运行还开着:不杀它们,等到结束,通知只写事件,再交出 outcome。
+   * 这段等待也算挂起:用户发来消息 → 'resume',调用方 continue,由下一步的开头给新预算。取消不经过这里
+   */
+  async function settle(step: number, outcome: TurnOutcome): Promise<TurnOutcome | 'resume'> {
+    for (;;) {
+      deliverNotices(step)
+      if (!background || !runsOpen()) return outcome
+      const woke = await park(step, background)
+      if (woke === 'abort') return fail('cancelled')
+      if (woke === 'message') return 'resume'
+    }
+  }
+
+  /** 本步调用的结果消息:没跑到的补"已中断",与 history.ts 重建的一样;否则恢复后的请求里调用没有结果 */
+  const closeCalls = (calls: Call[], results: Part[]): Message => ({
+    role: 'tool',
+    parts: calls.map((c, j) => results[j] ?? { type: 'tool_result' as const, callId: c.id, content: INTERRUPTED, isError: true }),
+  })
+
+  // 过了上限还有后续消息时要再走一步:第 limit 步挂起时收下的消息,要到下一步开头才给新预算
+  turn: for (let step = 1; step <= limit || received.length > 0; step++) {
     if (signal.aborted) return fail('cancelled')
+    // 后续消息在前:它的 message.user 收下时已写,seq 比这里才写的通知小
+    const followUps = [...received.splice(0), ...(inbox?.take() ?? [])]
+    for (const f of followUps) messages.push(followUpMessage(f.text, f.ts, buildOpts))
+    if (followUps.length) {
+      limit = step + maxSteps
+      guard = new LoopGuard()
+    }
+    deliverNotices(step)
+
     let r = await streamStep(step)
     // 限流且这一步还没吐出文本 / 工具调用:等一会儿重试(每轮最多 2 次,可被取消)
     while (r.kind === 'error' && r.error.kind === 'rate_limit' && r.error.retryable && !r.produced && retries < MAX_RETRIES) {
@@ -205,7 +275,11 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<TurnOut
       r = await streamStep(step)
     }
     if (r.kind === 'cancelled') return fail('cancelled')
-    if (r.kind === 'error') return fail(r.error.kind, { message: r.error.message })
+    if (r.kind === 'error') {
+      const s = await settle(step, fail(r.error.kind, { message: r.error.message }))
+      if (s === 'resume') continue
+      return s
+    }
 
     // 模型原文进本轮的消息;写进事件的工具参数打码
     const parts: Part[] = [
@@ -221,15 +295,36 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<TurnOut
     ev('message.assistant', { step, text: r.text, parts: logged })
     if (!r.calls.length) {
       if (r.reason === 'length') deps.log.warn('model output hit the length limit', { step })
-      return { type: 'turn.ended', payload: { turnId } }
+      // 同 stepParts:只有推理的步不进
+      if (parts.some(p => p.type === 'text' || p.type === 'tool_call')) messages.push({ role: 'assistant', parts })
+      const ended: TurnOutcome = { type: 'turn.ended', payload: { turnId } }
+      if (!background || !runsOpen()) return ended
+      const woke = await park(step, background)
+      if (woke === 'abort') return fail('cancelled')
+      // 到了上限只有用户的消息才值得再请求模型;通知写进事件留给下一轮(§7.3)
+      if (step !== limit || woke === 'message') continue
+      const s = await settle(step, ended)
+      if (s === 'resume') continue
+      return s
     }
-    if (step === maxSteps) return fail('max_steps')
     messages.push({ role: 'assistant', parts })
+    if (step === limit) {
+      messages.push(closeCalls(r.calls, []))
+      const s = await settle(step, fail('max_steps'))
+      if (s === 'resume') continue
+      return s
+    }
 
     const results: Part[] = []
     for (const c of r.calls) {
       const verdict = guard.see(c.name, c.args)
-      if (verdict === 'stop') return fail('loop') // 第 5 次不执行
+      if (verdict === 'stop') {
+        // 第 5 次不执行
+        messages.push(closeCalls(r.calls, results))
+        const s = await settle(step, fail('loop'))
+        if (s === 'resume') continue turn
+        return s
+      }
       const res = await tools.call(c.name, c.args, {
         sessionId, turnId, callId: c.id, cwd: info.cwd, spillDir: deps.sessions.spillDir(sessionId), signal,
       })
@@ -240,6 +335,6 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<TurnOut
     }
     messages.push({ role: 'tool', parts: results })
   }
-  // 不会到这里:step === maxSteps 时上面已返回
+  // 不会到这里:step === limit 时上面已返回或收到了后续消息
   return fail('max_steps')
 }

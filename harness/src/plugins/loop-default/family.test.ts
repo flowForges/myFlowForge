@@ -50,4 +50,14 @@ describe('family', () => {
     ])
     expect(toolDefs(all, 'edit').map(d => d.name)).toEqual(['read', 'edit', 'shell'])
   })
+
+  it('delegate tools follow the toolset in both toolsets, sorted by name; TOOLSETS stays as it was', () => {
+    const t = (name: string, delegate?: boolean): Tool => ({ name, description: name, parameters: {}, ...(delegate && { delegate }), permission: () => [], run: async () => ({ content: '' }) })
+    const before = structuredClone(TOOLSETS)
+    const all = [t('delegate_qoder', true), t('shell'), t('delegate_codex', true), t('read'), t('extra')]
+    expect(toolDefs(all, 'patch').map(d => d.name)).toEqual(['read', 'shell', 'delegate_codex', 'delegate_qoder'])
+    expect(toolDefs(all, 'edit').map(d => d.name)).toEqual(['read', 'shell', 'delegate_codex', 'delegate_qoder'])
+    expect(TOOLSETS).toEqual(before)
+    expect(toolDefs([t('read')], 'edit').map(d => d.name)).toEqual(['read'])
+  })
 })

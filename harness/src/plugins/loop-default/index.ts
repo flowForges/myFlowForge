@@ -7,7 +7,7 @@ import { RpcError } from '../../kernel/rpcError'
 import type { Sessions } from '../../kernel/sessions'
 import { createGit, type Git } from '../../lib/git/snapshot'
 import type { ModelsService } from '../../lib/models/types'
-import type { ToolsService } from '../../lib/tools/types'
+import type { BackgroundRuns, ToolsService, TurnInbox } from '../../lib/tools/types'
 import { ERR_BUSY, type ModelRef, type WorkerParams } from '../../protocol/index'
 import { runTurn, type LoopDeps, type TurnOutcome } from './loop'
 import { manifest } from './manifest'
@@ -24,7 +24,8 @@ export interface LoopDefaultOpts {
   snapshotTmpDir?: string
 }
 
-interface PromptReq { sessionId: string; turnId: string; text: string; signal: AbortSignal }
+/** inbox:内核按轮提供;没有时(旧调用方、测试)循环照常挂起,只有通知能叫醒 */
+interface PromptReq { sessionId: string; turnId: string; text: string; signal: AbortSignal; inbox?: TurnInbox }
 
 export function createLoopDefault(opts: LoopDefaultOpts = {}): Plugin {
   return {
@@ -53,7 +54,7 @@ export function createLoopDefault(opts: LoopDefaultOpts = {}): Plugin {
         await Promise.all([...locks.values()]) // 停用前等进行中的回滚写完事件
       })
 
-      ctx.events.on('session.prompt', async ({ sessionId, turnId, text, signal }: PromptReq) => {
+      ctx.events.on('session.prompt', async ({ sessionId, turnId, text, signal, inbox }: PromptReq) => {
         const info = sessions.get(sessionId)
         const cwd = info?.cwd
         if (!info || !cwd) return undefined // 纯对话:交给 loop-direct
@@ -68,6 +69,8 @@ export function createLoopDefault(opts: LoopDefaultOpts = {}): Plugin {
           ev('turn.failed', { reason: 'tools_unavailable' }) // 不降级成纯对话
           return true
         }
+        // 只经服务,不 import 插件;没有 executor-cli 时循环与 03 完全一样
+        const background = ctx.services.get<BackgroundRuns>('executors')
         active.add(sessionId)
         const target = { sessionId, cwd }
         let startRef: string | undefined
@@ -86,10 +89,26 @@ export function createLoopDefault(opts: LoopDefaultOpts = {}): Plugin {
               history: sid => ctx.events.history(sid),
               ...(opts.maxSteps !== undefined && { maxSteps: opts.maxSteps }),
               ...(opts.sleep && { sleep: opts.sleep }),
+              ...(background && { background }),
+              ...(inbox && { inbox }),
             },
             { sessionId, turnId, text, info: { ...info, cwd }, ref },
           )
         } finally {
+          // 循环已不再等:杀掉本轮还开着的运行(每个都写完 run.ended),没送达的通知留在日志里给下一轮。
+          // 全在结束快照之前,快照才包含运行的改动;杀不干净也要拍快照、写终态
+          if (background) {
+            try {
+              await background.abandon(turnId, signal.reason === 'kernel_stopping' ? 'kernel_stopping' : undefined)
+            } catch (err) {
+              ctx.log.warn('abandoning runs failed', { error: err instanceof Error ? err.message : String(err) })
+            }
+            try {
+              for (const n of background.take(turnId)) ctx.append({ type: 'executor.notice', sessionId, payload: { turnId, runId: n.runId, text: n.text } })
+            } catch (err) {
+              ctx.log.warn('leftover notices not recorded', { error: err instanceof Error ? err.message : String(err) })
+            }
+          }
           // 不论怎样结束(含取消、出错)都先拍结束快照,再写终态:客户端看到终态时快照已在。
           // runTurn 抛错 → 没有 outcome,由内核补 turn.failed error;内核已关库等写入失败只记日志
           try {

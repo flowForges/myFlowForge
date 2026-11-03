@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import { buildAnthropicBody } from '../../lib/models/anthropic'
+import { buildChatBody } from '../../lib/models/chat'
+import { buildResponsesBody } from '../../lib/models/responses'
 import type { KernelEvent } from '../../protocol/index'
-import { buildMessages, INTERRUPTED, type ReplayOrigin } from './history'
+import { buildMessages, followUpMessage, INTERRUPTED, noticeMessage, type ReplayOrigin } from './history'
 
 const ORIGIN: ReplayOrigin = { accountId: 'acc', protocol: 'anthropic', modelId: 'claude-x' }
 
@@ -145,5 +148,141 @@ describe('buildMessages', () => {
     expect(out[2].parts).toEqual([{ type: 'text', text: `<r>${t2}</r>` }, { type: 'text', text: 'q2' }])
     // 第一轮本身:当前消息就是第一条,带环境块;不在 events 里时用 now
     expect(buildMessages([], 't1', 'q1', opts)[0].parts).toEqual([{ type: 'text', text: '<environment>E</environment>' }, { type: 'text', text: '<r>999</r>' }, { type: 'text', text: 'q1' }])
+  })
+})
+
+describe('buildMessages: notices and follow-ups', () => {
+  const opts = { environment: '<environment>E</environment>', reminder: (ts: number) => `<r>${ts}</r>` }
+  const notice = (turnId: string, text: string, step?: number) => ev('executor.notice', { turnId, ...(step !== undefined && { step }), runId: 'run_a', text })
+  const texts = (m: { parts: { type: string; text?: string }[] }) => m.parts.map(p => p.text ?? p.type)
+
+  it('a notice is a bare user message: no reminder, no environment', () => {
+    const events = [
+      ev('message.user', { turnId: 't1', text: 'q1' }),
+      ev('message.assistant', { turnId: 't1', step: 1, text: 'a', parts: [{ type: 'text', text: 'a' }] }),
+      notice('t1', '<executor-notice>n</executor-notice>', 2),
+      ev('turn.ended', { turnId: 't1' }),
+    ]
+    const out = buildMessages(events, 't2', 'q2', opts)
+    expect(out[2]).toEqual({ role: 'user', parts: [{ type: 'text', text: '<executor-notice>n</executor-notice>' }] })
+    expect(out[2]).toEqual(noticeMessage('<executor-notice>n</executor-notice>'))
+  })
+
+  it('a follow-up renders with its own reminder and no environment; a plain second message.user is still ignored', () => {
+    const first = ev('message.user', { turnId: 't1', text: 'q1' })
+    const stray = ev('message.user', { turnId: 't1', text: 'not a follow-up' })
+    const follow = ev('message.user', { turnId: 't1', text: 'q1b', followUp: true })
+    const out = buildMessages([first, stray, follow, ev('turn.ended', { turnId: 't1' })], 't2', 'q2', opts)
+    expect(out.map(texts)).toEqual([
+      ['<environment>E</environment>', `<r>${first.ts}</r>`, 'q1'],
+      [`<r>${follow.ts}</r>`, 'q1b'],
+      [expect.stringMatching(/^<r>/), 'q2'],
+    ])
+    expect(out[1]).toEqual(followUpMessage('q1b', follow.ts, opts))
+  })
+
+  it('a follow-up of the current turn is not rebuilt, and the current message keeps the first ts', () => {
+    const first = ev('message.user', { turnId: 't1', text: 'q1' })
+    const out = buildMessages([first, ev('message.user', { turnId: 't1', text: 'later', followUp: true })], 't1', 'q1', opts)
+    expect(out.map(texts)).toEqual([['<environment>E</environment>', `<r>${first.ts}</r>`, 'q1']])
+  })
+
+  it('a tool.ended after a notice or a follow-up pairs with the last assistant step, and the tool message stays right after its call', () => {
+    const events = [
+      ev('message.user', { turnId: 't1', text: 'q1' }),
+      ev('message.assistant', { turnId: 't1', step: 1, text: '', parts: [call('c1'), call('c2')] }),
+      ended('t1', 'c1', 'one'),
+      notice('t1', 'N'),
+      ev('message.user', { turnId: 't1', text: 'F', followUp: true }),
+      ended('t1', 'c2', 'two'),
+      ev('turn.ended', { turnId: 't1' }),
+    ]
+    const out = buildMessages(events, 't2', 'q2')
+    expect(out.map(m => m.role)).toEqual(['user', 'assistant', 'tool', 'user', 'user', 'user'])
+    expect(out[2].parts).toEqual([{ type: 'tool_result', callId: 'c1', content: 'one' }, { type: 'tool_result', callId: 'c2', content: 'two' }])
+    expect(out[3]).toEqual(noticeMessage('N'))
+    expect(texts(out[4])).toEqual(['F'])
+  })
+
+  it('a recovery notice after an unpaired call: the call is padded and the notice follows', () => {
+    const events = [
+      ev('message.user', { turnId: 't1', text: 'q1' }),
+      ev('message.assistant', { turnId: 't1', step: 1, text: '', parts: [call('c1')] }),
+      notice('t1', 'interrupted run'),
+      ev('turn.failed', { turnId: 't1', reason: 'interrupted' }),
+    ]
+    const out = buildMessages(events, 't2', 'q2')
+    expect(out.map(m => m.role)).toEqual(['user', 'assistant', 'tool', 'user', 'user'])
+    expect(out[2].parts).toEqual([{ type: 'tool_result', callId: 'c1', content: INTERRUPTED, isError: true }])
+    expect(out[3]).toEqual(noticeMessage('interrupted run'))
+  })
+
+  it('a notice written after the terminal event is still in the next turn', () => {
+    const events = [
+      ev('message.user', { turnId: 't1', text: 'q1' }),
+      ev('turn.failed', { turnId: 't1', reason: 'cancelled' }),
+      notice('t1', 'late'),
+    ]
+    expect(buildMessages(events, 't2', 'q2').map(texts)).toEqual([['q1'], ['late'], ['q2']])
+  })
+
+  it('a rolled-back turn drops its notices and both user messages; a notice with no known turn or no text is ignored', () => {
+    const events = [
+      ev('message.user', { turnId: 't1', text: 'q1' }),
+      ev('message.user', { turnId: 't1', text: 'q1b', followUp: true }),
+      notice('t1', 'N'),
+      ev('turn.ended', { turnId: 't1' }),
+      ev('turn.rolledBack', { turnId: 't1', files: 1 }),
+      notice('ghost', 'G'),
+      ev('message.user', { turnId: 't3', text: 'q3' }),
+      ev('executor.notice', { turnId: 't3', runId: 'r' }),
+      ev('turn.ended', { turnId: 't3' }),
+    ]
+    expect(buildMessages(events, 't4', 'q4').map(texts)).toEqual([['q3'], ['q4']])
+  })
+})
+
+describe('request bodies: tool result, then a notice, then the next user message', () => {
+  const events = [
+    ev('message.user', { turnId: 't1', text: 'q1' }),
+    ev('message.assistant', { turnId: 't1', step: 1, text: '', parts: [call('c1')] }),
+    ended('t1', 'c1', 'body'),
+    ev('executor.notice', { turnId: 't1', step: 2, runId: 'run_a', text: 'NOTICE' }),
+    ev('message.assistant', { turnId: 't1', step: 2, text: 'ok', parts: [{ type: 'text', text: 'ok' }] }),
+    ev('turn.ended', { turnId: 't1' }),
+  ]
+  // 工具结果紧接通知,再接下一条用户消息:去掉第 2 步的回答才是这个形状
+  const messages = buildMessages(events.filter(e => (e.payload as { step?: number }).step !== 2 || e.type === 'executor.notice'), 't2', 'NEXT')
+  const req = { model: { accountId: 'a', modelId: 'm' }, system: 's', messages }
+
+  it('the shape under test', () => {
+    expect(messages.map(m => m.role)).toEqual(['user', 'assistant', 'tool', 'user', 'user'])
+  })
+
+  it('Anthropic merges them into one user message with tool_result first', () => {
+    const body = buildAnthropicBody(req as never, {}) as { messages: { role: string; content: { type: string; text?: string; tool_use_id?: string; content?: unknown }[] }[] }
+    expect(body.messages.map(m => m.role)).toEqual(['user', 'assistant', 'user'])
+    expect(body.messages[2].content.map(b => b.type)).toEqual(['tool_result', 'text', 'text'])
+    expect(body.messages[2].content[0].tool_use_id).toBe('c1')
+    expect(body.messages[2].content.slice(1).map(b => b.text)).toEqual(['NOTICE', 'NEXT'])
+  })
+
+  it('Chat gives a tool message, then the user messages', () => {
+    const body = buildChatBody(req as never, {}) as { messages: { role: string; tool_call_id?: string; content?: unknown }[] }
+    const rest = body.messages.filter(m => m.role !== 'system' && m.role !== 'developer')
+    expect(rest.map(m => m.role)).toEqual(['user', 'assistant', 'tool', 'user', 'user'])
+    expect(rest[2].tool_call_id).toBe('c1')
+    expect(JSON.stringify(rest[3].content)).toContain('NOTICE')
+    expect(JSON.stringify(rest[4].content)).toContain('NEXT')
+  })
+
+  it('Responses gives function_call_output, then messages', () => {
+    const body = buildResponsesBody(req as never, { store: false, includeEncryptedReasoning: true }) as { input: { type?: string; role?: string; call_id?: string; content?: unknown }[] }
+    const kinds = body.input.map(i => i.type ?? i.role)
+    const at = kinds.indexOf('function_call_output')
+    expect(body.input[at].call_id).toBe('c1')
+    expect(body.input.slice(at + 1).map(i => i.role)).toEqual(['user', 'user'])
+    expect(JSON.stringify(body.input[at + 1].content)).toContain('NOTICE')
+    expect(JSON.stringify(body.input[at + 2].content)).toContain('NEXT')
   })
 })

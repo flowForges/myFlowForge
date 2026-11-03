@@ -128,3 +128,25 @@ describe('contextWindow', () => {
     expect(contextWindow(models, { accountId: 'x', modelId: 'cat' })).toBe(128_000)
   })
 })
+
+describe('compact with notices', () => {
+  const notice = (text: string): Message => ({ role: 'user', parts: [{ type: 'text', text }] })
+  it('never touches a notice, in or out of the recent window; the first user message stays first', () => {
+    const big = 'x'.repeat(20_000)
+    const msgs: Message[] = [
+      { role: 'user', parts: [{ type: 'text', text: '<environment>E</environment>' }, { type: 'text', text: 'first' }] },
+      { role: 'assistant', parts: [{ type: 'tool_call', id: 'c1', name: 'grep', args: '{"pattern":"p"}' }] },
+      { role: 'tool', parts: [{ type: 'tool_result', callId: 'c1', content: big }] },
+      notice(`<executor-notice>old ${big}</executor-notice>`),
+      { role: 'assistant', parts: [{ type: 'tool_call', id: 'c2', name: 'grep', args: '{"pattern":"q"}' }] },
+      { role: 'tool', parts: [{ type: 'tool_result', callId: 'c2', content: big }] },
+      notice('<executor-notice>recent</executor-notice>'),
+    ]
+    const out = compact(msgs, { context: 10_000, keepRecentTokens: 1 })
+    expect(out[2].parts[0]).toMatchObject({ content: expect.stringMatching(/^\[已折叠/) })
+    expect(out[0]).toEqual(msgs[0])
+    expect(out[3]).toEqual(msgs[3])
+    expect(out[6]).toEqual(msgs[6])
+    expect(out.map(m => m.role)).toEqual(msgs.map(m => m.role))
+  })
+})

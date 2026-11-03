@@ -12,6 +12,7 @@ import type { ModelRef } from '../../protocol/models'
 import { createToolsCoding } from '../tools-coding'
 import toolsRegistry from '../tools-registry'
 import { createLoopDefault } from './index'
+import { hasOpenTurn, rollbackRefs, snapshotRef } from './snapshots'
 import { NO_SANDBOX, seedUnsandboxedAuto } from '../../../test/sandboxStub'
 
 const posix = process.platform !== 'win32'
@@ -455,5 +456,27 @@ describe('Review Focus 5: turn.rollback restores only that turn files', () => {
     await expect(changesOf(k, sid, 'nope')).rejects.toMatchObject({ code: -32602 })
     await expect(changesOf(k, 'no-session', 'nope')).rejects.toMatchObject({ code: -32602 })
     await expect(rollback(k, 'no-session', 'nope')).rejects.toMatchObject({ code: -32602 })
+  })
+})
+
+describe('scan with a follow-up and notices', () => {
+  const ev = (seq: number, type: KernelEvent['type'], payload: object): KernelEvent => ({ seq, ts: seq, type, sessionId: 's', payload })
+  const events = [
+    ev(1, 'message.user', { turnId: 't', text: 'q' }),
+    ev(2, 'turn.snapshot', { turnId: 't', phase: 'start', ref: snapshotRef('s', 't', 'start') }),
+    ev(3, 'message.user', { turnId: 't', text: 'q2', followUp: true }),
+    ev(4, 'executor.notice', { turnId: 't', step: 2, runId: 'r', text: 'n' }),
+  ]
+  const closed = [
+    ...events,
+    ev(5, 'turn.failed', { turnId: 't', reason: 'cancelled' }),
+    ev(6, 'executor.notice', { turnId: 't', runId: 'r2', text: 'late' }),
+    ev(7, 'turn.snapshot', { turnId: 't', phase: 'end', ref: snapshotRef('s', 't', 'end') }),
+  ]
+
+  it('one turn: a follow-up neither opens another nor reopens, and a late notice changes nothing', () => {
+    expect(hasOpenTurn('s', events)).toBe(true)
+    expect(hasOpenTurn('s', closed)).toBe(false)
+    expect(rollbackRefs('s', closed, 't')).toEqual({ start: snapshotRef('s', 't', 'start'), end: snapshotRef('s', 't', 'end') })
   })
 })

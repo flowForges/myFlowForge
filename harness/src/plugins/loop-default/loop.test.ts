@@ -14,6 +14,11 @@ import { createToolsCoding } from '../tools-coding'
 import toolsRegistry from '../tools-registry'
 import { createLoopDefault, type LoopDefaultOpts } from './index'
 import { LOOP_REMINDER } from './loopGuard'
+import { buildMessages, INTERRUPTED, noticeMessage } from './history'
+import { runTurn, type LoopDeps, type TurnOutcome } from './loop'
+import { dateReminder } from './prompts/index'
+import type { BackgroundRuns, FollowUp, RunNotice, ToolsService, TurnInbox } from '../../lib/tools/types'
+import { ERR_BUSY } from '../../protocol/index'
 import { NO_SANDBOX, seedUnsandboxedAuto } from '../../../test/sandboxStub'
 
 const posix = process.platform !== 'win32'
@@ -597,5 +602,669 @@ describe('loop-default: history and prompts', () => {
     def = GPT
     await turn(k, sid, 'q3')
     expect(calls[2].messages[1].parts).toEqual([{ type: 'text', text: 'a1' }])
+  })
+})
+
+/** 脚本化的 BackgroundRuns:`wait` 在已有通知时立刻 resolve(运行结束在 active() 与 wait() 之间的情形) */
+function scriptedRuns(onAbandon?: (reason?: string) => Promise<void>) {
+  let active = 0
+  const notices: RunNotice[] = []
+  const wakers = new Set<() => void>()
+  const calls = { abandon: [] as (string | undefined)[], activeAtAbandon: [] as number[], waits: 0 }
+  const runs: BackgroundRuns & { start(n?: number): void; end(runId: string, text?: string): void; calls: typeof calls } = {
+    calls,
+    start: (n = 1) => { active += n },
+    end(runId, text = `<executor-notice run="${runId}" status="ok">done</executor-notice>`) {
+      active--
+      notices.push({ runId, text })
+      for (const w of [...wakers]) w()
+    },
+    active: () => active,
+    pending: () => notices.length,
+    take: () => notices.splice(0),
+    wait: (_turnId, signal) => {
+      calls.waits++
+      return new Promise<void>(resolve => {
+        if (notices.length || signal.aborted) return resolve()
+        const done = () => {
+          wakers.delete(done)
+          signal.removeEventListener('abort', done)
+          resolve()
+        }
+        wakers.add(done)
+        signal.addEventListener('abort', done, { once: true })
+      })
+    },
+    abandon: async (_turnId, reason) => {
+      calls.abandon.push(reason)
+      calls.activeAtAbandon.push(active)
+      await onAbandon?.(reason)
+    },
+  }
+  return runs
+}
+
+const FAR_APART = 86_400_000 * 3 // 每个事件隔 3 天:每条用户消息的日期提醒都不同
+
+/** 直接跑 runTurn:内存事件日志、脚本化的模型 / 工具 / 收件箱(真正的收件箱由内核提供) */
+function drive(script: (n: number) => AsyncIterable<ModelEvent>, o: { runs?: ReturnType<typeof scriptedRuns>; inbox?: boolean; maxSteps?: number; onTool?: (name: string, id: string) => void } = {}) {
+  const turnId = 't1'
+  const events: KernelEvent[] = []
+  const requests: { messages: Message[]; toolChoice?: string }[] = []
+  const controller = new AbortController()
+  const append = (e: Omit<KernelEvent, 'seq' | 'ts'>) => {
+    const full = { ...e, seq: events.length + 1, ts: 1_700_000_000_000 + events.length * FAR_APART } as KernelEvent
+    events.push(full)
+    return full
+  }
+  const pendingFollowUps: FollowUp[] = []
+  let wake: (() => void) | undefined
+  const box = {
+    parked: false,
+    parks: 0,
+    /** 内核的做法:写 message.user,提交后清 parked、放进收件箱、叫醒 */
+    send(text: string) {
+      if (!box.parked) throw new Error('ERR_BUSY')
+      const e = append({ type: 'message.user', sessionId: 's', payload: { turnId, text, followUp: true } })
+      box.parked = false
+      pendingFollowUps.push({ text, ts: e.ts })
+      wake?.()
+    },
+  }
+  const inbox: TurnInbox = {
+    park() {
+      box.parked = true
+      box.parks++
+      return new Promise<void>(resolve => {
+        wake = resolve
+        controller.signal.addEventListener('abort', () => resolve(), { once: true })
+      })
+    },
+    unpark() { box.parked = false },
+    take: () => pendingFollowUps.splice(0),
+  }
+  append({ type: 'message.user', sessionId: 's', payload: { turnId, text: 'go' } })
+  const models = {
+    catalog: () => ({ presets: [], models: {} }),
+    accounts: () => [],
+    stream(_ref: unknown, req: Req) {
+      requests.push({ messages: structuredClone(req.messages), ...(req.toolChoice && { toolChoice: req.toolChoice }) })
+      return script(requests.length)
+    },
+  } as unknown as ModelsService
+  const tools = {
+    list: () => [],
+    async call(name: string, _args: string, ctx: { callId: string }) {
+      o.onTool?.(name, ctx.callId)
+      const content = `result of ${ctx.callId}`
+      append({ type: 'tool.ended', sessionId: 's', payload: { turnId, callId: ctx.callId, name, ok: true, ms: 1, content } })
+      return { content }
+    },
+  } as unknown as ToolsService
+  const deps: LoopDeps = {
+    models, tools, append, signal: controller.signal,
+    sessions: { spillDir: () => '/nonexistent-spill' },
+    log: { info() {}, warn() {}, error() {} },
+    history: () => events.slice(),
+    platform: 'linux',
+    now: () => new Date(0),
+    ...(o.maxSteps !== undefined && { maxSteps: o.maxSteps }),
+    ...(o.runs && { background: o.runs }),
+    ...(o.inbox && { inbox }),
+  }
+  const result: Promise<TurnOutcome> = runTurn(deps, { sessionId: 's', turnId, text: 'go', info: { sessionId: 's', cwd: '/nonexistent-cwd' } as never, ref: GPT })
+  const parkedCount = () => events.filter(e => e.type === 'turn.parked').length
+  return {
+    events, requests, controller, box, result, turnId,
+    types: (...only: string[]) => events.filter(e => only.includes(e.type)).map(e => e.type),
+    parked: (n: number) => waitFor(() => parkedCount() === n),
+    /** 下一次 setImmediate 之后:所有已就绪的微任务都跑完了 */
+    settled: () => new Promise(r => setImmediate(r)),
+    rebuilt() {
+      const first = requests[0].messages[0].parts[0] as { text: string }
+      return buildMessages(events, 'later', 'next', { origin: { accountId: 'acc', protocol: undefined, modelId: 'gpt-5' }, environment: first.text, reminder: dateReminder })
+    },
+  }
+}
+const textOf = (m: Message | undefined) => (m?.parts ?? []).map(p => (p.type === 'text' ? p.text : p.type)).join('|')
+const ended = { type: 'turn.ended', payload: { turnId: 't1' } }
+
+describe('loop-default: Review Focus 3, the turn waits for runs', () => {
+  it('two runs: parked, then exactly one request per notice, then turn.ended', async () => {
+    const runs = scriptedRuns()
+    runs.start(2)
+    const d = drive(n => say(`answer ${n}`), { runs })
+    await d.parked(1)
+    await d.settled()
+    expect(d.requests).toHaveLength(1)
+    expect(d.types('turn.ended', 'turn.failed')).toEqual([])
+    expect(d.events.find(e => e.type === 'turn.parked')?.payload).toEqual({ turnId: 't1', step: 1, active: 2, pending: 0 })
+
+    runs.end('run_a', 'NOTICE A')
+    await d.parked(2)
+    await d.settled()
+    expect(d.requests).toHaveLength(2)
+    expect(textOf(d.requests[1].messages.at(-1))).toBe('NOTICE A')
+    expect(d.requests[1].messages.at(-1)).toEqual(noticeMessage('NOTICE A'))
+
+    runs.end('run_b', 'NOTICE B')
+    expect(await d.result).toEqual(ended)
+    expect(d.requests).toHaveLength(3)
+    expect(textOf(d.requests[2].messages.at(-1))).toBe('NOTICE B')
+    expect(d.events.filter(e => e.type === 'turn.resumed').map(e => e.payload)).toEqual([
+      { turnId: 't1', step: 1, cause: 'notice' },
+      { turnId: 't1', step: 2, cause: 'notice' },
+    ])
+    expect(d.events.filter(e => e.type === 'executor.notice').map(e => e.payload)).toEqual([
+      { turnId: 't1', step: 2, runId: 'run_a', text: 'NOTICE A' },
+      { turnId: 't1', step: 3, runId: 'run_b', text: 'NOTICE B' },
+    ])
+    expect(d.events.map(e => e.type).filter(t => t !== 'message.assistant.delta' && t !== 'turn.usage')).toEqual([
+      'message.user',
+      'message.assistant', 'turn.parked', 'turn.resumed',
+      'executor.notice', 'message.assistant', 'turn.parked', 'turn.resumed',
+      'executor.notice', 'message.assistant',
+    ])
+  })
+
+  it('without a run nothing parks: inbox untouched, wait never called', async () => {
+    const runs = scriptedRuns()
+    const d = drive(() => say('hi'), { runs, inbox: true })
+    expect(await d.result).toEqual(ended)
+    expect(d.box.parks).toBe(0)
+    expect(runs.calls.waits).toBe(0)
+    expect(d.types('turn.parked', 'turn.resumed')).toEqual([])
+  })
+
+  it('a run that ended before the model stopped is pending: wait returns at once and it gets a request', async () => {
+    const runs = scriptedRuns()
+    runs.start()
+    runs.end('run_a', 'EARLY')
+    // 第 1 步开始前已取走;所以再起一个在第 1 步期间结束
+    runs.start()
+    const d = drive(n => {
+      if (n === 1) runs.end('run_b', 'DURING')
+      return say(`a${n}`)
+    }, { runs })
+    expect(await d.result).toEqual(ended)
+    expect(d.requests).toHaveLength(2)
+    expect(textOf(d.requests[0].messages.at(-1))).toBe('EARLY')
+    expect(textOf(d.requests[1].messages.at(-1))).toBe('DURING')
+    expect(d.types('turn.parked', 'turn.resumed')).toEqual(['turn.parked', 'turn.resumed'])
+  })
+
+  it('a run ending during other tools is delivered at the next step, after that step\'s tool message', async () => {
+    const runs = scriptedRuns()
+    runs.start()
+    const d = drive(n => (n === 1 ? calling('c1', 'read', { path: 'a' }) : say('done')), { runs, onTool: () => runs.end('run_a', 'NOTICE') })
+    expect(await d.result).toEqual(ended)
+    expect(d.requests[1].messages.map(m => m.role)).toEqual(['user', 'assistant', 'tool', 'user'])
+    expect(d.requests[1].messages.at(-1)).toEqual(noticeMessage('NOTICE'))
+    expect(d.requests[0].messages).toHaveLength(1)
+    expect(d.types('turn.parked')).toEqual([])
+  })
+
+  it('the request after a wake holds the assistant\'s own words; a reasoning-only step is not pushed', async () => {
+    const runs = scriptedRuns()
+    runs.start(2)
+    const d = drive(n => {
+      if (n === 1) return say('I started it')
+      if (n === 2) return seq({ type: 'reasoning', replay: { r: 1 } }, done())
+      return say('final')
+    }, { runs })
+    await d.parked(1)
+    runs.end('run_a', 'A')
+    await d.parked(2)
+    runs.end('run_b', 'B')
+    await d.result
+    expect(d.requests[1].messages.map(textOf).slice(1)).toEqual(['I started it', 'A'])
+    expect(d.requests[2].messages.map(textOf).slice(1)).toEqual(['I started it', 'A', 'B'])
+  })
+
+  it('step limit with a run active: no further model request, the notice is logged, turn.ended', async () => {
+    const runs = scriptedRuns()
+    runs.start()
+    const d = drive(() => say('wrapping up'), { runs, maxSteps: 1 })
+    await d.parked(1)
+    expect(d.requests[0].toolChoice).toBe('none')
+    runs.end('run_a', 'LATE')
+    expect(await d.result).toEqual(ended)
+    expect(d.requests).toHaveLength(1)
+    expect(d.events.filter(e => e.type === 'executor.notice').map(e => (e.payload as { text: string }).text)).toEqual(['LATE'])
+    expect(d.rebuilt().map(textOf).at(-2)).toBe('LATE')
+  })
+
+  it('a notice waking the last step before the limit gets its request with toolChoice none, and parks again without another', async () => {
+    const runs = scriptedRuns()
+    runs.start(2)
+    const d = drive(n => say(`a${n}`), { runs, maxSteps: 2 })
+    await d.parked(1)
+    runs.end('run_a', 'A')
+    await d.parked(2)
+    expect(d.requests.map(r => r.toolChoice)).toEqual([undefined, 'none'])
+    runs.end('run_b', 'B')
+    expect(await d.result).toEqual(ended)
+    expect(d.requests).toHaveLength(2)
+  })
+
+  it('a model error with a run active: the failure waits for the run and is the same failure', async () => {
+    const runs = scriptedRuns()
+    runs.start()
+    const d = drive(() => seq({ type: 'done', reason: 'error', error: { kind: 'unavailable', message: 'boom', retryable: false } }), { runs })
+    await d.parked(1)
+    expect(d.types('turn.failed')).toEqual([])
+    runs.end('run_a', 'N')
+    expect(await d.result).toEqual({ type: 'turn.failed', payload: { turnId: 't1', reason: 'unavailable', message: 'boom' } })
+    expect(d.requests).toHaveLength(1)
+    expect(d.types('executor.notice')).toEqual(['executor.notice'])
+    expect(runs.calls.abandon).toEqual([])
+  })
+
+  it('max_steps with a run active: same failure after the run, notice logged', async () => {
+    const runs = scriptedRuns()
+    runs.start()
+    const d = drive(() => calling('c1', 'read', { path: 'a' }), { runs, maxSteps: 1 })
+    await d.parked(1)
+    runs.end('run_a', 'N')
+    expect(await d.result).toEqual({ type: 'turn.failed', payload: { turnId: 't1', reason: 'max_steps' } })
+    expect(d.types('executor.notice')).toEqual(['executor.notice'])
+  })
+
+  it('loop with a run active: same failure after the run', async () => {
+    const runs = scriptedRuns()
+    runs.start()
+    const d = drive(() => calling('c', 'read', { path: 'same' }), { runs })
+    await d.parked(1)
+    expect(d.requests).toHaveLength(5)
+    runs.end('run_a', 'N')
+    expect(await d.result).toEqual({ type: 'turn.failed', payload: { turnId: 't1', reason: 'loop' } })
+  })
+
+  it('a failed run is only a notice: the turn still ends', async () => {
+    const runs = scriptedRuns()
+    runs.start()
+    const text = '<executor-notice run="run_a" executor="codex" status="failed">x</executor-notice>'
+    const d = drive(n => say(`a${n}`), { runs })
+    await d.parked(1)
+    runs.end('run_a', text)
+    expect(await d.result).toEqual(ended)
+    expect(textOf(d.requests[1].messages.at(-1))).toContain('status="failed"')
+  })
+
+  it('cancel while parked: no further request, cancelled, turn.resumed says abort, the notice waits for index.ts', async () => {
+    const runs = scriptedRuns()
+    runs.start()
+    const d = drive(() => say('x'), { runs, inbox: true })
+    await d.parked(1)
+    d.controller.abort()
+    expect(await d.result).toEqual({ type: 'turn.failed', payload: { turnId: 't1', reason: 'cancelled' } })
+    expect(d.requests).toHaveLength(1)
+    expect(d.box.parked).toBe(false)
+    expect(d.events.find(e => e.type === 'turn.resumed')?.payload).toEqual({ turnId: 't1', step: 1, cause: 'abort' })
+  })
+
+  it('cancel while waiting after a failure does not write the failure', async () => {
+    const runs = scriptedRuns()
+    runs.start()
+    const d = drive(() => seq({ type: 'done', reason: 'error', error: { kind: 'unavailable', message: 'boom', retryable: false } }), { runs })
+    await d.parked(1)
+    d.controller.abort()
+    expect(await d.result).toEqual({ type: 'turn.failed', payload: { turnId: 't1', reason: 'cancelled' } })
+  })
+
+  it('byte identity: a later turn rebuilds exactly what the model received, with follow-ups and notices', async () => {
+    const runs = scriptedRuns()
+    runs.start(2)
+    const d = drive(n => {
+      if (n === 1) return seq({ type: 'reasoning', replay: { r: 1 } }, { type: 'text', delta: 'started' }, ...toolCall('c1', 'read', { path: 'a' }), done('tool_calls'))
+      if (n === 3) return seq({ type: 'reasoning', replay: { r: 2 } }, done()) // 只有推理:不进历史
+      return say(`a${n}`)
+    }, { runs, inbox: true, onTool: () => runs.end('run_a', 'NOTICE A') })
+    await d.parked(1)
+    d.box.send('more please')
+    await d.parked(2)
+    runs.end('run_b', 'NOTICE B')
+    await d.result
+    const last = d.requests.at(-1)!.messages
+    const rebuilt = d.rebuilt()
+    expect(rebuilt.slice(0, last.length)).toEqual(last)
+    expect(JSON.stringify(rebuilt.slice(0, last.length))).toBe(JSON.stringify(last))
+    expect(rebuilt.map(m => m.role)).toEqual(['user', 'assistant', 'tool', 'user', 'assistant', 'user', 'user', 'assistant', 'user'])
+    // 模型每次请求的前缀都不变
+    for (let i = 1; i < d.requests.length; i++) {
+      const before = d.requests[i - 1].messages
+      expect(d.requests[i].messages.slice(0, before.length)).toEqual(before)
+    }
+  })
+})
+
+describe('loop-default: Review Focus 3a, a message wakes the parked turn', () => {
+  it('turn.parked is written with parked already set, in one tick', async () => {
+    const runs = scriptedRuns()
+    runs.start()
+    let parkedAtEvent: boolean | undefined
+    const d = drive(n => say(`a${n}`), { runs, inbox: true })
+    const push = d.events.push.bind(d.events)
+    d.events.push = (...e: KernelEvent[]) => {
+      if (e[0].type === 'turn.parked') parkedAtEvent = d.box.parked
+      return push(...e)
+    }
+    await d.parked(1)
+    expect(parkedAtEvent).toBe(true)
+    d.box.send('hi')
+    await d.parked(2)
+    runs.end('run_a')
+    await d.result
+  })
+
+  it('a message: cause message, exactly one request ending in that text with its own reminder and no environment; the run\'s notice comes later', async () => {
+    const runs = scriptedRuns()
+    runs.start()
+    const d = drive(n => say(`a${n}`), { runs, inbox: true })
+    await d.parked(1)
+    expect(d.box.parked).toBe(true)
+    d.box.send('and also this')
+    expect(d.box.parked).toBe(false)
+    await d.parked(2)
+    expect(d.requests).toHaveLength(2)
+    const user = d.events.filter(e => e.type === 'message.user')[1]
+    expect(d.requests[1].messages.at(-1)).toEqual({ role: 'user', parts: [{ type: 'text', text: dateReminder(user.ts) }, { type: 'text', text: 'and also this' }] })
+    expect(JSON.stringify(d.requests[1].messages.at(-1))).not.toContain('<environment>')
+    expect(d.events.find(e => e.type === 'turn.resumed')?.payload).toEqual({ turnId: 't1', step: 1, cause: 'message' })
+    expect(runs.calls.abandon).toEqual([])
+    runs.end('run_a', 'NOTICE')
+    expect(await d.result).toEqual(ended)
+    expect(d.requests).toHaveLength(3)
+    expect(textOf(d.requests[2].messages.at(-1))).toBe('NOTICE')
+  })
+
+  it('message and notice in one wake: message first, notice next, matching seq', async () => {
+    const runs = scriptedRuns()
+    runs.start(2)
+    const d = drive(n => say(`a${n}`), { runs, inbox: true })
+    await d.parked(1)
+    d.box.send('MSG')
+    runs.end('run_a', 'NOTICE')
+    await d.parked(2)
+    expect(d.requests[1].messages.slice(-2).map(textOf)).toEqual([expect.stringMatching(/\|MSG$/), 'NOTICE'])
+    const types = d.events.map(e => e.type)
+    expect(types.indexOf('executor.notice')).toBeGreaterThan(types.lastIndexOf('message.user'))
+    expect(d.events.filter(e => e.type === 'turn.resumed').map(e => (e.payload as { cause: string }).cause)).toEqual(['message'])
+    runs.end('run_b', 'B')
+    await d.result
+  })
+
+  it('notice wins the race and a message lands before unpark, at the step limit: the message is delivered, not dropped', async () => {
+    const runs = scriptedRuns()
+    runs.start(2)
+    const d = drive(n => say(`a${n}`), { runs, inbox: true, maxSteps: 1 })
+    await d.parked(1)
+    runs.end('run_a', 'NOTICE') // wait 先 resolve,race 的续延还没跑
+    d.box.send('MSG')
+    await d.parked(2)
+    expect(d.requests).toHaveLength(2)
+    expect(d.requests[1].toolChoice).toBeUndefined()
+    expect(d.requests[1].messages.slice(-2).map(textOf)).toEqual([expect.stringMatching(/\|MSG$/), 'NOTICE'])
+    expect(d.events.find(e => e.type === 'turn.resumed')?.payload).toMatchObject({ cause: 'message' })
+    runs.end('run_b', 'B')
+    expect(await d.result).toEqual(ended)
+  })
+
+  it('with a service and no inbox, parking works and only notices wake it', async () => {
+    const runs = scriptedRuns()
+    runs.start()
+    const d = drive(n => say(`a${n}`), { runs })
+    await d.parked(1)
+    await d.settled()
+    expect(d.requests).toHaveLength(1)
+    runs.end('run_a', 'N')
+    expect(await d.result).toEqual(ended)
+    expect(d.events.find(e => e.type === 'turn.resumed')?.payload).toMatchObject({ cause: 'notice' })
+  })
+
+  it('parked at the limit with maxSteps 1: the next request has no toolChoice none and can call tools again', async () => {
+    const runs = scriptedRuns()
+    runs.start()
+    const d = drive(n => (n === 2 ? calling('c1', 'read', { path: 'a' }) : say(`a${n}`)), { runs, inbox: true, maxSteps: 1 })
+    await d.parked(1)
+    expect(d.requests[0].toolChoice).toBe('none')
+    d.box.send('keep going')
+    await d.parked(2)
+    expect(d.requests.map(r => r.toolChoice)).toEqual(['none', undefined, 'none'])
+    expect(d.types('tool.ended')).toEqual(['tool.ended'])
+    runs.end('run_a', 'N')
+    expect(await d.result).toEqual(ended)
+    expect(d.types('executor.notice')).toEqual(['executor.notice'])
+  })
+
+  it('a follow-up gives a full new budget of maxSteps past its own step', async () => {
+    const runs = scriptedRuns()
+    runs.start()
+    const d = drive(n => (n === 3 ? say('stop') : n === 1 ? say('first') : calling(`c${n}`, 'read', { path: String(n) })), { runs, inbox: true, maxSteps: 2 })
+    await d.parked(1)
+    d.box.send('go on')
+    await d.parked(2)
+    // 第 2 步收到消息 → limit = 2 + 2 = 4:第 2、3 步不带 none,第 4 步才带
+    expect(d.requests.map(r => r.toolChoice)).toEqual([undefined, undefined, undefined])
+    runs.end('run_a', 'N')
+    await d.settled()
+    await waitFor(() => d.requests.length === 4)
+    expect(d.requests[3].toolChoice).toBe('none')
+    d.controller.abort()
+    await d.result
+  })
+
+  it('LoopGuard starts fresh after a follow-up', async () => {
+    const runs = scriptedRuns()
+    runs.start()
+    let n4 = 0
+    const d = drive(n => {
+      if (n === 5) return say('pause')
+      n4++
+      return n4 > 8 ? say('done') : calling('c', 'read', { path: 'same' })
+    }, { runs, inbox: true })
+    await d.parked(1)
+    expect(d.requests).toHaveLength(5)
+    expect(d.types('turn.failed')).toEqual([])
+    d.box.send('again')
+    await d.parked(2)
+    // 又连续 4 次相同调用也没到 stop(不重置的话第 1 次就是第 5 次相同的)
+    expect(d.types('tool.ended')).toHaveLength(8)
+    runs.end('run_a', 'N')
+    expect(await d.result).toEqual(ended)
+  })
+
+  it('a message during the wait after max_steps: the request is valid, every call has a result, and it rebuilds the same', async () => {
+    const runs = scriptedRuns()
+    runs.start()
+    const d = drive(n => (n === 1 ? seq({ type: 'text', delta: 'trying' }, ...toolCall('c1', 'read', { path: 'a' }), ...toolCall('c2', 'read', { path: 'b' }), done('tool_calls')) : say('ok')), { runs, inbox: true, maxSteps: 1 })
+    await d.parked(1)
+    d.box.send('continue')
+    await d.parked(2)
+    const m = d.requests[1].messages
+    expect(m.map(x => x.role)).toEqual(['user', 'assistant', 'tool', 'user'])
+    expect(m[2].parts).toEqual([
+      { type: 'tool_result', callId: 'c1', content: INTERRUPTED, isError: true },
+      { type: 'tool_result', callId: 'c2', content: INTERRUPTED, isError: true },
+    ])
+    expect(d.requests[1].toolChoice).toBeUndefined()
+    expect(d.types('turn.failed')).toEqual([])
+    runs.end('run_a', 'N')
+    expect(await d.result).toEqual(ended)
+    expect(JSON.stringify(d.rebuilt().slice(0, m.length))).toBe(JSON.stringify(m))
+  })
+
+  it('a message during the wait after a loop stop: the stopped call and those after it are padded', async () => {
+    const runs = scriptedRuns()
+    runs.start()
+    const d = drive(n => {
+      if (n === 1) return seq(...toolCall('a', 'read', { path: 'same' }), ...toolCall('b', 'read', { path: 'same' }), ...toolCall('c', 'read', { path: 'same' }), ...toolCall('d', 'read', { path: 'same' }), ...toolCall('e', 'read', { path: 'same' }), ...toolCall('f', 'read', { path: 'x' }), done('tool_calls'))
+      return say('ok')
+    }, { runs, inbox: true })
+    await d.parked(1)
+    expect(d.types('tool.ended')).toHaveLength(4)
+    d.box.send('continue')
+    await d.parked(2)
+    const m = d.requests[1].messages
+    expect(m.map(x => x.role)).toEqual(['user', 'assistant', 'tool', 'user'])
+    expect(m[2].parts.map(p => (p as { callId: string }).callId)).toEqual(['a', 'b', 'c', 'd', 'e', 'f'])
+    expect(m[2].parts.slice(4)).toEqual([
+      { type: 'tool_result', callId: 'e', content: INTERRUPTED, isError: true },
+      { type: 'tool_result', callId: 'f', content: INTERRUPTED, isError: true },
+    ])
+    runs.end('run_a', 'N')
+    await d.result
+  })
+
+  it('a message during the wait after a model error resumes; notices logged during that wait stay before it', async () => {
+    const runs = scriptedRuns()
+    runs.start(2)
+    const d = drive(n => (n === 1 ? seq({ type: 'done', reason: 'error', error: { kind: 'unavailable', message: 'boom', retryable: false } }) : say('recovered')), { runs, inbox: true, maxSteps: 3 })
+    await d.parked(1)
+    runs.end('run_a', 'EARLIER')
+    await d.parked(2) // 记下通知后再次挂起,不请求模型
+    expect(d.requests).toHaveLength(1)
+    d.box.send('retry please')
+    await d.parked(3)
+    const m = d.requests[1].messages
+    expect(m.slice(1).map(textOf)).toEqual(['EARLIER', expect.stringMatching(/\|retry please$/)])
+    runs.end('run_b', 'LATER')
+    expect(await d.result).toEqual(ended)
+    expect(d.types('turn.failed')).toEqual([])
+    expect(JSON.stringify(d.rebuilt().slice(0, m.length))).toBe(JSON.stringify(m))
+  })
+
+  it('a message during the wait after the limit, with notices logged first: both reach the model in seq order', async () => {
+    const runs = scriptedRuns()
+    runs.start(2)
+    const d = drive(n => say(`a${n}`), { runs, inbox: true, maxSteps: 1 })
+    await d.parked(1)
+    runs.end('run_a', 'LOGGED')
+    await d.parked(2)
+    expect(d.requests).toHaveLength(1)
+    d.box.send('still there?')
+    await d.parked(3)
+    expect(d.requests).toHaveLength(2)
+    expect(d.requests[1].messages.slice(-2).map(textOf)).toEqual(['LOGGED', expect.stringMatching(/\|still there\?$/)])
+    runs.end('run_b', 'B')
+    expect(await d.result).toEqual(ended)
+  })
+})
+
+describe('loop-default: executors service through the plugin', () => {
+  const executors = (runs: BackgroundRuns): Plugin => ({
+    manifest: { id: 'fake-executors', version: '0', kernel: '^0.1.0', provides: ['executors'] },
+    activate: ctx => ctx.services.provide('executors', runs),
+  })
+  const codes = async (fn: () => Promise<unknown>) => fn().then(() => undefined, (e: { code?: number }) => e.code)
+
+  it('no service: the turn runs as before with no parking events', async () => {
+    const calls: Call[] = []
+    const k = await boot(calls, () => say('ok'))
+    const sid = await create(k, { model: GPT })
+    await turn(k, sid, 'hi')
+    expect(evs(k, sid).some(e => e.type === 'turn.parked' || e.type === 'executor.notice')).toBe(false)
+    expect(terminal(k, sid)[0].type).toBe('turn.ended')
+  })
+
+  it('a normal end: abandon runs with nothing open, before the end snapshot', async () => {
+    const calls: Call[] = []
+    const runs = scriptedRuns()
+    const k = await boot(calls, () => say('ok'), { extra: [executors(runs)] })
+    const sid = await create(k, { model: GPT })
+    await turn(k, sid, 'hi')
+    expect(runs.calls.abandon).toEqual([undefined])
+    expect(runs.calls.activeAtAbandon).toEqual([0])
+  })
+
+  it('cancel while parked, fake exits at once: abandon ran, undelivered notices are in the log, end snapshot before the terminal', async () => {
+    const calls: Call[] = []
+    const runs = scriptedRuns(async () => {
+      runs.end('run_a', 'KILLED')
+    })
+    runs.start()
+    const k = await boot(calls, () => say('waiting'), { extra: [executors(runs)] })
+    const sid = await create(k, { model: GPT })
+    await prompt(k, sid, 'go')
+    await waitFor(() => evs(k, sid).some(e => e.type === 'turn.parked'))
+    await k.handle('session.cancel', { commandId: 'cx', sessionId: sid })
+    await waitFor(() => terminal(k, sid).length === 1)
+    expect(runs.calls.abandon).toHaveLength(1)
+    const order = evs(k, sid).map(e => e.type).filter(t => ['executor.notice', 'turn.snapshot', 'turn.failed', 'turn.resumed'].includes(t))
+    expect(order).toEqual(['turn.snapshot', 'turn.resumed', 'executor.notice', 'turn.snapshot', 'turn.failed'])
+    expect(pay(terminal(k, sid)[0]).reason).toBe('cancelled')
+    expect(pay(evs(k, sid).find(e => e.type === 'executor.notice'))).toEqual({ turnId: pay(terminal(k, sid)[0]).turnId, runId: 'run_a', text: 'KILLED' })
+    expect(calls).toHaveLength(1)
+    // 下一轮的历史看得到这条通知
+    await turn(k, sid, 'next')
+    expect(calls[1].messages.map(textOf).some(t => t === 'KILLED')).toBe(true)
+  })
+
+  it('cancel while parked, stubborn fake: the kernel\'s cancelled comes first at 1 s, then notice and end snapshot; busy until the handler returns', async () => {
+    const calls: Call[] = []
+    let release!: () => void
+    const held = new Promise<void>(r => { release = r })
+    const runs = scriptedRuns(async () => {
+      await held
+      runs.end('run_a', 'KILLED LATE')
+    })
+    runs.start()
+    const k = await boot(calls, () => say('waiting'), { extra: [executors(runs)] })
+    const sid = await create(k, { model: GPT })
+    const turnId = await prompt(k, sid, 'go')
+    await waitFor(() => evs(k, sid).some(e => e.type === 'turn.parked'))
+    await k.handle('session.cancel', { commandId: 'cx', sessionId: sid })
+    try {
+      expect(terminal(k, sid).map(e => pay(e).reason)).toEqual(['cancelled'])
+      expect(evs(k, sid).some(e => e.type === 'executor.notice')).toBe(false)
+      const retryId = 'retry-1'
+      expect(await codes(() => k.handle('session.prompt', { commandId: retryId, sessionId: sid, text: 'x' }))).toBe(ERR_BUSY)
+      expect(await codes(() => k.handle('turn.rollback', { commandId: 'rb1', sessionId: sid, turnId }))).toBe(ERR_BUSY)
+    } finally {
+      release()
+    }
+    await waitFor(() => evs(k, sid).filter(e => e.type === 'turn.snapshot').length === 2)
+    const order = evs(k, sid).map(e => e.type).filter(t => ['executor.notice', 'turn.snapshot', 'turn.failed'].includes(t))
+    expect(order).toEqual(['turn.snapshot', 'turn.failed', 'executor.notice', 'turn.snapshot'])
+    expect(terminal(k, sid)).toHaveLength(1)
+    // 处理者结束后不再忙;被拒的那个 commandId 没留回执,可以重试
+    let accepted: { accepted?: boolean } | undefined
+    for (let i = 0; i < 400 && !accepted; i++) {
+      accepted = await (k.handle('session.prompt', { commandId: 'retry-1', sessionId: sid, text: 'x' }) as Promise<{ accepted: boolean }>).catch(() => undefined)
+      if (!accepted) await sleep(5)
+    }
+    expect(accepted?.accepted).toBe(true)
+  })
+
+  it('a rejecting abandon still logs leftovers, takes the end snapshot and writes the terminal', async () => {
+    const calls: Call[] = []
+    const runs = scriptedRuns(async () => {
+      runs.end('run_a', 'LEFT')
+      throw new Error('kill failed')
+    })
+    runs.start()
+    const k = await boot(calls, () => say('x'), { extra: [executors(runs)] })
+    const sid = await create(k, { model: GPT })
+    await prompt(k, sid, 'go')
+    await waitFor(() => evs(k, sid).some(e => e.type === 'turn.parked'))
+    await k.handle('session.cancel', { commandId: 'cx', sessionId: sid })
+    await waitFor(() => terminal(k, sid).length === 1)
+    expect(evs(k, sid).map(e => e.type).filter(t => ['executor.notice', 'turn.snapshot', 'turn.failed'].includes(t))).toEqual(['turn.snapshot', 'executor.notice', 'turn.snapshot', 'turn.failed'])
+  })
+
+  it('a model error with a run active: abandon comes only after the run ended, then the same failure', async () => {
+    const calls: Call[] = []
+    const runs = scriptedRuns()
+    runs.start()
+    const k = await boot(calls, () => seq({ type: 'done', reason: 'error', error: { kind: 'unavailable', message: 'boom', retryable: false } }), { extra: [executors(runs)] })
+    const sid = await create(k, { model: GPT })
+    await prompt(k, sid, 'go')
+    await waitFor(() => evs(k, sid).some(e => e.type === 'turn.parked'))
+    expect(runs.calls.abandon).toEqual([])
+    runs.end('run_a', 'N')
+    await waitFor(() => terminal(k, sid).length === 1)
+    expect(runs.calls.activeAtAbandon).toEqual([0])
+    expect(pay(terminal(k, sid)[0])).toMatchObject({ reason: 'unavailable', message: 'boom' })
+    expect(calls).toHaveLength(1)
   })
 })

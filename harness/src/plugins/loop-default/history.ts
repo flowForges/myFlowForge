@@ -1,6 +1,7 @@
 // 历史重建(spec §8.3):从事件日志还原发给模型的 Message[]
 // message.user → user;message.assistant(按 step,有 parts 用 parts,否则按纯文本)→ assistant;
-// 该步之后的 tool.ended → 一条 role:'tool' 消息。未配对的调用补"已中断";已回滚的轮与当前轮跳过
+// 该步之后的 tool.ended → 一条 role:'tool' 消息。未配对的调用补"已中断";已回滚的轮与当前轮跳过。
+// executor.notice、followUp 的 message.user → 同一轮里按 seq 排的 user 消息(本轮的循环用同样的构造,逐字节相同)
 import type { Message, Part } from '../../lib/models/types'
 import type { KernelEvent } from '../../protocol/index'
 
@@ -26,7 +27,8 @@ export interface BuildOpts {
 
 type Call = Extract<Part, { type: 'tool_call' }>
 type Result = Extract<Part, { type: 'tool_result' }>
-interface Step { parts: Part[]; results: (Result | undefined)[] }
+interface AssistantStep { kind: 'assistant'; parts: Part[]; results: (Result | undefined)[] }
+type Step = AssistantStep | { kind: 'notice'; text: string } | { kind: 'followUp'; text: string; ts: number }
 interface Turn { user: string; ts: number; steps: Step[] }
 
 const obj = (v: unknown): Record<string, unknown> | undefined => (v && typeof v === 'object' ? (v as Record<string, unknown>) : undefined)
@@ -53,6 +55,28 @@ function stepParts(payload: Record<string, unknown>, origin: ReplayOrigin | unde
   return parts.some(p => p.type === 'text' || p.type === 'tool_call') ? parts : []
 }
 
+function userMessage(text: string, ts: number, opts: BuildOpts, first: boolean): Message {
+  const parts: Part[] = []
+  if (first && opts.environment) parts.push({ type: 'text', text: opts.environment })
+  if (opts.reminder) parts.push({ type: 'text', text: opts.reminder(ts) })
+  parts.push({ type: 'text', text })
+  return { role: 'user', parts }
+}
+
+/** 运行的完成通知:一条 user 消息,没有提醒,也没有环境块 */
+export const noticeMessage = (text: string): Message => ({ role: 'user', parts: [{ type: 'text', text }] })
+
+/** 挂起时收下的后续消息:带它自己时间的提醒;不是第一条,没有环境块 */
+export const followUpMessage = (text: string, ts: number, opts: BuildOpts): Message => userMessage(text, ts, opts, false)
+
+function lastAssistant(steps: Step[]): AssistantStep | undefined {
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const s = steps[i]
+    if (s.kind === 'assistant') return s
+  }
+  return undefined
+}
+
 export function buildMessages(events: KernelEvent[], currentTurnId: string, currentText: string, opts: BuildOpts = {}): Message[] {
   const rolledBack = new Set<string>()
   let currentTs: number | undefined
@@ -68,7 +92,11 @@ export function buildMessages(events: KernelEvent[], currentTurnId: string, curr
     const id = p?.turnId
     if (!p || !str(id) || id === currentTurnId || rolledBack.has(id)) continue
     if (e.type === 'message.user') {
-      if (turns.has(id)) continue
+      const open = turns.get(id)
+      if (open) {
+        if (p.followUp === true) open.steps.push({ kind: 'followUp', text: str(p.text) ? p.text : '', ts: e.ts })
+        continue
+      }
       turns.set(id, { user: str(p.text) ? p.text : '', ts: e.ts, steps: [] })
       order.push(id)
       continue
@@ -77,10 +105,12 @@ export function buildMessages(events: KernelEvent[], currentTurnId: string, curr
     if (!t) continue
     if (e.type === 'message.assistant') {
       const parts = stepParts(p, opts.origin)
-      if (parts.length) t.steps.push({ parts, results: parts.filter(x => x.type === 'tool_call').map(() => undefined) })
+      if (parts.length) t.steps.push({ kind: 'assistant', parts, results: parts.filter(x => x.type === 'tool_call').map(() => undefined) })
+    } else if (e.type === 'executor.notice') {
+      if (str(p.text)) t.steps.push({ kind: 'notice', text: p.text })
     } else if (e.type === 'tool.ended' && str(p.callId)) {
-      // 结果属于它之前最近的那一步里同 id、还没配上的调用
-      const step = t.steps.at(-1)
+      // 结果属于它之前最近的助手步里同 id、还没配上的调用;中间隔着的通知和后续消息不算步
+      const step = lastAssistant(t.steps)
       if (!step) continue
       const calls = step.parts.filter((x): x is Call => x.type === 'tool_call')
       const i = calls.findIndex((c, j) => c.id === p.callId && !step.results[j])
@@ -90,17 +120,19 @@ export function buildMessages(events: KernelEvent[], currentTurnId: string, curr
   }
 
   const out: Message[] = []
-  const user = (text: string, ts: number): Message => {
-    const parts: Part[] = []
-    if (!out.length && opts.environment) parts.push({ type: 'text', text: opts.environment })
-    if (opts.reminder) parts.push({ type: 'text', text: opts.reminder(ts) })
-    parts.push({ type: 'text', text })
-    return { role: 'user', parts }
-  }
+  const user = (text: string, ts: number): Message => userMessage(text, ts, opts, !out.length)
   for (const id of order) {
     const t = turns.get(id)!
     out.push(user(t.user, t.ts))
     for (const s of t.steps) {
+      if (s.kind === 'notice') {
+        out.push(noticeMessage(s.text))
+        continue
+      }
+      if (s.kind === 'followUp') {
+        out.push(user(s.text, s.ts))
+        continue
+      }
       out.push({ role: 'assistant', parts: s.parts })
       const calls = s.parts.filter((x): x is Call => x.type === 'tool_call')
       if (!calls.length) continue
