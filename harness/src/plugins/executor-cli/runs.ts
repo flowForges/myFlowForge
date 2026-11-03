@@ -8,6 +8,7 @@ import type { PermissionGate } from '../../kernel/permissionGate'
 import type { Logger } from '../../kernel/log'
 import { RpcError } from '../../kernel/rpcError'
 import { isInside, resolveToolPath } from '../../lib/fs/paths'
+import { validateNetworkEntry } from '../../lib/sandbox/net/domains'
 import { changes as gitChanges, pruneRefs, refExists, repoInfo, takeSnapshot, type Git } from '../../lib/git/snapshot'
 import { addWorktree, removeInWorktree, removeWorktree, reserveWorktree, rootConflict, sessionRepo, userGitState, worktreeIntact } from '../../lib/git/worktree'
 import type { PgidRegistry } from '../../lib/proc/pgids'
@@ -21,7 +22,7 @@ import type { ExecutorChangesSource, ExecutorIsolation, ExecutorRunReason, Execu
 import { foldEvent, type Adapter, type Outcome, type RunEvent, type RunState } from './adapters/types'
 import { binaryChanged, binaryDirs, isolationOf, trustedPath, type ExecutorInfo } from './detect'
 import { cleanText, clip, noticeText } from './diagnostics'
-import { checkViolations, mustAsk, protectDirs, translate, treePolicy, type TranslatedPolicy } from './policy'
+import { checkViolations, denyReadCopies, mustAsk, protectDirs, translate, treePolicy, type TranslatedPolicy } from './policy'
 
 export type Reason = ExecutorRunReason
 
@@ -43,6 +44,47 @@ export const DEFAULT_EXECUTORS_CONFIG: ExecutorsConfig = {
   disabled: [], codex: { network: false }, qoder: {},
 }
 
+const isCount = (v: unknown, max = Number.MAX_SAFE_INTEGER) => Number.isSafeInteger(v) && (v as number) >= 1 && (v as number) <= max
+
+/**
+ * 配置段(§9.1)。写坏的值退回默认并告警,绝不让整个插件起不来;布尔值只认 true,网络不会被 'yes' 打开。
+ * qoder.hosts 逐条过 05 的网络条目解析,无效的丢掉
+ */
+export function parseExecutorsConfig(raw: unknown, warn: (message: string) => void): ExecutorsConfig {
+  const d = DEFAULT_EXECUTORS_CONFIG
+  if (raw === undefined) return { ...d, disabled: [], codex: { ...d.codex }, qoder: {} }
+  const isObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v)
+  if (!isObject(raw)) warn('executors config is not an object')
+  const o = isObject(raw) ? raw : {}
+  const count = (k: 'maxPerExecutor' | 'maxGlobal' | 'maxPerTurn' | 'maxQueue' | 'timeoutMinutes' | 'idleMinutes', max?: number): number => {
+    if (o[k] === undefined) return d[k]
+    if (isCount(o[k], max)) return o[k] as number
+    warn(`executors.${k} is invalid, using ${d[k]}`)
+    return d[k]
+  }
+  let disabled: string[] = []
+  if (Array.isArray(o.disabled) && o.disabled.every(x => typeof x === 'string')) disabled = o.disabled as string[]
+  else if (o.disabled !== undefined) warn('executors.disabled is invalid, using []')
+  let network = false
+  if (o.codex !== undefined) {
+    if (isObject(o.codex) && (o.codex.network === undefined || typeof o.codex.network === 'boolean')) network = o.codex.network === true
+    else warn('executors.codex.network is invalid, using false')
+  }
+  const qoder: ExecutorsConfig['qoder'] = {}
+  if (o.qoder !== undefined) {
+    if (!isObject(o.qoder) || (o.qoder.hosts !== undefined && !Array.isArray(o.qoder.hosts))) warn('executors.qoder.hosts is invalid, using the defaults')
+    else if (Array.isArray(o.qoder.hosts)) {
+      const hosts = o.qoder.hosts as unknown[]
+      qoder.hosts = hosts.filter((h): h is string => typeof h === 'string' && validateNetworkEntry(h))
+      for (let n = hosts.length - qoder.hosts.length; n > 0; n--) warn('executors.qoder.hosts has an invalid entry, dropped')
+    }
+  }
+  return {
+    maxPerExecutor: count('maxPerExecutor'), maxGlobal: count('maxGlobal'), maxPerTurn: count('maxPerTurn'), maxQueue: count('maxQueue'),
+    timeoutMinutes: count('timeoutMinutes', 120), idleMinutes: count('idleMinutes'), disabled, codex: { network }, qoder,
+  }
+}
+
 export interface SubmitInput {
   adapter: string
   prompt: string
@@ -59,6 +101,8 @@ export interface SubmitInput {
   isolation: ExecutorIsolation
   /** 这次运行是人放行的 */
   asked: boolean
+  /** 批准时的程序文件(binaryKey):无隔离的放行只对这个文件算数 */
+  approvedBinary?: string
 }
 
 export interface RunManagerDeps {
@@ -444,10 +488,8 @@ const REFUSALS: Partial<Record<Reason, string>> = {
 const BINARY_CHANGED = 'Not started: the CLI program changed since it was checked and is being re-checked; try again shortly.'
 const BINARY_GONE = 'Not started: the CLI program is gone. It is being looked for again; install it, or try again.'
 const BINARY_UNTRUSTED = 'Not started: the CLI program failed the trust check. Fix its owner and permissions, then try again.'
+const NONE_OTHER_FILE = 'Not started: the CLI program changed after this unconfined run was approved. Call the tool again to ask for approval.'
 const RECHECK_WIDER = 'Not started: the CLI program changed, and its re-check came out less isolated than this run was approved for. Call the tool again to ask for approval.'
-
-/** 落在 worktree 里的 `deny read` 根 */
-const denyReadCopies = (policy: ExecPolicy, path: string, platform = process.platform) => policy.ruleDenyRead.filter(r => r !== path && isInside(r, path, platform))
 
 const inRoots = (file: string, roots: string[], platform = process.platform) => roots.some(r => isInside(file, r, platform))
 
@@ -620,24 +662,46 @@ export class RunManager implements BackgroundRuns {
     // 比批准时宽:人批准的是有隔离的那次运行,asked 也不算(05 review I1)。重试会重新过门
     if (s.isolation !== 'none' && isolation === 'none') return redetected ? binary('sandbox_unavailable', RECHECK_WIDER) : failed('sandbox_unavailable', REFUSALS.sandbox_unavailable!)
     if (exec === 'ask' && !s.asked) return failed('denied', REFUSALS.denied!)
+    // 人放行的是不隔离地跑那个文件;换了文件仍然不隔离,就得重新问人。隔离变窄(新文件过了自检)不用
+    if (s.asked && s.isolation === 'none' && isolation === 'none' && (redetected || (s.approvedBinary !== undefined && info.binaryKey !== s.approvedBinary))) return binary('untrusted_binary', NONE_OTHER_FILE)
     return undefined
+  }
+
+  /**
+   * 工具的 permission() 用:与出队时同一套算法、同样的路径(同步)。否则批准时算成 own,出队才发现变宽,
+   * 报的是 sandbox_unavailable 而不是问人
+   */
+  preview(adapterId: string, info: ExecutorInfo, s: { sessionId: string; cwd: string; spillDir: string }, loginPath: string): Assessment {
+    const { deps, platform, home } = this
+    const adapter = deps.adapters.get(adapterId)!
+    const pathDirs = (shellEnv(deps.env, { platform, home, loginPath }).PATH ?? '').split(':').filter(Boolean)
+    return this.assessTree({ adapter, sessionId: s.sessionId, sessionCwd: s.cwd, cwd: s.cwd, spillDir: s.spillDir }, info, pathDirs, adapter.allowWrite(home, deps.env))
   }
 
   /** 这次运行在这份 info 下的策略和隔离 */
   private assess(run: Run, info: ExecutorInfo, pathDirs: string[], allowWrite: string[]): Assessment {
+    const { s, adapter, cwd, worktree } = run
+    return this.assessTree({ adapter, sessionId: s.sessionId, sessionCwd: s.cwd, cwd, spillDir: s.spillDir, worktree }, info, pathDirs, allowWrite)
+  }
+
+  private assessTree(
+    r: { adapter: Adapter; sessionId: string; sessionCwd: string; cwd: string; spillDir: string; worktree?: Run['worktree'] },
+    info: ExecutorInfo,
+    pathDirs: string[],
+    allowWrite: string[],
+  ): Assessment {
     const { deps, platform } = this
-    const { s, adapter } = run
-    const wt = run.worktree
-    const policy = treePolicy(cwd => deps.sandbox.execPolicy(s.sessionId, cwd, adapter.id), s.cwd, run.cwd, wt && { session: wt.sessionTop, run: wt.path })
+    const { adapter, worktree: wt } = r
+    const policy = treePolicy(cwd => deps.sandbox.execPolicy(r.sessionId, cwd, adapter.id), r.sessionCwd, r.cwd, wt && { session: wt.sessionTop, run: wt.path })
     const protect = protectDirs({
-      kind: adapter.isolationKind, pathDirs, binary: binaryDirs(info), cwd: run.cwd, keepWritable: [run.cwd, s.spillDir, ...allowWrite], platform,
+      kind: adapter.isolationKind, pathDirs, binary: binaryDirs(info), cwd: r.cwd, keepWritable: [r.cwd, r.spillDir, ...allowWrite], platform,
     })
     // worktree 的 .git 文件决定沙箱外的 git 认哪个仓库。共用的 git 目录在沙箱里是可写根,要盖成只读:
     // Codex 的 :root 本来只读,写上去只会多一条可能让权限档不可信的路径
     const guard = wt ? [join(wt.path, '.git'), ...(adapter.isolationKind === 'wrap' ? wt.userState : [])] : []
     const t = translate(policy, [...protect, ...guard])
-    const level = deps.sandbox.status(s.sessionId).level
-    const { isolation, missing } = isolationOf(adapter, info, level, deps.config(), { cwd: run.cwd, denyRead: t.denyRead, readOnlyPaths: t.readOnlyPaths })
+    const level = deps.sandbox.status(r.sessionId).level
+    const { isolation, missing } = isolationOf(adapter, info, level, deps.config(), { cwd: r.cwd, denyRead: t.denyRead, readOnlyPaths: t.readOnlyPaths })
     return { info, policy, t, isolation, missing }
   }
 
@@ -1167,8 +1231,8 @@ export class RunManager implements BackgroundRuns {
 
   /**
    * 摘掉本轮排队的,取消在跑的,等它们都写完 run.ended。没有超时:runCli 一定返回,结束步骤里的 git 有自己的超时。
-   * kernel_stopping:走短梯,不拍结束快照。已经在长梯上的(刚被 executor.cancel)改不了预算,只能等,最长约 6 s,
-   * 比 CLOSE_GRACE_MS 长;这时内核接着 killLive,SIGINT 已经发过,直接杀组不会留下 Codex 的命令。
+   * kernel_stopping:走短梯,不拍结束快照。已经在长梯上的(刚被 executor.cancel)从这一刻起也按短梯算。
+   * 内核限时等这里(结束步骤里的 git 能卡很久),过了就接着 killLive:SIGINT 已经发过,直接杀组不会留下 Codex 的命令。
    * 日志已经关了也没关系:write 兜着,通知照样留在内存,来不及的由崩溃恢复补
    */
   async abandon(turnId: string, reason?: string): Promise<void> {

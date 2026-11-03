@@ -1,10 +1,11 @@
 // 用户规则与硬拒绝 → 适配器的隔离参数(04 spec §8.4)
 import { realpathSync } from 'node:fs'
-import { join, relative } from 'node:path'
 import type { PermissionGate } from '../../kernel/permissionGate'
 import { isInside, OUTSIDE, resolveToolPath } from '../../lib/fs/paths'
 import type { ExecPolicy } from '../../lib/tools/types'
 import type { ExecutorIsolation } from '../../protocol/tools'
+
+export { denyReadCopies, treePolicy } from '../../lib/tools/treePolicy'
 
 const uniq = (list: string[]) => [...new Set(list)]
 
@@ -53,30 +54,6 @@ export function protectDirs(o: {
   const free = (dir: string) => dir !== '/' && !o.keepWritable.some(w => holds(dir, w))
   const listed = o.kind === 'wrap' ? o.pathDirs : o.pathDirs.filter(d => spellings(d).some(s => isInside(s, o.cwd, o.platform)))
   return uniq([...listed, ...o.binary].filter(free))
-}
-
-/**
- * 一棵树的策略;worktree 运行时规则要同时盖住两棵树。`deny read(hidden/**)` 按 cwd 解析,只算会话的 cwd 就保护不到 worktree 里那份;
- * 绝对路径的规则两边算出来都是会话那棵树,所以落在会话 cwd 里的根再映射一份到 worktree。
- * tops:会话在仓库子目录时,整棵仓库都检出到了 worktree,cwd 之外的根也有一份,要按仓库根再映射。
- * 按两边较大的算翻译不了的条数:哪边落实不了都得问人
- */
-export function treePolicy(policyOf: (cwd: string) => ExecPolicy, sessionCwd: string, runCwd: string, tops?: { session: string; run: string }): ExecPolicy {
-  const session = policyOf(sessionCwd)
-  if (runCwd === sessionCwd) return session
-  const tree = policyOf(runCwd)
-  const bases: [string, string][] = [[sessionCwd, runCwd], ...(tops ? [[tops.session, tops.run] as [string, string]] : [])]
-  const mapped = (roots: string[]) => roots.flatMap(r => {
-    const hit = bases.find(([from]) => isInside(r, from, process.platform))
-    return hit ? [join(hit[1], relative(hit[0], r))] : []
-  })
-  const both = (a: string[], b: string[]) => uniq([...a, ...b, ...mapped(a)])
-  return {
-    ...session,
-    ruleDenyRead: both(session.ruleDenyRead, tree.ruleDenyRead),
-    ruleDenyWrite: both(session.ruleDenyWrite, tree.ruleDenyWrite),
-    untranslatedRules: Math.max(session.untranslatedRules, tree.untranslatedRules),
-  }
 }
 
 /** 有 deny / ask 规则这次落实不了;隔离 none 时什么都没落实 */

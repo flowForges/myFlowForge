@@ -372,6 +372,14 @@ export function isolationOf(
   return gaps.length > 0 ? result('none', ...gaps) : result('own')
 }
 
+/** 只探登录。跑不起来、读不懂 → unknown,照跑 */
+export async function checkAuth(adapter: Adapter, file: string, deps: DetectDeps): Promise<ExecutorInfo['auth']> {
+  const login = await probe(deps, file, adapter.loginArgs, deps.env)
+  const parsed = login.code === null ? 'unknown' : adapter.parseLogin(login.out)
+  // 退出码说失败、文字说登录了:读不懂
+  return parsed === 'ok' && login.code !== 0 ? 'unknown' : parsed
+}
+
 export async function detectExecutor(adapter: Adapter, deps: DetectDeps): Promise<ExecutorInfo> {
   try {
     const config = deps.config()
@@ -388,11 +396,8 @@ export async function detectExecutor(adapter: Adapter, deps: DetectDeps): Promis
     if (v.code !== 0) return { ...absent(adapter.id, 'not_runnable'), path }
     const version = versionLine(v.stdout)
 
-    const login = await probe(deps, path, adapter.loginArgs, deps.env)
+    const auth = await checkAuth(adapter, path, deps)
     if (deps.signal?.aborted) return absent(adapter.id, 'cancelled')
-    const parsed = login.code === null ? 'unknown' : adapter.parseLogin(login.out)
-    // 退出码说失败、文字说登录了:读不懂
-    const auth = parsed === 'ok' && login.code !== 0 ? 'unknown' : parsed
 
     const missing: string[] = []
     if (adapter.isolationKind === 'translate' && !config.codex?.network && !(await selfTestPassed(adapter, path, key, deps))) missing.push(SELFTEST_FAILED)

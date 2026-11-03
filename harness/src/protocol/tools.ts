@@ -39,6 +39,8 @@ export const ApprovalRequestedPayloadSchema = z.object({
   callId: z.string(),
   tool: z.string(),
   summary: z.string(),
+  /** 本会话放行的键。没有 = allow_session 只算这一次,客户端不该提供那个选项 */
+  key: z.string().optional(),
   /** 这次不在隔离里跑:委派工具按这次运行的实际隔离,其他工具按会话的沙箱级别 none */
   unsandboxed: z.boolean().optional(),
 })

@@ -93,6 +93,8 @@ export interface BackgroundRuns {
   wait(turnId: string, signal: AbortSignal): Promise<void>
   /** 杀掉本轮所有运行;每个 run.ended 都写完才 resolve */
   abandon(turnId: string, reason?: string): Promise<void>
+  /** 所有轮;内核关闭时在 killLive 之前调,不再接受新运行 */
+  abandonAll?(reason?: string): Promise<void>
 }
 
 /** 工具在 permission / run 里用自己的 zod 校验参数;不合格 → 抛错(tools 服务把消息作为 isError 交给模型) */

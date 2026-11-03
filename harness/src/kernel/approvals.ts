@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { redact } from '../lib/tools/redact'
 import type { KernelEvent } from '../protocol/index'
 import { nullLogger, type Logger } from './log'
 
@@ -74,7 +75,7 @@ export class Approvals {
         this.opts.append({
           type: 'approval.requested',
           sessionId: req.sessionId,
-          payload: { approvalId, turnId: req.turnId, callId: req.callId, tool: req.tool, summary: req.summary, ...(req.unsandboxed === true && { unsandboxed: true }) },
+          payload: { approvalId, turnId: req.turnId, callId: req.callId, tool: req.tool, summary: req.summary, ...(req.key !== undefined && { key: redact(req.key) }), ...(req.unsandboxed === true && { unsandboxed: true }) },
         })
       } catch (err) {
         if (this.pending.delete(approvalId)) cleanup()

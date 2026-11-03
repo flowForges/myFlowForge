@@ -50,6 +50,8 @@ describe.skipIf(!E2E)('built daemon e2e', () => {
     const home = mkdtempSync(join(tmpdir(), 'mffai-e2e-home-'))
     const data = mkdtempSync(join(tmpdir(), 'mffai-e2e-data-'))
     temps.push(home, data)
+    // PATH 是真的:探测不能跑到机器上真的 codex、qodercli
+    writeFileSync(join(data, 'config.json'), JSON.stringify({ executors: { disabled: ['codex', 'qoder'] } }))
     const gitConfig = join(home, 'gitconfig')
     writeFileSync(gitConfig, '')
     const env: NodeJS.ProcessEnv = {

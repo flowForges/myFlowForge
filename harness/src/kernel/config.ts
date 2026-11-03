@@ -27,6 +27,8 @@ export const KernelConfigSchema = z.object({
   models: ModelsConfigSchema.default({ accounts: [] }),
   // 05 §6:宽松收下、原样保留,由 permissions.ts 单独解析 —— 规则写坏了也不能让整份配置被改名(会丢模型账号)
   permissions: z.unknown().optional(),
+  // 04 §9.1:同样宽松收下,由 executor-cli 解析;写坏了退回默认值并告警
+  executors: z.unknown().optional(),
 })
 export type KernelConfig = z.infer<typeof KernelConfigSchema>
 

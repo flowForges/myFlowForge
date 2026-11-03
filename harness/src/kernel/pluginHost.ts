@@ -45,7 +45,7 @@ export interface Plugin {
 }
 
 /** 插件可写的内核配置段:收紧为白名单 */
-export const CONFIG_SECTIONS: Record<string, (keyof KernelConfig)[]> = { 'models-registry': ['models'] }
+export const CONFIG_SECTIONS: Record<string, (keyof KernelConfig)[]> = { 'models-registry': ['models'], 'executor-cli': ['executors'] }
 
 export interface PluginConfigAccess {
   get(): KernelConfig

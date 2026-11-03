@@ -8,6 +8,9 @@ import { guarded, repoInfo, type Git, type RepoInfo } from './snapshot'
 /** 根下最多保留这么多个;不自动删,可能是用户要的 */
 export const MAX_WORKTREES = 20
 
+/** 数据目录在凭据黑名单里,worktree 必须放在它旁边,不能在里面 */
+export const worktreeRootOf = (dataDir: string) => `${dataDir}-worktrees`
+
 /** `.git` 文件只有一行路径,再大就不是 git 写的 */
 const GIT_FILE_MAX = 8192
 

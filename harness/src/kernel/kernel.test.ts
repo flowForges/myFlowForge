@@ -39,7 +39,26 @@ const waitFor = async (fn: () => boolean) => {
 
 describe('kernel', () => {
   it('builtin plugins in registration order', () => {
-    expect(BUILTIN_PLUGINS.map(p => p.manifest.id)).toEqual(['models-registry', 'model-openai', 'model-anthropic', 'model-chatgpt', 'tools-registry', 'tools-coding', 'loop-default', 'loop-direct', 'loop-echo'])
+    expect(BUILTIN_PLUGINS.map(p => p.manifest.id)).toEqual(['models-registry', 'model-openai', 'model-anthropic', 'model-chatgpt', 'tools-registry', 'tools-coding', 'executor-cli', 'loop-default', 'loop-direct', 'loop-echo'])
+  })
+
+  it('close aborts turns with the kernel_stopping reason', async () => {
+    let reason: unknown
+    const holder: Plugin = {
+      manifest: { id: 'holder', version: '0', kernel: '^0.1.0' },
+      activate(ctx) {
+        ctx.events.on('session.prompt', async ({ signal }: { signal: AbortSignal }) => {
+          await new Promise<void>(res => signal.addEventListener('abort', () => res(), { once: true }))
+          reason = signal.reason
+          return true
+        })
+      },
+    }
+    const k = await createKernel({ sandbox: NO_SANDBOX, dataDir: dir, plugins: [holder], secrets: { osBackend: false } })
+    const { sessionId } = (await k.handle('session.create', { commandId: 'c1' })) as { sessionId: string }
+    await k.handle('session.prompt', { commandId: 'c2', sessionId, text: 'hi' })
+    await k.close()
+    expect(reason).toBe('kernel_stopping')
   })
 
   it('create + prompt runs the echo turn in order', async () => {

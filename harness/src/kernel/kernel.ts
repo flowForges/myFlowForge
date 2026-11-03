@@ -31,8 +31,10 @@ import { killLive, pgidFile, PgidRegistry, type PgidEntry } from '../lib/proc/pg
 import { createSandboxService } from './sandbox'
 import { detectSandbox, type DetectResult } from '../lib/sandbox/detect'
 import { upstreamFromEnv, type LookupFn, type Upstream } from '../lib/sandbox/net/proxy'
-import type { Git } from '../lib/git/snapshot'
-import type { FollowUp, TurnInbox } from '../lib/tools/types'
+import { createGit, type Git } from '../lib/git/snapshot'
+import { worktreeRootOf } from '../lib/git/worktree'
+import type { BackgroundRuns, FollowUp, TurnInbox } from '../lib/tools/types'
+import { cleanRecoveredWorktrees, recoverRuns } from './runRecovery'
 import { HARNESS_VERSION } from './version'
 import { toWire } from './wire'
 
@@ -83,6 +85,8 @@ const ERR_INVALID_PARAMS = -32602
 const ERR_INTERNAL = -32603
 const CANCEL_GRACE_MS = 1000
 const APPROVAL_TIMEOUT_MS = 600_000
+/** 启动时等 git 删崩溃留下的 worktree 的上限;没删完的接着删,不挡启动 */
+const RECOVERY_WAIT_MS = 3_000
 
 type Turn = {
   turnId: string
@@ -111,6 +115,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   const services = new ServiceRegistry()
   const bus = new EventBus({ onError: (type, err) => log.error(`handler for ${type} failed`, { error: String(err) }) })
   bus.declare('session.prompt', 'bail')
+  bus.declare('config.changed', 'emit')
   const home = opts.home ?? homedir()
   const envSnapshot = snapshotEnv(opts.env ?? process.env, process.platform)
   const broad = overbroadRelocations(envSnapshot, home, process.platform)
@@ -146,6 +151,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
       const next = KernelConfigSchema.parse({ ...config, [section]: value })
       saveConfig(configFile, next) // 先落盘,成功后才换内存
       config = next
+      bus.emit('config.changed', { section, value: next[section] })
     },
   }
   // 规则写坏了只记进 errors,不影响启动,也不动 config.json(spec §6)
@@ -197,6 +203,24 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   const failTurn = (t: Turn, reason: string, extra?: Record<string, unknown>) => {
     if (t.ended) return
     append({ type: 'turn.failed', sessionId: t.sessionId, payload: { turnId: t.turnId, reason, ...extra } })
+  }
+
+  // 运行的崩溃恢复(04 §7.5)在 turn 之前:ended、notice 要排在 turn.failed interrupted 前面
+  const recovered = recoverRuns(eventLog.after(0), append)
+  if (recovered.length > 0) {
+    const tmpDir = join(opts.dataDir, 'tmp')
+    mkdirSync(tmpDir, { recursive: true })
+    const cleaning = cleanRecoveredWorktrees(recovered, {
+      root: worktreeRootOf(opts.dataDir),
+      git: so.git ?? createGit({ base: envSnapshot }),
+      tmpDir,
+      log,
+      cwdOf: sid => sessions.get(sid)?.cwd,
+      policyOf: (sid, cwd) => sandbox.execPolicy(sid, cwd),
+    })
+    let timer: ReturnType<typeof setTimeout> | undefined
+    await Promise.race([cleaning, new Promise<void>(r => { timer = setTimeout(r, RECOVERY_WAIT_MS) })])
+    clearTimeout(timer)
   }
 
   // 崩溃恢复:有开始痕迹却无终态的 turn 标记 interrupted,不重放(副作用不确定)
@@ -449,10 +473,13 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
       approvals.cancelAll() // 在关库之前:待决审批写完 resolved 再停
       // 中止进行中的 turn(模型流、工具、shell 进程树),等它们写完终态再关库;不等无限久
       const running = [...turns.values()]
-      for (const t of running) t.controller.abort()
-      if (running.length) {
+      for (const t of running) t.controller.abort('kernel_stopping')
+      // 委派的运行(04 §7.4):短梯在这里走完,要在 killLive 之前(它从 SIGTERM 开始,Codex 的命令活得过 SIGTERM)。
+      // 和 turn 共用一份预算:结束步骤里的 git 能卡 120 s,等不到的由下次启动的恢复补
+      const stopRuns = services.get<BackgroundRuns>('executors')?.abandonAll?.('kernel_stopping').catch(err => log.error('abandoning runs failed', { error: String(err) }))
+      if (running.length || stopRuns) {
         let timer: ReturnType<typeof setTimeout> | undefined
-        await Promise.race([Promise.all(running.map(t => t.settled)), new Promise<void>(r => { timer = setTimeout(r, CLOSE_GRACE_MS) })])
+        await Promise.race([Promise.all([...running.map(t => t.settled), stopRuns]), new Promise<void>(r => { timer = setTimeout(r, CLOSE_GRACE_MS) })])
         clearTimeout(timer)
       }
       // shell 留在后台的组(开发服务器等):无主进程比被杀更糟

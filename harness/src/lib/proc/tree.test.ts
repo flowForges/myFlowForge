@@ -129,6 +129,22 @@ describe('killLadder order', () => {
     expect(signals(s.log)).toEqual(['0 -4242 SIGINT', '1500 -4242 SIGTERM', '1500 5001 SIGTERM', '2300 -4242 SIGKILL', '2300 5001 SIGKILL'])
   })
 
+  it('fast turns true halfway (cancelled, then the kernel closes): the rest follows the short ladder from that moment', async () => {
+    const s = scripted()
+    let fast = false
+    const sleep = s.opts.sleep!
+    const opts = { ...s.opts, sleep: async (ms: number) => { await sleep(ms); if (s.opts.now!() >= 1000) fast = true } }
+    await killLadder(4242, { ...opts, owned: () => true, fast: () => fast })
+    // 1000 才变快:SIGINT 宽限到 min(3000, 1000+1500),SIGKILL 不晚于 1000+2500-200
+    expect(signals(s.log)).toEqual(['0 -4242 SIGINT', '2500 -4242 SIGTERM', '2500 5001 SIGTERM', '3300 -4242 SIGKILL', '3300 5001 SIGKILL'])
+  })
+
+  it('fast that never turns true keeps the long ladder', async () => {
+    const s = scripted()
+    await killLadder(4242, { ...s.opts, owned: () => true, fast: () => false })
+    expect(signals(s.log)).toEqual(['0 -4242 SIGINT', '3000 -4242 SIGTERM', '3000 5001 SIGTERM', '4800 -4242 SIGKILL', '4800 5001 SIGKILL'])
+  })
+
   it('stops as soon as the group and the snapshot are gone', async () => {
     const s = scripted({ procTable: () => [row(4242, 1)], alive: () => false })
     const res = await killLadder(4242, { ...s.opts, owned: () => true })

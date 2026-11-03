@@ -4,8 +4,11 @@ import { descendants, resolveDeps, signalGroup, signalMembers, treeMembers, veri
 export { descendants }
 
 export interface LadderOpts extends Omit<ProcDeps, 'seed' | 'refreshMs' | 'listMembers'> {
-  /** 内核关闭:1.5 s + 1 s;否则 3 s + 2 s */
-  fast?: boolean
+  /**
+   * 内核关闭:1.5 s + 1 s;否则 3 s + 2 s。函数每一拍都看:走到一半才变 true(刚取消就关内核)时,
+   * 从那一刻起按短梯算,不会比原来的期限晚
+   */
+  fast?: boolean | (() => boolean)
   /** 组长的组还在吗 */
   alive: () => boolean
   /** 组长是我们还没回收的子进程:pid 不可能被复用,读不了进程表也能发组信号 */
@@ -87,11 +90,11 @@ export async function killLadder(pid: number, o: LadderOpts): Promise<LadderResu
     return { rows, ours }
   }
   const gone = () => !o.alive() && ![...known.keys()].some(p => pidExists(p, r))
-  /** 等到都没了(true)或到点(false) */
-  const waitGone = async (until: number) => {
-    while (now() < until) {
+  /** 等到都没了(true)或到点(false);期限可能中途提前 */
+  const waitGone = async (until: () => number) => {
+    while (now() < until()) {
       if (gone()) return true
-      await sleep(Math.min(POLL_MS, until - now()))
+      await sleep(Math.max(0, Math.min(POLL_MS, until() - now())))
     }
     return gone()
   }
@@ -103,14 +106,20 @@ export async function killLadder(pid: number, o: LadderOpts): Promise<LadderResu
   }
 
   const t0 = now()
-  const [intMs, totalMs] = o.fast ? [1500, 2500] : [3000, 5000]
+  const isFast = () => (typeof o.fast === 'function' ? o.fast() : o.fast === true)
+  let hurriedAt = isFast() ? t0 : undefined
+  const deadline = (slowMs: number, fastMs: number) => () => {
+    if (hurriedAt === undefined && isFast()) hurriedAt = now()
+    return hurriedAt === undefined ? t0 + slowMs : Math.min(t0 + slowMs, hurriedAt + fastMs)
+  }
   const s = send('SIGINT', false)
   if (!known.size && !s.ours) return { gone: !o.alive() }
-  if (await waitGone(t0 + intMs)) return { gone: true }
+  if (await waitGone(deadline(3000, 1500))) return { gone: true }
   send('SIGTERM', true)
-  if (await waitGone(t0 + totalMs - SNAPSHOT_MS)) return { gone: true }
+  if (await waitGone(deadline(5000 - SNAPSHOT_MS, 2500 - SNAPSHOT_MS))) return { gone: true }
   send('SIGKILL', true)
-  if (await waitGone(now() + CONFIRM_MS)) return { gone: true }
+  const confirmBy = now() + CONFIRM_MS
+  if (await waitGone(() => confirmBy)) return { gone: true }
   snapshot() // 只为去掉已被复用的 pid:它们不算没杀掉
   return { gone: gone() }
 }

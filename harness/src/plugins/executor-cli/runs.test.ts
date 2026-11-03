@@ -472,11 +472,16 @@ describe('review fixes', () => {
       expect(notice).toContain('isolation=own')
     })
 
-    it('still none, approved as none: permissions are re-evaluated and it runs', async () => {
+    it('still none, approved as none: the person approved another file, so it fails and the retry asks again; with no approval it stays denied', async () => {
       const fake = freshFake({ lines: CODEX_OK })
-      const rig = setup([fake], { infos: { codex: { missing: ['codex_selftest'] } }, deps: { redetect: async id => fresh(fake, id, { missing: ['codex_selftest'] }) } })
+      const rig = setup([fake], { config: { maxPerTurn: 1 }, infos: { codex: { missing: ['codex_selftest'] } }, deps: { redetect: async id => fresh(fake, id, { missing: ['codex_selftest'] }) } })
       touchLater(fake.file)
-      expect((await one(rig, { isolation: 'none', asked: true })).end.status).toBe('ok')
+      const { end, notice } = await one(rig, { isolation: 'none', asked: true })
+      expect(end).toMatchObject({ status: 'failed', reason: 'untrusted_binary' })
+      expect(notice).toContain('ask for approval')
+      expect(fake.calls()).toEqual([])
+      expect(rig.manager.submit(input({ readOnly: true, turnId: 't1' }))).not.toHaveProperty('failure')
+      await drain(rig)
       touchLater(fake.file)
       const unasked = setup([fake], { infos: { codex: { binaryKey: 'stale', missing: ['codex_selftest'] } }, deps: { redetect: async id => fresh(fake, id, { missing: ['codex_selftest'] }) } })
       expect((await one(unasked, { isolation: 'none', asked: false, turnId: 't9' })).end).toMatchObject({ status: 'failed', reason: 'denied' })

@@ -209,10 +209,14 @@ export function runCli(plan: CliPlan, o: CliOpts): Promise<CliResult> {
       stopTimers()
       const pid = child.pid!
       const selfExited = exited
-      let fast = false
-      quietly(() => {
-        fast = o.fast?.() === true
-      })
+      /** 每一拍都看:取消之后内核才开始关的,也要换短梯 */
+      const fast = () => {
+        let hurry = false
+        quietly(() => {
+          hurry = o.fast?.() === true
+        })
+        return hurry
+      }
       void (async () => {
         let gone = false
         try {
