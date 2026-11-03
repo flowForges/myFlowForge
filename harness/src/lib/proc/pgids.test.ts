@@ -3,7 +3,8 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { bootId, groupMembers, killLive, ownPgid, parseEntries, PgidRegistry, reapOrphans, startTime, type Kill, type ProcDeps } from './pgids'
+import { cleanupFakes, installFake, trackPid } from '../../../test/fakeCli'
+import { bootId, groupMembers, killLive, ownPgid, parseEntries, PgidRegistry, reapOrphans, startTime, startTimes, type Kill, type ProcDeps } from './pgids'
 
 const posix = process.platform === 'linux' || process.platform === 'darwin'
 
@@ -75,6 +76,7 @@ afterEach(async () => {
     // 继续清理
   }
   registries = []
+  cleanupFakes()
   // 还没被回收的子进程 pid 不会被复用,它自成的组也还是它的
   for (const { c, detached } of children) {
     if (exited(c) || !c.pid) continue
@@ -408,6 +410,115 @@ describe('review fixes', () => {
     writeFileSync(join(dir, 'other.tmp'), 'x')
     reapOrphans(file, { platform: 'linux', ...fake().deps })
     expect(readdirSync(dir).sort()).toEqual(['other.tmp', 'shell-pgids'])
+  })
+})
+
+describe('reapOrphans walks the process tree (04 Review Focus 1)', () => {
+  const line = (e: object) => JSON.stringify(e) + '\n'
+
+  it.skipIf(!posix)('a registered, still-alive stubborn tree (simulated crash): the own-session grandchild dies too', async () => {
+    const fake = installFake({ stubborn: true })
+    const c = spawn(fake.file, [], { detached: true, stdio: 'ignore', env: { PATH: process.env.PATH } })
+    trackPid(c.pid!)
+    children.push({ c, detached: true })
+    const grandchild = await fake.waitPid('grandchild')
+    const reg = newReg(file)
+    reg.add(c.pid!) // 工作进程登记后崩溃:不 settle、不 killLive
+    const res = reapOrphans(file)
+    expect(res).toMatchObject({ killed: [c.pid], skipped: [] })
+    expect(await waitFor(() => !alive(grandchild), 2000)).toBe(true)
+    expect(await waitFor(() => exited(c), 2000)).toBe(true)
+    cleanupFakes()
+  }, 10_000)
+
+  const fakeDeps = (log: string[], over: ProcDeps = {}): ProcDeps => ({
+    kill: (pid, sig) => void (sig !== 0 && log.push(`kill ${pid}`)),
+    startTime: () => 'S',
+    groupMembers: () => [],
+    ownPgid: () => 4242,
+    bootId: () => 'B',
+    descendants: root => {
+      log.push(`walk ${root}`)
+      return root === 777 ? [801, 802] : []
+    },
+    ...over,
+  })
+
+  it('snapshot first, then the group, then each snapshot pid', () => {
+    const f = join(root, 'f')
+    writeEntries(f, line({ pgid: 777, start: 'S', boot: 'B' }))
+    const log: string[] = []
+    reapOrphans(f, { platform: 'linux', ...fakeDeps(log) })
+    expect(log).toEqual(['walk 777', 'kill -777', 'kill 801', 'kill 802'])
+  })
+
+  it('a snapshot pid whose start time changes before the kill (reused) is not signalled', () => {
+    const f = join(root, 'f')
+    writeEntries(f, line({ pgid: 777, start: 'S', boot: 'B' }))
+    const log: string[] = []
+    let n = 0
+    reapOrphans(f, { platform: 'linux', ...fakeDeps(log, { startTime: pid => (pid === 801 && n++ > 0 ? 'NEW' : 'S') }) })
+    expect(log.filter(l => l.startsWith('kill'))).toEqual(['kill -777', 'kill 802'])
+  })
+
+  it('leader already gone: walks from the group members too', () => {
+    const f = join(root, 'f')
+    writeEntries(f, line({ pgid: 777, start: 'S', boot: 'B', members: [{ pid: 790, start: 'M' }] }))
+    const log: string[] = []
+    reapOrphans(f, {
+      platform: 'linux',
+      ...fakeDeps(log, {
+        startTime: pid => (pid === 777 ? undefined : 'T'),
+        groupMembers: () => [{ pid: 790, start: 'M' }],
+        descendants: r => (r === 790 ? [803] : []),
+      }),
+    })
+    expect(log).toEqual(['kill -777', 'kill 803'])
+  })
+
+  it('not ours, or unverifiable: never walked, nothing signalled', () => {
+    const f = join(root, 'f')
+    writeEntries(f, line({ pgid: 777, start: 'OLD', boot: 'B' }) + line({ pgid: 778, start: 'S', boot: 'OTHER' }))
+    const log: string[] = []
+    reapOrphans(f, { platform: 'linux', ...fakeDeps(log) })
+    expect(log).toEqual([])
+  })
+
+  it('own group unknown: never walked, nothing signalled', () => {
+    const f = join(root, 'f')
+    writeEntries(f, line({ pgid: 777, start: 'S', boot: 'B' }))
+    const log: string[] = []
+    reapOrphans(f, { platform: 'linux', ...fakeDeps(log, { ownPgid: () => undefined }) })
+    expect(log).toEqual([])
+  })
+
+  it('a descendants walk that throws does not stop the group kill', () => {
+    const f = join(root, 'f')
+    writeEntries(f, line({ pgid: 777, start: 'S', boot: 'B' }))
+    const log: string[] = []
+    const res = reapOrphans(f, { platform: 'linux', ...fakeDeps(log, { descendants: () => { throw new Error('ps') } }) })
+    expect(res.killed).toEqual([777])
+    expect(log).toEqual(['kill -777'])
+  })
+
+  it('with an injected kill and no injected descendants, the real process table is not read', () => {
+    const f = join(root, 'f')
+    writeEntries(f, line({ pgid: process.ppid, start: 'S', boot: 'B' }))
+    const log: string[] = []
+    const { descendants: _unused, ...rest } = fakeDeps(log)
+    reapOrphans(f, { platform: 'linux', ...rest })
+    expect(log).toEqual([`kill -${process.ppid}`])
+  })
+
+  it.skipIf(!posix)('startTimes agrees with startTime and leaves out dead pids', async () => {
+    const c = spawnGroup('exit 0')
+    await waitFor(() => exited(c))
+    const m = startTimes([process.pid, process.ppid, c.pid!])
+    expect(m.get(process.pid)).toBe(startTime(process.pid))
+    expect(m.get(process.ppid)).toBe(startTime(process.ppid))
+    expect(m.has(c.pid!)).toBe(false)
+    expect(startTimes([c.pid!]).size).toBe(0)
+    expect(startTimes([]).size).toBe(0)
   })
 })
 

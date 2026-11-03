@@ -37,6 +37,10 @@ export interface ProcDeps {
   ownPgid?: () => number | undefined
   /** 本次开机的标识;Linux 必须有,其余平台不用 */
   bootId?: () => string | undefined
+  /** 一次查多个 pid 的启动时间;没给时用 startTime(注入了的话)或一次 ps。抛错 = 这次查不了 */
+  startTimes?: (pids: number[]) => Map<number, string>
+  /** 进程树的后代;注入了 kill 而没给它 → 不读真实进程表(假 pid 不该碰真进程) */
+  descendants?: typeof descendants
   /** PgidRegistry:起始条目(reapOrphans 这次认不了、留到下次的),第一次写文件时一并写回 */
   seed?: PgidEntry[]
   /** 命令跑着时多久刷新一次组员,默认 2 s */
@@ -49,6 +53,7 @@ const MAX_MEMBERS = 32
 const REFRESH_MS = 2_000
 const PS = '/bin/ps'
 const PS_TIMEOUT = 2_000
+const PS_TREE_TIMEOUT = 3_000
 const PS_OPTS = { env: { LC_ALL: 'C' }, timeout: PS_TIMEOUT, stdio: ['ignore', 'pipe', 'ignore'] as ('ignore' | 'pipe')[] }
 const nullLog: PgidLog = { warn() {} }
 
@@ -89,6 +94,66 @@ export function startTime(pid: number, platform: NodeJS.Platform = process.platf
   } catch {
     return undefined
   }
+}
+
+/** 多个 pid 的启动时间,格式同 startTime;不在的不进结果。查不了 → 抛错。darwin 一次 ps,不随 pid 数量多跑 */
+export function startTimes(pids: number[], platform: NodeJS.Platform = process.platform): Map<number, string> {
+  const out = new Map<number, string>()
+  if (!pids.length) return out
+  if (platform === 'linux') {
+    for (const p of pids) {
+      const s = procStat(p)?.[19]
+      if (s) out.set(p, s)
+    }
+  } else if (platform === 'darwin') {
+    let text: string
+    try {
+      text = execFileSync(PS, ['-o', 'pid=,lstart=', '-p', pids.join(',')], PS_OPTS).toString()
+    } catch (err) {
+      const e = err as { status?: number | null; stdout?: Buffer }
+      if (e.status === 1 && !e.stdout?.toString().trim()) return out // 全都不在
+      throw err
+    }
+    for (const line of text.split('\n')) {
+      const m = /^\s*(\d+)\s+(.+?)\s*$/.exec(line)
+      if (m) out.set(Number(m[1]), m[2])
+    }
+  }
+  return out
+}
+
+/**
+ * root 的所有后代(不含 root)。ps 失败 → []。root ≤ 1 → []:从 init 往下就是全机。
+ * 只说明"此刻 ppid 链通到 root":调用方要先证明 root 是自己的,发信号前还要再比启动时间(signalMembers)
+ */
+export function descendants(root: number, ps: () => string = psTree): number[] {
+  if (!validPgid(root)) return []
+  try {
+    const kids = new Map<number, number[]>()
+    for (const line of ps().split('\n')) {
+      const m = /^\s*(\d+)\s+(\d+)\s*$/.exec(line)
+      if (!m) continue
+      const list = kids.get(Number(m[2]))
+      if (list) list.push(Number(m[1]))
+      else kids.set(Number(m[2]), [Number(m[1])])
+    }
+    const out = new Set<number>()
+    const todo = [root]
+    while (todo.length) {
+      for (const k of kids.get(todo.pop()!) ?? []) {
+        if (k === root || out.has(k)) continue
+        out.add(k)
+        todo.push(k)
+      }
+    }
+    return [...out]
+  } catch {
+    return []
+  }
+}
+
+function psTree(): string {
+  return execFileSync(PS, ['-Ao', 'pid=,ppid='], { ...PS_OPTS, timeout: PS_TREE_TIMEOUT }).toString()
 }
 
 function scanProc(wanted: Set<number>): Map<number, Member[]> {
@@ -173,7 +238,7 @@ export function bootId(platform: NodeJS.Platform = process.platform): string | u
   }
 }
 
-interface Resolved {
+export interface Resolved {
   platform: NodeJS.Platform
   kill: Kill
   startTime: (pid: number) => string | undefined
@@ -181,6 +246,8 @@ interface Resolved {
   listMembers: (pgids: number[]) => Promise<Map<number, Member[]> | undefined>
   ownPgid: () => number | undefined
   bootId: () => string | undefined
+  startTimes: (pids: number[]) => Map<number, string>
+  descendants: (root: number) => number[]
   refreshMs: number
   log: PgidLog
 }
@@ -190,7 +257,8 @@ const once = <T>(fn: () => T): (() => T) => {
   return () => (v ??= { v: fn() }).v
 }
 
-function resolve(platform: NodeJS.Platform, d: ProcDeps): Resolved {
+export function resolveDeps(platform: NodeJS.Platform, d: ProcDeps): Resolved {
+  const one = d.startTime
   return {
     platform,
     kill: d.kill ?? ((pid, sig) => process.kill(pid, sig)),
@@ -199,6 +267,12 @@ function resolve(platform: NodeJS.Platform, d: ProcDeps): Resolved {
     listMembers: d.listMembers ?? (pgids => listMembers(pgids, platform)),
     ownPgid: once(d.ownPgid ?? (() => ownPgid(platform))),
     bootId: once(d.bootId ?? (() => bootId(platform))),
+    startTimes:
+      d.startTimes ??
+      (one
+        ? pids => new Map(pids.flatMap(p => { const s = one(p); return s === undefined ? [] : [[p, s] as const] }))
+        : pids => startTimes(pids, platform)),
+    descendants: root => (d.descendants ?? (d.kill ? () => [] : descendants))(root),
     refreshMs: d.refreshMs ?? REFRESH_MS,
     log: d.log ?? nullLog,
   }
@@ -207,7 +281,7 @@ function resolve(platform: NodeJS.Platform, d: ProcDeps): Resolved {
 const validPgid = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v > 1
 
 /** 组还在吗;EPERM 也算在(组存在,只是不归我们) */
-function groupExists(pgid: number, kill: Kill): boolean {
+export function groupExists(pgid: number, kill: Kill): boolean {
   try {
     kill(-pgid, 0)
     return true
@@ -225,7 +299,7 @@ type Verdict = 'ours' | 'not' | 'unknown'
  * 组长已死:组里得有一个登记过的组员,pid 与启动时间都对得上(setpgid 只能在同一会话里换组)。
  * 查的过程中出错 → unknown(不杀,条目留到下次)。
  */
-function verify(e: PgidEntry, r: Resolved): Verdict {
+export function verify(e: PgidEntry, r: Resolved): Verdict {
   try {
     if (r.platform === 'linux') {
       const boot = r.bootId()
@@ -242,8 +316,8 @@ function verify(e: PgidEntry, r: Resolved): Verdict {
   }
 }
 
-/** 唯一发信号的地方:不碰 pid ≤ 1、本进程、本进程所在的组;拿不到本组 id 时一律不发 */
-function signalGroup(pgid: number, sig: NodeJS.Signals, r: Resolved): boolean {
+/** 给组发信号的唯一入口:不碰 pid ≤ 1、本进程、本进程所在的组;拿不到本组 id 时一律不发 */
+export function signalGroup(pgid: number, sig: NodeJS.Signals, r: Resolved): boolean {
   const own = r.ownPgid()
   if (!validPgid(pgid) || pgid === process.pid || own === undefined || pgid === own) return false
   try {
@@ -251,6 +325,44 @@ function signalGroup(pgid: number, sig: NodeJS.Signals, r: Resolved): boolean {
     return true
   } catch {
     return false
+  }
+}
+
+/** 这些根的后代连同启动时间(动手之前拍:父进程一死 ppid 链就断)。根必须已证明是自己的;查不了 → 有多少算多少 */
+export function treeMembers(roots: number[], r: Resolved): Member[] {
+  const pids = new Set<number>()
+  try {
+    for (const root of roots.slice(0, MAX_MEMBERS + 1)) for (const p of r.descendants(root)) if (validPgid(p) && p !== process.pid) pids.add(p)
+    const starts = r.startTimes([...pids])
+    return [...starts].map(([pid, start]) => ({ pid, start }))
+  } catch (err) {
+    r.log.warn('process tree snapshot failed', { error: String(err) })
+    return []
+  }
+}
+
+/**
+ * 给快照里的单个进程发信号:发之前再比一次启动时间,对不上(pid 被复用)或查不了都不发。
+ * 同样不碰 pid ≤ 1、本进程、本进程所在的组。
+ */
+export function signalMembers(members: Member[], sig: NodeJS.Signals, r: Resolved): void {
+  const own = r.ownPgid()
+  const safe = members.filter(m => validPgid(m.pid) && m.pid !== process.pid && own !== undefined && m.pid !== own)
+  if (!safe.length) return
+  let now: Map<number, string>
+  try {
+    now = r.startTimes(safe.map(m => m.pid))
+  } catch (err) {
+    r.log.warn('process start time unavailable, not signalled', { error: String(err) })
+    return
+  }
+  for (const m of safe) {
+    if (now.get(m.pid) !== m.start) continue
+    try {
+      r.kill(m.pid, sig)
+    } catch {
+      // 刚好退了
+    }
   }
 }
 
@@ -346,7 +458,7 @@ export class PgidRegistry {
     private platform: NodeJS.Platform = process.platform,
     deps: ProcDeps = {},
   ) {
-    this.r = resolve(platform, deps)
+    this.r = resolveDeps(platform, deps)
     for (const e of deps.seed ?? []) if (validPgid(e.pgid)) this.entries.set(e.pgid, e)
   }
 
@@ -476,7 +588,7 @@ export class PgidRegistry {
 }
 
 /**
- * 工作进程启动时(内核建好之前)处理上一个工作进程留下的组(spec §12):能证明是自己的 → SIGKILL 整组;
+ * 工作进程启动时(内核建好之前)处理上一个工作进程留下的组(spec §12):能证明是自己的 → 先拍后代快照,SIGKILL 整组,再杀快照里还是原进程的;
  * pid 被复用 / 别的开机 / 认不出 → 跳过并丢掉;这次查不了(ps 失败等)→ 跳过并留到下次。
  * 文件不在、不是本用户 0600 的普通文件 → 什么都不做。
  */
@@ -487,9 +599,20 @@ export interface ReapResult {
   kept: PgidEntry[]
 }
 
+/** 从组长和现有组员往下走(组长可能已经不在了)。pgid 必须已证明是自己的 */
+function groupTree(pgid: number, r: Resolved): Member[] {
+  let members: Member[] = []
+  try {
+    members = r.groupMembers(pgid)
+  } catch {
+    // 只从组长走
+  }
+  return treeMembers([pgid, ...members.map(m => m.pid)], r)
+}
+
 export function reapOrphans(file: string, opts: ProcDeps & { platform?: NodeJS.Platform } = {}): ReapResult {
   const platform = opts.platform ?? process.platform
-  const r = resolve(platform, opts)
+  const r = resolveDeps(platform, opts)
   const keep: PgidEntry[] = []
   const res: ReapResult = { killed: [], skipped: [], kept: keep }
   if (platform === 'win32') return res
@@ -506,8 +629,12 @@ export function reapOrphans(file: string, opts: ProcDeps & { platform?: NodeJS.P
     for (const e of parseEntries(text)) {
       if (!groupExists(e.pgid, r.kill)) continue
       const v = verify(e, r)
-      if (v === 'ours' && signalGroup(e.pgid, 'SIGKILL', r)) res.killed.push(e.pgid)
-      else {
+      // 后代自成一组时组信号碰不到它们;认过的组才去看进程树。快照在杀组之前:父进程一死 ppid 链就断
+      const tree = v === 'ours' && r.ownPgid() !== undefined ? groupTree(e.pgid, r) : []
+      if (v === 'ours' && signalGroup(e.pgid, 'SIGKILL', r)) {
+        res.killed.push(e.pgid)
+        signalMembers(tree, 'SIGKILL', r)
+      } else {
         res.skipped.push(e.pgid)
         if (v === 'unknown' || (v === 'ours' && r.ownPgid() === undefined)) keep.push(e)
       }
