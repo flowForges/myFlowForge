@@ -272,7 +272,7 @@ describe('04 schemas', () => {
     expect(ExecutorRunEndedPayloadSchema.safeParse({ ...ended, status: 'done' }).success).toBe(false)
     for (const reason of [
       'not_installed', 'auth_missing', 'quota', 'spawn_failed', 'exit_nonzero', 'cli_error', 'no_result', 'timeout', 'stalled', 'cancelled',
-      'kernel_stopping', 'daemon_restart', 'sandbox_unavailable', 'worktree_unavailable', 'worktree_limit', 'queue_full', 'too_many_runs', 'denied', 'untrusted_binary',
+      'kernel_stopping', 'daemon_restart', 'sandbox_unavailable', 'worktree_unavailable', 'worktree_limit', 'queue_full', 'too_many_runs', 'denied', 'untrusted_binary', 'kill_failed',
     ]) expect(ExecutorRunEndedPayloadSchema.safeParse({ ...ended, status: 'failed', reason }).success).toBe(true)
     expect(ExecutorRunEndedPayloadSchema.safeParse({ ...ended, status: 'failed', reason: 'because' }).success).toBe(false)
   })

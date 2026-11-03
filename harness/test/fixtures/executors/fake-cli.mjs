@@ -11,6 +11,7 @@
 //   writeFiles {相对 cwd 的路径: 内容}、deleteFiles [路径]
 //   run:用 /bin/sh -c 跑这段脚本,把读到的 stdin 交给它,输出直通,脚本的退出码就是假 CLI 的退出码(验沙箱里 CLI 能做什么)
 //   lines [字符串 | {line, delayMs}]、flood(行数)、stderr(字符串 | 字符串数组)、sleep(ms)、exit(退出码)
+//   floodLine:flood 每行的内容,`#` 换成序号;bigLine {bytes, text}:一行 bytes 字节的 x,开头是 text
 //   forwarding:起一个自成一会话的 sleep 300。SIGINT → 杀掉它再退;SIGTERM → 只有自己退,它活下来(实测的 Codex)
 //   stubborn:忽略 SIGINT / SIGTERM,再起一个同样忽略两者、自成一会话的孙进程
 //   grandchild:只起那个孙进程,自己不忽略信号(SIGINT 一到就死,ppid 链随之断开,像 node 包装层)
@@ -109,7 +110,7 @@ async function main() {
       argv,
       stdin,
       envNames: Object.keys(process.env).sort(),
-      env: pick(['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy', 'TMPDIR', 'CODEX_HOME']),
+      env: pick(['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy', 'TMPDIR', 'CODEX_HOME', 'PATH', 'TERM', 'LANG', 'USER']),
       cwd: process.cwd(),
     })
 
@@ -177,7 +178,8 @@ async function main() {
     if (delayMs) await pause(delayMs)
     await write(process.stdout, line + '\n')
   }
-  for (let i = 0; i < (sc.flood ?? 0); i++) await write(process.stdout, `{"flood":${i}}\n`)
+  for (let i = 0; i < (sc.flood ?? 0); i++) await write(process.stdout, `${sc.floodLine ? sc.floodLine.replace('#', String(i)) : `{"flood":${i}}`}\n`)
+  if (sc.bigLine) await write(process.stdout, `${sc.bigLine.text ?? ''}${'x'.repeat(sc.bigLine.bytes)}\n`)
   for (const line of [sc.stderr ?? []].flat()) await write(process.stderr, line + '\n')
 
   if (sc.sleep) await pause(sc.sleep)

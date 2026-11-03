@@ -8,7 +8,7 @@ import { literalRoots, parseRule, type Effect, type MatchCtx, type Rule } from '
 import type { ExecPolicy, PermissionRequest } from '../../lib/tools/types'
 import type { ExecutorIsolation } from '../../protocol/tools'
 import { codexAdapter } from './adapters/codex'
-import { checkViolations, mustAsk, translate } from './policy'
+import { checkViolations, mustAsk, protectDirs, translate, treePolicy } from './policy'
 
 let root: string
 let cwd: string
@@ -254,5 +254,69 @@ describe('checkViolations', () => {
     ]])
     expect(checkViolations(gate, 's1', [], cwd)).toEqual([])
     expect(seen).toHaveLength(1)
+  })
+})
+
+describe('protectDirs (Tasks 6, 7)', () => {
+  const opts = (over: Partial<Parameters<typeof protectDirs>[0]> = {}) => ({
+    kind: 'wrap' as const, pathDirs: [], binary: [], cwd: '/w/repo', keepWritable: ['/w/repo', '/d/spill', '/h/.qoder/logs'], platform: 'linux' as const, ...over,
+  })
+
+  it('wrapped: every PATH dir, except one holding a path that has to stay writable, and /', () => {
+    const got = protectDirs(opts({ pathDirs: ['/', '/w', '/w/repo', '/d', '/h', '/h/.qoder', '/h/.qoder/logs', '/usr/bin', '/h/.bun/bin', '/w/repo/bin'], binary: ['/opt/x'] }))
+    expect(got).toEqual(['/usr/bin', '/h/.bun/bin', '/w/repo/bin', '/opt/x'])
+  })
+
+  it('the binary dirs are filtered the same way: a program in the session cwd\'s parent can\'t freeze cwd', () => {
+    expect(protectDirs(opts({ binary: ['/w', '/opt/x'] }))).toEqual(['/opt/x'])
+  })
+
+  it('Codex: only dirs inside cwd need a read entry, the root is read-only anyway; the binary dirs stay', () => {
+    const got = protectDirs(opts({ kind: 'translate', pathDirs: ['/usr/bin', '/w/repo/bin', '/w/repo/a/b'], binary: ['/opt/x'] }))
+    expect(got).toEqual(['/w/repo/bin', '/w/repo/a/b', '/opt/x'])
+  })
+
+  it('de-duplicates', () => {
+    expect(protectDirs(opts({ pathDirs: ['/a', '/a'], binary: ['/a'] }))).toEqual(['/a'])
+  })
+
+  it('compares realpath spellings too: a link to the parent of cwd still holds cwd', () => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'mffai-protect-')))
+    try {
+      const cwd = join(base, 'parent', 'repo')
+      mkdirSync(cwd, { recursive: true })
+      const link = join(base, 'link')
+      symlinkSync(join(base, 'parent'), link)
+      expect(protectDirs(opts({ pathDirs: [link], cwd, keepWritable: [cwd], platform: process.platform }))).toEqual([])
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('treePolicy: rule roots in a worktree (Task 6 review)', () => {
+  const policyOf = (cwd: string): ExecPolicy => ({
+    denyRead: ['/cred'], persistence: [], dataDir: '/d', level: 'full',
+    // deny read(hidden/**) 按 cwd 解析;deny read(/repo/abs/**) 是绝对路径,两棵树下都是同一个根
+    ruleDenyRead: [`${cwd}/hidden`, '/repo/abs', '/elsewhere'],
+    ruleDenyWrite: [`${cwd}/gen`],
+    untranslatedRules: cwd === '/repo' ? 1 : 0,
+    totalRules: 3,
+  })
+
+  it('in place: the session\'s policy, unchanged', () => {
+    expect(treePolicy(policyOf, '/repo', '/repo')).toEqual(policyOf('/repo'))
+  })
+
+  it('in a worktree: both trees are covered, and an absolute root inside the session maps onto the worktree', () => {
+    const p = treePolicy(policyOf, '/repo', '/wt/run_a')
+    expect(p.ruleDenyRead.sort()).toEqual(['/elsewhere', '/repo/abs', '/repo/hidden', '/wt/run_a/abs', '/wt/run_a/hidden'].sort())
+    expect(p.ruleDenyWrite.sort()).toEqual(['/repo/gen', '/wt/run_a/gen'].sort())
+    expect(p.denyRead).toEqual(['/cred'])
+  })
+
+  it('the larger untranslated count wins: a rule one tree can\'t translate still has to ask', () => {
+    expect(treePolicy(policyOf, '/repo', '/wt/run_a').untranslatedRules).toBe(1)
+    expect(treePolicy(cwd => ({ ...policyOf(cwd), untranslatedRules: cwd === '/repo' ? 0 : 2 }), '/repo', '/wt/run_a').untranslatedRules).toBe(2)
   })
 })

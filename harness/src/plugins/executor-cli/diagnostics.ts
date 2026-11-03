@@ -32,7 +32,15 @@ export interface Diagnostic {
   worktree?: string
   stderrTail?: string
   final?: string
+  /** 要杀但进程还在 */
+  killFailed?: boolean
+  /** 运行结束时还留着的进程;它们之后改的文件不在 changed 里 */
+  leftovers?: 'kept' | 'killed'
 }
+
+/** 这次运行的打码表(RunRedactor.mask);要在清掉控制字符之后、截断之前用 */
+export type Mask = (s: string) => string
+const noMask: Mask = s => s
 
 /** 留头留尾。尾部多留:结论通常在最后。不切开代理对 */
 export function clip(s: string, max: number): string {
@@ -65,15 +73,15 @@ const LINE_BREAK = /\r\n?|[\u000b\u000c\u0085\u2028\u2029]/g
 // eslint-disable-next-line no-control-regex
 const INVISIBLE = /[\u0000-\u0008\u000e-\u001f\u007f-\u009f\p{Cf}\p{Default_Ignorable_Code_Point}]/gu
 
-const cleanText = (s: string) => s.replace(TERMINAL_ESCAPE, '').replace(LINE_BREAK, '\n').replace(INVISIBLE, '')
+export const cleanText = (s: string) => s.replace(TERMINAL_ESCAPE, '').replace(LINE_BREAK, '\n').replace(INVISIBLE, '')
 
 /**
  * 自由文本:先清控制字符再打码,被转义序列隔开的密钥清完才认得出;打码在截断之前,否则
  * 半个密钥认不出、截掉 BEGIN 的 PEM 也认不出;后续行缩进,顶格的行只会是九个字段。
  */
-function freeText(s: string | undefined, max: number): string {
+function freeText(s: string | undefined, max: number, mask: Mask): string {
   if (!s) return '-'
-  const out = clip(redact(cleanText(s)), max).trimEnd()
+  const out = clip(mask(redact(cleanText(s))), max).trimEnd()
   return out === '' ? '-' : out.replace(/\n/g, '\n  ')
 }
 
@@ -87,20 +95,20 @@ const unicodeEscape = (c: string) => [...Array(c.length).keys()].map(i => `\\u${
  * 文件名与路径:能假冒一行、一个列表项或"空"的,写成 JSON。
  * 名字要原样给出,所以只在清过之后才认得出密钥时才用清过的版本
  */
-function nameText(raw: string, max: number): string {
+function nameText(raw: string, max: number, mask: Mask): string {
   const clean = cleanText(raw)
-  const masked = redact(clean)
+  const masked = mask(redact(clean))
   const name = clip(masked !== clean ? masked : raw, max)
   if (!JSON_ONLY.test(name)) return name
   return JSON.stringify(name).replace(JSON_EXTRA, unicodeEscape)
 }
 
-function nameList(names: string[] | undefined): string {
+function nameList(names: string[] | undefined, mask: Mask): string {
   if (!names || names.length === 0) return '-'
   const shown: string[] = []
   let used = 0
   for (const n of names) {
-    const t = nameText(n, NAME_MAX)
+    const t = nameText(n, NAME_MAX, mask)
     if (shown.length > 0 && used + t.length > LIST_MAX) break
     shown.push(t)
     used += t.length + 2
@@ -110,27 +118,36 @@ function nameList(names: string[] | undefined): string {
 }
 
 interface Parts {
-  /** 前七行 */
+  /** 前七行,杀进程有事时多一两行 */
   fixed: string[]
   stderr: string
   final: string
 }
 
-function parts(d: Diagnostic): Parts {
+/** 只有固定的词,没有 CLI 的内容 */
+function processLines(d: Diagnostic): string[] {
+  return [
+    ...(d.killFailed ? ['kill-failed: true; the process may still be running'] : []),
+    ...(d.leftovers === 'kept' || d.leftovers === 'killed' ? [`leftovers: ${d.leftovers}; files they change after the run ended are not in changed`] : []),
+  ]
+}
+
+function parts(d: Diagnostic, mask: Mask = noMask): Parts {
   const c = d.changed
   const u = d.usage
   return {
     fixed: [
       `[executor] id=${word(d.id)} run=${word(d.run)} status=${word(d.status)} reason=${word(d.reason)} exit=${count(d.exit)} signal=${word(d.signal)} ms=${count(d.ms)} isolation=${word(d.isolation)}`,
-      `changed: ${c?.files.length ?? 0} (source=${word(c?.source ?? 'none')}${c?.concurrent ? ' concurrent=true' : ''}) ${nameList(c?.files)}`,
-      `violations: ${nameList(d.violations)}`,
+      `changed: ${c?.files.length ?? 0} (source=${word(c?.source ?? 'none')}${c?.concurrent ? ' concurrent=true' : ''}) ${nameList(c?.files, mask)}`,
+      `violations: ${nameList(d.violations, mask)}`,
       `untranslated: ${count(d.untranslated ?? 0)}`,
       `usage: ${u ? `input=${count(u.input)} cached=${count(u.cached)} output=${count(u.output)}` : '-'}`,
-      `raw-log: ${d.rawLog ? nameText(d.rawLog, PATH_MAX) : '-'}`,
-      `worktree: ${d.worktree ? nameText(d.worktree, PATH_MAX) : '-'}`,
+      `raw-log: ${d.rawLog ? nameText(d.rawLog, PATH_MAX, mask) : '-'}`,
+      `worktree: ${d.worktree ? nameText(d.worktree, PATH_MAX, mask) : '-'}`,
+      ...processLines(d),
     ],
-    stderr: `stderr-tail: ${freeText(d.stderrTail, STDERR_MAX)}`,
-    final: `final: ${freeText(d.final, FINAL_MAX)}`,
+    stderr: `stderr-tail: ${freeText(d.stderrTail, STDERR_MAX, mask)}`,
+    final: `final: ${freeText(d.final, FINAL_MAX, mask)}`,
   }
 }
 
@@ -145,8 +162,8 @@ export function formatDiagnostic(d: Diagnostic): string {
  */
 const escapeTags = (s: string) => s.replace(/</g, '&lt;')
 
-export function noticeText(d: Diagnostic): string {
-  const p = parts(d)
+export function noticeText(d: Diagnostic, mask: Mask = noMask): string {
+  const p = parts(d, mask)
   const frame = (body: string) =>
     `<executor-notice run="${word(d.run)}" executor="${word(d.id)}" status="${word(d.status)}">\n${NOTICE_PREFACE}\n<result>\n${body}\n</result>\n</executor-notice>`
   const fixed = p.fixed.map((l, i) => (i === 0 ? l : clip(escapeTags(l), LINE_MAX))).join('\n')

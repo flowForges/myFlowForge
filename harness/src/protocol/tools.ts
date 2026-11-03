@@ -110,6 +110,7 @@ export const ExecutorRunReasonSchema = z.enum([
   'too_many_runs',
   'denied',
   'untrusted_binary',
+  'kill_failed',
 ])
 export type ExecutorRunReason = z.infer<typeof ExecutorRunReasonSchema>
 

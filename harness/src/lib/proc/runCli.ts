@@ -46,6 +46,11 @@ export interface CliResult {
    * 或者有杀不到的进程还拿着管道。killed:CLI 自己退了,留下的进程拿着管道,被杀掉了
    */
   leftovers?: 'kept' | 'killed'
+  /**
+   * 开始杀的时候 CLI 已经自己退了(取消落在等管道的 1 s 里):code、signal 是它自己的结局,不是我们杀出来的。
+   * cancelled 仍如实为 true,怎么算由调用方定
+   */
+  exitedFirst?: boolean
   /** 只有错误码:Node 的报错文本会引用 env 和参数的值 */
   spawnError?: string
 }
@@ -230,7 +235,7 @@ export function runCli(plan: CliPlan, o: CliOpts): Promise<CliResult> {
         const held = !isClosed
         child.stderr?.destroy()
         const leftovers = !gone || held ? 'kept' : selfExited ? 'killed' : undefined
-        finish({ ...(cause && !gone && { killFailed: true }), ...(leftovers && { leftovers }) })
+        finish({ ...(cause && !gone && { killFailed: true }), ...(leftovers && { leftovers }), ...(selfExited && { exitedFirst: true }) })
       })()
     }
 

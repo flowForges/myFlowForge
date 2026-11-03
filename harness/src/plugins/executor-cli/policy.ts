@@ -1,6 +1,8 @@
 // 用户规则与硬拒绝 → 适配器的隔离参数(04 spec §8.4)
+import { realpathSync } from 'node:fs'
+import { join, relative } from 'node:path'
 import type { PermissionGate } from '../../kernel/permissionGate'
-import { OUTSIDE, resolveToolPath } from '../../lib/fs/paths'
+import { isInside, OUTSIDE, resolveToolPath } from '../../lib/fs/paths'
 import type { ExecPolicy } from '../../lib/tools/types'
 import type { ExecutorIsolation } from '../../protocol/tools'
 
@@ -16,13 +18,59 @@ export interface TranslatedPolicy {
   untranslated: number
 }
 
-/** protect:选中的程序所在的目录(binaryDirs)。cwd 盖住它们时,不能让运行改掉下次在沙箱外跑的东西 */
+/** protect:protectDirs 的结果。cwd 盖住它们时,不能让运行改掉下次在沙箱外跑的东西 */
 export function translate(p: ExecPolicy, protect: string[] = []): TranslatedPolicy {
   return {
     denyRead: uniq([...p.denyRead, ...p.ruleDenyRead]),
     readOnlyPaths: uniq([...p.persistence, ...p.ruleDenyWrite, ...protect]),
     denyWrite: uniq([...p.ruleDenyWrite, ...protect]),
     untranslated: p.untranslatedRules,
+  }
+}
+
+const spellings = (p: string): string[] => {
+  try {
+    return [p, realpathSync.native(p)]
+  } catch {
+    return [p]
+  }
+}
+
+/**
+ * 要写保护的目录:PATH 的所有条目(cwd 里的已经不在运行的 PATH 上,但用户在沙箱外还要用)+ 选中的程序所在的目录。
+ * 盖住 keepWritable(cwd、spill、allowWrite)的不能算:那等于把它们变成只读,运行什么都写不了;`/` 还会让 bwrap 拒绝运行。
+ * translate(Codex):`:root` 本来就只读,只有 cwd 里的 PATH 条目才需要 read。
+ */
+export function protectDirs(o: {
+  kind: 'translate' | 'wrap'
+  pathDirs: string[]
+  binary: string[]
+  cwd: string
+  keepWritable: string[]
+  platform: NodeJS.Platform
+}): string[] {
+  const holds = (dir: string, inner: string) => spellings(inner).some(i => spellings(dir).some(d => isInside(i, d, o.platform)))
+  const free = (dir: string) => dir !== '/' && !o.keepWritable.some(w => holds(dir, w))
+  const listed = o.kind === 'wrap' ? o.pathDirs : o.pathDirs.filter(d => spellings(d).some(s => isInside(s, o.cwd, o.platform)))
+  return uniq([...listed, ...o.binary].filter(free))
+}
+
+/**
+ * 一棵树的策略;worktree 运行时规则要同时盖住两棵树。`deny read(hidden/**)` 按 cwd 解析,只算会话的 cwd 就保护不到 worktree 里那份;
+ * 绝对路径的规则两边算出来都是会话那棵树,所以落在会话 cwd 里的根再映射一份到 worktree。
+ * 按两边较大的算翻译不了的条数:哪边落实不了都得问人
+ */
+export function treePolicy(policyOf: (cwd: string) => ExecPolicy, sessionCwd: string, runCwd: string): ExecPolicy {
+  const session = policyOf(sessionCwd)
+  if (runCwd === sessionCwd) return session
+  const tree = policyOf(runCwd)
+  const mapped = (roots: string[]) => roots.flatMap(r => (isInside(r, sessionCwd, process.platform) ? [join(runCwd, relative(sessionCwd, r))] : []))
+  const both = (a: string[], b: string[]) => uniq([...a, ...b, ...mapped(a)])
+  return {
+    ...session,
+    ruleDenyRead: both(session.ruleDenyRead, tree.ruleDenyRead),
+    ruleDenyWrite: both(session.ruleDenyWrite, tree.ruleDenyWrite),
+    untranslatedRules: Math.max(session.untranslatedRules, tree.untranslatedRules),
   }
 }
 

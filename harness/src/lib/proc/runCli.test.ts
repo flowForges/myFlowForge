@@ -327,6 +327,35 @@ describe.skipIf(!posix)('runCli', () => {
     })
   })
 
+  describe('an abort during the drain, after the CLI already exited (M-4)', () => {
+    it('says the CLI exited first, with its real exit code', async () => {
+      const fake = installFake({ run: 'sleep 30 & exit 0' })
+      const ac = new AbortController()
+      const pids: number[] = []
+      const done = runCli(fakePlan(fake), opts({ signal: ac.signal, onClose: pid => pids.push(pid) }))
+      await fake.waitPid('cli')
+      // 假 CLI 退出后,sleep 还拿着 stdout:drain 的 1 s 正在走。等到退出后再中止
+      const cli = await fake.waitPid('cli')
+      for (let i = 0; i < 200 && isAlive(cli); i++) await new Promise(res => setTimeout(res, 10))
+      expect(isAlive(cli)).toBe(false)
+      ac.abort()
+      const r = await done
+      expect(r).toMatchObject({ code: 0, cancelled: true, exitedFirst: true, leftovers: 'killed' })
+    }, 15_000)
+
+    it('a CLI still running when the abort lands has no exitedFirst, even if it then exits 0', async () => {
+      const fake = installFake({ run: "trap 'exit 0' INT; while :; do sleep 0.05; done" })
+      const ac = new AbortController()
+      const done = runCli(fakePlan(fake), opts({ signal: ac.signal }))
+      await fake.waitPid('cli')
+      await new Promise(res => setTimeout(res, 200))
+      ac.abort()
+      const r = await done
+      expect(r.cancelled).toBe(true)
+      expect(r.exitedFirst).toBeUndefined()
+    }, 15_000)
+  })
+
   describe('a CLI that exits by itself leaves what let go of its pipes (I-1)', () => {
     it('a nohup server that closed the pipes stays alive, reported as kept, and the result is immediate', async () => {
       const fake = installFake({ background: true, exit: 0 })

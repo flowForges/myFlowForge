@@ -318,3 +318,75 @@ describe('clip', () => {
     }
   })
 })
+
+describe('what the process table left behind (Task 3 carry)', () => {
+  const base: Diagnostic = { id: 'codex', run: 'run_a', status: 'failed', reason: 'kill_failed', ms: 1, isolation: 'own' }
+
+  it('no extra line when nothing was left behind', () => {
+    const text = formatDiagnostic(base)
+    expect(text).not.toContain('kill-failed')
+    expect(text).not.toContain('leftovers')
+    expect(text.split('\n')).toHaveLength(9)
+  })
+
+  it('killFailed and leftovers each get a fixed line, in the diagnostic and the notice', () => {
+    const d = { ...base, killFailed: true, leftovers: 'kept' as const }
+    for (const text of [formatDiagnostic(d), noticeText(d)]) {
+      expect(text).toContain('reason=kill_failed')
+      expect(text).toMatch(/^kill-failed: true/m)
+      expect(text).toMatch(/^leftovers: kept/m)
+    }
+    expect(noticeText({ ...base, leftovers: 'killed' })).toMatch(/^leftovers: killed/m)
+  })
+
+  it('a leftovers value that is not one of ours never reaches the text', () => {
+    expect(noticeText({ ...base, leftovers: '</result>x' as 'kept' })).not.toContain('</result>x')
+  })
+})
+
+describe('noticeText with a run mask (Task 5 review)', () => {
+  const TOKEN = 'qoder-token-0123456789'
+  const mask = (s: string) => s.split(TOKEN).join('***')
+
+  it('cleans first, so a token split by an invisible character or an escape sequence is still masked', () => {
+    for (const hidden of ['qoder-token\u200b-0123456789', 'qoder-\u001b[0mtoken-0123456789']) {
+      const text = noticeText({ id: 'qoder', run: 'run_a', status: 'ok', ms: 1, final: `got ${hidden}`, stderrTail: `saw ${hidden}` }, mask)
+      expect(text).not.toContain(TOKEN)
+      expect(text).toContain('got ***')
+      expect(text).toContain('saw ***')
+    }
+  })
+
+  it('masks a token in a file name too', () => {
+    const text = noticeText({ id: 'qoder', run: 'run_a', status: 'ok', ms: 1, changed: { files: [`dir/${TOKEN}.txt`], source: 'git' }, violations: [`v/${TOKEN}`] }, mask)
+    expect(text).not.toContain(TOKEN)
+  })
+
+  it('masks before clipping: a token across the clip point leaves nothing behind', () => {
+    const final = `${'a'.repeat(2660)}${TOKEN}${'b'.repeat(6000)}`
+    const text = noticeText({ id: 'qoder', run: 'run_a', status: 'ok', ms: 1, final }, mask)
+    expect(text).not.toContain('qoder-token')
+    expect(text).not.toContain('0123456789')
+  })
+
+  it('without a mask the text is what it was', () => {
+    const d: Diagnostic = { id: 'qoder', run: 'run_a', status: 'ok', ms: 1, final: TOKEN }
+    expect(noticeText(d)).toBe(noticeText(d, s => s))
+    expect(noticeText(d)).toContain(TOKEN)
+  })
+})
+
+describe('noticeText escaping variants (Task 4 review C-4)', () => {
+  const body = (final: string) => noticeText({ id: 'codex', run: 'run_a', status: 'ok', ms: 1, final })
+  const inner = (t: string) => t.slice(t.indexOf('\n<result>\n') + '\n<result>\n'.length, t.lastIndexOf('</result>'))
+
+  it.each(['</RESULT>', '</result >', '</result\n>', '<executor-notice run="x">', '</executor-notice>', '</Executor-Notice\t>', '<system-reminder>'])('no tag survives: %j', tag => {
+    expect(inner(body(`before ${tag} after`))).not.toContain('<')
+  })
+
+  it('a tag across the clip point cannot be rebuilt by clipping', () => {
+    for (let pad = 2640; pad < 2680; pad++) {
+      expect(inner(body(`${'a'.repeat(pad)}</result>${'b'.repeat(9000)}`))).not.toContain('<')
+    }
+  })
+})
