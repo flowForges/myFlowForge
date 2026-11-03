@@ -55,6 +55,22 @@ describe('toWire', () => {
   })
 })
 
+describe('toWire: 04 events', () => {
+  const long = 'x'.repeat(5000)
+  it.each([
+    ['executor.run.queued', { runId: 'r', turnId: 't', callId: 'c', executor: 'codex', summary: long, readOnly: false, isolation: 'own', position: 0 }],
+    ['executor.run.started', { runId: 'r', turnId: 't', executor: 'codex', cwd: '/w', isolation: 'own' }],
+    ['executor.run.progress', { runId: 'r', turnId: 't', kind: 'text', text: long }],
+    ['executor.run.ended', { runId: 'r', turnId: 't', executor: 'codex', status: 'ok', ms: 1, changed: { files: [], source: 'none' } }],
+    ['executor.notice', { turnId: 't', step: 1, runId: 'r', text: long }],
+    ['turn.parked', { turnId: 't', step: 1, active: 1, pending: 0 }],
+    ['turn.resumed', { turnId: 't', step: 1, cause: 'notice' }],
+  ] as const)('%s passes through unchanged', (type, payload) => {
+    const e = ev(type, payload)
+    expect(toWire(e)).toBe(e)
+  })
+})
+
 describe('toWire: 05 events', () => {
   it.each([
     ['sandbox.netDenied', { host: 'evil.example', port: 443, reason: 'not_allowed' }],

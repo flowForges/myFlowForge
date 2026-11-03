@@ -557,5 +557,13 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
     proxies.clear()
   }
 
-  return { status, plan, close }
+  // 04 Task 7 实现;在那之前谁误调都立刻失败
+  const execPolicy: SandboxService['execPolicy'] = () => {
+    throw new Error('not implemented')
+  }
+  const planExec: SandboxService['planExec'] = () => {
+    throw new Error('not implemented')
+  }
+
+  return { status, plan, execPolicy, planExec, close }
 }

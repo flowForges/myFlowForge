@@ -337,6 +337,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
               ...(cwd && { cwd }),
               approvalMode: p.approvalMode ?? 'ask',
               ...(p.toolset && { toolset: p.toolset }),
+              ...(p.origin && p.origin !== 'app' && { origin: p.origin }),
             }
             append({ type: 'session.created', sessionId, payload })
             return { result: { sessionId } }

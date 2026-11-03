@@ -5,6 +5,8 @@ import {
   ApprovalRequestedPayloadSchema, ApprovalResolvedPayloadSchema, AssistantPartSchema, FileChangeSchema, ToolEndedPayloadSchema,
   ToolStartedPayloadSchema, TurnRolledBackPayloadSchema, TurnSnapshotPayloadSchema,
   PermissionsUpdatedPayloadSchema, SandboxNetDeniedPayloadSchema, SandboxStatusSchema,
+  ExecutorNoticePayloadSchema, ExecutorRunEndedPayloadSchema, ExecutorRunProgressPayloadSchema, ExecutorRunQueuedPayloadSchema,
+  ExecutorRunStartedPayloadSchema, SessionOriginSchema, TurnParkedPayloadSchema, TurnResumedPayloadSchema,
 } from './index'
 
 describe('framing', () => {
@@ -231,6 +233,111 @@ describe('05 schemas', () => {
     expect(PermissionsUpdatedPayloadSchema.safeParse({ rules: 'read(x)', network: 9 }).success).toBe(false)
     expect(SandboxNetDeniedPayloadSchema.safeParse({ host: 'evil.example', port: 443, reason: 'not_allowed' }).success).toBe(true)
     expect(SandboxNetDeniedPayloadSchema.safeParse({ host: 'evil.example' }).success).toBe(false)
+  })
+})
+
+describe('04 schemas', () => {
+  const ok = (m: keyof typeof WorkerMethods, v: unknown) => WorkerMethods[m].params.safeParse(v).success
+  const result = (m: keyof typeof WorkerMethods, v: unknown) => WorkerMethods[m].result.safeParse(v).success
+  const ended = { runId: 'run_a', turnId: 't', executor: 'codex', status: 'ok', ms: 5, changed: { files: [], source: 'none' } }
+
+  it('new event types are in EVENT_TYPES', () => {
+    for (const t of ['executor.run.queued', 'executor.run.started', 'executor.run.progress', 'executor.run.ended', 'executor.notice', 'turn.parked', 'turn.resumed'])
+      expect(EVENT_TYPES).toContain(t)
+  })
+  it('executor.run.queued', () => {
+    const q = { runId: 'run_a', turnId: 't', callId: 'c', executor: 'codex', summary: 'codex: x', readOnly: false, isolation: 'own', position: 0 }
+    expect(ExecutorRunQueuedPayloadSchema.safeParse(q).success).toBe(true)
+    expect(ExecutorRunQueuedPayloadSchema.safeParse({ ...q, isolation: 'half' }).success).toBe(false)
+    const { position: _p, ...noPosition } = q
+    expect(ExecutorRunQueuedPayloadSchema.safeParse(noPosition).success).toBe(false)
+  })
+  it('executor.run.started', () => {
+    const s = { runId: 'run_a', turnId: 't', executor: 'qoder', cwd: '/w', isolation: 'wrapped' }
+    expect(ExecutorRunStartedPayloadSchema.safeParse(s).success).toBe(true)
+    expect(ExecutorRunStartedPayloadSchema.safeParse({ ...s, worktree: '/wt', untranslatedRules: 2 }).success).toBe(true)
+    const { cwd: _c, ...noCwd } = s
+    expect(ExecutorRunStartedPayloadSchema.safeParse(noCwd).success).toBe(false)
+  })
+  it('executor.run.progress kind is closed', () => {
+    for (const kind of ['tool', 'file', 'text', 'think'])
+      expect(ExecutorRunProgressPayloadSchema.safeParse({ runId: 'run_a', turnId: 't', kind, text: 'x' }).success).toBe(true)
+    expect(ExecutorRunProgressPayloadSchema.safeParse({ runId: 'run_a', turnId: 't', kind: 'delta', text: 'x' }).success).toBe(false)
+  })
+  it('executor.run.ended needs status, and status and reason are closed', () => {
+    for (const status of ['ok', 'failed', 'cancelled', 'timeout', 'stalled', 'interrupted'])
+      expect(ExecutorRunEndedPayloadSchema.safeParse({ ...ended, status }).success).toBe(true)
+    const { status: _s, ...noStatus } = ended
+    expect(ExecutorRunEndedPayloadSchema.safeParse(noStatus).success).toBe(false)
+    expect(ExecutorRunEndedPayloadSchema.safeParse({ ...ended, status: 'done' }).success).toBe(false)
+    for (const reason of [
+      'not_installed', 'auth_missing', 'quota', 'spawn_failed', 'exit_nonzero', 'cli_error', 'no_result', 'timeout', 'stalled', 'cancelled',
+      'kernel_stopping', 'daemon_restart', 'sandbox_unavailable', 'worktree_unavailable', 'worktree_limit', 'queue_full', 'too_many_runs', 'denied', 'untrusted_binary',
+    ]) expect(ExecutorRunEndedPayloadSchema.safeParse({ ...ended, status: 'failed', reason }).success).toBe(true)
+    expect(ExecutorRunEndedPayloadSchema.safeParse({ ...ended, status: 'failed', reason: 'because' }).success).toBe(false)
+  })
+  it('executor.run.ended carries every optional field; changed is required', () => {
+    const full = {
+      ...ended, reason: 'exit_nonzero', exit: 1, signal: 'SIGINT', usage: { input: 22, output: 10, cached: 6 },
+      changed: { files: ['a.txt'], source: 'git', concurrent: true }, violations: ['a.env'], worktree: '/wt', rawLog: '/s/run_a.jsonl', nativeId: 'th', droppedProgress: 3,
+    }
+    expect(ExecutorRunEndedPayloadSchema.parse(full)).toEqual(full)
+    const { changed: _c, ...noChanged } = ended
+    expect(ExecutorRunEndedPayloadSchema.safeParse(noChanged).success).toBe(false)
+    expect(ExecutorRunEndedPayloadSchema.safeParse({ ...ended, changed: { files: [], source: 'guess' } }).success).toBe(false)
+    expect(ExecutorRunEndedPayloadSchema.safeParse({ ...ended, usage: { input: 1 } }).success).toBe(false)
+  })
+  it('executor.notice: step is optional, because recovery writes it outside any step', () => {
+    expect(ExecutorNoticePayloadSchema.safeParse({ turnId: 't', step: 3, runId: 'run_a', text: 'n' }).success).toBe(true)
+    expect(ExecutorNoticePayloadSchema.safeParse({ turnId: 't', runId: 'run_a', text: 'n' }).success).toBe(true)
+    expect(ExecutorNoticePayloadSchema.safeParse({ turnId: 't', step: 3, runId: 'run_a' }).success).toBe(false)
+  })
+  it('turn.parked and turn.resumed; turn.resumed needs cause', () => {
+    expect(TurnParkedPayloadSchema.safeParse({ turnId: 't', step: 1, active: 2, pending: 0 }).success).toBe(true)
+    expect(TurnParkedPayloadSchema.safeParse({ turnId: 't', step: 1, active: 2 }).success).toBe(false)
+    for (const cause of ['notice', 'message', 'abort']) expect(TurnResumedPayloadSchema.safeParse({ turnId: 't', step: 1, cause }).success).toBe(true)
+    expect(TurnResumedPayloadSchema.safeParse({ turnId: 't', step: 1 }).success).toBe(false)
+    expect(TurnResumedPayloadSchema.safeParse({ turnId: 't', step: 1, cause: 'timer' }).success).toBe(false)
+  })
+  it('session.create origin is optional and enumerated', () => {
+    for (const origin of ['app', 'im', 'schedule']) expect(ok('session.create', { commandId: 'c', origin })).toBe(true)
+    expect(ok('session.create', { commandId: 'c' })).toBe(true)
+    expect(ok('session.create', { commandId: 'c', origin: 'cron' })).toBe(false)
+    expect(SessionOriginSchema.options).toEqual(['app', 'im', 'schedule'])
+  })
+  it('session.prompt result: followUp is optional', () => {
+    expect(result('session.prompt', { accepted: true, turnId: 't' })).toBe(true)
+    expect(result('session.prompt', { accepted: true, turnId: 't', followUp: true })).toBe(true)
+    expect(result('session.prompt', { accepted: true, turnId: 't', followUp: 'yes' })).toBe(false)
+  })
+  it('executor.list and executor.refresh', () => {
+    expect(ok('executor.list', {})).toBe(true)
+    expect(ok('executor.refresh', {})).toBe(true)
+    expect(ok('executor.refresh', { commandId: 'c' })).toBe(true)
+    const row = { id: 'codex', installed: true, version: '0.154.0', auth: 'ok', isolation: 'own', missing: [] }
+    for (const m of ['executor.list', 'executor.refresh'] as const) {
+      expect(result(m, { executors: [row] })).toBe(true)
+      expect(result(m, { executors: [{ id: 'qoder', installed: false, auth: 'unknown', isolation: 'none', missing: ['unsupported'] }] })).toBe(true)
+      expect(result(m, { executors: [{ ...row, auth: 'maybe' }] })).toBe(false)
+      expect(result(m, { executors: [{ ...row, isolation: 'half' }] })).toBe(false)
+    }
+  })
+  it('executor.cancel and executor.worktree.discard need commandId, sessionId and runId', () => {
+    for (const m of ['executor.cancel', 'executor.worktree.discard'] as const) {
+      expect(ok(m, { commandId: 'c', sessionId: 's', runId: 'r' })).toBe(true)
+      expect(ok(m, { sessionId: 's', runId: 'r' })).toBe(false)
+      expect(ok(m, { commandId: 'c', runId: 'r' })).toBe(false)
+      expect(ok(m, { commandId: 'c', sessionId: 's' })).toBe(false)
+      expect(result(m, { ok: false })).toBe(true)
+    }
+  })
+  it('executor.changes needs sessionId and runId', () => {
+    expect(ok('executor.changes', { sessionId: 's', runId: 'r' })).toBe(true)
+    expect(ok('executor.changes', { runId: 'r' })).toBe(false)
+    expect(ok('executor.changes', { sessionId: 's' })).toBe(false)
+    expect(result('executor.changes', { files: [{ path: 'a', status: 'M' }], source: 'git', concurrent: true })).toBe(true)
+    expect(result('executor.changes', { files: [], source: 'none' })).toBe(true)
+    expect(result('executor.changes', { files: [] })).toBe(false)
   })
 })
 

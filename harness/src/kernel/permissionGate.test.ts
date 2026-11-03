@@ -26,10 +26,10 @@ describe('decide (table)', () => {
   const dataDir = '/h/.myFlowForge/mff-ai'
   const spillDir = `${dataDir}/sessions/s1/spill`
   const env: DecideEnv = { roots: credentialRoots(home, 'linux', {}), persistence: persistenceRoots(home, 'linux'), dataDir, spillDir, platform: 'linux', home, ...layered }
-  const ask: SessionInfo = { sessionId: 's1', cwd: '/h/repo', approvalMode: 'ask' }
+  const ask: SessionInfo = { sessionId: 's1', cwd: '/h/repo', approvalMode: 'ask', origin: 'app' }
   const auto: SessionInfo = { ...ask, approvalMode: 'auto' }
   const atHome: SessionInfo = { ...ask, cwd: home }
-  const noCwd: SessionInfo = { sessionId: 's1', approvalMode: 'auto' }
+  const noCwd: SessionInfo = { sessionId: 's1', approvalMode: 'auto', origin: 'app' }
   const req = (action: string, resource?: string, actor = 'plugin:tools'): PermissionRequest => ({ actor, action, resource, sessionId: 's1' })
 
   const cases: [string, PermissionRequest, SessionInfo | undefined, 'allow' | 'deny' | 'ask'][] = [
@@ -101,7 +101,7 @@ describe('decide (table)', () => {
     const d = { ...env, roots: credentialRoots(home, 'darwin', {}), persistence: persistenceRoots(home, 'darwin'), platform: 'darwin' as const }
     for (const p of ['/h/repo/.GIT/hooks/x', '/h/repo/.Git/config']) expect(decide(req('write', p), ask, d)).toBe('deny')
     const w: DecideEnv = { roots: credentialRoots('C:\\Users\\u', 'win32', {}), persistence: persistenceRoots('C:\\Users\\u', 'win32'), dataDir: 'C:\\Users\\u\\.mff', platform: 'win32', home: 'C:\\Users\\u', ...layered }
-    const s: SessionInfo = { sessionId: 's1', cwd: 'C:\\repo', approvalMode: 'auto' }
+    const s: SessionInfo = { sessionId: 's1', cwd: 'C:\\repo', approvalMode: 'auto', origin: 'app' }
     for (const p of ['C:\\repo\\.GIT\\config', 'C:\\repo\\.git.\\hooks\\x', 'C:\\repo\\.git \\config', 'C:\\repo\\GIT~1\\config'])
       expect(decide(req('write', p), s, w)).toBe('deny')
     expect(decide(req('write', 'C:\\repo\\.github\\x'), s, w)).toBe('allow')
@@ -115,7 +115,7 @@ describe('decide (table)', () => {
 
   it('win32: other drive, UNC and ADS are denied', () => {
     const w: DecideEnv = { roots: credentialRoots('C:\\Users\\u', 'win32', {}), persistence: persistenceRoots('C:\\Users\\u', 'win32'), dataDir: 'C:\\Users\\u\\.mff', platform: 'win32', home: 'C:\\Users\\u', ...layered }
-    const s: SessionInfo = { sessionId: 's1', cwd: 'C:\\repo', approvalMode: 'auto' }
+    const s: SessionInfo = { sessionId: 's1', cwd: 'C:\\repo', approvalMode: 'auto', origin: 'app' }
     expect(decide(req('read', 'c:\\REPO\\x'), s, w)).toBe('allow')
     for (const p of ['D:\\x', '\\\\server\\share\\x', '\\\\?\\C:\\repo\\x', 'C:\\repo\\a.txt:stream'])
       expect(decide(req('write', p), s, w)).toBe('deny')
@@ -126,7 +126,7 @@ describe('decide: layered rules (Review Focus 3)', () => {
   const home = '/h'
   const dataDir = '/h/.myFlowForge/mff-ai'
   const base: DecideEnv = { roots: credentialRoots(home, 'linux', {}), persistence: persistenceRoots(home, 'linux'), dataDir, platform: 'linux', home, ...layered }
-  const repo: SessionInfo = { sessionId: 's1', cwd: '/h/repo', approvalMode: 'ask' }
+  const repo: SessionInfo = { sessionId: 's1', cwd: '/h/repo', approvalMode: 'ask', origin: 'app' }
   const atHome: SessionInfo = { ...repo, cwd: home }
   const auto: SessionInfo = { ...repo, approvalMode: 'auto' }
   const req = (action: string, resource: string): PermissionRequest => ({ actor: 'tools', action, resource, sessionId: 's1' })
@@ -168,7 +168,7 @@ describe('decide: layered rules (Review Focus 3)', () => {
   })
 
   it('a session without a cwd is denied reads and writes even with a matching allow', () => {
-    const noCwd: SessionInfo = { sessionId: 's1', approvalMode: 'auto' }
+    const noCwd: SessionInfo = { sessionId: 's1', approvalMode: 'auto', origin: 'app' }
     expect(decide(req('read', '/opt/x'), noCwd, with_({ effect: 'allow', rule: 'read(/opt/**)' }))).toBe('deny')
   })
 
@@ -198,7 +198,7 @@ describe('decide: layered rules (Review Focus 3)', () => {
     expect(defaultRules(auto, FULL, false)).toEqual(['allow read(/h/repo/**)', 'allow write(/h/repo/**)', 'allow shell(*)'])
     expect(defaultRules(auto, none, false)[2]).toBe('ask shell(*)')
     expect(defaultRules(auto, none, true)[2]).toBe('allow shell(*)')
-    expect(defaultRules({ sessionId: 's', approvalMode: 'auto' }, FULL, false)).toEqual(['allow shell(*)'])
+    expect(defaultRules({ sessionId: 's', approvalMode: 'auto', origin: 'app' }, FULL, false)).toEqual(['allow shell(*)'])
     expect(defaultRules(undefined, FULL, false)).toEqual(['allow read(<cwd>/**)', 'allow write(<cwd>/**)', '<mode> shell(*)'])
   })
 

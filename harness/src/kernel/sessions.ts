@@ -1,6 +1,6 @@
 import { realpathSync, statSync } from 'node:fs'
 import { join, posix, win32 } from 'node:path'
-import type { ApprovalMode, KernelEvent, ModelRef, Toolset } from '../protocol/index'
+import type { ApprovalMode, KernelEvent, ModelRef, SessionOrigin, Toolset } from '../protocol/index'
 import { RpcError } from './rpcError'
 import { isCredentialPath, isRootLike, type EnvSnapshot } from '../lib/fs/paths'
 import { blacklist } from './permissionGate'
@@ -13,6 +13,7 @@ export interface SessionInfo {
   approvalMode: ApprovalMode
   toolset?: Toolset
   model?: ModelRef
+  origin: SessionOrigin
 }
 
 const SAFE_ID = /^[A-Za-z0-9_-]+$/
@@ -29,7 +30,11 @@ export class Sessions {
   observe(e: KernelEvent): void {
     if (e.type !== 'session.created' || !e.sessionId) return
     const p = (e.payload ?? {}) as Partial<Omit<SessionInfo, 'sessionId'>>
-    const info: SessionInfo = { sessionId: e.sessionId, approvalMode: p.approvalMode === 'auto' ? 'auto' : 'ask' } // v2 会话没有该字段
+    const info: SessionInfo = {
+      sessionId: e.sessionId,
+      approvalMode: p.approvalMode === 'auto' ? 'auto' : 'ask', // v2 会话没有该字段
+      origin: p.origin === 'im' || p.origin === 'schedule' ? p.origin : 'app', // 只有不是 app 时才写进事件
+    }
     if (typeof p.cwd === 'string') info.cwd = p.cwd
     if (p.toolset === 'patch' || p.toolset === 'edit') info.toolset = p.toolset
     if (p.model) info.model = p.model

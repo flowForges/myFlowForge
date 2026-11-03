@@ -25,6 +25,13 @@ export const EVENT_TYPES = [
   'turn.rolledBack',
   'permissions.updated',
   'sandbox.netDenied',
+  'executor.run.queued',
+  'executor.run.started',
+  'executor.run.progress',
+  'executor.run.ended',
+  'executor.notice',
+  'turn.parked',
+  'turn.resumed',
 ] as const
 
 export const EventTypeSchema = z.enum(EVENT_TYPES)

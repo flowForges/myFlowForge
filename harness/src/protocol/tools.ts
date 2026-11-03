@@ -8,6 +8,10 @@ export type ApprovalMode = z.infer<typeof ApprovalModeSchema>
 export const ToolsetSchema = z.enum(['patch', 'edit'])
 export type Toolset = z.infer<typeof ToolsetSchema>
 
+// 04:会话来源;不是 app 的会话,写模式委派一律进 worktree
+export const SessionOriginSchema = z.enum(['app', 'im', 'schedule'])
+export type SessionOrigin = z.infer<typeof SessionOriginSchema>
+
 export const ToolStartedPayloadSchema = z.object({
   turnId: z.string(),
   callId: z.string(),
@@ -78,3 +82,99 @@ export const AssistantPartSchema = z.discriminatedUnion('type', [
   }),
 ])
 export type AssistantPart = z.infer<typeof AssistantPartSchema>
+
+// 04:委派给本机 CLI(spec §12、§14)
+export const ExecutorIsolationSchema = z.enum(['own', 'wrapped', 'none'])
+export type ExecutorIsolation = z.infer<typeof ExecutorIsolationSchema>
+
+export const ExecutorRunStatusSchema = z.enum(['ok', 'failed', 'cancelled', 'timeout', 'stalled', 'interrupted'])
+export type ExecutorRunStatus = z.infer<typeof ExecutorRunStatusSchema>
+
+export const ExecutorRunReasonSchema = z.enum([
+  'not_installed',
+  'auth_missing',
+  'quota',
+  'spawn_failed',
+  'exit_nonzero',
+  'cli_error',
+  'no_result',
+  'timeout',
+  'stalled',
+  'cancelled',
+  'kernel_stopping',
+  'daemon_restart',
+  'sandbox_unavailable',
+  'worktree_unavailable',
+  'worktree_limit',
+  'queue_full',
+  'too_many_runs',
+  'denied',
+  'untrusted_binary',
+])
+export type ExecutorRunReason = z.infer<typeof ExecutorRunReasonSchema>
+
+/** 改动清单的来源:快照 diff、CLI 自报,或都没有 */
+export const ExecutorChangesSourceSchema = z.enum(['git', 'cli', 'none'])
+export type ExecutorChangesSource = z.infer<typeof ExecutorChangesSourceSchema>
+
+export const ExecutorRunQueuedPayloadSchema = z.object({
+  runId: z.string(),
+  turnId: z.string(),
+  callId: z.string(),
+  executor: z.string(),
+  summary: z.string(),
+  readOnly: z.boolean(),
+  isolation: ExecutorIsolationSchema,
+  position: z.number(),
+})
+export type ExecutorRunQueuedPayload = z.infer<typeof ExecutorRunQueuedPayloadSchema>
+
+export const ExecutorRunStartedPayloadSchema = z.object({
+  runId: z.string(),
+  turnId: z.string(),
+  executor: z.string(),
+  cwd: z.string(),
+  isolation: ExecutorIsolationSchema,
+  worktree: z.string().optional(),
+  untranslatedRules: z.number().optional(),
+})
+export type ExecutorRunStartedPayload = z.infer<typeof ExecutorRunStartedPayloadSchema>
+
+export const ExecutorRunProgressPayloadSchema = z.object({
+  runId: z.string(),
+  turnId: z.string(),
+  kind: z.enum(['tool', 'file', 'text', 'think']),
+  text: z.string(),
+})
+export type ExecutorRunProgressPayload = z.infer<typeof ExecutorRunProgressPayloadSchema>
+
+export const ExecutorRunEndedPayloadSchema = z.object({
+  runId: z.string(),
+  turnId: z.string(),
+  executor: z.string(),
+  status: ExecutorRunStatusSchema,
+  reason: ExecutorRunReasonSchema.optional(),
+  ms: z.number(),
+  exit: z.number().optional(),
+  signal: z.string().optional(),
+  /** 用户套餐的用量,不算进 turn.usage */
+  usage: z.object({ input: z.number(), output: z.number(), cached: z.number().optional() }).optional(),
+  /** files 只有路径:CLI 自报时没有状态;要状态用 executor.changes */
+  changed: z.object({ files: z.array(z.string()), source: ExecutorChangesSourceSchema, concurrent: z.boolean().optional() }),
+  violations: z.array(z.string()).optional(),
+  worktree: z.string().optional(),
+  rawLog: z.string().optional(),
+  nativeId: z.string().optional(),
+  droppedProgress: z.number().optional(),
+})
+export type ExecutorRunEndedPayload = z.infer<typeof ExecutorRunEndedPayloadSchema>
+
+/** 给模型的;step 只有循环写时才有,finally 与崩溃恢复写的没有 */
+export const ExecutorNoticePayloadSchema = z.object({ turnId: z.string(), step: z.number().optional(), runId: z.string(), text: z.string() })
+export type ExecutorNoticePayload = z.infer<typeof ExecutorNoticePayloadSchema>
+
+export const TurnParkedPayloadSchema = z.object({ turnId: z.string(), step: z.number(), active: z.number(), pending: z.number() })
+export type TurnParkedPayload = z.infer<typeof TurnParkedPayloadSchema>
+
+export const TurnResumedPayloadSchema = z.object({ turnId: z.string(), step: z.number(), cause: z.enum(['notice', 'message', 'abort']) })
+export type TurnResumedPayload = z.infer<typeof TurnResumedPayloadSchema>

@@ -9,7 +9,14 @@ import {
   QuotaSchema,
   SecretsBackendSchema,
 } from './models'
-import { ApprovalModeSchema, FileChangeSchema, ToolsetSchema } from './tools'
+import {
+  ApprovalModeSchema,
+  ExecutorChangesSourceSchema,
+  ExecutorIsolationSchema,
+  FileChangeSchema,
+  SessionOriginSchema,
+  ToolsetSchema,
+} from './tools'
 
 // JSON-RPC 错误码
 export const ERR_DRAINING = -32001
@@ -95,6 +102,21 @@ export const ControlStatusSchema = z.object({
 })
 export type ControlStatus = z.infer<typeof ControlStatusSchema>
 
+// 04:执行器探测结果(spec §13);missing 是稳定代码,含 unsupported、codex_selftest、codex_network 等
+export const ExecutorListResultSchema = z.object({
+  executors: z.array(
+    z.object({
+      id: z.string(),
+      installed: z.boolean(),
+      version: z.string().optional(),
+      auth: z.enum(['ok', 'missing', 'unknown']),
+      isolation: ExecutorIsolationSchema,
+      missing: z.array(z.string()),
+    }),
+  ),
+})
+export type ExecutorListResult = z.infer<typeof ExecutorListResultSchema>
+
 export const WorkerMethods = {
   ...AuthMethods,
   hello: {
@@ -119,12 +141,14 @@ export const WorkerMethods = {
       cwd: z.string().optional(),
       approvalMode: ApprovalModeSchema.optional(),
       toolset: ToolsetSchema.optional(),
+      origin: SessionOriginSchema.optional(),
     }),
     result: z.object({ sessionId: z.string() }),
   },
   'session.prompt': {
     params: z.object({ commandId: z.string(), sessionId: z.string(), text: z.string() }),
-    result: z.object({ accepted: z.boolean(), turnId: z.string() }),
+    // followUp:消息被挂起的那一轮收下,turnId 是那一轮
+    result: z.object({ accepted: z.boolean(), turnId: z.string(), followUp: z.boolean().optional() }),
   },
   'session.cancel': {
     params: z.object({ commandId: z.string(), sessionId: z.string() }),
@@ -184,6 +208,14 @@ export const WorkerMethods = {
   'models.quota': { params: z.object({ accountId: z.string() }), result: QuotaSchema.nullable() },
   'auth.chatgpt.begin': { params: Empty, result: z.object({ flowId: z.string(), authUrl: z.string() }) },
   'auth.chatgpt.cancel': { params: z.object({ flowId: z.string() }), result: Ok },
+  'executor.list': { params: Empty, result: ExecutorListResultSchema },
+  'executor.refresh': { params: z.object({ commandId: z.string().optional() }), result: ExecutorListResultSchema },
+  'executor.cancel': { params: z.object({ commandId: z.string(), sessionId: z.string(), runId: z.string() }), result: Ok },
+  'executor.changes': {
+    params: z.object({ sessionId: z.string(), runId: z.string() }),
+    result: z.object({ files: z.array(FileChangeSchema), source: ExecutorChangesSourceSchema, concurrent: z.boolean().optional() }),
+  },
+  'executor.worktree.discard': { params: z.object({ commandId: z.string(), sessionId: z.string(), runId: z.string() }), result: Ok },
 } as const
 
 export const ControlMethods = {

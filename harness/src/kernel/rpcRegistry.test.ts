@@ -60,6 +60,11 @@ describe('RpcRegistry', () => {
     expect(() => r.register('a', 'turn.rollback', async () => 1)).not.toThrow()
     expect(() => r.register('a', 'turn.changes', async () => 1)).not.toThrow()
   })
+  it('executor.* stays registrable', () => {
+    const r = new RpcRegistry()
+    for (const m of ['executor.list', 'executor.refresh', 'executor.cancel', 'executor.changes', 'executor.worktree.discard'] as const)
+      expect(() => r.register('a', m, async () => 1)).not.toThrow()
+  })
   it('transport auth is reserved but plugin-owned auth.chatgpt.* stays registrable', () => {
     const r = new RpcRegistry()
     expect(() => r.register('a', 'auth.chatgpt.begin', async () => 1)).not.toThrow()
@@ -93,6 +98,14 @@ describe('plugin RPC via kernel.handle', () => {
     expect(await codeOf(k.handle('models.setDefault', { accountId: 'a' }))).toBe(-32602)
     expect(seen).toEqual([{ accountId: 'a', modelId: 'm' }])
     expect(await codeOf(k.handle('models.quota', { accountId: 'a' }))).toBe(-32601)
+  })
+
+  it('a plugin can serve executor.* through kernel.handle', async () => {
+    const k = await boot([plugin('p', ctx => {
+      ctx.rpc.register('executor.list', async () => ({ executors: [] }))
+    })])
+    expect(await k.handle('executor.list', undefined)).toEqual({ executors: [] })
+    expect(k.status().plugins).toEqual([expect.objectContaining({ id: 'p', state: 'active' })])
   })
 
   it('handler RpcError passes through; other errors → -32603', async () => {

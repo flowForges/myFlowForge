@@ -82,7 +82,7 @@ describe('Sessions service', () => {
     expect(seen).toBeInstanceOf(Sessions)
     const { sessionId } = await create(k, { cwd: work, approvalMode: 'auto', toolset: 'patch', model: { accountId: 'a', modelId: 'm' } })
     expect(seen!.get(sessionId)).toEqual({
-      sessionId, cwd: realpathSync.native(work), approvalMode: 'auto', toolset: 'patch', model: { accountId: 'a', modelId: 'm' },
+      sessionId, cwd: realpathSync.native(work), approvalMode: 'auto', toolset: 'patch', model: { accountId: 'a', modelId: 'm' }, origin: 'app',
     })
     expect(seen!.get('nope')).toBeUndefined()
   })
@@ -94,8 +94,8 @@ describe('Sessions service', () => {
     await k1.close()
     kernels = []
     await boot()
-    expect(seen!.get(a.sessionId)).toEqual({ sessionId: a.sessionId, cwd: realpathSync.native(work), approvalMode: 'ask', toolset: 'edit' })
-    expect(seen!.get(b.sessionId)).toEqual({ sessionId: b.sessionId, approvalMode: 'ask' })
+    expect(seen!.get(a.sessionId)).toEqual({ sessionId: a.sessionId, cwd: realpathSync.native(work), approvalMode: 'ask', toolset: 'edit', origin: 'app' })
+    expect(seen!.get(b.sessionId)).toEqual({ sessionId: b.sessionId, approvalMode: 'ask', origin: 'app' })
   })
 
   it('load / observe only read session.created; old payloads default to ask', () => {
@@ -103,9 +103,44 @@ describe('Sessions service', () => {
     const ev = (seq: number, type: KernelEvent['type'], sessionId: string | undefined, payload: unknown): KernelEvent =>
       ({ seq, ts: 0, type, sessionId, payload })
     s.load([ev(1, 'session.created', 's1', { title: 'old' }), ev(2, 'message.user', 's1', { cwd: '/x' }), ev(3, 'session.created', undefined, {})])
-    expect(s.get('s1')).toEqual({ sessionId: 's1', approvalMode: 'ask' })
+    expect(s.get('s1')).toEqual({ sessionId: 's1', approvalMode: 'ask', origin: 'app' })
     s.observe(ev(4, 'session.created', 's2', { approvalMode: 'auto', cwd: '/w' }))
-    expect(s.get('s2')).toEqual({ sessionId: 's2', approvalMode: 'auto', cwd: '/w' })
+    expect(s.get('s2')).toEqual({ sessionId: 's2', approvalMode: 'auto', cwd: '/w', origin: 'app' })
+  })
+
+  it('origin round-trips through session.create; session.created carries it only when not app', async () => {
+    const k = await boot()
+    const im = await create(k, { origin: 'im' }, 'im')
+    const schedule = await create(k, { origin: 'schedule' }, 'schedule')
+    const app = await create(k, { origin: 'app' }, 'app')
+    const none = await create(k, {}, 'none')
+    expect(seen!.get(im.sessionId)?.origin).toBe('im')
+    expect(seen!.get(schedule.sessionId)?.origin).toBe('schedule')
+    expect(seen!.get(app.sessionId)?.origin).toBe('app')
+    expect(seen!.get(none.sessionId)?.origin).toBe('app')
+    expect(createdPayload(k, im.sessionId).origin).toBe('im')
+    expect(createdPayload(k, schedule.sessionId).origin).toBe('schedule')
+    expect(createdPayload(k, app.sessionId)).not.toHaveProperty('origin')
+    expect(createdPayload(k, none.sessionId)).not.toHaveProperty('origin')
+    expect(await codeOf(create(k, { origin: 'cron' }, 'bad'))).toBe(-32602)
+  })
+
+  it('origin survives a kernel restart', async () => {
+    const k1 = await boot()
+    const im = await create(k1, { origin: 'im' }, 'im')
+    await k1.close()
+    kernels = []
+    await boot()
+    expect(seen!.get(im.sessionId)?.origin).toBe('im')
+  })
+
+  it('an old or unrecognised origin in session.created reads as app', () => {
+    const s = new Sessions(dir)
+    const ev = (sessionId: string, payload: unknown): KernelEvent => ({ seq: 1, ts: 0, type: 'session.created', sessionId, payload })
+    s.load([ev('old', { title: 'old' }), ev('weird', { origin: 'cron' }), ev('kept', { origin: 'schedule' })])
+    expect(s.get('old')?.origin).toBe('app')
+    expect(s.get('weird')?.origin).toBe('app')
+    expect(s.get('kept')?.origin).toBe('schedule')
   })
 
   it('spillDir is dataDir/sessions/<id>/spill', () => {
