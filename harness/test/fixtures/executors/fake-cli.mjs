@@ -5,7 +5,9 @@
 //
 // 剧本字段:
 //   version、loginStatus(原样打印)、loginExit、probeSleep(ms,探测命令先等这么久)
-//   selftest: 'pass' | 'fail:<row>'(`sandbox …` 每行打印 `<row> r=<n>`,不做真实操作,也不连网)
+//   selftest: 'pass' | 'fail:<row>' | 'omit:<row>'(`sandbox …` 每行打印 `<row> r=<n>`,不做真实操作,也不连网)
+//             'run':真的跑 `--` 后面的命令(cwd 取 -C),不加任何隔离,用来验自检脚本本身
+//   selftestExit(`sandbox` 的退出码)、selftestConnect(打印之前连一次最后一个参数给的本机端口,行照样报 r=1)
 //   writeFiles {相对 cwd 的路径: 内容}、deleteFiles [路径]
 //   lines [字符串 | {line, delayMs}]、flood(行数)、stderr(字符串 | 字符串数组)、sleep(ms)、exit(退出码)
 //   forwarding:起一个自成一会话的 sleep 300。SIGINT → 杀掉它再退;SIGTERM → 只有自己退,它活下来(实测的 Codex)
@@ -14,8 +16,9 @@
 //   escape:起一个 ppid 已是 1、自成一会话、拿着 stdout 的 sleep(进程树找不到它)
 //   background:起一个同组、不碰 stdio 的 sleep
 // forwarding / stubborn 跑完前面的步骤后一直活着,等信号。
-import { spawn, execFileSync } from 'node:child_process'
+import { spawn, spawnSync, execFileSync } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { connect } from 'node:net'
 import { dirname, join } from 'node:path'
 
 const BIN = dirname(process.argv[1])
@@ -72,9 +75,26 @@ const SELFTEST_ROWS = { secret_read: 1, cwd_write: 0, outside_write: 1, git_writ
 
 function selfTestOutput(selftest = 'pass') {
   const failed = selftest.startsWith('fail:') ? selftest.slice('fail:'.length) : undefined
+  const omitted = selftest.startsWith('omit:') ? selftest.slice('omit:'.length) : undefined
   return Object.entries(SELFTEST_ROWS)
+    .filter(([row]) => row !== omitted)
     .map(([row, r]) => `${row} r=${row === failed ? 1 - r : r}\n`)
     .join('')
+}
+
+const connectOnce = port =>
+  new Promise(res => {
+    const c = connect(port, '127.0.0.1', () => {
+      c.destroy()
+      res()
+    })
+    c.on('error', () => res())
+  })
+
+function runCommand() {
+  const command = argv.slice(argv.indexOf('--') + 1)
+  const r = spawnSync(command[0], command.slice(1), { cwd: argv[argv.indexOf('-C') + 1], stdio: ['ignore', 'inherit', 'inherit'] })
+  process.exit(r.status ?? 1)
 }
 
 async function main() {
@@ -98,7 +118,14 @@ async function main() {
   if (argv[0] === '--version') return answer(`${sc.version ?? 'fake-cli 0.0.0'}\n`)
   if (argv[0] === 'login' && argv[1] === 'status') return answer(`${sc.loginStatus ?? 'Logged in using ChatGPT'}\n`, sc.loginExit ?? 0)
   if (argv[0] === 'status') return answer(`${sc.loginStatus ?? '{"logged_in":true}'}\n`, sc.loginExit ?? 0)
-  if (argv[0] === 'sandbox') return answer(selfTestOutput(sc.selftest))
+  if (argv[0] === 'sandbox') {
+    if (sc.selftest === 'run') {
+      call('')
+      return runCommand()
+    }
+    if (sc.selftestConnect) await connectOnce(Number(argv.at(-1)))
+    return answer(selfTestOutput(sc.selftest), sc.selftestExit ?? 0)
+  }
 
   // 先装好信号处理再记 pid:测试看到 pid 时行为已经就位
   if (sc.stubborn) {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { isPlainCommand } from '../tools/commandKey'
-import { DEFAULT_NETWORK_ALLOW, evaluate, type Effect, type MatchCtx, matches, parseRule, type Rule, type RuleError, type RuleSpec, runTests } from './rules'
+import { DEFAULT_NETWORK_ALLOW, evaluate, type Effect, literalRoots, type MatchCtx, matches, parseRule, type Rule, type RuleError, type RuleSpec, runTests } from './rules'
 
 const DARWIN: MatchCtx = { cwd: '/__cwd__', home: '/Users/u', platform: 'darwin' }
 const LINUX: MatchCtx = { cwd: '/__cwd__', home: '/home/u', platform: 'linux' }
@@ -310,4 +310,82 @@ it('DEFAULT_NETWORK_ALLOW holds the nine default hosts', () => {
     'registry.npmjs.org', 'pypi.org', 'files.pythonhosted.org', 'github.com', 'codeload.github.com',
     'objects.githubusercontent.com', 'crates.io', 'static.crates.io', 'proxy.golang.org',
   ])
+})
+
+describe('literalRoots', () => {
+  const ctx: MatchCtx = { cwd: '/w/repo', home: '/h', platform: 'darwin' }
+  const roots = (subject: 'read' | 'write', c: MatchCtx, ...rules: Rule[]) => literalRoots(rules, subject, c)
+
+  it.each<[string, string[], number]>([
+    ['write(src/gen/**)', ['/w/repo/src/gen'], 0],
+    ['write(src/gen/)', ['/w/repo/src/gen'], 0],
+    ['write(src/gen)', ['/w/repo/src/gen'], 0],
+    ['write(./src/.)', ['/w/repo/src'], 0],
+    ['write(package.json)', ['/w/repo/package.json'], 0],
+    ['write(~/secrets)', ['/h/secrets'], 0],
+    ['write(~/secrets/**)', ['/h/secrets'], 0],
+    ['write(~)', ['/h'], 0],
+    ['write(/etc/x/)', ['/etc/x'], 0],
+    ['write(/**)', ['/'], 0],
+    // 管住整个 cwd:化成根,只读运行才不用每次问(C12)
+    ['write(**)', ['/w/repo'], 0],
+    ['write(**/*.env)', [], 1],
+    ['write(*.env)', [], 1],
+    ['write(src/*/gen)', [], 1],
+    ['write(src/**/gen)', [], 1],
+    ['write(src/**/)', [], 1],
+    ['write(src/gen**)', [], 1],
+    ['write(src/ge?)', [], 1],
+    ['write(/a*/b/**)', [], 1],
+  ])('%s', (text, want, untranslated) => {
+    expect(roots('write', ctx, rule('deny', text))).toEqual({ roots: want, untranslated })
+  })
+
+  it('takes deny and ask, ignores allow', () => {
+    const got = roots('write', ctx, rule('deny', 'write(a)'), rule('ask', 'write(b/**)'), rule('allow', 'write(c)'), rule('allow', 'write(*.c)'), rule('ask', 'write(*.d)'))
+    expect(got).toEqual({ roots: ['/w/repo/a', '/w/repo/b'], untranslated: 1 })
+  })
+
+  it('ask on the whole cwd stays untranslated: approving it must leave the run able to work', () => {
+    expect(roots('write', ctx, rule('ask', 'write(**)'))).toEqual({ roots: [], untranslated: 1 })
+    expect(roots('read', ctx, rule('ask', 'read(**)'))).toEqual({ roots: [], untranslated: 1 })
+  })
+
+  it('takes only the asked subject, and never a shell rule', () => {
+    const rules = [rule('deny', 'read(r)'), rule('deny', 'read(*.r)'), rule('deny', 'write(w)'), rule('deny', 'shell(git push*)')]
+    expect(literalRoots(rules, 'read', ctx)).toEqual({ roots: ['/w/repo/r'], untranslated: 1 })
+    expect(literalRoots(rules, 'write', ctx)).toEqual({ roots: ['/w/repo/w'], untranslated: 0 })
+  })
+
+  it('a wildcard in the cwd or home is a literal, not a glob', () => {
+    expect(roots('write', { ...ctx, cwd: '/w/a*b' }, rule('deny', 'write(src/**)'), rule('deny', 'write(**)'))).toEqual({ roots: ['/w/a*b/src', '/w/a*b'], untranslated: 0 })
+    expect(roots('read', { ...ctx, home: '/h?' }, rule('deny', 'read(~/x)'))).toEqual({ roots: ['/h?/x'], untranslated: 0 })
+  })
+
+  it('a bracket is literal for the rule engine, so it stays a root', () => {
+    expect(roots('write', ctx, rule('deny', 'write(src/[a]/**)'))).toEqual({ roots: ['/w/repo/src/[a]'], untranslated: 0 })
+  })
+
+  it('holds both the raw and the realpath form, because Codex has no realpath step', () => {
+    const realpath = (p: string) => {
+      if (p === '/w/repo/link') return '/real/target'
+      if (p === '/w/repo/link/missing') throw new Error('ENOENT')
+      return p
+    }
+    expect(roots('write', { ...ctx, realpath }, rule('deny', 'write(link/**)')).roots).toEqual(['/w/repo/link', '/real/target'])
+    expect(roots('write', { ...ctx, realpath }, rule('deny', 'write(link/missing)')).roots).toEqual(['/w/repo/link/missing', '/real/target/missing'])
+    expect(roots('write', { ...ctx, realpath: p => p }, rule('deny', 'write(plain)')).roots).toEqual(['/w/repo/plain'])
+  })
+
+  it('removes duplicates', () => {
+    expect(roots('write', ctx, rule('deny', 'write(a)'), rule('ask', 'write(a/**)')).roots).toEqual(['/w/repo/a'])
+  })
+
+  it('what it reports covers what the rule matches', () => {
+    for (const [text, inside] of [['write(src/gen/**)', '/w/repo/src/gen/x.ts'], ['write(~/secrets)', '/h/secrets'], ['write(**)', '/w/repo/a/b']] as const) {
+      const r = rule('deny', text)
+      expect(matches(r, inside, ctx)).toBe(true)
+      expect(literalRoots([r], 'write', ctx).roots.some(root => inside === root || inside.startsWith(`${root}/`))).toBe(true)
+    }
+  })
 })

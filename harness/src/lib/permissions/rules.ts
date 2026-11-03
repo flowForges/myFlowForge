@@ -156,6 +156,29 @@ function patternForms(pattern: string, ctx: MatchCtx): PatternForm[] {
   return realAbs === abs ? [raw] : [raw, { path: realAbs, literal: real }]
 }
 
+/**
+ * deny / ask 规则里能化成字面路径根的(04 spec §8.4),其余只计数,由调用方按 mustAsk 处理。
+ * 字面 = 没有通配符,或只有结尾的 `/**`、`/`;`**` 按 `<cwd>/**` 算,代入的 cwd / home 不算通配符。
+ * `ask` 的 `**` 例外:人放行之后整个 cwd 仍被挡住,这次运行就白跑了,所以留给 mustAsk 和事后检查。
+ * `[` 在规则引擎里是字面量,照样进 roots;Codex 那边由 profileGaps 降级。
+ * 根比规则宽(`a` 也盖住 `a/x`),只会多拒。两种写法都给:Codex 的权限档自己不取 realpath
+ */
+export function literalRoots(rules: Rule[], subject: 'read' | 'write', ctx: MatchCtx): { roots: string[]; untranslated: number } {
+  const path = pathOf(ctx.platform)
+  const roots = new Set<string>()
+  let untranslated = 0
+  const withoutSep = (p: string) => (p.endsWith(path.sep) && path.parse(p).root !== p ? p.slice(0, -1) : p)
+  for (const rule of rules) {
+    if (rule.subject !== subject || rule.effect === 'allow') continue
+    const forms = patternForms(rule.pattern, ctx)
+    const [{ path: abs, literal }] = forms
+    const askAboutAll = rule.effect === 'ask' && rule.pattern.trim() === '**'
+    if (!askAboutAll && (abs === literal || abs === path.join(literal, '**'))) for (const f of forms) roots.add(withoutSep(f.literal))
+    else untranslated++
+  }
+  return { roots: [...roots], untranslated }
+}
+
 interface CompiledPath {
   forms: PatternForm[]
   folded: Map<boolean, Seg[][]>
