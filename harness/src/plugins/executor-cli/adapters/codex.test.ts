@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { credentialRoots } from '../../../lib/fs/paths'
 import { codexAdapter, filesystemMap, tomlString } from './codex'
-import { WRITE_RUN_SUFFIX, type BuildInput, type RunEvent, type RunState } from './types'
+import { foldEvent, WRITE_RUN_SUFFIX, type BuildInput, type RunEvent, type RunState } from './types'
 
 const fixture = (name: string) =>
   readFileSync(fileURLToPath(new URL(`../../../../test/fixtures/executors/${name}`, import.meta.url)), 'utf8').split('\n').filter(Boolean)
@@ -139,6 +139,11 @@ describe('codex buildArgs', () => {
     expect(ro).toEqual({ ':root': 'read', ':tmpdir': 'write', '/h/.ssh': 'none' })
   })
 
+  it('network must be exactly true to open the network', () => {
+    const odd = codexAdapter.buildArgs(input({ network: 'true,x=1' as never })).args
+    expect(flag(odd, 'permissions.mffai.network=')).toBe('permissions.mffai.network={enabled=false}')
+  })
+
   it('network:true flips the network table and nothing else', () => {
     const off = codexAdapter.buildArgs(input()).args
     const on = codexAdapter.buildArgs(input({ network: true })).args
@@ -209,6 +214,80 @@ describe('filesystemMap and tomlString', () => {
   })
 })
 
+describe('a read entry cannot reopen a none root', () => {
+  const table = (denyRead: string[], readOnlyPaths: string[]) =>
+    parseToml(filesystemMap({ denyRead, readOnlyPaths, readOnly: false })) as Record<string, unknown>
+
+  it('deny write(~/.ssh/config) does not make the file readable', () => {
+    const denyRead = credentialRoots('/h', 'darwin', {})
+    expect(denyRead).toContain('/h/.ssh')
+    const t = fsTable(codexAdapter.buildArgs(input({ denyRead, readOnlyPaths: ['/h/.ssh/config'] })).args)
+    expect(t['/h/.ssh']).toBe('none')
+    expect(t['/h/.ssh/config']).toBeUndefined()
+  })
+
+  it('at or under a none root, with any spelling, nothing is emitted', () => {
+    for (const r of ['/s', '/s/', '/s/a', '/s/a/', '/s/a/b/c', '/s/x/../a']) {
+      expect(table(['/s'], [r])).toEqual({ ':root': 'read', ':project_roots': { '.': 'write' }, ':tmpdir': 'write', '/s': 'none' })
+    }
+    expect(table(['/s/'], ['/s/a'])['/s/a']).toBeUndefined()
+    expect(table(['/'], ['/anything'])['/anything']).toBeUndefined()
+  })
+
+  it('a sibling that only shares the prefix stays read, and none under read is kept', () => {
+    expect(table(['/s'], ['/sibling'])['/sibling']).toBe('read')
+    expect(table(['/s/a'], ['/s'])).toMatchObject({ '/s': 'read', '/s/a': 'none' })
+  })
+})
+
+describe('glob characters in a profile path', () => {
+  const GLOBS = ['/w/cw[1]d', '/w/a*b', '/w/a?b', '/w/[x', '/w/a]b']
+
+  it('a cwd like cw[1]d is unenforceable: never own, and reported', () => {
+    const i = input({ cwd: '/w/cw[1]d', denyRead: ['/w/cw[1]d/hid'], isolation: 'none' })
+    expect(codexAdapter.buildArgs(i).unenforceable).toEqual(['codex_path_glob'])
+    expect(codexAdapter.profileGaps!(i)).toEqual(['codex_path_glob'])
+    expect(() => codexAdapter.buildArgs({ ...i, isolation: 'own' })).toThrow(/codex_path_glob/)
+    expect(() => codexAdapter.buildArgs({ ...i, isolation: 'wrapped' })).toThrow(/codex_path_glob/)
+  })
+
+  it('each metacharacter in cwd, a deny root or a rule path counts', () => {
+    for (const p of GLOBS) {
+      expect(codexAdapter.profileGaps!({ cwd: p, denyRead: [], readOnlyPaths: [] })).toEqual(['codex_path_glob'])
+      expect(codexAdapter.profileGaps!({ cwd: '/w', denyRead: [p], readOnlyPaths: [] })).toEqual(['codex_path_glob'])
+      expect(codexAdapter.profileGaps!({ cwd: '/w', denyRead: [], readOnlyPaths: [p] })).toEqual(['codex_path_glob'])
+      expect(() => codexAdapter.buildArgs(input({ denyRead: [p] }))).toThrow(/codex_path_glob/)
+    }
+  })
+
+  it('characters Codex takes literally do not count', () => {
+    for (const p of ['/w/{p}', '/w/a\\b', '/w/a b', '/w/a"b', '/w/a,b', '/w/空白']) {
+      const i = input({ cwd: p, denyRead: [p], isolation: 'own' })
+      expect(codexAdapter.profileGaps!(i)).toEqual([])
+      expect(codexAdapter.buildArgs(i).unenforceable).toBeUndefined()
+    }
+  })
+
+  it('a read entry already dropped under a none root is not in the profile, so it does not count', () => {
+    expect(codexAdapter.profileGaps!({ cwd: '/w', denyRead: ['/s'], readOnlyPaths: ['/s/a[1]'] })).toEqual([])
+  })
+
+  it('degraded, the profile still runs: glob read keys are left out because Codex refuses them with exit 1', () => {
+    const { args } = codexAdapter.buildArgs(input({ cwd: '/w/cw[1]d', isolation: 'none', denyRead: ['/w/cw[1]d/hid'], readOnlyPaths: ['/w/cw[1]d/gen', '/w/plain'] }))
+    expect(fsTable(args)).toEqual({ ':root': 'read', ':project_roots': { '.': 'write' }, ':tmpdir': 'write', '/w/cw[1]d/hid': 'none', '/w/plain': 'read' })
+  })
+
+  it('no escaping is attempted', () => {
+    const raw = flag(codexAdapter.buildArgs(input({ denyRead: ['/w/a[1]'], isolation: 'none' })).args, 'permissions.mffai.filesystem=')!
+    expect(raw).toContain('"/w/a[1]"="none"')
+  })
+
+  it('a clean run reports nothing', () => {
+    expect(codexAdapter.buildArgs(input()).unenforceable).toBeUndefined()
+    expect(codexAdapter.profileGaps!(input())).toEqual([])
+  })
+})
+
 describe('codex selfTest', () => {
   const st = (over = {}) => codexAdapter.selfTest!({ dir: '/tmp/st', secret: '/tmp/st-secret/key', flags: [], ...over })
 
@@ -270,11 +349,11 @@ describe('codex parseLine', () => {
   })
 
   it('turn.failed and top-level error are errors, in each shape the CLI has used', () => {
-    expect(codexAdapter.parseLine('{"type":"turn.failed","error":{"message":"boom"}}')).toEqual([{ kind: 'error', message: 'boom' }])
-    expect(codexAdapter.parseLine('{"type":"turn.failed","error":"boom"}')).toEqual([{ kind: 'error', message: 'boom' }])
+    expect(codexAdapter.parseLine('{"type":"turn.failed","error":{"message":"boom"}}')).toEqual([{ kind: 'error', message: 'boom', fatal: true }])
+    expect(codexAdapter.parseLine('{"type":"turn.failed","error":"boom"}')).toEqual([{ kind: 'error', message: 'boom', fatal: true }])
     expect(codexAdapter.parseLine('{"type":"error","message":"bad"}')).toEqual([{ kind: 'error', message: 'bad' }])
     expect(codexAdapter.parseLine('{"type":"error","error":{"message":"nested"}}')).toEqual([{ kind: 'error', message: 'nested' }])
-    expect(codexAdapter.parseLine('{"type":"turn.failed"}')).toEqual([{ kind: 'error', message: 'turn.failed' }])
+    expect(codexAdapter.parseLine('{"type":"turn.failed"}')).toEqual([{ kind: 'error', message: 'turn.failed', fatal: true }])
   })
 
   it('bad or odd lines give nothing and never throw', () => {
@@ -288,6 +367,9 @@ describe('codex parseLine', () => {
   it('turn.completed without usable usage still completes', () => {
     expect(codexAdapter.parseLine('{"type":"turn.completed"}')).toEqual([{ kind: 'completed' }])
     expect(codexAdapter.parseLine('{"type":"turn.completed","usage":{"input_tokens":"x"}}')).toEqual([{ kind: 'completed' }])
+    for (const bad of ['-1', '1.5', '1e999']) {
+      expect(codexAdapter.parseLine(`{"type":"turn.completed","usage":{"input_tokens":${bad},"output_tokens":${bad}}}`)).toEqual([{ kind: 'completed' }])
+    }
   })
 
   it('file_change skips entries with no path', () => {
@@ -299,15 +381,8 @@ describe('codex parseLine', () => {
 })
 
 describe('codex classify', () => {
-  /** 把解析出的事件折成 classify 的输入,与 Task 8 的做法一致 */
-  const fold = (lines: string[], over: Partial<RunState> = {}): RunState => {
-    const s = state(over)
-    for (const e of lines.flatMap(l => codexAdapter.parseLine(l))) {
-      if (e.kind === 'completed') { s.completed = true; s.sawResult = true }
-      if (e.kind === 'error') s.errors.push({ message: e.message, auth: e.auth })
-    }
-    return s
-  }
+  const fold = (lines: string[], over: Partial<RunState> = {}): RunState =>
+    lines.flatMap(l => codexAdapter.parseLine(l)).reduce(foldEvent, state(over))
   const recorded = fixture('codex-exec-0.154.jsonl')
 
   it('recorded lines → ok, the warning item ignored', () => {
@@ -338,18 +413,65 @@ describe('codex classify', () => {
     for (const [s, want] of rows) expect(codexAdapter.classify(state(s))).toEqual(want)
   })
 
-  it('the order is cancelled, timedOut, stalled, auth, quota, then exit', () => {
+  it('the order is cancelled, timedOut, stalled, clean completion, auth, quota, then exit', () => {
     const everything = state({ completed: true, code: 1, errors: [{ message: 'quota' }, { message: 'x', auth: true }], cancelled: true, timedOut: true, stalled: true })
     expect(codexAdapter.classify(everything)).toEqual({ status: 'cancelled', reason: 'cancelled' })
     expect(codexAdapter.classify({ ...everything, cancelled: false })).toEqual({ status: 'timeout', reason: 'timeout' })
     expect(codexAdapter.classify({ ...everything, cancelled: false, timedOut: false })).toEqual({ status: 'stalled', reason: 'stalled' })
     expect(codexAdapter.classify({ ...everything, cancelled: false, timedOut: false, stalled: false })).toEqual({ status: 'failed', reason: 'auth_missing' })
-    expect(codexAdapter.classify(state({ completed: true, errors: [{ message: 'quota' }] }))).toEqual({ status: 'failed', reason: 'quota' })
+    expect(codexAdapter.classify(state({ code: 1, errors: [{ message: 'quota' }] }))).toEqual({ status: 'failed', reason: 'quota' })
   })
 
-  it('a retry warning before a completed turn is still ok', () => {
-    expect(codexAdapter.classify(fold(['{"type":"error","message":"Reconnecting... 2/5"}', '{"type":"turn.completed"}']))).toEqual({ status: 'ok' })
+  it('a clean completion is ok whatever was retried before it', () => {
+    expect(codexAdapter.classify(fold(fixture('codex-retried-rate-limit-derived.jsonl')))).toEqual({ status: 'ok' })
+    for (const message of ['Reconnecting... 2/5', 'Reconnecting... 1/1 (unexpected status 401 Unauthorized: x)', 'Reconnecting... 1/1 (rate limit exceeded: x)', 'usage limit', 'not logged in']) {
+      const lines = [JSON.stringify({ type: 'error', message }), '{"type":"turn.completed"}']
+      expect(codexAdapter.classify(fold(lines))).toEqual({ status: 'ok' })
+    }
+  })
+
+  it('the same lines that never completed keep their reason', () => {
+    const lines = fixture('codex-retried-rate-limit-derived.jsonl').filter(l => !l.includes('turn.completed'))
+    expect(codexAdapter.classify(fold(lines))).toEqual({ status: 'failed', reason: 'quota' })
     expect(codexAdapter.classify(fold(['{"type":"error","message":"Reconnecting... 5/5"}']))).toEqual({ status: 'failed', reason: 'cli_error' })
+    expect(codexAdapter.classify(fold(['{"type":"error","message":"unexpected status 401"}']))).toEqual({ status: 'failed', reason: 'auth_missing' })
+    expect(codexAdapter.classify(fold(['{"type":"error","message":"rate limit"}', '{"type":"turn.completed"}'], { code: 1 }))).toEqual({ status: 'failed', reason: 'quota' })
+  })
+
+  it('a terminal 429 is quota', () => {
+    expect(codexAdapter.classify(state({ code: 1, errors: [{ message: 'exceeded retry limit, last status: 429 Too Many Requests' }] }))).toEqual({ status: 'failed', reason: 'quota' })
+    expect(codexAdapter.classify(state({ code: 1, errors: [{ message: 'too many requests' }] }))).toEqual({ status: 'failed', reason: 'quota' })
+    expect(codexAdapter.classify(state({ code: 1, errors: [{ message: 'open 14290.txt' }] }))).toEqual({ status: 'failed', reason: 'cli_error' })
+  })
+
+  it('any turn.failed is a failure, in either order, even with turn.completed', () => {
+    const failed = '{"type":"turn.failed","error":{"message":"boom"}}'
+    const done = '{"type":"turn.completed"}'
+    expect(codexAdapter.parseLine(failed)).toEqual([{ kind: 'error', message: 'boom', fatal: true }])
+    expect(codexAdapter.classify(fold([failed, done]))).toEqual({ status: 'failed', reason: 'cli_error' })
+    expect(codexAdapter.classify(fold([done, failed]))).toEqual({ status: 'failed', reason: 'cli_error' })
+    expect(codexAdapter.classify(fold([done, '{"type":"turn.failed","error":{"message":"quota gone"}}']))).toEqual({ status: 'failed', reason: 'quota' })
+  })
+})
+
+describe('foldEvent', () => {
+  it('carries every flag classify needs', () => {
+    const s = [
+      { kind: 'error', message: 'a', auth: true },
+      { kind: 'error', message: 'b', fatal: true },
+      { kind: 'final', text: 'x' },
+      { kind: 'completed' },
+    ].reduce((acc, e) => foldEvent(acc, e as RunEvent), state())
+    expect(s.errors).toEqual([{ message: 'a', auth: true }, { message: 'b', fatal: true }])
+    expect(s.completed).toBe(true)
+    expect(s.sawResult).toBe(true)
+  })
+
+  it('does not change its input', () => {
+    const s = state()
+    foldEvent(s, { kind: 'error', message: 'a' })
+    foldEvent(s, { kind: 'completed' })
+    expect(s).toEqual(state())
   })
 })
 

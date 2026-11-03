@@ -149,6 +149,28 @@ describe('formatDiagnostic', () => {
     expect(pem).not.toContain('BODYBODY')
   })
 
+  const HIDDEN = ['\u00ad', '\u034f', '\u061c', '\u115f', '\u17b4', '\u180e', '\u200b', '\u2060', '\u3164', '\ufe00', '\ufe0f', '\uffa0', '\u{e0001}', '\u{e0041}', '\u{e007f}', '\u{e0100}']
+
+  it.each(HIDDEN.map(c => [c.codePointAt(0)!.toString(16), c]))('U+%s is removed from free text, so it can neither split a secret nor carry text', (_, c) => {
+    const text = noticeText(d({ final: `sk-abcdefgh${c}ijklmnopqrstuvwxyz and ${c}hello`, stderrTail: `sk-abcdefgh${c}ijklmnopqrstuvwxyz` }))
+    expect(text).not.toContain('abcdefgh')
+    expect(text).not.toContain(c)
+    expect(text).toContain('and hello')
+  })
+
+  it.each(HIDDEN.map(c => [c.codePointAt(0)!.toString(16), c]))('U+%s in a name is written as JSON', (_, c) => {
+    const line = formatDiagnostic(d({ changed: { files: [`x${c}y`], source: 'git' } })).split('\n')[1]
+    expect(line).not.toContain(c)
+    expect(JSON.parse(line.slice('changed: 1 (source=git) '.length))).toBe(`x${c}y`)
+  })
+
+  it('a secret in a name is masked even when a control or invisible character splits it', () => {
+    for (const c of ['\u0001', '\u00ad', '\u200b', '\u{e0041}']) {
+      const text = formatDiagnostic(d({ changed: { files: [`sk-abcdefgh${c}ijklmnopqrstuvwxyz.txt`], source: 'git' }, worktree: `/w/sk-abcdefgh${c}ijklmnopqrstuvwxyz` }))
+      expect(text).not.toContain('abcdefgh')
+    }
+  })
+
   it('a masked field does not swallow the fields after it', () => {
     const text = formatDiagnostic(d({ stderrTail: '-----BEGIN RSA PRIVATE KEY-----\nbody', final: 'kept' }))
     expect(text).toContain('stderr-tail: ***')

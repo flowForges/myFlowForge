@@ -8,7 +8,7 @@ import {
 /** bin/、settings.json、external-commands/ 不在内:写了它们,下次在沙箱外运行就是任意代码执行(C4) */
 const WRITABLE = ['.auth', 'logs', 'projects', 'tmp', 'cache', '.cache']
 
-const NO_WEB = ['WebFetch', 'WebSearch', 'ImageSearch', 'CronCreate'].flatMap(t => ['--disallowed-tools', t])
+const NO_WEB = ['WebFetch', 'WebSearch', 'ImageSearch', 'CronCreate', 'ImageGen'].flatMap(t => ['--disallowed-tools', t])
 
 function modeArgs(i: BuildInput): string[] {
   if (i.readOnly) {
@@ -39,22 +39,31 @@ function blockEvents(b: Record<string, unknown>): RunEvent[] {
 }
 
 function assistantEvents(o: Record<string, unknown>): RunEvent[] {
-  const content = record(o.message)?.content
+  const message = record(o.message)
+  const content = message?.content
   const blocks = Array.isArray(content) ? content.flatMap<Record<string, unknown>>(b => record(b) ?? []) : []
   const events = blocks.flatMap(blockEvents)
-  if (o.error !== 'authentication_failed') return events
+  const failed = o.error !== undefined && o.error !== null
+  if (!message && !failed) return events
+  if (!failed) return [...events, { kind: 'assistant', failed: false }]
   const said = blocks.flatMap(b => (b.type === 'text' ? (text(b.text) ?? []) : [])).at(-1)
-  return [...events, { kind: 'error', message: said ?? 'authentication_failed', auth: true }]
+  const auth = o.error === 'authentication_failed'
+  const error: RunEvent = { kind: 'error', message: said ?? text(o.error) ?? 'assistant error', ...(auth ? { auth } : {}) }
+  return [...events, error, { kind: 'assistant', failed: true }]
 }
 
+/**
+ * 只有 subtype:"success" 且 is_error 严格为 false 才算完成。subtype 单独不可信:
+ * 未登录时是 success + is_error:true(spec §2);缺字段、改了形状的都不算成功
+ */
 function resultEvents(o: Record<string, unknown>): RunEvent[] {
   const final = text(o.result)
+  const failed = (o.is_error !== undefined && o.is_error !== false) || (o.subtype !== undefined && o.subtype !== 'success')
   return [
     ...(final ? [{ kind: 'final', text: final } as const] : []),
     ...usageEvents(o.usage, 'cache_read_input_tokens'),
-    // subtype 不可信:未登录时是 success + is_error:true(spec §2)
-    ...(o.is_error === true ? [{ kind: 'error', message: final ?? text(o.subtype) ?? 'result' } as const] : []),
-    { kind: 'completed' },
+    ...(failed ? [{ kind: 'error', message: final ?? text(o.subtype) ?? 'result' } as const] : []),
+    ...(o.subtype === 'success' && o.is_error === false ? [{ kind: 'completed' } as const] : []),
   ]
 }
 
@@ -91,8 +100,7 @@ export const qoderAdapter: Adapter = {
     return o.type === 'result' ? resultEvents(o) : []
   },
 
-  // is_error 已经进了 errors,所以"没有错误"才算成功
-  classify: s => classifyOutcome(s, (s.sawResult || s.completed) && s.errors.length === 0),
+  classify: s => classifyOutcome(s, s.completed && s.assistantError !== true),
 
   loginArgs: ['status', '-o', 'json'],
   parseLogin(out) {

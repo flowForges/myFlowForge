@@ -1,0 +1,3 @@
+{"type":"system","subtype":"init","session_id":"s1"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"done"}]},"parent_tool_use_id":null,"session_id":"s1"}
+{"type":"result","subtype":"success","is_error":false,"result":"done","usage":{"input_tokens":1,"output_tokens":1},"session_id":"s1"}

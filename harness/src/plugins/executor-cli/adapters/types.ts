@@ -11,8 +11,11 @@ export type RunEvent =
   | { kind: 'files'; files: string[] }
   | { kind: 'final'; text: string }
   | { kind: 'usage'; usage: { input: number; output: number; cached?: number } }
-  | { kind: 'error'; message: string; auth?: boolean }
-  /** Codex 的 turn.completed、Qoder 的 result。调用方见到它就置 completed 和 sawResult */
+  /** fatal:这一轮确实失败了(Codex 的 turn.failed),后面就算有 turn.completed 也不算成功 */
+  | { kind: 'error'; message: string; auth?: boolean; fatal?: boolean }
+  /** Qoder 每条 assistant 消息一个;只有最后一条算数 */
+  | { kind: 'assistant'; failed: boolean }
+  /** Codex 的 turn.completed;Qoder 明确成功的 result */
   | { kind: 'completed' }
 
 export interface BuildInput {
@@ -31,7 +34,9 @@ export interface RunState {
   signal: string | null
   completed: boolean
   sawResult: boolean
-  errors: { message: string; auth?: boolean }[]
+  errors: { message: string; auth?: boolean; fatal?: boolean }[]
+  /** 最后一条 assistant 消息带了 error */
+  assistantError?: boolean
   timedOut: boolean
   stalled: boolean
   cancelled: boolean
@@ -52,7 +57,13 @@ export interface Adapter {
   allowRead(home: string, env: EnvSnapshot): string[]
   allowWrite(home: string, env: EnvSnapshot): string[]
   hosts: string[]
-  buildArgs(i: BuildInput): { args: string[]; stdin?: string }
+  /**
+   * unenforceable:这组路径下隔离落实不了的原因(与 profileGaps 相同)。
+   * 这时 isolation 必须已经是 none,否则抛:不能声称隔离却悄悄失效
+   */
+  buildArgs(i: BuildInput): { args: string[]; stdin?: string; unenforceable?: string[] }
+  /** 同步、纯函数,权限门判定隔离时用;非空 → 这次运行 isolation:'none',内容进 missing */
+  profileGaps?(i: Pick<BuildInput, 'cwd' | 'denyRead' | 'readOnlyPaths'>): string[]
   /** 读不懂的行 → [] */
   parseLine(line: string): RunEvent[]
   classify(s: RunState): Outcome
@@ -108,7 +119,7 @@ export function text(v: unknown): string | undefined {
 export function usageEvents(v: unknown, cachedKey: string): RunEvent[] {
   const u = record(v)
   if (!u) return []
-  const num = (k: string) => (typeof u[k] === 'number' ? (u[k] as number) : undefined)
+  const num = (k: string) => (Number.isSafeInteger(u[k]) && (u[k] as number) >= 0 ? (u[k] as number) : undefined)
   const input = num('input_tokens')
   const output = num('output_tokens')
   if (input === undefined && output === undefined) return []
@@ -116,17 +127,29 @@ export function usageEvents(v: unknown, cachedKey: string): RunEvent[] {
   return [{ kind: 'usage', usage: { input: input ?? 0, output: output ?? 0, ...(cached === undefined ? {} : { cached }) } }]
 }
 
-const AUTH_ERROR = /\b401\b|unauthorized|not logged in/i
-const QUOTA_ERROR = /usage limit|quota|rate limit/i
+/** 把一个事件折进 classify 的输入。运行管理器必须走这里,旗标才不会漏 */
+export function foldEvent(s: RunState, e: RunEvent): RunState {
+  if (e.kind === 'completed') return { ...s, completed: true, sawResult: true }
+  if (e.kind === 'assistant') return { ...s, assistantError: e.failed }
+  if (e.kind !== 'error') return s
+  const { kind: _kind, ...error } = e
+  return { ...s, errors: [...s.errors, error] }
+}
 
-/** spec §14 的顺序:取消、超时、卡死、认证、额度,最后才看退出和完成 */
+const AUTH_ERROR = /\b401\b|unauthorized|not logged in/i
+const QUOTA_ERROR = /usage limit|quota|rate limit|\b429\b|too many requests/i
+
+/**
+ * 取消、超时、卡死,然后是干净的完成:重试过的 429、401 不影响它。
+ * 认证和额度只解释没有完成的运行
+ */
 export function classifyOutcome(s: RunState, succeeded: boolean): Outcome {
   if (s.cancelled) return { status: 'cancelled', reason: 'cancelled' }
   if (s.timedOut) return { status: 'timeout', reason: 'timeout' }
   if (s.stalled) return { status: 'stalled', reason: 'stalled' }
+  if (s.code === 0 && succeeded) return { status: 'ok' }
   if (s.errors.some(e => e.auth || AUTH_ERROR.test(e.message))) return { status: 'failed', reason: 'auth_missing' }
   if (s.errors.some(e => QUOTA_ERROR.test(e.message))) return { status: 'failed', reason: 'quota' }
-  if (s.code === 0 && succeeded) return { status: 'ok' }
   if (s.errors.length > 0) return { status: 'failed', reason: 'cli_error' }
   return { status: 'failed', reason: s.code === 0 ? 'no_result' : 'exit_nonzero' }
 }

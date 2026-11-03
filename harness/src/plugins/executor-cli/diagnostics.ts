@@ -63,7 +63,9 @@ const count = (v: number | null | undefined) => (typeof v === 'number' && Number
 const TERMINAL_ESCAPE = /\u001b\[[0-?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g
 const LINE_BREAK = /\r\n?|[\u000b\u000c\u0085\u2028\u2029]/g
 // eslint-disable-next-line no-control-regex
-const INVISIBLE = /[\u0000-\u0008\u000e-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g
+const INVISIBLE = /[\u0000-\u0008\u000e-\u001f\u007f-\u009f\p{Cf}\p{Default_Ignorable_Code_Point}]/gu
+
+const cleanText = (s: string) => s.replace(TERMINAL_ESCAPE, '').replace(LINE_BREAK, '\n').replace(INVISIBLE, '')
 
 /**
  * 自由文本:先清控制字符再打码,被转义序列隔开的密钥清完才认得出;打码在截断之前,否则
@@ -71,21 +73,26 @@ const INVISIBLE = /[\u0000-\u0008\u000e-\u001f\u007f-\u009f\u200b-\u200f\u202a-\
  */
 function freeText(s: string | undefined, max: number): string {
   if (!s) return '-'
-  const clean = s.replace(TERMINAL_ESCAPE, '').replace(LINE_BREAK, '\n').replace(INVISIBLE, '')
-  const out = clip(redact(clean), max).trimEnd()
+  const out = clip(redact(cleanText(s)), max).trimEnd()
   return out === '' ? '-' : out.replace(/\n/g, '\n  ')
 }
 
 // eslint-disable-next-line no-control-regex
-const JSON_ONLY = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff",]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]|^\s|\s$|^-?$/
-// JSON.stringify 不转这些:它们照样能断行或改变显示
-const JSON_EXTRA = /[\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g
+const JSON_ONLY = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\p{Cf}\p{Default_Ignorable_Code_Point}",]|\p{Cs}|^\s|\s$|^-?$/u
+// JSON.stringify 不转这些:它们照样能断行、改变显示或藏文字
+const JSON_EXTRA = /[\u007f-\u009f\u2028\u2029\p{Cf}\p{Default_Ignorable_Code_Point}]/gu
+const unicodeEscape = (c: string) => [...Array(c.length).keys()].map(i => `\\u${c.charCodeAt(i).toString(16).padStart(4, '0')}`).join('')
 
-/** 文件名与路径:能假冒一行、一个列表项或"空"的,写成 JSON */
+/**
+ * 文件名与路径:能假冒一行、一个列表项或"空"的,写成 JSON。
+ * 名字要原样给出,所以只在清过之后才认得出密钥时才用清过的版本
+ */
 function nameText(raw: string, max: number): string {
-  const name = clip(redact(raw), max)
+  const clean = cleanText(raw)
+  const masked = redact(clean)
+  const name = clip(masked !== clean ? masked : raw, max)
   if (!JSON_ONLY.test(name)) return name
-  return JSON.stringify(name).replace(JSON_EXTRA, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
+  return JSON.stringify(name).replace(JSON_EXTRA, unicodeEscape)
 }
 
 function nameList(names: string[] | undefined): string {

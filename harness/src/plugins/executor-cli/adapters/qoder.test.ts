@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { qoderAdapter } from './qoder'
-import { ModelSchema, WRITE_RUN_SUFFIX, type BuildInput, type RunState } from './types'
+import { foldEvent, ModelSchema, WRITE_RUN_SUFFIX, type BuildInput, type RunState } from './types'
 
 const fixture = (name: string) =>
   readFileSync(fileURLToPath(new URL(`../../../../test/fixtures/executors/${name}`, import.meta.url)), 'utf8').split('\n').filter(Boolean)
@@ -22,7 +22,7 @@ const state = (over: Partial<RunState> = {}): RunState => ({
 })
 
 const BASE = ['-p', '--output-format', 'stream-json', '--cwd', '/work/repo', '--strict-mcp-config', '--setting-sources', 'user']
-const NO_WEB = ['--disallowed-tools', 'WebFetch', '--disallowed-tools', 'WebSearch', '--disallowed-tools', 'ImageSearch', '--disallowed-tools', 'CronCreate']
+const NO_WEB = ['--disallowed-tools', 'WebFetch', '--disallowed-tools', 'WebSearch', '--disallowed-tools', 'ImageSearch', '--disallowed-tools', 'CronCreate', '--disallowed-tools', 'ImageGen']
 const SKIP = '--dangerously-skip-permissions'
 const modes = [
   { readOnly: false, isolation: 'wrapped' as const },
@@ -82,11 +82,11 @@ describe('qoder buildArgs', () => {
     }
   })
 
-  it('write modes disallow the four tools', () => {
+  it('write modes disallow the listed tools', () => {
     for (const isolation of ['wrapped', 'none', 'own'] as const) {
       const { args } = qoderAdapter.buildArgs(input({ isolation }))
       const off = args.flatMap((a, i) => (a === '--disallowed-tools' ? [args[i + 1]] : []))
-      expect(off).toEqual(['WebFetch', 'WebSearch', 'ImageSearch', 'CronCreate'])
+      expect(off).toEqual(['WebFetch', 'WebSearch', 'ImageSearch', 'CronCreate', 'ImageGen'])
     }
   })
 
@@ -137,19 +137,30 @@ describe('qoder parseLine', () => {
       { kind: 'native', id: 's1' },
       { kind: 'final', text: 'Not logged in · Please run /login' },
       { kind: 'error', message: 'Not logged in · Please run /login', auth: true },
+      { kind: 'assistant', failed: true },
       { kind: 'final', text: 'Not logged in · Please run /login' },
       { kind: 'error', message: 'Not logged in · Please run /login' },
+    ])
+  })
+
+  it('reads an explicit success', () => {
+    expect(fixture('qoder-success-explicit-derived.jsonl').flatMap(l => qoderAdapter.parseLine(l))).toEqual([
+      { kind: 'native', id: 's1' },
+      { kind: 'final', text: 'done' },
+      { kind: 'assistant', failed: false },
+      { kind: 'final', text: 'done' },
+      { kind: 'usage', usage: { input: 1, output: 1 } },
       { kind: 'completed' },
     ])
   })
 
-  it('reads the success lines (derived from the app tests)', () => {
+  it('the app-derived success lines carry no is_error, so they are not a completion', () => {
     expect(fixture('qoder-success-derived.jsonl').flatMap(l => qoderAdapter.parseLine(l))).toEqual([
       { kind: 'final', text: '…' },
       { kind: 'progress', progress: 'tool', text: 'Bash: ls' },
+      { kind: 'assistant', failed: false },
       { kind: 'final', text: '…' },
       { kind: 'usage', usage: { input: 1, output: 1 } },
-      { kind: 'completed' },
     ])
   })
 
@@ -170,74 +181,129 @@ describe('qoder parseLine', () => {
       { kind: 'files', files: ['b.ts'] },
       { kind: 'progress', progress: 'tool', text: 'Read: c.ts' },
       { kind: 'progress', progress: 'tool', text: 'Edit' },
+      { kind: 'assistant', failed: false },
     ])
   })
 
   it('authentication_failed with no text still reports auth', () => {
     expect(qoderAdapter.parseLine(assistant([], { error: 'authentication_failed' }))).toEqual([
       { kind: 'error', message: 'authentication_failed', auth: true },
+      { kind: 'assistant', failed: true },
     ])
   })
 
-  it('a result with is_error and no text is still an error', () => {
+  it('any other assistant.error is a plain error', () => {
+    expect(qoderAdapter.parseLine(assistant([{ type: 'text', text: 'slow down' }], { error: 'rate_limit' }))).toEqual([
+      { kind: 'final', text: 'slow down' },
+      { kind: 'error', message: 'slow down' },
+      { kind: 'assistant', failed: true },
+    ])
+    expect(qoderAdapter.parseLine(assistant([], { error: 'rate_limit' }))).toEqual([
+      { kind: 'error', message: 'rate_limit' },
+      { kind: 'assistant', failed: true },
+    ])
+    expect(qoderAdapter.parseLine(assistant([], { error: { code: 1 } }))).toEqual([
+      { kind: 'error', message: 'assistant error' },
+      { kind: 'assistant', failed: true },
+    ])
+    expect(qoderAdapter.parseLine(assistant([], { error: null }))).toEqual([{ kind: 'assistant', failed: false }])
+  })
+
+  it('a result that is not explicitly successful is an error or nothing, never a completion', () => {
     expect(qoderAdapter.parseLine('{"type":"result","is_error":true,"subtype":"error_during_execution"}')).toEqual([
       { kind: 'error', message: 'error_during_execution' },
-      { kind: 'completed' },
     ])
+    expect(qoderAdapter.parseLine('{"type":"result"}')).toEqual([])
+    expect(qoderAdapter.parseLine('{"type":"result","subtype":"success"}')).toEqual([])
+    expect(qoderAdapter.parseLine('{"type":"result","is_error":false}')).toEqual([])
+    expect(qoderAdapter.parseLine('{"type":"result","subtype":"error_max_turns","is_error":false}')).toEqual([{ kind: 'error', message: 'error_max_turns' }])
+    expect(qoderAdapter.parseLine('{"type":"result","subtype":"success","is_error":"true"}')).toEqual([{ kind: 'error', message: 'success' }])
+    expect(qoderAdapter.parseLine('{"type":"result","subtype":"success","is_error":0}')).toEqual([{ kind: 'error', message: 'success' }])
   })
 
-  it('cached tokens are read when present; empty usage gives no usage event', () => {
-    expect(qoderAdapter.parseLine('{"type":"result","usage":{"input_tokens":3,"output_tokens":4,"cache_read_input_tokens":2}}')).toEqual([
+  it('cached tokens are read when present; empty or nonsense usage gives no usage event', () => {
+    const ok = '"subtype":"success","is_error":false'
+    expect(qoderAdapter.parseLine(`{"type":"result",${ok},"usage":{"input_tokens":3,"output_tokens":4,"cache_read_input_tokens":2}}`)).toEqual([
       { kind: 'usage', usage: { input: 3, output: 4, cached: 2 } },
       { kind: 'completed' },
     ])
-    expect(qoderAdapter.parseLine('{"type":"result","usage":{}}')).toEqual([{ kind: 'completed' }])
+    expect(qoderAdapter.parseLine(`{"type":"result",${ok},"usage":{}}`)).toEqual([{ kind: 'completed' }])
+    expect(qoderAdapter.parseLine(`{"type":"result",${ok},"usage":{"input_tokens":1e999}}`)).toEqual([{ kind: 'completed' }])
   })
 
   it('bad or odd lines give nothing and never throw', () => {
     for (const l of ['', 'nope', '{', 'null', '7', '[]', '{"type":"assistant"}', '{"type":"assistant","message":null}',
-      '{"type":"assistant","message":{"content":"x"}}', '{"type":"assistant","message":{"content":[null,5,{"type":"text"},{"type":"tool_use"},{"type":"thinking"}]}}',
       '{"type":"system"}', '{"type":"system","subtype":"init"}', '{"type":"system","subtype":"other","session_id":"s"}', '{"type":"user"}']) {
       expect(qoderAdapter.parseLine(l)).toEqual([])
+    }
+    for (const l of ['{"type":"assistant","message":{"content":"x"}}', '{"type":"assistant","message":{"content":[null,5,{"type":"text"},{"type":"tool_use"},{"type":"thinking"}]}}']) {
+      expect(qoderAdapter.parseLine(l)).toEqual([{ kind: 'assistant', failed: false }])
     }
   })
 })
 
 describe('qoder classify', () => {
-  const fold = (lines: string[], over: Partial<RunState> = {}): RunState => {
-    const s = state(over)
-    for (const e of lines.flatMap(l => qoderAdapter.parseLine(l))) {
-      if (e.kind === 'completed') { s.completed = true; s.sawResult = true }
-      if (e.kind === 'error') s.errors.push({ message: e.message, auth: e.auth })
-    }
-    return s
-  }
+  const fold = (lines: string[], over: Partial<RunState> = {}): RunState =>
+    lines.flatMap(l => qoderAdapter.parseLine(l)).reduce(foldEvent, state(over))
+  const SUCCESS = '{"type":"result","subtype":"success","is_error":false,"result":"done"}'
+  const clean = '{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}'
+  const erred = (e: string) => JSON.stringify({ type: 'assistant', message: { content: [] }, error: e })
 
   it('recorded lines → auth_missing, even though subtype is success', () => {
     expect(qoderAdapter.classify(fold(fixture('qoder-not-logged-in-1.0.29.jsonl'), { code: 1 }))).toEqual({ status: 'failed', reason: 'auth_missing' })
     expect(qoderAdapter.classify(fold(fixture('qoder-not-logged-in-1.0.29.jsonl'), { code: 0 }))).toEqual({ status: 'failed', reason: 'auth_missing' })
   })
 
-  it('success lines → ok', () => {
-    expect(qoderAdapter.classify(fold(fixture('qoder-success-derived.jsonl')))).toEqual({ status: 'ok' })
+  it('an explicit success → ok', () => {
+    expect(qoderAdapter.classify(fold(fixture('qoder-success-explicit-derived.jsonl')))).toEqual({ status: 'ok' })
+    expect(qoderAdapter.classify(fold([SUCCESS]))).toEqual({ status: 'ok' })
+  })
+
+  it('without is_error:false it is not ok: the app-derived lines are no_result', () => {
+    expect(qoderAdapter.classify(fold(fixture('qoder-success-derived.jsonl')))).toEqual({ status: 'failed', reason: 'no_result' })
+  })
+
+  it.each([
+    ['{"type":"result"}', 'no_result'],
+    ['{"type":"result","subtype":"success"}', 'no_result'],
+    ['{"type":"result","is_error":false}', 'no_result'],
+    ['{"type":"result","subtype":"success","is_error":"true"}', 'cli_error'],
+    ['{"type":"result","subtype":"success","is_error":1}', 'cli_error'],
+    ['{"type":"result","subtype":"success","is_error":true,"result":"something broke"}', 'cli_error'],
+    ['{"type":"result","subtype":"error_during_execution"}', 'cli_error'],
+    ['{"type":"result","subtype":"error_max_turns","is_error":false}', 'cli_error'],
+  ])('%s → %s with exit 0', (line, reason) => {
+    expect(qoderAdapter.classify(fold([line]))).toEqual({ status: 'failed', reason })
+  })
+
+  it('an error on the final assistant message beats a clean result', () => {
+    expect(qoderAdapter.classify(fold([erred('overloaded'), SUCCESS]))).toEqual({ status: 'failed', reason: 'cli_error' })
+    expect(qoderAdapter.classify(fold([SUCCESS, erred('overloaded')]))).toEqual({ status: 'failed', reason: 'cli_error' })
+    expect(qoderAdapter.classify(fold([erred('rate_limit'), SUCCESS]))).toEqual({ status: 'failed', reason: 'cli_error' })
+    expect(qoderAdapter.classify(fold([clean, erred('authentication_failed'), SUCCESS]))).toEqual({ status: 'failed', reason: 'auth_missing' })
+  })
+
+  it('an error on an earlier message, with a clean message after it, is ok', () => {
+    expect(qoderAdapter.classify(fold([erred('overloaded'), clean, SUCCESS]))).toEqual({ status: 'ok' })
+  })
+
+  it('a line with no message does not clear an earlier error', () => {
+    expect(qoderAdapter.classify(fold([erred('overloaded'), '{"type":"assistant"}', SUCCESS]))).toEqual({ status: 'failed', reason: 'cli_error' })
   })
 
   it('table', () => {
     const rows: [Partial<RunState>, object][] = [
-      [{ sawResult: true, errors: [{ message: 'boom' }] }, { status: 'failed', reason: 'cli_error' }],
-      [{ sawResult: true, code: 2 }, { status: 'failed', reason: 'exit_nonzero' }],
+      [{ completed: true, errors: [{ message: 'boom' }], assistantError: true }, { status: 'failed', reason: 'cli_error' }],
+      [{ completed: true, code: 2 }, { status: 'failed', reason: 'exit_nonzero' }],
       [{}, { status: 'failed', reason: 'no_result' }],
+      [{ sawResult: true }, { status: 'failed', reason: 'no_result' }],
       [{ code: 1 }, { status: 'failed', reason: 'exit_nonzero' }],
-      [{ sawResult: true, errors: [{ message: 'rate limit' }] }, { status: 'failed', reason: 'quota' }],
-      [{ sawResult: true, cancelled: true }, { status: 'cancelled', reason: 'cancelled' }],
-      [{ sawResult: true, timedOut: true }, { status: 'timeout', reason: 'timeout' }],
-      [{ sawResult: true, stalled: true }, { status: 'stalled', reason: 'stalled' }],
+      [{ errors: [{ message: 'rate limit' }] }, { status: 'failed', reason: 'quota' }],
+      [{ completed: true, cancelled: true }, { status: 'cancelled', reason: 'cancelled' }],
+      [{ completed: true, timedOut: true }, { status: 'timeout', reason: 'timeout' }],
+      [{ completed: true, stalled: true }, { status: 'stalled', reason: 'stalled' }],
     ]
     for (const [s, want] of rows) expect(qoderAdapter.classify(state(s))).toEqual(want)
-  })
-
-  it('an is_error result is a failure with a clean exit and no auth text', () => {
-    expect(qoderAdapter.classify(fold(['{"type":"result","subtype":"success","is_error":true,"result":"something broke"}']))).toEqual({ status: 'failed', reason: 'cli_error' })
   })
 })
 

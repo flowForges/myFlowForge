@@ -22,21 +22,38 @@ function pathKey(p: string, what: string): string {
   return n.length > 1 && n.endsWith('/') ? n.slice(0, -1) : n
 }
 
+/** 实测 0.154:路径里有这些字符时 Codex 按 glob 解释,none 悄悄失效且不报错,read 直接拒绝(exit 1) */
+const GLOB = /[*?[\]]/
+export const PATH_GLOB_GAP = 'codex_path_glob'
+
+const atOrUnder = (p: string, root: string) => p === root || p.startsWith(root === '/' ? '/' : `${root}/`)
+
 /**
- * 真实运行和自检共用这一个。相对路径直接抛:悄悄丢掉就是丢掉一条 deny,
- * 原样写进去又可能撞上 `:root`。同一路径两边都有时 none 赢,只收窄
+ * 相对路径直接抛:悄悄丢掉就是丢掉一条 deny,原样写进去又可能撞上 `:root`。
+ * 最具体的条目赢,所以 none 里或 none 本身的 read 不能写:写了就把那个文件放开了
  */
+function profilePaths(i: Pick<BuildInput, 'denyRead' | 'readOnlyPaths'>): { none: string[]; read: string[] } {
+  const none = [...new Set(i.denyRead.filter(p => p !== '').map(p => pathKey(p, 'denyRead')))]
+  const read = [...new Set(i.readOnlyPaths.filter(p => p !== '').map(p => pathKey(p, 'readOnlyPaths')))]
+  return { none, read: read.filter(r => !none.some(n => atOrUnder(r, n))) }
+}
+
+/** 真实运行和自检共用这一个。带 glob 字符的 read 不写:那样的运行已经按 none 算,写了只会让 Codex 退出 */
 export function filesystemMap(i: Pick<BuildInput, 'denyRead' | 'readOnlyPaths' | 'readOnly'>): string {
-  const none = new Set(i.denyRead.filter(p => p !== '').map(p => pathKey(p, 'denyRead')))
-  const read = new Set(i.readOnlyPaths.filter(p => p !== '').map(p => pathKey(p, 'readOnlyPaths')))
+  const { none, read } = profilePaths(i)
   const entries = [
     '":root"="read"',
     ...(i.readOnly ? [] : ['":project_roots"={"."="write"}']),
     '":tmpdir"="write"',
-    ...[...none].map(p => `${tomlString(p)}="none"`),
-    ...[...read].filter(p => !none.has(p)).map(p => `${tomlString(p)}="read"`),
+    ...none.map(p => `${tomlString(p)}="none"`),
+    ...read.filter(p => !GLOB.test(p)).map(p => `${tomlString(p)}="read"`),
   ]
   return `{${entries.join(',')}}`
+}
+
+function profileGaps(i: Pick<BuildInput, 'cwd' | 'denyRead' | 'readOnlyPaths'>): string[] {
+  const { none, read } = profilePaths(i)
+  return [i.cwd, ...none, ...read].some(p => GLOB.test(p)) ? [PATH_GLOB_GAP] : []
 }
 
 function configFlags(i: Pick<BuildInput, 'denyRead' | 'readOnlyPaths' | 'readOnly' | 'network'>): string[] {
@@ -45,7 +62,7 @@ function configFlags(i: Pick<BuildInput, 'denyRead' | 'readOnlyPaths' | 'readOnl
     '-c', 'web_search="disabled"',
     '-c', `default_permissions="${PROFILE}"`,
     '-c', `permissions.${PROFILE}.filesystem=${filesystemMap(i)}`,
-    '-c', `permissions.${PROFILE}.network={enabled=${i.network}}`,
+    '-c', `permissions.${PROFILE}.network={enabled=${i.network === true}}`,
   ]
 }
 
@@ -105,7 +122,11 @@ export const codexAdapter: Adapter = {
   allowWrite: () => [],
   hosts: [],
 
+  profileGaps,
+
   buildArgs(i) {
+    const gaps = profileGaps(i)
+    if (gaps.length > 0 && i.isolation !== 'none') throw new Error(`${gaps.join(',')}: isolation must be none`)
     return {
       args: [
         'exec', '--json', '--ephemeral', '--skip-git-repo-check', '--ignore-user-config', '--ignore-rules',
@@ -115,6 +136,7 @@ export const codexAdapter: Adapter = {
         '-',
       ],
       stdin: promptStdin(i),
+      ...(gaps.length > 0 ? { unenforceable: gaps } : {}),
     }
   },
 
@@ -134,6 +156,7 @@ export const codexAdapter: Adapter = {
       case 'turn.completed':
         return [...usageEvents(o.usage, 'cached_input_tokens'), { kind: 'completed' }]
       case 'turn.failed':
+        return [{ kind: 'error', message: errorMessage(o, o.type), fatal: true }]
       case 'error':
         return [{ kind: 'error', message: errorMessage(o, o.type) }]
       default:
@@ -141,8 +164,8 @@ export const codexAdapter: Adapter = {
     }
   },
 
-  // 顶层 error 也可能只是重试计数(`Reconnecting... 2/5`):轮真的完成了就算成功
-  classify: s => classifyOutcome(s, s.completed),
+  // 顶层 error 也可能只是重试计数(`Reconnecting... 2/5`):轮真的完成了就算成功。turn.failed 不算重试
+  classify: s => classifyOutcome(s, s.completed && !s.errors.some(e => e.fatal)),
 
   loginArgs: ['login', 'status'],
   parseLogin(out) {
