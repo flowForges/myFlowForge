@@ -434,9 +434,51 @@ describe('bwrapArgs for a wrapped CLI (04 Task 7)', () => {
     expect(at(a, '--tmpfs', RUN)).toHaveLength(1)
   })
 
-  it('without the new params the argv is exactly what it was', () => {
+  it('empty new params give the same argv as absent ones', () => {
     const plain = bwrapArgs(params())
     expect(bwrapArgs(params({ extraWritable: [], ruleDenyRead: [], ruleDenyWrite: [], readOnly: false }))).toEqual(plain)
+  })
+
+  it('deny write(~/.ssh/config): a rule root inside a hidden dir is never mounted (review C2)', () => {
+    const cfgFile = '/data/ssh/config'
+    const a = bwrapArgs(params({ ruleDenyWrite: [`${H}/.ssh/config`], ...qfs([], [cfgFile]), realpath: p => (p === `${H}/.ssh/config` ? cfgFile : REAL[p] ?? p) }))
+    expect(a).not.toContain(cfgFile)
+    expect(at(a, '--tmpfs', '/data/ssh')).toHaveLength(1)
+  })
+
+  it('a rule root equal to a hidden file stays /dev/null, and another session under the data dir stays hidden (review C2)', () => {
+    const other = `${DATA}/sessions/other`
+    const a = bwrapArgs(params({ ruleDenyWrite: [`${H}/.npmrc`, other], ...qfs([other]) }))
+    expect(at(a, '--ro-bind', `${H}/.npmrc`, `${H}/.npmrc`)).toHaveLength(0)
+    expect(at(a, '--ro-bind', '/dev/null', `${H}/.npmrc`)).toHaveLength(1)
+    expect(a).not.toContain(other)
+  })
+
+  it('a rule root inside what is re-exposed still holds: session tmp, and allowWrite inside a hidden dir', () => {
+    const inTmp = `${TMP}/gen`
+    const wide = `${H}/.qoder`
+    const inAuth = `${AUTH}/k`
+    const a = bwrapArgs(params({ extraWritable: [AUTH], hideDirs: [wide], ruleDenyWrite: [inTmp, inAuth], ...qfs([inTmp, inAuth]) }))
+    expect(last(a, '--ro-bind', inTmp, inTmp)).toBeGreaterThan(last(a, '--bind', TMP, TMP))
+    expect(last(a, '--ro-bind', inAuth, inAuth)).toBeGreaterThan(last(a, '--bind', AUTH, AUTH))
+  })
+
+  it('git protections are re-applied after an allowWrite bind that holds them (review I2)', () => {
+    const cwd = `${QODER}/projects/p`
+    const git = `${cwd}/.git`
+    const wt = `${git}/worktrees/w/gitdir`
+    const projects = `${QODER}/projects`
+    const a = bwrapArgs(params({ cwd, gitDirs: [git], gitProtected: [wt], extraWritable: [projects], ...qfs([projects, cwd, git, `${git}/hooks`], [`${git}/config`, `${git}/config.worktree`, wt]) }))
+    const bind = last(a, '--bind', projects, projects)
+    expect(bind).toBeGreaterThan(last(a, '--bind', git, git))
+    for (const f of [`${git}/hooks`, `${git}/config`, `${git}/config.worktree`, wt]) expect(last(a, '--ro-bind', f, f), f).toBeGreaterThan(bind)
+  })
+
+  it('a persistence file under a credential inside allowWrite does not come back after the hide', () => {
+    const cred = `${LOGS}/creds`
+    const rc = `${cred}/.zshrc`
+    const a = bwrapArgs(params({ extraWritable: [LOGS], hideDirs: [cred], persistence: [rc], ...qfs([cred], [rc]) }))
+    expect(last(a, '--tmpfs', cred)).toBeGreaterThan(at(a, '--ro-bind', rc, rc).at(-1) ?? -1)
   })
 
   it('a rule root under the private /tmp is not read back from the host; one inside a bound root is', () => {

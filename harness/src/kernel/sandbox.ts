@@ -533,21 +533,27 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
     ensureTmp(tmp)
     const repo = await repoFor(s.sessionId, s.cwd)
     // 只读运行:连同"cwd 就在它里面"的额外可写项一起去掉
-    const allowWrite = plainDirs(x.allowWrite).filter(a => !x.readOnly || !(within(s.cwd, a) || within(realSpelling(s.cwd), realSpelling(a))))
-    const writable = [...(x.readOnly ? [] : [s.cwd, ...repo.gitDirs]), tmp, ...allowWrite]
+    const grantWrite = () => plainDirs(x.allowWrite).filter(a => !x.readOnly || !(within(s.cwd, a) || within(realSpelling(s.cwd), realSpelling(a))))
+    const writableWith = (extra: string[]) => [...(x.readOnly ? [] : [s.cwd, ...repo.gitDirs]), tmp, ...extra]
     const key = x.proxyScope === undefined ? s.sessionId : `${s.sessionId}\0${x.proxyScope}`
+    // 同一 tick 里查和占,并发的两个计划只有一个过:第二个的主机名单不会悄悄变成第一个的
+    if (x.proxyScope !== undefined && proxies.get(key)?.holds) throw new Error('sandbox: proxy scope is in use')
     const e = usesProxy() ? entryFor(key, x.proxyScope === undefined ? undefined : { allowHosts: x.allowHosts }) : undefined
     const release = e ? hold(key, s.sessionId, e) : () => {}
     try {
-      const proxy = e ? await proxyFor(key, s.sessionId, e, writable) : undefined
+      const proxy = e ? await proxyFor(key, s.sessionId, e, writableWith(grantWrite())) : undefined
       if (closed) throw new Error('sandbox closed')
+      // 等代理的时候 cwd = ~/.qoder 的会话可能已经把条目换成了链接,所以在生成配置之前才定;从这里到配置之间没有 await
+      const allowWrite = grantWrite()
+      const writable = writableWith(allowWrite)
       // 本会话的代理没起来 → 网络全断,级别如实报 partial
       const level: 'full' | 'partial' = e?.failed ? 'partial' : base
       const creds = credentialList()
       const persistence = persistenceList()
       const hidden = exemptFrom(creds, x.allowRead)
       // 豁免目录里嵌套的凭据不跟着放出来
-      const nested = [...hidden, o.dataDir].filter(c => x.allowRead.some(a => within(c, a) || within(c, realSpelling(a))))
+      const insideExemption = (c: string) => x.allowRead.some(a => within(c, a) || within(c, realSpelling(a)))
+      const nested = [...hidden, o.dataDir].filter(insideExemption)
 
       if (platform === 'darwin') {
         const allowLoopback = cfg.sandbox.allowLoopback
@@ -564,8 +570,10 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
           reAllowWrite: [tmp, ...x.allowRead.filter(a => allowWrite.some(w => within(a, w) || within(realSpelling(a), realSpelling(w))))],
           finalDenyRead: [...x.denyRead, ...nested],
           // 读规则也拒写:否则 `mv secret/a ./a`、`ln` 就把它带出来了(与 Codex 的 `none` 一致)
-          finalDenyWrite: [...x.denyRead, ...x.denyWrite, ...nested],
-          moveBlock: withAncestors([...creds, o.dataDir, ...persistence, ...x.denyRead, ...x.denyWrite, ...repo.gitDirs.flatMap(g => [g, `${g}/hooks`, `${g}/config`, `${g}/modules`, `${g}/worktrees`]), ...moduleDirs, ...moduleGuard, ...modules.flatMap(m => m.between), ...(repo.cwdGitFile ? [repo.cwdGitFile] : [])], writable),
+          finalDenyWrite: [...x.denyRead, ...x.denyWrite, ...nested, ...persistence.filter(insideExemption)],
+          // 可写根本身(及它在别的可写根里的父目录)也不能挪:Seatbelt 只按源、目标路径判,挪走之后里面的东西就换了路径,
+          // 哪条规则都不再认得(`mv "$PWD" "$TMPDIR/r"` 再改 .git/hooks)。x.allowWrite 是要求的全部:缺的、丢掉的也不能在沙箱里建出来或换掉
+          moveBlock: withAncestors([...writable, ...x.allowWrite, ...creds, o.dataDir, ...persistence, ...x.denyRead, ...x.denyWrite, ...repo.gitDirs.flatMap(g => [g, `${g}/hooks`, `${g}/config`, `${g}/modules`, `${g}/worktrees`]), ...moduleDirs, ...moduleGuard, ...modules.flatMap(m => m.between), ...(repo.cwdGitFile ? [repo.cwdGitFile] : [])], writable),
           proxyPort: proxy?.port,
           allowLoopback,
         })
@@ -603,7 +611,8 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
         execPath,
         execRoot: execRootFor(execPath),
         readOnly: x.readOnly,
-        extraWritable: allowWrite,
+        // 与 Seatbelt 一致:在隐藏的根里的,只有豁免项放出来(bind 的源是宿主,不筛就绕过了隐藏)
+        extraWritable: allowWrite.filter(a => x.allowRead.some(r => within(a, r)) || ![...hidden, o.dataDir].some(c => within(a, c) || within(realSpelling(a), realSpelling(c)))),
         ruleDenyRead: x.denyRead,
         ruleDenyWrite: x.denyWrite,
         command,

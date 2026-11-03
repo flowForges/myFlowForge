@@ -3,7 +3,7 @@
 // bwrap 按参数顺序挂载,后挂的盖住先挂的,所以顺序即语义:
 //   只读根 + 私有 /tmp → [execRoot] → 可写根(cwd、各 gitDir、tmp)与只读 spill → git 保护 → 持久化文件只读 →
 //   隐藏(运行时目录、已知 Unix socket、凭据、数据目录)→ 盖回 tmp / spill →
-//   [04:额外可写 → 规则只读 → 被这两步盖回来的隐藏与持久化再挂一次 → 规则隐藏] → 代理 socket → 命令(full 时经中转)。
+//   [04:额外可写 → git 保护与持久化再挂一次 → 规则只读 → 被盖回来的隐藏再挂一次 → 规则隐藏] → 代理 socket → 命令(full 时经中转)。
 // - 只挂 realpath:bwrap 先 pivot_root 再 mount(2),目标里的符号链接按新根解析 —— 绝对链接会 ENOENT 让 bwrap 起不来,
 //   相对链接落到目标上、链接本身仍可删可换。挂载按 inode 生效,一个 realpath 就覆盖所有拼写(I1)。
 // - 持久化文件在隐藏之前挂:它们的源是宿主,挂在隐藏之后会把被隐藏根里的内容读回来(M1)。
@@ -271,21 +271,35 @@ export function bwrapArgs(p: BwrapParams): string[] {
   // 额外可写;之后是规则只读:它们挂在所有 --bind 之后,额外可写也盖不掉规则
   const extraMounted = extra.filter(exists)
   for (const x of extraMounted) again('--bind', x, x)
+
+  // 之后挂的可写项盖住了前面的只读:git 保护与持久化文件再挂一次(cwd 在 allowWrite 里时 .git/hooks 就在其中)
+  const laterWritable = [tmp, ...extraMounted]
+  const protect = [
+    ...gitDirs.flatMap(g => ['hooks', 'config', 'config.worktree'].map(f => `${g}/${f}`)),
+    ...gitProtected,
+    ...persistence.map(R),
+  ]
+  for (const f of protect) if (laterWritable.some(w => within(f, w))) again('--ro-bind', f, f)
+
   // /tmp 是私有的,宿主那边本来就碰不到;只有落在挂进来的根里才算数。否则挂上去反而把宿主的内容读回来
-  const ruleWriteMounted = ruleWrite.filter(r => exists(r) && (!within(r, '/tmp') || [cwd, ...gitDirs, tmp, ...extraMounted].some(w => within(r, w))))
+  // 落在隐藏路径里的同理:那里的写本来就到不了宿主(tmpfs、/dev/null),挂上去只会把凭据读回来(`deny write(~/.ssh/config)`);
+  // 除非它又在盖回来的 tmp、spill、额外可写里
+  const reExposed = [tmp, spill, ...extraMounted]
+  const ruleWriteMounted = ruleWrite.filter(r => {
+    if (!exists(r)) return false
+    if (reExposed.some(w => within(r, w))) return true
+    if (targets.some(t => within(r, t.path))) return false
+    return !within(r, '/tmp') || [cwd, ...gitDirs].some(w => within(r, w))
+  })
   for (const r of ruleWriteMounted) again('--ro-bind', r, r)
 
-  // 这两步的源是宿主,盖在里面的东西又露出来了:隐藏再来一遍,持久化文件也是;隐藏了数据目录就再盖回 tmp / spill
+  // 这几步的源是宿主,盖在里面的东西又露出来了:隐藏再来一遍;隐藏了数据目录就再盖回 tmp / spill
   const layered = [...extraMounted, ...ruleWriteMounted]
   const uncovered = targets.filter(t => layered.some(m => within(t.path, m)))
   hide(uncovered)
   if (uncovered.some(t => t.dir && (within(tmp, t.path) || within(spill, t.path)))) {
     again(ruleWriteMounted.some(r => within(tmp, r)) ? '--ro-bind' : '--bind', tmp, tmp)
     again('--ro-bind', spill, spill)
-  }
-  for (const lit of persistence) {
-    const r = R(lit)
-    if (extraMounted.some(x => within(r, x))) again('--ro-bind', r, r)
   }
 
   // 规则隐藏最后:谁都盖不回来;写进 tmpfs 的东西也到不了宿主

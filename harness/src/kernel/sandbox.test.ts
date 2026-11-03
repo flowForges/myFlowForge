@@ -308,7 +308,8 @@ describe('sandbox plan (darwin)', () => {
     for (const x of [join(home, '.ssh'), join(home, 'nest', 'deep', 'gpg'), join(home, 'nest', 'deep'), join(home, 'nest'), join(home, '.zshrc')]) {
       expect(block, x).toContain(`(literal ${q(x)})`)
     }
-    expect(block).not.toContain(`(literal ${q(home)})`)
+    expect(block).toContain(`(literal ${q(home)})`) // 可写根本身也不能挪(04 Task 7 评审 C1)
+    expect(block).not.toContain(`(literal ${q(root)})`) // 根以外的父目录本来就写不了
     p.release()
   })
 
@@ -809,6 +810,53 @@ describe('planExec', () => {
       p.release()
     })
 
+    it('the writable roots and any ancestor inside another root join the move block, in shell plans too; ordinary paths do not (review C1)', async () => {
+      const { svc } = service()
+      const movedIn = (args: string[]) => profileRules(profileOf(args)).filter(r => r.ops.includes('file-write-unlink')).flatMap(r => r.literals)
+      const cwd = join(repo, 'sub')
+      const tmp = sessionTmpDir(dataDir, 's1')
+      const shell = await svc.plan('true', session(), baseEnv)
+      for (const x of [cwd, tmp]) expect(movedIn(shell.args)).toContain(x)
+      expect(movedIn(shell.args)).not.toContain(join(cwd, 'file'))
+      shell.release()
+      const run = await svc.planExec(FILE, ARGS, session(), baseEnv, opts())
+      for (const x of [cwd, tmp, auth(), logs()]) expect(movedIn(run.args)).toContain(x)
+      run.release()
+      // cwd = home:.qoder 不是可写根,但它里面有 logs
+      const atHome = await svc.planExec(FILE, ARGS, session('s1', home), baseEnv, opts())
+      expect(movedIn(atHome.args)).toContain(qoder())
+      atHome.release()
+    })
+
+    it('a listed entry that is missing, or dropped as a link, or dropped by readOnly, is still move-blocked (review I1)', async () => {
+      const { svc } = service()
+      const missing = join(qoder(), 'cache')
+      const moved = (args: string[]) => profileRules(profileOf(args)).filter(r => r.ops.includes('file-write-unlink')).flatMap(r => r.literals)
+      rmSync(logs(), { recursive: true })
+      symlinkSync(root, logs())
+      const p = await svc.planExec(FILE, ARGS, session(), baseEnv, opts({ allowWrite: [auth(), logs(), missing] }))
+      expect(moved(p.args)).toEqual(expect.arrayContaining([logs(), missing]))
+      p.release()
+    })
+
+    it('a swap that lands while the proxy starts is seen: the link is refused, its target never writable (review I1)', async () => {
+      const target = join(root, 'target')
+      mkdirSync(target)
+      const { svc } = service({
+        startProxy: async o => {
+          rmSync(logs(), { recursive: true })
+          symlinkSync(target, logs())
+          return startProxy(o)
+        },
+      })
+      const p = await svc.planExec(FILE, ARGS, session(), baseEnv, opts())
+      const allow = profileRules(profileOf(p.args)).filter(r => r.action === 'allow' && r.ops === 'file-write*').flatMap(r => r.subpaths)
+      expect(allow).not.toContain(target)
+      expect(allow).not.toContain(logs())
+      expect(allow).toContain(auth())
+      p.release()
+    })
+
     it('the shell plan is unchanged: empty options leave no exemption, no extra root, no final deny', async () => {
       const { svc } = service()
       const p = await svc.plan('echo hi', session(), baseEnv)
@@ -840,6 +888,27 @@ describe('planExec', () => {
       expect(p.args).not.toContain(join(qoder(), 'tmp'))
       expect(lastIdx(p.args, '--bind', qoder(), qoder())).toBe(-1)
       expect(p.args.at(-1)).toBe(QUOTED)
+      p.release()
+    })
+
+    it('deny write(~/.ssh/config): the host file is not brought back over the tmpfs (review C2)', async () => {
+      writeFileSync(join(home, '.ssh', 'config'), 'x')
+      const other = join(dataDir, 'sessions', 'other')
+      mkdirSync(other, { recursive: true })
+      const { svc } = service(LINUX)
+      const p = await svc.planExec(FILE, ARGS, session(), baseEnv, opts({ denyWrite: [join(home, '.ssh', 'config'), other] }))
+      expect(p.args).not.toContain(join(home, '.ssh', 'config'))
+      expect(p.args).not.toContain(other)
+      expect(lastIdx(p.args, '--tmpfs', join(home, '.ssh'))).toBeGreaterThan(0)
+      p.release()
+    })
+
+    it('allowWrite inside a hidden credential root is not re-exposed, unless it is the exemption (same as Seatbelt)', async () => {
+      const { svc } = service({ ...LINUX, env: { HOME: home, QODER_CONFIG_DIR: qoder() } })
+      const p = await svc.planExec(FILE, ARGS, session(), baseEnv, opts())
+      expect(lastIdx(p.args, '--tmpfs', qoder())).toBeGreaterThan(0)
+      expect(lastIdx(p.args, '--bind', auth(), auth())).toBeGreaterThan(lastIdx(p.args, '--tmpfs', qoder()))
+      expect(lastIdx(p.args, '--bind', logs(), logs())).toBe(-1)
       p.release()
     })
 
@@ -958,6 +1027,18 @@ describe('planExec', () => {
       ;(await svc.plan('true', session(), baseEnv)).release()
       expect(n).toBe(once)
       shellPlan.release()
+    })
+
+    it('a scope still in use is refused, also when two plans race; after release it can be used again (review M4)', async () => {
+      const { svc } = service()
+      const a = await svc.planExec(FILE, ARGS, session(), baseEnv, opts({ proxyScope: 'same' }))
+      await expect(svc.planExec(FILE, ARGS, session(), baseEnv, opts({ proxyScope: 'same' }))).rejects.toThrow(/scope/)
+      a.release()
+      const b = await svc.planExec(FILE, ARGS, session(), baseEnv, opts({ proxyScope: 'same' }))
+      b.release()
+      const raced = await Promise.allSettled([svc.planExec(FILE, ARGS, session(), baseEnv, opts({ proxyScope: 'r' })), svc.planExec(FILE, ARGS, session(), baseEnv, opts({ proxyScope: 'r' }))])
+      expect(raced.map(r => r.status).sort()).toEqual(['fulfilled', 'rejected'])
+      for (const r of raced) if (r.status === 'fulfilled') r.value.release()
     })
 
     it('close() closes run proxies still held', async () => {

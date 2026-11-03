@@ -1,12 +1,12 @@
 // 真跑 sandbox-exec(04 Review Focus 2):假 qodercli 经 planExec + runCli,临时 HOME。
 // 只读 / 只写的断言都带一条能成功的对照:否则"什么都干不了"也会通过。
 // 测试进程自己在沙箱里时不能嵌套 → 整个文件跳过(探测只跑一次)
-import { spawnSync } from 'node:child_process'
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { startFakeUpstream, type FakeServer } from '../../test/fakeUpstream'
 import { parseRule, type Rule } from '../lib/permissions/rules'
 import { runCli } from '../lib/proc/runCli'
@@ -77,11 +77,20 @@ async function cli(script: string, o: RunOpts = {}): Promise<{ code: number | nu
   return { code: r.code, out, err }
 }
 
-/** 同一会话的 shell 工具 */
-async function shell(command: string): Promise<{ code: number | null; out: string; plan: ShellPlan }> {
-  const plan = await svc.plan(command, session(repo), env())
-  const r = spawnSync(plan.file, plan.args, { cwd: repo, env: plan.env, encoding: 'utf8' })
-  return { code: r.status, out: r.stdout, plan }
+/** 同一会话的 shell 工具。异步起:代理跑在本进程,spawnSync 会堵住事件循环,连得上也会超时 */
+async function shell(command: string, cwd = repo): Promise<{ code: number | null; out: string; env: NodeJS.ProcessEnv }> {
+  const plan = await svc.plan(command, session(cwd), env())
+  try {
+    return await new Promise((resolve, reject) => {
+      const c = spawn(plan.file, plan.args, { cwd, env: plan.env, stdio: ['ignore', 'pipe', 'ignore'] })
+      let out = ''
+      c.stdout!.on('data', d => { out += d })
+      c.on('error', reject)
+      c.on('close', code => resolve({ code, out, env: plan.env }))
+    })
+  } finally {
+    plan.release()
+  }
 }
 
 function connectStatus(port: number, target: string): Promise<string> {
@@ -277,6 +286,179 @@ describe.skipIf(!usable)('planExec, real sandbox-exec', () => {
     expect(existsSync(join(qoder, 'logs', 'w'))).toBe(false)
   })
 
+  describe('moving a writable root (review C1)', () => {
+    /** 两条路都验:委派的运行和 05 的 shell */
+    const boxes: [string, (script: string, cwd?: string) => Promise<{ code: number | null; out: string }>][] = [
+      ['planExec', (script, cwd) => cli(script, { cwd })],
+      ['plan', (script, cwd) => shell(script, cwd)],
+    ]
+    beforeEach(() => {
+      mkdirSync(join(repo, '.git', 'hooks'), { recursive: true })
+      writeFileSync(join(repo, '.git', 'HEAD'), 'ref: refs/heads/main\n')
+    })
+    afterEach(() => {
+      rmSync(join(repo, '.git'), { recursive: true, force: true })
+    })
+
+    describe.each(boxes)('%s', (_name, box) => {
+      it('cwd and TMPDIR cannot be moved, and the repo stays where it was', async () => {
+        for (const script of ['mv "$PWD" "$TMPDIR/r"', 'mv "$PWD" ../moved', 'mv "$TMPDIR" ./t', 'mv "$TMPDIR" "$TMPDIR.x"']) {
+          expect((await box(script)).code, script).not.toBe(0)
+        }
+        expect(existsSync(join(repo, 'src', 'gen'))).toBe(true)
+        expect(existsSync(join(repo, '.git', 'HEAD'))).toBe(true)
+      })
+
+      it('the .git/hooks plant via that trick fails', async () => {
+        const r = await box('R="$TMPDIR/r"; O="$PWD"; mv "$O" "$R" && mv "$R/.git" "$R/g" && mkdir -p "$R/g/hooks" && echo evil > "$R/g/hooks/pre-commit"; mv "$R/g" "$R/.git"; mv "$R" "$O"; test -f "$O/.git/hooks/pre-commit"')
+        expect(r.code).not.toBe(0)
+        expect(existsSync(join(repo, '.git', 'hooks', 'pre-commit'))).toBe(false)
+      })
+
+      it('ordinary renames inside the root still work', async () => {
+        const r = await box('mkdir a && echo x > a/f && mv a/f a/g && mv a b && cat b/g && rm -r b && echo y > "$TMPDIR/f" && mv "$TMPDIR/f" "$TMPDIR/g" && mkdir "$TMPDIR/d" && mv "$TMPDIR/d" "$TMPDIR/e" && rm -r "$TMPDIR/g" "$TMPDIR/e"')
+        expect(r.code).toBe(0)
+        expect(r.out).toBe('x\n')
+      })
+    })
+
+    it('planExec: moving cwd does not get around user rules', async () => {
+      rules = [rule('deny', 'read(hidden/**)'), rule('deny', 'write(src/gen/**)')]
+      const read = await cli('mv "$PWD" ~/.qoder/logs/r && cat ~/.qoder/logs/r/hidden/h.txt')
+      expect(read.code).not.toBe(0)
+      expect(read.out).not.toContain('HIDDEN')
+      expect((await cli('R="$TMPDIR/r"; O="$PWD"; mv "$O" "$R" && echo evil > "$R/src/gen/a"; mv "$R" "$O"; test -f "$O/src/gen/a"')).code).not.toBe(0)
+      expect(existsSync(join(repo, 'src', 'gen', 'a'))).toBe(false)
+    })
+
+    it('planExec: cwd in a subdirectory cannot move into the git dir beside it', async () => {
+      const sub = join(repo, 'src')
+      expect((await cli('mv "$PWD" ../.git/x', { cwd: sub })).code).not.toBe(0)
+      expect(existsSync(sub)).toBe(true)
+    })
+
+    it('planExec: ~/.qoder/projects holding cwd cannot move', async () => {
+      const cwd = join(qoder, 'projects', 'p')
+      mkdirSync(cwd)
+      try {
+        expect((await cli('mv ~/.qoder/projects ~/.qoder/logs/x', { cwd })).code).not.toBe(0)
+        expect((await cli('mv "$PWD" ~/.qoder/logs/x', { cwd })).code).not.toBe(0)
+        expect(existsSync(cwd)).toBe(true)
+      } finally {
+        rmSync(cwd, { recursive: true })
+      }
+    })
+  })
+
+  describe('the .qoder entries are not the run\'s to swap (review I1)', () => {
+    it.each([
+      ['cwd = a project', () => repo],
+      ['cwd = ~/.qoder', () => qoder],
+    ])('existing entries cannot be replaced: %s', async (_name, cwdOf) => {
+      const cwd = cwdOf()
+      for (const script of [
+        `mv ~/.qoder/logs ~/.qoder/cache/l && ln -s ${root} ~/.qoder/logs`,
+        `rm -rf ~/.qoder/logs && ln -s ${root} ~/.qoder/logs`,
+        'mv ~/.qoder/cache ~/.qoder/logs/c',
+      ]) {
+        expect((await cli(script, { cwd })).code, script).not.toBe(0)
+      }
+      expect(lstatSync(join(qoder, 'logs')).isDirectory()).toBe(true)
+      expect(existsSync(join(qoder, 'cache'))).toBe(true)
+    })
+
+    it('a listed entry that is missing cannot be created, not even at cwd = ~/.qoder', async () => {
+      rmSync(join(qoder, '.cache'), { recursive: true })
+      try {
+        for (const script of ['mkdir ~/.qoder/.cache', `ln -s ${root} ~/.qoder/.cache`]) {
+          expect((await cli(script, { cwd: qoder })).code, script).not.toBe(0)
+        }
+        expect(existsSync(join(qoder, '.cache'))).toBe(false)
+        const control = await cli('echo x > ./w && rm ./w', { cwd: qoder })
+        expect(control.code, control.err).toBe(0)
+      } finally {
+        mkdirSync(join(qoder, '.cache'), { recursive: true })
+      }
+    })
+  })
+
+  describe('real denials through planExec (review M2)', () => {
+    beforeEach(() => {
+      mkdirSync(join(repo, '.git', 'hooks'), { recursive: true })
+      writeFileSync(join(repo, '.git', 'HEAD'), 'ref: refs/heads/main\n')
+      writeFileSync(join(repo, '.git', 'config'), '[core]\n')
+    })
+    afterEach(() => {
+      rmSync(join(repo, '.git'), { recursive: true, force: true })
+    })
+
+    it('data dir and another session\'s tmp cannot be read; own tmp can', async () => {
+      const other = join(data, 'sessions', 's2', 'tmp')
+      mkdirSync(other, { recursive: true })
+      writeFileSync(join(other, 'x'), 'OTHER')
+      writeFileSync(join(data, 'config.json'), 'CONFIG')
+      for (const f of [join(other, 'x'), join(data, 'config.json')]) {
+        const r = await cli(`cat ${f}`)
+        expect(r.code, f).not.toBe(0)
+        expect(r.out, f).toBe('')
+      }
+      const own = await cli('echo mine > "$TMPDIR/o" && cat "$TMPDIR/o" && rm "$TMPDIR/o"')
+      expect(own.out).toBe('mine\n')
+    })
+
+    it('own spill is readable, not writable', async () => {
+      const spill = session(repo).spillDir
+      mkdirSync(spill, { recursive: true })
+      writeFileSync(join(spill, 's'), 'SPILL\n')
+      const ok = await cli(`cat ${spill}/s`)
+      expect(ok.out).toBe('SPILL\n')
+      expect((await cli(`echo x > ${spill}/w`)).code).not.toBe(0)
+      expect((await cli(`echo x >> ${spill}/s`)).code).not.toBe(0)
+      expect(readFileSync(join(spill, 's'), 'utf8')).toBe('SPILL\n')
+    })
+
+    it('.git/hooks and .git/config cannot be written in write mode; other .git files can', async () => {
+      for (const script of ['echo x > .git/hooks/pre-commit', 'echo x >> .git/config', 'rm .git/config']) {
+        expect((await cli(script)).code, script).not.toBe(0)
+      }
+      expect(readFileSync(join(repo, '.git', 'config'), 'utf8')).toBe('[core]\n')
+      expect(existsSync(join(repo, '.git', 'hooks', 'pre-commit'))).toBe(false)
+      const ok = await cli('echo x > .git/index-test && rm .git/index-test')
+      expect(ok.code, ok.err).toBe(0)
+    })
+
+    it('~/.zshrc stays write-denied at cwd = home, existing or not', async () => {
+      writeFileSync(join(home, '.zshrc'), 'rc\n')
+      try {
+        for (const script of ['echo evil >> ~/.zshrc', 'rm ~/.zshrc', 'echo evil > ~/.bashrc']) {
+          expect((await cli(script, { cwd: home })).code, script).not.toBe(0)
+        }
+        expect(readFileSync(join(home, '.zshrc'), 'utf8')).toBe('rc\n')
+        expect(existsSync(join(home, '.bashrc'))).toBe(false)
+      } finally {
+        rmSync(join(home, '.zshrc'), { force: true })
+      }
+    })
+  })
+
+  it('a persistence file inside the exemption stays write-denied (review M3)', async () => {
+    // 文件要已存在:不存在时改名黑名单就挡住了新建,验不到写规则
+    const gc = join(qoder, '.auth', 'gc')
+    writeFileSync(gc, 'orig\n')
+    const outer = svc
+    svc = makeService({ HOME: home, GIT_CONFIG_GLOBAL: gc })
+    try {
+      expect((await cli('echo evil > ~/.qoder/.auth/gc')).code).not.toBe(0)
+      expect(readFileSync(gc, 'utf8')).toBe('orig\n')
+      const ok = await cli('echo x > ~/.qoder/.auth/w && rm ~/.qoder/.auth/w')
+      expect(ok.code, ok.err).toBe(0)
+    } finally {
+      await svc.close()
+      svc = outer
+      rmSync(gc, { force: true })
+    }
+  })
+
   describe('user rules', () => {
     it('deny write(src/gen/**): writes and the move around it fail, the sibling works', async () => {
       rules = [rule('deny', 'write(src/gen/**)')]
@@ -325,7 +507,6 @@ describe.skipIf(!usable)('planExec, real sandbox-exec', () => {
   describe('network', () => {
     it("the same session's shell can't read the exemption and gets 403 for Qoder's host; the run's proxy reaches the upstream", async () => {
       const s = await shell('cat ~/.qoder/.auth/t')
-      s.plan.release()
       expect(s.code).not.toBe(0)
       expect(s.out).not.toContain('TOKEN')
 
@@ -354,15 +535,27 @@ describe.skipIf(!usable)('planExec, real sandbox-exec', () => {
       expect(upstream.connects.length).toBe(before)
       shellPlan.release()
 
+      // 对照:同一条 curl 在沙箱外(同样异步)连得上,所以下面的 000 只能是沙箱拦的
       let runPort = 0
+      let control = ''
       let shellOut = ''
-      await cli('sleep 2', {
+      const mid = { connects: 0 }
+      await cli('sleep 3', {
         keep: async p => {
           runPort = portOf(p.env)
+          control = await new Promise<string>(resolve => {
+            const c = spawn('/bin/sh', ['-c', curlConnect(runPort)], { stdio: ['ignore', 'pipe', 'ignore'] })
+            let o = ''
+            c.stdout!.on('data', d => { o += d })
+            c.on('close', () => resolve(o))
+          })
+          mid.connects = upstream.connects.length
           shellOut = (await shell(curlConnect(runPort))).out
+          expect(upstream.connects.length).toBe(mid.connects)
         },
       })
       expect(runPort).toBeGreaterThan(0)
+      expect(control.trim()).toBe('200')
       expect(shellOut.trim()).toBe('000')
     })
   })
