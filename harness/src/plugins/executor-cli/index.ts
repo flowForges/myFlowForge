@@ -109,7 +109,8 @@ export function createExecutorCli(opts: ExecutorCliOpts = {}): Plugin {
       const tmpDir = join(ctx.dataDir, 'tmp')
       mkdirSync(tmpDir, { recursive: true })
       const warn = (message: string) => ctx.log.warn(message)
-      let cfg = parseExecutorsConfig(ctx.config.executors, warn)
+      // 只在激活时读:改了要重启,重启后探测本来就是新的
+      const cfg = parseExecutorsConfig(ctx.config.executors, warn)
 
       const byId = new Map(adapters.map(a => [a.id as string, a]))
       const infos = new Map<string, ExecutorInfo>(adapters.map(a => [a.id, { id: a.id, installed: false, auth: 'unknown', isolation: 'none', missing: ['detecting'] }]))
@@ -128,7 +129,8 @@ export function createExecutorCli(opts: ExecutorCliOpts = {}): Plugin {
       }
 
       const detectDeps = async (a: Adapter, force: boolean, signal: AbortSignal = probes.signal): Promise<DetectDeps> => {
-        const base = shellEnv(env, { platform, home, loginPath: await loginPath() })
+        // 关掉的执行器什么都不跑,登录 shell(用户的 rc 文件)也不例外
+        const base = shellEnv(env, { platform, home, loginPath: cfg.disabled.includes(a.id) ? '' : await loginPath() })
         for (const k of a.passEnv) if (env[k] !== undefined) base[k] = env[k]
         return {
           env: base,
@@ -179,8 +181,8 @@ export function createExecutorCli(opts: ExecutorCliOpts = {}): Plugin {
         inflight.set(a.id, p)
         return p
       }
-      const inBackground = (a: Adapter, o?: Parameters<typeof detect>[1]) =>
-        void detect(a, o).catch(e => ctx.log.warn('detection failed', { id: a.id, error: e instanceof Error ? redact(e.message) : 'unknown' }))
+      const inBackground = (a: Adapter) =>
+        void detect(a).catch(e => ctx.log.warn('detection failed', { id: a.id, error: e instanceof Error ? redact(e.message) : 'unknown' }))
 
       const manager = new RunManager({
         append: e => ctx.append(e),
@@ -340,15 +342,6 @@ export function createExecutorCli(opts: ExecutorCliOpts = {}): Plugin {
       ctx.rpc.register('executor.worktree.discard', async params => {
         const { sessionId, runId } = params as WorkerParams<'executor.worktree.discard'>
         return manager.discard(sessionId, runId)
-      })
-
-      // 配置平时只在激活时读,重启后探测本来就是新的。有人在运行中写这一段时,判隔离的 network 和探测结果不能各说各话
-      ctx.events.on('config.changed', ({ section, value }: { section: string; value: unknown }) => {
-        if (section !== 'executors') return
-        const prev = cfg
-        cfg = parseExecutorsConfig(value, warn)
-        const redetect = prev.codex.network !== cfg.codex.network || prev.disabled.join('\0') !== cfg.disabled.join('\0')
-        if (redetect) for (const a of adapters) inBackground(a, { fresh: true })
       })
 
       // 最后注册、最先释放:先挡住还在路上的探测结果

@@ -81,6 +81,15 @@ describe('harness 边界', () => {
     expect(bad).toEqual([])
   })
 
+  it('kernel 不 import plugins/**(插件由 entry 登记)', () => {
+    const files = walk(KERNEL)
+    expect(files.length).toBeGreaterThan(0)
+    const bad: string[] = []
+    for (const f of files)
+      for (const s of specifiers(f)) if (s.startsWith('.') && inside(resolved(f, s), PLUGINS)) bad.push(`${relative(REPO, f)} -> ${s}`)
+    expect(bad).toEqual([])
+  })
+
   it('src/main/mffai 不 import electron,index.ts 只动态 import mffai/host', () => {
     const bad: string[] = []
     for (const f of walk(join(APP_SRC, 'main', 'mffai')))

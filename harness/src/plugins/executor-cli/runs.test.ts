@@ -2102,9 +2102,10 @@ describe('changes: in place (Review Focus 6, in-place half)', () => {
       expect(r).toEqual({ files: [{ path: 'a.txt', status: 'M' }], source: 'git' })
       const end = execFileSync('git', ['rev-parse', '-q', '--verify', `refs/mffai/runs/${SID}/${runId}-end`], { cwd: repo, env: gitBase }).toString().trim()
       expect(end).toMatch(/^[0-9a-f]+$/)
-      // 再问一次用同一张
+      // 中断的运行每次现拍:再问一次看得到新的改动
       expect(await after.manager.changes(SID, runId)).toEqual(r)
-      expect(execFileSync('git', ['rev-parse', '-q', '--verify', `refs/mffai/runs/${SID}/${runId}-end`], { cwd: repo, env: gitBase }).toString().trim()).toBe(end)
+      writeFileSync(join(repo, 'late.txt'), 'late\n')
+      expect((await after.manager.changes(SID, runId)).files.map(f => f.path).sort()).toEqual(['a.txt', 'late.txt'])
     }, 20_000)
 
     it('a runId not in that session → -32602', async () => {

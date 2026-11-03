@@ -42,7 +42,7 @@ const str = (v: unknown) => (typeof v === 'string' ? v : undefined)
  * 有 ended 没 notice:只补通知(通知结束时只在内存里,要等循环取走才进日志)。
  * 返回第一种,它们的 worktree 由 cleanRecoveredWorktrees 收拾
  */
-export function recoverRuns(events: KernelEvent[], append: (e: Omit<KernelEvent, 'seq' | 'ts'>) => unknown, o: { tmpRoot?: string } = {}): RecoveredRun[] {
+export function recoverRuns(events: KernelEvent[], append: (e: Omit<KernelEvent, 'seq' | 'ts'>) => unknown, o: { tmpRoot?: string; log?: Logger } = {}): RecoveredRun[] {
   const runs = new Map<string, RunLog>()
   for (const e of events) {
     if (!e.type.startsWith('executor.')) continue
@@ -61,39 +61,44 @@ export function recoverRuns(events: KernelEvent[], append: (e: Omit<KernelEvent,
 
   const recovered: RecoveredRun[] = []
   for (const [runId, run] of runs) {
-    const { queued, started, sessionId } = run
-    if (!queued || run.noticed) continue
-    const turnId = queued.turnId as string
-    const id = str(queued.executor) ?? 'unknown'
-    const isolation = (started?.isolation ?? queued.isolation) as Diagnostic['isolation']
-    const untranslated = started?.untranslatedRules as number | undefined
-    const notice = (d: Omit<Diagnostic, 'id' | 'run' | 'isolation' | 'untranslated'>) =>
-      append({ type: 'executor.notice', sessionId, payload: { turnId, runId, text: noticeText({ id, run: runId, isolation, untranslated, ...d }) } } as Omit<KernelEvent, 'seq' | 'ts'>)
+    // 写坏的一条不能让后台永远起不来(worker 启动失败就退出)
+    try {
+      const { queued, started, sessionId } = run
+      if (!queued || run.noticed) continue
+      const turnId = queued.turnId as string
+      const id = str(queued.executor) ?? 'unknown'
+      const isolation = (started?.isolation ?? queued.isolation) as Diagnostic['isolation']
+      const untranslated = started?.untranslatedRules as number | undefined
+      const notice = (d: Omit<Diagnostic, 'id' | 'run' | 'isolation' | 'untranslated'>) =>
+        append({ type: 'executor.notice', sessionId, payload: { turnId, runId, text: noticeText({ id, run: runId, isolation, untranslated, ...d }) } } as Omit<KernelEvent, 'seq' | 'ts'>)
 
-    const end = run.ended
-    if (end) {
-      notice({
-        status: end.status, reason: end.reason, exit: end.exit, signal: end.signal, ms: end.ms, changed: end.changed,
-        violations: end.violations, usage: end.usage, rawLog: end.rawLog, worktree: end.worktree, final: UNDELIVERED_FINAL,
-      })
-      continue
-    }
-    const worktree = str(started?.worktree)
-    const changed = { files: [] as string[], source: 'none' as const }
-    append({
-      type: 'executor.run.ended',
-      sessionId,
-      payload: { runId, turnId, executor: id, status: 'interrupted', reason: 'daemon_restart', ms: 0, changed, ...(worktree && { worktree }) },
-    } as Omit<KernelEvent, 'seq' | 'ts'>)
-    notice({ status: 'interrupted', reason: 'daemon_restart', ms: 0, changed, worktree, final: RECOVERY_FINAL })
-    recovered.push({ runId, sessionId, started: started !== undefined, ...(str(started?.cwd) && { cwd: started!.cwd }), ...(worktree && { worktree }) })
-    // runId 来自日志,拼路径之前先认形状
-    if (RUN_ID.test(runId)) {
-      try {
-        rmSync(join(o.tmpRoot ?? tmpdir(), `mffai-run-${runId}`), { recursive: true, force: true })
-      } catch {
-        // 删不掉只留一个临时目录
+      const end = run.ended
+      if (end) {
+        notice({
+          status: end.status, reason: end.reason, exit: end.exit, signal: end.signal, ms: end.ms, changed: end.changed,
+          violations: end.violations, usage: end.usage, rawLog: end.rawLog, worktree: end.worktree, final: UNDELIVERED_FINAL,
+        })
+        continue
       }
+      const worktree = str(started?.worktree)
+      const changed = { files: [] as string[], source: 'none' as const }
+      append({
+        type: 'executor.run.ended',
+        sessionId,
+        payload: { runId, turnId, executor: id, status: 'interrupted', reason: 'daemon_restart', ms: 0, changed, ...(worktree && { worktree }) },
+      } as Omit<KernelEvent, 'seq' | 'ts'>)
+      notice({ status: 'interrupted', reason: 'daemon_restart', ms: 0, changed, worktree, final: RECOVERY_FINAL })
+      recovered.push({ runId, sessionId, started: started !== undefined, ...(str(started?.cwd) && { cwd: started!.cwd }), ...(worktree && { worktree }) })
+      // runId 来自日志,拼路径之前先认形状
+      if (RUN_ID.test(runId)) {
+        try {
+          rmSync(join(o.tmpRoot ?? tmpdir(), `mffai-run-${runId}`), { recursive: true, force: true })
+        } catch {
+          // 删不掉只留一个临时目录
+        }
+      }
+    } catch (e) {
+      o.log?.error('run not recovered', { runId: RUN_ID.test(runId) ? runId : 'invalid', error: e instanceof Error ? e.message : 'unknown' })
     }
   }
   return recovered

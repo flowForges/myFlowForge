@@ -103,6 +103,9 @@ type Turn = {
   wake?: () => void
 }
 
+/** 和 session.cancel 一样:挂起的轮能把排空拖满,这时候还得能停下单个运行 */
+const DRAIN_ALLOWED = new Set<string>(['executor.cancel'])
+
 const isTerminal = (type: string) => type === 'turn.ended' || type === 'turn.failed'
 
 export async function createKernel(opts: KernelOpts): Promise<Kernel> {
@@ -115,7 +118,6 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   const services = new ServiceRegistry()
   const bus = new EventBus({ onError: (type, err) => log.error(`handler for ${type} failed`, { error: String(err) }) })
   bus.declare('session.prompt', 'bail')
-  bus.declare('config.changed', 'emit')
   const home = opts.home ?? homedir()
   const envSnapshot = snapshotEnv(opts.env ?? process.env, process.platform)
   const broad = overbroadRelocations(envSnapshot, home, process.platform)
@@ -151,7 +153,6 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
       const next = KernelConfigSchema.parse({ ...config, [section]: value })
       saveConfig(configFile, next) // 先落盘,成功后才换内存
       config = next
-      bus.emit('config.changed', { section, value: next[section] })
     },
   }
   // 规则写坏了只记进 errors,不影响启动,也不动 config.json(spec §6)
@@ -206,7 +207,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   }
 
   // 运行的崩溃恢复(04 §7.5)在 turn 之前:ended、notice 要排在 turn.failed interrupted 前面
-  const recovered = recoverRuns(eventLog.after(0), append)
+  const recovered = recoverRuns(eventLog.after(0), append, { log })
   if (recovered.length > 0) {
     const tmpDir = join(opts.dataDir, 'tmp')
     mkdirSync(tmpDir, { recursive: true })
@@ -315,7 +316,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
       if (prior.method !== method) throw new RpcError(ERR_INVALID_PARAMS, 'commandId already used by another method')
       return prior.result
     }
-    if (state === 'draining') throw new RpcError(ERR_DRAINING, 'draining')
+    if (state === 'draining' && !DRAIN_ALLOWED.has(method)) throw new RpcError(ERR_DRAINING, 'draining')
     const promise = (async () => {
       try {
         const result = await run()

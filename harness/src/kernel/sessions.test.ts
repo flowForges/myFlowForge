@@ -164,6 +164,17 @@ describe('validateCwd', () => {
   it('returns the realpath of an existing absolute directory', () => {
     expect(validateCwd(work, opts())).toBe(realpathSync.native(work))
   })
+  it('rejects the worktree root and a session dir under it, a retained worktree stays legal', () => {
+    const wt = `${dir}-worktrees`
+    try {
+      mkdirSync(join(wt, 's1', 'run_a'), { recursive: true })
+      expect(() => validateCwd(wt, opts())).toThrow('invalid cwd')
+      expect(() => validateCwd(join(wt, 's1'), opts())).toThrow('invalid cwd')
+      expect(validateCwd(join(wt, 's1', 'run_a'), opts())).toBe(realpathSync.native(join(wt, 's1', 'run_a')))
+    } finally {
+      rmSync(wt, { recursive: true, force: true })
+    }
+  })
   it('rejects a filesystem root', () => {
     expect(() => validateCwd('/', opts())).toThrow('invalid cwd')
   })

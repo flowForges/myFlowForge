@@ -1272,7 +1272,7 @@ export class RunManager implements BackgroundRuns {
     }
     if (!find('executor.run.queued')) throw new RpcError(-32602, 'unknown run')
     const started = find<{ cwd: string; worktree?: string; executor?: string }>('executor.run.started')
-    const ended = find<{ changed?: { files: string[]; source: ExecutorChangesSource; concurrent?: boolean } }>('executor.run.ended')
+    const ended = find<{ status?: string; changed?: { files: string[]; source: ExecutorChangesSource; concurrent?: boolean } }>('executor.run.ended')
     const concurrent = ended?.changed?.concurrent ? { concurrent: true } : {}
     /** 算不了就报 run.ended 记下的。没有状态,一律按改过算 */
     const reported = () => {
@@ -1291,7 +1291,9 @@ export class RunManager implements BackgroundRuns {
         if (repoCwd === undefined || !(await worktreeIntact(repoCwd, started.worktree, cwd, git, { tmpDir }))) return reported()
       }
       if (!(await exists(startRef))) return reported()
-      if (!(await exists(endRef))) {
+      // 只有 finish 拍的结束快照算数。还在跑、中断的(内核关闭和崩溃都不拍)要现拍:这里之前写下的 -end 早就过时了
+      const finished = ended !== undefined && ended.status !== 'interrupted' && ended.changed?.source === 'git'
+      if (!finished || !(await exists(endRef))) {
         const end = await takeSnapshot(cwd, endRef, git, this.gitOpts())
         if (!end.ref) return reported()
       }

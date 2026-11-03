@@ -3,6 +3,11 @@ import { redact } from '../lib/tools/redact'
 import type { KernelEvent } from '../protocol/index'
 import { nullLogger, type Logger } from './log'
 
+/**
+ * 事件里的 key 只告诉客户端能不能本会话放行。精确匹配的命令整条都是 key:只留开头,这部分 summary 的截断也留着,不会多露东西
+ */
+const KEY_SHOWN = 200
+
 // 审批(spec §10):ask → approval.requested,等用户应答 / 超时 / 取消 / 内核停止;
 // allow_session 把命令键记在本会话内存里,之后同键请求直接放行(不写 requested)
 
@@ -75,7 +80,7 @@ export class Approvals {
         this.opts.append({
           type: 'approval.requested',
           sessionId: req.sessionId,
-          payload: { approvalId, turnId: req.turnId, callId: req.callId, tool: req.tool, summary: req.summary, ...(req.key !== undefined && { key: redact(req.key) }), ...(req.unsandboxed === true && { unsandboxed: true }) },
+          payload: { approvalId, turnId: req.turnId, callId: req.callId, tool: req.tool, summary: req.summary, ...(req.key !== undefined && { key: redact(req.key).slice(0, KEY_SHOWN) }), ...(req.unsandboxed === true && { unsandboxed: true }) },
         })
       } catch (err) {
         if (this.pending.delete(approvalId)) cleanup()

@@ -34,6 +34,19 @@ describe('Approvals', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
+  it('key: shown when there is one, capped, redacted; no key when none', async () => {
+    const secret = 'sk-abcdefghijklmnopqrstuvwxyz012345'
+    const p = ask('x', { key: `run ${secret} ${'y'.repeat(5000)}` })
+    const shown = (requested()[0].payload as { key: string }).key
+    expect(shown.length).toBeLessThanOrEqual(200)
+    expect(shown).not.toContain(secret)
+    approvals.respond(lastId(), 'allow_session')
+    await p
+    // 判定用的是原值:同一个键下次不问
+    await expect(ask('x', { key: `run ${secret} ${'y'.repeat(5000)}` })).resolves.toBe('allow')
+    expect(requested()).toHaveLength(1)
+  })
+
   it('deny', async () => {
     const p = ask('rm -rf build')
     expect(approvals.respond(lastId(), 'deny')).toBe(true)

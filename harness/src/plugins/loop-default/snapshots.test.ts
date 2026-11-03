@@ -13,7 +13,7 @@ import type { ModelRef } from '../../protocol/models'
 import { createToolsCoding } from '../tools-coding'
 import toolsRegistry from '../tools-registry'
 import { createLoopDefault } from './index'
-import { endSnapshot, hasOpenTurn, rollbackRefs, snapshotRef, startSnapshot, turnChanges, type SnapshotDeps } from './snapshots'
+import { endSnapshot, hasOpenTurn, rollbackRefs, snapshotRef, startSnapshot, turnChanges, writableRootsFor, type SnapshotDeps } from './snapshots'
 import { NO_SANDBOX, seedUnsandboxedAuto } from '../../../test/sandboxStub'
 
 const posix = process.platform !== 'win32'
@@ -638,6 +638,11 @@ describe('unsafe_filter: rollback is unavailable for that turn (Task 9 review C3
   }
   const t = () => ({ sessionId: 's', cwd: repo })
   const opened = (turnId: string): KernelEvent[] => [{ type: 'message.user', sessionId: 's', seq: 0, ts: 0, payload: { turnId, text: 'x' } } as unknown as KernelEvent]
+
+  it('what counts as writable: the whole data dir and the worktrees beside it, worked out from the plugin dir', () => {
+    // 不走真内核:测试的数据目录都在系统临时目录里,临时目录本来就在名单上,看不出区别
+    expect(writableRootsFor('/d/data/plugins/loop-default', '/tmp/x')).toEqual(['/d/data', '/d/data-worktrees', '/tmp/x'])
+  })
 
   it('both snapshots report the reason, no ref, no marker, not rollbackable', async () => {
     initRepo()

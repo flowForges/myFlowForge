@@ -2,18 +2,17 @@
 // 每轮前后拍快照(spec §11),并注册 turn.rollback / turn.changes
 import { mkdirSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import type { Plugin } from '../../kernel/pluginHost'
 import { RpcError } from '../../kernel/rpcError'
 import type { Sessions } from '../../kernel/sessions'
 import { createGit, type Git } from '../../lib/git/snapshot'
-import { worktreeRootOf } from '../../lib/git/worktree'
 import type { ModelsService } from '../../lib/models/types'
 import type { BackgroundRuns, ToolsService, TurnInbox } from '../../lib/tools/types'
 import { ERR_BUSY, type ModelRef, type WorkerParams } from '../../protocol/index'
 import { runTurn, type LoopDeps, type TurnOutcome } from './loop'
 import { manifest } from './manifest'
-import { endSnapshot, hasOpenTurn, rollbackTurn, startSnapshot, turnChanges, type SnapshotDeps } from './snapshots'
+import { endSnapshot, hasOpenTurn, rollbackTurn, startSnapshot, turnChanges, writableRootsFor, type SnapshotDeps } from './snapshots'
 
 export interface LoopDefaultOpts {
   /** 步数上限,默认 50 */
@@ -42,9 +41,7 @@ export function createLoopDefault(opts: LoopDefaultOpts = {}): Plugin {
         tmpDir,
         log: ctx.log,
         append: e => ctx.append(e),
-        // 会话 tmp 在数据目录里;运行的 TMPDIR 在系统临时目录;其他 worktree 在 -worktrees(executor-cli)
-        // ctx.dataDir 是 <数据目录>/plugins/<id>,数据目录要往上两层
-        writableRoots: [dirname(dirname(ctx.dataDir)), worktreeRootOf(dirname(dirname(ctx.dataDir))), realpathSync(tmpdir())],
+        writableRoots: writableRootsFor(ctx.dataDir, realpathSync(tmpdir())),
       }
 
       /** 本插件正在跑的轮(从接管到结束快照拍完),按会话 */

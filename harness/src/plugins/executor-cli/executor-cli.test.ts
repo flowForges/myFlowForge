@@ -1,177 +1,18 @@
-// 插件装配的端到端:真内核、真权限门、假模型、假 CLI(04 Review Focus 2、3、3a、4、6)
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { beforeEach, describe, expect, it } from 'vitest'
+import { mkdirSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createKernel, type Kernel, type KernelOpts } from '../../kernel/kernel'
-import { CONFIG_SECTIONS, type Plugin } from '../../kernel/pluginHost'
-import { CLOSE_GRACE_MS, KILL_LIVE_MS } from '../../kernel/shutdown'
-import { createGit } from '../../lib/git/snapshot'
-import type { Message, ModelEvent, ModelRequest, ModelsService } from '../../lib/models/types'
-import type { Tool, ToolsService } from '../../lib/tools/types'
-import { ERR_BUSY, type KernelEvent } from '../../protocol/index'
-import type { ModelRef } from '../../protocol/models'
-import { cleanupFakes, disposeReusableFakes, installFake, isAlive, reusableFake, waitDead, type FakeCli } from '../../../test/fakeCli'
+import { installFake } from '../../../test/fakeCli'
 import { NO_SANDBOX } from '../../../test/sandboxStub'
 import { BUILTIN_PLUGINS } from '../index'
-import { createLoopDefault } from '../loop-default'
-import { createToolsCoding } from '../tools-coding'
-import toolsRegistry from '../tools-registry'
-import { createExecutorCli, manifestFor, type ExecutorCliOpts } from './index'
+import { CODEX_OK, approval, bins, boot, create, cwd, delegate, detected, done, execCalls, fake, infoOf, kernels, lastText, list, noRepo, ofType, pay, prompt, respond, root, say, sleep, terminal, toolResult, turn, untilGo, waitFor, type Info, type Script, useRig } from '../../../test/executorRig'
+import { manifestFor, type ExecutorCliOpts } from './index'
 import { parseExecutorsConfig } from './runs'
 
-const fixture = (name: string) => readFileSync(join(__dirname, '../../../test/fixtures/executors', name), 'utf8').split('\n').filter(Boolean)
-const CODEX_OK = fixture('codex-exec-0.154.jsonl')
-const FINISH = '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}'
-const FULL: NonNullable<KernelOpts['sandbox']> = { detect: () => ({ level: 'full', missing: [] }), upstream: null }
-const REF: ModelRef = { accountId: 'acc', modelId: 'gpt-5' }
-
-let root: string
-let dataDir: string
-let home: string
-let cwd: string
-let kernels: Kernel[] = []
-const bins = realpathSync(mkdtempSync(join(tmpdir(), 'mffai-execcli-bins-')))
-
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
-async function waitFor(fn: () => boolean, ms = 15_000) {
-  const end = Date.now() + ms
-  while (Date.now() < end && !fn()) await sleep(10)
-  expect(fn()).toBe(true)
-}
-const gitEnv = (): NodeJS.ProcessEnv => ({ PATH: '/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin', HOME: home, GIT_CONFIG_GLOBAL: join(root, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1', GIT_CEILING_DIRECTORIES: root })
-const isolatedGit = () => createGit({ base: gitEnv() })
-const sh = (...args: string[]) => execFileSync('git', args, { cwd, env: gitEnv(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
-
-beforeEach(() => {
-  root = realpathSync(mkdtempSync(join(tmpdir(), 'mffai-execcli-')))
-  dataDir = join(root, 'data')
-  home = join(root, 'home')
-  cwd = join(root, 'repo')
-  for (const d of [dataDir, home, cwd]) mkdirSync(d)
-  writeFileSync(join(root, 'gitconfig'), '[user]\n\tname = t\n\temail = t@example.invalid\n')
-  writeFileSync(join(cwd, 'a.txt'), 'a\n')
-  writeFileSync(join(cwd, 'b.txt'), 'b\n')
-  sh('init', '-q')
-  sh('add', '-A')
-  sh('commit', '-qm', 'init')
-})
-afterEach(async () => {
-  for (const k of kernels) await k.close().catch(() => {})
-  kernels = []
-  cleanupFakes()
-  rmSync(root, { recursive: true, force: true })
-  rmSync(`${root}-worktrees`, { recursive: true, force: true })
-})
-afterAll(() => {
-  disposeReusableFakes()
-  rmSync(bins, { recursive: true, force: true })
-})
-
-type Req = Omit<ModelRequest, 'model'>
-type Script = (n: number, req: Req) => AsyncIterable<ModelEvent>
-async function* seq(...evs: ModelEvent[]) {
-  for (const e of evs) yield e
-}
-const done = (reason: 'stop' | 'tool_calls' = 'stop'): ModelEvent => ({ type: 'done', reason })
-const calling = (id: string, name: string, args: object) => seq({ type: 'tool_call', id, name, argsDelta: JSON.stringify(args) }, done('tool_calls'))
-const say = (text: string) => seq({ type: 'text', delta: text }, { type: 'usage', input: 1, output: 1 }, done())
-const delegate = (args: object = { prompt: 'do it' }, id = 'c1', name = 'delegate_codex') => calling(id, name, args)
-
-function fakeModels(calls: Message[][], script: Script): Plugin {
-  const service = {
-    catalog: () => ({ presets: [], models: {}, default: REF }),
-    accounts: () => [],
-    stream(_ref: unknown, req: Req) {
-      calls.push(structuredClone(req.messages))
-      return script(calls.length, req)
-    },
-  } as unknown as ModelsService
-  return { manifest: { id: 'fake-models', version: '0', kernel: '^0.1.0', provides: ['models'] }, activate: ctx => ctx.services.provide('models', service) }
-}
-
-interface Rig {
-  k: Kernel
-  calls: Message[][]
-  tools(): Tool[]
-}
-interface BootOpts {
-  script?: Script
-  sandbox?: KernelOpts['sandbox']
-  rules?: { effect: 'deny' | 'ask' | 'allow'; rule: string }[]
-  allowUnsandboxedAuto?: boolean
-  executors?: Record<string, unknown>
-  plugin?: ExecutorCliOpts
-  extra?: Plugin[]
-  path?: string
-}
-
-/** executorDirs:放假程序的目录排在 PATH 最前;qoder 默认关掉,否则会找到机器上真的那个 */
-async function boot(fake: Pick<FakeCli, 'dir'> | undefined, o: BootOpts = {}): Promise<Rig> {
-  writeFileSync(join(dataDir, 'config.json'), JSON.stringify({
-    permissions: { rules: o.rules ?? [], ...(o.allowUnsandboxedAuto && { allowUnsandboxedAuto: true }) },
-    executors: { disabled: ['qoder'], ...o.executors },
-  }))
-  const calls: Message[][] = []
-  let tools: ToolsService | undefined
-  const env = { PATH: o.path ?? `${fake ? `${fake.dir}:` : ''}/usr/bin:/bin`, HOME: home, GIT_CONFIG_GLOBAL: join(root, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1' }
-  const k = await createKernel({
-    dataDir, home, secrets: { osBackend: false }, env, sandbox: { ...(o.sandbox ?? FULL), git: isolatedGit() },
-    plugins: [
-      fakeModels(calls, o.script ?? (() => say('ok'))),
-      toolsRegistry,
-      { manifest: { id: 'spy', version: '0', kernel: '^0.1.0', inject: ['tools'] }, activate: ctx => { tools = ctx.services.get<ToolsService>('tools') } },
-      createToolsCoding({ shellEnv: env, loginPath: async () => '', git: async () => { throw new Error('no git') } }),
-      createExecutorCli({ env, loginPath: async () => '', git: isolatedGit(), ...o.plugin }),
-      createLoopDefault({ git: isolatedGit() }),
-      ...(o.extra ?? []),
-    ],
-  })
-  kernels.push(k)
-  return { k, calls, tools: () => tools!.list(t => t.delegate === true) }
-}
-
-type Info = { id: string; installed: boolean; version?: string; auth: string; isolation: string; missing: string[] }
-const list = async (k: Kernel) => ((await k.handle('executor.list', {})) as { executors: Info[] }).executors
-const infoOf = async (k: Kernel, id = 'codex') => (await list(k)).find(e => e.id === id)!
-async function detected(k: Kernel) {
-  for (let i = 0; i < 1500; i++) {
-    if (!(await list(k)).some(e => e.missing.includes('detecting'))) return
-    await sleep(10)
-  }
-  throw new Error('detection never finished')
-}
-const create = async (k: Kernel, o: { approvalMode?: 'ask' | 'auto'; origin?: 'app' | 'im' | 'schedule'; dir?: string } = {}) =>
-  ((await k.handle('session.create', { commandId: `c${Math.random()}`, cwd: o.dir ?? cwd, model: REF, approvalMode: o.approvalMode ?? 'auto', ...(o.origin && { origin: o.origin }) })) as { sessionId: string }).sessionId
-const prompt = async (k: Kernel, sid: string, text = 'go') => (await k.handle('session.prompt', { commandId: `p${Math.random()}`, sessionId: sid, text })) as { accepted: boolean; turnId: string; followUp?: boolean }
-const evs = (k: Kernel, sid: string) => k.events.bySession(sid)
-const pay = <T = Record<string, any>>(e: KernelEvent | undefined) => e?.payload as T
-const ofType = (k: Kernel, sid: string, t: string) => evs(k, sid).filter(e => e.type === t)
-const terminal = (k: Kernel, sid: string) => evs(k, sid).filter(e => e.type === 'turn.ended' || e.type === 'turn.failed')
-const execCalls = (f: FakeCli) => f.calls().filter(c => c.argv[0] === 'exec' || c.argv[0] === '-p')
-async function turn(k: Kernel, sid: string, text = 'go') {
-  const want = terminal(k, sid).length + 1
-  const { turnId } = await prompt(k, sid, text)
-  await waitFor(() => terminal(k, sid).length >= want)
-  return turnId
-}
-const toolResult = (m: Message[]) => m.filter(x => x.role === 'tool').flatMap(x => x.parts).filter(p => p.type === 'tool_result') as { callId: string; content: string; isError?: boolean }[]
-const lastText = (m: Message[]) => {
-  const last = m[m.length - 1]
-  return last.parts.map(p => (p.type === 'text' ? p.text : '')).join('')
-}
-async function approval(k: Kernel, sid: string, nth = 0) {
-  await waitFor(() => ofType(k, sid, 'approval.requested').length > nth)
-  return pay<{ approvalId: string; key?: string; unsandboxed?: boolean; summary: string }>(ofType(k, sid, 'approval.requested')[nth])
-}
-const respond = (k: Kernel, approvalId: string, decision: 'allow' | 'allow_session' | 'deny') => k.handle('approval.respond', { approvalId, decision })
-
-/** 假 CLI 一直跑到 go 文件出现 */
-const untilGo = (go: string, also: object = {}) => ({ ...also, run: `while [ ! -e '${go}' ]; do sleep 0.02; done; printf '%s\\n' '${FINISH}'` })
-const fake = (scenario: object = { lines: CODEX_OK }) => reusableFake(scenario, 'codex', bins)
+useRig()
 
 describe('registration and detection', () => {
+  beforeEach(noRepo)
+
   it('manifest: injects what it uses, pgids only on posix', () => {
     expect(manifestFor('darwin')).toMatchObject({ id: 'executor-cli', provides: ['executors'], inject: ['tools', 'sessions', 'sandbox', 'permissionGate', 'pgids'] })
     expect(manifestFor('win32').inject).toEqual(['tools', 'sessions', 'sandbox', 'permissionGate'])
@@ -230,6 +71,13 @@ describe('registration and detection', () => {
     expect(f.calls()).toEqual([])
   })
 
+  it('all disabled: not even the login shell runs', async () => {
+    let logins = 0
+    const { k } = await boot(undefined, { executors: { disabled: ['codex', 'qoder'] }, plugin: { loginPath: async () => { logins++; return '' } } })
+    await detected(k)
+    expect(logins).toBe(0)
+  })
+
   it('detection does not hold up kernel start: tools come when it finishes', async () => {
     let release = () => {}
     const gate = new Promise<void>(res => { release = res })
@@ -260,7 +108,7 @@ describe('registration and detection', () => {
     const { k, tools } = await boot(fake(), { plugin: { run } })
     await waitFor(() => signals.length > 0)
     await k.close()
-    kernels = []
+    kernels.length = 0
     expect(signals[0]?.aborted).toBe(true)
     release()
     await sleep(50)
@@ -309,6 +157,8 @@ describe('config', () => {
 })
 
 describe('gate through the real tool', () => {
+  beforeEach(noRepo)
+
   it('ask session: approval.requested carries the rw key, deny → isError and no spawn', async () => {
     const f = fake()
     const { k, calls } = await boot(f, { script: n => (n === 1 ? delegate() : say('done')) })
@@ -382,19 +232,6 @@ describe('gate through the real tool', () => {
     })
   }
 
-  it('violations lists the .env the fake really wrote, in the event and the notice', async () => {
-    const f = fake({ lines: CODEX_OK, writeFiles: { 'x.env': 'K=1\n', 'ok.txt': 'fine\n' } })
-    const { k, calls } = await boot(f, { rules: [{ effect: 'deny', rule: 'write(**/*.env)' }], script: n => (n === 1 ? delegate() : say('done')) })
-    await detected(k)
-    const sid = await create(k)
-    await prompt(k, sid)
-    await respond(k, (await approval(k, sid)).approvalId, 'allow')
-    await waitFor(() => terminal(k, sid).length === 1)
-    expect(pay(ofType(k, sid, 'executor.run.ended')[0])).toMatchObject({ status: 'ok', violations: ['x.env'] })
-    expect(pay<{ text: string }>(ofType(k, sid, 'executor.notice')[0]).text).toContain('violations: x.env')
-    expect(calls.flat().map(m => m.parts.map(p => (p.type === 'text' ? p.text : '')).join('')).join('\n')).toContain('violations: x.env')
-  })
-
   it('deny read(**) blocks a read-only delegation', async () => {
     const f = fake()
     const { k, calls } = await boot(f, { rules: [{ effect: 'deny', rule: 'read(**)' }], script: n => (n === 1 ? delegate({ prompt: 'p', readOnly: true }) : say('done')) })
@@ -446,7 +283,7 @@ describe('gate through the real tool', () => {
     await respond(a.k, req.approvalId, 'allow')
     await waitFor(() => terminal(a.k, sid).length === 1)
     await a.k.close()
-    kernels = []
+    kernels.length = 0
 
     const b = await boot(f, { sandbox: NO_SANDBOX, allowUnsandboxedAuto: true, script: n => (n === 1 ? delegate() : say('done')) })
     await detected(b.k)
@@ -495,7 +332,24 @@ describe('gate through the real tool', () => {
   })
 })
 
+describe('violations', () => {
+  it('violations lists the .env the fake really wrote, in the event and the notice', async () => {
+    const f = fake({ lines: CODEX_OK, writeFiles: { 'x.env': 'K=1\n', 'ok.txt': 'fine\n' } })
+    const { k, calls } = await boot(f, { rules: [{ effect: 'deny', rule: 'write(**/*.env)' }], script: n => (n === 1 ? delegate() : say('done')) })
+    await detected(k)
+    const sid = await create(k)
+    await prompt(k, sid)
+    await respond(k, (await approval(k, sid)).approvalId, 'allow')
+    await waitFor(() => terminal(k, sid).length === 1)
+    expect(pay(ofType(k, sid, 'executor.run.ended')[0])).toMatchObject({ status: 'ok', violations: ['x.env'] })
+    expect(pay<{ text: string }>(ofType(k, sid, 'executor.notice')[0]).text).toContain('violations: x.env')
+    expect(calls.flat().map(m => m.parts.map(p => (p.type === 'text' ? p.text : '')).join('')).join('\n')).toContain('violations: x.env')
+  })
+})
+
 describe('a changed binary', () => {
+  beforeEach(noRepo)
+
   const touch = (file: string) => {
     const later = new Date(Date.now() + 60_000)
     utimesSync(file, later, later)
@@ -570,6 +424,8 @@ describe('a changed binary', () => {
 })
 
 describe('auth', () => {
+  beforeEach(noRepo)
+
   it('logged out: isError with the §14 text, no exec, the turn goes on', async () => {
     const f = fake({ lines: CODEX_OK, loginStatus: 'Not logged in', loginExit: 1 })
     const { k, calls } = await boot(f, { script: n => (n === 1 ? delegate() : say('please log in')) })
@@ -624,107 +480,9 @@ describe('auth', () => {
   })
 })
 
-describe('turn end to end', () => {
-  it('start → notice → summary → turn.ended; turn.changes and turn.rollback cover what the fake wrote', async () => {
-    const f = fake({ lines: CODEX_OK, writeFiles: { 'a.txt': 'changed\n', 'new.txt': 'new\n' }, deleteFiles: ['b.txt'] })
-    const { k, calls } = await boot(f, { script: n => (n === 1 ? delegate() : n === 2 ? say('started it') : say('summary')) })
-    await detected(k)
-    const sid = await create(k)
-    const turnId = await turn(k, sid)
-    const types = evs(k, sid).map(e => e.type)
-    expect(types.filter(t => t === 'turn.ended')).toHaveLength(1)
-    expect(types.indexOf('executor.run.ended')).toBeLessThan(types.indexOf('executor.notice'))
-    expect(types.indexOf('executor.notice')).toBeLessThan(types.lastIndexOf('message.assistant'))
-    expect(calls).toHaveLength(3)
-    expect(lastText(calls[2])).toContain('<executor-notice')
-    expect(lastText(calls[2])).toContain('status="ok"')
-    expect(pay(ofType(k, sid, 'executor.run.ended')[0]).changed).toMatchObject({ source: 'git', files: expect.arrayContaining(['a.txt', 'b.txt', 'new.txt']) })
-    const changes = (await k.handle('turn.changes', { sessionId: sid, turnId })) as { files: { path: string }[] }
-    expect(changes.files.map(x => x.path).sort()).toEqual(['a.txt', 'b.txt', 'new.txt'])
-    const rb = (await k.handle('turn.rollback', { commandId: 'rb', sessionId: sid, turnId })) as { ok: boolean }
-    expect(rb.ok).toBe(true)
-    expect(readFileSync(join(cwd, 'a.txt'), 'utf8')).toBe('a\n')
-    expect(readFileSync(join(cwd, 'b.txt'), 'utf8')).toBe('b\n')
-    expect(existsSync(join(cwd, 'new.txt'))).toBe(false)
-    // 跑运行的 CLI 拿到的是 stdin,不是 argv
-    expect(execCalls(f)[0].stdin).toContain('do it')
-    expect(execCalls(f)[0].argv.join(' ')).not.toContain('do it')
-  })
-
-  it('parked → session.prompt accepted → model answers → parked again → fake ends → notice → turn.ended', async () => {
-    const go = join(root, 'go')
-    const f = fake(untilGo(go))
-    const { k, calls } = await boot(f, { script: n => (n === 1 ? delegate() : n === 2 ? say('started') : n === 3 ? say('still going') : say('all done')) })
-    await detected(k)
-    const sid = await create(k)
-    const { turnId } = await prompt(k, sid)
-    await waitFor(() => ofType(k, sid, 'turn.parked').length === 1)
-    const pid = await f.waitPid('cli')
-    const r = await prompt(k, sid, 'how is it going')
-    expect(r).toEqual({ accepted: true, turnId, followUp: true })
-    await waitFor(() => ofType(k, sid, 'turn.parked').length === 2)
-    expect(lastText(calls[2])).toContain('how is it going')
-    expect(calls).toHaveLength(3)
-    expect(isAlive(pid)).toBe(true)
-    expect(f.pids().filter(p => p.role === 'cli').map(p => p.pid)).toEqual([pid])
-    // 挂起时回滚仍是忙
-    await expect(k.handle('turn.rollback', { commandId: 'rb', sessionId: sid, turnId })).rejects.toMatchObject({ code: ERR_BUSY })
-    writeFileSync(go, '')
-    await waitFor(() => terminal(k, sid).length === 1)
-    expect(terminal(k, sid)[0].type).toBe('turn.ended')
-    expect(calls).toHaveLength(4)
-    expect(lastText(calls[3])).toContain('<executor-notice')
-    expect(ofType(k, sid, 'turn.started')).toHaveLength(1)
-    expect(pay(ofType(k, sid, 'turn.resumed')[0]).cause).toBe('message')
-    expect(pay(ofType(k, sid, 'turn.resumed')[1]).cause).toBe('notice')
-  })
-
-  it('a failed run: notice with status failed, and the turn still ends', async () => {
-    const f = fake({ lines: [], exit: 3 })
-    const { k, calls } = await boot(f, { script: n => (n === 1 ? delegate() : n === 2 ? say('wait') : say('it failed')) })
-    await detected(k)
-    const sid = await create(k)
-    await turn(k, sid)
-    expect(terminal(k, sid)[0].type).toBe('turn.ended')
-    expect(lastText(calls[2])).toContain('status="failed"')
-  })
-
-  it('a worktree session: the fake runs in the worktree, the session cwd is untouched, discard removes it', async () => {
-    const f = fake({ lines: CODEX_OK, writeFiles: { 'a.txt': 'changed\n' } })
-    writeFileSync(join(cwd, 'untracked.txt'), 'u\n')
-    const { k } = await boot(f, { script: n => (n === 1 ? delegate() : say('done')) })
-    await detected(k)
-    const sid = await create(k, { origin: 'schedule' })
-    await turn(k, sid)
-    const end = pay<{ status: string; worktree: string; runId: string }>(ofType(k, sid, 'executor.run.ended')[0])
-    expect(end.status).toBe('ok')
-    expect(end.worktree).toBe(join(`${dataDir}-worktrees`, sid, end.runId))
-    expect(execCalls(f)[0].cwd).toBe(end.worktree)
-    expect(readFileSync(join(cwd, 'a.txt'), 'utf8')).toBe('a\n')
-    expect(readFileSync(join(end.worktree, 'untracked.txt'), 'utf8')).toBe('u\n')
-    expect(sh('worktree', 'list')).toContain(end.worktree)
-    const changes = (await k.handle('executor.changes', { sessionId: sid, runId: end.runId })) as { files: { path: string }[]; source: string }
-    expect(changes).toMatchObject({ source: 'git' })
-    expect(changes.files.map(x => x.path)).toEqual(['a.txt'])
-    expect(await k.handle('executor.worktree.discard', { commandId: 'd', sessionId: sid, runId: end.runId })).toEqual({ ok: true })
-    expect(existsSync(end.worktree)).toBe(false)
-    expect(sh('worktree', 'list')).not.toContain(end.worktree)
-  })
-
-  it('a non-git session with origin im → worktree_unavailable, the fake never ran', async () => {
-    const plain = join(root, 'plain')
-    mkdirSync(plain)
-    const f = fake()
-    const { k } = await boot(f, { script: n => (n === 1 ? delegate() : say('done')) })
-    await detected(k)
-    const sid = await create(k, { origin: 'im', dir: plain })
-    await turn(k, sid)
-    expect(pay(ofType(k, sid, 'executor.run.ended')[0])).toMatchObject({ status: 'failed', reason: 'worktree_unavailable' })
-    expect(execCalls(f)).toEqual([])
-  })
-})
-
 describe('dequeue', () => {
+  beforeEach(noRepo)
+
   it('queued in auto, then a new ask rule nobody approved → denied, never spawned', async () => {
     const go = join(root, 'go')
     const f = fake(untilGo(go))
@@ -741,353 +499,5 @@ describe('dequeue', () => {
     expect(ended).toHaveLength(2)
     expect(ended[1]).toMatchObject({ status: 'failed', reason: 'denied' })
     expect(execCalls(f)).toHaveLength(1)
-  })
-})
-
-describe('cancel', () => {
-  it('session.cancel on a parked turn: the run dies by SIGINT, its notice stays in the log, the end snapshot comes before the terminal event', async () => {
-    const f = fake({ forwarding: true })
-    const { k } = await boot(f, { script: n => (n === 1 ? delegate() : say('wait')) })
-    await detected(k)
-    const sid = await create(k)
-    await prompt(k, sid)
-    await waitFor(() => ofType(k, sid, 'turn.parked').length === 1)
-    const child = await f.waitPid('child')
-    await k.handle('session.cancel', { commandId: 'x', sessionId: sid })
-    expect(await waitDead(child, 3000)).toBe(true)
-    await waitFor(() => ofType(k, sid, 'executor.notice').length === 1)
-    expect(pay(ofType(k, sid, 'executor.run.ended')[0])).toMatchObject({ status: 'cancelled', reason: 'cancelled' })
-    expect(pay(terminal(k, sid)[0]).reason).toBe('cancelled')
-    await waitFor(() => evs(k, sid).filter(e => e.type === 'turn.snapshot').length === 2)
-    const types = evs(k, sid).map(e => e.type)
-    expect(types.lastIndexOf('turn.snapshot')).toBeLessThan(types.indexOf('turn.failed'))
-  })
-})
-
-describe('deactivation', () => {
-  it('the plugin effect alone kills running fakes and writes interrupted, with no kernel in front of it', async () => {
-    const f = fake({ stubborn: true })
-    const events: { type: string; payload: Record<string, unknown> }[] = []
-    const registered: Tool[] = []
-    const effects: (() => void | Promise<void>)[] = []
-    const allow = { check: () => 'allow', checkMany: (r: unknown[]) => r.map(() => 'allow') }
-    const session = { sessionId: 's1', cwd, origin: 'app' }
-    const services: Record<string, unknown> = {
-      tools: { register: (t: Tool) => { registered.push(t); return () => {} } },
-      sessions: { get: () => session },
-      permissionGate: allow,
-      sandbox: {
-        status: () => ({ level: 'full', missing: [], autoDegraded: false }),
-        execPolicy: () => ({ denyRead: [], persistence: [], dataDir, level: 'full', ruleDenyRead: [], ruleDenyWrite: [], untranslatedRules: 0, totalRules: 0 }),
-      },
-    }
-    const log = { info() {}, warn() {}, error() {} }
-    const plugin = createExecutorCli({ env: { PATH: `${f.dir}:/usr/bin:/bin`, HOME: home }, loginPath: async () => '', git: isolatedGit() })
-    await plugin.activate({
-      services: { get: <T>(k: string) => services[k] as T, provide: () => {} },
-      events: { on: () => () => {}, history: () => [] },
-      effect: (d: () => void | Promise<void>) => effects.push(d),
-      rpc: { register: () => {} },
-      log,
-      config: { executors: { disabled: ['qoder'] } },
-      dataDir: join(dataDir, 'plugins', 'executor-cli'),
-      append: (e: { type: string; payload: Record<string, unknown> }) => { events.push(e); return e },
-    } as never)
-    await waitFor(() => registered.length === 1)
-    const signal = new AbortController().signal
-    const started = await registered[0].run({ prompt: 'x', readOnly: true }, { sessionId: 's1', turnId: 't1', callId: 'c1', cwd, spillDir: join(root, 'spill'), signal })
-    expect(started.isError).toBeFalsy()
-    const cli = await f.waitPid('cli')
-    const grand = await f.waitPid('grandchild')
-    for (const d of effects.reverse()) await d()
-    // 效果只限时等一小会儿,进程按短梯死
-    expect(await waitDead(cli, 3000)).toBe(true)
-    expect(await waitDead(grand, 500)).toBe(true)
-    await waitFor(() => events.some(e => e.type === 'executor.run.ended'))
-    expect(events.find(e => e.type === 'executor.run.ended')!.payload).toMatchObject({ status: 'interrupted', reason: 'kernel_stopping' })
-    // 之后再派:拒绝,不会起进程
-    const after = await registered[0].run({ prompt: 'x', readOnly: true }, { sessionId: 's1', turnId: 't2', callId: 'c2', cwd, spillDir: join(root, 'spill'), signal })
-    expect(after).toMatchObject({ isError: true })
-    expect(after.content).toContain('reason=kernel_stopping')
-  })
-})
-
-describe('RPC', () => {
-  it('executor.cancel: this turn goes on and the model hears status=cancelled; another session and a finished run get ok:false', async () => {
-    const f = fake({ forwarding: true })
-    const { k, calls } = await boot(f, { script: n => (n === 1 ? delegate() : n === 2 ? say('wait') : say('cancelled, ok')) })
-    await detected(k)
-    const sid = await create(k)
-    const other = await create(k)
-    await prompt(k, sid)
-    await waitFor(() => ofType(k, sid, 'executor.run.started').length === 1)
-    const { runId } = pay<{ runId: string }>(ofType(k, sid, 'executor.run.queued')[0])
-    expect(await k.handle('executor.cancel', { commandId: 'x1', sessionId: other, runId })).toEqual({ ok: false })
-    expect(isAlive(await f.waitPid('cli'))).toBe(true)
-    expect(await k.handle('executor.cancel', { commandId: 'x2', sessionId: sid, runId })).toEqual({ ok: true })
-    await waitFor(() => terminal(k, sid).length === 1)
-    expect(terminal(k, sid)[0].type).toBe('turn.ended')
-    expect(lastText(calls[2])).toContain('status="cancelled"')
-    expect(await k.handle('executor.cancel', { commandId: 'x3', sessionId: sid, runId })).toEqual({ ok: false })
-  })
-
-  it('a runId from another session is unknown everywhere', async () => {
-    const f = fake()
-    const { k } = await boot(f, { script: n => (n === 1 ? delegate() : say('done')) })
-    await detected(k)
-    const sid = await create(k)
-    const other = await create(k)
-    await turn(k, sid)
-    const { runId } = pay<{ runId: string }>(ofType(k, sid, 'executor.run.queued')[0])
-    await expect(k.handle('executor.changes', { sessionId: other, runId })).rejects.toMatchObject({ code: -32602 })
-    expect(await k.handle('executor.worktree.discard', { commandId: 'd', sessionId: other, runId })).toEqual({ ok: false })
-    expect(await k.handle('executor.changes', { sessionId: sid, runId })).toMatchObject({ source: 'git' })
-  })
-
-  it('discard of a running worktree run is busy', async () => {
-    const go = join(root, 'go')
-    const f = fake(untilGo(go))
-    const { k } = await boot(f, { script: n => (n === 1 ? delegate() : say('done')) })
-    await detected(k)
-    const sid = await create(k, { origin: 'schedule' })
-    await prompt(k, sid)
-    await waitFor(() => ofType(k, sid, 'executor.run.started').length === 1)
-    const { runId } = pay<{ runId: string }>(ofType(k, sid, 'executor.run.queued')[0])
-    await expect(k.handle('executor.worktree.discard', { commandId: 'd', sessionId: sid, runId })).rejects.toMatchObject({ code: ERR_BUSY })
-    writeFileSync(go, '')
-    await waitFor(() => terminal(k, sid).length === 1)
-  })
-
-  it('executor.refresh passes force: a self-test that now fails is seen', async () => {
-    const f = installFake({ lines: CODEX_OK })
-    const { k } = await boot(f)
-    await detected(k)
-    expect((await infoOf(k)).isolation).toBe('own')
-    writeFileSync(join(f.dir, 'scenario.json'), JSON.stringify({ selftest: 'fail:secret_read' }))
-    const r = (await k.handle('executor.refresh', {})) as { executors: Info[] }
-    expect(r.executors.find(e => e.id === 'codex')).toMatchObject({ isolation: 'none', missing: ['codex_selftest'] })
-  })
-})
-
-describe('codex.network', () => {
-  it('network:true → none, codex_network, no self-test run', async () => {
-    const f = installFake({ lines: CODEX_OK })
-    const { k } = await boot(f, { executors: { codex: { network: true } } })
-    await detected(k)
-    expect(await infoOf(k)).toMatchObject({ isolation: 'none', missing: ['codex_network'] })
-    expect(f.calls().filter(c => c.argv[0] === 'sandbox')).toEqual([])
-  })
-
-  it('a change to the config section re-detects, in both directions', async () => {
-    const f = installFake({ lines: CODEX_OK })
-    CONFIG_SECTIONS['config-writer'] = ['executors']
-    let update: (v: unknown) => void = () => {}
-    const writer: Plugin = { manifest: { id: 'config-writer', version: '0', kernel: '^0.1.0' }, activate: ctx => { update = v => ctx.updateConfig('executors', v) } }
-    try {
-      const { k } = await boot(f, { extra: [writer] })
-      await detected(k)
-      expect(await infoOf(k)).toMatchObject({ isolation: 'own', missing: [] })
-      update({ disabled: ['qoder'], codex: { network: true } })
-      await waitFor(() => f.calls().filter(c => c.argv[0] === '--version').length === 2)
-      for (let i = 0; i < 500 && (await infoOf(k)).isolation !== 'none'; i++) await sleep(10)
-      expect(await infoOf(k)).toMatchObject({ isolation: 'none', missing: ['codex_network'] })
-      update({ disabled: ['qoder'], codex: { network: false } })
-      for (let i = 0; i < 500 && (await infoOf(k)).isolation !== 'own'; i++) await sleep(10)
-      expect(await infoOf(k)).toMatchObject({ isolation: 'own', missing: [] })
-    } finally {
-      delete CONFIG_SECTIONS['config-writer']
-    }
-  })
-})
-
-describe('close', () => {
-  it('kernel.close with a run: interrupted / kernel_stopping, no process left, within budget', async () => {
-    const f = fake({ stubborn: true })
-    const { k } = await boot(f, { script: n => (n === 1 ? delegate() : say('wait')) })
-    await detected(k)
-    const sid = await create(k)
-    await prompt(k, sid)
-    const cli = await f.waitPid('cli')
-    const grand = await f.waitPid('grandchild')
-    const t0 = Date.now()
-    await k.close()
-    kernels = []
-    expect(Date.now() - t0).toBeLessThan(CLOSE_GRACE_MS + KILL_LIVE_MS)
-    expect(isAlive(cli)).toBe(false)
-    expect(await waitDead(grand, 500)).toBe(true)
-    const again = await createKernel({ dataDir, home, secrets: { osBackend: false }, sandbox: NO_SANDBOX, plugins: [] })
-    kernels.push(again)
-    const ended = again.events.bySession(sid).filter(e => e.type === 'executor.run.ended')
-    expect(ended).toHaveLength(1)
-    expect(pay(ended[0])).toMatchObject({ status: 'interrupted', reason: 'kernel_stopping' })
-    expect(again.events.bySession(sid).filter(e => e.type === 'executor.notice')).toHaveLength(1)
-    expect(again.events.bySession(sid).find(e => e.type === 'turn.failed' || e.type === 'turn.ended')).toBeDefined()
-  })
-
-  it('cancelled just before close: not left on the long ladder past CLOSE_GRACE_MS', async () => {
-    const f = fake({ stubborn: true })
-    const { k } = await boot(f, { script: n => (n === 1 ? delegate() : say('wait')) })
-    await detected(k)
-    const sid = await create(k)
-    await prompt(k, sid)
-    const cli = await f.waitPid('cli')
-    const grand = await f.waitPid('grandchild')
-    await waitFor(() => ofType(k, sid, 'executor.run.started').length === 1)
-    const { runId } = pay<{ runId: string }>(ofType(k, sid, 'executor.run.queued')[0])
-    await k.handle('executor.cancel', { commandId: 'x', sessionId: sid, runId })
-    const t0 = Date.now()
-    await k.close()
-    kernels = []
-    expect(Date.now() - t0).toBeLessThan(CLOSE_GRACE_MS + KILL_LIVE_MS)
-    expect(isAlive(cli)).toBe(false)
-    expect(await waitDead(grand, 500)).toBe(true)
-  })
-
-  it('a turn stuck in a model call that ignores the signal: the run still gets SIGINT first, before killLive, and ended is logged', async () => {
-    const f = fake({ forwarding: true })
-    let release = () => {}
-    const hold = new Promise<void>(res => { release = res })
-    async function* stuck(): AsyncGenerator<ModelEvent> {
-      await hold
-      yield done()
-    }
-    const { k } = await boot(f, { script: n => (n === 1 ? delegate() : stuck()) })
-    await detected(k)
-    const sid = await create(k)
-    await prompt(k, sid)
-    const child = await f.waitPid('child')
-    const ended: Record<string, unknown>[] = []
-    k.events.onAppend(e => {
-      if (e.type === 'executor.run.ended') ended.push(pay(e))
-    })
-    await k.close()
-    kernels = []
-    release()
-    expect(ended).toHaveLength(1)
-    expect(ended[0]).toMatchObject({ status: 'interrupted', reason: 'kernel_stopping' })
-    // SIGINT 先到:forwarding 自己收掉自成一会话的子进程。killLive 的 SIGTERM 打头的话它活下来
-    expect(await waitDead(child, 500)).toBe(true)
-  })
-
-  it('a stuck end step does not hold close past the budget, and recovery writes what is missing', async () => {
-    const f = fake({ lines: CODEX_OK })
-    let stuck = false
-    let release = () => {}
-    const hold = new Promise<void>(res => { release = res })
-    const real = isolatedGit()
-    const git: typeof real = async (args, o) => {
-      if (stuck && args.includes('add')) await hold
-      return real(args, o)
-    }
-    const go = join(root, 'go')
-    writeFileSync(join(f.dir, 'scenario.json'), JSON.stringify(untilGo(go)))
-    const { k } = await boot(f, { script: n => (n === 1 ? delegate() : say('wait')), plugin: { git } })
-    await detected(k)
-    const sid = await create(k)
-    await prompt(k, sid)
-    await waitFor(() => ofType(k, sid, 'turn.parked').length === 1)
-    stuck = true
-    writeFileSync(go, '')
-    await sleep(300) // CLI 退了,卡在结束快照里
-    const t0 = Date.now()
-    await k.close()
-    kernels = []
-    release()
-    expect(Date.now() - t0).toBeLessThan(CLOSE_GRACE_MS + KILL_LIVE_MS + 1500)
-    await sleep(50)
-    const again = await createKernel({ dataDir, home, secrets: { osBackend: false }, sandbox: NO_SANDBOX, plugins: [] })
-    kernels.push(again)
-    expect(again.events.bySession(sid).filter(e => e.type === 'executor.run.ended')).toHaveLength(1)
-    expect(again.events.bySession(sid).filter(e => e.type === 'executor.notice')).toHaveLength(1)
-  })
-})
-
-describe('restart', () => {
-  /** 关掉内核但日志里留一个开着的运行:崩溃的样子 */
-  async function crashedLog(extra: (sid: string, turnId: string) => { type: string; payload: object }[], plugins: Plugin[] = []) {
-    const k = await createKernel({ dataDir, home, secrets: { osBackend: false }, sandbox: NO_SANDBOX, plugins })
-    const { sessionId } = (await k.handle('session.create', { commandId: 'c', cwd, model: REF, approvalMode: 'auto' })) as { sessionId: string }
-    const turnId = 't-crashed'
-    k.events.append({ type: 'message.user', sessionId, payload: { turnId, text: 'hi' } })
-    k.events.append({ type: 'turn.started', sessionId, payload: { turnId } })
-    for (const e of extra(sessionId, turnId)) k.events.append({ ...e, sessionId } as Omit<KernelEvent, 'seq' | 'ts'>)
-    await k.close()
-    return { sessionId, turnId }
-  }
-  const queued = (runId: string, turnId: string) => ({ type: 'executor.run.queued', payload: { runId, turnId, callId: 'c1', executor: 'codex', summary: 'codex: x', readOnly: false, isolation: 'own', position: 0 } })
-  const started = (runId: string, turnId: string, o: object = {}) => ({ type: 'executor.run.started', payload: { runId, turnId, executor: 'codex', cwd, isolation: 'own', ...o } })
-
-  it('open run: ended, notice, turn.failed interrupted in that order; the next turn sees the notice; the fake is not started again', async () => {
-    const f = fake()
-    const { sessionId: sid } = await crashedLog((_s, t) => [queued('run_abc', t), started('run_abc', t)])
-    const { k, calls } = await boot(f, { script: () => say('ok') })
-    await detected(k)
-    const after = evs(k, sid)
-    const at = (t: string) => after.findIndex(e => e.type === t)
-    expect(pay(after[at('executor.run.ended')])).toMatchObject({ status: 'interrupted', reason: 'daemon_restart', ms: 0, changed: { files: [], source: 'none' } })
-    expect(at('executor.run.ended')).toBeLessThan(at('executor.notice'))
-    expect(at('executor.notice')).toBeLessThan(at('turn.failed'))
-    expect(pay(after[at('turn.failed')]).reason).toBe('interrupted')
-    await turn(k, sid, 'what happened')
-    const text = calls[0].flatMap(m => m.parts).map(p => (p.type === 'text' ? p.text : '')).join('\n')
-    expect(text).toContain('status="interrupted"')
-    expect(text).toContain('git status')
-    expect(execCalls(f)).toEqual([])
-  })
-
-  it('recovery on the next restart writes nothing', async () => {
-    const { sessionId: sid } = await crashedLog((_s, t) => [queued('run_abc', t)])
-    const open = async () => createKernel({ dataDir, home, secrets: { osBackend: false }, sandbox: NO_SANDBOX, plugins: [] })
-    const a = await open()
-    const n = a.events.bySession(sid).length
-    await a.close()
-    const b = await open()
-    kernels.push(b)
-    expect(b.events.bySession(sid)).toHaveLength(n)
-  })
-
-  it('crash between worktree add and spawn: the worktree and its git entry go, and no worktree on the ended', async () => {
-    const runId = 'run_0a0b'
-    const reserved = (sid: string) => join(realpathSync(root), 'data-worktrees', sid, runId)
-    const { sessionId: sid } = await crashedLog((s, t) => {
-      mkdirSync(join(`${dataDir}-worktrees`, s), { recursive: true })
-      sh('worktree', 'add', '--detach', reserved(s), 'HEAD')
-      return [queued(runId, t)]
-    })
-    expect(existsSync(reserved(sid))).toBe(true)
-    const k = await createKernel({ dataDir, home, secrets: { osBackend: false }, sandbox: { ...NO_SANDBOX, git: isolatedGit() }, plugins: [] })
-    kernels.push(k)
-    expect(existsSync(reserved(sid))).toBe(false)
-    expect(sh('worktree', 'list')).not.toContain(reserved(sid))
-    expect(pay(k.events.bySession(sid).find(e => e.type === 'executor.run.ended'))).not.toHaveProperty('worktree')
-  })
-
-  it('a started worktree stays, named on the ended, minus literal deny-read copies', async () => {
-    const runId = 'run_0c0d'
-    const path = (sid: string) => join(realpathSync(root), 'data-worktrees', sid, runId)
-    writeFileSync(join(dataDir, 'config.json'), JSON.stringify({ permissions: { rules: [{ effect: 'deny', rule: 'read(hidden/**)' }] } }))
-    const { sessionId: sid } = await crashedLog((s, t) => {
-      mkdirSync(join(path(s), 'hidden'), { recursive: true })
-      writeFileSync(join(path(s), 'hidden', 'secret'), 'SECRET')
-      writeFileSync(join(path(s), 'kept.txt'), 'half done')
-      return [queued(runId, t), started(runId, t, { cwd: path(s), worktree: path(s) })]
-    })
-    const k = await createKernel({ dataDir, home, secrets: { osBackend: false }, sandbox: { ...NO_SANDBOX, git: isolatedGit() }, plugins: [] })
-    kernels.push(k)
-    expect(existsSync(join(path(sid), 'hidden'))).toBe(false)
-    expect(readFileSync(join(path(sid), 'kept.txt'), 'utf8')).toBe('half done')
-    expect(pay(k.events.bySession(sid).find(e => e.type === 'executor.run.ended')).worktree).toBe(path(sid))
-    expect(pay<{ text: string }>(k.events.bySession(sid).find(e => e.type === 'executor.notice')).text).toContain(`worktree: ${path(sid)}`)
-  })
-
-  it('a forged worktree path in the log removes nothing', async () => {
-    const victim = join(root, 'victim')
-    mkdirSync(join(victim, 'hidden'), { recursive: true })
-    writeFileSync(join(dataDir, 'config.json'), JSON.stringify({ permissions: { rules: [{ effect: 'deny', rule: `read(${victim}/hidden/**)` }] } }))
-    const { sessionId: sid } = await crashedLog((_s, t) => [queued('run_0e0f', t), started('run_0e0f', t, { cwd: victim, worktree: victim })])
-    const k = await createKernel({ dataDir, home, secrets: { osBackend: false }, sandbox: { ...NO_SANDBOX, git: isolatedGit() }, plugins: [] })
-    kernels.push(k)
-    expect(existsSync(join(victim, 'hidden'))).toBe(true)
-    expect(k.events.bySession(sid).some(e => e.type === 'executor.run.ended')).toBe(true)
   })
 })

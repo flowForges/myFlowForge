@@ -102,6 +102,16 @@ describe('recoverRuns', () => {
     ])
   })
 
+  it('a malformed run is logged and skipped, the others still recover', () => {
+    const errors: string[] = []
+    const out: KernelEvent[] = []
+    const events = [queued('run_a1'), ended('run_a1', { changed: {} }), queued('run_b1')]
+    const recovered = recoverRuns(events, e => out.push(e as KernelEvent), { tmpRoot: tmp, log: { info() {}, warn() {}, error: m => errors.push(m) } })
+    expect(errors).toEqual(['run not recovered'])
+    expect(recovered.map(r => r.runId)).toEqual(['run_b1'])
+    expect(out.map(e => e.type)).toEqual(['executor.run.ended', 'executor.notice'])
+  })
+
   it('removes mffai-run-<runId> only for open runs with a well-formed id', () => {
     const dirs = ['mffai-run-run_a1', 'mffai-run-run_b1', 'mffai-run-run_c1']
     for (const d of dirs) mkdirSync(join(tmp, d))

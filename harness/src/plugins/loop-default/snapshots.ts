@@ -1,7 +1,9 @@
 // 每轮的开始 / 结束快照与回滚(spec §11):git 部分在 lib/git/snapshot,这里管引用命名、事件与"哪一轮能回滚"
+import { dirname } from 'node:path'
 import type { Logger } from '../../kernel/log'
 import { RpcError } from '../../kernel/rpcError'
 import { changes, pruneRefs, restore, submodulePaths, takeSnapshot, type Git, type SnapshotResult } from '../../lib/git/snapshot'
+import { worktreeRootOf } from '../../lib/git/worktree'
 import type { FileChange, KernelEvent } from '../../protocol/index'
 
 const ERR_INVALID_PARAMS = -32602
@@ -43,6 +45,12 @@ const take = (deps: SnapshotDeps, t: SnapshotTarget, turnId: string, phase: Phas
   timed(deps, phase, () => takeSnapshot(t.cwd, snapshotRef(t.sessionId, turnId, phase), deps.git, gitOpts(deps)))
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err))
+
+/** 过滤器落在这些地方就不跑。pluginDir 是 <数据目录>/plugins/<id>:会话 tmp 在数据目录里,运行的 TMPDIR 在系统临时目录,其他 worktree 在 -worktrees */
+export const writableRootsFor = (pluginDir: string, systemTmp: string): string[] => {
+  const dataDir = dirname(dirname(pluginDir))
+  return [dataDir, worktreeRootOf(dataDir), systemTmp]
+}
 
 /** 资格已查过之后的 git 失败:是服务端的问题(−32603),记日志 */
 function gitFailed(deps: SnapshotDeps, what: string, err: unknown): RpcError {
