@@ -60,4 +60,23 @@ describe('family', () => {
     expect(TOOLSETS).toEqual(before)
     expect(toolDefs([t('read')], 'edit').map(d => d.name)).toEqual(['read'])
   })
+
+  it('order is toolset, then ambient by name, then delegate by name; TOOLSETS stays as it was', () => {
+    const t = (name: string, o: Partial<Tool> = {}): Tool => ({ name, description: name, parameters: {}, ...o, permission: () => [], run: async () => ({ content: '' }) })
+    const before = structuredClone(TOOLSETS)
+    const all = [
+      t('delegate_qoder', { delegate: true }), t('memory_write', { ambient: true }), t('shell'), t('delegate_codex', { delegate: true }),
+      t('memory_get', { ambient: true }), t('read'), t('memory_search', { ambient: true }), t('extra'),
+    ]
+    const want = ['read', 'shell', 'memory_get', 'memory_search', 'memory_write', 'delegate_codex', 'delegate_qoder']
+    expect(toolDefs(all, 'patch').map(d => d.name)).toEqual(want)
+    expect(toolDefs(all, 'edit').map(d => d.name)).toEqual(want)
+    expect(toolDefs([...all].reverse(), 'edit').map(d => d.name)).toEqual(want)
+    expect(TOOLSETS).toEqual(before)
+  })
+
+  it('ambient does not leak into the definition sent to the model', () => {
+    const tool: Tool = { name: 'memory_get', description: 'd', parameters: { type: 'object' }, ambient: true, permission: () => [], run: async () => ({ content: '' }) }
+    expect(toolDefs([tool], 'edit')).toEqual([{ name: 'memory_get', description: 'd', parameters: { type: 'object' } }])
+  })
 })

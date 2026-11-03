@@ -82,7 +82,7 @@ describe('Sessions service', () => {
     expect(seen).toBeInstanceOf(Sessions)
     const { sessionId } = await create(k, { cwd: work, approvalMode: 'auto', toolset: 'patch', model: { accountId: 'a', modelId: 'm' } })
     expect(seen!.get(sessionId)).toEqual({
-      sessionId, cwd: realpathSync.native(work), approvalMode: 'auto', toolset: 'patch', model: { accountId: 'a', modelId: 'm' }, origin: 'app', repo: { kind: 'none' },
+      sessionId, cwd: realpathSync.native(work), approvalMode: 'auto', toolset: 'patch', model: { accountId: 'a', modelId: 'm' }, origin: 'app', audience: 'owner', repo: { kind: 'none' },
     })
     expect(seen!.get('nope')).toBeUndefined()
   })
@@ -94,8 +94,8 @@ describe('Sessions service', () => {
     await k1.close()
     kernels = []
     await boot()
-    expect(seen!.get(a.sessionId)).toEqual({ sessionId: a.sessionId, cwd: realpathSync.native(work), approvalMode: 'ask', toolset: 'edit', origin: 'app', repo: { kind: 'none' } })
-    expect(seen!.get(b.sessionId)).toEqual({ sessionId: b.sessionId, approvalMode: 'ask', origin: 'app' })
+    expect(seen!.get(a.sessionId)).toEqual({ sessionId: a.sessionId, cwd: realpathSync.native(work), approvalMode: 'ask', toolset: 'edit', origin: 'app', audience: 'owner', repo: { kind: 'none' } })
+    expect(seen!.get(b.sessionId)).toEqual({ sessionId: b.sessionId, approvalMode: 'ask', origin: 'app', audience: 'owner' })
   })
 
   it('load / observe only read session.created; old payloads default to ask', () => {
@@ -103,9 +103,9 @@ describe('Sessions service', () => {
     const ev = (seq: number, type: KernelEvent['type'], sessionId: string | undefined, payload: unknown): KernelEvent =>
       ({ seq, ts: 0, type, sessionId, payload })
     s.load([ev(1, 'session.created', 's1', { title: 'old' }), ev(2, 'message.user', 's1', { cwd: '/x' }), ev(3, 'session.created', undefined, {})])
-    expect(s.get('s1')).toEqual({ sessionId: 's1', approvalMode: 'ask', origin: 'app' })
+    expect(s.get('s1')).toEqual({ sessionId: 's1', approvalMode: 'ask', origin: 'app', audience: 'owner' })
     s.observe(ev(4, 'session.created', 's2', { approvalMode: 'auto', cwd: '/w' }))
-    expect(s.get('s2')).toEqual({ sessionId: 's2', approvalMode: 'auto', cwd: '/w', origin: 'app', repo: { kind: 'none' } })
+    expect(s.get('s2')).toEqual({ sessionId: 's2', approvalMode: 'auto', cwd: '/w', origin: 'app', audience: 'owner', repo: { kind: 'none' } })
   })
 
   it('origin round-trips through session.create; session.created carries it only when not app', async () => {
@@ -156,6 +156,67 @@ describe('Sessions service', () => {
     const s = new Sessions(dir)
     expect(s.spillDir('abc-1')).toBe(join(dir, 'sessions', 'abc-1', 'spill'))
     for (const bad of ['../x', 'a/b', '', '..']) expect(() => s.spillDir(bad)).toThrow()
+  })
+})
+
+describe('session audience (06 spec §9)', () => {
+  it.each([
+    [{}, 'owner'],
+    [{ origin: 'app' }, 'owner'],
+    [{ origin: 'schedule' }, 'owner'],
+    [{ origin: 'im' }, 'group'],
+    [{ origin: 'im', audience: 'owner' }, 'owner'],
+    [{ origin: 'app', audience: 'group' }, 'group'],
+    [{ audience: 'owner' }, 'owner'],
+  ] as const)('session.create %j → %s', async (params, want) => {
+    const k = await boot()
+    const { sessionId } = await create(k, params)
+    expect(seen!.get(sessionId)?.audience).toBe(want)
+  })
+
+  it('session.created carries it only when given', async () => {
+    const k = await boot()
+    const none = await create(k, { origin: 'im' }, 'none')
+    const given = await create(k, { origin: 'im', audience: 'owner' }, 'given')
+    expect(createdPayload(k, none.sessionId)).not.toHaveProperty('audience')
+    expect(createdPayload(k, given.sessionId).audience).toBe('owner')
+  })
+
+  it('the schema rejects an unknown audience', async () => {
+    const k = await boot()
+    expect(await codeOf(create(k, { audience: 'admin' }))).toBe(-32602)
+  })
+
+  it.each([
+    ['unknown audience on an old log', { audience: 'admin' }, 'group'],
+    ['unknown audience beats a trusted origin', { origin: 'app', audience: 'admin' }, 'group'],
+    ['non-string audience', { audience: 1 }, 'group'],
+    ['unknown origin, no audience', { origin: 'future-channel' }, 'group'],
+    ['im, no audience', { origin: 'im' }, 'group'],
+    ['old session, nothing at all', {}, 'owner'],
+    ['schedule', { origin: 'schedule' }, 'owner'],
+    ['unknown origin, explicit owner', { origin: 'future-channel', audience: 'owner' }, 'owner'],
+  ])('old log: %s', (_name, payload, want) => {
+    const s = new Sessions('/d')
+    s.observe({ seq: 1, ts: 1, type: 'session.created', sessionId: 's', payload })
+    expect(s.get('s')?.audience).toBe(want)
+  })
+
+  it('an unknown origin still maps to schedule for origin, but not for audience', () => {
+    const s = new Sessions('/d')
+    s.observe({ seq: 1, ts: 1, type: 'session.created', sessionId: 's', payload: { origin: 'future-channel' } })
+    expect(s.get('s')).toMatchObject({ origin: 'schedule', audience: 'group' })
+  })
+
+  it('survives a kernel restart', async () => {
+    const k1 = await boot()
+    const a = await create(k1, { origin: 'im', audience: 'owner' }, 'a')
+    const b = await create(k1, { origin: 'im' }, 'b')
+    await k1.close()
+    kernels = []
+    await boot()
+    expect(seen!.get(a.sessionId)?.audience).toBe('owner')
+    expect(seen!.get(b.sessionId)?.audience).toBe('group')
   })
 })
 

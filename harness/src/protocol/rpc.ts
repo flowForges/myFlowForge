@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { KernelEventSchema } from './events'
+import { KernelEventSchema, MemoryConsolidatedPayloadSchema, MemoryProposalStatusSchema, MemoryProposalTargetSchema } from './events'
 import {
   AccountProtocolSchema,
   AccountViewSchema,
@@ -14,6 +14,7 @@ import {
   ExecutorChangesSourceSchema,
   ExecutorIsolationSchema,
   FileChangeSchema,
+  SessionAudienceSchema,
   SessionOriginSchema,
   ToolsetSchema,
 } from './tools'
@@ -117,6 +118,79 @@ export const ExecutorListResultSchema = z.object({
 })
 export type ExecutorListResult = z.infer<typeof ExecutorListResultSchema>
 
+// 06:记忆(spec §16)。路径不来自调用方拼接:只有这三种形状
+export const MemoryFileSchema = z.union([z.literal('USER.md'), z.literal('MEMORY.md'), z.string().regex(/^topics\/[a-z0-9-]{1,40}\.md$/)])
+export type MemoryFile = z.infer<typeof MemoryFileSchema>
+
+export const MemoryLayerSchema = z.enum(['user', 'memory', 'topic', 'diary', 'session', 'raw'])
+export type MemoryLayer = z.infer<typeof MemoryLayerSchema>
+
+export const MemoryItemSchema = z.object({
+  id: z.string(),
+  layer: MemoryLayerSchema,
+  text: z.string(),
+  source: z.string().optional(),
+  scope: z.string().optional(),
+  file: z.string().optional(),
+  sessionId: z.string().optional(),
+  ts: z.number().optional(),
+  flags: z.array(z.string()).optional(),
+})
+export type MemoryItem = z.infer<typeof MemoryItemSchema>
+
+export const MemoryChangeSchema = z.object({
+  ts: z.number(),
+  id: z.string(),
+  file: z.string().optional(),
+  op: z.string(),
+  before: z.string().nullable().optional(),
+  after: z.string().nullable().optional(),
+  source: z.string(),
+})
+export type MemoryChange = z.infer<typeof MemoryChangeSchema>
+
+export const MemoryProposalSchema = z.object({
+  id: z.string(),
+  target: MemoryProposalTargetSchema,
+  op: z.enum(['add', 'replace']),
+  text: z.string(),
+  replaces: z.string().optional(),
+  evidence: z.array(z.string()),
+  source: z.enum(['extract', 'model']),
+  flags: z.array(z.string()),
+  status: MemoryProposalStatusSchema,
+  createdAt: z.number(),
+  decidedAt: z.number().optional(),
+})
+export type MemoryProposal = z.infer<typeof MemoryProposalSchema>
+
+export const MemoryHabitSchema = z.object({
+  id: z.string(),
+  kind: z.literal('routine'),
+  weekday: z.number(),
+  hour: z.number(),
+  cwd: z.string(),
+  status: z.enum(['detected', 'confirmed', 'dismissed']),
+})
+export type MemoryHabit = z.infer<typeof MemoryHabitSchema>
+
+export const MemoryHealthSchema = z.object({
+  dbBytes: z.number(),
+  rawRows: z.number(),
+  noteRows: z.number(),
+  cursorLag: z.number(),
+  pendingProposals: z.number(),
+  lastConsolidation: z.string().optional(),
+  // 预算相关字段由后台任务(Task 8)提供
+  budget: z.object({ tokens: z.number(), usd: z.number(), tokensLimit: z.number(), usdLimit: z.number() }).optional(),
+  backgroundModel: ModelRefSchema.optional(),
+  /** 稳定代码,如 db_recovered、file_over_cap:USER.md */
+  problems: z.array(z.string()),
+})
+export type MemoryHealth = z.infer<typeof MemoryHealthSchema>
+
+const MemoryItems = z.object({ items: z.array(MemoryItemSchema) })
+
 export const WorkerMethods = {
   ...AuthMethods,
   hello: {
@@ -142,6 +216,7 @@ export const WorkerMethods = {
       approvalMode: ApprovalModeSchema.optional(),
       toolset: ToolsetSchema.optional(),
       origin: SessionOriginSchema.optional(),
+      audience: SessionAudienceSchema.optional(),
     }),
     result: z.object({ sessionId: z.string() }),
   },
@@ -216,6 +291,31 @@ export const WorkerMethods = {
     result: z.object({ files: z.array(FileChangeSchema), source: ExecutorChangesSourceSchema, concurrent: z.boolean().optional() }),
   },
   'executor.worktree.discard': { params: z.object({ commandId: z.string(), sessionId: z.string(), runId: z.string() }), result: Ok },
+  'memory.list': { params: z.object({ layer: MemoryLayerSchema.optional(), limit: z.number().int().min(1).optional(), before: z.number().optional() }), result: MemoryItems },
+  'memory.get': { params: z.object({ id: z.string() }), result: MemoryItemSchema.extend({ evidence: z.array(z.string()).optional() }) },
+  'memory.search': {
+    params: z.object({ query: z.string().min(1), layer: z.enum(['notes', 'raw', 'all']).optional(), limit: z.number().int().min(1).optional() }),
+    result: MemoryItems,
+  },
+  'memory.update': { params: z.object({ commandId: z.string(), id: z.string(), text: z.string() }), result: z.object({ ok: z.boolean(), masked: z.number() }) },
+  // sources:用户自己的原话,还留在对话记录里(08 列给用户,逐条删)
+  'memory.delete': { params: z.object({ commandId: z.string(), id: z.string() }), result: z.object({ ok: z.boolean(), redacted: z.number(), sources: z.array(z.string()) }) },
+  'memory.file.get': { params: z.object({ file: MemoryFileSchema }), result: z.object({ content: z.string(), hash: z.string(), cap: z.number() }) },
+  'memory.file.set': {
+    params: z.object({ commandId: z.string(), file: MemoryFileSchema, content: z.string(), expectedHash: z.string() }),
+    result: z.object({ ok: z.boolean(), hash: z.string(), masked: z.number() }),
+  },
+  'memory.changes': { params: z.object({ limit: z.number().int().min(1).optional() }), result: z.object({ items: z.array(MemoryChangeSchema) }) },
+  'memory.health': { params: Empty, result: MemoryHealthSchema },
+  'memory.proposals.list': { params: z.object({ status: MemoryProposalStatusSchema.optional() }), result: z.object({ items: z.array(MemoryProposalSchema) }) },
+  'memory.proposals.decide': { params: z.object({ commandId: z.string(), id: z.string(), decision: z.enum(['approve', 'reject']), text: z.string().optional() }), result: Ok },
+  'memory.consolidate': {
+    params: z.object({ commandId: z.string() }),
+    result: MemoryConsolidatedPayloadSchema,
+  },
+  'memory.habits.list': { params: Empty, result: z.object({ items: z.array(MemoryHabitSchema) }) },
+  'memory.habits.decide': { params: z.object({ commandId: z.string(), id: z.string(), decision: z.enum(['confirmed', 'dismissed']) }), result: Ok },
+  'memory.recommendations.set': { params: z.object({ commandId: z.string(), routine: z.boolean() }), result: Ok },
 } as const
 
 export const ControlMethods = {

@@ -27,15 +27,18 @@ export function toolsetFor(f: Family, override?: Toolset): Toolset {
   return override ?? (f === 'gpt' ? 'patch' : 'edit')
 }
 
-/** 给模型的工具定义:唯一的映射处(按工具集顺序,缺的工具跳过;委派工具按名字排序接在后面,不随区域设置变) */
+const byToolName = (a: Tool, b: Tool) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0) // 不随区域设置变
+
+/** 给模型的工具定义:唯一的映射处(按工具集顺序,缺的工具跳过;ambient、委派工具各自按名字排序接在后面) */
 export function toolDefs(tools: Tool[], toolset: Toolset): NonNullable<ModelRequest['tools']> {
   const byName = new Map(tools.map(t => [t.name, t]))
   const inToolset = TOOLSETS[toolset].flatMap(name => {
     const t = byName.get(name)
     return t ? [t] : []
   })
-  const delegates = tools.filter(t => t.delegate).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
-  return [...inToolset, ...delegates].map(t => ({ name: t.name, description: t.description, parameters: t.parameters }))
+  const ambient = tools.filter(t => t.ambient).sort(byToolName)
+  const delegates = tools.filter(t => t.delegate).sort(byToolName)
+  return [...inToolset, ...ambient, ...delegates].map(t => ({ name: t.name, description: t.description, parameters: t.parameters }))
 }
 
 /** 账号的协议:目录里只看得到预设;ChatGPT 订阅预设(chatgpt-oauth)固定走 chatgpt 协议 */

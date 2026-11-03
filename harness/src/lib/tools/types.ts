@@ -5,7 +5,7 @@ import type { SandboxStatus } from '../../protocol/rpc'
 /** 权限请求;路径资源由工具解析成绝对路径后给出(lib/fs/paths 的 resolveToolPath) */
 export interface PermissionRequest {
   actor: 'kernel' | string
-  action: 'read' | 'write' | 'exec' | string
+  action: 'read' | 'write' | 'exec' | 'memory' | string
   resource?: string
   sessionId?: string
   /** 审批卡片的摘要;委派工具给(已打码) */
@@ -48,6 +48,8 @@ export interface Tool {
   parameters: object
   /** 委派工具:toolDefs 把它们按名字排序接在工具集之后 */
   delegate?: boolean
+  /** 不属于工具集、每个会话都有的工具(记忆):toolDefs 按名字排序接在工具集之后、委派工具之前 */
+  ambient?: boolean
   /** 权限请求:由参数算出动作与资源;返回多个时全部要放行;空数组 = 拒绝(tools 服务不执行) */
   permission(args: unknown, ctx: ToolContext): PermissionRequest[]
   run(args: unknown, ctx: ToolContext): Promise<ToolResult>

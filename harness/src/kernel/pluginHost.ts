@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import { mkdirSync } from 'node:fs'
 import type { KernelEvent, SecretsBackend, WorkerMethodName } from '../protocol/index'
 import type { KernelConfig } from './config'
+import type { EventLog, RedactEdit } from './eventLog'
 import type { EventBus } from './events'
 import type { ServiceRegistry } from './services'
 import { EffectScope } from './effects'
@@ -22,6 +23,12 @@ export interface PluginContext {
   events: Pick<EventBus, 'declare' | 'on' | 'emit' | 'waterfall' | 'serial' | 'bail'> & {
     /** 只读:某会话的事件(seq 升序) */
     history(sessionId: string): KernelEvent[]
+    /** 只读:seq 之后的事件(所有会话,seq 升序),最多 limit 条 */
+    after(seq: number, limit: number): KernelEvent[]
+    /** 日志提交后才通知;回滚的事务不通知。随插件停用注销;回调里不要做 I/O */
+    onAppend(cb: (e: KernelEvent) => void): () => void
+    /** 用户删除记忆时就地换掉文本(见 EventLog.redact);只有 EVENT_REDACTORS 能调,否则抛错。返回改了几个事件 */
+    redact(edits: RedactEdit[]): number
   }
   effect(dispose: () => void | Promise<void>): void
   /** 注册工作进程 RPC 方法:参数先由内核按 WorkerMethods 校验;随插件停用自动注销 */
@@ -45,7 +52,10 @@ export interface Plugin {
 }
 
 /** 插件可写的内核配置段:收紧为白名单 */
-export const CONFIG_SECTIONS: Record<string, (keyof KernelConfig)[]> = { 'models-registry': ['models'], 'executor-cli': ['executors'] }
+export const CONFIG_SECTIONS: Record<string, (keyof KernelConfig)[]> = { 'models-registry': ['models'], 'executor-cli': ['executors'], 'memory-default': ['memory'] }
+
+/** 能就地改事件日志的插件:日志只追加的唯一例外(06 spec §16) */
+export const EVENT_REDACTORS: readonly string[] = ['memory-default']
 
 export interface PluginConfigAccess {
   get(): KernelConfig
@@ -65,6 +75,7 @@ export interface PluginHostDeps {
   rpc: RpcRegistry
   append(e: Omit<KernelEvent, 'seq' | 'ts'>): KernelEvent
   history?(sessionId: string): KernelEvent[]
+  eventLog?: Pick<EventLog, 'after' | 'onAppend' | 'redact'>
   log: Logger
   dataDir: string
   injectTimeoutMs?: number
@@ -129,6 +140,17 @@ export class PluginHost {
           serial: (t, ...a) => events.serial(t, ...a),
           bail: (t, ...a) => events.bail(t, ...a),
           history: sid => this.deps.history?.(sid) ?? [],
+          after: (seq, limit) => this.deps.eventLog?.after(seq, limit) ?? [],
+          onAppend: cb => {
+            const off = this.deps.eventLog?.onAppend(cb) ?? (() => {})
+            scope.add(off)
+            return off
+          },
+          redact: edits => {
+            const log = this.deps.eventLog
+            if (!log || !EVENT_REDACTORS.includes(id)) throw new Error(`plugin ${id} may not redact events`)
+            return log.redact(edits, id)
+          },
         },
         effect: d => scope.add(d),
         rpc: { register: (method, handler) => scope.add(rpc.register(id, method, handler)) },

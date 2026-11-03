@@ -7,6 +7,8 @@ import {
   PermissionsUpdatedPayloadSchema, SandboxNetDeniedPayloadSchema, SandboxStatusSchema,
   ExecutorNoticePayloadSchema, ExecutorRunEndedPayloadSchema, ExecutorRunProgressPayloadSchema, ExecutorRunQueuedPayloadSchema,
   ExecutorRunStartedPayloadSchema, SessionOriginSchema, TurnParkedPayloadSchema, TurnResumedPayloadSchema,
+  ContextRebuiltPayloadSchema, EventsRedactedPayloadSchema, MemoryCheckpointPayloadSchema, MemoryConsolidatedPayloadSchema, MemoryDeletedPayloadSchema,
+  MemoryInjectedPayloadSchema, MemoryProposalPayloadSchema, MemoryRecommendationPayloadSchema, MemoryUpdatedPayloadSchema, SessionAudienceSchema,
 } from './index'
 
 describe('framing', () => {
@@ -354,5 +356,107 @@ describe('FrameDecoder hardening', () => {
     d.push('x'.repeat(MAX_FRAME_BYTES + 1))
     expect(errs).toHaveLength(1)
     expect(d.push(encodeFrame({ ok: 1 }))).toEqual([{ ok: 1 }])
+  })
+})
+
+describe('06 schemas', () => {
+  const params = (m: keyof typeof WorkerMethods, v: unknown) => WorkerMethods[m].params.safeParse(v).success
+  const result = (m: keyof typeof WorkerMethods, v: unknown) => WorkerMethods[m].result.safeParse(v).success
+
+  it('every new event type is in EVENT_TYPES; the protocol version stays 3', () => {
+    for (const t of ['memory.injected', 'memory.checkpoint', 'context.rebuilt', 'memory.deleted', 'events.redacted', 'memory.updated', 'memory.proposal', 'memory.consolidated', 'memory.recommendation'])
+      expect(EVENT_TYPES).toContain(t)
+    expect(PROTOCOL_VERSION).toBe(3)
+  })
+
+  it('memory.injected needs kind and text; coreVersion is optional', () => {
+    const ok = { turnId: 't', kind: 'session', text: 'x', items: ['n_a'], coreVersion: 'abc' }
+    expect(MemoryInjectedPayloadSchema.safeParse(ok).success).toBe(true)
+    expect(MemoryInjectedPayloadSchema.safeParse({ turnId: 't', kind: 'turn', text: 'x', items: [] }).success).toBe(true)
+    expect(MemoryInjectedPayloadSchema.safeParse({ turnId: 't', text: 'x', items: [] }).success).toBe(false)
+    expect(MemoryInjectedPayloadSchema.safeParse({ turnId: 't', kind: 'turn', items: [] }).success).toBe(false)
+    expect(MemoryInjectedPayloadSchema.safeParse({ ...ok, kind: 'other' }).success).toBe(false)
+  })
+
+  it('memory.checkpoint carries asOfSeq; redacted and spend are optional', () => {
+    const ok = { throughSeq: 5, asOfSeq: 9, text: 'x', model: 'm', tokens: 10, covers: 3 }
+    expect(MemoryCheckpointPayloadSchema.safeParse(ok).success).toBe(true)
+    expect(MemoryCheckpointPayloadSchema.safeParse({ ...ok, redacted: true, usd: 0.1 }).success).toBe(true)
+    const { asOfSeq: _a, ...noAsOf } = ok
+    expect(MemoryCheckpointPayloadSchema.safeParse(noAsOf).success).toBe(false)
+  })
+
+  it('context.rebuilt needs throughSeq', () => {
+    const ok = { turnId: 't', step: 1, checkpointSeq: 7, throughSeq: 5, before: 100, after: 50 }
+    expect(ContextRebuiltPayloadSchema.safeParse(ok).success).toBe(true)
+    const { throughSeq: _t, ...none } = ok
+    expect(ContextRebuiltPayloadSchema.safeParse(none).success).toBe(false)
+  })
+
+  it('the remaining events parse', () => {
+    expect(MemoryDeletedPayloadSchema.safeParse({ id: 'n_a', rawSeqs: [1, 2] }).success).toBe(true)
+    expect(MemoryDeletedPayloadSchema.safeParse({ id: 'n_a' }).success).toBe(false)
+    expect(EventsRedactedPayloadSchema.safeParse({ by: 'memory-default', seqs: [1] }).success).toBe(true)
+    expect(EventsRedactedPayloadSchema.safeParse({ seqs: [1] }).success).toBe(false)
+    expect(MemoryUpdatedPayloadSchema.safeParse({ id: 'n_a', op: 'add', source: 'confirmed' }).success).toBe(true)
+    expect(MemoryUpdatedPayloadSchema.safeParse({ file: 'USER.md', op: 'set', source: 'user' }).success).toBe(true)
+    expect(MemoryUpdatedPayloadSchema.safeParse({ id: 'n_a', source: 'user' }).success).toBe(false)
+    expect(MemoryProposalPayloadSchema.safeParse({ id: 'p', target: 'USER.md', status: 'pending' }).success).toBe(true)
+    expect(MemoryProposalPayloadSchema.safeParse({ id: 'p', target: 'topics/a.md', status: 'pending' }).success).toBe(false)
+    expect(MemoryConsolidatedPayloadSchema.safeParse({ extracted: 1, promoted: 0, proposed: 1 }).success).toBe(true)
+    expect(MemoryConsolidatedPayloadSchema.safeParse({ extracted: 0, promoted: 0, proposed: 0, skipped: 'no_model', model: 'm', tokens: 3, usd: 0.1 }).success).toBe(true)
+    expect(MemoryRecommendationPayloadSchema.safeParse({ id: 'r', category: 'routine', habitId: 'h', text: 'x', cwd: '/w' }).success).toBe(true)
+    expect(MemoryRecommendationPayloadSchema.safeParse({ id: 'r', category: 'other', habitId: 'h', text: 'x', cwd: '/w' }).success).toBe(false)
+  })
+
+  it('no event that describes a deletion or a change has a text field', () => {
+    for (const s of [MemoryDeletedPayloadSchema, EventsRedactedPayloadSchema, MemoryUpdatedPayloadSchema, MemoryProposalPayloadSchema])
+      expect(Object.keys(s.shape)).not.toContain('text')
+  })
+
+  it('session.create takes owner or group and nothing else', () => {
+    expect(SessionAudienceSchema.options).toEqual(['owner', 'group'])
+    expect(params('session.create', { commandId: 'c', origin: 'im', audience: 'owner' })).toBe(true)
+    expect(params('session.create', { commandId: 'c', audience: 'group' })).toBe(true)
+    expect(params('session.create', { commandId: 'c' })).toBe(true)
+    expect(params('session.create', { commandId: 'c', audience: 'admin' })).toBe(false)
+  })
+
+  it('file accepts the two core files and topic slugs, and no other path', () => {
+    for (const file of ['USER.md', 'MEMORY.md', 'topics/a-1.md', `topics/${'a'.repeat(40)}.md`]) expect(params('memory.file.get', { file })).toBe(true)
+    for (const file of ['../USER.md', 'topics/../USER.md', 'topics/A.md', 'topics/a.txt', `topics/${'a'.repeat(41)}.md`, 'diary/2026-11-04.md', 'archive/USER.md', 'topics/a.md\n', '/etc/passwd', ''])
+      expect(params('memory.file.get', { file })).toBe(false)
+    expect(params('memory.file.set', { commandId: 'c', file: 'topics/a.md', content: 'x', expectedHash: 'h' })).toBe(true)
+    expect(params('memory.file.set', { commandId: 'c', file: 'x.md', content: 'x', expectedHash: 'h' })).toBe(false)
+  })
+
+  it('every method of spec §16 exists, write methods need a commandId', () => {
+    for (const m of ['memory.list', 'memory.get', 'memory.search', 'memory.update', 'memory.delete', 'memory.file.get', 'memory.file.set', 'memory.changes', 'memory.health', 'memory.proposals.list', 'memory.proposals.decide', 'memory.consolidate', 'memory.habits.list', 'memory.habits.decide', 'memory.recommendations.set'])
+      expect(Object.hasOwn(WorkerMethods, m)).toBe(true)
+    expect(Object.hasOwn(WorkerMethods, 'memory.export')).toBe(false)
+    expect(params('memory.update', { id: 'n', text: 'x' })).toBe(false)
+    expect(params('memory.delete', { id: 'n' })).toBe(false)
+    expect(params('memory.proposals.decide', { id: 'p', decision: 'approve' })).toBe(false)
+    expect(params('memory.consolidate', {})).toBe(false)
+    expect(params('memory.habits.decide', { id: 'h', decision: 'confirmed' })).toBe(false)
+    expect(params('memory.recommendations.set', { routine: true })).toBe(false)
+  })
+
+  it('parameters and results follow the table', () => {
+    expect(params('memory.list', {})).toBe(true)
+    expect(params('memory.list', { layer: 'raw', limit: 10, before: 5 })).toBe(true)
+    expect(params('memory.search', { query: 'x', layer: 'notes', limit: 20 })).toBe(true)
+    expect(params('memory.search', {})).toBe(false)
+    expect(params('memory.proposals.decide', { commandId: 'c', id: 'p', decision: 'approve', text: 'x' })).toBe(true)
+    expect(params('memory.proposals.decide', { commandId: 'c', id: 'p', decision: 'maybe' })).toBe(false)
+    expect(params('memory.habits.decide', { commandId: 'c', id: 'h', decision: 'confirmed' })).toBe(true)
+    expect(params('memory.habits.decide', { commandId: 'c', id: 'h', decision: 'detected' })).toBe(false)
+    expect(result('memory.delete', { ok: true, redacted: 2, sources: ['r_1'] })).toBe(true)
+    expect(result('memory.delete', { ok: true })).toBe(false)
+    expect(result('memory.update', { ok: true, masked: 1 })).toBe(true)
+    expect(result('memory.file.get', { content: '', hash: 'h', cap: 2000 })).toBe(true)
+    expect(result('memory.file.set', { ok: true, hash: 'h', masked: 0 })).toBe(true)
+    // 预算和后台模型 Task 8 才有,没有也要过
+    expect(result('memory.health', { dbBytes: 1, rawRows: 0, noteRows: 0, cursorLag: 0, pendingProposals: 0, problems: [] })).toBe(true)
   })
 })

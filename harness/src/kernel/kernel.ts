@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, realpathSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -108,11 +108,35 @@ const DRAIN_ALLOWED = new Set<string>(['executor.cancel'])
 
 const isTerminal = (type: string) => type === 'turn.ended' || type === 'turn.failed'
 
+/** win32 上 chmod 不起作用,也不该挡启动 */
+function chmodPrivate(path: string, mode: number): void {
+  try {
+    chmodSync(path, mode)
+  } catch (err) {
+    if (process.platform !== 'win32') throw err
+  }
+}
+
+/** 06 spec §5:memory.injected 把核心记忆复制进了事件日志。-wal、-shm 跟主文件的权限走,所以主文件要在打开之前就收紧 */
+function openPrivateDb(dir: string): ReturnType<typeof openDb> {
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  chmodPrivate(dir, 0o700)
+  const file = join(dir, 'events.sqlite')
+  closeSync(openSync(file, 'a', 0o600))
+  const files = [file, `${file}-wal`, `${file}-shm`]
+  const tighten = () => {
+    for (const f of files) if (existsSync(f)) chmodPrivate(f, 0o600)
+  }
+  tighten()
+  const db = openDb(file)
+  tighten()
+  return db
+}
+
 export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   const log = opts.log ?? nullLogger
   const startedAt = Date.now()
-  mkdirSync(join(opts.dataDir, 'db'), { recursive: true })
-  const db = openDb(join(opts.dataDir, 'db', 'events.sqlite'))
+  const db = openPrivateDb(join(opts.dataDir, 'db'))
   const eventLog = new EventLog(db, { onListenerError: err => log.error('event listener failed', { error: String(err) }) })
   const receipts = new Receipts(db)
   const services = new ServiceRegistry()
@@ -198,7 +222,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   // 后端故障不抛错:状态为 unavailable / unreadable,内核照常启动
   const secrets = await openSecretStore({ ...opts.secrets, dataDir: opts.dataDir, log })
   const host = new PluginHost({
-    services, events: bus, rpc, append, history: sid => eventLog.bySession(sid), log, dataDir: opts.dataDir, injectTimeoutMs: opts.injectTimeoutMs, secrets, config: configAccess,
+    services, events: bus, rpc, append, history: sid => eventLog.bySession(sid), eventLog, log, dataDir: opts.dataDir, injectTimeoutMs: opts.injectTimeoutMs, secrets, config: configAccess,
   })
 
   let state: StatusResult['state'] = 'starting'
@@ -363,7 +387,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
       if (e.type === 'session.created') {
         const title = (e.payload as { title?: string } | null)?.title
         sessions.set(e.sessionId, { id: e.sessionId, title: title || '新会话', updatedAt: e.ts })
-      } else {
+      } else if (e.type !== 'memory.checkpoint') { // 后台写一条不算会话有动静
         const s = sessions.get(e.sessionId)
         if (s) s.updatedAt = e.ts
       }
@@ -415,6 +439,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
               approvalMode: p.approvalMode ?? 'ask',
               ...(p.toolset && { toolset: p.toolset }),
               ...(p.origin && p.origin !== 'app' && { origin: p.origin }),
+              ...(p.audience && { audience: p.audience }),
             }
             append({ type: 'session.created', sessionId, payload })
             return { result: { sessionId } }

@@ -138,7 +138,7 @@ function setup(fakes: FakeCli[], o: Options = {}) {
     if (!pins.has(id)) pins.set(id, syncPin(cwd, gitBase))
     return pins.get(id)!
   }
-  const session = (id: string) => ({ sessionId: id, cwd: o.sessionCwd?.[id] ?? repo, approvalMode: o.mode ?? ('auto' as const), origin: 'app' as const, repo: pinOf(id) })
+  const session = (id: string) => ({ sessionId: id, cwd: o.sessionCwd?.[id] ?? repo, approvalMode: o.mode ?? ('auto' as const), origin: 'app' as const, audience: 'owner' as const, repo: pinOf(id) })
   const gate = new PermissionGate({
     sessions: { get: session, spillDir: () => spill },
     home,

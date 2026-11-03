@@ -26,14 +26,20 @@ describe('decide (table)', () => {
   const dataDir = '/h/.myFlowForge/mff-ai'
   const spillDir = `${dataDir}/sessions/s1/spill`
   const env: DecideEnv = { roots: credentialRoots(home, 'linux', {}), persistence: persistenceRoots(home, 'linux'), dataDir, spillDir, platform: 'linux', home, ...layered }
-  const ask: SessionInfo = { sessionId: 's1', cwd: '/h/repo', approvalMode: 'ask', origin: 'app' }
+  const ask: SessionInfo = { sessionId: 's1', cwd: '/h/repo', approvalMode: 'ask', origin: 'app', audience: 'owner' }
   const auto: SessionInfo = { ...ask, approvalMode: 'auto' }
   const atHome: SessionInfo = { ...ask, cwd: home }
-  const noCwd: SessionInfo = { sessionId: 's1', approvalMode: 'auto', origin: 'app' }
+  const noCwd: SessionInfo = { sessionId: 's1', approvalMode: 'auto', origin: 'app', audience: 'owner' }
   const req = (action: string, resource?: string, actor = 'plugin:tools'): PermissionRequest => ({ actor, action, resource, sessionId: 's1' })
 
   const cases: [string, PermissionRequest, SessionInfo | undefined, 'allow' | 'deny' | 'ask'][] = [
     ['kernel actor', req('anything', '/etc/passwd', 'kernel'), undefined, 'allow'],
+    ['memory with a session', req('memory', 'search'), ask, 'allow'],
+    ['memory write with a session, no cwd', req('memory', 'write'), noCwd, 'allow'],
+    ['memory get in auto', req('memory', 'get'), auto, 'allow'],
+    ['memory without a session', req('memory', 'search'), undefined, 'deny'],
+    ['unknown action with a session', req('remember', 'search'), ask, 'deny'],
+    ['unknown action in auto', req('admin'), auto, 'deny'],
     ['read inside', req('read', '/h/repo/a.txt'), ask, 'allow'],
     ['write inside', req('write', '/h/repo/sub/new.txt'), ask, 'allow'],
     ['read cwd itself', req('read', '/h/repo'), ask, 'allow'],
@@ -114,7 +120,7 @@ describe('decide (table)', () => {
     const d = { ...env, roots: credentialRoots(home, 'darwin', {}), persistence: persistenceRoots(home, 'darwin'), platform: 'darwin' as const }
     for (const p of ['/h/repo/.GIT/hooks/x', '/h/repo/.Git/config']) expect(decide(req('write', p), ask, d)).toBe('deny')
     const w: DecideEnv = { roots: credentialRoots('C:\\Users\\u', 'win32', {}), persistence: persistenceRoots('C:\\Users\\u', 'win32'), dataDir: 'C:\\Users\\u\\.mff', platform: 'win32', home: 'C:\\Users\\u', ...layered }
-    const s: SessionInfo = { sessionId: 's1', cwd: 'C:\\repo', approvalMode: 'auto', origin: 'app' }
+    const s: SessionInfo = { sessionId: 's1', cwd: 'C:\\repo', approvalMode: 'auto', origin: 'app', audience: 'owner' }
     for (const p of ['C:\\repo\\.GIT\\config', 'C:\\repo\\.git.\\hooks\\x', 'C:\\repo\\.git \\config', 'C:\\repo\\GIT~1\\config'])
       expect(decide(req('write', p), s, w)).toBe('deny')
     expect(decide(req('write', 'C:\\repo\\.github\\x'), s, w)).toBe('allow')
@@ -128,10 +134,24 @@ describe('decide (table)', () => {
 
   it('win32: other drive, UNC and ADS are denied', () => {
     const w: DecideEnv = { roots: credentialRoots('C:\\Users\\u', 'win32', {}), persistence: persistenceRoots('C:\\Users\\u', 'win32'), dataDir: 'C:\\Users\\u\\.mff', platform: 'win32', home: 'C:\\Users\\u', ...layered }
-    const s: SessionInfo = { sessionId: 's1', cwd: 'C:\\repo', approvalMode: 'auto', origin: 'app' }
+    const s: SessionInfo = { sessionId: 's1', cwd: 'C:\\repo', approvalMode: 'auto', origin: 'app', audience: 'owner' }
     expect(decide(req('read', 'c:\\REPO\\x'), s, w)).toBe('allow')
     for (const p of ['D:\\x', '\\\\server\\share\\x', '\\\\?\\C:\\repo\\x', 'C:\\repo\\a.txt:stream'])
       expect(decide(req('write', p), s, w)).toBe('deny')
+  })
+})
+
+describe('decide: memory is not a rule subject (06 spec §8)', () => {
+  it('a user rule neither blocks nor widens it, and allowing memory does not allow anything else', () => {
+    const home = '/h'
+    const dataDir = '/h/.myFlowForge/mff-ai'
+    const env: DecideEnv = { roots: credentialRoots(home, 'linux', {}), persistence: persistenceRoots(home, 'linux'), dataDir, platform: 'linux', home, ...layered }
+    const s: SessionInfo = { sessionId: 's1', cwd: '/h/repo', approvalMode: 'ask', origin: 'im', audience: 'group' }
+    const req = (action: string, resource?: string): PermissionRequest => ({ actor: 'plugin:tools', action, resource, sessionId: 's1' })
+    expect(decide(req('memory', 'write'), s, env)).toBe('allow')
+    expect(decide(req('read', `${dataDir}/plugins/memory-default/files/USER.md`), s, env)).toBe('deny')
+    expect(decide(req('write', `${dataDir}/config.json`), s, env)).toBe('deny')
+    expect(decide(req('exec', 'ls'), s, env)).toBe('ask')
   })
 })
 
@@ -139,7 +159,7 @@ describe('decide: layered rules (Review Focus 3)', () => {
   const home = '/h'
   const dataDir = '/h/.myFlowForge/mff-ai'
   const base: DecideEnv = { roots: credentialRoots(home, 'linux', {}), persistence: persistenceRoots(home, 'linux'), dataDir, platform: 'linux', home, ...layered }
-  const repo: SessionInfo = { sessionId: 's1', cwd: '/h/repo', approvalMode: 'ask', origin: 'app' }
+  const repo: SessionInfo = { sessionId: 's1', cwd: '/h/repo', approvalMode: 'ask', origin: 'app', audience: 'owner' }
   const atHome: SessionInfo = { ...repo, cwd: home }
   const auto: SessionInfo = { ...repo, approvalMode: 'auto' }
   const req = (action: string, resource: string): PermissionRequest => ({ actor: 'tools', action, resource, sessionId: 's1' })
@@ -181,7 +201,7 @@ describe('decide: layered rules (Review Focus 3)', () => {
   })
 
   it('a session without a cwd is denied reads and writes even with a matching allow', () => {
-    const noCwd: SessionInfo = { sessionId: 's1', approvalMode: 'auto', origin: 'app' }
+    const noCwd: SessionInfo = { sessionId: 's1', approvalMode: 'auto', origin: 'app', audience: 'owner' }
     expect(decide(req('read', '/opt/x'), noCwd, with_({ effect: 'allow', rule: 'read(/opt/**)' }))).toBe('deny')
   })
 
@@ -211,7 +231,7 @@ describe('decide: layered rules (Review Focus 3)', () => {
     expect(defaultRules(auto, FULL, false)).toEqual(['allow read(/h/repo/**)', 'allow write(/h/repo/**)', 'allow shell(*)'])
     expect(defaultRules(auto, none, false)[2]).toBe('ask shell(*)')
     expect(defaultRules(auto, none, true)[2]).toBe('allow shell(*)')
-    expect(defaultRules({ sessionId: 's', approvalMode: 'auto', origin: 'app' }, FULL, false)).toEqual(['allow shell(*)'])
+    expect(defaultRules({ sessionId: 's', approvalMode: 'auto', origin: 'app', audience: 'owner' }, FULL, false)).toEqual(['allow shell(*)'])
     expect(defaultRules(undefined, FULL, false)).toEqual(['allow read(<cwd>/**)', 'allow write(<cwd>/**)', '<mode> shell(*)'])
   })
 
@@ -247,7 +267,7 @@ describe('decide: delegation can only narrow (04 spec §6)', () => {
   const home = '/h'
   const dataDir = '/h/.myFlowForge/mff-ai'
   const base: DecideEnv = { roots: credentialRoots(home, 'linux', {}), persistence: persistenceRoots(home, 'linux'), dataDir, platform: 'linux', home, ...layered }
-  const session = (approvalMode: 'ask' | 'auto'): SessionInfo => ({ sessionId: 's1', cwd: '/h/repo', approvalMode, origin: 'app' })
+  const session = (approvalMode: 'ask' | 'auto'): SessionInfo => ({ sessionId: 's1', cwd: '/h/repo', approvalMode, origin: 'app', audience: 'owner' })
   const statusOf = (level: SandboxStatus['level']): SandboxStatus => ({ level, missing: level === 'full' ? [] : ['platform'], autoDegraded: false })
   const ALLOW = { effect: 'allow', rule: 'shell(codex)' } as const
 

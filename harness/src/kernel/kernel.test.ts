@@ -1,9 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getEventListeners } from 'node:events'
-import { cpSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createKernel, type Kernel } from './kernel'
+import { EventLog, openDb, REDACTED } from './eventLog'
+import { EventBus } from './events'
+import { nullLogger } from './log'
+import { PluginHost, type PluginContext } from './pluginHost'
+import { RpcRegistry } from './rpcRegistry'
+import type { SecretStore } from './secrets/secretStore'
+import { ServiceRegistry } from './services'
+import { fakeClock, fakeModels, memoryKernel, say, type MemoryRig } from '../../test/memoryRig'
 import { PermissionGate } from './permissionGate'
 import { Sessions } from './sessions'
 import { RpcError } from './rpcError'
@@ -757,3 +765,287 @@ describe('kernel: Review Focus 3a, a parked turn accepts the message', () => {
 })
 
 const isEnd = (t: string) => t === 'turn.ended' || t === 'turn.failed'
+
+describe('plugin event tap (06)', () => {
+  const rigs: MemoryRig[] = []
+  afterEach(async () => {
+    for (const r of rigs.splice(0)) await r.close()
+  })
+  const probe = (id: string, onCtx: (ctx: PluginContext) => void): Plugin => ({ manifest: { id, version: '0', kernel: '^0.1.0' }, activate: onCtx })
+  const rigWith = async (id = 'tap', config?: Record<string, unknown>) => {
+    let ctx!: PluginContext
+    const r = await memoryKernel({ plugins: [probe(id, c => { ctx = c })], config })
+    rigs.push(r)
+    return { r, ctx: () => ctx }
+  }
+
+  it('onAppend fires after commit: the event is already readable through after', async () => {
+    const { r, ctx } = await rigWith()
+    const seen: { type: string; readable: boolean }[] = []
+    ctx().events.onAppend(e => seen.push({ type: e.type, readable: ctx().events.after(e.seq - 1, 1)[0]?.seq === e.seq }))
+    await r.k.handle('session.create', { commandId: 'c' })
+    expect(seen).toEqual([{ type: 'session.created', readable: true }])
+  })
+
+  it('a rolled-back transaction never reaches onAppend', async () => {
+    const { r, ctx } = await rigWith()
+    const seen: string[] = []
+    ctx().events.onAppend(e => seen.push(e.type))
+    // permissions.set 写事件和落盘在一个事务里;落盘的临时文件名被目录占了,事务回滚
+    mkdirSync(join(r.dataDir, `config.json.tmp-${process.pid}`))
+    const config = { rules: [], network: { allow: [] }, sandbox: { enabled: true, allowLoopback: false }, allowUnsandboxedAuto: false }
+    await expect(r.k.handle('permissions.set', { commandId: 'p', config })).rejects.toThrow()
+    expect(r.k.events.after(0).some(e => e.type === 'permissions.updated')).toBe(false)
+    expect(seen).toEqual([])
+  })
+
+  it('onAppend stops after deactivate, and its own disposer works', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mffai-tap-'))
+    const db = openDb(join(root, 'k.db'))
+    const log = new EventLog(db)
+    const host = new PluginHost({
+      services: new ServiceRegistry(), events: new EventBus({}), rpc: new RpcRegistry(), append: e => log.append(e), log: nullLogger, dataDir: root,
+      secrets: {} as SecretStore, eventLog: log,
+    })
+    const scoped: number[] = []
+    const manual: number[] = []
+    let off!: () => void
+    await host.activateAll([probe('tap', c => {
+      c.events.onAppend(e => scoped.push(e.seq))
+      off = c.events.onAppend(e => manual.push(e.seq))
+    })], [])
+    scoped.length = manual.length = 0 // 去掉 plugin.activated
+    const first = log.append({ type: 'turn.started', payload: {} })
+    off()
+    const second = log.append({ type: 'turn.started', payload: {} })
+    await host.deactivateAll()
+    log.append({ type: 'turn.started', payload: {} })
+    expect(manual).toEqual([first.seq])
+    expect(scoped).toEqual([first.seq, second.seq])
+    db.close()
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  it('a plugin that fails to activate leaves no listener behind', async () => {
+    const seen: number[] = []
+    const r = await memoryKernel({ plugins: [probe('bad', c => {
+      c.events.onAppend(e => seen.push(e.seq))
+      throw new Error('boom')
+    })] })
+    rigs.push(r)
+    await r.k.handle('session.create', { commandId: 'c' })
+    expect(r.k.status().plugins.find(p => p.id === 'bad')?.state).toBe('failed')
+    expect(seen).toEqual([])
+  })
+
+  it('a throwing listener does not stop the write', async () => {
+    const { r, ctx } = await rigWith()
+    ctx().events.onAppend(() => { throw new Error('boom') })
+    await expect(r.k.handle('session.create', { commandId: 'c' })).resolves.toMatchObject({ sessionId: expect.any(String) })
+  })
+
+  it('after pages', async () => {
+    const { r, ctx } = await rigWith()
+    const start = r.k.events.lastSeq()
+    for (const commandId of ['a', 'b', 'c']) await r.k.handle('session.create', { commandId })
+    const one = ctx().events.after(start, 2)
+    const two = ctx().events.after(one.at(-1)!.seq, 2)
+    expect(one).toHaveLength(2)
+    expect(two).toHaveLength(1)
+    expect([...one, ...two].map(e => e.seq)).toEqual([start + 1, start + 2, start + 3])
+    expect(ctx().events.after(start + 3, 2)).toEqual([])
+  })
+
+  it('redact: memory-default may, any other plugin throws, and on an unlisted type it throws too', async () => {
+    let other!: PluginContext
+    let owner!: PluginContext
+    const r = await memoryKernel({ plugins: [probe('other', c => { other = c }), probe('memory-default', c => { owner = c })] })
+    rigs.push(r)
+    const { sessionId } = (await r.k.handle('session.create', { commandId: 'c' })) as { sessionId: string }
+    const created = r.k.events.bySession(sessionId)[0]
+    const e = r.k.events.append({ type: 'message.user', sessionId, payload: { turnId: 't', text: 'SECRET' } })
+    expect(() => other.events.redact([{ seq: e.seq }])).toThrow()
+    expect((r.k.events.after(e.seq - 1, 1)[0].payload as { text: string }).text).toBe('SECRET')
+    expect(() => owner.events.redact([{ seq: created.seq }])).toThrow()
+    expect(owner.events.redact([{ seq: e.seq }])).toBe(1)
+    expect((r.k.events.after(e.seq - 1, 1)[0].payload as { text: string }).text).toBe(REDACTED)
+    expect(r.k.events.after(e.seq).at(-1)).toMatchObject({ type: 'events.redacted', payload: { by: 'memory-default', seqs: [e.seq] } })
+  })
+
+  it('without an event log the tap is inert and redact still refuses', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mffai-tap-'))
+    const db = openDb(join(root, 'k.db'))
+    const log = new EventLog(db)
+    let ctx!: PluginContext
+    const host = new PluginHost({
+      services: new ServiceRegistry(), events: new EventBus({}), rpc: new RpcRegistry(), append: e => log.append(e), log: nullLogger, dataDir: root, secrets: {} as SecretStore,
+    })
+    await host.activateAll([probe('memory-default', c => { ctx = c })], [])
+    expect(ctx.events.after(0, 10)).toEqual([])
+    expect(ctx.events.onAppend(() => {})).toBeTypeOf('function')
+    expect(() => ctx.events.redact([{ seq: 1 }])).toThrow()
+    await host.deactivateAll()
+    db.close()
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  it('memory.* is unhandled until a plugin registers it, and it is not reserved', async () => {
+    let ctx!: PluginContext
+    const r = await memoryKernel({ plugins: [probe('memory-default', c => { ctx = c })] })
+    rigs.push(r)
+    await expect(r.k.handle('memory.health', {})).rejects.toMatchObject({ code: -32601, message: 'method not handled: memory.health' })
+    await expect(r.k.handle('memory.file.get', { file: '../x' })).rejects.toMatchObject({ code: -32602 })
+    const all = ['memory.list', 'memory.get', 'memory.search', 'memory.update', 'memory.delete', 'memory.file.get', 'memory.file.set', 'memory.changes', 'memory.health', 'memory.proposals.list', 'memory.proposals.decide', 'memory.consolidate', 'memory.habits.list', 'memory.habits.decide', 'memory.recommendations.set'] as const
+    for (const m of all) expect(() => ctx.rpc.register(m, async () => ({}))).not.toThrow()
+    await expect(r.k.handle('memory.health', {})).resolves.toEqual({})
+  })
+
+  it('memory-default owns the memory section and only that', async () => {
+    let owner!: PluginContext
+    let other!: PluginContext
+    const r = await memoryKernel({
+      config: { memory: { tokensPerDay: 5 }, models: { accounts: [] } },
+      plugins: [probe('memory-default', c => { owner = c }), probe('other', c => { other = c })],
+    })
+    rigs.push(r)
+    expect(owner.config.memory).toEqual({ tokensPerDay: 5 })
+    expect(other.config.memory).toBeUndefined()
+    owner.updateConfig('memory', { tokensPerDay: 6 })
+    expect(JSON.parse(readFileSync(join(r.dataDir, 'config.json'), 'utf8')).memory).toEqual({ tokensPerDay: 6 })
+    expect(owner.config.memory).toEqual({ tokensPerDay: 5 }) // 激活时的快照,插件自己留一份当前值
+    expect(() => owner.updateConfig('permissions', {})).toThrow()
+    expect(() => owner.updateConfig('models', {})).toThrow()
+    expect(() => other.updateConfig('memory', {})).toThrow()
+  })
+
+  it('a broken memory section leaves the rest of the config alone', async () => {
+    const account = { id: 'a', presetId: 'p', label: 'l' }
+    const r = await memoryKernel({ config: { memory: 'garbage', models: { accounts: [account] } } })
+    rigs.push(r)
+    const saved = JSON.parse(readFileSync(join(r.dataDir, 'config.json'), 'utf8'))
+    expect(saved.models.accounts).toEqual([account])
+    expect(saved.memory).toBe('garbage')
+  })
+
+  describe('snapshot', () => {
+    afterEach(() => vi.restoreAllMocks())
+    const appendAt = (r: MemoryRig, ts: number, type: Parameters<Kernel['events']['append']>[0]['type'], sessionId: string) => {
+      const spy = vi.spyOn(Date, 'now').mockReturnValue(ts)
+      r.k.events.append({ type, sessionId, payload: { turnId: 't', text: 'x', throughSeq: 1, asOfSeq: 1, model: 'm', tokens: 1, covers: 1 } })
+      spy.mockRestore()
+    }
+    it('updatedAt ignores a memory.checkpoint, and not other events', async () => {
+      const { r } = await rigWith()
+      const { sessionId } = (await r.k.handle('session.create', { commandId: 'c' })) as { sessionId: string }
+      const at = () => r.k.snapshot().sessions.find(s => s.id === sessionId)!.updatedAt
+      const base = at()
+      appendAt(r, base + 1000, 'memory.checkpoint', sessionId)
+      expect(at()).toBe(base)
+      appendAt(r, base + 2000, 'memory.injected', sessionId)
+      expect(at()).toBe(base + 2000)
+    })
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('database file modes (06 spec §5)', () => {
+  const mode = (p: string) => statSync(p).mode & 0o777
+
+  it('a new kernel: db/ is 0700, events.sqlite and its WAL are 0600', async () => {
+    const k = await boot()
+    await k.handle('session.create', { commandId: 'c' })
+    expect(mode(join(dir, 'db'))).toBe(0o700)
+    expect(mode(join(dir, 'db', 'events.sqlite'))).toBe(0o600)
+    expect(mode(join(dir, 'db', 'events.sqlite-wal'))).toBe(0o600)
+    expect(mode(join(dir, 'db', 'events.sqlite-shm'))).toBe(0o600)
+  })
+
+  it('an existing data directory from before 06 is tightened', async () => {
+    const k1 = await boot()
+    await k1.handle('session.create', { commandId: 'c' })
+    await k1.close()
+    kernels = []
+    chmodSync(join(dir, 'db'), 0o755)
+    chmodSync(join(dir, 'db', 'events.sqlite'), 0o644)
+    const k2 = await boot()
+    await k2.handle('session.create', { commandId: 'c2' })
+    expect(mode(join(dir, 'db'))).toBe(0o700)
+    expect(mode(join(dir, 'db', 'events.sqlite'))).toBe(0o600)
+    expect(mode(join(dir, 'db', 'events.sqlite-wal'))).toBe(0o600)
+    expect(k2.snapshot().sessions).toHaveLength(2) // 旧数据还在
+  })
+})
+
+describe('memoryRig', () => {
+  it('uses a temp home and data dir, restarts on the same data, removes everything on close', async () => {
+    const r = await memoryKernel()
+    expect(r.home.startsWith(r.root) && r.dataDir.startsWith(r.root) && r.cwd.startsWith(r.root)).toBe(true)
+    const { sessionId } = (await r.k.handle('session.create', { commandId: 'c', cwd: r.cwd })) as { sessionId: string }
+    await r.restart()
+    expect(r.k.snapshot().sessions.map(s => s.id)).toEqual([sessionId])
+    await r.close()
+    expect(existsSync(r.root)).toBe(false)
+  })
+
+  it('fakeModels records foreground and background calls, with costs, restriction and quota per account', async () => {
+    const seen: string[] = []
+    const fm = fakeModels({
+      accounts: [
+        { id: 'cheap', billing: 'metered', models: [{ id: 'mini', cost: { input: 0.1, output: 0.2 } }, { id: 'old', deprecated: true }] },
+        { id: 'plan', billing: 'subscription', restriction: 'coding-tools-only', models: [{ id: 'big', context: 500_000 }] },
+      ],
+      script: (n, _req, ref) => say(`${n}:${ref.accountId}/${ref.modelId}`),
+      onRequest: c => seen.push(c.ref.modelId),
+      quota: id => (id === 'cheap' ? { windows: [{ label: 'd', usedPercent: 80 }] } : { link: 'https://example.invalid' }),
+    })
+    const signal = new AbortController().signal
+    const message = { role: 'user' as const, parts: [{ type: 'text' as const, text: 'hi' }] }
+    const texts: string[] = []
+    const run = async (ref: Parameters<typeof fm.service.stream>[0], interactive: boolean) => {
+      for await (const e of fm.service.stream(ref, { messages: [message], interactive, signal })) if (e.type === 'text') texts.push(e.delta)
+    }
+    await run('default', true)
+    await run({ accountId: 'plan', modelId: 'big' }, false)
+    expect(texts).toEqual(['1:cheap/mini', '2:plan/big'])
+    expect(seen).toEqual(['mini', 'big'])
+    expect(fm.foreground().map(c => c.ref)).toEqual([{ accountId: 'cheap', modelId: 'mini' }])
+    expect(fm.background().map(c => c.ref)).toEqual([{ accountId: 'plan', modelId: 'big' }])
+    expect(fm.calls[0].req.messages).toEqual([message])
+    expect(fm.calls[0].req.signal).toBe(signal)
+    const presets = fm.service.catalog().presets
+    expect(presets.find(p => p.id === 'preset-plan')).toMatchObject({ billing: 'subscription', restriction: 'coding-tools-only' })
+    const cheap = fm.service.accounts().find(a => a.id === 'cheap')!
+    expect(cheap.models![0]).toMatchObject({ id: 'mini', cost: { input: 0.1, output: 0.2 }, context: 100_000 })
+    expect(cheap.models![1].deprecated).toBe(true)
+    expect(fm.service.catalog().default).toEqual({ accountId: 'cheap', modelId: 'mini' })
+    expect(await fm.service.quota('cheap')).toEqual({ windows: [{ label: 'd', usedPercent: 80 }] })
+    expect(await fm.service.quota('plan')).toEqual({ link: 'https://example.invalid' })
+  })
+
+  it('the fake is a plugin that provides models', async () => {
+    const fm = fakeModels()
+    let got: unknown
+    const r = await memoryKernel({
+      models: fm,
+      plugins: [{ manifest: { id: 'p', version: '0', kernel: '^0.1.0', inject: ['models'] }, activate: c => { got = c.services.get('models') } }],
+    })
+    expect(got).toBe(fm.service)
+    expect(r.k.status().plugins.map(p => p.id)).toEqual(['fake-models', 'p'])
+    await r.close()
+  })
+
+  it('fakeClock runs due timers in order, cancels, and can reschedule within one advance', () => {
+    const c = fakeClock(1000)
+    const fired: [string, number][] = []
+    const mark = (n: string) => () => void fired.push([n, c.now()])
+    c.timers.setTimeout(mark('b'), 20)
+    c.timers.setTimeout(mark('a'), 10)
+    const gone = c.timers.setTimeout(mark('gone'), 15).unref()
+    c.timers.clearTimeout(gone)
+    c.timers.setTimeout(() => { fired.push(['first', c.now()]); c.timers.setTimeout(mark('again'), 5) }, 12)
+    c.advance(19)
+    expect(c.now()).toBe(1019)
+    expect(fired).toEqual([['a', 1010], ['first', 1012], ['again', 1017]])
+    c.advance(1)
+    expect(fired.at(-1)).toEqual(['b', 1020])
+  })
+})

@@ -2,7 +2,10 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, readdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { openDb, transaction, EventLog } from './eventLog'
+import { openDb, transaction, EventLog, REDACTED } from './eventLog'
+import { MemoryConfigSchema, parseMemoryConfig } from '../lib/memory/types'
+import { KernelConfigSchema } from './config'
+import { AssistantPartSchema, type EventType } from '../protocol/index'
 import { Receipts } from './receipts'
 import { loadConfig, saveConfig } from './config'
 
@@ -122,5 +125,253 @@ describe('config', () => {
     writeFileSync(f, '{nope')
     expect(loadConfig(f).plugins.disabled).toEqual([])
     expect(readdirSync(dir).some((n) => n.startsWith('config.json.bad-'))).toBe(true)
+  })
+})
+
+describe('EventLog.redact (06 spec §16)', () => {
+  const setup = () => {
+    const file = join(mk(), 'k.db')
+    const db = openDb(file)
+    return { file, db, log: new EventLog(db) }
+  }
+  type P = Record<string, unknown>
+  const payloadOf = (log: EventLog, seq: number) => log.after(seq - 1, 1)[0].payload as P
+
+  it('the placeholder is fixed', () => {
+    expect(REDACTED).toBe('[已删除]')
+  })
+
+  const fields: [EventType, P, keyof P][] = [
+    ['memory.injected', { turnId: 't', kind: 'session', text: 'a SECRET b', items: ['n_a'], coreVersion: 'v' }, 'text'],
+    ['tool.ended', { turnId: 't', callId: 'c', name: 'memory_get', ok: true, ms: 1, content: 'a SECRET b' }, 'content'],
+    ['tool.started', { turnId: 't', callId: 'c', name: 'memory_write', argsPreview: 'a SECRET b' }, 'argsPreview'],
+    ['message.user', { turnId: 't', text: 'a SECRET b' }, 'text'],
+    ['message.assistant.delta', { turnId: 't', step: 1, text: 'a SECRET b' }, 'text'],
+    ['executor.notice', { turnId: 't', runId: 'r', text: 'a SECRET b' }, 'text'],
+  ]
+  it.each(fields)('%s whole field: replaced, every other key kept', (type, payload, field) => {
+    const { log } = setup()
+    const e = log.append({ type, sessionId: 's', payload })
+    expect(log.redact([{ seq: e.seq }], 'memory-default')).toBe(1)
+    expect(payloadOf(log, e.seq)).toEqual({ ...payload, [field]: REDACTED })
+  })
+  it.each(fields)('%s with a needle: only literal occurrences', (type, payload, field) => {
+    const { log } = setup()
+    const e = log.append({ type, sessionId: 's', payload })
+    expect(log.redact([{ seq: e.seq, needle: 'SECRET' }], 'memory-default')).toBe(1)
+    expect(payloadOf(log, e.seq)).toEqual({ ...payload, [field]: `a ${REDACTED} b` })
+  })
+
+  it('a needle is literal, not a pattern, and every occurrence goes', () => {
+    const { log } = setup()
+    const e = log.append({ type: 'message.user', payload: { turnId: 't', text: 'x.*x x.*x xyx $& ' } })
+    log.redact([{ seq: e.seq, needle: 'x.*x' }], 'p')
+    expect(payloadOf(log, e.seq).text).toBe(`${REDACTED} ${REDACTED} xyx $& `)
+  })
+
+  it('an empty needle is refused: it would match everywhere', () => {
+    const { log } = setup()
+    const e = log.append({ type: 'message.user', payload: { turnId: 't', text: 'abc' } })
+    expect(() => log.redact([{ seq: e.seq, needle: '' }], 'p')).toThrow()
+    expect(payloadOf(log, e.seq).text).toBe('abc')
+  })
+
+  it('memory.checkpoint: whole field also sets redacted, a needle does not', () => {
+    const { log } = setup()
+    const payload = { throughSeq: 1, asOfSeq: 2, text: 'a SECRET b', model: 'm', tokens: 3, covers: 4 }
+    const a = log.append({ type: 'memory.checkpoint', sessionId: 's', payload })
+    const b = log.append({ type: 'memory.checkpoint', sessionId: 's', payload })
+    log.redact([{ seq: a.seq }, { seq: b.seq, needle: 'SECRET' }], 'p')
+    expect(payloadOf(log, a.seq)).toEqual({ ...payload, text: REDACTED, redacted: true })
+    expect(payloadOf(log, b.seq)).toEqual({ ...payload, text: `a ${REDACTED} b` })
+  })
+
+  const step = () => ({
+    turnId: 't', step: 1, text: 'a SECRET b',
+    parts: [
+      { type: 'reasoning', text: 'think SECRET', replay: { opaque: 'SIG' } },
+      { type: 'text', text: 'a SECRET b' },
+      { type: 'tool_call', id: 'c1', name: 'memory_write', args: JSON.stringify({ text: 'SECRET' }) },
+      { type: 'tool_call', id: 'c2', name: 'shell', args: JSON.stringify({ command: 'ls' }) },
+    ],
+  })
+  const partsOf = (p: P) => p.parts as P[]
+
+  it('message.assistant whole field: text, parts text and every args; args stay valid JSON, structure stays', () => {
+    const { log } = setup()
+    const e = log.append({ type: 'message.assistant', sessionId: 's', payload: step() })
+    expect(log.redact([{ seq: e.seq }], 'p')).toBe(1)
+    const p = payloadOf(log, e.seq)
+    expect(p.text).toBe(REDACTED)
+    expect(partsOf(p).map(x => x.type)).toEqual(['reasoning', 'text', 'tool_call', 'tool_call'])
+    expect(partsOf(p).map(x => x.id)).toEqual([undefined, undefined, 'c1', 'c2'])
+    expect(partsOf(p)[0]).toEqual({ type: 'reasoning', text: REDACTED, replay: { opaque: 'SIG' } })
+    expect(partsOf(p)[1].text).toBe(REDACTED)
+    for (const part of partsOf(p).slice(2)) expect(JSON.parse(part.args as string)).toEqual({ redacted: true })
+    for (const part of partsOf(p)) expect(AssistantPartSchema.safeParse(part).success).toBe(true)
+  })
+
+  it('message.assistant with a needle: literal in the text, args only as a whole and only where it appears', () => {
+    const { log } = setup()
+    const e = log.append({ type: 'message.assistant', sessionId: 's', payload: step() })
+    log.redact([{ seq: e.seq, needle: 'SECRET' }], 'p')
+    const p = payloadOf(log, e.seq)
+    expect(p.text).toBe(`a ${REDACTED} b`)
+    expect(partsOf(p)[1].text).toBe(`a ${REDACTED} b`)
+    expect(JSON.parse(partsOf(p)[2].args as string)).toEqual({ redacted: true })
+    expect(JSON.parse(partsOf(p)[3].args as string)).toEqual({ command: 'ls' })
+  })
+
+  it('args holding the needle only in escaped form are still blanked', () => {
+    const { log } = setup()
+    const parts = [
+      { type: 'tool_call', id: 'a', name: 'memory_write', args: '{"text":"\\u5bc6\\u7801\\u5728\\u8fd9"}' },
+      { type: 'tool_call', id: 'b', name: 'memory_write', args: JSON.stringify({ text: 'say "hi" now' }) },
+    ]
+    const a = log.append({ type: 'message.assistant', payload: { turnId: 't', text: '', parts } })
+    log.redact([{ seq: a.seq, needle: '密码在这' }, { seq: a.seq, needle: 'say "hi" now' }], 'p')
+    for (const part of partsOf(payloadOf(log, a.seq))) expect(JSON.parse(part.args as string)).toEqual({ redacted: true })
+  })
+
+  it('callId blanks only that tool call, and nothing else in the step', () => {
+    const { log } = setup()
+    const e = log.append({ type: 'message.assistant', sessionId: 's', payload: step() })
+    expect(log.redact([{ seq: e.seq, callId: 'c1' }], 'p')).toBe(1)
+    const p = payloadOf(log, e.seq)
+    expect(p.text).toBe('a SECRET b')
+    expect(partsOf(p)[1].text).toBe('a SECRET b')
+    expect(JSON.parse(partsOf(p)[2].args as string)).toEqual({ redacted: true })
+    expect(JSON.parse(partsOf(p)[3].args as string)).toEqual({ command: 'ls' })
+    expect(log.redact([{ seq: e.seq, callId: 'nope' }], 'p')).toBe(0)
+  })
+
+  it('callId is refused on other event types and together with a needle', () => {
+    const { log } = setup()
+    const u = log.append({ type: 'tool.started', payload: { turnId: 't', callId: 'c1', name: 'n', argsPreview: 'x' } })
+    const a = log.append({ type: 'message.assistant', payload: step() })
+    expect(() => log.redact([{ seq: u.seq, callId: 'c1' }], 'p')).toThrow()
+    expect(() => log.redact([{ seq: a.seq, callId: 'c1', needle: 'x' }], 'p')).toThrow()
+    expect(payloadOf(log, u.seq).argsPreview).toBe('x')
+  })
+
+  it('keeps seq, ts, type and session; only touches the listed events; appends one audit event without text', () => {
+    const { log } = setup()
+    const a = log.append({ type: 'message.user', sessionId: 's', payload: { turnId: 't', text: 'SECRET' } })
+    const other = log.append({ type: 'turn.started', sessionId: 's', payload: { turnId: 't' } })
+    const b = log.append({ type: 'tool.ended', sessionId: 's', payload: { turnId: 't', callId: 'c', name: 'n', ok: true, ms: 1, content: 'SECRET' } })
+    const before = log.after(0)
+    expect(log.redact([{ seq: a.seq }, { seq: b.seq }], 'memory-default')).toBe(2)
+    const after = log.after(0)
+    expect(after).toHaveLength(before.length + 1)
+    for (const [i, e] of before.entries()) {
+      expect({ seq: after[i].seq, ts: after[i].ts, type: after[i].type, sessionId: after[i].sessionId }).toEqual({ seq: e.seq, ts: e.ts, type: e.type, sessionId: e.sessionId })
+    }
+    expect(after[1]).toEqual(other)
+    const audit = after.at(-1)!
+    expect(audit.type).toBe('events.redacted')
+    expect(audit.sessionId).toBeUndefined()
+    expect(audit.payload).toEqual({ by: 'memory-default', seqs: [a.seq, b.seq] })
+  })
+
+  it.each(['session.created', 'turn.started', 'turn.rolledBack', 'memory.deleted', 'events.redacted', 'message.reasoning.delta', 'permissions.updated'] as const)('%s throws and rolls the whole batch back', type => {
+    const { log } = setup()
+    const ok = log.append({ type: 'message.user', payload: { turnId: 't', text: 'SECRET' } })
+    const bad = log.append({ type, payload: { text: 'x', content: 'x' } })
+    const last = log.lastSeq()
+    expect(() => log.redact([{ seq: ok.seq }, { seq: bad.seq }], 'p')).toThrow()
+    expect(payloadOf(log, ok.seq).text).toBe('SECRET')
+    expect(log.lastSeq()).toBe(last)
+  })
+
+  it('an unknown seq throws and rolls back', () => {
+    const { log } = setup()
+    const ok = log.append({ type: 'message.user', payload: { turnId: 't', text: 'SECRET' } })
+    expect(() => log.redact([{ seq: ok.seq }, { seq: 999 }], 'p')).toThrow()
+    expect(payloadOf(log, ok.seq).text).toBe('SECRET')
+  })
+
+  it('doing it again changes nothing and writes no second audit event', () => {
+    const { log } = setup()
+    const a = log.append({ type: 'memory.checkpoint', payload: { throughSeq: 1, asOfSeq: 1, text: 'SECRET', model: 'm', tokens: 1, covers: 1 } })
+    const b = log.append({ type: 'message.assistant', payload: step() })
+    const c = log.append({ type: 'message.user', payload: { turnId: 't', text: 'SECRET' } })
+    const edits = [{ seq: a.seq }, { seq: b.seq }, { seq: c.seq, needle: 'SECRET' }]
+    expect(log.redact(edits, 'p')).toBe(3)
+    const last = log.lastSeq()
+    expect(log.redact(edits, 'p')).toBe(0)
+    expect(log.redact([], 'p')).toBe(0)
+    expect(log.lastSeq()).toBe(last)
+  })
+
+  it('two edits of one event count once and list it once', () => {
+    const { log } = setup()
+    const a = log.append({ type: 'message.user', payload: { turnId: 't', text: 'one two' } })
+    expect(log.redact([{ seq: a.seq, needle: 'one' }, { seq: a.seq, needle: 'two' }], 'p')).toBe(1)
+    expect(payloadOf(log, a.seq).text).toBe(`${REDACTED} ${REDACTED}`)
+    expect(log.after(a.seq).at(-1)!.payload).toEqual({ by: 'p', seqs: [a.seq] })
+  })
+
+  it('the audit event reaches listeners after commit; a rolled-back batch notifies nobody', () => {
+    const { log } = setup()
+    const a = log.append({ type: 'message.user', payload: { turnId: 't', text: 'x' } })
+    const bad = log.append({ type: 'turn.started', payload: {} })
+    const seen: string[] = []
+    let textAtNotify: unknown
+    log.onAppend(e => { seen.push(e.type); textAtNotify = payloadOf(log, a.seq).text })
+    expect(() => log.redact([{ seq: a.seq }, { seq: bad.seq }], 'p')).toThrow()
+    expect(seen).toEqual([])
+    log.redact([{ seq: a.seq }], 'p')
+    expect(seen).toEqual(['events.redacted'])
+    expect(textAtNotify).toBe(REDACTED)
+  })
+
+  it('the text is gone from the bytes of the database and its WAL', () => {
+    const { file, log } = setup()
+    const marker = 'DELETED-MARKER-' + 'q'.repeat(300)
+    const a = log.append({ type: 'memory.injected', sessionId: 's', payload: { turnId: 't', kind: 'session', text: `x ${marker} y`, items: [] } })
+    log.append({ type: 'turn.started', sessionId: 's', payload: { turnId: 't' } })
+    log.redact([{ seq: a.seq, needle: marker }], 'p')
+    const bytes = readdirSync(dir).map(f => readFileSync(join(dir, f)).toString('latin1')).join('')
+    expect(bytes).not.toContain('DELETED-MARKER')
+    expect(existsSync(`${file}-wal`) ? readFileSync(`${file}-wal`).length : 0).toBe(0)
+  })
+
+  it('inside an open transaction the checkpoint failure stays quiet, and the batch joins that transaction', () => {
+    const { db, log } = setup()
+    const a = log.append({ type: 'message.user', payload: { turnId: 't', text: 'x' } })
+    expect(() => transaction(db, () => {
+      expect(log.redact([{ seq: a.seq }], 'p')).toBe(1)
+      throw new Error('boom')
+    })).toThrow('boom')
+    expect(payloadOf(log, a.seq).text).toBe('x')
+  })
+})
+
+describe('memory config (06)', () => {
+  it('parse({}) fills every default, including the nested ones', () => {
+    expect(MemoryConfigSchema.parse({})).toEqual({
+      recall: true, tokensPerDay: 400_000, usdPerDay: 1, nightly: { enabled: true, hour: 3 }, recommendations: { routine: false },
+    })
+    const c = MemoryConfigSchema.parse({})
+    expect(c.nightly.enabled).toBe(true)
+    expect(c.nightly.hour).toBe(3)
+  })
+  it('a partial nested section keeps the other defaults', () => {
+    expect(MemoryConfigSchema.parse({ nightly: { hour: 5 } }).nightly).toEqual({ enabled: true, hour: 5 })
+  })
+  it('a broken section falls back to defaults and warns; a missing one does not warn', () => {
+    const warns: string[] = []
+    const warn = (m: string) => void warns.push(m)
+    const defaults = MemoryConfigSchema.parse({})
+    expect(parseMemoryConfig(undefined, warn)).toEqual(defaults)
+    expect(warns).toEqual([])
+    expect(parseMemoryConfig({ nightly: { hour: 99 } }, warn)).toEqual(defaults)
+    expect(parseMemoryConfig('nope', warn)).toEqual(defaults)
+    expect(warns).toHaveLength(2)
+    expect(parseMemoryConfig({ tokensPerDay: 5 }, warn).tokensPerDay).toBe(5)
+    expect(warns).toHaveLength(2)
+  })
+  it('the kernel keeps the section as it is, even when broken', () => {
+    expect(KernelConfigSchema.parse({ memory: { nightly: 'garbage' } }).memory).toEqual({ nightly: 'garbage' })
   })
 })

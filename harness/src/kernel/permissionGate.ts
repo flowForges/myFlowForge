@@ -82,6 +82,8 @@ export function decide(req: PermissionRequest, s: SessionInfo | undefined, env: 
     if (user === 'allow') return 'allow'
     return execDefault(s.approvalMode, req.unsandboxed ? NONE_LEVEL : env.sandbox, env.allowUnsandboxedAuto)
   }
+  // 06 spec §8:不进规则语言,不走审批;能看到什么、写到哪由 memory-default 的 policy 按会话定
+  if (action === 'memory') return s ? 'allow' : 'deny'
   return 'deny'
 }
 

@@ -12,6 +12,10 @@ export type Toolset = z.infer<typeof ToolsetSchema>
 export const SessionOriginSchema = z.enum(['app', 'im', 'schedule'])
 export type SessionOrigin = z.infer<typeof SessionOriginSchema>
 
+// 06:谁在会话里。group 看不到主人的记忆,也留不下记忆;建会话时定下,之后不能改
+export const SessionAudienceSchema = z.enum(['owner', 'group'])
+export type SessionAudience = z.infer<typeof SessionAudienceSchema>
+
 export const ToolStartedPayloadSchema = z.object({
   turnId: z.string(),
   callId: z.string(),

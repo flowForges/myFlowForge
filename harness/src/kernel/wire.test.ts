@@ -130,6 +130,24 @@ describe('toWire: 05 events', () => {
   })
 })
 
+describe('toWire: 06 events', () => {
+  it.each(['memory.injected', 'memory.checkpoint'] as const)('%s clips text above 2 000 chars and marks it', type => {
+    const e = ev(type, { turnId: 't', kind: 'session', throughSeq: 1, text: 'x'.repeat(2500) })
+    const w = toWire(e)
+    expect((w.payload as { text: string }).text).toBe('x'.repeat(2000))
+    expect(w.payload).toMatchObject({ truncated: true, turnId: 't', kind: 'session', throughSeq: 1 })
+    expect((e.payload as { text: string }).text).toHaveLength(2500)
+  })
+  it.each(['memory.injected', 'memory.checkpoint'] as const)('%s at the limit is returned by identity', type => {
+    const e = ev(type, { text: 'x'.repeat(2000) })
+    expect(toWire(e)).toBe(e)
+  })
+  it('does not split a surrogate pair', () => {
+    const w = toWire(ev('memory.injected', { text: 'a'.repeat(1999) + '😀' + 'b'.repeat(10) }))
+    expect((w.payload as { text: string }).text).toBe('a'.repeat(1999))
+  })
+})
+
 describe('wire view in the kernel and the server', () => {
   let dir: string
   let kernel: Kernel

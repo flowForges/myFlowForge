@@ -1,6 +1,6 @@
 import { realpathSync, statSync } from 'node:fs'
 import { join, posix, win32 } from 'node:path'
-import type { ApprovalMode, KernelEvent, ModelRef, SessionOrigin, Toolset } from '../protocol/index'
+import type { ApprovalMode, KernelEvent, ModelRef, SessionAudience, SessionOrigin, Toolset } from '../protocol/index'
 import { RpcError } from './rpcError'
 import { isCredentialPath, isInside, isRootLike, type EnvSnapshot } from '../lib/fs/paths'
 import { parsePin, type RepoPin } from '../lib/git/snapshot'
@@ -16,6 +16,8 @@ export interface SessionInfo {
   toolset?: Toolset
   model?: ModelRef
   origin: SessionOrigin
+  /** 建会话时定下,之后不能改;推算规则见 audienceOf */
+  audience: SessionAudience
   /** 建会话时定下的仓库。沙箱外的 git 只认它;旧日志里的会话没有,按没有仓库算(那时模型可能已经写过了) */
   repo?: RepoPin
 }
@@ -26,6 +28,16 @@ const SAFE_ID = /^[A-Za-z0-9_-]+$/
 function originOf(raw: unknown): SessionOrigin {
   if (raw === undefined || raw === 'app') return 'app'
   return raw === 'im' ? 'im' : 'schedule'
+}
+
+/**
+ * 要原始的 origin:originOf 把不认识的值归成 schedule,而 schedule 算 owner。
+ * 判错不对称:私聊当群聊只是没记忆,群聊当私聊是泄露,所以不认识的一律 group
+ */
+function audienceOf(raw: unknown, rawOrigin: unknown): SessionAudience {
+  if (raw === 'owner' || raw === 'group') return raw
+  if (raw !== undefined) return 'group'
+  return rawOrigin === undefined || rawOrigin === 'app' || rawOrigin === 'schedule' ? 'owner' : 'group'
 }
 
 export class Sessions {
@@ -44,6 +56,7 @@ export class Sessions {
       sessionId: e.sessionId,
       approvalMode: p.approvalMode === 'auto' ? 'auto' : 'ask', // v2 会话没有该字段
       origin: originOf(p.origin),
+      audience: audienceOf(p.audience, p.origin),
     }
     if (typeof p.cwd === 'string') info.cwd = p.cwd
     if (p.toolset === 'patch' || p.toolset === 'edit') info.toolset = p.toolset

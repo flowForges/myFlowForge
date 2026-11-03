@@ -19,7 +19,7 @@ export function toWire(e: KernelEvent): KernelEvent {
     if (typeof p.content !== 'string' || p.content.length <= WIRE_CONTENT_MAX) return e
     return { ...e, payload: { ...p, content: cut(p.content), truncated: true } }
   }
-  if (e.type === 'executor.notice') {
+  if (e.type === 'executor.notice' || e.type === 'memory.injected' || e.type === 'memory.checkpoint') {
     if (typeof p.text !== 'string' || p.text.length <= WIRE_CONTENT_MAX) return e
     return { ...e, payload: { ...p, text: cut(p.text), truncated: true } }
   }

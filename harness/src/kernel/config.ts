@@ -29,6 +29,8 @@ export const KernelConfigSchema = z.object({
   permissions: z.unknown().optional(),
   // 04 §9.1:同样宽松收下,由 executor-cli 解析;写坏了退回默认值并告警
   executors: z.unknown().optional(),
+  // 06:同样宽松收下,由 memory-default 解析(lib/memory/types.ts 的 parseMemoryConfig)
+  memory: z.unknown().optional(),
 })
 export type KernelConfig = z.infer<typeof KernelConfigSchema>
 
