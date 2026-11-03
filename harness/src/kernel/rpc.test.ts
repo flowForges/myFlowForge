@@ -13,6 +13,8 @@ import {
   type KernelEvent, type MffaiClient,
 } from '../protocol/index'
 import loopEcho from '../plugins/loop-echo'
+import type { Plugin } from './pluginHost'
+import type { TurnInbox } from '../lib/tools/types'
 import { NO_SANDBOX } from '../../test/sandboxStub'
 
 let dir: string
@@ -477,5 +479,45 @@ describe('rpc server + client', () => {
     closers.push(() => rmSync(p.workerAddr, { force: true }))
     await serve(p.workerAddr)
     expect((await (await client(p.workerAddr)).call('status')).state).toBe('running')
+  })
+})
+
+describe('session.prompt on a parked turn, over the wire', () => {
+  it('the receipt carries followUp:true, the same commandId replays it, and the message wakes the turn only once', async () => {
+    const seen: string[] = []
+    const parking: Plugin = {
+      manifest: { id: 'parking', version: '1', kernel: '*' },
+      activate: ctx => {
+        ctx.events.on('session.prompt', async (r: { signal: AbortSignal; inbox: TurnInbox }) => {
+          while (!r.signal.aborted) {
+            await r.inbox.park()
+            r.inbox.unpark()
+            seen.push(...r.inbox.take().map(f => f.text))
+          }
+          return true
+        })
+      },
+    }
+    await kernel.close()
+    closers = []
+    kernel = await createKernel({ sandbox: NO_SANDBOX, dataDir: dir, plugins: [parking], secrets: { osBackend: false } })
+    closers.push(() => kernel.close())
+    const addr = sockPath('parked')
+    await serve(addr)
+    const c = await client(addr)
+    const { sessionId } = await c.call('session.create', { commandId: 'c1' })
+    const { turnId } = await c.call('session.prompt', { commandId: 'p1', sessionId, text: 'first' })
+    // 第一条的处理者挂起之前可能回忙;挂起后一定收下
+    let r: Awaited<ReturnType<typeof c.call<'session.prompt'>>> | undefined
+    for (let i = 0; i < 100 && !r; i++) {
+      r = await c.call('session.prompt', { commandId: 'p2', sessionId, text: 'second' }).catch(() => undefined)
+      if (!r) await new Promise(res => setTimeout(res, 5))
+    }
+    expect(r).toEqual({ accepted: true, turnId, followUp: true })
+    await wait(() => seen.length === 1)
+    expect(await c.call('session.prompt', { commandId: 'p2', sessionId, text: 'second' })).toEqual({ accepted: true, turnId, followUp: true })
+    await new Promise(res => setTimeout(res, 20))
+    expect(seen).toEqual(['second'])
+    expect(kernel.events.after(0).filter(e => e.type === 'message.user')).toHaveLength(2)
   })
 })

@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createKernel, type Kernel } from '../../kernel/kernel'
 import type { Plugin } from '../../kernel/pluginHost'
 import { createGit, type Git } from '../../lib/git/snapshot'
 import type { Message, ModelEvent, ModelRequest, ModelsService } from '../../lib/models/types'
+import type { BackgroundRuns, RunNotice } from '../../lib/tools/types'
 import { ERR_BUSY, type KernelEvent } from '../../protocol/index'
 import type { ModelRef } from '../../protocol/models'
 import { createToolsCoding } from '../tools-coding'
@@ -93,7 +94,7 @@ const oneTool = (name: string, args: object): Script => (n => (n % 2 === 1 ? cal
 /** 插件日志(只留消息):测试据此确认第 2 轮已在等回滚,不靠睡固定时长 */
 let logs: string[] = []
 const logger = { info: (m: string) => { logs.push(m) }, warn: (m: string) => { logs.push(m) }, error: (m: string) => { logs.push(m) } }
-async function boot(calls: Message[][], script: () => Script, wrapGit?: (g: Git) => Git) {
+async function boot(calls: Message[][], script: () => Script, wrapGit?: (g: Git) => Git, extra: Plugin[] = []) {
   const g = createGit({ base: baseEnv(), extraEnv: gitInjected() })
   logs = []
   seedUnsandboxedAuto(dataDir) // auto 会话的 03 用例:NO_SANDBOX 下显式放开无沙箱 auto(R22)
@@ -105,6 +106,7 @@ async function boot(calls: Message[][], script: () => Script, wrapGit?: (g: Git)
     injectTimeoutMs: 100,
     plugins: [
       fakeModels(calls, script),
+      ...extra,
       toolsRegistry,
       createToolsCoding({ shellEnv: baseEnv(), loginPath: async () => '', git: async () => { throw new Error('git disabled in tests') }, minTimeoutMs: 100 }),
       createLoopDefault({ git: wrapGit ? wrapGit(g) : g, snapshotTmpDir: snapTmp }),
@@ -478,5 +480,128 @@ describe('scan with a follow-up and notices', () => {
     expect(hasOpenTurn('s', events)).toBe(true)
     expect(hasOpenTurn('s', closed)).toBe(false)
     expect(rollbackRefs('s', closed, 't')).toEqual({ start: snapshotRef('s', 't', 'start'), end: snapshotRef('s', 't', 'end') })
+  })
+})
+
+describe('Review Focus 3a: a follow-up stays in the same turn (real kernel inbox, real loop, fake runs)', () => {
+  /** 一个开着的运行;end() 交出通知。abandon 只把它记成结束 */
+  function fakeRuns() {
+    let open = 1
+    const notices: RunNotice[] = []
+    const wakers = new Set<() => void>()
+    const service: BackgroundRuns = {
+      active: () => open,
+      pending: () => notices.length,
+      take: () => notices.splice(0),
+      wait: (_t, signal) => new Promise<void>(resolve => {
+        if (notices.length || signal.aborted) return resolve()
+        const done = () => { wakers.delete(done); signal.removeEventListener('abort', done); resolve() }
+        wakers.add(done)
+        signal.addEventListener('abort', done, { once: true })
+      }),
+      abandon: async () => { open = 0 },
+    }
+    const plugin: Plugin = {
+      manifest: { id: 'fake-executors', version: '0', kernel: '^0.1.0', provides: ['executors'] },
+      activate: ctx => ctx.services.provide('executors', service),
+    }
+    return {
+      plugin,
+      end(text: string) {
+        open = 0
+        notices.push({ runId: 'run_a', text })
+        for (const w of [...wakers]) w()
+      },
+    }
+  }
+  const parkedCount = (k: Kernel, sid: string) => evs(k, sid).filter(e => e.type === 'turn.parked').length
+  const lastText = (m: Message[]) => m.at(-1)!.parts.map(p => (p.type === 'text' ? p.text : '')).join('|')
+
+  it.skipIf(!posix)('one started, one start and one end snapshot; changes and rollback cover both sides of the follow-up; rollback while parked is busy; a later turn drops both messages', async () => {
+    initRepo()
+    const calls: Message[][] = []
+    const runs = fakeRuns()
+    const script: Script = n => {
+      if (n === 1) return calling('c1', 'write', { path: 'before.txt', content: 'before' })
+      if (n === 2) return say('started a run')
+      if (n === 3) return calling('c3', 'write', { path: 'after.txt', content: 'after' })
+      if (n === 4) return say('wrote that too')
+      if (n === 5) return say('all done')
+      return say('next turn')
+    }
+    const k = await boot(calls, () => script, undefined, [runs.plugin])
+    const sid = await create(k, GPT)
+    const turnId = await prompt(k, sid, 'FIRST-MESSAGE')
+    await waitFor(() => parkedCount(k, sid) === 1)
+    expect(calls).toHaveLength(2)
+
+    await expect(rollback(k, sid, turnId)).rejects.toMatchObject({ code: ERR_BUSY })
+
+    const r = await k.handle('session.prompt', { commandId: 'follow', sessionId: sid, text: 'SECOND-MESSAGE' })
+    expect(r).toEqual({ accepted: true, turnId, followUp: true })
+    await waitFor(() => parkedCount(k, sid) === 2)
+    expect(calls).toHaveLength(4)
+    const delivered = calls[2]
+    expect(lastText(delivered)).toMatch(/SECOND-MESSAGE$/)
+    expect(lastText(delivered)).toMatch(/<reminder>/)
+    expect(lastText(delivered)).not.toContain('<environment>')
+    expect(evs(k, sid).filter(e => e.type === 'turn.resumed').map(e => pay(e).cause)).toEqual(['message'])
+
+    runs.end('NOTICE-TEXT')
+    await waitFor(() => terminalOf(k, sid, turnId).length > 0)
+    expect(lastText(calls[4])).toBe('NOTICE-TEXT')
+    expect(terminalOf(k, sid, turnId).map(e => e.type)).toEqual(['turn.ended'])
+
+    expect(evs(k, sid).filter(e => e.type === 'turn.started')).toHaveLength(1)
+    expect(snaps(k, sid, turnId).map(s => s.phase)).toEqual(['start', 'end'])
+    expect(snaps(k, sid, turnId)[1].changed).toBe(2)
+    // 第二条 message.user 没有开出新的一轮:最新的可回滚轮仍是它
+    expect(rollbackRefs(sid, evs(k, sid), turnId)).toBeDefined()
+    expect(hasOpenTurn(sid, evs(k, sid))).toBe(false)
+
+    const changed = (await changesOf(k, sid, turnId)) as { files: { path: string }[] }
+    expect(changed.files.map(f => f.path).sort()).toEqual(['after.txt', 'before.txt'])
+
+    await rollback(k, sid, turnId)
+    expect(existsSync(R('before.txt'))).toBe(false)
+    expect(existsSync(R('after.txt'))).toBe(false)
+
+    const next = await prompt(k, sid, 'THIRD-MESSAGE')
+    await waitFor(() => terminalOf(k, sid, next).length > 0)
+    const history = JSON.stringify(calls.at(-1))
+    expect(history).toContain('THIRD-MESSAGE')
+    expect(history).not.toContain('FIRST-MESSAGE')
+    expect(history).not.toContain('SECOND-MESSAGE')
+  })
+
+  it.skipIf(!posix)('killed after a follow-up: one turn.failed interrupted across two restarts, and the follow-up is in the next turn\'s history', async () => {
+    initRepo()
+    const calls: Message[][] = []
+    const runs = fakeRuns()
+    const k = await boot(calls, () => n => say(`a${n}`), undefined, [runs.plugin])
+    const sid = await create(k, GPT)
+    const turnId = await prompt(k, sid, 'FIRST-MESSAGE')
+    await waitFor(() => parkedCount(k, sid) === 1)
+    await k.handle('session.prompt', { commandId: 'follow', sessionId: sid, text: 'SECOND-MESSAGE' })
+    await waitFor(() => parkedCount(k, sid) === 2)
+    // 库文件的拷贝就是崩溃时盘上的样子:旧内核还没写终态
+    const crashed = join(root, 'crashed')
+    cpSync(join(dataDir, 'db'), join(crashed, 'db'), { recursive: true })
+    dataDir = crashed
+    const interrupted = (x: Kernel) => terminalOf(x, sid, turnId).map(e => pay(e).reason)
+
+    const k2 = await boot(calls, () => n => say(`a${n}`))
+    expect(interrupted(k2)).toEqual(['interrupted'])
+    await k2.close()
+    kernels = kernels.filter(x => x !== k2)
+
+    const k3 = await boot(calls, () => n => say(`a${n}`))
+    expect(interrupted(k3)).toEqual(['interrupted'])
+    const next = await prompt(k3, sid, 'THIRD-MESSAGE')
+    await waitFor(() => terminalOf(k3, sid, next).length > 0)
+    const history = JSON.stringify(calls.at(-1))
+    expect(history).toContain('FIRST-MESSAGE')
+    expect(history).toContain('SECOND-MESSAGE')
+    expect(interrupted(k3)).toEqual(['interrupted'])
   })
 })

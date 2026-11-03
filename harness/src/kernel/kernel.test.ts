@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { getEventListeners } from 'node:events'
+import { cpSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createKernel, type Kernel } from './kernel'
@@ -11,6 +12,7 @@ import type { Plugin } from './pluginHost'
 import loopEcho from '../plugins/loop-echo'
 import { BUILTIN_PLUGINS } from '../plugins'
 import type { Approvals } from './approvals'
+import type { FollowUp, TurnInbox } from '../lib/tools/types'
 import { sessionKey } from '../lib/tools/commandKey'
 import { NO_SANDBOX } from '../../test/sandboxStub'
 
@@ -456,3 +458,283 @@ describe('kernel approvals', () => {
     expect(existsSync(g.marker)).toBe(false)
   })
 })
+
+describe('kernel: Review Focus 3a, a parked turn accepts the message', () => {
+  type Req = { sessionId: string; turnId: string; text: string; signal: AbortSignal; inbox: TurnInbox }
+  /** 只调 inbox 的假循环:醒来取走消息;then() 决定接着挂起、停在非挂起状态,还是结束 */
+  function parkingLoop() {
+    const c = {
+      req: undefined as Req | undefined,
+      parks: 0,
+      taken: [] as FollowUp[],
+      /** 下一次醒来之后:'park' 再挂起,'hold' 等 release,'end' 写 turn.ended */
+      after: 'park' as 'park' | 'hold' | 'end',
+      release: () => {},
+      plugin: {
+        manifest: { id: 'parking', version: '1', kernel: '*' },
+        activate: ctx => {
+          ctx.events.on('session.prompt', async (r: Req) => {
+            c.req = r
+            for (;;) {
+              const woke = r.inbox.park()
+              c.parks++
+              await woke
+              r.inbox.unpark()
+              c.taken.push(...r.inbox.take())
+              if (r.signal.aborted) {
+                if (c.after === 'hold') await new Promise<void>(res => { c.release = res })
+                return true
+              }
+              if (c.after === 'hold') await new Promise<void>(res => { c.release = res })
+              if (c.after === 'end') {
+                ctx.append({ type: 'turn.ended', sessionId: r.sessionId, payload: { turnId: r.turnId } })
+                return true
+              }
+            }
+          })
+        },
+      } as Plugin,
+    }
+    return c
+  }
+  async function parkedTurn() {
+    const loop = parkingLoop()
+    const k = await boot([loop.plugin])
+    const { sessionId } = (await k.handle('session.create', { commandId: 'c' })) as { sessionId: string }
+    const first = (await k.handle('session.prompt', { commandId: 'p1', sessionId, text: 'first' })) as { turnId: string }
+    await waitFor(() => loop.parks === 1)
+    return { k, loop, sessionId, turnId: first.turnId }
+  }
+  const users = (k: Kernel) => k.events.after(0).filter(e => e.type === 'message.user')
+  const busy = { code: ERR_BUSY, message: 'turn in progress' }
+
+  it('parked: same turn, followUp receipt and event, the inbox gets the text with that event\'s ts, and the handler wakes', async () => {
+    const { k, loop, sessionId, turnId } = await parkedTurn()
+    const r = await k.handle('session.prompt', { commandId: 'p2', sessionId, text: 'second' })
+    expect(r).toEqual({ accepted: true, turnId, followUp: true })
+    expect(users(k).map(e => e.payload)).toEqual([{ turnId, text: 'first' }, { turnId, text: 'second', followUp: true }])
+    await waitFor(() => loop.parks === 2)
+    expect(loop.taken).toEqual([{ text: 'second', ts: users(k)[1].ts }])
+  })
+
+  it('the handler is not dispatched again', async () => {
+    const { k, loop, sessionId } = await parkedTurn()
+    const req = loop.req
+    await k.handle('session.prompt', { commandId: 'p2', sessionId, text: 'second' })
+    await waitFor(() => loop.parks === 2)
+    expect(loop.req).toBe(req)
+  })
+
+  it('not parked yet, or between parks → ERR_BUSY, no event, no receipt, and the same commandId can retry', async () => {
+    const { k, loop, sessionId, turnId } = await parkedTurn()
+    loop.after = 'hold'
+    await k.handle('session.prompt', { commandId: 'p2', sessionId, text: 'second' })
+    await waitFor(() => loop.taken.length === 1)
+    await expect(k.handle('session.prompt', { commandId: 'p3', sessionId, text: 'third' })).rejects.toMatchObject(busy)
+    expect(users(k)).toHaveLength(2)
+    loop.after = 'park'
+    loop.release()
+    await waitFor(() => loop.parks === 2)
+    expect(await k.handle('session.prompt', { commandId: 'p3', sessionId, text: 'third' })).toEqual({ accepted: true, turnId, followUp: true })
+  })
+
+  it('two prompts in a row: the first is accepted, the second is busy at once; replaying the first wakes nothing', async () => {
+    const { k, loop, sessionId } = await parkedTurn()
+    // 同一个 tick:循环还没机会再挂起
+    const accepted = k.handle('session.prompt', { commandId: 'p2', sessionId, text: 'second' })
+    const refused = k.handle('session.prompt', { commandId: 'p3', sessionId, text: 'third' })
+    const one = await accepted
+    await expect(refused).rejects.toMatchObject(busy)
+    await waitFor(() => loop.parks === 2)
+    expect(await k.handle('session.prompt', { commandId: 'p2', sessionId, text: 'second' })).toEqual(one)
+    await new Promise(r => setTimeout(r, 20))
+    expect(loop.parks).toBe(2)
+    expect(loop.taken).toHaveLength(1)
+    expect(users(k)).toHaveLength(2)
+  })
+
+  it('after can\'t run if the transaction throws: still parked, nothing queued, nothing woken, and the commandId can retry', async () => {
+    const { k, loop, sessionId, turnId } = await parkedTurn()
+    const spy = vi.spyOn(k.events, 'append').mockImplementationOnce(() => { throw new Error('disk full') })
+    await expect(k.handle('session.prompt', { commandId: 'p2', sessionId, text: 'second' })).rejects.toThrow('disk full')
+    spy.mockRestore()
+    await new Promise(r => setTimeout(r, 20))
+    expect(loop.parks).toBe(1)
+    expect(loop.taken).toEqual([])
+    expect(users(k)).toHaveLength(1)
+    expect(await k.handle('session.prompt', { commandId: 'p2', sessionId, text: 'second' })).toEqual({ accepted: true, turnId, followUp: true })
+    await waitFor(() => loop.taken.length === 1)
+  })
+
+  it('session.cancel while parked resolves the inbox and the turn fails cancelled', async () => {
+    const { k, loop, sessionId } = await parkedTurn()
+    await k.handle('session.cancel', { commandId: 'x', sessionId })
+    await waitFor(() => types(k).includes('turn.failed'))
+    expect(k.events.after(0).filter(e => e.type === 'turn.failed').map(e => (e.payload as { reason: string }).reason)).toEqual(['cancelled'])
+    await new Promise(r => setTimeout(r, 10))
+    expect(loop.parks).toBe(1) // 循环已经返回,没有再挂起
+    expect((await k.handle('session.prompt', { commandId: 'p9', sessionId, text: 'next' })) as { followUp?: boolean }).not.toHaveProperty('followUp')
+  })
+
+  it('park after the turn was aborted resolves at once', async () => {
+    const { k, loop, sessionId } = await parkedTurn()
+    loop.after = 'hold'
+    const aborted = k.handle('session.cancel', { commandId: 'x', sessionId })
+    await waitFor(() => loop.req!.signal.aborted)
+    await expect(loop.req!.inbox.park()).resolves.toBeUndefined()
+    await aborted
+    loop.release()
+  })
+
+  it('after session.cancel with the handler still running → ERR_BUSY, no receipt', async () => {
+    const { k, loop, sessionId } = await parkedTurn()
+    loop.after = 'hold'
+    const cancelling = k.handle('session.cancel', { commandId: 'x', sessionId })
+    await waitFor(() => loop.req!.signal.aborted)
+    await expect(k.handle('session.prompt', { commandId: 'p2', sessionId, text: 'late' })).rejects.toMatchObject(busy)
+    // 宽限过后内核写了 cancelled,处理者还没退:t.ended 也挡住
+    await cancelling
+    expect(types(k)).toContain('turn.failed')
+    await expect(k.handle('session.prompt', { commandId: 'p2', sessionId, text: 'late' })).rejects.toMatchObject(busy)
+    expect(users(k)).toHaveLength(1)
+    loop.release()
+  })
+
+  it('cancel and a prompt in the same tick: aborted but not yet unparked → ERR_BUSY', async () => {
+    const { k, sessionId } = await parkedTurn()
+    const cancelling = k.handle('session.cancel', { commandId: 'x', sessionId }) // 同步中止,循环的续延还没跑
+    await expect(k.handle('session.prompt', { commandId: 'p2', sessionId, text: 'late' })).rejects.toMatchObject(busy)
+    expect(users(k)).toHaveLength(1)
+    await cancelling
+  })
+
+  it('parked but the terminal event is already written → ERR_BUSY', async () => {
+    let finish = () => {}
+    let parked = false
+    const late: Plugin = {
+      manifest: { id: 'late', version: '1', kernel: '*' },
+      activate: ctx => {
+        ctx.events.on('session.prompt', async (r: Req) => {
+          ctx.append({ type: 'turn.ended', sessionId: r.sessionId, payload: { turnId: r.turnId } })
+          void r.inbox.park()
+          parked = true
+          await new Promise<void>(res => { finish = res })
+          return true
+        })
+      },
+    }
+    const k = await boot([late])
+    const { sessionId } = (await k.handle('session.create', { commandId: 'c' })) as { sessionId: string }
+    await k.handle('session.prompt', { commandId: 'p1', sessionId, text: 'first' })
+    await waitFor(() => parked)
+    await expect(k.handle('session.prompt', { commandId: 'p2', sessionId, text: 'late' })).rejects.toMatchObject(busy)
+    expect(users(k)).toHaveLength(1)
+    finish()
+  })
+
+  it('a turn that parked and then ended no longer accepts: the next prompt is a new turn', async () => {
+    const { k, loop, sessionId, turnId } = await parkedTurn()
+    loop.after = 'end'
+    await k.handle('session.prompt', { commandId: 'p2', sessionId, text: 'second' })
+    await waitFor(() => types(k).includes('turn.ended'))
+    await new Promise(r => setTimeout(r, 10))
+    loop.after = 'park'
+    const next = (await k.handle('session.prompt', { commandId: 'p3', sessionId, text: 'third' })) as { turnId: string; followUp?: boolean }
+    expect(next.turnId).not.toBe(turnId)
+    expect(next.followUp).toBeUndefined()
+  })
+
+  it('draining while parked → ERR_DRAINING', async () => {
+    const { k, sessionId } = await parkedTurn()
+    void k.drain(1)
+    await expect(k.handle('session.prompt', { commandId: 'p2', sessionId, text: 'second' })).rejects.toMatchObject({ code: ERR_DRAINING })
+    expect(users(k)).toHaveLength(1)
+  })
+
+  it('a loop that never parks stays busy', async () => {
+    let release!: () => void
+    const slow: Plugin = {
+      manifest: { id: 'slow', version: '1', kernel: '*' },
+      activate: ctx => {
+        ctx.events.on('session.prompt', async (r: { sessionId: string; turnId: string; inbox: TurnInbox }) => {
+          await new Promise<void>(res => { release = res })
+          ctx.append({ type: 'turn.ended', sessionId: r.sessionId, payload: { turnId: r.turnId } })
+          return true
+        })
+      },
+    }
+    const k = await boot([slow])
+    const { sessionId } = (await k.handle('session.create', { commandId: 'c' })) as { sessionId: string }
+    await k.handle('session.prompt', { commandId: 'p1', sessionId, text: 'a' })
+    await expect(k.handle('session.prompt', { commandId: 'p2', sessionId, text: 'b' })).rejects.toMatchObject(busy)
+    await waitFor(() => !!release)
+    release()
+    await waitFor(() => types(k).includes('turn.ended'))
+  })
+
+  it('each park replaces the last: abort listeners don\'t pile up, and an abandoned park is released', async () => {
+    // 假循环不自己挂起,park 全由测试调
+    let req: Req | undefined
+    const idle: Plugin = {
+      manifest: { id: 'idle', version: '1', kernel: '*' },
+      activate: ctx => {
+        ctx.events.on('session.prompt', (r: Req) => new Promise(res => {
+          req = r
+          r.signal.addEventListener('abort', () => res(true), { once: true })
+        }))
+      },
+    }
+    const k = await boot([idle])
+    const { sessionId } = (await k.handle('session.create', { commandId: 'c' })) as { sessionId: string }
+    await k.handle('session.prompt', { commandId: 'p1', sessionId, text: 'first' })
+    await waitFor(() => !!req)
+    const { inbox, signal } = req!
+    const base = getEventListeners(signal, 'abort').length
+    // 循环被通知叫醒:unpark 之后再 park,旧的 promise 没人再等
+    for (let i = 0; i < 20; i++) {
+      const old = inbox.park()
+      inbox.unpark()
+      await expect(old).resolves.toBeUndefined()
+      expect(getEventListeners(signal, 'abort')).toHaveLength(base)
+    }
+    // 没有 unpark 就再 park:旧的也放开,监听器只留一个
+    const a = inbox.park()
+    const b = inbox.park()
+    await expect(a).resolves.toBeUndefined()
+    expect(getEventListeners(signal, 'abort')).toHaveLength(base + 1)
+    await k.handle('session.prompt', { commandId: 'p2', sessionId, text: 'second' })
+    await expect(b).resolves.toBeUndefined()
+    expect(getEventListeners(signal, 'abort')).toHaveLength(base)
+  })
+
+  it('killed after a follow-up: exactly one turn.failed interrupted, on this restart and the next', async () => {
+    const { k, sessionId, turnId } = await parkedTurn()
+    await k.handle('session.prompt', { commandId: 'p2', sessionId, text: 'second' })
+    // 库文件的拷贝就是崩溃时盘上的样子:旧内核没写终态
+    const crashed = join(dir, 'crashed')
+    cpSync(join(dir, 'db'), join(crashed, 'db'), { recursive: true })
+    const open = () => createKernel({ sandbox: NO_SANDBOX, dataDir: crashed, plugins: [], secrets: { osBackend: false } })
+    const failed = (x: Kernel) => x.events.after(0).filter(e => e.type === 'turn.failed').map(e => e.payload)
+    const k2 = await open()
+    expect(failed(k2)).toEqual([{ turnId, reason: 'interrupted' }])
+    await k2.close()
+    const k3 = await open()
+    expect(failed(k3)).toEqual([{ turnId, reason: 'interrupted' }])
+    expect(users(k3).map(e => (e.payload as { text: string }).text)).toEqual(['first', 'second'])
+    await k3.close()
+  })
+
+  it('t.ended blocks a message.user after a terminal event, so recovery never sees one', async () => {
+    const { k, loop, sessionId } = await parkedTurn()
+    loop.after = 'hold'
+    await k.handle('session.cancel', { commandId: 'x', sessionId }) // 终态已写,处理者还在
+    await expect(k.handle('session.prompt', { commandId: 'p2', sessionId, text: 'late' })).rejects.toMatchObject(busy)
+    const log = k.events.after(0)
+    const terminalAt = log.findIndex(e => isEnd(e.type))
+    expect(terminalAt).toBeGreaterThan(-1)
+    expect(log.slice(terminalAt).some(e => e.type === 'message.user')).toBe(false)
+    loop.release()
+  })
+})
+
+const isEnd = (t: string) => t === 'turn.ended' || t === 'turn.failed'

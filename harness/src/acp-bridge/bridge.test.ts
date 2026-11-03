@@ -378,3 +378,146 @@ describe('ACP bridge: tools and approvals', () => {
     w.emit([ended]) // 结束本轮,不留悬着的 prompt 处理
   })
 })
+
+describe('ACP bridge: a second session/prompt on a parked turn', () => {
+  /** 假循环:挂起,被消息叫醒后不再挂起,finish() 时写 turn.ended */
+  function parkingLoop() {
+    const c = {
+      parked: false,
+      woken: false,
+      finish: () => {},
+      plugin: {
+        manifest: { id: 'parking', version: '1', kernel: '*' },
+        activate: ctx => {
+          ctx.events.on('session.prompt', async (r: { sessionId: string; turnId: string; inbox: { park(): Promise<void>; unpark(): void; take(): unknown[] } }) => {
+            const woke = r.inbox.park()
+            c.parked = true
+            await woke
+            r.inbox.unpark()
+            r.inbox.take()
+            await new Promise<void>(res => { c.finish = res; c.woken = true })
+            ctx.append({ type: 'turn.ended', sessionId: r.sessionId, payload: { turnId: r.turnId } })
+            return true
+          })
+        },
+      } as Plugin,
+    }
+    return c
+  }
+
+  it('real kernel: it doesn\'t replace the first; both return end_turn at turn.ended', async () => {
+    const loop = parkingLoop()
+    const { a } = await boot([loop.plugin])
+    const stops = await client({ name: 't' }).connectWith(a, async (cx) => {
+      await cx.request('initialize', INIT)
+      const { sessionId } = await cx.request('session/new', { cwd: work, mcpServers: [] })
+      const first = cx.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'one' }] })
+      await wait(() => loop.parked)
+      const second = cx.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'two' }] })
+      await wait(() => loop.woken)
+      expect(kernel.events.after(0).some(e => e.type === 'turn.ended')).toBe(false)
+      loop.finish()
+      return [(await first).stopReason, (await second).stopReason]
+    })
+    expect(stops).toEqual(['end_turn', 'end_turn'])
+  })
+
+  /** 可以逐个控制 session.prompt 响应的假工作进程 */
+  function twoPrompts() {
+    const w = fakeWorker({})
+    const replies: Array<{ resolve(v: unknown): void; reject(e: Error): void }> = []
+    const inner = w.c.call.bind(w.c) as (m: string, p?: unknown) => Promise<unknown>
+    ;(w.c as { call: unknown }).call = (m: string, p?: unknown) => {
+      if (m !== 'session.prompt') return inner(m, p)
+      w.calls.push({ method: m, params: p })
+      return new Promise((resolve, reject) => { replies.push({ resolve, reject }) })
+    }
+    return { w, replies }
+  }
+  const accepted = { accepted: true, turnId: 'T' }
+  const followed = { accepted: true, turnId: 'T', followUp: true }
+
+  async function connect(w: ReturnType<typeof fakeWorker>, body: (cx: any, sessionId: string, p: () => Promise<{ stopReason: string }>) => Promise<unknown>) {
+    const { a, b } = pair()
+    void runBridge({ stream: b, connect: async () => w.c })
+    return client({ name: 't' }).connectWith(a, async (cx) => {
+      await cx.request('initialize', INIT)
+      const { sessionId } = await cx.request('session/new', { cwd: '/x', mcpServers: [] })
+      return body(cx, sessionId, () => cx.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'go' }] }))
+    })
+  }
+
+  it('the terminal event overtakes the second prompt\'s reply and the first has already left: the second still returns', async () => {
+    const { w, replies } = twoPrompts()
+    const stops = await connect(w, async (_cx, _sid, p) => {
+      const first = p()
+      await wait(() => replies.length === 1)
+      replies[0].resolve(accepted)
+      await new Promise(r => setTimeout(r, 5))
+      const second = p()
+      await wait(() => replies.length === 2)
+      w.emit([ended])
+      const one = (await first).stopReason
+      replies[1].resolve(followed) // 第一个已经走了,Turn 也删了
+      return [one, (await second).stopReason]
+    })
+    expect(stops).toEqual(['end_turn', 'end_turn'])
+  })
+
+  it('cancelled: both return cancelled, not just the first one out', async () => {
+    const { w, replies } = twoPrompts()
+    const stops = await connect(w, async (cx, sessionId, p) => {
+      const first = p()
+      await wait(() => replies.length === 1)
+      replies[0].resolve(accepted)
+      await new Promise(r => setTimeout(r, 5))
+      const second = p()
+      await wait(() => replies.length === 2)
+      replies[1].resolve(followed)
+      await new Promise(r => setTimeout(r, 5))
+      await cx.notify('session/cancel', { sessionId })
+      await wait(() => w.calls.some(c => c.method === 'session.cancel'))
+      w.emit([ev('turn.failed', { reason: 'cancelled' })])
+      return [(await first).stopReason, (await second).stopReason]
+    })
+    expect(stops).toEqual(['cancelled', 'cancelled'])
+  })
+
+  it('a second prompt sent after the cancel doesn\'t clear it: the first still returns cancelled', async () => {
+    const { w, replies } = twoPrompts()
+    const stops = await connect(w, async (cx, sessionId, p) => {
+      const first = p()
+      await wait(() => replies.length === 1)
+      replies[0].resolve(accepted)
+      await new Promise(r => setTimeout(r, 5))
+      await cx.notify('session/cancel', { sessionId })
+      await wait(() => w.calls.some(c => c.method === 'session.cancel'))
+      const second = p()
+      await wait(() => replies.length === 2)
+      replies[1].reject(new Error('turn in progress'))
+      await expect(second).rejects.toThrow('turn in progress')
+      w.emit([ev('turn.failed', { reason: 'cancelled' })])
+      return (await first).stopReason
+    })
+    expect(stops).toBe('cancelled')
+  })
+
+  it('a rejected second prompt leaves the first alone: its cancel is still a cancel', async () => {
+    const { w, replies } = twoPrompts()
+    const stops = await connect(w, async (cx, sessionId, p) => {
+      const first = p()
+      await wait(() => replies.length === 1)
+      replies[0].resolve(accepted)
+      await new Promise(r => setTimeout(r, 5))
+      const second = p()
+      await wait(() => replies.length === 2)
+      replies[1].reject(new Error('turn in progress'))
+      await expect(second).rejects.toThrow('turn in progress')
+      await cx.notify('session/cancel', { sessionId })
+      await wait(() => w.calls.some(c => c.method === 'session.cancel'))
+      w.emit([ev('turn.failed', { reason: 'cancelled' })])
+      return (await first).stopReason
+    })
+    expect(stops).toBe('cancelled')
+  })
+})

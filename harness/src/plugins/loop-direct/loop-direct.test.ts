@@ -6,7 +6,8 @@ import { createKernel, type Kernel } from '../../kernel/kernel'
 import type { Plugin } from '../../kernel/pluginHost'
 import type { Message, ModelEvent, ModelRequest, ModelsService } from '../../lib/models/types'
 import type { ModelRef } from '../../protocol/models'
-import loopDirect from './index'
+import { ERR_BUSY, type KernelEvent } from '../../protocol/index'
+import loopDirect, { buildHistory } from './index'
 import loopEcho from '../loop-echo'
 import { createLoopDefault } from '../loop-default'
 import toolsRegistry from '../tools-registry'
@@ -198,5 +199,36 @@ describe('loop-direct', () => {
     expect(fake.calls[0].req.tools).toBeUndefined()
     expect(k.events.bySession(sid).find(e => e.type === 'message.assistant')?.payload).toEqual({ turnId: expect.any(String), text: 'direct' }) // 没有 step / parts:是 loop-direct 写的
     expect(terminal(k, sid)[0].type).toBe('turn.ended')
+  })
+})
+
+describe('loop-direct: a follow-up from a parked turn (spec §7.6)', () => {
+  const ev = (seq: number, type: string, payload: object): KernelEvent => ({ seq, ts: seq, type, sessionId: 's', payload } as KernelEvent)
+
+  it('buildHistory skips followUp messages: one question, one answer, no duplicate', () => {
+    const out = buildHistory([
+      ev(1, 'message.user', { turnId: 't1', text: 'first' }),
+      ev(2, 'message.user', { turnId: 't1', text: 'second', followUp: true }),
+      ev(3, 'message.assistant', { turnId: 't1', text: 'answer' }),
+      ev(4, 'turn.ended', { turnId: 't1' }),
+    ], 't2', 'now')
+    expect(texts(out)).toEqual(['user:first', 'assistant:answer', 'user:now'])
+  })
+
+  it('a loop-direct turn never parks: session.prompt during it is ERR_BUSY', async () => {
+    const fake: Fake = { calls: [] }
+    const k = await boot([
+      fakeModels(fake, async function* (req) {
+        yield { type: 'text', delta: 'x' } as ModelEvent
+        await new Promise<void>(r => req.signal.addEventListener('abort', () => r()))
+        yield done('cancelled')
+      }),
+      loopDirect, loopEcho,
+    ])
+    const sid = await create(k, REF)
+    await prompt(k, sid, 'hi')
+    await waitFor(() => k.events.bySession(sid).some(e => e.type === 'message.assistant.delta'))
+    await expect(prompt(k, sid, 'again')).rejects.toMatchObject({ code: ERR_BUSY })
+    expect(k.events.bySession(sid).filter(e => e.type === 'message.user')).toHaveLength(1)
   })
 })

@@ -2,12 +2,16 @@ import { randomUUID } from 'node:crypto'
 import { agent, PROTOCOL_VERSION, RequestError, type AgentContext, type PermissionOption, type SessionUpdate, type Stream, type ToolKind } from '@agentclientprotocol/sdk'
 import type { KernelEvent, MffaiClient } from '../protocol/index'
 
+type Outcome = { ok: true } | { ok: false; reason: string }
+
 interface Turn {
   sessionId: string
   deltas: Promise<void>
-  client: AgentContext
+  client: AgentContext // 第一个 prompt 的;挂起时收下的 session/prompt 没有自己的流
   prompts: Map<string, AbortController> // approvalId → 还开着(或排队待发)的权限请求
-  done(r: { ok: true } | { ok: false; reason: string }): void
+  finished: Promise<Outcome> // 同一轮的 prompt 都等它,一起返回
+  waiting: number // 还在等的 prompt;最后一个走时删掉这条
+  done(r: Outcome): void
 }
 
 const turnIdOf = (e: KernelEvent): string | undefined => {
@@ -62,7 +66,7 @@ export async function runBridge(opts: { stream: Stream; connect: () => Promise<M
   let closed = false
   const turns = new Map<string, Turn>()
   const early = new EarlyBuffer()
-  const prompting = new Set<string>() // 有 prompt 在途的 sessionId
+  const prompting = new Map<string, number>() // sessionId → 在途的 prompt 数
   const cancelled = new Set<string>() // 已请求取消的 sessionId
 
   const need = (): MffaiClient => {
@@ -113,6 +117,12 @@ export async function runBridge(opts: { stream: Stream; connect: () => Promise<M
     })
   }
 
+  function newTurn(sessionId: string, client: AgentContext): Turn {
+    let done!: Turn['done']
+    const finished = new Promise<Outcome>((resolve) => { done = resolve })
+    return { sessionId, deltas: Promise.resolve(), client, prompts: new Map(), finished, waiting: 0, done }
+  }
+
   function dispatch(t: Turn, e: KernelEvent): void {
     const p = e.payload as Record<string, unknown> & { text?: string; reason?: string; message?: string }
     if (e.type === 'message.assistant.delta' && typeof p.text === 'string') {
@@ -147,7 +157,8 @@ export async function runBridge(opts: { stream: Stream; connect: () => Promise<M
     if (!id) return
     const t = turns.get(id)
     if (t) dispatch(t, e)
-    else early.add(id, e)
+    // 终态也留一份:后续消息的响应可能晚于它,而第一个 prompt 已经走了,晚到的 prompt 要靠它返回
+    if (!t || e.type === 'turn.ended' || e.type === 'turn.failed') early.add(id, e)
   }
 
   function onGone(): void {
@@ -195,10 +206,11 @@ export async function runBridge(opts: { stream: Stream; connect: () => Promise<M
       const w = need()
       const { sessionId } = ctx.params
       const text = ctx.params.prompt.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('')
-      cancelled.delete(sessionId)
-      prompting.add(sessionId)
+      if (!prompting.has(sessionId)) cancelled.delete(sessionId) // 同一轮还有 prompt 在等时,它们的取消不能丢
+      prompting.set(sessionId, (prompting.get(sessionId) ?? 0) + 1)
       early.begin()
       let turnId: string | undefined
+      let t: Turn | undefined
       try {
         const res = await w.call('session.prompt', { commandId: randomUUID(), sessionId, text }).catch((e: Error) => {
           // 响应到达前连接断开:与轮中断开同一说法
@@ -207,12 +219,13 @@ export async function runBridge(opts: { stream: Stream; connect: () => Promise<M
         if (!res.accepted) throw new RequestError(-32603, 'mff-ai 拒绝了这次请求')
         turnId = res.turnId
 
-        let t!: Turn
-        const finished = new Promise<{ ok: true } | { ok: false; reason: string }>((resolve) => {
-          t = { sessionId, deltas: Promise.resolve(), client: ctx.client, prompts: new Map(), done: resolve }
-        })
-        turns.set(turnId, t)
-        for (const e of early.take(turnId)) dispatch(t, e)
+        t = turns.get(turnId)
+        if (!t) {
+          t = newTurn(sessionId, ctx.client)
+          turns.set(turnId, t)
+          for (const e of early.take(turnId)) dispatch(t, e)
+        }
+        t.waiting++
         if (closed) t.done({ ok: false, reason: 'mff-ai 连接已断开' })
         const abort = () => {
           cancelled.add(sessionId)
@@ -220,19 +233,25 @@ export async function runBridge(opts: { stream: Stream; connect: () => Promise<M
         }
         ctx.signal.addEventListener('abort', abort, { once: true })
         try {
-          const r = await finished
+          const r = await t.finished
           await t.deltas
           if (r.ok) return { stopReason: 'end_turn' as const }
           if (cancelled.has(sessionId)) return { stopReason: 'cancelled' as const }
           throw new RequestError(-32603, r.reason)
         } finally {
           ctx.signal.removeEventListener('abort', abort)
-          withdraw(t)
         }
       } finally {
-        if (turnId) turns.delete(turnId)
-        prompting.delete(sessionId)
-        cancelled.delete(sessionId)
+        if (t && --t.waiting === 0) {
+          withdraw(t)
+          turns.delete(turnId!)
+        }
+        const left = (prompting.get(sessionId) ?? 1) - 1
+        if (left > 0) prompting.set(sessionId, left)
+        else {
+          prompting.delete(sessionId)
+          cancelled.delete(sessionId)
+        }
         early.end()
       }
     })

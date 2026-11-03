@@ -18,7 +18,11 @@ export function buildHistory(events: KernelEvent[], currentTurnId: string, curre
   for (const e of events) {
     const id = turnOf(e)
     if (!id) continue
-    if (e.type === 'message.user') { users.set(id, textOf(e)); order.push(id) }
+    if (e.type === 'message.user') {
+      if ((e.payload as { followUp?: boolean }).followUp) continue // 一轮一问一答;否则同一轮进两次
+      users.set(id, textOf(e))
+      order.push(id)
+    }
     else if (e.type === 'message.assistant') answers.set(id, textOf(e))
     else if (e.type === 'turn.ended') ended.add(id)
   }

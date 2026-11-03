@@ -32,6 +32,7 @@ import { createSandboxService } from './sandbox'
 import { detectSandbox, type DetectResult } from '../lib/sandbox/detect'
 import { upstreamFromEnv, type LookupFn, type Upstream } from '../lib/sandbox/net/proxy'
 import type { Git } from '../lib/git/snapshot'
+import type { FollowUp, TurnInbox } from '../lib/tools/types'
 import { HARNESS_VERSION } from './version'
 import { toWire } from './wire'
 
@@ -83,7 +84,20 @@ const ERR_INTERNAL = -32603
 const CANCEL_GRACE_MS = 1000
 const APPROVAL_TIMEOUT_MS = 600_000
 
-type Turn = { turnId: string; sessionId: string; ended: boolean; controller: AbortController; settled: Promise<void>; terminal?: KernelEvent }
+type Turn = {
+  turnId: string
+  sessionId: string
+  ended: boolean
+  controller: AbortController
+  settled: Promise<void>
+  terminal?: KernelEvent
+  /** 循环在等,这时 session.prompt 收下消息(spec §7.6) */
+  parked: boolean
+  /** 已收下、循环还没取走的 */
+  followUps: FollowUp[]
+  /** 放开当前这次 park;每次 park 换一个,放开时摘掉它的 abort 监听 */
+  wake?: () => void
+}
 
 const isTerminal = (type: string) => type === 'turn.ended' || type === 'turn.failed'
 
@@ -194,15 +208,38 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   }
   for (const [turnId, sessionId] of open) append({ type: 'turn.failed', sessionId, payload: { turnId, reason: 'interrupted' } })
 
+  const inboxOf = (turn: Turn): TurnInbox => ({
+    park: () => {
+      turn.wake?.() // 循环不再等上一次时不留下它的监听
+      turn.parked = true
+      const { signal } = turn.controller
+      if (signal.aborted) return Promise.resolve()
+      return new Promise<void>(resolve => {
+        const wake = () => {
+          signal.removeEventListener('abort', wake)
+          if (turn.wake === wake) turn.wake = undefined
+          resolve()
+        }
+        turn.wake = wake
+        signal.addEventListener('abort', wake, { once: true })
+      })
+    },
+    unpark: () => {
+      turn.parked = false
+      turn.wake?.()
+    },
+    take: () => turn.followUps.splice(0),
+  })
+
   const dispatchPrompt = (sessionId: string, turnId: string, text: string) => {
     const controller = new AbortController()
-    const turn: Turn = { turnId, sessionId, controller, ended: false, settled: Promise.resolve() }
+    const turn: Turn = { turnId, sessionId, controller, ended: false, settled: Promise.resolve(), parked: false, followUps: [] }
     turns.set(turnId, turn)
     activeBySession.set(sessionId, turnId) // 先登记:处理者可能同步写完终态事件
     turn.settled = (async () => {
       let failure: string | undefined
       try {
-        await bus.bail('session.prompt', { sessionId, turnId, text, signal: controller.signal })
+        await bus.bail('session.prompt', { sessionId, turnId, text, signal: controller.signal, inbox: inboxOf(turn) })
       } catch (err) {
         failure = err instanceof Error ? err.message : String(err)
         log.error('session.prompt handler failed', { error: failure })
@@ -343,8 +380,15 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
             return { result: { sessionId } }
           }).result
         case 'session.prompt':
-          return command(name, p.commandId, () => {
-            if (activeBySession.has(p.sessionId)) throw new RpcError(ERR_BUSY, 'turn in progress') // 回滚,不留回执
+          return command<{ accepted: boolean; turnId: string; followUp?: boolean }>(name, p.commandId, () => {
+            const activeId = activeBySession.get(p.sessionId)
+            if (activeId) {
+              const t = turns.get(activeId)
+              if (!t?.parked || t.ended || t.controller.signal.aborted) throw new RpcError(ERR_BUSY, 'turn in progress') // 回滚,不留回执
+              const e = append({ type: 'message.user', sessionId: p.sessionId, payload: { turnId: t.turnId, text: p.text, followUp: true } })
+              // 全程同步:提交之后马上清 parked、放消息、叫醒,中间插不进第二条
+              return { result: { accepted: true, turnId: t.turnId, followUp: true }, after: () => { t.parked = false; t.followUps.push({ text: p.text, ts: e.ts }); t.wake?.() } }
+            }
             const turnId = randomUUID()
             append({ type: 'message.user', sessionId: p.sessionId, payload: { turnId, text: p.text } })
             // 提交之后才交给循环插件

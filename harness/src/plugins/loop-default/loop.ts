@@ -242,7 +242,14 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<TurnOut
       if (!background || !runsOpen()) return outcome
       const woke = await park(step, background)
       if (woke === 'abort') return fail('cancelled')
-      if (woke === 'message') return 'resume'
+      if (woke === 'message') {
+        // 这个失败不会写进事件了:留一条日志,否则就没有任何记录
+        if (outcome.type === 'turn.failed') {
+          const { reason: kind, message } = outcome.payload
+          deps.log.warn('turn failure replaced by a follow-up', { turnId, kind, ...(message !== undefined && { message: redact(message) }) })
+        }
+        return 'resume'
+      }
     }
   }
 

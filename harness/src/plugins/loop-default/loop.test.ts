@@ -647,7 +647,7 @@ function scriptedRuns(onAbandon?: (reason?: string) => Promise<void>) {
 const FAR_APART = 86_400_000 * 3 // 每个事件隔 3 天:每条用户消息的日期提醒都不同
 
 /** 直接跑 runTurn:内存事件日志、脚本化的模型 / 工具 / 收件箱(真正的收件箱由内核提供) */
-function drive(script: (n: number) => AsyncIterable<ModelEvent>, o: { runs?: ReturnType<typeof scriptedRuns>; inbox?: boolean; maxSteps?: number; onTool?: (name: string, id: string) => void } = {}) {
+function drive(script: (n: number) => AsyncIterable<ModelEvent>, o: { runs?: ReturnType<typeof scriptedRuns>; inbox?: boolean; maxSteps?: number; onTool?: (name: string, id: string) => void; warn?: (msg: string, data?: unknown) => void } = {}) {
   const turnId = 't1'
   const events: KernelEvent[] = []
   const requests: { messages: Message[]; toolChoice?: string }[] = []
@@ -704,7 +704,7 @@ function drive(script: (n: number) => AsyncIterable<ModelEvent>, o: { runs?: Ret
   const deps: LoopDeps = {
     models, tools, append, signal: controller.signal,
     sessions: { spillDir: () => '/nonexistent-spill' },
-    log: { info() {}, warn() {}, error() {} },
+    log: { info() {}, warn: (msg, data) => o.warn?.(msg, data), error() {} },
     history: () => events.slice(),
     platform: 'linux',
     now: () => new Date(0),
@@ -938,6 +938,74 @@ describe('loop-default: Review Focus 3, the turn waits for runs', () => {
   })
 })
 
+describe('loop-default: Review Focus 3a, only a parked turn accepts (real kernel, real loop)', () => {
+  const refused = async (k: Kernel, sid: string) => {
+    await expect(k.handle('session.prompt', { commandId: 'second', sessionId: sid, text: 'b' })).rejects.toMatchObject({ code: ERR_BUSY })
+    expect(evs(k, sid).filter(e => e.type === 'message.user')).toHaveLength(1)
+  }
+
+  it('while streaming → ERR_BUSY, no receipt, and the same commandId works after the turn', async () => {
+    const calls: Call[] = []
+    let release = () => {}
+    const k = await boot(calls, n => (n === 1
+      ? (async function* (): AsyncGenerator<ModelEvent> {
+          yield { type: 'text', delta: 'x' }
+          await new Promise<void>(r => { release = r })
+          yield done()
+        })()
+      : say('next')))
+    const sid = await create(k, { model: CLAUDE })
+    await prompt(k, sid, 'go')
+    await waitFor(() => evs(k, sid).some(e => e.type === 'message.assistant.delta'))
+    await refused(k, sid)
+    release()
+    await waitFor(() => terminal(k, sid).length === 1)
+    // 终态之后处理者还要收尾片刻:回忙就再试,同一个 commandId
+    let accepted = false
+    for (let i = 0; i < 200 && !accepted; i++) {
+      accepted = await k.handle('session.prompt', { commandId: 'second', sessionId: sid, text: 'b' }).then(() => true, () => false)
+      if (!accepted) await sleep(5)
+    }
+    expect(accepted).toBe(true)
+    await waitFor(() => terminal(k, sid).length === 2)
+  })
+
+  it.skipIf(!posix)('during a tool → ERR_BUSY', async () => {
+    const calls: Call[] = []
+    const k = await boot(calls, n => (n === 1 ? calling('c1', 'shell', { command: 'sleep 60 & echo $! > pid; wait' }) : say('no')))
+    const sid = await create(k, { model: CLAUDE, approvalMode: 'auto' })
+    await prompt(k, sid, 'go')
+    await waitFor(() => pidOf() !== undefined)
+    await refused(k, sid)
+    await k.handle('session.cancel', { commandId: 'cx', sessionId: sid })
+  })
+
+  it.skipIf(!posix)('during an approval wait → ERR_BUSY', async () => {
+    const calls: Call[] = []
+    const k = await boot(calls, n => (n === 1 ? calling('c1', 'shell', { command: 'touch marker' }) : say('no')))
+    const sid = await create(k, { model: CLAUDE })
+    await prompt(k, sid, 'go')
+    await waitFor(() => evs(k, sid).some(e => e.type === 'approval.requested'))
+    await refused(k, sid)
+    await k.handle('session.cancel', { commandId: 'cx', sessionId: sid })
+  })
+
+  it('during the rate-limit sleep → ERR_BUSY', async () => {
+    const calls: Call[] = []
+    let sleeping = false
+    const k = await boot(
+      calls,
+      () => seq({ type: 'done', reason: 'error', error: { kind: 'rate_limit', message: 'slow down', retryable: true } }),
+      { loop: { sleep: (_ms, signal) => new Promise<void>(r => { sleeping = true; signal.addEventListener('abort', () => r(), { once: true }) }) } },
+    )
+    const sid = await create(k, { model: CLAUDE })
+    await prompt(k, sid, 'go')
+    await waitFor(() => sleeping)
+    await refused(k, sid)
+    await k.handle('session.cancel', { commandId: 'cx', sessionId: sid })
+  })
+})
+
 describe('loop-default: Review Focus 3a, a message wakes the parked turn', () => {
   it('turn.parked is written with parked already set, in one tick', async () => {
     const runs = scriptedRuns()
@@ -1132,6 +1200,56 @@ describe('loop-default: Review Focus 3a, a message wakes the parked turn', () =>
     expect(await d.result).toEqual(ended)
     expect(d.types('turn.failed')).toEqual([])
     expect(JSON.stringify(d.rebuilt().slice(0, m.length))).toBe(JSON.stringify(m))
+  })
+
+  it('a message replacing a model error: the failure is still logged, kind and message, and the secret in it is masked', async () => {
+    const runs = scriptedRuns()
+    runs.start()
+    const warnings: { msg: string; data: unknown }[] = []
+    const key = 'sk-' + 'a'.repeat(32)
+    const d = drive(n => (n === 1 ? seq({ type: 'done', reason: 'error', error: { kind: 'unavailable', message: `boom ${key}`, retryable: false } }) : say('recovered')), {
+      runs, inbox: true, warn: (msg, data) => warnings.push({ msg, data }),
+    })
+    await d.parked(1)
+    expect(warnings).toEqual([])
+    d.box.send('retry please')
+    await d.parked(2)
+    expect(warnings).toEqual([{ msg: 'turn failure replaced by a follow-up', data: { turnId: 't1', kind: 'unavailable', message: expect.stringContaining('boom') } }])
+    expect(JSON.stringify(warnings)).not.toContain(key)
+    runs.end('run_a', 'N')
+    expect(await d.result).toEqual(ended)
+  })
+
+  it('a message replacing loop or max_steps: logged with its kind, no message field', async () => {
+    const runs = scriptedRuns()
+    runs.start()
+    const warnings: unknown[] = []
+    const d = drive(n => (n === 1 ? calling('c1', 'read', { path: 'a' }) : say('ok')), { runs, inbox: true, maxSteps: 1, warn: (_m, data) => warnings.push(data) })
+    await d.parked(1)
+    d.box.send('go on')
+    await d.parked(2)
+    expect(warnings).toEqual([{ turnId: 't1', kind: 'max_steps' }])
+    runs.end('run_a', 'N')
+    await d.result
+  })
+
+  it('no failure was replaced → nothing logged: a message after a clean stop at the limit, or a failure that is written as usual', async () => {
+    const runs = scriptedRuns()
+    runs.start()
+    const warnings: unknown[] = []
+    const d = drive(n => say(`a${n}`), { runs, inbox: true, maxSteps: 1, warn: (_m, data) => warnings.push(data) })
+    await d.parked(1)
+    runs.end('run_a', 'N')
+    expect(await d.result).toEqual(ended)
+    expect(warnings).toEqual([])
+
+    const runs2 = scriptedRuns()
+    runs2.start()
+    const d2 = drive(() => seq({ type: 'done', reason: 'error', error: { kind: 'unavailable', message: 'boom', retryable: false } }), { runs: runs2, inbox: true, warn: (_m, data) => warnings.push(data) })
+    await d2.parked(1)
+    runs2.end('run_a', 'N')
+    expect(await d2.result).toMatchObject({ type: 'turn.failed', payload: { reason: 'unavailable' } })
+    expect(warnings).toEqual([])
   })
 
   it('a message during the wait after the limit, with notices logged first: both reach the model in seq order', async () => {
