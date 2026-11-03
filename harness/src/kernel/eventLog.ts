@@ -12,12 +12,14 @@ export function openDb(file: string): DatabaseSync {
   return db
 }
 
+type Written = { log: EventLog; event: KernelEvent }
+
 // 每个 db 一个待发通知队列:事务内的通知等 COMMIT 后再发,ROLLBACK 则丢弃
-const pending = new WeakMap<DatabaseSync, Array<() => void>>()
+const pending = new WeakMap<DatabaseSync, Written[]>()
 
 export function transaction<T>(db: DatabaseSync, fn: () => T): T {
   if (pending.has(db)) return fn() // 嵌套:并入外层事务
-  const queue: Array<() => void> = []
+  const queue: Written[] = []
   db.exec('BEGIN IMMEDIATE') // 失败则不登记 pending
   pending.set(db, queue)
   let result: T
@@ -30,7 +32,9 @@ export function transaction<T>(db: DatabaseSync, fn: () => T): T {
     throw err
   }
   pending.delete(db)
-  for (const n of queue) n() // notify 自身已吞掉订阅者异常
+  // 先全部排队再发:监听者这时写的事件 seq 更大,要排在这一批后面
+  for (const w of queue) w.log.enqueue(w.event)
+  for (const w of queue) w.log.deliver()
   return result
 }
 
@@ -55,6 +59,7 @@ const REDACTABLE = new Map<string, string>([
   ['message.user', 'text'],
   ['message.assistant', 'text'],
   ['message.assistant.delta', 'text'],
+  ['message.reasoning.delta', 'text'],
   ['executor.notice', 'text'],
 ])
 
@@ -66,11 +71,11 @@ export interface RedactEdit {
   callId?: string
 }
 
-/** args 是模型写的 JSON:中文可能写成 \uXXXX,引号是转义过的,字面比较找不到 */
-function argsHold(args: string, needle: string): boolean {
-  if (args.includes(needle)) return true
+/** args、replay 里的文本是 JSON 转义过的:中文可能写成 \uXXXX,引号带反斜杠,字面比较找不到 */
+function jsonHolds(json: string, needle: string): boolean {
+  if (json.includes(needle)) return true
   try {
-    return JSON.stringify(JSON.parse(args)).includes(JSON.stringify(needle).slice(1, -1))
+    return JSON.stringify(JSON.parse(json)).includes(JSON.stringify(needle).slice(1, -1))
   } catch {
     return false
   }
@@ -93,7 +98,9 @@ function redactPayload(type: string, p: Record<string, unknown>, edit: RedactEdi
   const swap = (owner: Record<string, unknown>, field: string) => {
     const old = owner[field]
     if (typeof old !== 'string') return
-    const next = needle === undefined ? REDACTED : old.split(needle).join(REDACTED)
+    // 针是占位符的一部分时只能整段换:否则重做一遍会在占位符里面再换一次
+    const whole = needle === undefined || (REDACTED.includes(needle) && old.includes(needle))
+    const next = whole ? REDACTED : old.split(needle).join(REDACTED)
     if (next === old) return
     owner[field] = next
     changed = true
@@ -102,9 +109,14 @@ function redactPayload(type: string, p: Record<string, unknown>, edit: RedactEdi
   for (const part of parts) {
     swap(part, 'text')
     // args 是 JSON,只能整个换,否则可能不再合法
-    if (part.type === 'tool_call' && typeof part.args === 'string' && (needle === undefined || argsHold(part.args, needle))) blankArgs(part)
+    if (part.type === 'tool_call' && typeof part.args === 'string' && (needle === undefined || jsonHolds(part.args, needle))) blankArgs(part)
+    // replay 就是明文思考(thinking、reasoning_content、summary),history 会原样发回同一模型;带签名,不能只换一段
+    if (part.type === 'reasoning' && part.replay !== undefined && (needle === undefined || jsonHolds(JSON.stringify(part.replay), needle))) {
+      delete part.replay
+      changed = true
+    }
   }
-  if (type === 'memory.checkpoint' && needle === undefined && p.redacted !== true) {
+  if (type === 'memory.checkpoint' && p.text === REDACTED && p.redacted !== true) {
     p.redacted = true
     changed = true
   }
@@ -113,6 +125,8 @@ function redactPayload(type: string, p: Record<string, unknown>, edit: RedactEdi
 
 export class EventLog {
   private listeners = new Set<(e: KernelEvent) => void>()
+  private outbox: KernelEvent[] = []
+  private delivering = false
   private insert
   private afterStmt
   private tailStmt
@@ -123,7 +137,7 @@ export class EventLog {
 
   constructor(
     private db: DatabaseSync,
-    private opts: { onListenerError?: (err: unknown) => void } = {},
+    private opts: { onListenerError?: (err: unknown) => void; onWarn?: (message: string) => void } = {},
   ) {
     this.insert = db.prepare('INSERT INTO events(ts, type, session_id, payload) VALUES (?, ?, ?, ?)')
     this.afterStmt = db.prepare('SELECT * FROM events WHERE seq > ? ORDER BY seq LIMIT ?')
@@ -138,19 +152,37 @@ export class EventLog {
     const ts = Date.now()
     const info = this.insert.run(ts, e.type, e.sessionId ?? null, JSON.stringify(e.payload ?? null))
     const ev: KernelEvent = { ...e, seq: Number(info.lastInsertRowid), ts }
-    const notify = () => {
-      for (const l of [...this.listeners]) {
-        try {
-          l(ev)
-        } catch (err) {
-          try { this.opts.onListenerError?.(err) } catch { /* 忽略 */ }
+    const queue = pending.get(this.db)
+    if (queue) queue.push({ log: this, event: ev })
+    else {
+      this.enqueue(ev)
+      this.deliver()
+    }
+    return ev
+  }
+
+  /** 给 transaction 用 */
+  enqueue(e: KernelEvent): void {
+    this.outbox.push(e)
+  }
+
+  /** 按 seq 发,不重入:监听者里写的事件等当前这条发完。否则它先到游标型订阅者(rpcServer),当前这条被当成旧的丢掉 */
+  deliver(): void {
+    if (this.delivering) return
+    this.delivering = true
+    try {
+      for (let e = this.outbox.shift(); e; e = this.outbox.shift()) {
+        for (const l of [...this.listeners]) {
+          try {
+            l(e)
+          } catch (err) {
+            try { this.opts.onListenerError?.(err) } catch { /* 忽略 */ }
+          }
         }
       }
+    } finally {
+      this.delivering = false
     }
-    const queue = pending.get(this.db)
-    if (queue) queue.push(notify)
-    else notify()
-    return ev
   }
 
   after(seq: number, limit = -1): KernelEvent[] {
@@ -197,12 +229,19 @@ export class EventLog {
       }
       if (seqs.size > 0) this.append({ type: 'events.redacted', payload: { by, seqs: [...seqs] } })
     })
-    if (seqs.size === 0) return 0
-    try {
-      this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)') // 旧页还在 WAL 里;做不成(有读者、在外层事务里)下次再清
-    } catch {
-      // 尽力而为
-    }
+    this.checkpoint() // 没有改动也做:上一次可能提交了却没清掉,重试要补上
     return seqs.size
+  }
+
+  /** 旧文本还在 WAL 里;尽力而为。外层事务提交之前做不了,由调用方重试 */
+  private checkpoint(): void {
+    if (pending.has(this.db)) return
+    try {
+      // 被读者挡住不抛错,只在结果行里说
+      const r = this.db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get() as { busy?: number } | undefined
+      if (r?.busy) this.opts.onWarn?.('wal checkpoint after redact was busy')
+    } catch (err) {
+      this.opts.onWarn?.(`wal checkpoint after redact failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
   }
 }

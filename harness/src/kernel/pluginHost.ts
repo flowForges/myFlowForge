@@ -25,7 +25,7 @@ export interface PluginContext {
     history(sessionId: string): KernelEvent[]
     /** 只读:seq 之后的事件(所有会话,seq 升序),最多 limit 条 */
     after(seq: number, limit: number): KernelEvent[]
-    /** 日志提交后才通知;回滚的事务不通知。随插件停用注销;回调里不要做 I/O */
+    /** 日志提交后才通知;回滚的事务不通知。给的是副本,改了不影响别人。抛错、reject 只记日志。随插件停用注销。在调用方的写入路径上同步跑:不要做 I/O */
     onAppend(cb: (e: KernelEvent) => void): () => void
     /** 用户删除记忆时就地换掉文本(见 EventLog.redact);只有 EVENT_REDACTORS 能调,否则抛错。返回改了几个事件 */
     redact(edits: RedactEdit[]): number
@@ -142,7 +142,15 @@ export class PluginHost {
           history: sid => this.deps.history?.(sid) ?? [],
           after: (seq, limit) => this.deps.eventLog?.after(seq, limit) ?? [],
           onAppend: cb => {
-            const off = this.deps.eventLog?.onAppend(cb) ?? (() => {})
+            const failed = (err: unknown) => pluginLog.error('event tap failed', { error: err instanceof Error ? err.message : String(err) })
+            const off = this.deps.eventLog?.onAppend(e => {
+              try {
+                // 回调可能是 async 的:拒绝没人接就是 unhandledRejection,整个进程退出
+                Promise.resolve(cb(structuredClone(e))).catch(failed)
+              } catch (err) {
+                failed(err)
+              }
+            }) ?? (() => {})
             scope.add(off)
             return off
           },

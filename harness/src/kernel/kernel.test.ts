@@ -844,6 +844,79 @@ describe('plugin event tap (06)', () => {
     await expect(r.k.handle('session.create', { commandId: 'c' })).resolves.toMatchObject({ sessionId: expect.any(String) })
   })
 
+  describe('a tap cannot hurt anyone else', () => {
+    const loud = () => {
+      const errors: string[] = []
+      const log = { info() {}, warn() {}, error: (m: string, d?: Record<string, unknown>) => void errors.push(`${m} ${JSON.stringify(d)}`) }
+      return { errors, log }
+    }
+    it('a rejected async callback is logged, never unhandled, and the kernel carries on', async () => {
+      const unhandled: unknown[] = []
+      const onUnhandled = (e: unknown) => void unhandled.push(e)
+      process.on('unhandledRejection', onUnhandled)
+      try {
+        const { errors, log } = loud()
+        let ctx!: PluginContext
+        const r = await memoryKernel({ kernel: { log }, plugins: [probe('tap', c => { ctx = c })] })
+        rigs.push(r)
+        ctx.events.onAppend(async () => { throw new Error('async boom') })
+        await r.k.handle('session.create', { commandId: 'a' })
+        await new Promise(res => setTimeout(res, 20))
+        expect(unhandled).toEqual([])
+        expect(errors.join()).toContain('[tap]')
+        expect(errors.join()).toContain('async boom')
+        await expect(r.k.handle('session.create', { commandId: 'b' })).resolves.toMatchObject({ sessionId: expect.any(String) })
+      } finally {
+        process.off('unhandledRejection', onUnhandled)
+      }
+    })
+
+    it('a sync throw is logged under the plugin too', async () => {
+      const { errors, log } = loud()
+      let ctx!: PluginContext
+      const r = await memoryKernel({ kernel: { log }, plugins: [probe('tap', c => { ctx = c })] })
+      rigs.push(r)
+      ctx.events.onAppend(() => { throw new Error('sync boom') })
+      await r.k.handle('session.create', { commandId: 'a' })
+      expect(errors.join()).toContain('sync boom')
+    })
+
+    it('a tap that changes its event changes nothing for the next tap, the caller or the log', async () => {
+      let ctx!: PluginContext
+      const r = await memoryKernel({ plugins: [probe('tap', c => { ctx = c })] })
+      rigs.push(r)
+      const later: unknown[] = []
+      ctx.events.onAppend(e => { (e.payload as { text: string }).text = 'tampered'; e.seq = -1 })
+      ctx.events.onAppend(e => void later.push(structuredClone(e.payload)))
+      const written = r.k.events.append({ type: 'message.user', sessionId: 's', payload: { turnId: 't', text: 'real' } })
+      expect(later).toEqual([{ turnId: 't', text: 'real' }])
+      expect(written.payload).toEqual({ turnId: 't', text: 'real' })
+      expect(written.seq).toBeGreaterThan(0)
+      expect(r.k.events.after(written.seq - 1, 1)[0].payload).toEqual({ turnId: 't', text: 'real' })
+    })
+
+    it('a tap that appends loses no event for a client cursor', async () => {
+      let ctx!: PluginContext
+      const r = await memoryKernel({ plugins: [probe('tap', c => { ctx = c })] })
+      rigs.push(r)
+      let once = true
+      ctx.events.onAppend(() => {
+        if (!once) return
+        once = false
+        ctx.append({ type: 'memory.updated', payload: { op: 'x', source: 'y' } })
+      })
+      const got: string[] = []
+      let sent = 0
+      r.k.events.onAppend(e => {
+        if (e.seq <= sent) return
+        sent = e.seq
+        got.push(e.type)
+      })
+      r.k.events.append({ type: 'turn.started', sessionId: 's', payload: {} })
+      expect(got).toEqual(['turn.started', 'memory.updated'])
+    })
+  })
+
   it('after pages', async () => {
     const { r, ctx } = await rigWith()
     const start = r.k.events.lastSeq()
@@ -972,6 +1045,40 @@ describe.skipIf(process.platform === 'win32')('database file modes (06 spec §5)
     expect(mode(join(dir, 'db', 'events.sqlite'))).toBe(0o600)
     expect(mode(join(dir, 'db', 'events.sqlite-wal'))).toBe(0o600)
     expect(k2.snapshot().sessions).toHaveLength(2) // 旧数据还在
+  })
+})
+
+describe('a filesystem that refuses or ignores modes (06)', () => {
+  const warnsOf = () => {
+    const warns: string[] = []
+    return { warns, log: { info() {}, warn: (m: string) => void warns.push(m), error() {} } }
+  }
+  const open = (extra: Partial<Parameters<typeof createKernel>[0]>) =>
+    createKernel({ sandbox: NO_SANDBOX, dataDir: dir, plugins: [], secrets: { osBackend: false }, ...extra }).then(k => (kernels.push(k), k))
+
+  it('chmod throwing: the kernel starts, warns and status says so', async () => {
+    const { warns, log } = warnsOf()
+    const k = await open({ log, chmod: () => { throw Object.assign(new Error('nope'), { code: 'EPERM' }) } })
+    expect(k.status().dbUnprotected).toBe(true)
+    expect(warns.filter(w => w.includes('events database'))).not.toEqual([])
+    await expect(k.handle('session.create', { commandId: 'c' })).resolves.toMatchObject({ sessionId: expect.any(String) })
+    expect((await k.handle('status', {}) as { dbUnprotected?: boolean }).dbUnprotected).toBe(true)
+  })
+
+  it.skipIf(process.platform === 'win32')('chmod that succeeds without taking effect is reported as well', async () => {
+    mkdirSync(join(dir, 'db'), { mode: 0o755 })
+    chmodSync(join(dir, 'db'), 0o755)
+    const { warns, log } = warnsOf()
+    const k = await open({ log, chmod: () => {} })
+    expect(k.status().dbUnprotected).toBe(true)
+    expect(warns).not.toEqual([])
+  })
+
+  it.skipIf(process.platform === 'win32')('a normal start reports nothing', async () => {
+    const { warns, log } = warnsOf()
+    const k = await open({ log })
+    expect(k.status()).not.toHaveProperty('dbUnprotected')
+    expect(warns).toEqual([])
   })
 })
 

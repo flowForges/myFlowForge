@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { chmodSync, closeSync, existsSync, mkdirSync, openSync, realpathSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -65,6 +65,8 @@ export interface KernelOpts {
   pgidFile?: string
   /** 启动时 reapOrphans 认不了、留到下次的条目(`ReapResult.kept`),登记从它们开始 */
   pgidSeed?: PgidEntry[]
+  /** 收紧 db/ 和 events.sqlite 用的 chmod;测试注入失败 */
+  chmod?: (path: string, mode: number) => void
   /**
    * 沙箱(05 spec §7、§10)。不给 = 真实探测(生产默认);测试传 `NO_SANDBOX`(harness/test/sandboxStub.ts)或注入 detect。
    * upstream:不给 = 从环境快照的 HTTPS_PROXY 等取;null = 没有上游
@@ -108,36 +110,39 @@ const DRAIN_ALLOWED = new Set<string>(['executor.cancel'])
 
 const isTerminal = (type: string) => type === 'turn.ended' || type === 'turn.failed'
 
-/** win32 上 chmod 不起作用,也不该挡启动 */
-function chmodPrivate(path: string, mode: number): void {
-  try {
-    chmodSync(path, mode)
-  } catch (err) {
-    if (process.platform !== 'win32') throw err
+/**
+ * 06 spec §5:memory.injected 把核心记忆复制进了事件日志。-wal、-shm 跟主文件的权限走,所以主文件要在打开之前就收紧。
+ * 文件系统没有权限位时不能挡启动:告警并在 status 里报。win32 没有 POSIX 权限,不比较
+ */
+function openPrivateDb(dir: string, chmod: (path: string, mode: number) => void, log: Logger): { db: ReturnType<typeof openDb>; unprotected: boolean } {
+  let unprotected = false
+  const tighten = (path: string, mode: number) => {
+    try {
+      chmod(path, mode)
+      if (process.platform !== 'win32' && (statSync(path).mode & 0o777) !== mode) throw new Error('mode did not take effect')
+    } catch (err) {
+      unprotected = true
+      log.warn('events database permissions could not be tightened', { path, error: err instanceof Error ? err.message : String(err) })
+    }
   }
-}
-
-/** 06 spec §5:memory.injected 把核心记忆复制进了事件日志。-wal、-shm 跟主文件的权限走,所以主文件要在打开之前就收紧 */
-function openPrivateDb(dir: string): ReturnType<typeof openDb> {
   mkdirSync(dir, { recursive: true, mode: 0o700 })
-  chmodPrivate(dir, 0o700)
+  tighten(dir, 0o700)
   const file = join(dir, 'events.sqlite')
   closeSync(openSync(file, 'a', 0o600))
-  const files = [file, `${file}-wal`, `${file}-shm`]
-  const tighten = () => {
-    for (const f of files) if (existsSync(f)) chmodPrivate(f, 0o600)
+  const tightenFiles = () => {
+    for (const f of [file, `${file}-wal`, `${file}-shm`]) if (existsSync(f)) tighten(f, 0o600)
   }
-  tighten()
+  tightenFiles()
   const db = openDb(file)
-  tighten()
-  return db
+  tightenFiles()
+  return { db, unprotected }
 }
 
 export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   const log = opts.log ?? nullLogger
   const startedAt = Date.now()
-  const db = openPrivateDb(join(opts.dataDir, 'db'))
-  const eventLog = new EventLog(db, { onListenerError: err => log.error('event listener failed', { error: String(err) }) })
+  const { db, unprotected: dbUnprotected } = openPrivateDb(join(opts.dataDir, 'db'), opts.chmod ?? chmodSync, log)
+  const eventLog = new EventLog(db, { onListenerError: err => log.error('event listener failed', { error: String(err) }), onWarn: m => log.warn(m) })
   const receipts = new Receipts(db)
   const services = new ServiceRegistry()
   const bus = new EventBus({ onError: (type, err) => log.error(`handler for ${type} failed`, { error: String(err) }) })
@@ -377,6 +382,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
       plugins: host.states(),
       secretsBackend: secrets.backend,
       sandbox: sandboxStatus(),
+      ...(dbUnprotected && { dbUnprotected: true as const }),
     }
   }
 

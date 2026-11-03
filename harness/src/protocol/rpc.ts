@@ -61,6 +61,8 @@ export const StatusResultSchema = z.object({
   secretsBackend: SecretsBackendSchema.optional(),
   // 05:旧后台没有该字段
   sandbox: SandboxStatusSchema.optional(),
+  // 06:db/ 或 events.sqlite 收不紧(文件系统没有权限位),事件日志里的核心记忆别的用户可能读得到。正常时没有该字段
+  dbUnprotected: z.literal(true).optional(),
 })
 export type StatusResult = z.infer<typeof StatusResultSchema>
 

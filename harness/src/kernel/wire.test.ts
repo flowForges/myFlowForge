@@ -182,6 +182,48 @@ describe('wire view in the kernel and the server', () => {
     expect((full[1].payload as typeof assistant).parts[0]).toEqual(assistant.parts[0])
   })
 
+  describe('after a redact (06 spec §16)', () => {
+    const redacted = () => {
+      const e = kernel.events.append({ type: 'message.user', sessionId: 's', payload: { turnId: 't', text: 'SECRET-TEXT' } })
+      return e
+    }
+    it('events.tail shows the placeholder and the audit event', async () => {
+      const e = redacted()
+      kernel.events.redact([{ seq: e.seq }], 'memory-default')
+      const { events } = (await kernel.handle('events.tail', { limit: 10 })) as { events: KernelEvent[] }
+      expect(JSON.stringify(events)).not.toContain('SECRET-TEXT')
+      expect(events.find(x => x.seq === e.seq)).toEqual({ ...e, payload: { turnId: 't', text: '[已删除]' } })
+      expect(events.at(-1)).toMatchObject({ type: 'events.redacted', payload: { by: 'memory-default', seqs: [e.seq] } })
+    })
+
+    it('a subscriber from an old cursor gets the placeholder; a live one gets the audit event, without text', async () => {
+      const addr = process.platform === 'win32' ? `\\\\.\\pipe\\mffai-wire-redact-${process.pid}-${Date.now()}` : join(dir, 'r.sock')
+      const s = await startRpcServer({ addr, token: 'tok', version: 'v', events: kernel.events, handle: (m, p) => kernel.handle(m, p) })
+      closers.push(() => s.close())
+      const live = await connectClient({ addr, token: 'tok' })
+      closers.push(() => live.close())
+      const liveGot: KernelEvent[] = []
+      live.onEvent(x => liveGot.push(x))
+      await live.call('events.subscribe', { after: kernel.events.lastSeq() })
+      const e = redacted()
+      for (let i = 0; i < 400 && !liveGot.some(x => x.seq === e.seq); i++) await new Promise(r => setTimeout(r, 5))
+      kernel.events.redact([{ seq: e.seq }], 'memory-default')
+      for (let i = 0; i < 400 && !liveGot.some(x => x.type === 'events.redacted'); i++) await new Promise(r => setTimeout(r, 5))
+      const audit = liveGot.find(x => x.type === 'events.redacted')!
+      expect(audit.payload).toEqual({ by: 'memory-default', seqs: [e.seq] })
+
+      const late = await connectClient({ addr, token: 'tok' })
+      closers.push(() => late.close())
+      const lateGot: KernelEvent[] = []
+      late.onEvent(x => lateGot.push(x))
+      await late.call('events.subscribe', { after: e.seq - 1 })
+      for (let i = 0; i < 400 && lateGot.length < 2; i++) await new Promise(r => setTimeout(r, 5))
+      expect(lateGot.map(x => x.seq)).toEqual([e.seq, audit.seq])
+      expect(lateGot[0].payload).toEqual({ turnId: 't', text: '[已删除]' })
+      expect(JSON.stringify(lateGot)).not.toContain('SECRET-TEXT')
+    })
+  })
+
   it('permissions.updated from permissions.set reaches events.tail unchanged', async () => {
     await kernel.handle('permissions.set', { commandId: 'p1', config: { rules: [{ effect: 'deny', rule: 'shell(git push*)' }], network: { allow: ['a.example', 'b.example'] } } })
     const { events } = (await kernel.handle('events.tail', { limit: 50 })) as { events: KernelEvent[] }

@@ -1,11 +1,13 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, readdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
+import { DatabaseSync } from 'node:sqlite'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openDb, transaction, EventLog, REDACTED } from './eventLog'
 import { MemoryConfigSchema, parseMemoryConfig } from '../lib/memory/types'
 import { KernelConfigSchema } from './config'
 import { AssistantPartSchema, type EventType } from '../protocol/index'
+import { buildMessages } from '../plugins/loop-default/history'
 import { Receipts } from './receipts'
 import { loadConfig, saveConfig } from './config'
 
@@ -147,6 +149,7 @@ describe('EventLog.redact (06 spec §16)', () => {
     ['tool.started', { turnId: 't', callId: 'c', name: 'memory_write', argsPreview: 'a SECRET b' }, 'argsPreview'],
     ['message.user', { turnId: 't', text: 'a SECRET b' }, 'text'],
     ['message.assistant.delta', { turnId: 't', step: 1, text: 'a SECRET b' }, 'text'],
+    ['message.reasoning.delta', { turnId: 't', step: 1, text: 'a SECRET b' }, 'text'],
     ['executor.notice', { turnId: 't', runId: 'r', text: 'a SECRET b' }, 'text'],
   ]
   it.each(fields)('%s whole field: replaced, every other key kept', (type, payload, field) => {
@@ -186,10 +189,11 @@ describe('EventLog.redact (06 spec §16)', () => {
     expect(payloadOf(log, b.seq)).toEqual({ ...payload, text: `a ${REDACTED} b` })
   })
 
+  const ORIGIN = { accountId: 'a', protocol: 'anthropic', modelId: 'm' }
   const step = () => ({
     turnId: 't', step: 1, text: 'a SECRET b',
     parts: [
-      { type: 'reasoning', text: 'think SECRET', replay: { opaque: 'SIG' } },
+      { type: 'reasoning', replay: { type: 'thinking', thinking: 'think SECRET', signature: 'SIG' }, ...ORIGIN },
       { type: 'text', text: 'a SECRET b' },
       { type: 'tool_call', id: 'c1', name: 'memory_write', args: JSON.stringify({ text: 'SECRET' }) },
       { type: 'tool_call', id: 'c2', name: 'shell', args: JSON.stringify({ command: 'ls' }) },
@@ -205,7 +209,7 @@ describe('EventLog.redact (06 spec §16)', () => {
     expect(p.text).toBe(REDACTED)
     expect(partsOf(p).map(x => x.type)).toEqual(['reasoning', 'text', 'tool_call', 'tool_call'])
     expect(partsOf(p).map(x => x.id)).toEqual([undefined, undefined, 'c1', 'c2'])
-    expect(partsOf(p)[0]).toEqual({ type: 'reasoning', text: REDACTED, replay: { opaque: 'SIG' } })
+    expect(partsOf(p)[0]).toEqual({ type: 'reasoning', ...ORIGIN })
     expect(partsOf(p)[1].text).toBe(REDACTED)
     for (const part of partsOf(p).slice(2)) expect(JSON.parse(part.args as string)).toEqual({ redacted: true })
     for (const part of partsOf(p)) expect(AssistantPartSchema.safeParse(part).success).toBe(true)
@@ -220,6 +224,62 @@ describe('EventLog.redact (06 spec §16)', () => {
     expect(partsOf(p)[1].text).toBe(`a ${REDACTED} b`)
     expect(JSON.parse(partsOf(p)[2].args as string)).toEqual({ redacted: true })
     expect(JSON.parse(partsOf(p)[3].args as string)).toEqual({ command: 'ls' })
+    expect(partsOf(p)[0]).toEqual({ type: 'reasoning', ...ORIGIN })
+  })
+
+  // lib/models 产出的真实形状:replay 里就是明文
+  const REPLAYS: [string, object][] = [
+    ['Anthropic thinking', { type: 'thinking', thinking: 'THOUGHT-MARK "quoted" 想法', signature: 'SIG' }],
+    ['DeepSeek reasoning_content', { reasoning_content: 'THOUGHT-MARK "quoted" 想法' }],
+    ['Responses summary', { id: 'rs_1', encrypted_content: 'ENC', summary: [{ type: 'summary_text', text: 'THOUGHT-MARK "quoted" 想法' }] }],
+  ]
+  const thinkingStep = (replay: object) => ({
+    turnId: 'old', step: 1, text: 'answer',
+    parts: [
+      { type: 'reasoning', replay, ...ORIGIN },
+      { type: 'text', text: 'answer' },
+      { type: 'tool_call', id: 'c1', name: 'shell', args: '{"command":"ls"}' },
+    ],
+  })
+  /** 下一次发给模型的内容:同一模型,replay 本来会原样回传 */
+  const sent = (log: EventLog) => JSON.stringify(buildMessages(log.bySession('s'), 'now', 'next', { origin: ORIGIN }))
+  const allBytes = () => readdirSync(dir).map(f => readFileSync(join(dir, f)).toString('utf8')).join('')
+  const seedStep = (log: EventLog, replay: object) => {
+    log.append({ type: 'message.user', sessionId: 's', payload: { turnId: 'old', text: 'q' } })
+    const e = log.append({ type: 'message.assistant', sessionId: 's', payload: thinkingStep(replay) })
+    log.append({ type: 'tool.ended', sessionId: 's', payload: { turnId: 'old', callId: 'c1', name: 'shell', ok: true, ms: 1, content: 'out' } })
+    log.append({ type: 'turn.ended', sessionId: 's', payload: { turnId: 'old' } })
+    return e
+  }
+
+  it.each(REPLAYS)('%s: before a redact the plaintext really is sent back (the fixture is honest)', (_n, replay) => {
+    const { log } = setup()
+    seedStep(log, replay)
+    expect(sent(log)).toContain('THOUGHT-MARK')
+  })
+  it.each(REPLAYS)('%s: whole field leaves neither the bytes nor the next request holding it; pairing stays', (_n, replay) => {
+    const { log } = setup()
+    const e = seedStep(log, replay)
+    expect(log.redact([{ seq: e.seq }], 'p')).toBe(1)
+    expect(allBytes()).not.toContain('THOUGHT-MARK')
+    expect(sent(log)).not.toContain('THOUGHT-MARK')
+    expect(sent(log)).toContain('"callId":"c1"')
+    expect(log.redact([{ seq: e.seq }], 'p')).toBe(0)
+  })
+  const needleRows = REPLAYS.flatMap(([n, replay]) => ['THOUGHT-MARK', '"quoted"', '想法'].map(needle => [n, needle, replay] as const))
+  it.each(needleRows)('%s: needle %s found in it drops the replay, also when it is only there escaped', (_n, needle, replay) => {
+    const { log } = setup()
+    const e = seedStep(log, replay)
+    expect(log.redact([{ seq: e.seq, needle }], 'p')).toBe(1)
+    expect((payloadOf(log, e.seq).parts as P[])[0]).not.toHaveProperty('replay')
+    expect(sent(log)).not.toContain('THOUGHT-MARK')
+  })
+  it.each(REPLAYS)('%s: a needle that is not in it keeps the replay', (_n, replay) => {
+    const { log } = setup()
+    const e = seedStep(log, replay)
+    expect(log.redact([{ seq: e.seq, needle: 'answer' }], 'p')).toBe(1)
+    expect((payloadOf(log, e.seq).parts as P[])[0].replay).toEqual(replay)
+    expect(sent(log)).toContain('THOUGHT-MARK')
   })
 
   it('args holding the needle only in escaped form are still blanked', () => {
@@ -273,7 +333,7 @@ describe('EventLog.redact (06 spec §16)', () => {
     expect(audit.payload).toEqual({ by: 'memory-default', seqs: [a.seq, b.seq] })
   })
 
-  it.each(['session.created', 'turn.started', 'turn.rolledBack', 'memory.deleted', 'events.redacted', 'message.reasoning.delta', 'permissions.updated'] as const)('%s throws and rolls the whole batch back', type => {
+  it.each(['session.created', 'turn.started', 'turn.rolledBack', 'memory.deleted', 'events.redacted', 'turn.usage', 'permissions.updated'] as const)('%s throws and rolls the whole batch back', type => {
     const { log } = setup()
     const ok = log.append({ type: 'message.user', payload: { turnId: 't', text: 'SECRET' } })
     const bad = log.append({ type, payload: { text: 'x', content: 'x' } })
@@ -303,6 +363,47 @@ describe('EventLog.redact (06 spec §16)', () => {
     expect(log.lastSeq()).toBe(last)
   })
 
+  it.each(['删除', '[', REDACTED])('a needle that is part of the placeholder stays idempotent: %s', needle => {
+    const { log } = setup()
+    const a = log.append({ type: 'message.user', payload: { turnId: 't', text: `请${needle}它` } })
+    const other = log.append({ type: 'message.user', payload: { turnId: 't', text: 'nothing here' } })
+    const edits = [{ seq: a.seq, needle }, { seq: other.seq, needle }]
+    expect(log.redact(edits, 'p')).toBe(1)
+    expect(payloadOf(log, a.seq).text).toBe(REDACTED)
+    expect(payloadOf(log, other.seq).text).toBe('nothing here')
+    const last = log.lastSeq()
+    expect(log.redact(edits, 'p')).toBe(0)
+    expect(log.lastSeq()).toBe(last)
+  })
+
+  it('a checkpoint emptied by a needle counts as redacted, so it can no longer be used', () => {
+    const { log } = setup()
+    const base = { throughSeq: 1, asOfSeq: 1, model: 'm', tokens: 1, covers: 1 }
+    const a = log.append({ type: 'memory.checkpoint', payload: { ...base, text: '删除' } })
+    log.redact([{ seq: a.seq, needle: '删除' }], 'p')
+    expect(payloadOf(log, a.seq)).toEqual({ ...base, text: REDACTED, redacted: true })
+  })
+
+  it('a checkpoint that could not run is retried by the next call, even with nothing left to change', () => {
+    const { file, db } = setup()
+    const warns: string[] = []
+    const log = new EventLog(db, { onWarn: m => void warns.push(m) })
+    db.exec('PRAGMA busy_timeout = 0')
+    const marker = 'MISSED-CHECKPOINT-' + 'q'.repeat(300)
+    const a = log.append({ type: 'message.user', payload: { turnId: 't', text: marker } })
+    const reader = new DatabaseSync(file)
+    reader.exec('BEGIN')
+    reader.prepare('SELECT count(*) FROM events').get()
+    expect(log.redact([{ seq: a.seq }], 'p')).toBe(1)
+    expect(warns).toHaveLength(1)
+    expect(allBytes()).toContain('MISSED-CHECKPOINT') // 这就是要补的
+    reader.exec('COMMIT')
+    reader.close()
+    expect(log.redact([{ seq: a.seq }], 'p')).toBe(0)
+    expect(allBytes()).not.toContain('MISSED-CHECKPOINT')
+    expect(warns).toHaveLength(1)
+  })
+
   it('two edits of one event count once and list it once', () => {
     const { log } = setup()
     const a = log.append({ type: 'message.user', payload: { turnId: 't', text: 'one two' } })
@@ -329,8 +430,9 @@ describe('EventLog.redact (06 spec §16)', () => {
     const { file, log } = setup()
     const marker = 'DELETED-MARKER-' + 'q'.repeat(300)
     const a = log.append({ type: 'memory.injected', sessionId: 's', payload: { turnId: 't', kind: 'session', text: `x ${marker} y`, items: [] } })
+    const d = log.append({ type: 'message.reasoning.delta', sessionId: 's', payload: { turnId: 't', step: 1, text: `x ${marker} y` } })
     log.append({ type: 'turn.started', sessionId: 's', payload: { turnId: 't' } })
-    log.redact([{ seq: a.seq, needle: marker }], 'p')
+    log.redact([{ seq: a.seq, needle: marker }, { seq: d.seq }], 'p')
     const bytes = readdirSync(dir).map(f => readFileSync(join(dir, f)).toString('latin1')).join('')
     expect(bytes).not.toContain('DELETED-MARKER')
     expect(existsSync(`${file}-wal`) ? readFileSync(`${file}-wal`).length : 0).toBe(0)
@@ -344,6 +446,60 @@ describe('EventLog.redact (06 spec §16)', () => {
       throw new Error('boom')
     })).toThrow('boom')
     expect(payloadOf(log, a.seq).text).toBe('x')
+  })
+})
+
+describe('event delivery is in order and not re-entrant', () => {
+  const setup = () => {
+    const db = openDb(join(mk(), 'k.db'))
+    return { db, log: new EventLog(db) }
+  }
+  /** 和 rpcServer 的推送一样:seq 不大于已发的就丢 */
+  const cursor = (log: EventLog) => {
+    const got: number[] = []
+    let sent = 0
+    log.onAppend(e => {
+      if (e.seq <= sent) return
+      sent = e.seq
+      got.push(e.seq)
+    })
+    return got
+  }
+  const appendOnce = (log: EventLog) => {
+    let once = true
+    log.onAppend(() => {
+      if (!once) return
+      once = false
+      log.append({ type: 'memory.updated', payload: { op: 'x', source: 'y' } })
+    })
+  }
+
+  it('an append from a listener does not drop the outer event from a cursor', () => {
+    const { log } = setup()
+    appendOnce(log)
+    const got = cursor(log)
+    const outer = log.append({ type: 'turn.ended', payload: {} })
+    expect(got).toEqual([outer.seq, outer.seq + 1])
+  })
+
+  it('the same inside a transaction with two events: a listener\'s append comes after both', () => {
+    const { db, log } = setup()
+    appendOnce(log)
+    const got = cursor(log)
+    const [a, b] = transaction(db, () => [log.append({ type: 'turn.started', payload: {} }), log.append({ type: 'turn.ended', payload: {} })])
+    expect(got).toEqual([a.seq, b.seq, b.seq + 1])
+  })
+
+  it('a listener that throws neither stops delivery nor leaves it stuck', () => {
+    const db = openDb(join(mk(), 'k.db'))
+    const errors: unknown[] = []
+    const log = new EventLog(db, { onListenerError: e => void errors.push(e) })
+    log.onAppend(() => { throw new Error('boom') })
+    const got = cursor(log)
+    log.append({ type: 'turn.started', payload: {} })
+    log.append({ type: 'turn.ended', payload: {} })
+    expect(got).toHaveLength(2)
+    expect(errors).toHaveLength(2)
   })
 })
 
