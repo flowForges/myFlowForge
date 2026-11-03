@@ -283,7 +283,8 @@ describe('decide: delegation can only narrow (04 spec §6)', () => {
     { level: 'none', mode: 'auto', want: 'ask' },
     { level: 'none', mode: 'auto', flag: true, want: 'allow' },
   ]
-  it.each(table)('$level $mode flag=$flag unsandboxed=$unsandboxed rules=$rules.0.rule → $want', ({ level, mode, flag, rules: specs, unsandboxed, want }) => {
+  const titled = table.map(r => ({ ...r, title: `${r.level} ${r.mode} flag=${r.flag ?? false} unsandboxed=${r.unsandboxed ?? '-'} rule=${r.rules?.[0].rule ?? '-'} → ${r.want}` }))
+  it.each(titled)('$title', ({ level, mode, flag, rules: specs, unsandboxed, want }) => {
     const env: DecideEnv = { ...base, sandbox: statusOf(level), allowUnsandboxedAuto: flag ?? false, rules: rules(...(specs ?? [])) }
     expect(decide({ actor: 'tools', action: 'exec', resource: 'codex', sessionId: 's1', unsandboxed }, session(mode), env)).toBe(want)
   })
@@ -486,6 +487,45 @@ describe('PermissionGate.check (real tree)', () => {
     const inRepo = gateFor(join(home, 'repo'))
     expect(check(inRepo.gate, 'read', resolveToolPath(inRepo.cwd, '../.qoder/settings.json'))).toBe('deny') // cwd 外,照常兜底拒绝
     expect(check(inRepo.gate, 'read', resolveToolPath(inRepo.cwd, '../.qoder/.auth/x'))).toBe('deny')
+  })
+
+  describe('~/.qoder: what could plant code is write-denied', () => {
+    const PLANTS = ['bin/qodercli/qodercli-1.0.29', 'settings.json', 'external-commands/x']
+    const seed = (dir: string) => {
+      mkdirSync(join(dir, 'bin'), { recursive: true })
+      writeFileSync(join(dir, 'settings.json'), '{}')
+    }
+
+    it('cwd = home', () => {
+      seed(join(home, '.qoder'))
+      const { gate, cwd } = gateFor(home, 'auto')
+      for (const rel of PLANTS) expect(check(gate, 'write', resolveToolPath(cwd, `.qoder/${rel}`)), rel).toBe('deny')
+      expect(check(gate, 'read', resolveToolPath(cwd, '.qoder/settings.json'))).toBe('allow')
+      expect(check(gate, 'write', resolveToolPath(cwd, '.qoder/logs/x'))).toBe('allow')
+    })
+
+    it('cwd = ~/.qoder', () => {
+      seed(join(home, '.qoder'))
+      const { gate, cwd } = gateFor(join(home, '.qoder'), 'auto')
+      for (const rel of PLANTS) expect(check(gate, 'write', resolveToolPath(cwd, rel)), rel).toBe('deny')
+      expect(check(gate, 'read', resolveToolPath(cwd, 'settings.json'))).toBe('allow')
+      expect(check(gate, 'write', resolveToolPath(cwd, 'logs/x'))).toBe('allow')
+    })
+
+    it('a symlinked ~/.qoder: the target is denied from its own directory', () => {
+      const real = join(outside, 'q')
+      seed(real)
+      symlinkSync(real, join(home, '.qoder'), 'dir')
+      const { gate, cwd } = gateFor(real, 'auto')
+      for (const rel of PLANTS) expect(check(gate, 'write', resolveToolPath(cwd, rel)), rel).toBe('deny')
+      expect(check(gate, 'write', resolveToolPath(cwd, 'logs/x'))).toBe('allow')
+    })
+
+    it('a user allow cannot open them', () => {
+      seed(join(home, '.qoder'))
+      const { gate, cwd } = gateFor(home, 'auto', {}, [{ effect: 'allow', rule: 'write(~/.qoder/**)' }])
+      expect(check(gate, 'write', resolveToolPath(cwd, '.qoder/settings.json'))).toBe('deny')
+    })
   })
 
   it('a user allow cannot open ~/.qoder/.auth', () => {

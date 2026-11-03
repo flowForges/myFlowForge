@@ -145,7 +145,7 @@ export class ToolsRegistry implements ToolsService {
     // 先过完全部权限门,任何一个 deny 就不再去问用户
     const checked: { req: PermissionRequest; decision: string }[] = []
     for (const req of reqs) {
-      const r = this.normalize(req, ctx)
+      const r = this.normalize(req, tool, ctx)
       const decision = this.check(r)
       if (decision !== 'allow' && decision !== 'ask') return failed(`拒绝:${r.action}${shown(r.resource)}`)
       checked.push({ req: r, decision })
@@ -159,9 +159,12 @@ export class ToolsRegistry implements ToolsService {
       if (!(await this.approve(req, tool.name, ctx, req.action === 'exec' && (req.unsandboxed ?? seen === 'none')))) return failed(DENIED_BY_USER)
     }
     if (ctx.signal.aborted) return failed('已取消')
-    // 等审批期间权限配置可能变了(permissions.set):新加的 deny 照样生效
+    // 等审批期间权限配置可能变了(permissions.set):新加的 deny 照样生效;原来直接放行、现在要问的,没人批过,也不跑
     if (asked) {
-      for (const { req } of checked) if (this.check(req) === 'deny') return failed(`拒绝:${req.action}${shown(req.resource)}`)
+      for (const { req, decision } of checked) {
+        const now = this.check(req)
+        if (now === 'deny' || (decision === 'allow' && now !== 'allow')) return failed(`拒绝:${req.action}${shown(req.resource)}`)
+      }
     }
 
     let result: ToolResult
@@ -178,9 +181,21 @@ export class ToolsRegistry implements ToolsService {
     return this.spill(content, name, ctx, shape)
   }
 
-  /** actor 与会话一律由注册表定:工具不能自称 kernel,也不能借别的会话的 cwd */
-  private normalize(req: PermissionRequest, ctx: ToolContext): PermissionRequest {
-    return { action: req.action, resource: req.resource, summary: req.summary, key: req.key, unsandboxed: req.unsandboxed, mustAsk: req.mustAsk, actor: 'tools', sessionId: ctx.sessionId }
+  /**
+   * actor 与会话一律由注册表定:工具不能自称 kernel,也不能借别的会话的 cwd。
+   * 本会话放行的键和这次运行的隔离,只认委派工具的 exec;其他工具按会话级别与 sessionKey(04 spec §6)
+   */
+  private normalize(req: PermissionRequest, tool: Tool, ctx: ToolContext): PermissionRequest {
+    const delegated = tool.delegate === true && req.action === 'exec'
+    return {
+      action: req.action,
+      resource: req.resource,
+      summary: req.summary,
+      mustAsk: req.mustAsk,
+      ...(delegated && { key: req.key, unsandboxed: req.unsandboxed }),
+      actor: 'tools',
+      sessionId: ctx.sessionId,
+    }
   }
 
   private check(r: PermissionRequest): string {
@@ -212,7 +227,8 @@ export class ToolsRegistry implements ToolsService {
         callId: ctx.callId,
         tool,
         summary: clip(redact(r.summary ?? r.resource ?? tool), SHORT),
-        key: r.mustAsk ? undefined : r.key ?? (r.action === 'exec' && r.resource !== undefined ? sessionKey(r.resource) : undefined),
+        // 有规则落实不了、或这次运行明说没有隔离:每次都问,不留也不用本会话放行
+        key: r.mustAsk || r.unsandboxed ? undefined : r.key ?? (r.action === 'exec' && r.resource !== undefined ? sessionKey(r.resource) : undefined),
         ...(unsandboxed && { unsandboxed: true }),
         signal: ctx.signal,
       })

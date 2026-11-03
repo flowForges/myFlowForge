@@ -266,6 +266,8 @@ export const PERSISTENCE_FILES: readonly string[] = [
   '.bashrc', '.bash_profile', '.bash_login', '.bash_logout', '.zshrc', '.zprofile', '.zshenv', '.zlogin', '.zlogout', '.profile',
   '.config/fish', '.gitconfig', '.config/git', 'Library/LaunchAgents', '.config/autostart', '.config/systemd',
   ...['.config/zsh', '.zsh'].flatMap(d => ZSH_FILES.map(f => `${d}/${f}`)),
+  // Qoder 的程序本体、钩子配置、外部命令:改了,下次在沙箱外跑 qodercli 就执行(04 spec C4)
+  '.qoder/bin', '.qoder/settings.json', '.qoder/external-commands',
 ]
 
 const XDG_PERSISTENCE = ['fish', 'git', 'autostart', 'systemd', 'zsh']

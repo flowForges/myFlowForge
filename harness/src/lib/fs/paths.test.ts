@@ -310,7 +310,9 @@ describe('persistence files (spec §5.2)', () => {
       '.config/fish', '.gitconfig', '.config/git', 'Library/LaunchAgents', '.config/autostart', '.config/systemd'])
       expect(r).toContain(`/h/${rel}`)
     for (const d of ['.config/zsh', '.zsh']) for (const f of ['.zshrc', '.zshenv', '.zprofile', '.zlogin', '.zlogout']) expect(r).toContain(`/h/${d}/${f}`)
-    expect(PERSISTENCE_FILES).toHaveLength(26)
+    for (const rel of ['.qoder/bin', '.qoder/settings.json', '.qoder/external-commands']) expect(r).toContain(`/h/${rel}`)
+    for (const rel of ['.qoder', '.qoder/logs/x', '.qoder/projects', '.qoder/tmp', '.qoder/cache', '.qoder/.cache']) expect(isCredentialPath(`/h/${rel}`, r, 'darwin'), rel).toBe(false)
+    expect(PERSISTENCE_FILES).toHaveLength(29)
     expect(persistenceRoots('C:\\Users\\u', 'win32')).toContain('C:\\Users\\u\\.config\\git')
   })
   it('env-relocated rc locations are added (ZDOTDIR, XDG_CONFIG_HOME, GIT_CONFIG_GLOBAL); relative ones ignored', () => {
