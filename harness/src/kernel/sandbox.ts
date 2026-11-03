@@ -5,12 +5,13 @@
 // - cwd / 临时目录等自身路径坏了照样抛错:plan reject,调用方让命令失败,绝不退回无沙箱执行;
 // - 代理每会话一个,按需启动;命令在跑(plan 之后、release 之前)时保持不关,之后按空闲关闭。
 //   04:委派的运行各有一个(键 `sessionId\0scope`),多出它自己的主机,release 时立刻关。
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, type Dirent } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync, type Dirent } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, posix, resolve } from 'node:path'
+import { join, posix } from 'node:path'
 import type { KernelEvent, PermissionsConfig, SandboxStatus } from '../protocol/index'
-import { canonicalRoots, credentialRoots, persistenceRoots, type EnvSnapshot } from '../lib/fs/paths'
-import { createGit, type Git } from '../lib/git/snapshot'
+import { canonicalRoots, credentialRoots, persistenceRoots, PROJECT_CONFIG_DIRS, type EnvSnapshot } from '../lib/fs/paths'
+import type { RepoPin } from '../lib/git/snapshot'
+import { worktreeRootOf } from '../lib/git/worktree'
 import { literalRoots, matches, type MatchCtx, type Rule } from '../lib/permissions/rules'
 import { bwrapArgs, ensureGitHooksDir, execRootFor } from '../lib/sandbox/bwrap'
 import type { DetectResult } from '../lib/sandbox/detect'
@@ -33,6 +34,14 @@ const MAX_MODULE_DIRS = 2000
  */
 const GIT_INTERNAL_DIRS = new Set(['objects', 'refs', 'logs', 'hooks', 'info', 'lfs', 'branches'])
 const DEFAULT_IDLE_MS = 600_000
+
+function ensureDir(p: string): void {
+  try {
+    mkdirSync(p)
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e
+  }
+}
 /** shell 工具:什么都不豁免 */
 const SHELL_PLAN: Omit<ExecPlanOpts, 'proxyScope'> & { proxyScope?: string } = { allowRead: [], allowWrite: [], allowHosts: [], readOnly: false, denyRead: [], denyWrite: [] }
 
@@ -86,8 +95,8 @@ export interface SandboxOpts {
   lookup?: LookupFn
   /** 代理空闲多久关闭;默认 10 分钟 */
   idleMs?: number
-  /** 查 gitDir 用的 git;默认 createGit({ base: env }) */
-  git?: Git
+  /** 会话建立时定下的仓库;没有 = 没有仓库。这里不跑 git,也不从 cwd 往上找:cwd 是模型写得到的 */
+  repoPin?: (sessionId: string) => RepoPin | undefined
   /** 代理 Unix socket 的父目录(不能在沙箱可写范围内);默认 os.tmpdir() */
   proxyParent?: string
   uid?: number
@@ -117,12 +126,10 @@ interface RepoGit {
 export function createSandboxService(o: SandboxOpts): SandboxService {
   const log = o.log ?? nullLogger
   const platform = o.platform
-  const git = o.git ?? createGit({ base: o.env as NodeJS.ProcessEnv })
   const start = o.startProxy ?? realStartProxy
   const idleMs = o.idleMs ?? DEFAULT_IDLE_MS
   const execPath = o.execPath ?? process.execPath
   const proxies = new Map<string, SessionProxy>()
-  const repos = new Map<string, Promise<RepoGit>>()
   let closed = false
 
   /** 这个级别下命令是否经会话代理上网:macOS 总是;Linux 只有 full(网络命名空间 + 中转) */
@@ -189,96 +196,23 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
   // ---- git ----
 
   /**
-   * git 的答案(review I1):不用 --path-format(git 2.31 才有,旧版原样回显未知参数且退出 0),相对结果按 cwd 解析。
-   * 结果第一行像参数(`-` 开头,更老的 git 不认 --git-common-dir)也当没答上来
+   * 会话钉住的仓库。<worktree 根>/<会话>/<运行> 下的 cwd 是这个会话委派运行的 worktree,它自己的 `.git` 文件也要保护。
+   * 现算 `.git` 是不是文件,不跑 git
    */
-  async function askGit(cwd: string): Promise<{ repo?: RepoGit; ran: boolean }> {
-    let r: Awaited<ReturnType<Git>>
+  function repoFor(sessionId: string, cwd: string): RepoGit {
+    const pin = o.repoPin?.(sessionId)
+    if (pin?.kind !== 'repo') return { gitDirs: [] }
+    const runs = join(realSpelling(worktreeRootOf(o.dataDir)), sessionId)
+    const real = realSpelling(cwd)
+    const top = within(real, runs) && real !== runs ? join(runs, posix.relative(runs, real).split('/')[0]) : pin.top
+    const f = join(top, '.git')
+    let cwdGitFile: string | undefined
     try {
-      r = await git(['rev-parse', '--git-common-dir'], { cwd })
-    } catch (err) {
-      log.warn('sandbox git lookup failed', { error: String(err) })
-      return { ran: false }
+      if (!lstatSync(f).isDirectory()) cwdGitFile = f
+    } catch {
+      // 没有 .git:没什么要保护的
     }
-    const line = r.code === 0 ? r.stdout.toString().split('\n')[0] : ''
-    if (!line || line.startsWith('-')) return { ran: r.code !== 0 } // 非 0 = 确实不是仓库(仍要走一遍目录兜底)
-    try {
-      const gitDir = realpathSync.native(resolve(cwd, line))
-      let cwdGitFile: string | undefined
-      const t = await git(['rev-parse', '--show-toplevel'], { cwd })
-      const top = t.code === 0 ? t.stdout.toString().split('\n')[0] : ''
-      if (top.startsWith('/')) {
-        const f = join(realpathSync.native(top), '.git')
-        try {
-          if (!lstatSync(f).isDirectory()) cwdGitFile = f
-        } catch {
-          // 没有 .git(GIT_DIR 之类):不保护
-        }
-      }
-      return { repo: { gitDirs: [gitDir], cwdGitFile }, ran: true }
-    } catch (err) {
-      log.warn('sandbox git lookup failed', { error: String(err) })
-      return { ran: false }
-    }
-  }
-
-  /**
-   * 兜底(git 不在 / 太老 / 出错):从 cwd 往上找 `.git`。目录 → 它就是 gitDir;文件 → 按 `gitdir:` 与 commondir 解析。
-   * 有 `.git` 却解析不出 → 抛错(命令失败,不在没有 git 保护的情况下跑)
-   */
-  function walkGit(cwd: string): RepoGit {
-    for (let d = cwd; ; d = posix.dirname(d)) {
-      const p = join(d, '.git')
-      let st
-      try {
-        st = lstatSync(p)
-      } catch {
-        if (d === posix.dirname(d)) return { gitDirs: [] }
-        continue
-      }
-      try {
-        if (st.isDirectory()) return { gitDirs: [realpathSync.native(p)] }
-        if (st.isSymbolicLink() && statSync(p).isDirectory()) return { gitDirs: [realpathSync.native(p)], cwdGitFile: p }
-        const m = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(readFileSync(p, 'utf8'))
-        if (!m) throw new Error('no gitdir line')
-        const gd = realpathSync.native(resolve(d, m[1]))
-        let common = gd
-        try {
-          common = realpathSync.native(resolve(gd, readFileSync(join(gd, 'commondir'), 'utf8').trim()))
-        } catch (e) {
-          if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
-        }
-        return { gitDirs: [common], cwdGitFile: p }
-      } catch (err) {
-        throw new Error(`sandbox: can't resolve the git dir of ${JSON.stringify(p)}: ${err instanceof Error ? err.message : String(err)}`)
-      }
-    }
-  }
-
-  const MAX_REPOS = 256
-
-  /** 一个会话查一次;git 没答上来的结果不缓存(review M6) */
-  async function repoFor(sessionId: string, cwd: string): Promise<RepoGit> {
-    const key = `${sessionId}\0${cwd}`
-    const cached = repos.get(key)
-    if (cached) return cached
-    const a = await askGit(cwd)
-    if (a.repo) {
-      remember(key, a.repo)
-      return a.repo
-    }
-    const walked = walkGit(cwd)
-    if (a.ran && walked.gitDirs.length === 0) remember(key, walked) // git 说不是仓库,目录里也没有 .git
-    return walked
-  }
-
-  function remember(key: string, repo: RepoGit): void {
-    repos.set(key, Promise.resolve(repo))
-    if (repos.size > MAX_REPOS) repos.delete(repos.keys().next().value!)
-  }
-
-  function forgetRepo(sessionId: string): void {
-    for (const k of repos.keys()) if (k.startsWith(`${sessionId}\0`)) repos.delete(k)
+    return { gitDirs: [pin.commonDir], cwdGitFile }
   }
 
   /**
@@ -385,13 +319,12 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
   }
 
   /**
-   * 代理已关、没有命令在跑:整条记录连同 git 缓存丢掉(review M5);失败标记要留着给 status。
-   * 运行的条目没人再问 status,失败了也删;git 缓存是会话的,不动
+   * 代理已关、没有命令在跑:整条记录丢掉(review M5);失败标记要留着给 status。
+   * 运行的条目没人再问 status,失败了也删
    */
-  function prune(key: string, sessionId: string, e: SessionProxy): void {
+  function prune(key: string, e: SessionProxy): void {
     if (e.holds === 0 && !e.handle && !e.starting && (!e.failed || e.scoped) && proxies.get(key) === e) {
       proxies.delete(key)
-      if (!e.scoped) forgetRepo(sessionId)
     }
   }
 
@@ -418,7 +351,7 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
         e.handle = h
         void h.closed.then(() => {
           if (e.handle === h) e.handle = undefined
-          prune(key, sessionId, e)
+          prune(key, e)
         })
         return h
       },
@@ -456,7 +389,7 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
           void closing(e.handle)
           void e.starting?.then(closing)
         } else e.handle?.touch()
-        prune(key, sessionId, e)
+        prune(key, e)
       }
     }
   }
@@ -505,6 +438,14 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
     return creds.filter(c => !exempt.has(c))
   }
 
+  /**
+   * cwd 里 CLI 会自己加载的配置目录(final review I-2):写了就是下次委派时在沙箱外跑命令。
+   * cwd = 家目录时它们是 CLI 自己的状态目录,由凭据和持久化清单管,运行要写的子目录在 allowWrite 里,不在这里盖
+   */
+  function projectConfigDirs(cwd: string, allowWrite: string[]): string[] {
+    return PROJECT_CONFIG_DIRS.map(d => join(cwd, d)).filter(d => !allowWrite.some(a => within(a, d) || within(realSpelling(a), realSpelling(d))))
+  }
+
   /** 是链接的可写项丢掉:cwd = ~/.qoder 的会话能把 logs 换成指向别处的链接,下次运行就写到那里去了 */
   function plainDirs(paths: string[]): string[] {
     return paths.filter(p => {
@@ -531,7 +472,7 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
     const x = { ...raw, allowRead: cleaned(raw.allowRead), allowWrite: cleaned(raw.allowWrite), denyRead: cleaned(raw.denyRead), denyWrite: cleaned(raw.denyWrite) }
     const tmp = sessionTmpDir(o.dataDir, s.sessionId)
     ensureTmp(tmp)
-    const repo = await repoFor(s.sessionId, s.cwd)
+    const repo = repoFor(s.sessionId, s.cwd)
     // 只读运行:连同"cwd 就在它里面"的额外可写项一起去掉
     const grantWrite = () => plainDirs(x.allowWrite).filter(a => !x.readOnly || !(within(s.cwd, a) || within(realSpelling(s.cwd), realSpelling(a))))
     const writableWith = (extra: string[]) => [...(x.readOnly ? [] : [s.cwd, ...repo.gitDirs]), tmp, ...extra]
@@ -561,6 +502,7 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
         const moduleDirs = modules.flatMap(m => m.dirs)
         const moduleGuard = moduleDirs.flatMap(m => [join(m, 'hooks'), join(m, 'config')])
         const profile = seatbeltProfile({
+          projectConfig: projectConfigDirs(s.cwd, x.allowWrite),
           writable,
           gitDirs: repo.gitDirs,
           cwdGitFile: repo.cwdGitFile,
@@ -583,6 +525,9 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
 
       // linux(bwrap)
       for (const g of repo.gitDirs) ensureGitHooksDir(g)
+      // bwrap 只挂存在的路径:和 hooks 一样先建空目录,才能只读挂上
+      const projectConfig = projectConfigDirs(s.cwd, x.allowWrite)
+      for (const d of projectConfig) ensureDir(d)
       const hideDirs: string[] = []
       const hideFiles: string[] = []
       for (const c of hidden) {
@@ -614,7 +559,7 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
         // 与 Seatbelt 一致:在隐藏的根里的,只有豁免项放出来(bind 的源是宿主,不筛就绕过了隐藏)
         extraWritable: allowWrite.filter(a => x.allowRead.some(r => within(a, r)) || ![...hidden, o.dataDir].some(c => within(a, c) || within(realSpelling(a), realSpelling(c)))),
         ruleDenyRead: x.denyRead,
-        ruleDenyWrite: x.denyWrite,
+        ruleDenyWrite: [...x.denyWrite, ...projectConfig],
         command,
         env: o.env,
         uid: o.uid ?? process.getuid?.(),

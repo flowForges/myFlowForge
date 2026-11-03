@@ -427,7 +427,7 @@ describe.skipIf(!posix)('fake-cli probes', () => {
 
   it('answers sandbox with one marker per row; fail:<row> flips that row', async () => {
     const pass = await output(installFake({ selftest: 'pass' }), ['sandbox', '-P', 'mffai'])
-    expect(pass.out.split('\n')).toEqual(['secret_read r=1', 'cwd_write r=0', 'outside_write r=1', 'git_write r=1', 'tmp_write r=0', 'rule_write r=1', 'rule_read r=1', 'secret_dir_read r=1', 'net_connect r=1'])
+    expect(pass.out.split('\n')).toEqual(['secret_read r=1', 'cwd_write r=0', 'outside_write r=1', 'git_write r=1', 'nested_git_hook r=1', 'nested_git_config r=1', 'codex_config_write r=1', 'qoder_config_write r=1', 'tmp_write r=0', 'rule_write r=1', 'rule_read r=1', 'secret_dir_read r=1', 'net_connect r=1'])
     const bad = await output(installFake({ selftest: 'fail:outside_write' }), ['sandbox'])
     expect(bad.out).toContain('outside_write r=0')
     expect(bad.out).toContain('secret_read r=1')

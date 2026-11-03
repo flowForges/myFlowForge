@@ -1,8 +1,8 @@
 // 每轮的开始 / 结束快照与回滚(spec §11):git 部分在 lib/git/snapshot,这里管引用命名、事件与"哪一轮能回滚"
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { Logger } from '../../kernel/log'
 import { RpcError } from '../../kernel/rpcError'
-import { changes, pruneRefs, restore, submodulePaths, takeSnapshot, type Git, type SnapshotResult } from '../../lib/git/snapshot'
+import { changes, pruneRefs, restore, submodulePaths, takeSnapshot, type Git, type RepoPin, type SnapshotResult } from '../../lib/git/snapshot'
 import { worktreeRootOf } from '../../lib/git/worktree'
 import type { FileChange, KernelEvent } from '../../protocol/index'
 
@@ -23,7 +23,8 @@ export interface SnapshotDeps {
   slowMs?: number
 }
 
-export interface SnapshotTarget { sessionId: string; cwd: string }
+/** pin:建会话时定下的仓库,不再从 cwd 找 */
+export interface SnapshotTarget { sessionId: string; cwd: string; pin: RepoPin }
 
 type Phase = 'start' | 'end' | 'pre-rollback'
 export const refBase = (sessionId: string) => `refs/mffai/snapshots/${sessionId}`
@@ -39,17 +40,20 @@ async function timed<T>(deps: SnapshotDeps, what: string, fn: () => Promise<T>):
   }
 }
 
-const gitOpts = (deps: SnapshotDeps) => ({ tmpDir: deps.tmpDir, writableRoots: deps.writableRoots })
+const gitOpts = (deps: SnapshotDeps, t: SnapshotTarget) => ({ pin: t.pin, tmpDir: deps.tmpDir, writableRoots: deps.writableRoots })
 
 const take = (deps: SnapshotDeps, t: SnapshotTarget, turnId: string, phase: Phase): Promise<SnapshotResult> =>
-  timed(deps, phase, () => takeSnapshot(t.cwd, snapshotRef(t.sessionId, turnId, phase), deps.git, gitOpts(deps)))
+  timed(deps, phase, () => takeSnapshot(t.cwd, snapshotRef(t.sessionId, turnId, phase), deps.git, gitOpts(deps, t)))
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err))
 
-/** 过滤器落在这些地方就不跑。pluginDir 是 <数据目录>/plugins/<id>:会话 tmp 在数据目录里,运行的 TMPDIR 在系统临时目录,其他 worktree 在 -worktrees */
-export const writableRootsFor = (pluginDir: string, systemTmp: string): string[] => {
+/**
+ * 过滤器落在这些地方就不跑。pluginDir 是 <数据目录>/plugins/<id>:会话 tmp 在数据目录里,运行的 TMPDIR 在系统临时目录,其他 worktree 在 -worktrees;
+ * 包起来的 Qoder 写得到 ~/.qoder 下面几个目录,这里按整个算(插件之间不能 import,也不必列得那么细)
+ */
+export const writableRootsFor = (pluginDir: string, systemTmp: string, home: string): string[] => {
   const dataDir = dirname(dirname(pluginDir))
-  return [dataDir, worktreeRootOf(dataDir), systemTmp]
+  return [dataDir, worktreeRootOf(dataDir), systemTmp, join(home, '.qoder')]
 }
 
 /** 资格已查过之后的 git 失败:是服务端的问题(−32603),记日志 */
@@ -64,7 +68,7 @@ export async function startSnapshot(deps: SnapshotDeps, t: SnapshotTarget, turnI
   if (r.reason === 'error') deps.log.warn('start snapshot failed', { turnId })
   deps.append({ type: 'turn.snapshot', sessionId: t.sessionId, payload: { turnId, phase: 'start', ...(r.ref && { ref: r.ref }), ...(r.reason && { reason: r.reason }) } })
   if (r.ref) {
-    await timed(deps, 'prune', () => pruneRefs(t.cwd, refBase(t.sessionId), KEEP_TURNS, deps.git, { tmpDir: deps.tmpDir })).catch(err =>
+    await timed(deps, 'prune', () => pruneRefs(refBase(t.sessionId), KEEP_TURNS, deps.git, { pin: t.pin, tmpDir: deps.tmpDir })).catch(err =>
       deps.log.warn('snapshot prune failed', { error: err instanceof Error ? err.message : String(err) }),
     )
   }
@@ -77,7 +81,7 @@ export async function endSnapshot(deps: SnapshotDeps, t: SnapshotTarget, turnId:
   if (r.reason === 'error') deps.log.warn('end snapshot failed', { turnId })
   let changed: number | undefined
   if (startRef && r.ref) {
-    changed = await timed(deps, 'changes', () => changes(t.cwd, startRef, r.ref!, deps.git, gitOpts(deps))).then(
+    changed = await timed(deps, 'changes', () => changes(t.cwd, startRef, r.ref!, deps.git, gitOpts(deps, t))).then(
       f => f.length,
       err => {
         deps.log.warn('snapshot diff failed', { error: err instanceof Error ? err.message : String(err) })
@@ -141,7 +145,7 @@ export async function turnChanges(deps: SnapshotDeps, t: SnapshotTarget, events:
   const ts = scan(t.sessionId, events).turns.get(turnId)
   if (!ts?.start || !ts.end) throw new RpcError(ERR_INVALID_PARAMS, 'snapshots missing')
   try {
-    return await changes(t.cwd, ts.start, ts.end, deps.git, gitOpts(deps))
+    return await changes(t.cwd, ts.start, ts.end, deps.git, gitOpts(deps, t))
   } catch (err) {
     throw gitFailed(deps, 'turn.changes', err)
   }
@@ -161,12 +165,12 @@ export async function rollbackTurn(deps: SnapshotDeps, t: SnapshotTarget, events
   const refs = rollbackRefs(t.sessionId, events, turnId)
   if (!refs) throw new RpcError(ERR_INVALID_PARAMS, 'not rollbackable')
   const preRef = preRollbackRef(t.sessionId, turnId, Date.now())
-  const pre = await timed(deps, 'pre-rollback', () => takeSnapshot(t.cwd, preRef, deps.git, { ...gitOpts(deps), createOnly: true }))
+  const pre = await timed(deps, 'pre-rollback', () => takeSnapshot(t.cwd, preRef, deps.git, { ...gitOpts(deps, t), createOnly: true }))
   if (!pre.ref) throw new RpcError(ERR_INTERNAL, `pre-rollback snapshot failed: ${pre.reason ?? 'error'}`)
   let files: FileChange[]
   let skipped: string[]
   try {
-    const opts = gitOpts(deps)
+    const opts = gitOpts(deps, t)
     files = await timed(deps, 'changes', () => changes(t.cwd, refs.start, refs.end, deps.git, opts))
     skipped = await submodulePaths(t.cwd, refs.start, refs.end, deps.git, opts)
   } catch (err) {
@@ -174,7 +178,7 @@ export async function rollbackTurn(deps: SnapshotDeps, t: SnapshotTarget, events
   }
   const restorable = files.filter(f => !skipped.includes(f.path))
   try {
-    await timed(deps, 'restore', () => restore(t.cwd, refs.start, restorable, deps.git, gitOpts(deps)))
+    await timed(deps, 'restore', () => restore(t.cwd, refs.start, restorable, deps.git, gitOpts(deps, t)))
   } catch (err) {
     throw gitFailed(deps, 'restore', err)
   }

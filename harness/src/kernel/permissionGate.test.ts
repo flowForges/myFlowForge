@@ -64,6 +64,13 @@ describe('decide (table)', () => {
     ['write .git file itself', req('write', '/h/repo/.git'), auto, 'deny'],
     ['write nested .git', req('write', '/h/repo/vendor/x/.git/config'), auto, 'deny'],
     ['read .git/config', req('read', '/h/repo/.git/config'), ask, 'allow'],
+    ['write <cwd>/.codex/config.toml', req('write', '/h/repo/.codex/config.toml'), auto, 'deny'],
+    ['write <cwd>/.codex/hooks.json, ask', req('write', '/h/repo/.codex/hooks.json'), ask, 'deny'],
+    ['write <cwd>/.codex itself', req('write', '/h/repo/.codex'), auto, 'deny'],
+    ['write <cwd>/.qoder/settings.json', req('write', '/h/repo/.qoder/settings.json'), auto, 'deny'],
+    ['read <cwd>/.codex/config.toml is fine', req('read', '/h/repo/.codex/config.toml'), ask, 'allow'],
+    ['write <cwd>/.codexrc is fine', req('write', '/h/repo/.codexrc'), ask, 'allow'],
+    ['write <cwd>/sub/.codex is not the cwd one', req('write', '/h/repo/sub/.codex/x'), ask, 'allow'],
     ['write .github is fine', req('write', '/h/repo/.github/workflows/ci.yml'), ask, 'allow'],
     ['write .gitignore is fine', req('write', '/h/repo/.gitignore'), ask, 'allow'],
     ['write x.git is fine', req('write', '/h/repo/x.git/a'), ask, 'allow'],
@@ -93,6 +100,8 @@ describe('decide (table)', () => {
 
   it('darwin: case variants of a blacklisted root are denied', () => {
     const d = { ...env, roots: credentialRoots(home, 'darwin', {}), persistence: persistenceRoots(home, 'darwin'), platform: 'darwin' as const }
+    expect(decide(req('write', '/h/repo/.CODEX/config.toml'), auto, d)).toBe('deny')
+    expect(decide(req('write', '/h/repo/.Qoder/settings.json'), auto, d)).toBe('deny')
     expect(decide(req('read', '/h/.SSH/id'), atHome, d)).toBe('deny')
     expect(decide(req('read', '/H/REPO/a'), ask, d)).toBe('allow')
     const dataVol: SessionInfo = { ...ask, cwd: '/System/Volumes/Data' }
@@ -501,7 +510,7 @@ describe('PermissionGate.check (real tree)', () => {
       const { gate, cwd } = gateFor(home, 'auto')
       for (const rel of PLANTS) expect(check(gate, 'write', resolveToolPath(cwd, `.qoder/${rel}`)), rel).toBe('deny')
       expect(check(gate, 'read', resolveToolPath(cwd, '.qoder/settings.json'))).toBe('allow')
-      expect(check(gate, 'write', resolveToolPath(cwd, '.qoder/logs/x'))).toBe('allow')
+      expect(check(gate, 'write', resolveToolPath(cwd, '.qoder/logs/x'))).toBe('deny') // <cwd>/.qoder 整个拒写(final review I-2)
     })
 
     it('cwd = ~/.qoder', () => {

@@ -295,8 +295,8 @@ export function createExecutorCli(opts: ExecutorCliOpts = {}): Plugin {
             approvedBinary: record.binaryKey,
           })
           if ('failure' in r) return fail(r.failure, SUBMIT_FAILURES[r.failure] ?? 'Not started.')
-          const where = r.position > 0 ? `,排队第 ${r.position + 1} 位` : ''
-          return { content: `已启动 ${r.runId}(${a.id})${where}。结果会以 <executor-notice> 送达,不用轮询。`, meta: { runId: r.runId, isolation: record.isolation } }
+          const state = r.queued ? `已排队 ${r.runId}(${a.id}),第 ${r.position + 1} 位` : `已启动 ${r.runId}(${a.id})`
+          return { content: `${state}。结果会以 <executor-notice> 送达,不用轮询。`, meta: { runId: r.runId, isolation: record.isolation } }
         },
       })
 

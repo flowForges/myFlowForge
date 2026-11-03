@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { noticeText } from '../lib/tools/diagnostics'
@@ -130,5 +130,20 @@ describe('recoverRuns', () => {
     expect(existsSync(outside)).toBe(true)
     // 路径不用,事件照写:日志里有这么一次运行
     expect(out.filter(e => e.type === 'executor.run.ended')).toHaveLength(3)
+  })
+})
+
+describe('run tmp dirs doomed before a crash (final review M-4)', () => {
+  it('startup removes mffai-run-*-rm and leaves everything else', () => {
+    const tmpRoot = mkdtempSync(join(tmpdir(), 'mffai-recov-sweep-'))
+    try {
+      mkdirSync(join(tmpRoot, 'mffai-run-run_1-rm', 'deep'), { recursive: true })
+      mkdirSync(join(tmpRoot, 'mffai-run-run_2'))
+      mkdirSync(join(tmpRoot, 'other-rm'))
+      recoverRuns([], () => {}, { tmpRoot })
+      expect(readdirSync(tmpRoot).sort()).toEqual(['mffai-run-run_2', 'other-rm'])
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true })
+    }
   })
 })

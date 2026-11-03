@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { startFakeUpstream, type FakeServer } from '../../test/fakeUpstream'
+import { NO_REPO, pinFromPaths } from '../lib/git/snapshot'
 import { parseRule, type Rule } from '../lib/permissions/rules'
 import { runCli } from '../lib/proc/runCli'
 import type { SandboxService, ShellPlan } from '../lib/tools/types'
@@ -114,7 +115,7 @@ const makeService = (snapshot: Record<string, string>) =>
     permissions: () => ({ rules: [], network: { allow: [] }, sandbox: { enabled: true, allowLoopback: false }, allowUnsandboxedAuto: false }),
     rules: () => rules,
     append: e => appended.push(e),
-    git: (async () => { throw new Error('no git in this test') }) as never, // 走目录兜底
+    repoPin: () => (existsSync(join(repo, '.git')) ? pinFromPaths(repo, join(repo, '.git'), join(repo, '.git')) : NO_REPO),
     upstream: { url: new URL(`http://127.0.0.1:${upstream.port}`), noProxy: () => false },
     lookup: async () => [{ address: '93.184.216.34', family: 4 }],
   })
@@ -166,6 +167,14 @@ describe.skipIf(!usable)('planExec, real sandbox-exec', () => {
     expect(t.out).toBe('TOKEN\nNEW\n')
     expect(readFileSync(join(qoder, '.auth', 'n'), 'utf8')).toBe('NEW\n')
     rmSync(join(qoder, '.auth', 'n'))
+  })
+
+  it('a wrapped run can not create or change <cwd>/.codex or .qoder, in any letter case (final review I-2)', async () => {
+    const r = await cli('for d in .codex .qoder .CODEX .Qoder; do (mkdir "$d") 2>/dev/null && echo "MADE $d"; done; echo x > allowed.txt && echo WROTE; exit 0')
+    expect(r.out).toBe('WROTE\n')
+    expect(existsSync(join(repo, '.codex'))).toBe(false)
+    expect(existsSync(join(repo, '.qoder'))).toBe(false)
+    rmSync(join(repo, 'allowed.txt'))
   })
 
   it('the exemption itself can be neither moved nor replaced', async () => {

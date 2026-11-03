@@ -2,12 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
-import { delimiter, join, relative } from 'node:path'
+import { delimiter, dirname, join, relative } from 'node:path'
 import { cleanupFakes, installFake, isAlive, trackPid, waitDead, type FakeCli } from '../../../test/fakeCli'
 import { codexAdapter } from './adapters/codex'
 import { qoderAdapter } from './adapters/qoder'
 import type { Adapter } from './adapters/types'
-import { binaryDirs, binaryKey, binaryTrusted, detectExecutor, findBin, isolationOf, PROBE_TIMEOUT_MS, runProbe, runSelfTest, SELF_TEST_READ_ONLY_SCRIPT, SELF_TEST_SCRIPT, trustedPath, type DetectDeps, type ExecutorInfo } from './detect'
+import { binaryDirs, binaryKey, binaryTrusted, detectExecutor, findBin, isolationOf, PROBE_TIMEOUT_MS, runProbe, runSelfTest, SELF_TEST_READ_ONLY_SCRIPT, SELF_TEST_SUBDIR_SCRIPT, SELF_TEST_SCRIPT, trustedPath, type DetectDeps, type ExecutorInfo } from './detect'
 import { PgidRegistry, reapOrphans } from '../../lib/proc/pgids'
 
 let base: string
@@ -42,6 +42,7 @@ function depsFor(dir: string, over: Partial<DetectDeps> = {}): DetectDeps {
   }
 }
 
+const ALL_GOOD = 'secret_read r=1\ncwd_write r=0\noutside_write r=1\ngit_write r=1\nnested_git_hook r=1\nnested_git_config r=1\ncodex_config_write r=1\nqoder_config_write r=1\ntmp_write r=0\nrule_write r=1\nrule_read r=1\nsecret_dir_read r=1\nnet_connect r=1\n'
 const sandboxCalls = (f: FakeCli) => f.calls().filter(c => c.argv[0] === 'sandbox')
 const refused = (port: number) =>
   new Promise<boolean>(res => {
@@ -311,7 +312,7 @@ describe.skipIf(process.platform === 'win32')('detectExecutor', () => {
     const fake = installFake()
     const asked: number[] = []
     await detectExecutor(codexAdapter, depsFor(fake.dir, { run: (f, a, t, e) => (asked.push(t), runProbe(f, a, t, e)) }))
-    expect(asked).toEqual([PROBE_TIMEOUT_MS, PROBE_TIMEOUT_MS, PROBE_TIMEOUT_MS, PROBE_TIMEOUT_MS])
+    expect(asked).toEqual(Array(5).fill(PROBE_TIMEOUT_MS))
   })
 
   it.each<[string, DetectDeps['run']]>([
@@ -481,11 +482,14 @@ describe.skipIf(process.platform === 'win32')('Codex self-test', () => {
     const fake = installFake()
     await detectExecutor(codexAdapter, depsFor(fake.dir))
     const calls = sandboxCalls(fake)
-    expect(calls).toHaveLength(2)
+    expect(calls).toHaveLength(3)
     const fsOf = (argv: string[]) => argv.find(a => a.startsWith('permissions.mffai.filesystem='))!
     expect(fsOf(calls[0].argv)).toContain(':project_roots')
-    expect(fsOf(calls[1].argv)).not.toContain(':project_roots')
-    expect(calls[1].argv.slice(calls[1].argv.indexOf('--') + 1, calls[1].argv.indexOf('--') + 4)).toEqual(['/bin/sh', '-c', SELF_TEST_READ_ONLY_SCRIPT])
+    // 第二遍:从仓库子目录跑,看 :project_roots 算 cwd 还是 git 顶层
+    expect(calls[1].argv[calls[1].argv.indexOf('-C') + 1]).toBe(join(calls[0].argv[calls[0].argv.indexOf('-C') + 1], 'sub'))
+    expect(calls[1].argv.slice(calls[1].argv.indexOf('--') + 1, calls[1].argv.indexOf('--') + 4)).toEqual(['/bin/sh', '-c', SELF_TEST_SUBDIR_SCRIPT])
+    expect(fsOf(calls[2].argv)).not.toContain(':project_roots')
+    expect(calls[2].argv.slice(calls[2].argv.indexOf('--') + 1, calls[2].argv.indexOf('--') + 4)).toEqual(['/bin/sh', '-c', SELF_TEST_READ_ONLY_SCRIPT])
     const failing = installFake({ selftest: 'fail:rule_read' })
     await detectExecutor(codexAdapter, depsFor(failing.dir))
     expect(sandboxCalls(failing)).toHaveLength(1)
@@ -555,7 +559,7 @@ describe.skipIf(process.platform === 'win32')('Codex self-test', () => {
     expect(argv.slice(dash - 2, dash)).toEqual(['-P', 'mffai'])
     expect(argv.slice(dash + 1, dash + 4)).toEqual(['/bin/sh', '-c', SELF_TEST_SCRIPT])
     const fs = argv.find(a => a.startsWith('permissions.mffai.filesystem='))!
-    for (const entry of ['":root"="read"', '":project_roots"={"."="write"}', '":tmpdir"="write"', '"/h/.ssh"="none"', '"/h/data"="none"']) expect(fs).toContain(entry)
+    for (const entry of ['":root"="read"', '":project_roots"={"."="write",".codex"="read",".qoder"="read","*/**/.git/hooks/**"="none","*/**/.git/config"="none"}', '":tmpdir"="write"', '"/h/.ssh"="none"', '"/h/data"="none"']) expect(fs).toContain(entry)
     expect(argv).toContain('permissions.mffai.network={enabled=false}')
     expect(argv).not.toContain('--dangerously-bypass-approvals-and-sandbox')
   })
@@ -627,17 +631,17 @@ describe.skipIf(process.platform === 'win32')('Codex self-test', () => {
     const fake = installFake({ version: 'codex 1.0' })
     await detectExecutor(codexAdapter, depsFor(fake.dir))
     expect(await detectExecutor(codexAdapter, depsFor(fake.dir))).toMatchObject({ isolation: 'own', missing: [] })
-    expect(sandboxCalls(fake)).toHaveLength(2)
+    expect(sandboxCalls(fake)).toHaveLength(3)
     // 同样的版本号、同一个路径,文件换了
     writeFileSync(join(fake.dir, 'scenario.json'), JSON.stringify({ version: 'codex 1.0', selftest: 'fail:secret_read' }))
     const t = new Date(Date.now() + 5000)
     utimesSync(fake.file, t, t)
     expect(await detectExecutor(codexAdapter, depsFor(fake.dir))).toMatchObject({ version: 'codex 1.0', isolation: 'none', missing: ['codex_selftest'] })
-    expect(sandboxCalls(fake)).toHaveLength(3)
+    expect(sandboxCalls(fake)).toHaveLength(4)
     // 确定的失败也缓存;版本号变了但文件没变,不重跑
     writeFileSync(join(fake.dir, 'scenario.json'), JSON.stringify({ version: 'codex 2.0' }))
     expect(await detectExecutor(codexAdapter, depsFor(fake.dir))).toMatchObject({ version: 'codex 2.0', isolation: 'none', missing: ['codex_selftest'] })
-    expect(sandboxCalls(fake)).toHaveLength(3)
+    expect(sandboxCalls(fake)).toHaveLength(4)
   })
 
   it('a repointed symlink is a different binary', async () => {
@@ -690,17 +694,33 @@ describe.skipIf(process.platform === 'win32')('Codex self-test', () => {
     expect(sandboxCalls(fake)).toEqual([])
   })
 
+  it.each(['nested_git_hook', 'nested_git_config', 'codex_config_write', 'qoder_config_write', 'parent_write', 'sibling_write', 'sub_cwd_write'])('a failed %s row → none + codex_selftest', async row => {
+    const fake = installFake({ selftest: `fail:${row}` })
+    expect(await detectExecutor(codexAdapter, depsFor(fake.dir))).toMatchObject({ installed: true, isolation: 'none', missing: ['codex_selftest'] })
+  })
+
   describe('the real scripts, under the fake (no Codex, no sandbox)', () => {
     const hasCurl = existsSync('/usr/bin/curl')
     const argsOf = (a: string[]) => {
       const [secret, control, outside, secretDir] = a.slice(a.indexOf('--') + 5)
-      return { secret, control, outside, secretDir, dir: a[a.indexOf('-C') + 1], readOnly: a.includes(SELF_TEST_READ_ONLY_SCRIPT) }
+      return { secret, control, outside, secretDir, dir: a[a.indexOf('-C') + 1], readOnly: a.includes(SELF_TEST_READ_ONLY_SCRIPT), subdir: a.includes(SELF_TEST_SUBDIR_SCRIPT) }
     }
     /** 真的跑脚本;用文件权限造出"被挡住"的样子。只读那一遍的 cwd 临时收紧,跑完放开,不然删不掉 */
-    function runner(confine: { write?: boolean; readOnly?: boolean; also?: (p: ReturnType<typeof argsOf>) => void }): DetectDeps['run'] {
+    function runner(confine: { write?: boolean; readOnly?: boolean; subdir?: boolean; also?: (p: ReturnType<typeof argsOf>) => void }): DetectDeps['run'] {
       return async (f, a, t, e, c) => {
         if (a[0] !== 'sandbox') return runProbe(f, a, t, e, c)
         const p = argsOf(a)
+        if (p.subdir) {
+          const parent = dirname(p.dir)
+          if (confine.subdir !== false) chmodSync(parent, 0o555)
+          chmodSync(join(parent, 'vendor'), confine.subdir !== false ? 0o555 : 0o755)
+          try {
+            return await runProbe(f, a, t, e, c)
+          } finally {
+            chmodSync(parent, 0o755)
+            chmodSync(join(parent, 'vendor'), 0o755)
+          }
+        }
         if (p.readOnly) {
           if (confine.readOnly) chmodSync(p.dir, 0o555)
           try {
@@ -716,6 +736,9 @@ describe.skipIf(process.platform === 'win32')('Codex self-test', () => {
           chmodSync(join(p.dir, '.git', 'config'), 0o444)
           chmodSync(join(p.dir, 'ro'), 0o555)
           chmodSync(join(p.dir, 'hidden', 'x'), 0o000)
+          chmodSync(join(p.dir, 'vendor', '.git', 'hooks'), 0o555)
+          chmodSync(join(p.dir, 'vendor', '.git', 'config'), 0o444)
+          for (const d of ['.codex', '.qoder']) mkdirSync(join(p.dir, d), { mode: 0o555 })
         }
         confine.also?.(p)
         return runProbe(f, a, t, e, c)
@@ -728,13 +751,24 @@ describe.skipIf(process.platform === 'win32')('Codex self-test', () => {
 
     it('with no isolation at all, every "must fail" row is reported', async () => {
       const { failed } = await selfTest({})
-      expect([...failed].sort()).toEqual([...(hasCurl ? ['net_connect'] : []), 'git_write', 'outside_write', 'rule_read', 'rule_write', 'secret_dir_read', 'secret_read'].sort())
+      expect([...failed].sort()).toEqual([...(hasCurl ? ['net_connect'] : []), 'codex_config_write', 'git_write', 'nested_git_config', 'nested_git_hook', 'outside_write', 'qoder_config_write', 'rule_read', 'rule_write', 'secret_dir_read', 'secret_read'].sort())
     })
 
     it('under a working boundary every row passes except the network, which file modes cannot block', async () => {
       const { failed } = await selfTest({ write: true, readOnly: true })
       expect(failed).toEqual(hasCurl ? ['net_connect'] : [])
       expect(readdirSync(scratch)).toEqual([])
+    })
+
+    it('a :project_roots that means the git toplevel: the subdirectory pass reports it', async () => {
+      const fake = installFake({ selftest: 'run' })
+      const failed = await runSelfTest(codexAdapter, fake.file, depsFor(fake.dir, { run: async (f, a, t, e, c) => {
+        if (a[0] !== 'sandbox') return runProbe(f, a, t, e, c)
+        const p = argsOf(a)
+        if (p.subdir) return runProbe(f, a, t, e, c)
+        return { code: 0, out: ALL_GOOD, stdout: ALL_GOOD }
+      } }))
+      expect(failed.failed).toEqual(['parent_write', 'sibling_write'])
     })
 
     it('a secret that "fails" only because nothing is readable does not pass', async () => {

@@ -1,10 +1,10 @@
 // 每轮的 git 快照与回滚(spec §11):快照写在隐藏引用 refs/mffai/…,用临时索引拍,
 // 不碰用户的索引、分支、stash、工作区;回滚只写回本轮改过的文件,不跟随链接、不出 cwd、不写 .git
 import { spawn } from 'node:child_process'
-import { accessSync, constants as fsConstants, lstatSync, realpathSync, rmdirSync, statSync } from 'node:fs'
+import { accessSync, constants as fsConstants, lstatSync, readFileSync, realpathSync, rmdirSync, statSync } from 'node:fs'
 import { copyFile, lstat, mkdir, mkdtemp, rm, stat, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { FileChange } from '../../protocol/tools'
 import { hasGitSegment, isInside, OUTSIDE, resolveToolPath } from '../fs/paths'
 import { lexists, mkdirChecked, removeLeaf, replaceFile, replaceSymlink, samePath } from '../fs/safeFs'
@@ -20,6 +20,8 @@ const IDENTITY = {
   GIT_COMMITTER_NAME: 'mff-ai',
   GIT_COMMITTER_EMAIL: 'mff-ai@localhost',
   GIT_TERMINAL_PROMPT: '0',
+  // 部分克隆缺对象时不去 remote.*.url 拉:那个地址可能是沙箱写得到的配置给的
+  GIT_NO_LAZY_FETCH: '1',
 }
 
 /** 去掉继承的全部 GIT_*(大小写不敏感:Windows 的变量名不分大小写),设 mff-ai 身份、不弹提示 */
@@ -104,27 +106,102 @@ export async function guarded<T>(git: Git, tmpDir: string | undefined, fn: (g: G
   }
 }
 
-export interface RepoInfo {
-  top: string
-  /** cwd 在仓库内的前缀,`/` 分隔、以 `/` 结尾;在仓库根时为 '' */
-  prefix: string
-  gitDir: string
-  head?: string
+export interface FileId { dev: number; ino: number }
+
+/**
+ * 会话的仓库:建会话时在沙箱外定一次(之后模型才写得到东西),写进 session.created。
+ * 沙箱外的每条 git 都用它的 GIT_DIR / GIT_WORK_TREE / GIT_COMMON_DIR,绝不从模型写得到的目录往上找仓库(final review C-1)
+ */
+export type RepoPin =
+  | { kind: 'none' }
+  | { kind: 'repo'; top: string; gitDir: string; commonDir: string; ids: { top: FileId; gitDir: FileId; commonDir: FileId } }
+export type PinnedRepo = Extract<RepoPin, { kind: 'repo' }>
+
+export const NO_REPO: RepoPin = { kind: 'none' }
+
+const idOf = (p: string): FileId => {
+  const st = lstatSync(p)
+  return { dev: st.dev, ino: st.ino }
 }
 
-async function readRepoInfo(cwd: string, git: Git): Promise<RepoInfo | undefined> {
-  const r = await git(['rev-parse', '--show-toplevel', '--show-prefix', '--absolute-git-dir'], { cwd })
-  if (r.code !== 0) return undefined
-  const [top, prefix, gitDir] = r.stdout.toString().split('\n')
-  if (!top || !gitDir) return undefined
-  const h = await git(['rev-parse', '-q', '--verify', 'HEAD'], { cwd })
-  const head = h.code === 0 ? h.stdout.toString().trim() || undefined : undefined
-  return { top, prefix: prefix ?? '', gitDir, head }
+/** 三个路径 → 钉子:路径取 realpath,身份取 lstat。路径不在就抛 */
+export function pinFromPaths(top: string, gitDir: string, commonDir: string): PinnedRepo {
+  const [t, g, c] = [top, gitDir, commonDir].map(p => realpathSync.native(p))
+  return { kind: 'repo', top: t, gitDir: g, commonDir: c, ids: { top: idOf(t), gitDir: idOf(g), commonDir: idOf(c) } }
 }
 
-/** cwd 所在的工作树;不在工作树内(含 .git 目录里、裸仓库)→ undefined */
-export function repoInfo(cwd: string, git: Git, opts: { tmpDir?: string } = {}): Promise<RepoInfo | undefined> {
-  return guarded(git, opts.tmpDir, g => readRepoInfo(cwd, g))
+/** 建会话时用。不在工作树内(含 .git 目录里、裸仓库)、git 不在、答不上来 → 没有仓库 */
+export async function pinRepo(cwd: string, git: Git, opts: { tmpDir?: string } = {}): Promise<RepoPin> {
+  try {
+    return await guarded(git, opts.tmpDir, async g => {
+      const r = await g(['rev-parse', '--show-toplevel', '--absolute-git-dir', '--git-common-dir'], { cwd })
+      if (r.code !== 0) return NO_REPO
+      const [top, gitDir, common] = r.stdout.toString().split('\n')
+      // 老 git 不认 --git-common-dir 时原样回显
+      if (!top || !gitDir || !common || common.startsWith('-')) return NO_REPO
+      return pinFromPaths(top, gitDir, resolve(cwd, common))
+    })
+  } catch {
+    return NO_REPO
+  }
+}
+
+/** 事件里读回来的:形状不对就当没有仓库(不认就不跑 git) */
+export function parsePin(raw: unknown): RepoPin {
+  const r = raw as PinnedRepo | undefined
+  const isId = (x: FileId | undefined) => typeof x?.dev === 'number' && typeof x?.ino === 'number'
+  if (r?.kind === 'repo' && [r.top, r.gitDir, r.commonDir].every(p => typeof p === 'string' && isAbsolute(p)) && isId(r.ids?.top) && isId(r.ids?.gitDir) && isId(r.ids?.commonDir)) return r
+  return NO_REPO
+}
+
+const sameId = (p: string, id: FileId) => {
+  const st = lstatSync(p)
+  return st.isDirectory() && st.dev === id.dev && st.ino === id.ino
+}
+
+/**
+ * 钉住的仓库还是原来那个:三个目录的身份没变(换成文件、链接,挪走都不算),common 目录也没被 `commondir` 文件指到别处。
+ * 主仓库的 git 目录里不该有 commondir;linked worktree 的要指回 commonDir
+ */
+export function pinIntact(pin: PinnedRepo): boolean {
+  try {
+    if (!sameId(pin.top, pin.ids.top) || !sameId(pin.gitDir, pin.ids.gitDir) || !sameId(pin.commonDir, pin.ids.commonDir)) return false
+    const link = join(pin.gitDir, 'commondir')
+    if (pin.gitDir === pin.commonDir) return !lexists(link)
+    return samePath(realpathSync.native(resolve(pin.gitDir, readFileSync(link, 'utf8').trim())), pin.commonDir)
+  } catch {
+    return false
+  }
+}
+
+/** 这个 git 的每条命令都只认钉住的仓库。commondir 文件也不看 */
+export const pinnedGit = (git: Git, pin: PinnedRepo): Git => (args, o) =>
+  git(args, { ...o, env: { GIT_DIR: pin.gitDir, GIT_WORK_TREE: pin.top, GIT_COMMON_DIR: pin.commonDir, ...o.env } })
+
+/** cwd 在仓库内的前缀,`/` 分隔、以 `/` 结尾;在仓库根时为 '' */
+export function repoPrefix(pin: PinnedRepo, cwd: string): string {
+  const rel = relative(pin.top, cwd)
+  if (rel === '') return ''
+  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Error('cwd is outside the pinned repo')
+  return `${rel.split(sep).join('/')}/`
+}
+
+/** 没有仓库、仓库变了:都不跑 git。不抛的调用方(takeSnapshot)自己先判 */
+function usable(pin: RepoPin): PinnedRepo {
+  if (pin.kind === 'none') throw new Error('不是 git 工作树')
+  if (!pinIntact(pin)) throw new Error('unsafe_repo')
+  return pin
+}
+
+/** 隔离钩子 + 钉住的仓库 */
+function inRepo<T>(git: Git, opts: { pin: RepoPin; tmpDir?: string }, fn: (g: Git, pin: PinnedRepo, dir: string) => Promise<T>): Promise<T> {
+  const pin = usable(opts.pin)
+  return guarded(pinnedGit(git, pin), opts.tmpDir, (g, dir) => fn(g, pin, dir))
+}
+
+async function headOf(g: Git, top: string): Promise<string | undefined> {
+  const h = await g(['rev-parse', '-q', '--verify', 'HEAD'], { cwd: top })
+  return h.code === 0 ? h.stdout.toString().trim() || undefined : undefined
 }
 
 /** 拆成词;引号外有 shell 才懂的字符,或者引号里有展开 → undefined:看不懂的命令不算安全 */
@@ -151,11 +228,8 @@ function shellWords(command: string): string[] | undefined {
   return words
 }
 
-/**
- * 这些程序的行为取决于 cwd 里的文件(`python -m x` 从 cwd 加载,`make` 读 Makefile,`sh x` 跑脚本),
- * 或者参数就是程序。git 跑过滤器时 cwd 是工作树,所以绝对路径也一样不安全。名单不可能全,见 spec §16
- */
-const CWD_DRIVEN = /^(sh|bash|zsh|dash|ksh|fish|csh|tcsh|env|xargs|nohup|exec|time|sudo|python[\d.]*|pypy[\d.]*|node|nodejs|deno|bun|ruby|perl|php|lua|java|npx|npm|pnpm|yarn|uv|uvx|pipx|make|gmake|rake|just|cargo|go|gradle|mvn)$/
+/** 能跑的过滤器。过滤器在沙箱外跑,所以只认这几个程序:见过 tclsh、osascript 这种从 stdin 读程序的,名单拦不完(final review C-1) */
+const FILTER_PROGRAMS = new Set(['git-lfs', 'git-crypt'])
 
 export interface FilterContext {
   /** 工作树根:git 跑过滤器时的 cwd */
@@ -167,8 +241,8 @@ export interface FilterContext {
 }
 
 /**
- * 过滤器命令会不会跑到沙箱写得到的东西。过滤器在沙箱外跑,所以这等于沙箱逃逸。
- * 看不懂的、相对路径、解析到可写根里的,都不安全;沙箱外的绝对路径和 PATH 上的程序(git-lfs、git-crypt)是安全的
+ * 过滤器命令能不能跑。只有 git-lfs、git-crypt,落在沙箱写不到的地方,才算安全;其余一律不安全,快照就不拍。
+ * 看不懂的、相对路径、解析到可写根里的、参数指向可写根或工作树里的文件,都不安全
  */
 export function unsafeFilterCommand(command: string, o: FilterContext): boolean {
   const words = shellWords(command)
@@ -179,7 +253,7 @@ export function unsafeFilterCommand(command: string, o: FilterContext): boolean 
     return real === OUTSIDE || o.roots.some(r => isInside(p, r, process.platform) || isInside(real, resolveToolPath(o.top, r), process.platform))
   }
   const [program, ...args] = words
-  if (/\s/.test(program) || program.includes('=') || CWD_DRIVEN.test(basename(program))) return true
+  if (/\s/.test(program) || program.includes('=') || !FILTER_PROGRAMS.has(basename(program))) return true
   if (program.includes('/')) {
     if (!isAbsolute(program) || inRoots(program)) return true
   } else {
@@ -208,13 +282,11 @@ export function unsafeFilterCommand(command: string, o: FilterContext): boolean 
 const FILTER_KEY = /^filter\..+\.(clean|smudge|process)$/i
 
 /** 现读 `filter.*`:用户配置、全局配置都算;属性文件 CLI 改得了,所以不看这个过滤器现在用没用上。读不了 = 不安全 */
-async function hasUnsafeFilter(g: Git, cwd: string, top: string, gitDir: string, writableRoots: string[] = []): Promise<boolean> {
-  const config = await g(['config', '-z', '--get-regexp', '^filter\\.'], { cwd })
+async function hasUnsafeFilter(g: Git, pin: PinnedRepo, writableRoots: string[] = []): Promise<boolean> {
+  const { top, gitDir, commonDir } = pin
+  const config = await g(['config', '-z', '--get-regexp', '^filter\\.'], { cwd: top })
   if (config.code === 1) return false
   if (config.code !== 0) return true
-  const common = await g(['rev-parse', '--git-common-dir'], { cwd })
-  if (common.code !== 0) return true
-  const commonDir = resolve(cwd, common.stdout.toString().split('\n')[0])
   const roots = [top, gitDir, commonDir, ...(basename(commonDir) === '.git' ? [dirname(commonDir)] : []), ...writableRoots]
   const o: FilterContext = { top, roots, path: process.env.PATH ?? '' }
   return splitZ(config.stdout).some(entry => {
@@ -229,6 +301,7 @@ const scope = (prefix: string) => (prefix ? `:(top,literal)${prefix}` : ':/')
 const splitZ = (b: Buffer) => b.toString().split('\0').filter(s => s !== '')
 
 export interface SnapshotOpts {
+  pin: RepoPin
   /** ref 已存在则失败(不覆盖) */
   createOnly?: boolean
   maxFileBytes?: number
@@ -239,10 +312,10 @@ export interface SnapshotOpts {
   writableRoots?: string[]
 }
 
-/** unsafe_filter:配置里有沙箱写得到的过滤器;拍不了这一轮就回滚不了 */
-export type SnapshotResult = { ref?: string; reason?: 'not_git' | 'too_large' | 'unsafe_filter' | 'error' }
+/** unsafe_filter:配置里有不认识或沙箱写得到的过滤器;unsafe_repo:钉住的仓库变了。拍不了这一轮就回滚不了 */
+export type SnapshotResult = { ref?: string; reason?: 'not_git' | 'too_large' | 'unsafe_filter' | 'unsafe_repo' | 'error' }
 
-export interface GitReadOpts { tmpDir?: string; writableRoots?: string[] }
+export interface GitReadOpts { pin: RepoPin; tmpDir?: string; writableRoots?: string[] }
 
 /** 一次并发 lstat 的个数 */
 const STAT_BATCH = 64
@@ -261,15 +334,17 @@ async function tooLarge(top: string, paths: string[], maxFile: number, maxTotal:
 }
 
 /** 把 cwd 前缀下的工作区(遵守 .gitignore)拍成一个提交,写到 ref;任何失败都不抛,只给 reason */
-export async function takeSnapshot(cwd: string, ref: string, git: Git, opts: SnapshotOpts = {}): Promise<SnapshotResult> {
+export async function takeSnapshot(cwd: string, ref: string, git: Git, opts: SnapshotOpts): Promise<SnapshotResult> {
   const maxFile = opts.maxFileBytes ?? 20 << 20
   const maxTotal = opts.maxTotalBytes ?? 200 << 20
+  if (opts.pin.kind === 'none') return { reason: 'not_git' }
+  if (!pinIntact(opts.pin)) return { reason: 'unsafe_repo' }
   try {
-    return await guarded(git, opts.tmpDir, async (g, dir): Promise<SnapshotResult> => {
-      const info = await readRepoInfo(cwd, g)
-      if (!info) return { reason: 'not_git' }
-      const { top, prefix, gitDir, head } = info
-      if (await hasUnsafeFilter(g, cwd, top, gitDir, opts.writableRoots)) return { reason: 'unsafe_filter' }
+    return await inRepo(git, opts, async (g, pin, dir): Promise<SnapshotResult> => {
+      const { top, gitDir } = pin
+      const prefix = repoPrefix(pin, cwd)
+      const head = await headOf(g, top)
+      if (await hasUnsafeFilter(g, pin, opts.writableRoots)) return { reason: 'unsafe_filter' }
       // 未跟踪且未忽略的文件:单个或合计过大 → 不拍(不把大文件塞进用户的对象库)
       const untracked = splitZ(await run(g, ['ls-files', '-o', '--exclude-standard', '-z', '--full-name', '--', scope(prefix)], { cwd: top }))
       if (await tooLarge(top, untracked, maxFile, maxTotal)) return { reason: 'too_large' }
@@ -322,13 +397,11 @@ async function clearAssumeUnchanged(g: Git, top: string, prefix: string, env: Re
 const STATUSES = new Set(['A', 'M', 'D', 'T'])
 
 /** from..to 之间 cwd 前缀下变化的文件(路径相对仓库根,`/` 分隔) */
-export function changes(cwd: string, from: string, to: string, git: Git, opts: GitReadOpts = {}): Promise<FileChange[]> {
-  return guarded(git, opts.tmpDir, async g => {
-    const info = await readRepoInfo(cwd, g)
-    if (!info) throw new Error(`不是 git 工作树:${cwd}`)
-    if (await hasUnsafeFilter(g, cwd, info.top, info.gitDir, opts.writableRoots)) throw new Error('unsafe_filter')
+export async function changes(cwd: string, from: string, to: string, git: Git, opts: GitReadOpts): Promise<FileChange[]> {
+  return inRepo(git, opts, async (g, pin) => {
+    if (await hasUnsafeFilter(g, pin, opts.writableRoots)) throw new Error('unsafe_filter')
     const parts = splitZ(
-      await run(g, ['diff', '--name-status', '--no-renames', '--no-ext-diff', '-z', from, to, '--', scope(info.prefix)], { cwd: info.top }),
+      await run(g, ['diff', '--name-status', '--no-renames', '--no-ext-diff', '-z', from, to, '--', scope(repoPrefix(pin, cwd))], { cwd: pin.top }),
     )
     const out: FileChange[] = []
     for (let i = 0; i + 1 < parts.length; i += 2) {
@@ -341,12 +414,10 @@ export function changes(cwd: string, from: string, to: string, git: Git, opts: G
 }
 
 /** from..to 之间 cwd 前缀下任一侧是子模块(gitlink,mode 160000)的路径:回滚写不回它们 */
-export function submodulePaths(cwd: string, from: string, to: string, git: Git, opts: { tmpDir?: string } = {}): Promise<string[]> {
-  return guarded(git, opts.tmpDir, async g => {
-    const info = await readRepoInfo(cwd, g)
-    if (!info) throw new Error(`不是 git 工作树:${cwd}`)
+export async function submodulePaths(cwd: string, from: string, to: string, git: Git, opts: { pin: RepoPin; tmpDir?: string }): Promise<string[]> {
+  return inRepo(git, opts, async (g, pin) => {
     const parts = splitZ(
-      await run(g, ['diff', '--raw', '--no-renames', '--no-ext-diff', '--no-abbrev', '-z', from, to, '--', scope(info.prefix)], { cwd: info.top }),
+      await run(g, ['diff', '--raw', '--no-renames', '--no-ext-diff', '--no-abbrev', '-z', from, to, '--', scope(repoPrefix(pin, cwd))], { cwd: pin.top }),
     )
     const out: string[] = []
     for (let i = 0; i + 1 < parts.length; i += 2) {
@@ -442,12 +513,10 @@ function pruneEmptyDirs(from: string, realCwd: string): void {
  * 把 files 按 from 的内容写回:from 里没有的删除,其余按 from 的内容与权限位写回(符号链接按链接重建)。
  * 先从 git 取齐全部内容再动文件;逐个处理,失败的(含无法写回的子模块)汇总后抛出
  */
-export function restore(cwd: string, from: string, files: FileChange[], git: Git, opts: GitReadOpts = {}): Promise<void> {
-  return guarded(git, opts.tmpDir, async g => {
-    const info = await readRepoInfo(cwd, g)
-    if (!info) throw new Error(`不是 git 工作树:${cwd}`)
+export async function restore(cwd: string, from: string, files: FileChange[], git: Git, opts: GitReadOpts): Promise<void> {
+  return inRepo(git, opts, async (g, info) => {
     // cat-file --filters 会跑 smudge
-    if (await hasUnsafeFilter(g, cwd, info.top, info.gitDir, opts.writableRoots)) throw new Error('unsafe_filter')
+    if (await hasUnsafeFilter(g, info, opts.writableRoots)) throw new Error('unsafe_filter')
     const realCwd = realpathSync.native(cwd)
     const targets = files.map(f => {
       return { f, p: target(realCwd, info.top, f.path) }
@@ -489,16 +558,16 @@ export function restore(cwd: string, from: string, files: FileChange[], git: Git
   })
 }
 
-/** 引用在不在;走隔离 git,cwd 可能是 CLI 写过的树 */
-export function refExists(cwd: string, ref: string, git: Git, opts: { tmpDir?: string } = {}): Promise<boolean> {
-  return guarded(git, opts.tmpDir, async g => (await g(['rev-parse', '-q', '--verify', ref], { cwd })).code === 0)
+/** 引用在不在 */
+export async function refExists(ref: string, git: Git, opts: { pin: RepoPin; tmpDir?: string }): Promise<boolean> {
+  return inRepo(git, opts, async (g, pin) => (await g(['rev-parse', '-q', '--verify', ref], { cwd: pin.top })).code === 0)
 }
 
 /** 一个会话(prefixRef 下)只留最近 keepTurns 轮的引用;按提交时间从新到旧,同一轮的 start / end / pre-rollback 算一轮 */
-export function pruneRefs(cwd: string, prefixRef: string, keepTurns: number, git: Git, opts: { tmpDir?: string } = {}): Promise<void> {
-  return guarded(git, opts.tmpDir, async g => {
+export async function pruneRefs(prefixRef: string, keepTurns: number, git: Git, opts: { pin: RepoPin; tmpDir?: string }): Promise<void> {
+  return inRepo(git, opts, async (g, { top }) => {
     const base = prefixRef.replace(/\/+$/, '') + '/'
-    const out = await run(g, ['for-each-ref', '--sort=-committerdate', '--format=%(refname)', base], { cwd })
+    const out = await run(g, ['for-each-ref', '--sort=-committerdate', '--format=%(refname)', base], { cwd: top })
     const kept = new Set<string>()
     const drop: string[] = []
     for (const ref of out.toString().split('\n').filter(Boolean)) {
@@ -507,6 +576,6 @@ export function pruneRefs(cwd: string, prefixRef: string, keepTurns: number, git
       if (kept.size < keepTurns) kept.add(turn)
       else drop.push(ref)
     }
-    if (drop.length) await run(g, ['update-ref', '--stdin'], { cwd, input: Buffer.from(drop.map(r => `delete ${r}\n`).join('')) })
+    if (drop.length) await run(g, ['update-ref', '--stdin'], { cwd: top, input: Buffer.from(drop.map(r => `delete ${r}\n`).join('')) })
   })
 }

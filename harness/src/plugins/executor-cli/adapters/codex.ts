@@ -41,12 +41,21 @@ function profilePaths(i: Pick<BuildInput, 'denyRead' | 'readOnlyPaths'>): { none
   return { none, read: read.filter(r => !none.some(n => atOrUnder(r, n))) }
 }
 
+/**
+ * cwd 可写,但这些不行(实测 0.154,`codex sandbox`,见 spec §8.1):
+ * - `.codex`、`.qoder`:Codex 主进程不在沙箱里,cwd 的配置它自己会加载。`.codex` 现在它自己也保护,这里不靠版本行为;
+ * - 嵌套仓库的 hooks、config:Codex 只保护 cwd 那一层 `.git`。glob 只支持 none,所以这两处读也不行,嵌套仓库里跑不了 git;
+ *   `*`+`/**` 不含 cwd 自己的 `.git`,那里只读不是 none。
+ * `:project_roots` 里的相对路径按 `-C` 算
+ */
+const PROJECT_ROOTS = '":project_roots"={"."="write",".codex"="read",".qoder"="read","*/**/.git/hooks/**"="none","*/**/.git/config"="none"}'
+
 /** 真实运行和自检共用这一个。带 glob 字符的 read 不写:那样的运行已经按 none 算,写了只会让 Codex 退出 */
 export function filesystemMap(i: Pick<BuildInput, 'denyRead' | 'readOnlyPaths' | 'readOnly'>): string {
   const { none, read } = profilePaths(i)
   const entries = [
     '":root"="read"',
-    ...(i.readOnly ? [] : ['":project_roots"={"."="write"}']),
+    ...(i.readOnly ? [] : [PROJECT_ROOTS]),
     '":tmpdir"="write"',
     ...none.map(p => `${tomlString(p)}="none"`),
     ...read.filter(p => !GLOB.test(p)).map(p => `${tomlString(p)}="read"`),
@@ -75,11 +84,25 @@ const SELF_TEST_ROWS: Record<string, boolean> = {
   cwd_write: true,
   outside_write: false,
   git_write: false,
+  nested_git_hook: false,
+  nested_git_config: false,
+  codex_config_write: false,
+  qoder_config_write: false,
   tmp_write: true,
   rule_write: false,
   rule_read: false,
   secret_dir_read: false,
   net_connect: false,
+}
+
+/**
+ * 从仓库子目录跑的那一遍:`:project_roots` 要是 cwd 而不是 git 顶层。
+ * 是顶层的话,仓库子目录里的会话委派出去就能写整个仓库
+ */
+const SELF_TEST_SUBDIR_ROWS: Record<string, boolean> = {
+  sub_cwd_write: true,
+  parent_write: false,
+  sibling_write: false,
 }
 
 /** 只读那一遍:没有 :project_roots,cwd 写不了但读得了 */
@@ -190,7 +213,7 @@ export const codexAdapter: Adapter = {
   selfTest(i) {
     const readOnly = i.readOnly === true
     const flags = configFlags({ denyRead: [...(i.denyRead ?? []), i.secret], readOnlyPaths: i.readOnlyPaths ?? [], readOnly, network: false })
-    const rows = readOnly ? SELF_TEST_READ_ONLY_ROWS : SELF_TEST_ROWS
+    const rows = readOnly ? SELF_TEST_READ_ONLY_ROWS : i.subdir ? SELF_TEST_SUBDIR_ROWS : SELF_TEST_ROWS
     return {
       args: ['sandbox', '-C', requireAbsolute(i.dir, 'dir'), ...flags, ...i.flags, '-P', PROFILE, '--'],
       parse: out => failedRows(rows, out),

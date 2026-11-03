@@ -1,12 +1,12 @@
 // loop-default:接管带工作目录的会话(spec §8);没有 cwd / 没有模型时让位给 loop-direct / loop-echo。
 // 每轮前后拍快照(spec §11),并注册 turn.rollback / turn.changes
 import { mkdirSync, realpathSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Plugin } from '../../kernel/pluginHost'
 import { RpcError } from '../../kernel/rpcError'
 import type { Sessions } from '../../kernel/sessions'
-import { createGit, type Git } from '../../lib/git/snapshot'
+import { createGit, NO_REPO, type Git } from '../../lib/git/snapshot'
 import type { ModelsService } from '../../lib/models/types'
 import type { BackgroundRuns, ToolsService, TurnInbox } from '../../lib/tools/types'
 import { ERR_BUSY, type ModelRef, type WorkerParams } from '../../protocol/index'
@@ -41,7 +41,7 @@ export function createLoopDefault(opts: LoopDefaultOpts = {}): Plugin {
         tmpDir,
         log: ctx.log,
         append: e => ctx.append(e),
-        writableRoots: writableRootsFor(ctx.dataDir, realpathSync(tmpdir())),
+        writableRoots: writableRootsFor(ctx.dataDir, realpathSync(tmpdir()), process.env.HOME ?? homedir()),
       }
 
       /** 本插件正在跑的轮(从接管到结束快照拍完),按会话 */
@@ -79,7 +79,7 @@ export function createLoopDefault(opts: LoopDefaultOpts = {}): Plugin {
         // 只经服务,不 import 插件;没有 executor-cli 时循环与 03 完全一样
         const background = ctx.services.get<BackgroundRuns>('executors')
         active.add(sessionId)
-        const target = { sessionId, cwd }
+        const target = { sessionId, cwd, pin: info.repo ?? NO_REPO }
         let startRef: string | undefined
         let outcome: TurnOutcome | undefined
         try {
@@ -133,28 +133,26 @@ export function createLoopDefault(opts: LoopDefaultOpts = {}): Plugin {
         return true
       })
 
-      const cwdOf = (sessionId: string) => {
-        const cwd = sessions.get(sessionId)?.cwd
-        if (!cwd) throw new RpcError(-32602, 'not rollbackable')
-        return cwd
+      const targetOf = (sessionId: string, message: string) => {
+        const info = sessions.get(sessionId)
+        if (!info?.cwd) throw new RpcError(-32602, message)
+        return { sessionId, cwd: info.cwd, pin: info.repo ?? NO_REPO }
       }
 
       ctx.rpc.register('turn.rollback', async params => {
         const { sessionId, turnId } = params as WorkerParams<'turn.rollback'>
-        const cwd = cwdOf(sessionId)
+        const target = targetOf(sessionId, 'not rollbackable')
         return exclusive(sessionId, async () => {
           const events = ctx.events.history(sessionId)
           if (active.has(sessionId) || hasOpenTurn(sessionId, events)) throw new RpcError(ERR_BUSY, 'turn in progress')
-          const { files, skipped } = await rollbackTurn(snap, { sessionId, cwd }, events, turnId)
+          const { files, skipped } = await rollbackTurn(snap, target, events, turnId)
           return { ok: true as const, files, ...(skipped.length && { skipped }) }
         })
       })
 
       ctx.rpc.register('turn.changes', async params => {
         const { sessionId, turnId } = params as WorkerParams<'turn.changes'>
-        const cwd = sessions.get(sessionId)?.cwd
-        if (!cwd) throw new RpcError(-32602, 'snapshots missing')
-        return { files: await turnChanges(snap, { sessionId, cwd }, ctx.events.history(sessionId), turnId) }
+        return { files: await turnChanges(snap, targetOf(sessionId, 'snapshots missing'), ctx.events.history(sessionId), turnId) }
       })
     },
   }

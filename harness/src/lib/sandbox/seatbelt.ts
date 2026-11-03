@@ -9,6 +9,7 @@
 // - SBPL 不解码 \uXXXX:含控制字符的路径会被 JSON.stringify 写成 \u0001,拼写对不上 → 拒绝规则悄悄失效。
 //   所以含 C0 控制字符、DEL、孤立代理项的路径直接抛错(宁可命令跑不了,也不放过);
 // - 正则里的路径先转义全部正则元字符,再整体 JSON.stringify。
+import { posix } from 'node:path'
 import { cleanPath, realSpelling } from './paths'
 
 export interface SeatbeltParams {
@@ -29,6 +30,8 @@ export interface SeatbeltParams {
   /** 04:在放回之后再拒,放回盖不掉(用户规则、豁免目录里嵌套的凭据) */
   finalDenyRead?: string[]
   finalDenyWrite?: string[]
+  /** 04:cwd 里 CLI 会加载的配置目录,不存在也不能建,不分大小写 */
+  projectConfig?: string[]
   /** 拒改名 / 删除的路径(literal),调用方已加上它们在可写根内的各级父目录;gitDir 及其 hooks / config / modules / worktrees 由这里自己加 */
   moveBlock: string[]
   /** 本会话代理的 TCP 端口(127.0.0.1);没有 → 网络全断 */
@@ -96,6 +99,9 @@ function rule(action: 'allow' | 'deny', ops: string, parts: string[]): string[] 
   return body ? [`(${action} ${ops} ${body})`] : []
 }
 
+/** 拼写不分大小写:APFS 上 `.CODEX` 就是 `.codex`,而 Seatbelt 按字面比 */
+const anyCase = (name: string) => name.replace(/[a-z]/g, c => `[${c}${c.toUpperCase()}]`).replace(/\./g, '\\.')
+
 export function seatbeltProfile(p: SeatbeltParams): string {
   if (p.proxyPort !== undefined && !(Number.isInteger(p.proxyPort) && p.proxyPort > 0 && p.proxyPort < 65536)) {
     throw new Error(`seatbelt: bad proxy port ${p.proxyPort}`)
@@ -103,7 +109,8 @@ export function seatbeltProfile(p: SeatbeltParams): string {
   const gitDirs = spellings(p.gitDirs)
   const cwdGitFile = p.cwdGitFile === undefined ? [] : spellings([p.cwdGitFile])
 
-  const gitLiteral = gitDirs.flatMap(g => [`${g}/config`, `${g}/config.worktree`])
+  // commondir:git 目录里多一个这个文件,git 就读它指的那个目录的配置(final review C-1)
+  const gitLiteral = gitDirs.flatMap(g => [`${g}/config`, `${g}/config.worktree`, `${g}/commondir`])
   const gitSubpath = gitDirs.map(g => `${g}/hooks`)
   const gitRegex = gitDirs.flatMap(g => {
     const e = reEscape(g)
@@ -157,12 +164,15 @@ export function seatbeltProfile(p: SeatbeltParams): string {
     ...rule('deny', 'file-write*', [
       filters('subpath', [...spellings(p.denyWrite), ...gitSubpath]),
       filters('literal', [...gitLiteral, ...cwdGitFile]),
-      regexes([...gitRegex, '/\\.git/(hooks|config)(/|$)']),
+      regexes([...gitRegex, '/\\.git/(hooks|config|commondir)(/|$)']),
     ]),
     // 写 c
     ...rule('allow', 'file-write*', [filters('subpath', spellings(p.reAllowWrite))]),
     // 写 c2
-    ...rule('deny', 'file-write*', [filters('subpath', spellings(p.finalDenyWrite ?? []))]),
+    ...rule('deny', 'file-write*', [
+      filters('subpath', spellings(p.finalDenyWrite ?? [])),
+      regexes((p.projectConfig ?? []).flatMap(d => spellings([posix.dirname(d)]).map(parent => `^${reEscape(parent)}/${anyCase(posix.basename(d))}(/|$)`))),
+    ]),
     // 写 d
     ...rule('deny', 'file-write-unlink file-write-create', [filters('literal', moveBlock), regexes(gitMoveRegex)]),
   ]

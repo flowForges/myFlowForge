@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { pinFromPaths } from '../lib/git/snapshot'
 import type { SandboxService } from '../lib/tools/types'
 import { createSandboxService } from './sandbox'
 
@@ -42,11 +43,11 @@ describe.skipIf(!usable)('kernel sandbox, real sandbox-exec: submodule git dirs'
     mkdirSync(join(logs, 'hooks'))
     writeFileSync(join(logs, 'HEAD'), 'ref: refs/heads/main\n')
     writeFileSync(join(logs, 'config'), '[core]\n')
-    const missingGit = (async () => { throw new Error('no git in this test') }) as never // 走目录兜底,不需要真的 git
     svc = createSandboxService({
       platform: 'darwin', dataDir: join(root, 'data'), home, env: { HOME: home }, detected: { level: 'full', missing: [] },
       permissions: () => ({ rules: [], network: { allow: [] }, sandbox: { enabled: true, allowLoopback: false }, allowUnsandboxedAuto: false }),
-      rules: () => [], append: () => {}, git: missingGit,
+      rules: () => [], append: () => {},
+      repoPin: () => pinFromPaths(repo, join(repo, '.git'), join(repo, '.git')),
     })
   })
   afterAll(async () => {

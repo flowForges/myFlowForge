@@ -369,7 +369,7 @@ describe('a changed binary', () => {
     expect(execCalls(f)).toEqual([])
     // 后台重新探测:跑到结束后 info 对得上新文件,不用 refresh
     await waitFor(() => f.calls().length > probes)
-    for (let i = 0; i < 500 && f.calls().filter(c => c.argv[0] === 'sandbox').length < 4; i++) await sleep(10)
+    for (let i = 0; i < 500 && f.calls().filter(c => c.argv[0] === 'sandbox').length < 6; i++) await sleep(10)
     const sid2 = await create(k, { approvalMode: 'ask' })
     await prompt(k, sid2, 'retry please')
     await respond(k, (await approval(k, sid2)).approvalId, 'allow')

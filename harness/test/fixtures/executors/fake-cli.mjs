@@ -73,15 +73,18 @@ function write(stream, text) {
   return new Promise(res => stream.write(text, () => res()))
 }
 
-const SELFTEST_ROWS = { secret_read: 1, cwd_write: 0, outside_write: 1, git_write: 1, tmp_write: 0, rule_write: 1, rule_read: 1, secret_dir_read: 1, net_connect: 1 }
+const SELFTEST_ROWS = { secret_read: 1, cwd_write: 0, outside_write: 1, git_write: 1, nested_git_hook: 1, nested_git_config: 1, codex_config_write: 1, qoder_config_write: 1, tmp_write: 0, rule_write: 1, rule_read: 1, secret_dir_read: 1, net_connect: 1 }
 /** 权限档里没有 :project_roots = 只读那一遍 */
 const READ_ONLY_ROWS = { ro_cwd_write: 1, ro_cwd_read: 0 }
+/** 从仓库子目录跑的那一遍:-C 指向 …/sub */
+const SUBDIR_ROWS = { sub_cwd_write: 0, parent_write: 1, sibling_write: 1 }
+const isSubdirPass = () => argv[argv.indexOf('-C') + 1]?.endsWith('/sub')
 const isReadOnlyPass = () => argv.some(a => a.startsWith('permissions.mffai.filesystem=') && !a.includes(':project_roots'))
 
 function selfTestOutput(selftest = 'pass') {
   const failed = selftest.startsWith('fail:') ? selftest.slice('fail:'.length) : undefined
   const omitted = selftest.startsWith('omit:') ? selftest.slice('omit:'.length) : undefined
-  return Object.entries(isReadOnlyPass() ? READ_ONLY_ROWS : SELFTEST_ROWS)
+  return Object.entries(isReadOnlyPass() ? READ_ONLY_ROWS : isSubdirPass() ? SUBDIR_ROWS : SELFTEST_ROWS)
     .filter(([row]) => row !== omitted)
     .map(([row, r]) => `${row} r=${row === failed ? 1 - r : r}\n`)
     .join('')
@@ -128,7 +131,7 @@ async function main() {
       call('')
       return runCommand()
     }
-    if (sc.selftestConnect && !isReadOnlyPass()) await connectOnce(Number(argv.at(-1)))
+    if (sc.selftestConnect && !isReadOnlyPass() && !isSubdirPass()) await connectOnce(Number(argv.at(-1)))
     return answer(selfTestOutput(sc.selftest), sc.selftestExit ?? 0)
   }
 

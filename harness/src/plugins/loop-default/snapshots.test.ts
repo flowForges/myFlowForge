@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createKernel, type Kernel } from '../../kernel/kernel'
+import { Sessions } from '../../kernel/sessions'
 import type { Plugin } from '../../kernel/pluginHost'
+import { syncPin } from '../../../test/syncPin'
 import { createGit, type Git } from '../../lib/git/snapshot'
 import type { Message, ModelEvent, ModelRequest, ModelsService } from '../../lib/models/types'
 import type { BackgroundRuns, RunNotice } from '../../lib/tools/types'
@@ -619,6 +621,63 @@ describe('Review Focus 3a: a follow-up stays in the same turn (real kernel inbox
   })
 })
 
+describe('the session pin, through the real kernel (final review C-1)', () => {
+  const createdPin = (k: Kernel, sid: string) => pay<{ repo?: { kind: string; top?: string } }>(evs(k, sid).find(e => e.type === 'session.created')).repo
+
+  it('session.create records the repo; a restart keeps it and snapshots use it', async () => {
+    initRepo()
+    const k = await boot([], () => oneTool('write', { path: 'new.txt', content: 'n\n' }))
+    const sid = await create(k, CLAUDE)
+    expect(createdPin(k, sid)).toMatchObject({ kind: 'repo', top: repo })
+    await k.close()
+    kernels = []
+    const k2 = await boot([], () => oneTool('write', { path: 'two.txt', content: 'n\n' }))
+    const turnId = await turn(k2, sid, 'again')
+    expect(snaps(k2, sid, turnId).map(s => s.reason)).toEqual([undefined, undefined])
+    expect(await changesOf(k2, sid, turnId)).toEqual({ files: [{ path: 'two.txt', status: 'A' }] })
+  })
+
+  it('a replayed session.create returns the same session and does not ask git again', async () => {
+    initRepo()
+    const k = await boot([], () => oneTool('write', { path: 'n.txt', content: 'n\n' }))
+    const params = { commandId: 'same', model: CLAUDE, cwd: repo, approvalMode: 'auto' }
+    const a = await k.handle('session.create', params)
+    rmSync(join(repo, '.git'), { recursive: true, force: true })
+    expect(await k.handle('session.create', params)).toEqual(a)
+  })
+
+  it('pinned "none": a repo created later never gets a snapshot, its refs stay empty', async () => {
+    const k = await boot([], () => oneTool('write', { path: 'n.txt', content: 'n\n' }))
+    const sid = await create(k, CLAUDE)
+    expect(createdPin(k, sid)).toEqual({ kind: 'none' })
+    initRepo()
+    const turnId = await turn(k, sid, 'go')
+    expect(snaps(k, sid, turnId).map(s => s.reason)).toEqual(['not_git', 'not_git'])
+    expect(hidden()).toEqual([])
+    await expect(rollback(k, sid, turnId)).rejects.toThrow()
+  })
+
+  it('.git replaced after the turn: unsafe_repo on the next turn, and rollback of the old one is refused', async () => {
+    initRepo()
+    const k = await boot([], () => oneTool('write', { path: 'n.txt', content: 'n\n' }))
+    const sid = await create(k, CLAUDE)
+    const first = await turn(k, sid, 'one')
+    expect(snaps(k, sid, first).map(s => s.reason)).toEqual([undefined, undefined])
+    renameSync(join(repo, '.git'), join(root, 'aside'))
+    writeFileSync(join(repo, '.git'), 'gitdir: evil\n')
+    await expect(rollback(k, sid, first)).rejects.toThrow(/unsafe_repo/)
+    await expect(changesOf(k, sid, first)).rejects.toThrow(/unsafe_repo/)
+    const second = await turn(k, sid, 'two')
+    expect(snaps(k, sid, second).map(s => s.reason)).toEqual(['unsafe_repo', 'unsafe_repo'])
+  })
+
+  it('a session in the log with no recorded repo (older log) counts as no repo', () => {
+    const s = new Sessions(dataDir)
+    s.observe({ type: 'session.created', sessionId: 'old', seq: 1, ts: 0, payload: { title: 't', cwd: repo } } as KernelEvent)
+    expect(s.get('old')?.repo).toEqual({ kind: 'none' })
+  })
+})
+
 describe('unsafe_filter: rollback is unavailable for that turn (Task 9 review C3)', () => {
   const mark = () => join(root, 'filter-ran')
   const deps = (events: KernelEvent[]): SnapshotDeps => {
@@ -636,12 +695,12 @@ describe('unsafe_filter: rollback is unavailable for that turn (Task 9 review C3
     writeFileSync(R('.gitattributes'), '*.txt filter=f\n')
     ug(['config', 'filter.f.clean', './tool.sh'])
   }
-  const t = () => ({ sessionId: 's', cwd: repo })
+  const t = () => ({ sessionId: 's', cwd: repo, pin: syncPin(repo, baseEnv()) })
   const opened = (turnId: string): KernelEvent[] => [{ type: 'message.user', sessionId: 's', seq: 0, ts: 0, payload: { turnId, text: 'x' } } as unknown as KernelEvent]
 
   it('what counts as writable: the whole data dir and the worktrees beside it, worked out from the plugin dir', () => {
     // 不走真内核:测试的数据目录都在系统临时目录里,临时目录本来就在名单上,看不出区别
-    expect(writableRootsFor('/d/data/plugins/loop-default', '/tmp/x')).toEqual(['/d/data', '/d/data-worktrees', '/tmp/x'])
+    expect(writableRootsFor('/d/data/plugins/loop-default', '/tmp/x', '/h')).toEqual(['/d/data', '/d/data-worktrees', '/tmp/x', '/h/.qoder'])
   })
 
   it('both snapshots report the reason, no ref, no marker, not rollbackable', async () => {

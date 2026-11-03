@@ -1,9 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { changes, createGit, gitEnv, pruneRefs, refExists, repoInfo, restore, takeSnapshot, unsafeFilterCommand, type Git } from './snapshot'
+import * as git_ from './snapshot'
+import { createGit, gitEnv, NO_REPO, parsePin, pinIntact, pinRepo, unsafeFilterCommand, type Git, type PinnedRepo, type SnapshotOpts, type GitReadOpts } from './snapshot'
+
+// 这个文件大部分测的不是钉子:每次调用现定一个。钉子自己的语义在 "the pinned repo" 里
+type Later<T> = Omit<T, 'pin'>
+const takeSnapshot = async (cwd: string, ref: string, g: Git, o: Later<SnapshotOpts> = {}) => git_.takeSnapshot(cwd, ref, g, { ...o, pin: await pinRepo(cwd, g) })
+const changes = async (cwd: string, from: string, to: string, g: Git, o: Later<GitReadOpts> = {}) => git_.changes(cwd, from, to, g, { ...o, pin: await pinRepo(cwd, g) })
+const restore = async (cwd: string, from: string, files: Parameters<typeof git_.restore>[2], g: Git, o: Later<GitReadOpts> = {}) => git_.restore(cwd, from, files, g, { ...o, pin: await pinRepo(cwd, g) })
+const pruneRefs = async (cwd: string, prefix: string, keep: number, g: Git, o: { tmpDir?: string } = {}) => git_.pruneRefs(prefix, keep, g, { ...o, pin: await pinRepo(cwd, g) })
+const refExists = async (cwd: string, ref: string, g: Git, o: { tmpDir?: string } = {}) => git_.refExists(ref, g, { ...o, pin: await pinRepo(cwd, g) })
 
 let root: string
 let home: string
@@ -86,19 +95,149 @@ describe('gitEnv', () => {
   })
 })
 
-describe('repoInfo', () => {
-  it('reports top, prefix, gitDir and HEAD', async () => {
+describe('pinRepo', () => {
+  it('records the top and git dirs by real path, the same from a subdirectory', async () => {
     initRepo()
-    write(R('sub/x.txt'), 'x')
-    ug(['add', '.'])
-    commit('init')
-    const head = ug(['rev-parse', 'HEAD']).trim()
-    expect(await repoInfo(R('sub'), git())).toEqual({ top: repo, prefix: 'sub/', gitDir: join(repo, '.git'), head })
-    expect(await repoInfo(repo, git())).toMatchObject({ prefix: '', head })
+    mkdirSync(R('sub'))
+    const pin = (await pinRepo(R('sub'), git())) as PinnedRepo
+    expect(pin).toMatchObject({ kind: 'repo', top: repo, gitDir: join(repo, '.git'), commonDir: join(repo, '.git') })
+    expect(pinIntact(pin)).toBe(true)
+    expect(git_.repoPrefix(pin, R('sub'))).toBe('sub/')
+    expect(git_.repoPrefix(pin, repo)).toBe('')
+    expect(() => git_.repoPrefix(pin, tmp)).toThrow()
   })
 
-  it('is undefined outside a repo', async () => {
-    expect(await repoInfo(tmp, git())).toBeUndefined()
+  it('no repo, and git failing or missing, are all "none"', async () => {
+    expect(await pinRepo(tmp, git())).toEqual(NO_REPO)
+    expect(await pinRepo(tmp, (async () => { throw new Error('spawn git ENOENT') }) as Git)).toEqual(NO_REPO)
+  })
+
+  it('a stored pin of the wrong shape reads back as no repo', async () => {
+    initRepo()
+    const pin = await pinRepo(repo, git())
+    expect(parsePin(JSON.parse(JSON.stringify(pin)))).toEqual(pin)
+    for (const bad of [undefined, null, 'x', { kind: 'repo' }, { ...pin, top: 'relative' }, { ...pin, ids: {} }]) expect(parsePin(bad)).toEqual(NO_REPO)
+  })
+})
+
+describe('the pinned repo (final review C-1)', () => {
+  const ref = 'refs/mffai/x/t-start'
+  const mark = () => join(root, 'filter-ran')
+  /** 能在沙箱里写出来的一整套:.git 文件 → evil,里面配了跑 touch 的过滤器,payload 走这个过滤器 */
+  const plant = (dir: string) => {
+    write(join(dir, 'evil/HEAD'), 'ref: refs/heads/main\n')
+    mkdirSync(join(dir, 'evil/objects'), { recursive: true })
+    mkdirSync(join(dir, 'evil/refs'), { recursive: true })
+    write(join(dir, 'evil/config'), `[filter "x"]\n\tclean = /usr/bin/touch ${mark()}\n`)
+    write(join(dir, '.git'), 'gitdir: evil\n')
+    write(join(dir, '.gitattributes'), 'payload filter=x\n')
+    write(join(dir, 'payload'), 'x\n')
+  }
+  const seeded = async () => {
+    initRepo()
+    write(R('sub/keep.txt'), 'k\n')
+    ug(['add', '.'])
+    commit('init')
+    return (await pinRepo(R('sub'), git())) as PinnedRepo
+  }
+
+  it('every git call carries the pinned GIT_DIR, GIT_WORK_TREE and GIT_COMMON_DIR and runs at the top', async () => {
+    const pin = await seeded()
+    const seen: Parameters<Git>[1][] = []
+    const g = git()
+    const spy: Git = (a, o) => (seen.push(o), g(a, o))
+    const r = await git_.takeSnapshot(R('sub'), ref, spy, { pin })
+    expect(r.ref).toBe(ref)
+    await git_.changes(R('sub'), ref, ref, spy, { pin })
+    await git_.refExists(ref, spy, { pin })
+    await git_.pruneRefs('refs/mffai/x', 5, spy, { pin })
+    expect(seen.length).toBeGreaterThan(5)
+    for (const o of seen) {
+      expect(o.env).toMatchObject({ GIT_DIR: join(repo, '.git'), GIT_WORK_TREE: repo, GIT_COMMON_DIR: join(repo, '.git') })
+      expect(o.cwd).toBe(repo)
+    }
+  })
+
+  it('a planted repo in a subdirectory is not the repo: its filter never runs', async () => {
+    const pin = await seeded()
+    plant(R('sub'))
+    const r = await git_.takeSnapshot(R('sub'), ref, git(), { pin })
+    expect(existsSync(mark())).toBe(false)
+    // git 把它当嵌套仓库,没提交就拍不了;拍得了也不进去
+    expect(r.ref === ref || r.reason === 'error').toBe(true)
+    expect(hidden().filter(h => h !== ref)).toEqual([])
+    expect(existsSync(R('sub/evil/refs/mffai'))).toBe(false)
+  })
+
+  it('pinned "none" never runs git, even when a valid repo appears later', async () => {
+    const dir = join(root, 'plain')
+    mkdirSync(dir)
+    const pin = await pinRepo(dir, git())
+    expect(pin).toEqual(NO_REPO)
+    plant(dir)
+    let calls = 0
+    const spy: Git = () => { calls++; throw new Error('git ran') }
+    expect(await git_.takeSnapshot(dir, ref, spy, { pin })).toEqual({ reason: 'not_git' })
+    await expect(git_.changes(dir, 'a', 'b', spy, { pin })).rejects.toThrow(/不是 git/)
+    await expect(git_.restore(dir, 'a', [], spy, { pin })).rejects.toThrow(/不是 git/)
+    await expect(git_.refExists('a', spy, { pin })).rejects.toThrow(/不是 git/)
+    expect(calls).toBe(0)
+    expect(existsSync(mark())).toBe(false)
+  })
+
+  const unsafeNow = async (pin: PinnedRepo) => {
+    let calls = 0
+    const spy: Git = () => { calls++; throw new Error('git ran') }
+    expect(await git_.takeSnapshot(R('sub'), ref, spy, { pin })).toEqual({ reason: 'unsafe_repo' })
+    await expect(git_.changes(R('sub'), 'a', 'b', spy, { pin })).rejects.toThrow(/unsafe_repo/)
+    await expect(git_.restore(R('sub'), 'a', [], spy, { pin })).rejects.toThrow(/unsafe_repo/)
+    expect(calls).toBe(0)
+  }
+
+  it('.git replaced by a file, by a symlink, or moved → unsafe_repo, git never runs', async () => {
+    const pin = await seeded()
+    expect(pinIntact(pin)).toBe(true)
+    const aside = join(root, 'aside')
+    renameSync(join(repo, '.git'), aside)
+    writeFileSync(join(repo, '.git'), 'gitdir: evil\n')
+    await unsafeNow(pin)
+    rmSync(join(repo, '.git'))
+    symlinkSync(aside, join(repo, '.git'))
+    await unsafeNow(pin)
+    rmSync(join(repo, '.git'))
+    await unsafeNow(pin)
+  })
+
+  it('a .git directory rebuilt with the same path is a different repo', async () => {
+    const pin = await seeded()
+    renameSync(join(repo, '.git'), join(root, 'aside'))
+    ug(['init', '-q'])
+    await unsafeNow(pin)
+  })
+
+  it('a commondir file inside the git dir → unsafe_repo', async () => {
+    const pin = await seeded()
+    writeFileSync(join(repo, '.git', 'commondir'), '../evil\n')
+    await unsafeNow(pin)
+  })
+
+  it('a repo moved away → unsafe_repo', async () => {
+    const pin = await seeded()
+    renameSync(repo, join(root, 'moved'))
+    mkdirSync(R('sub'), { recursive: true })
+    await unsafeNow(pin)
+  })
+
+  it('a linked worktree keeps its own git dir, and its commondir has to lead back', async () => {
+    await seeded()
+    const linked = join(root, 'linked')
+    ug(['worktree', 'add', '-q', '--detach', linked])
+    const pin = (await pinRepo(linked, git())) as PinnedRepo
+    expect(pin.gitDir).toBe(join(repo, '.git', 'worktrees', 'linked'))
+    expect(pin.commonDir).toBe(join(repo, '.git'))
+    expect((await git_.takeSnapshot(linked, ref, git(), { pin })).ref).toBe(ref)
+    writeFileSync(join(pin.gitDir, 'commondir'), `${join(root, 'evil')}\n`)
+    expect(pinIntact(pin)).toBe(false)
   })
 })
 
@@ -348,7 +487,8 @@ describe('takeSnapshot edge cases', () => {
   it('git not on PATH → error, no throw', async () => {
     initRepo()
     const g = createGit({ base: { ...base(), PATH: join(root, 'nobin') }, extraEnv: injected() })
-    expect(await takeSnapshot(repo, 'refs/mffai/snapshots/s/t-start', g, { tmpDir: tmp })).toEqual({ reason: 'error' })
+    const pin = await pinRepo(repo, git())
+    expect(await git_.takeSnapshot(repo, 'refs/mffai/snapshots/s/t-start', g, { tmpDir: tmp, pin })).toEqual({ reason: 'error' })
     expect(readdirSync(tmp)).toEqual([])
   })
 
@@ -436,8 +576,12 @@ describe('review fixes', () => {
   it('I3: restore writes the checkout form (autocrlf line endings, smudge filter)', async () => {
     initRepo()
     ug(['config', 'core.autocrlf', 'true'])
-    ug(['config', 'filter.rot.clean', 'tr a-zA-Z n-za-mN-ZA-M'])
-    ug(['config', 'filter.rot.smudge', 'tr a-zA-Z n-za-mN-ZA-M'])
+    // 只有 git-lfs、git-crypt 能跑:拿这个名字的脚本验检出转换
+    const lfs = join(root, 'bin', 'git-lfs')
+    write(lfs, '#!/bin/sh\nexec /usr/bin/tr a-zA-Z n-za-mN-ZA-M\n')
+    chmodSync(lfs, 0o755)
+    ug(['config', 'filter.rot.clean', lfs])
+    ug(['config', 'filter.rot.smudge', lfs])
     write(R('.gitattributes'), 'secret.txt filter=rot\n')
     const crlf = Buffer.from('line1\r\nline2\r\n')
     write(R('crlf.txt'), crlf)
@@ -705,8 +849,12 @@ describe('a filter a sandboxed CLI could rewrite never runs (Task 9 review C3)',
     expect(existsSync(mark())).toBe(false)
   })
 
-  it('an absolute filter outside the writable roots still runs', async () => {
-    fixture('clean', '/usr/bin/tr a-z a-z')
+  it('git-lfs at an absolute path outside the writable roots still runs', async () => {
+    const bin = join(root, 'bin')
+    mkdirSync(bin)
+    writeFileSync(join(bin, 'git-lfs'), '#!/bin/sh\ncat\n')
+    chmodSync(join(bin, 'git-lfs'), 0o755)
+    fixture('clean', `${join(bin, 'git-lfs')} clean -- %f`)
     const r = await takeSnapshot(repo, 'refs/mffai/x/t-start', g(), { tmpDir: tmp })
     expect(r.reason).toBeUndefined()
     expect(r.ref).toBeDefined()
@@ -725,15 +873,18 @@ describe('a filter a sandboxed CLI could rewrite never runs (Task 9 review C3)',
 
     it.each([
       ['./tool.sh'], ['../tool.sh'], ['tools/clean.sh'], ['"./tool.sh" clean'],
+      // 名单外的一律不安全,哪怕落在沙箱写不到的地方、哪怕是从 stdin 读程序的那种(final review C-1)
+      ['tclsh'], ['/usr/bin/tclsh'], ['osascript'], ['sqlite3 -batch'], ['expect'], ['cat'], ['tr a-z A-Z'], ['/usr/bin/tr a b'], ['"/usr/bin/tr" a b'], ['no-such-program-x'],
+      ['/usr/local/bin/git-lfs-evil clean'], ['git-lfs.sh clean'],
       ['sh tool.sh'], ['bash -c cat'], ['python3 tools/clean.py'], ['python3 -m stripper'], ['/usr/bin/python3 -m stripper'], ['node x'], ['env FOO=1 tr a b'], ['make clean'],
       ['/usr/bin/tr a b; touch /x'], ['cat | sh'], ['$(./x)'], ['`./x`'], ['FOO=1 tr a b'], ['~/bin/x'], ['tr a b > out'], ['"$PWD/x"'], ['a\\ b'], ["'unterminated"],
-      ['tr a/b c'], ['awk -f tools/x.awk'], ['cat --file=tools/x'], ['"tr" "a b"'],
+      ['git-lfs a/b'], ['git-crypt -f tools/x'], ['git-lfs --file=tools/x'], ['"git-lfs" "a b"'], ['./git-lfs clean'], ['git-lfs/git-lfs clean'],
     ])('%s is unsafe', command => {
       expect(unsafeFilterCommand(command, o())).toBe(true)
     })
 
     it.each([
-      ['cat'], ['tr a-z A-Z'], ['git-lfs clean -- %f'], ['git-lfs filter-process'], ['"/usr/bin/tr" a b'], ['/usr/bin/tr a b'], ["'/usr/bin/tr' a b"], ['cat --x=y -- "%f"'], ['/usr/local/bin/git-crypt clean'],
+      ['git-lfs clean -- %f'], ['git-lfs smudge --skip -- %f'], ['git-lfs filter-process'], ['"git-crypt" clean'], ['"/usr/local/bin/git-crypt" smudge'], ["'/usr/local/bin/git-lfs' clean"], ['git-lfs clean --x=y -- "%f"'], ['/usr/local/bin/git-crypt clean'],
     ])('%s is fine', command => {
       expect(unsafeFilterCommand(command, o())).toBe(false)
     })
@@ -746,29 +897,33 @@ describe('a filter a sandboxed CLI could rewrite never runs (Task 9 review C3)',
       mkdirSync(join(root, 'links'))
       symlinkSync(R('tool.sh'), join(root, 'links', 'tool'))
       writeFileSync(R('tool.sh'), 'x')
-      for (const c of [R('tool.sh'), join(root, 'w', 'x'), join(root, 'links', 'tool'), `/usr/bin/tr ${R('tool.sh')}`, `/usr/bin/tr --from=${R('tool.sh')}`]) {
+      writeFileSync(R('git-lfs'), 'x')
+      for (const c of [R('tool.sh'), R('git-lfs'), join(root, 'w', 'git-lfs'), join(root, 'links', 'tool'), `git-lfs ${R('tool.sh')}`, `git-lfs --from=${R('tool.sh')}`]) {
         expect(unsafeFilterCommand(c, o())).toBe(true)
       }
     })
 
     it('a bare word that names a file in the tree is a path', () => {
       writeFileSync(R('rules'), 'x')
-      expect(unsafeFilterCommand('sed -f rules', o())).toBe(true)
-      expect(unsafeFilterCommand('sed -f other', o())).toBe(false)
+      expect(unsafeFilterCommand('git-crypt -f rules', o())).toBe(true)
+      expect(unsafeFilterCommand('git-crypt -f other', o())).toBe(false)
     })
 
     it('a bare program is resolved on PATH: inside a writable root it is refused, a relative PATH entry too', () => {
       const dir = join(root, 'w', 'bin')
-      mkdirSync(dir, { recursive: true })
-      writeFileSync(join(dir, 'tool-x'), '#!/bin/sh\n')
-      chmodSync(join(dir, 'tool-x'), 0o755)
-      expect(unsafeFilterCommand('tool-x', { ...o(), path: `/usr/bin:${dir}` })).toBe(true)
-      expect(unsafeFilterCommand('cat', { ...o(), path: `.:/bin` })).toBe(true)
-      expect(unsafeFilterCommand('cat', { ...o(), path: `:/bin` })).toBe(true)
+      const safe = join(root, 'safe')
+      for (const d of [dir, safe]) {
+        mkdirSync(d, { recursive: true })
+        writeFileSync(join(d, 'git-lfs'), '#!/bin/sh\n')
+        chmodSync(join(d, 'git-lfs'), 0o755)
+      }
+      expect(unsafeFilterCommand('git-lfs clean', { ...o(), path: `/usr/bin:${dir}` })).toBe(true)
+      expect(unsafeFilterCommand('git-lfs clean', { ...o(), path: `.:${safe}` })).toBe(true)
+      expect(unsafeFilterCommand('git-lfs clean', { ...o(), path: `:${safe}` })).toBe(true)
       // 前面的条目先找到:后面那个可写目录轮不到
-      expect(unsafeFilterCommand('cat', { ...o(), path: `/bin:${dir}` })).toBe(false)
+      expect(unsafeFilterCommand('git-lfs clean', { ...o(), path: `${safe}:${dir}` })).toBe(false)
       // 哪里都没有:什么也跑不起来
-      expect(unsafeFilterCommand('no-such-program-x', { ...o(), path: '/usr/bin' })).toBe(false)
+      expect(unsafeFilterCommand('git-lfs clean', { ...o(), path: '/nonexistent' })).toBe(false)
     })
   })
 })

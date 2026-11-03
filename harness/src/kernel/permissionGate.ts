@@ -1,5 +1,6 @@
 import { realpathSync } from 'node:fs'
-import { canonicalRoots, credentialRoots, hasGitSegment, isComparablePath, isCredentialPath, isInside, isRootLike, OUTSIDE, persistenceRoots, resolveToolPath, type EnvSnapshot } from '../lib/fs/paths'
+import { join } from 'node:path'
+import { canonicalRoots, credentialRoots, hasGitSegment, isComparablePath, isCredentialPath, isInside, isRootLike, OUTSIDE, persistenceRoots, PROJECT_CONFIG_DIRS, resolveToolPath, type EnvSnapshot } from '../lib/fs/paths'
 import { evaluate, type MatchCtx, type Rule } from '../lib/permissions/rules'
 import type { PermissionRequest } from '../lib/tools/types'
 import type { ApprovalMode, SandboxStatus } from '../protocol/index'
@@ -66,6 +67,7 @@ export function decide(req: PermissionRequest, s: SessionInfo | undefined, env: 
       if (hasGitSegment(resource, env.platform)) return 'deny' // .git/hooks、.git/config 能让 git status 跑代码
       if (!isInside(resource, cwd, env.platform)) return 'deny' // 工作目录外的写
       if (isCredentialPath(resource, env.persistence, env.platform)) return 'deny' // 下次开终端 / 登录就执行
+      if (PROJECT_CONFIG_DIRS.some(d => isInside(resource, join(cwd, d), env.platform))) return 'deny' // CLI 的主进程在沙箱外加载它们
     }
     const user = evaluate(env.rules, { action, resource }, ctx(cwd))
     if (user) return user

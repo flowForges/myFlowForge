@@ -1,11 +1,11 @@
 // 崩溃恢复(04 spec §7.5):不续跑,对没收尾的运行如实写结束事件和通知。
 // 只看日志,所以跑几次都一样;日志里的 runId、路径都不直接信
-import { existsSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, readdirSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative, sep } from 'node:path'
 import { isInside } from '../lib/fs/paths'
 import { removeInWorktree, removeWorktree } from '../lib/git/worktree'
-import type { Git } from '../lib/git/snapshot'
+import type { Git, RepoPin } from '../lib/git/snapshot'
 import { noticeText, type Diagnostic } from '../lib/tools/diagnostics'
 import { denyReadCopies, treePolicy } from '../lib/tools/treePolicy'
 import type { ExecPolicy } from '../lib/tools/types'
@@ -37,6 +37,15 @@ interface RunLog {
 
 const str = (v: unknown) => (typeof v === 'string' ? v : undefined)
 
+/** 运行结束时临时目录改名成 `…-rm` 再在后台删:崩在中间的在这里删 */
+function sweepDoomedTmp(root: string, log?: Logger): void {
+  try {
+    for (const name of readdirSync(root)) if (/^mffai-run-.+-rm$/.test(name)) rmSync(join(root, name), { recursive: true, force: true })
+  } catch (e) {
+    log?.warn('stale run tmp dirs not removed', { code: (e as NodeJS.ErrnoException)?.code })
+  }
+}
+
 /**
  * 有 queued 没 ended:写 interrupted 的 ended 和通知,删 `mffai-run-<runId>`。
  * 有 ended 没 notice:只补通知(通知结束时只在内存里,要等循环取走才进日志)。
@@ -59,6 +68,7 @@ export function recoverRuns(events: KernelEvent[], append: (e: Omit<KernelEvent,
     else if (e.type === 'executor.notice') run.noticed = true
   }
 
+  sweepDoomedTmp(o.tmpRoot ?? tmpdir(), o.log)
   const recovered: RecoveredRun[] = []
   for (const [runId, run] of runs) {
     // 写坏的一条不能让后台永远起不来(worker 启动失败就退出)
@@ -112,6 +122,8 @@ export interface WorktreeCleanup {
   log: Logger
   /** 会话的 cwd */
   cwdOf(sessionId: string): string | undefined
+  /** 会话钉住的仓库:不在了(不认识的会话)就只删目录,不跑 git */
+  pinOf(sessionId: string): RepoPin | undefined
   policyOf(sessionId: string, cwd: string): ExecPolicy
 }
 
@@ -136,7 +148,7 @@ export function cleanRecoveredWorktrees(runs: RecoveredRun[], o: WorktreeCleanup
     const sessionCwd = o.cwdOf(r.sessionId)
     if (!r.started) {
       if (!existsSync(path)) continue
-      removals.push(removeWorktree(sessionCwd ?? root, path, o.git, { root: o.root, tmpDir: o.tmpDir }).catch(e => o.log.warn('recovered worktree not removed', { runId: r.runId, error: e instanceof Error ? e.message : 'unknown' })))
+      removals.push(removeWorktree(o.pinOf(r.sessionId), path, o.git, { root: o.root, tmpDir: o.tmpDir }).catch(e => o.log.warn('recovered worktree not removed', { runId: r.runId, error: e instanceof Error ? e.message : 'unknown' })))
     } else if (r.worktree !== undefined && sessionCwd !== undefined) {
       try {
         const cwd = r.cwd !== undefined && isInside(r.cwd, path, process.platform) ? r.cwd : path

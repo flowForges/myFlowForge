@@ -8,7 +8,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { cleanupFakes, disposeReusableFakes, installFake as freshFake, isAlive, reusableFake, waitDead, type FakeCli } from '../../../test/fakeCli'
 import { PermissionGate } from '../../kernel/permissionGate'
 import { createSandboxService } from '../../kernel/sandbox'
-import { createGit, type Git } from '../../lib/git/snapshot'
+import { syncPin } from '../../../test/syncPin'
+import { createGit, NO_REPO, type Git, type RepoPin } from '../../lib/git/snapshot'
 import { parseRule, type Rule } from '../../lib/permissions/rules'
 import type { CliResult } from '../../lib/proc/runCli'
 import type { ExecPolicy, SandboxService, ShellPlan } from '../../lib/tools/types'
@@ -130,7 +131,14 @@ function setup(fakes: FakeCli[], o: Options = {}) {
     }),
     close: async () => {},
   }
-  const session = (id: string) => ({ sessionId: id, cwd: o.sessionCwd?.[id] ?? repo, approvalMode: o.mode ?? ('auto' as const), origin: 'app' as const })
+  // 和内核一样:第一次见到会话时定下仓库,之后不再找
+  const pins = new Map<string, RepoPin>()
+  const pinOf = (id: string) => {
+    const cwd = o.sessionCwd?.[id] ?? repo
+    if (!pins.has(id)) pins.set(id, syncPin(cwd, gitBase))
+    return pins.get(id)!
+  }
+  const session = (id: string) => ({ sessionId: id, cwd: o.sessionCwd?.[id] ?? repo, approvalMode: o.mode ?? ('auto' as const), origin: 'app' as const, repo: pinOf(id) })
   const gate = new PermissionGate({
     sessions: { get: session, spillDir: () => spill },
     home,
@@ -988,7 +996,7 @@ describe('Review Focus 2: env and binary', () => {
     expect(raw).toContain(`mffai-run-${runId}`)
     expect(raw.split('\n')[0]).toBe('700')
     expect(raw).toContain(realpathSync(process.env.TMPDIR!))
-    expect(runTmpDirs()).toEqual([])
+    await vi.waitFor(() => expect(runTmpDirs()).toEqual([]))
   })
 
   it('an existing mffai-run-<runId> is someone else\'s: the run fails and leaves it alone', async () => {
@@ -1129,7 +1137,7 @@ describe('sandbox wiring (Tasks 6, 7)', () => {
     const { end } = await one(rig, { adapter: 'qoder', isolation: 'wrapped' })
     expect(end).toMatchObject({ status: 'failed', reason: 'sandbox_unavailable' })
     expect(fake.calls()).toEqual([])
-    expect(runTmpDirs()).toEqual([])
+    await vi.waitFor(() => expect(runTmpDirs()).toEqual([]))
   })
 
   it('a wrapped run that gets sandboxed:false fails and releases: the one route to an unconfined run', async () => {
@@ -1235,7 +1243,7 @@ describe('sandbox wiring, real Seatbelt', () => {
       permissions: () => ({ rules: [], network: { allow: [] }, sandbox: { enabled: true, allowLoopback: false }, allowUnsandboxedAuto: false }),
       rules: () => rules,
       append: () => {},
-      git: createGit({ base: gitBase }),
+      repoPin: () => syncPin(repo, gitBase),
       lookup: async () => [{ address: '93.184.216.34', family: 4 }],
     })
     try {
@@ -1261,6 +1269,78 @@ describe('sandbox wiring, real Seatbelt', () => {
       await service.close()
     }
   }, 30_000)
+})
+
+describe('a repo planted by a wrapped in-place run, real Seatbelt (final review C-1)', () => {
+  usesGit()
+  const usable = process.platform === 'darwin' && spawnSync('/usr/bin/sandbox-exec', ['-p', '(version 1)(allow default)', '/usr/bin/true'], { stdio: 'ignore' }).status === 0
+  const run = async (cwd: string, sessionPin: () => RepoPin) => {
+    const marker = join(root, 'ESCAPED')
+    const fake = installFake({ run: [
+      `(/usr/bin/touch "${marker}") 2>/dev/null && echo DIRECT`,
+      "printf 'gitdir: evil\\n' > .git",
+      'mkdir -p evil/objects evil/refs',
+      "printf 'ref: refs/heads/main\\n' > evil/HEAD",
+      `printf '[filter "x"]\\n\\tclean = tclsh\\n' > evil/config`,
+      "printf 'payload filter=x\\n' > .gitattributes",
+      `printf 'exec /usr/bin/touch ${marker}\\n' > payload`,
+      'echo PLANTED-OK',
+      'exit 0',
+    ].join('\n') }, 'qodercli')
+    const service = createSandboxService({
+      platform: 'darwin', dataDir: join(root, 'data'), home, env: {}, detected: { level: 'full', missing: [] },
+      permissions: () => ({ rules: [], network: { allow: [] }, sandbox: { enabled: true, allowLoopback: false }, allowUnsandboxedAuto: false }),
+      rules: () => [],
+      append: () => {},
+      repoPin: sessionPin,
+      lookup: async () => [{ address: '93.184.216.34', family: 4 }],
+    })
+    try {
+      const rig = setup([fake], { deps: { sandbox: service }, sessionCwd: { [SID]: cwd } })
+      const { end, runId } = await one(rig, { adapter: 'qoder', isolation: 'wrapped', cwd })
+      const raw = rawLogOf(end)
+      expect(raw).not.toContain('DIRECT')
+      expect(raw).toContain('PLANTED-OK')
+      expect(existsSync(join(cwd, 'evil', 'config'))).toBe(true)
+      // 拍快照、算改动都已经跑过;executor.changes 再来一遍
+      await rig.manager.changes(SID, runId).catch(() => {})
+      expect(existsSync(marker)).toBe(false)
+    } finally {
+      await service.close()
+    }
+  }
+
+  it.skipIf(!usable)('session in a repo subdirectory', async () => {
+    const sub = join(repo, 'sub')
+    mkdirSync(sub)
+    const pin = syncPin(sub, gitBase)
+    expect(pin.kind).toBe('repo')
+    await run(sub, () => pin)
+  }, 30_000)
+
+  it.skipIf(!usable)('session in a non-git cwd', async () => {
+    const plain = join(root, 'plain')
+    mkdirSync(plain)
+    await run(plain, () => NO_REPO)
+  }, 30_000)
+})
+
+describe('the run tmp dir goes away without blocking (final review M-4)', () => {
+  it('the path is gone in the same tick as run.ended; the contents are removed in the background', async () => {
+    const big = installFake({ run: 'mkdir "$TMPDIR/d" && echo x > "$TMPDIR/d/f"; exit 0' })
+    const rig = setup([big])
+    const { end } = await one(rig)
+    expect(end.status).toBeDefined()
+    expect(runTmpDirs().filter(d => !d.endsWith('-rm'))).toEqual([])
+    await vi.waitFor(() => expect(runTmpDirs()).toEqual([]))
+  })
+
+  it('closing waits for the background removal', async () => {
+    const rig = setup([installFake({ lines: CODEX_OK })])
+    await one(rig)
+    await rig.manager.abandonAll()
+    expect(runTmpDirs()).toEqual([])
+  })
 })
 
 describe('queue', () => {
@@ -1324,6 +1404,16 @@ describe('queue', () => {
     expect(startedIds(rig)).not.toContain(c2)
     await rig.manager.abandon('t1')
   }, 30_000)
+
+  it('submit says whether the run is queued, read after dispatch: an empty queue with all slots full is still queued', async () => {
+    const codex = installFake({ ...alive, lines: CODEX_OK })
+    const rig = setup([codex], { config: { maxGlobal: 1 } })
+    const a = rig.manager.submit(input({ callId: 'a' }))
+    const b = rig.manager.submit(input({ callId: 'b' }))
+    expect(a).toMatchObject({ queued: false, position: -1 })
+    expect(b).toMatchObject({ queued: true, position: 0 })
+    await rig.manager.abandon('t1')
+  })
 
   it('queue full → queue_full; the queued event carries a position', async () => {
     const codex = installFake(alive)
@@ -1461,7 +1551,7 @@ describe('every way out of active produces a notice and wakes wait (Task 4 revie
     const [n] = rig.manager.take('t1')
     expect(n.text).toContain('status="ok"')
     expect(rig.manager.active('t1')).toBe(0)
-    expect(runTmpDirs()).toEqual([])
+    await vi.waitFor(() => expect(runTmpDirs()).toEqual([]))
   })
 
   it('git, the event log and the logger all throwing still produces the notice', async () => {
@@ -1635,7 +1725,7 @@ describe('outcomes', () => {
     const rig2 = setup([fake])
     expect((await one(rig2, { cwd: 'relative/cwd' })).end).toMatchObject({ status: 'failed', reason: 'denied' })
     expect(fake.calls()).toEqual([])
-    expect(runTmpDirs()).toEqual([])
+    await vi.waitFor(() => expect(runTmpDirs()).toEqual([]))
   })
 
   it('bad input: a bad model makes buildArgs throw → spawn_failed, not a crash', async () => {
@@ -1646,7 +1736,7 @@ describe('outcomes', () => {
     expect((await one(rig, { adapter: 'qoder', isolation: 'wrapped', model: 'bad model' })).end).toMatchObject({ status: 'failed', reason: 'spawn_failed' })
     expect(fake.calls()).toEqual([])
     expect(q.calls()).toEqual([])
-    expect(runTmpDirs()).toEqual([])
+    await vi.waitFor(() => expect(runTmpDirs()).toEqual([]))
   })
 
   it('runCli itself throwing can not crash the manager: spawn_failed', async () => {
@@ -1656,7 +1746,7 @@ describe('outcomes', () => {
     expect(end).toMatchObject({ status: 'failed', reason: 'spawn_failed' })
     expect(notice).not.toContain('spawn exploded')
     expect(rig.of('executor.run.started')).toEqual([])
-    expect(runTmpDirs()).toEqual([])
+    await vi.waitFor(() => expect(runTmpDirs()).toEqual([]))
   })
 
   it('escapes </executor-notice> and </result> from CLI output, and the attributes are ours', async () => {
@@ -1865,7 +1955,7 @@ describe('abandon', () => {
     expect(rig.ended(runId)).toMatchObject({ status: 'cancelled' })
     expect(fake.calls()).toEqual([])
     expect(rig.of('executor.run.started')).toEqual([])
-    expect(runTmpDirs()).toEqual([])
+    await vi.waitFor(() => expect(runTmpDirs()).toEqual([]))
   }, 20_000)
 
   it('kernel_stopping: fast ladder, interrupted, and no run snapshot of the end', async () => {
@@ -2821,7 +2911,7 @@ describe('worktrees', () => {
       expect(end.status).toBe('ok')
       expect(end.changed.source).toBe('none')
       expect(existsSync(mark)).toBe(false)
-      expect(rig.warnings.some(w => w.includes('filter'))).toBe(true)
+      expect(rig.warnings.some(w => w.includes('snapshot skipped'))).toBe(true)
     })
 
     it('executor.changes: with or without an end ref, it reports what run.ended recorded and runs nothing', async () => {
@@ -2851,8 +2941,16 @@ describe('worktrees', () => {
       expect(fake.calls()).toEqual([])
     })
 
-    it('an absolute filter outside the writable roots does not stop the run', async () => {
+    it('git-lfs outside the writable roots does not stop the run; anything else does, wherever it lives', async () => {
       ug(['config', 'filter.f.clean', '/usr/bin/tr a-z a-z'])
+      const refused = installFake({ lines: CODEX_OK })
+      expect((await one(setup([refused], { deps: deps() }), sched())).end.reason).toBe('worktree_unavailable')
+      expect(refused.calls()).toEqual([])
+      const bin = join(root, 'bin')
+      mkdirSync(bin)
+      writeFileSync(join(bin, 'git-lfs'), '#!/bin/sh\ncat\n')
+      chmodSync(join(bin, 'git-lfs'), 0o755)
+      ug(['config', 'filter.f.clean', `${join(bin, 'git-lfs')} clean -- %f`])
       const fake = installFake({ writeFiles: { 'n.txt': 'n\n' }, lines: CODEX_OK })
       const rig = setup([fake], { deps: deps() })
       const { end } = await one(rig, sched())
@@ -3014,7 +3112,7 @@ describe('worktrees', () => {
       permissions: () => ({ rules: [], network: { allow: [] }, sandbox: { enabled: true, allowLoopback: false }, allowUnsandboxedAuto: false }),
       rules: () => rules,
       append: () => {},
-      git: createGit({ base: gitBase }),
+      repoPin: () => syncPin(repo, gitBase),
       lookup: async () => [{ address: '93.184.216.34', family: 4 }],
     })
 

@@ -3,6 +3,7 @@ import { join, posix, win32 } from 'node:path'
 import type { ApprovalMode, KernelEvent, ModelRef, SessionOrigin, Toolset } from '../protocol/index'
 import { RpcError } from './rpcError'
 import { isCredentialPath, isInside, isRootLike, type EnvSnapshot } from '../lib/fs/paths'
+import { parsePin, type RepoPin } from '../lib/git/snapshot'
 import { worktreeRootOf } from '../lib/git/worktree'
 import { blacklist } from './permissionGate'
 
@@ -15,6 +16,8 @@ export interface SessionInfo {
   toolset?: Toolset
   model?: ModelRef
   origin: SessionOrigin
+  /** 建会话时定下的仓库。沙箱外的 git 只认它;旧日志里的会话没有,按没有仓库算(那时模型可能已经写过了) */
+  repo?: RepoPin
 }
 
 const SAFE_ID = /^[A-Za-z0-9_-]+$/
@@ -45,6 +48,7 @@ export class Sessions {
     if (typeof p.cwd === 'string') info.cwd = p.cwd
     if (p.toolset === 'patch' || p.toolset === 'edit') info.toolset = p.toolset
     if (p.model) info.model = p.model
+    if (info.cwd !== undefined) info.repo = parsePin(p.repo)
     this.byId.set(e.sessionId, info)
   }
 

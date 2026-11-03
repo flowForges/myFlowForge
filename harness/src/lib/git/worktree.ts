@@ -3,7 +3,7 @@ import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmdirSyn
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { isInside, OUTSIDE, resolveToolPath } from '../fs/paths'
 import { lexists, samePath } from '../fs/safeFs'
-import { guarded, repoInfo, type Git, type RepoInfo } from './snapshot'
+import { guarded, pinFromPaths, pinIntact, pinnedGit, type Git, type PinnedRepo, type RepoPin } from './snapshot'
 
 /** 根下最多保留这么多个;不自动删,可能是用户要的 */
 export const MAX_WORKTREES = 20
@@ -32,12 +32,13 @@ function assertUnderRoot(root: string, path: string): void {
 const firstLine = (s: string) => s.split('\n')[0]
 
 /** `git worktree add --detach`。path 可以是空目录(reserveWorktree 占的位) */
-export async function addWorktree(repoCwd: string, path: string, commit: string, git: Git, o: WorktreeOpts): Promise<void> {
+export async function addWorktree(pin: RepoPin, path: string, commit: string, git: Git, o: WorktreeOpts): Promise<void> {
   assertUnderRoot(o.root, path)
   if (commit.startsWith('-')) throw new Error('bad commit')
-  await guarded(git, o.tmpDir, async g => {
+  if (pin.kind === 'none' || !pinIntact(pin)) throw new Error('unsafe_repo')
+  await guarded(pinnedGit(git, pin), o.tmpDir, async g => {
     // submodule.recurse 开着时检出会去拉子模块;快照里只有 gitlink,不要
-    const r = await g(['-c', 'submodule.recurse=false', 'worktree', 'add', '--detach', path, commit], { cwd: repoCwd })
+    const r = await g(['-c', 'submodule.recurse=false', 'worktree', 'add', '--detach', path, commit], { cwd: pin.top })
     if (r.code !== 0) throw new Error(`git worktree add failed (${r.code}): ${firstLine(r.stderr)}`)
   })
 }
@@ -45,22 +46,26 @@ export async function addWorktree(repoCwd: string, path: string, commit: string,
 /**
  * `git worktree remove --force --force`(两次才删得掉 CLI 锁上的)。
  * git 不肯(`.git` 被改过、仓库没了)时直接删目录:路径已确认在根下,rm 不跟随链接;目录没了之后再 remove 一次,清掉自己的条目。
- * 不用 `git worktree prune`:它会带走用户自己指向缺失路径的条目(没插的移动硬盘)
+ * 不用 `git worktree prune`:它会带走用户自己指向缺失路径的条目(没插的移动硬盘)。
+ * 没有钉住的仓库、仓库变了:不跑 git,只删目录
  */
-export async function removeWorktree(repoCwd: string, path: string, git: Git, o: WorktreeOpts): Promise<void> {
+export async function removeWorktree(pin: RepoPin | undefined, path: string, git: Git, o: WorktreeOpts): Promise<void> {
   assertUnderRoot(o.root, path)
-  await guarded(git, o.tmpDir, async g => {
-    const remove = async () => {
-      try {
-        return (await g(['worktree', 'remove', '--force', '--force', path], { cwd: repoCwd })).code === 0
-      } catch {
-        return false // repoCwd 不在了
+  if (pin?.kind !== 'repo' || !pinIntact(pin)) rmSync(path, { recursive: true, force: true })
+  else {
+    await guarded(pinnedGit(git, pin), o.tmpDir, async g => {
+      const remove = async () => {
+        try {
+          return (await g(['worktree', 'remove', '--force', '--force', path], { cwd: pin.top })).code === 0
+        } catch {
+          return false // 仓库不在了
+        }
       }
-    }
-    if (await remove()) return
-    rmSync(path, { recursive: true, force: true })
-    await remove()
-  })
+      if (await remove()) return
+      rmSync(path, { recursive: true, force: true })
+      await remove()
+    })
+  }
   try {
     rmdirSync(dirname(path))
   } catch {
@@ -72,7 +77,7 @@ export async function removeWorktree(repoCwd: string, path: string, git: Git, o:
  * 根和会话的仓库不能重叠:否则运行的可写根盖得到别的 worktree,快照把它们当嵌套仓库收进去,用户 `git status` 也看得见。
  * 根不存在也能判,按 realpath
  */
-export function rootConflict(root: string, repo: Pick<SessionRepo, 'top' | 'commonDir'>, cwd: string): boolean {
+export function rootConflict(root: string, repo: Pick<PinnedRepo, 'top' | 'commonDir'>, cwd: string): boolean {
   const real = resolveToolPath(root, '.')
   if (real === OUTSIDE) return true
   const inside = (a: string, b: string) => isInside(a, b, process.platform)
@@ -126,54 +131,38 @@ export function reserveWorktree(root: string, sessionId: string, runId: string, 
   return path
 }
 
-export interface SessionRepo extends RepoInfo {
-  commonDir: string
-}
-
-/** cwd 所在仓库,外加共用的 git 目录(cwd 本身可能就是一个 linked worktree);不在仓库里 → undefined */
-export async function sessionRepo(cwd: string, git: Git, opts: { tmpDir?: string } = {}): Promise<SessionRepo | undefined> {
-  const info = await repoInfo(cwd, git, opts)
-  if (!info) return undefined
-  const line = await guarded(git, opts.tmpDir, async g => {
-    const r = await g(['rev-parse', '--git-common-dir'], { cwd })
-    return r.code === 0 ? firstLine(r.stdout.toString()) : ''
-  })
-  if (!line || line.startsWith('-')) return undefined
-  return { ...info, commonDir: realpathSync.native(resolve(cwd, line)) }
-}
-
 /**
  * worktree 运行只读的 git 目录:共用的那个整个,外加会话自己的(会话是 linked worktree 时)。
  * 05 把它们算作可写根;列举写不完(objects、shallow、rebase-merge、别的 worktree 的 HEAD……都伤得到用户)。
  * 代价:沙箱里的 CLI 在 worktree 里 add、commit 不了,与 Codex 一样;改动靠快照 diff 拿到
  */
-export function userGitState(repo: Pick<SessionRepo, 'commonDir' | 'gitDir'>): string[] {
+export function userGitState(repo: Pick<PinnedRepo, 'commonDir' | 'gitDir'>): string[] {
   return repo.gitDir === repo.commonDir ? [repo.commonDir] : [repo.commonDir, repo.gitDir]
 }
 
 /**
- * 沙箱外对 worktree 跑 git 之前:它的 `.git` 还是我们建的那个,而且指回这个仓库;path 和 cwd 之间没有新冒出来的 `.git`。
- * 否则 git 会认 CLI 准备的仓库,里面配置的 clean 过滤器就在沙箱外跑了
+ * 沙箱外对 worktree 跑 git 用的钉子,从会话钉住的仓库推出来,不问 git。
+ * 它的 `.git` 必须还是我们建的那个,指回会话的 common 目录;path 和 cwd 之间没有新冒出来的 `.git`。否则 undefined:不跑 git
  */
-export async function worktreeIntact(repoCwd: string, path: string, cwd: string, git: Git, opts: { tmpDir?: string } = {}): Promise<boolean> {
+export function worktreePin(session: RepoPin | undefined, path: string, cwd: string): PinnedRepo | undefined {
+  if (session?.kind !== 'repo' || !pinIntact(session)) return undefined
   try {
     const file = join(path, '.git')
     const st = lstatSync(file)
-    if (!st.isFile() || st.size > GIT_FILE_MAX) return false
+    if (!st.isFile() || st.size > GIT_FILE_MAX) return undefined
     for (let d = cwd; d !== path; d = dirname(d)) {
-      if (d === dirname(d) || !isInside(d, path, process.platform)) return false
-      if (lexists(join(d, '.git'))) return false
+      if (d === dirname(d) || !isInside(d, path, process.platform)) return undefined
+      if (lexists(join(d, '.git'))) return undefined
     }
     const m = /^gitdir: (.+)\n?$/.exec(readFileSync(file, 'utf8'))
-    if (!m) return false
-    const repo = await sessionRepo(repoCwd, git, opts)
-    if (!repo) return false
+    if (!m) return undefined
     // 两个文件都可能是相对路径(worktree.useRelativePaths)
     const admin = realpathSync.native(resolve(path, m[1]))
-    if (!samePath(dirname(admin), realpathSync.native(join(repo.commonDir, 'worktrees')))) return false
-    if (!samePath(realpathSync.native(resolve(admin, readFileSync(join(admin, 'commondir'), 'utf8').trim())), repo.commonDir)) return false
-    return samePath(realpathSync.native(resolve(admin, readFileSync(join(admin, 'gitdir'), 'utf8').trim())), realpathSync.native(file))
+    if (!samePath(dirname(admin), realpathSync.native(join(session.commonDir, 'worktrees')))) return undefined
+    if (!samePath(realpathSync.native(resolve(admin, readFileSync(join(admin, 'commondir'), 'utf8').trim())), session.commonDir)) return undefined
+    if (!samePath(realpathSync.native(resolve(admin, readFileSync(join(admin, 'gitdir'), 'utf8').trim())), realpathSync.native(file))) return undefined
+    return pinFromPaths(path, admin, session.commonDir)
   } catch {
-    return false
+    return undefined
   }
 }

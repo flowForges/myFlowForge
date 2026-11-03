@@ -75,7 +75,7 @@ export interface Adapter {
    * readOnlyPaths、denyRead 是规则翻译依赖的条目;readOnly 是只读运行那份档,行也不同。
    * parse 返回没过的行,没出现的行也算没过
    */
-  selfTest?(i: { dir: string; secret: string; flags: string[]; denyRead?: string[]; readOnlyPaths?: string[]; readOnly?: boolean }): { args: string[]; parse(out: string): string[] }
+  selfTest?(i: { dir: string; secret: string; flags: string[]; denyRead?: string[]; readOnlyPaths?: string[]; readOnly?: boolean; subdir?: boolean }): { args: string[]; parse(out: string): string[] }
 }
 
 /** 写模式运行的提示词结尾 */

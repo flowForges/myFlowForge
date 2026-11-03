@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, 
 import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { createGit } from '../lib/git/snapshot'
+import { createGit, NO_REPO, pinFromPaths } from '../lib/git/snapshot'
 import { parseRule, type Rule } from '../lib/permissions/rules'
 import { runCli } from '../lib/proc/runCli'
 import type { DetectResult } from '../lib/sandbox/detect'
@@ -59,7 +59,7 @@ function service(over: Partial<Omit<SandboxOpts, 'rules'>> & { config?: () => Pe
     permissions: () => config(),
     rules: () => [],
     append: e => appended.push(e),
-    git: testGit(),
+    repoPin: () => pinFromPaths(repo, join(repo, '.git'), join(repo, '.git')),
     upstream: undefined,
     ...over,
   })
@@ -319,22 +319,11 @@ describe('sandbox plan (darwin)', () => {
     await expect(svc.plan('true', session('s1', bad), baseEnv)).rejects.toThrow(/control characters/)
   })
 
-  it('looks the gitDir up once per session', async () => {
-    let calls = 0
-    const g = testGit()
-    const { svc } = service({ git: (a, o) => { calls++; return g(a, o) } })
-    for (let i = 0; i < 3; i++) (await svc.plan('true', session(), baseEnv)).release()
-    const once = calls
-    expect(once).toBeGreaterThan(0)
-    ;(await svc.plan('true', session('s2'), baseEnv)).release()
-    expect(calls).toBe(once * 2)
-  })
-
   it('a worktree cwd: the common gitDir is writable and the cwd .git file is protected', async () => {
     execFileSync('git', ['-C', repo, 'commit', '-q', '--allow-empty', '-m', 'i'], { env: { ...gitTestEnv(), GIT_AUTHOR_NAME: 'a', GIT_AUTHOR_EMAIL: 'a@x', GIT_COMMITTER_NAME: 'a', GIT_COMMITTER_EMAIL: 'a@x' } })
     const wt = join(home, 'wt')
     execFileSync('git', ['-C', repo, 'worktree', 'add', '-q', wt], { env: gitTestEnv() })
-    const { svc } = service()
+    const { svc } = service({ repoPin: () => pinFromPaths(wt, join(repo, '.git', 'worktrees', 'wt'), join(repo, '.git')) })
     const p = await svc.plan('true', session('s1', wt), baseEnv)
     const prof = profileOf(p.args)
     expect(prof).toMatch(new RegExp(`\\(allow file-write\\* [^\\n]*\\(subpath ${q(join(repo, '.git')).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)`))
@@ -343,75 +332,76 @@ describe('sandbox plan (darwin)', () => {
   })
 })
 
-describe('gitDir lookup fallbacks (review I1, M6)', () => {
-  /** git < 2.5:未知参数原样回显、退出 0 */
-  const echoGit = (calls: { n: number }) => (async (args: string[]) => {
-    calls.n++
-    return { code: 0, stdout: Buffer.from(args.slice(1).join('\n') + '\n'), stderr: '' }
-  }) as never
-  const brokenGit = (calls: { n: number }) => (async () => { calls.n++; throw new Error('spawn git ENOENT') }) as never
-
-  it('no --path-format: a relative --git-common-dir answer is resolved against cwd', async () => {
-    const seen: string[][] = []
-    const g = testGit()
-    const { svc } = service({ git: (a, o) => { seen.push(a); return g(a, o) } })
-    const p = await svc.plan('true', session(), baseEnv)
-    expect(seen.flat()).not.toContain('--path-format=absolute')
-    expect(profileOf(p.args)).toContain(`(subpath ${q(join(repo, '.git'))})`)
-    p.release()
-  })
-
-  it('a git that echoes the flag back (too old) → walk up from cwd and find .git; the miss is not cached', async () => {
-    const calls = { n: 0 }
-    const { svc } = service({ git: echoGit(calls) })
-    const p = await svc.plan('true', session(), baseEnv)
-    expect(profileOf(p.args)).toMatch(new RegExp(`\\(allow file-write\\* [^\\n]*\\(subpath ${q(join(repo, '.git')).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)`))
-    p.release()
-    const before = calls.n
-    ;(await svc.plan('true', session(), baseEnv)).release()
-    expect(calls.n).toBeGreaterThan(before)
-  })
-
-  it('git missing → walk fallback; on linux the hooks dir is still ro-bound', async () => {
-    rmSync(join(repo, '.git', 'hooks'), { recursive: true, force: true })
-    const calls = { n: 0 }
-    const { svc } = service({ platform: 'linux', detected: { level: 'partial', missing: ['netns'], bwrap: '/usr/bin/bwrap' }, git: brokenGit(calls) })
-    const p = await svc.plan('true', session(), baseEnv)
-    const hooks = join(repo, '.git', 'hooks')
-    const i = p.args.findIndex((x, k) => x === '--ro-bind' && p.args[k + 1] === hooks)
-    expect(i).toBeGreaterThan(0)
-    p.release()
-    ;(await svc.plan('true', session(), baseEnv)).release()
-    expect(calls.n).toBe(2) // 失败不缓存
-  })
-
-  it('walk fallback understands a worktree .git file (gitdir + commondir)', async () => {
-    execFileSync('git', ['-C', repo, 'commit', '-q', '--allow-empty', '-m', 'i'], { env: { ...gitTestEnv(), GIT_AUTHOR_NAME: 'a', GIT_AUTHOR_EMAIL: 'a@x', GIT_COMMITTER_NAME: 'a', GIT_COMMITTER_EMAIL: 'a@x' } })
-    const wt = join(home, 'wt')
-    execFileSync('git', ['-C', repo, 'worktree', 'add', '-q', wt], { env: gitTestEnv() })
-    const { svc } = service({ git: brokenGit({ n: 0 }) })
-    const p = await svc.plan('true', session('s1', wt), baseEnv)
-    expect(profileOf(p.args)).toContain(`(literal ${q(join(wt, '.git'))})`)
-    expect(profileOf(p.args)).toContain(`(subpath ${q(join(repo, '.git', 'hooks'))})`)
-    p.release()
-  })
-
-  it('a .git that cannot be resolved fails the plan closed', async () => {
-    const odd = join(home, 'odd')
-    mkdirSync(join(odd, 'sub'), { recursive: true })
-    writeFileSync(join(odd, '.git'), 'not a gitdir line\n')
-    const { svc } = service({ git: brokenGit({ n: 0 }) })
-    await expect(svc.plan('true', session('s1', join(odd, 'sub')), baseEnv)).rejects.toThrow(/can't resolve the git dir/)
-  })
-
-  it('not a repo (git says so, no .git anywhere) → cached as no gitDir', async () => {
+describe('the pinned repo decides the gitDirs (final review C-1)', () => {
+  it('a session pinned "none" gets no git dir, even with a planted .git file pointing at another repo', async () => {
     const plain = join(root, 'plain')
     mkdirSync(plain)
-    let n = 0
-    const g = testGit()
-    const { svc } = service({ git: (a, o) => { n++; return g(a, o) } })
-    for (let i = 0; i < 3; i++) (await svc.plan('true', session('s1', plain), baseEnv)).release()
-    expect(n).toBe(1)
+    writeFileSync(join(plain, '.git'), `gitdir: ${join(repo, '.git')}\n`)
+    const { svc } = service({ repoPin: () => NO_REPO })
+    const p = await svc.plan('true', session('s1', plain), baseEnv)
+    expect(profileOf(p.args)).not.toContain(`(subpath ${q(join(repo, '.git'))})`)
+    p.release()
+  })
+
+  it('an unknown session has no repo either', async () => {
+    const { svc } = service({ repoPin: () => undefined })
+    const p = await svc.plan('true', session(), baseEnv)
+    expect(profileOf(p.args)).not.toContain(`(subpath ${q(join(repo, '.git'))})`)
+    p.release()
+  })
+
+  it('a planted .git file in the cwd of a pinned session does not move the git dir', async () => {
+    const elsewhere = join(root, 'elsewhere')
+    execFileSync('git', ['init', '-q', elsewhere], { env: gitTestEnv() })
+    const sub = join(repo, 'sub')
+    mkdirSync(sub, { recursive: true })
+    writeFileSync(join(sub, '.git'), `gitdir: ${join(elsewhere, '.git')}\n`)
+    const { svc } = service()
+    const p = await svc.plan('true', session('s1', sub), baseEnv)
+    const prof = profileOf(p.args)
+    expect(prof).toContain(`(subpath ${q(join(repo, '.git'))})`)
+    expect(prof).not.toContain(q(join(elsewhere, '.git')))
+    p.release()
+  })
+
+  it('a run in this session\'s worktree protects that worktree\'s .git file', async () => {
+    const run = join(`${dataDir}-worktrees`, 's1', 'r1')
+    mkdirSync(run, { recursive: true })
+    writeFileSync(join(run, '.git'), 'gitdir: x\n')
+    const { svc } = service()
+    const p = await svc.plan('true', session('s1', join(run)), baseEnv)
+    expect(profileOf(p.args)).toContain(`(literal ${q(join(run, '.git'))})`)
+    p.release()
+    rmSync(`${dataDir}-worktrees`, { recursive: true, force: true })
+  })
+
+  it('linux: the config dirs are created and mounted read-only, since bwrap only binds what exists', async () => {
+    const cwd = join(repo, 'sub')
+    mkdirSync(cwd, { recursive: true })
+    const { svc } = service({ platform: 'linux', detected: { level: 'partial', missing: ['netns'], bwrap: '/usr/bin/bwrap' } })
+    const p = await svc.plan('true', session('s1', cwd), baseEnv)
+    for (const d of ['.codex', '.qoder']) {
+      const path = join(cwd, d)
+      expect(existsSync(path)).toBe(true)
+      const i = p.args.lastIndexOf(path)
+      expect(p.args.slice(i - 2, i + 1)).toEqual(['--ro-bind', path, path])
+    }
+    p.release()
+  })
+
+  it('<cwd>/.codex and .qoder stay protected, in any letter case, and never for an allowWrite under them', async () => {
+    const { svc } = service()
+    const cwd = join(repo, 'sub')
+    const p = await svc.plan('true', session('s1', cwd), baseEnv)
+    const prof = profileOf(p.args)
+    const esc = cwd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    expect(prof).toContain(JSON.stringify(`^${esc}/\\.[cC][oO][dD][eE][xX](/|$)`))
+    expect(prof).toContain(JSON.stringify(`^${esc}/\\.[qQ][oO][dD][eE][rR](/|$)`))
+    p.release()
+    const inHome = await svc.planExec('/opt/q/qodercli', [], session('s1', home), baseEnv, { allowRead: [], allowWrite: [join(home, '.qoder', 'logs')], allowHosts: [], proxyScope: 'r1', readOnly: false, denyRead: [], denyWrite: [] })
+    expect(profileOf(inHome.args)).not.toContain('[qQ][oO][dD][eE][rR]')
+    expect(profileOf(inHome.args)).toContain('[cC][oO][dD][eE][xX]')
+    inHome.release()
   })
 
   it('the darwin moveBlock includes the gitDir modules and worktrees dirs', async () => {
@@ -589,12 +579,11 @@ describe('proxy bookkeeping (review M3, M5, M8)', () => {
   })
 
   it('a config change during the plan awaits does not relabel the plan (level is taken once)', async () => {
-    const g = testGit()
     let flip = false
     const svc2 = createSandboxService({
       platform: 'darwin', dataDir, home, env: { HOME: home }, detected: { level: 'full', missing: [] },
       permissions: () => (flip ? cfg({}, { enabled: false }) : cfg()), rules: () => [], append: () => {},
-      git: async (a, o) => { flip = true; return g(a, o) },
+      repoPin: () => { flip = true; return NO_REPO },
     })
     closers.push(() => svc2.close())
     const p = await svc2.plan('true', session(), baseEnv)
@@ -604,16 +593,6 @@ describe('proxy bookkeeping (review M3, M5, M8)', () => {
     p.release()
   })
 
-  it('a session whose proxy idled out is forgotten (git looked up again next time)', async () => {
-    let n = 0
-    const g = testGit()
-    const { svc } = service({ idleMs: 80, git: (a, o) => { n++; return g(a, o) } })
-    ;(await svc.plan('true', session(), baseEnv)).release()
-    const once = n
-    await wait(300)
-    ;(await svc.plan('true', session(), baseEnv)).release()
-    expect(n).toBe(once * 2)
-  })
 })
 
 describe('planExec', () => {
@@ -1012,21 +991,6 @@ describe('planExec', () => {
       await vi.waitFor(async () => expect(await connectable(a.env)).toBe(false))
       expect(await connectable(b.env)).toBe(true)
       b.release()
-    })
-
-    it('the release of a run does not forget the session\'s git lookup; the plain entry still does', async () => {
-      let n = 0
-      const g = testGit()
-      const { svc } = service({ git: (a, o) => { n++; return g(a, o) } })
-      const shellPlan = await svc.plan('true', session(), baseEnv)
-      const once = n
-      const run = await svc.planExec(FILE, ARGS, session(), baseEnv, opts())
-      run.release()
-      await vi.waitFor(async () => expect(await connectable(run.env)).toBe(false))
-      await wait(20)
-      ;(await svc.plan('true', session(), baseEnv)).release()
-      expect(n).toBe(once)
-      shellPlan.release()
     })
 
     it('a scope still in use is refused, also when two plans race; after release it can be used again (review M4)', async () => {

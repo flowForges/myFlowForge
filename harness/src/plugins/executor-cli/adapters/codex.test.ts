@@ -67,6 +67,9 @@ const flag = (args: string[], prefix: string) => args.find(a => a.startsWith(pre
 const fsTable = (args: string[]) =>
   parseToml(flag(args, 'permissions.mffai.filesystem=')!.slice('permissions.mffai.filesystem='.length)) as Record<string, unknown>
 
+/** cwd 可写,cwd 的 CLI 配置和嵌套仓库的 hooks、config 不行(实测 0.154) */
+const PROJECT_ROOTS = { '.': 'write', '.codex': 'read', '.qoder': 'read', '*/**/.git/hooks/**': 'none', '*/**/.git/config': 'none' }
+
 describe('codex buildArgs', () => {
   it('matches spec §8.1 exactly', () => {
     const { args, stdin } = codexAdapter.buildArgs(input({ denyRead: ['/h/.ssh'], readOnlyPaths: ['/work/repo/gen'], model: 'gpt-x' }))
@@ -75,7 +78,7 @@ describe('codex buildArgs', () => {
       '-c', 'approval_policy="never"',
       '-c', 'web_search="disabled"',
       '-c', 'default_permissions="mffai"',
-      '-c', 'permissions.mffai.filesystem={":root"="read",":project_roots"={"."="write"},":tmpdir"="write","/h/.ssh"="none","/work/repo/gen"="read"}',
+      '-c', 'permissions.mffai.filesystem={":root"="read",":project_roots"={"."="write",".codex"="read",".qoder"="read","*/**/.git/hooks/**"="none","*/**/.git/config"="none"},":tmpdir"="write","/h/.ssh"="none","/work/repo/gen"="read"}',
       '-c', 'permissions.mffai.network={enabled=false}',
       '-m', 'gpt-x',
       '-',
@@ -135,7 +138,7 @@ describe('codex buildArgs', () => {
   it('readOnly removes :project_roots and keeps every narrowing entry', () => {
     const rw = fsTable(codexAdapter.buildArgs(input({ denyRead: ['/h/.ssh'] })).args)
     const ro = fsTable(codexAdapter.buildArgs(input({ denyRead: ['/h/.ssh'], readOnly: true })).args)
-    expect(rw[':project_roots']).toEqual({ '.': 'write' })
+    expect(rw[':project_roots']).toEqual(PROJECT_ROOTS)
     expect(ro).toEqual({ ':root': 'read', ':tmpdir': 'write', '/h/.ssh': 'none' })
   })
 
@@ -228,7 +231,7 @@ describe('a read entry cannot reopen a none root', () => {
 
   it('at or under a none root, with any spelling, nothing is emitted', () => {
     for (const r of ['/s', '/s/', '/s/a', '/s/a/', '/s/a/b/c', '/s/x/../a']) {
-      expect(table(['/s'], [r])).toEqual({ ':root': 'read', ':project_roots': { '.': 'write' }, ':tmpdir': 'write', '/s': 'none' })
+      expect(table(['/s'], [r])).toEqual({ ':root': 'read', ':project_roots': PROJECT_ROOTS, ':tmpdir': 'write', '/s': 'none' })
     }
     expect(table(['/s/'], ['/s/a'])['/s/a']).toBeUndefined()
     expect(table(['/'], ['/anything'])['/anything']).toBeUndefined()
@@ -274,7 +277,7 @@ describe('glob characters in a profile path', () => {
 
   it('degraded, the profile still runs: glob read keys are left out because Codex refuses them with exit 1', () => {
     const { args } = codexAdapter.buildArgs(input({ cwd: '/w/cw[1]d', isolation: 'none', denyRead: ['/w/cw[1]d/hid'], readOnlyPaths: ['/w/cw[1]d/gen', '/w/plain'] }))
-    expect(fsTable(args)).toEqual({ ':root': 'read', ':project_roots': { '.': 'write' }, ':tmpdir': 'write', '/w/cw[1]d/hid': 'none', '/w/plain': 'read' })
+    expect(fsTable(args)).toEqual({ ':root': 'read', ':project_roots': PROJECT_ROOTS, ':tmpdir': 'write', '/w/cw[1]d/hid': 'none', '/w/plain': 'read' })
   })
 
   it('no escaping is attempted', () => {
@@ -299,14 +302,14 @@ describe('codex selfTest', () => {
     expect(fsTable(args)['/tmp/st-secret/key']).toBe('none')
   })
 
-  const good = 'secret_read r=1\ncwd_write r=0\noutside_write r=1\ngit_write r=1\ntmp_write r=0\nrule_write r=1\nrule_read r=1\nsecret_dir_read r=1\nnet_connect r=1\n'
+  const good = 'secret_read r=1\ncwd_write r=0\noutside_write r=1\ngit_write r=1\nnested_git_hook r=1\nnested_git_config r=1\ncodex_config_write r=1\nqoder_config_write r=1\ntmp_write r=0\nrule_write r=1\nrule_read r=1\nsecret_dir_read r=1\nnet_connect r=1\n'
 
   it('all rows as expected → nothing failed', () => {
     expect(st().parse(good)).toEqual([])
   })
 
   it('each row that went the wrong way is reported', () => {
-    for (const row of ['secret_read', 'outside_write', 'git_write', 'rule_write', 'rule_read', 'secret_dir_read', 'net_connect']) {
+    for (const row of ['secret_read', 'outside_write', 'git_write', 'nested_git_hook', 'nested_git_config', 'codex_config_write', 'qoder_config_write', 'rule_write', 'rule_read', 'secret_dir_read', 'net_connect']) {
       expect(st().parse(good.replace(`${row} r=1`, `${row} r=0`))).toEqual([row])
     }
     for (const row of ['cwd_write', 'tmp_write']) {
@@ -315,12 +318,12 @@ describe('codex selfTest', () => {
   })
 
   it('a missing marker fails, for every row; garbage fails every row', () => {
-    for (const row of ['secret_read', 'cwd_write', 'outside_write', 'git_write', 'tmp_write', 'rule_write', 'rule_read', 'secret_dir_read', 'net_connect']) {
+    for (const row of ['secret_read', 'cwd_write', 'outside_write', 'git_write', 'nested_git_hook', 'nested_git_config', 'codex_config_write', 'qoder_config_write', 'tmp_write', 'rule_write', 'rule_read', 'secret_dir_read', 'net_connect']) {
       const without = good.split('\n').filter(l => !l.startsWith(`${row} `)).join('\n')
       expect(st().parse(without)).toEqual([row])
     }
-    expect(st().parse('').length).toBe(9)
-    expect(st().parse('nope').length).toBe(9)
+    expect(st().parse('').length).toBe(13)
+    expect(st().parse('nope').length).toBe(13)
   })
 
   it('a second marker saying otherwise fails the row', () => {
@@ -330,7 +333,17 @@ describe('codex selfTest', () => {
 
   it('takes the entries rule translation relies on, through the same map a real run uses', () => {
     const t = fsTable(st({ denyRead: ['/tmp/st/hidden', '/tmp/secdir'], readOnlyPaths: ['/tmp/st/ro'] }).args)
-    expect(t).toMatchObject({ '/tmp/st/hidden': 'none', '/tmp/secdir': 'none', '/tmp/st/ro': 'read', ':project_roots': { '.': 'write' } })
+    expect(t).toMatchObject({ '/tmp/st/hidden': 'none', '/tmp/secdir': 'none', '/tmp/st/ro': 'read', ':project_roots': PROJECT_ROOTS })
+  })
+
+  describe('the subdirectory pass', () => {
+    const sub = () => st({ subdir: true })
+    it('has its own rows and keeps the same map as a real run', () => {
+      expect(fsTable(sub().args)[':project_roots']).toEqual(PROJECT_ROOTS)
+      expect(sub().parse('sub_cwd_write r=0\nparent_write r=1\nsibling_write r=1\n')).toEqual([])
+      expect(sub().parse('sub_cwd_write r=0\nparent_write r=0\nsibling_write r=1\n')).toEqual(['parent_write'])
+      expect(sub().parse('')).toEqual(['sub_cwd_write', 'parent_write', 'sibling_write'])
+    })
   })
 
   describe('the read-only pass', () => {

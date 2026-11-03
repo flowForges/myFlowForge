@@ -82,7 +82,7 @@ describe('Sessions service', () => {
     expect(seen).toBeInstanceOf(Sessions)
     const { sessionId } = await create(k, { cwd: work, approvalMode: 'auto', toolset: 'patch', model: { accountId: 'a', modelId: 'm' } })
     expect(seen!.get(sessionId)).toEqual({
-      sessionId, cwd: realpathSync.native(work), approvalMode: 'auto', toolset: 'patch', model: { accountId: 'a', modelId: 'm' }, origin: 'app',
+      sessionId, cwd: realpathSync.native(work), approvalMode: 'auto', toolset: 'patch', model: { accountId: 'a', modelId: 'm' }, origin: 'app', repo: { kind: 'none' },
     })
     expect(seen!.get('nope')).toBeUndefined()
   })
@@ -94,7 +94,7 @@ describe('Sessions service', () => {
     await k1.close()
     kernels = []
     await boot()
-    expect(seen!.get(a.sessionId)).toEqual({ sessionId: a.sessionId, cwd: realpathSync.native(work), approvalMode: 'ask', toolset: 'edit', origin: 'app' })
+    expect(seen!.get(a.sessionId)).toEqual({ sessionId: a.sessionId, cwd: realpathSync.native(work), approvalMode: 'ask', toolset: 'edit', origin: 'app', repo: { kind: 'none' } })
     expect(seen!.get(b.sessionId)).toEqual({ sessionId: b.sessionId, approvalMode: 'ask', origin: 'app' })
   })
 
@@ -105,7 +105,7 @@ describe('Sessions service', () => {
     s.load([ev(1, 'session.created', 's1', { title: 'old' }), ev(2, 'message.user', 's1', { cwd: '/x' }), ev(3, 'session.created', undefined, {})])
     expect(s.get('s1')).toEqual({ sessionId: 's1', approvalMode: 'ask', origin: 'app' })
     s.observe(ev(4, 'session.created', 's2', { approvalMode: 'auto', cwd: '/w' }))
-    expect(s.get('s2')).toEqual({ sessionId: 's2', approvalMode: 'auto', cwd: '/w', origin: 'app' })
+    expect(s.get('s2')).toEqual({ sessionId: 's2', approvalMode: 'auto', cwd: '/w', origin: 'app', repo: { kind: 'none' } })
   })
 
   it('origin round-trips through session.create; session.created carries it only when not app', async () => {

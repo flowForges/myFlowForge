@@ -31,7 +31,7 @@ import { killLive, pgidFile, PgidRegistry, type PgidEntry } from '../lib/proc/pg
 import { createSandboxService } from './sandbox'
 import { detectSandbox, type DetectResult } from '../lib/sandbox/detect'
 import { upstreamFromEnv, type LookupFn, type Upstream } from '../lib/sandbox/net/proxy'
-import { createGit, type Git } from '../lib/git/snapshot'
+import { createGit, NO_REPO, pinRepo, type Git, type RepoPin } from '../lib/git/snapshot'
 import { worktreeRootOf } from '../lib/git/worktree'
 import type { BackgroundRuns, FollowUp, TurnInbox } from '../lib/tools/types'
 import { cleanRecoveredWorktrees, recoverRuns } from './runRecovery'
@@ -183,9 +183,11 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
     upstream,
     lookup: so.lookup,
     idleMs: so.idleMs,
-    git: so.git,
+    repoPin: sid => sessions.get(sid)?.repo,
     log,
   })
+  /** 沙箱外的 git:定会话的仓库、恢复时删 worktree */
+  const kernelGit = so.git ?? createGit({ base: envSnapshot })
   /** 全局状态(status / snapshot 用):不含单个会话的代理失败 */
   const sandboxStatus = () => sandbox.status()
   const gate = new PermissionGate({
@@ -213,10 +215,11 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
     mkdirSync(tmpDir, { recursive: true })
     const cleaning = cleanRecoveredWorktrees(recovered, {
       root: worktreeRootOf(opts.dataDir),
-      git: so.git ?? createGit({ base: envSnapshot }),
+      git: kernelGit,
       tmpDir,
       log,
       cwdOf: sid => sessions.get(sid)?.cwd,
+      pinOf: sid => sessions.get(sid)?.repo,
       policyOf: (sid, cwd) => sandbox.execPolicy(sid, cwd),
     })
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -390,14 +393,25 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
           return snapshot()
         case 'events.tail':
           return { events: eventLog.tail(p.limit).map(toWire) }
-        case 'session.create':
+        case 'session.create': {
+          const checked = () => (p.cwd === undefined ? undefined : validateCwd(p.cwd, { home, dataDir: opts.dataDir, platform: process.platform, env: envSnapshot }))
+          // 在任何工具跑之前定下这个会话的仓库,之后不再找(final review C-1)。重放不查。事务里不能等 git,所以在外面
+          let repo: RepoPin = NO_REPO
+          if (!receipts.get(p.commandId)) {
+            const dir = checked()
+            if (dir !== undefined) {
+              const tmpDir = join(opts.dataDir, 'tmp')
+              mkdirSync(tmpDir, { recursive: true })
+              repo = await pinRepo(dir, kernelGit, { tmpDir })
+            }
+          }
           return command(name, p.commandId, () => {
-            const cwd = p.cwd === undefined ? undefined : validateCwd(p.cwd, { home, dataDir: opts.dataDir, platform: process.platform, env: envSnapshot })
+            const cwd = checked()
             const sessionId = randomUUID()
             const payload = {
               title: p.title,
               ...(p.model && { model: p.model }),
-              ...(cwd && { cwd }),
+              ...(cwd && { cwd, repo }),
               approvalMode: p.approvalMode ?? 'ask',
               ...(p.toolset && { toolset: p.toolset }),
               ...(p.origin && p.origin !== 'app' && { origin: p.origin }),
@@ -405,6 +419,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
             append({ type: 'session.created', sessionId, payload })
             return { result: { sessionId } }
           }).result
+        }
         case 'session.prompt':
           return command<{ accepted: boolean; turnId: string; followUp?: boolean }>(name, p.commandId, () => {
             const activeId = activeBySession.get(p.sessionId)

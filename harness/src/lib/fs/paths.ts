@@ -357,3 +357,6 @@ export function isCredentialPath(p: string, roots: string[], platform: NodeJS.Pl
   if (!plainAbs(p, platform)) return true
   return roots.some(r => within(p, r, platform, true))
 }
+
+/** cwd 里 CLI 会自己加载的配置目录:Codex、Qoder 的主进程不在沙箱里,写进去的钩子和 MCP 命令就在沙箱外跑 */
+export const PROJECT_CONFIG_DIRS = ['.codex', '.qoder']

@@ -4,8 +4,9 @@ import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, re
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createGit, takeSnapshot, type Git } from './snapshot'
-import { addWorktree, MAX_WORKTREES, removeInWorktree, removeWorktree, reserveWorktree, rootConflict, sessionRepo, userGitState, worktreeIntact } from './worktree'
+import { createGit, NO_REPO, pinRepo, takeSnapshot, type Git, type PinnedRepo } from './snapshot'
+import * as wt from './worktree'
+import { MAX_WORKTREES, removeInWorktree, reserveWorktree, rootConflict, userGitState, worktreePin } from './worktree'
 
 let base: string
 let home: string
@@ -19,6 +20,9 @@ const env = () => ({ PATH: process.env.PATH ?? '', HOME: home, USERPROFILE: home
 const ug = (args: string[], cwd = repo) => execFileSync('git', args, { cwd, env: env() }).toString()
 const worktrees = () => ug(['worktree', 'list', '--porcelain']).split('\n').filter(l => l.startsWith('worktree ')).map(l => l.slice('worktree '.length))
 const o = () => ({ root: wtRoot, tmpDir: tmp })
+const pinOf = async (cwd = repo) => (await pinRepo(cwd, git, { tmpDir: tmp })) as PinnedRepo
+const addWorktree = async (cwd: string, path: string, commit: string, g: Git, opts: wt.WorktreeOpts) => wt.addWorktree(await pinRepo(cwd, git, { tmpDir: tmp }), path, commit, g, opts)
+const removeWorktree = async (cwd: string, path: string, g: Git, opts: wt.WorktreeOpts) => wt.removeWorktree(await pinRepo(cwd, git, { tmpDir: tmp }), path, g, opts)
 
 beforeEach(async () => {
   base = realpathSync(mkdtempSync(join(tmpdir(), 'mffai-wt-test-')))
@@ -33,7 +37,7 @@ beforeEach(async () => {
   ug(['add', '-A'])
   ug(['commit', '-qm', 'init'])
   git = createGit({ base: env() })
-  const snap = await takeSnapshot(repo, 'refs/mffai/runs/s1/r-start', git, { tmpDir: tmp })
+  const snap = await takeSnapshot(repo, 'refs/mffai/runs/s1/r-start', git, { tmpDir: tmp, pin: await pinOf() })
   start = snap.ref!
 })
 
@@ -242,40 +246,43 @@ describe('reserveWorktree', () => {
   })
 })
 
-describe('sessionRepo and userGitState', () => {
-  it('a plain repo at the top and in a subdirectory', async () => {
-    mkdirSync(join(repo, 'sub'))
-    expect(await sessionRepo(repo, git, { tmpDir: tmp })).toMatchObject({ top: repo, prefix: '', gitDir: join(repo, '.git'), commonDir: join(repo, '.git') })
-    expect(await sessionRepo(join(repo, 'sub'), git, { tmpDir: tmp })).toMatchObject({ top: repo, prefix: 'sub/' })
-  })
-
-  it('not a repo → undefined', async () => {
-    expect(await sessionRepo(tmp, git, { tmpDir: tmp })).toBeUndefined()
-  })
-
+describe('userGitState', () => {
   it('a session that is itself a linked worktree: the common dir and its own git dir are both protected', async () => {
     const linked = join(base, 'linked')
     ug(['worktree', 'add', '-q', '--detach', linked])
-    const info = (await sessionRepo(linked, git, { tmpDir: tmp }))!
+    const info = await pinOf(linked)
     expect(info.commonDir).toBe(join(repo, '.git'))
     expect(info.gitDir).toBe(join(repo, '.git', 'worktrees', 'linked'))
-    const state = userGitState(info)
-    expect(state).toEqual([join(repo, '.git'), join(repo, '.git', 'worktrees', 'linked')])
+    expect(userGitState(info)).toEqual([join(repo, '.git'), join(repo, '.git', 'worktrees', 'linked')])
   })
 
   it('a plain repo: the whole common dir is read-only', async () => {
-    expect(userGitState((await sessionRepo(repo, git, { tmpDir: tmp }))!)).toEqual([join(repo, '.git')])
+    expect(userGitState(await pinOf())).toEqual([join(repo, '.git')])
   })
 })
 
-describe('worktreeIntact', () => {
+describe('worktreePin', () => {
   const added = async () => {
     const path = join(wtRoot, 's1', 'r')
     mkdirSync(path, { recursive: true })
     await addWorktree(repo, path, start, git, o())
     return path
   }
-  const check = (path: string, cwd = path) => worktreeIntact(repo, path, cwd, git, { tmpDir: tmp })
+  const check = async (path: string, cwd = path) => worktreePin(await pinOf(), path, cwd) !== undefined
+
+  it('points at the admin dir under the pinned common dir, and works for a snapshot', async () => {
+    const path = await added()
+    const pin = worktreePin(await pinOf(), path, path)!
+    expect(pin).toMatchObject({ top: path, gitDir: join(repo, '.git', 'worktrees', 'r'), commonDir: join(repo, '.git') })
+    writeFileSync(join(path, 'new.txt'), 'n\n')
+    expect((await takeSnapshot(path, 'refs/mffai/runs/s1/r-end', git, { tmpDir: tmp, pin })).ref).toBeDefined()
+  })
+
+  it('a session with no pinned repo never gets one', async () => {
+    const path = await added()
+    expect(worktreePin(NO_REPO, path, path)).toBeUndefined()
+    expect(worktreePin(undefined, path, path)).toBeUndefined()
+  })
 
   it('a fresh worktree is intact, also from a subdirectory', async () => {
     const path = await added()
@@ -348,14 +355,14 @@ describe('worktreeIntact', () => {
 
   it('gone, or not a repo → not intact, no throw', async () => {
     const path = await added()
-    expect(await worktreeIntact(tmp, path, path, git, { tmpDir: tmp })).toBe(false)
+    expect(worktreePin(await pinRepo(tmp, git, { tmpDir: tmp }), path, path)).toBeUndefined()
     rmSync(path, { recursive: true, force: true })
     expect(await check(path)).toBe(false)
   })
 })
 
 describe('rootConflict', () => {
-  const info = async (cwd = repo) => (await sessionRepo(cwd, git, { tmpDir: tmp }))!
+  const info = (cwd = repo) => pinOf(cwd)
 
   it('a root beside the repo is fine, existing or not', async () => {
     expect(rootConflict(wtRoot, await info(), repo)).toBe(false)

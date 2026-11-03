@@ -227,11 +227,22 @@ export const SELF_TEST_SCRIPT = [
   '(echo x > ./mffai-probe) 2>/dev/null; echo "cwd_write r=$?"',
   '(echo x > "$3/mffai-probe") 2>/dev/null; echo "outside_write r=$?"',
   '(echo x >> .git/config) 2>/dev/null; echo "git_write r=$?"',
+  '(echo x > ./vendor/.git/hooks/mffai-probe) 2>/dev/null; echo "nested_git_hook r=$?"',
+  '(echo x >> ./vendor/.git/config) 2>/dev/null; echo "nested_git_config r=$?"',
+  '(/bin/mkdir -p ./.codex && echo x > ./.codex/config.toml) 2>/dev/null; echo "codex_config_write r=$?"',
+  '(/bin/mkdir -p ./.qoder && echo x > ./.qoder/settings.json) 2>/dev/null; echo "qoder_config_write r=$?"',
   '(echo x > "$TMPDIR/mffai-probe") 2>/dev/null; echo "tmp_write r=$?"',
   '(echo x > ./ro/x) 2>/dev/null; echo "rule_write r=$?"',
   'if /bin/cat ./visible >/dev/null 2>&1; then /bin/cat ./hidden/x >/dev/null 2>&1; echo "rule_read r=$?"; else echo "rule_read r=0"; fi',
   'if /bin/cat "$2" >/dev/null 2>&1; then /bin/cat "$4/x" >/dev/null 2>&1; echo "secret_dir_read r=$?"; else echo "secret_dir_read r=0"; fi',
   '/usr/bin/curl -q -s -o /dev/null --noproxy "*" --connect-timeout 2 "http://127.0.0.1:$5/" >/dev/null 2>&1; echo "net_connect r=$?"',
+].join('\n')
+
+/** 从仓库子目录跑(`-C <cwd>/sub`):$1 是 cwd 外的目录,确认这一遍的写真的按 -C 算 */
+export const SELF_TEST_SUBDIR_SCRIPT = [
+  '(echo x > ./mffai-probe-sub) 2>/dev/null; echo "sub_cwd_write r=$?"',
+  '(echo x > ../mffai-probe-parent) 2>/dev/null; echo "parent_write r=$?"',
+  '(echo x > ../vendor/mffai-probe-sibling) 2>/dev/null; echo "sibling_write r=$?"',
 ].join('\n')
 
 /** 只读运行那份档:cwd 写不了,但读得了 */
@@ -289,9 +300,14 @@ export async function runSelfTest(adapter: Adapter, file: string, deps: DetectDe
     root = made
     const base = realpathSync(made)
     const [dir, tmp, home, outside, secretDir] = ['cwd', 'tmp', 'home', 'outside', 'secret-dir'].map(d => join(base, d))
-    const [readOnlyDir, hidden] = [join(dir, 'ro'), join(dir, 'hidden')]
-    for (const d of [join(dir, '.git'), readOnlyDir, hidden, tmp, home, outside, secretDir]) mkdirSync(d, { recursive: true })
-    writeFileSync(join(dir, '.git', 'config'), '[core]\n')
+    const [readOnlyDir, hidden, sub] = [join(dir, 'ro'), join(dir, 'hidden'), join(dir, 'sub')]
+    // cwd 要像真的仓库顶层(HEAD、objects、refs):子目录那一遍问的就是 Codex 认不认这个顶层
+    const gits = [join(dir, '.git'), join(dir, 'vendor', '.git')]
+    for (const d of [...gits.flatMap(g => [join(g, 'hooks'), join(g, 'objects'), join(g, 'refs')]), readOnlyDir, hidden, sub, tmp, home, outside, secretDir]) mkdirSync(d, { recursive: true })
+    for (const g of gits) {
+      writeFileSync(join(g, 'config'), '[core]\n')
+      writeFileSync(join(g, 'HEAD'), 'ref: refs/heads/main\n')
+    }
     const secret = join(base, 'secret')
     const control = join(base, 'control')
     for (const f of [secret, join(secretDir, 'x'), join(hidden, 'x')]) writeFileSync(f, 'SECRET\n', { mode: 0o600 })
@@ -310,6 +326,12 @@ export async function runSelfTest(adapter: Adapter, file: string, deps: DetectDe
     if (listener.connections() > 0 && !failed.includes('net_connect')) failed.push('net_connect')
     if (r.code !== 0) failed.push('exit')
     if (failed.length > 0) return { failed, conclusive: r.code !== null }
+
+    const nested = adapter.selfTest({ dir: sub, secret, flags: [], denyRead, readOnlyPaths: [readOnlyDir], subdir: true })
+    const nestedRun = await probe(deps, file, [...nested.args, '/bin/sh', '-c', SELF_TEST_SUBDIR_SCRIPT, 'mffai-selftest'], env)
+    const nestedFailed = nested.parse(nestedRun.out)
+    if (nestedRun.code !== 0) nestedFailed.push('exit')
+    if (nestedFailed.length > 0) return { failed: nestedFailed, conclusive: nestedRun.code !== null }
 
     const readOnly = adapter.selfTest({ dir, secret, flags: [], denyRead, readOnlyPaths: [readOnlyDir], readOnly: true })
     const ro = await probe(deps, file, [...readOnly.args, '/bin/sh', '-c', SELF_TEST_READ_ONLY_SCRIPT, 'mffai-selftest'], env)
