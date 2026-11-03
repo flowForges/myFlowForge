@@ -53,17 +53,19 @@ function assistantEvents(o: Record<string, unknown>): RunEvent[] {
 }
 
 /**
- * 只有 subtype:"success" 且 is_error 严格为 false 才算完成。subtype 单独不可信:
- * 未登录时是 success + is_error:true(spec §2);缺字段、改了形状的都不算成功
+ * 只有 subtype:"success" 且 is_error 不存在或恰好是 false 才算完成。subtype 单独不可信:
+ * 未登录时是 success + is_error:true(spec §2);光秃秃的 result、其他形状的 is_error 都不算成功。
+ * 不要求 is_error 一定在:app 测试里的成功行没有它,登录后的真实形状还没录到
  */
 function resultEvents(o: Record<string, unknown>): RunEvent[] {
   const final = text(o.result)
-  const failed = (o.is_error !== undefined && o.is_error !== false) || (o.subtype !== undefined && o.subtype !== 'success')
+  const notError = o.is_error === undefined || o.is_error === false
+  const failed = !notError || (o.subtype !== undefined && o.subtype !== 'success')
   return [
     ...(final ? [{ kind: 'final', text: final } as const] : []),
     ...usageEvents(o.usage, 'cache_read_input_tokens'),
     ...(failed ? [{ kind: 'error', message: final ?? text(o.subtype) ?? 'result' } as const] : []),
-    ...(o.subtype === 'success' && o.is_error === false ? [{ kind: 'completed' } as const] : []),
+    ...(o.subtype === 'success' && notError ? [{ kind: 'completed' } as const] : []),
   ]
 }
 

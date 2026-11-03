@@ -154,13 +154,14 @@ describe('qoder parseLine', () => {
     ])
   })
 
-  it('the app-derived success lines carry no is_error, so they are not a completion', () => {
+  it('the app-derived success lines carry no is_error, and that is still a completion', () => {
     expect(fixture('qoder-success-derived.jsonl').flatMap(l => qoderAdapter.parseLine(l))).toEqual([
       { kind: 'final', text: '…' },
       { kind: 'progress', progress: 'tool', text: 'Bash: ls' },
       { kind: 'assistant', failed: false },
       { kind: 'final', text: '…' },
       { kind: 'usage', usage: { input: 1, output: 1 } },
+      { kind: 'completed' },
     ])
   })
 
@@ -214,7 +215,8 @@ describe('qoder parseLine', () => {
       { kind: 'error', message: 'error_during_execution' },
     ])
     expect(qoderAdapter.parseLine('{"type":"result"}')).toEqual([])
-    expect(qoderAdapter.parseLine('{"type":"result","subtype":"success"}')).toEqual([])
+    expect(qoderAdapter.parseLine('{"type":"result","subtype":"success"}')).toEqual([{ kind: 'completed' }])
+    expect(qoderAdapter.parseLine('{"type":"result","subtype":"success","is_error":null}')).toEqual([{ kind: 'error', message: 'success' }])
     expect(qoderAdapter.parseLine('{"type":"result","is_error":false}')).toEqual([])
     expect(qoderAdapter.parseLine('{"type":"result","subtype":"error_max_turns","is_error":false}')).toEqual([{ kind: 'error', message: 'error_max_turns' }])
     expect(qoderAdapter.parseLine('{"type":"result","subtype":"success","is_error":"true"}')).toEqual([{ kind: 'error', message: 'success' }])
@@ -259,16 +261,18 @@ describe('qoder classify', () => {
     expect(qoderAdapter.classify(fold([SUCCESS]))).toEqual({ status: 'ok' })
   })
 
-  it('without is_error:false it is not ok: the app-derived lines are no_result', () => {
-    expect(qoderAdapter.classify(fold(fixture('qoder-success-derived.jsonl')))).toEqual({ status: 'failed', reason: 'no_result' })
+  it('is_error may be absent: the app-derived lines are ok', () => {
+    expect(qoderAdapter.classify(fold(fixture('qoder-success-derived.jsonl')))).toEqual({ status: 'ok' })
+    expect(qoderAdapter.classify(fold(['{"type":"result","subtype":"success"}']))).toEqual({ status: 'ok' })
   })
 
   it.each([
     ['{"type":"result"}', 'no_result'],
-    ['{"type":"result","subtype":"success"}', 'no_result'],
     ['{"type":"result","is_error":false}', 'no_result'],
     ['{"type":"result","subtype":"success","is_error":"true"}', 'cli_error'],
     ['{"type":"result","subtype":"success","is_error":1}', 'cli_error'],
+    ['{"type":"result","subtype":"success","is_error":0}', 'cli_error'],
+    ['{"type":"result","subtype":"success","is_error":null}', 'cli_error'],
     ['{"type":"result","subtype":"success","is_error":true,"result":"something broke"}', 'cli_error'],
     ['{"type":"result","subtype":"error_during_execution"}', 'cli_error'],
     ['{"type":"result","subtype":"error_max_turns","is_error":false}', 'cli_error'],
@@ -279,6 +283,7 @@ describe('qoder classify', () => {
   it('an error on the final assistant message beats a clean result', () => {
     expect(qoderAdapter.classify(fold([erred('overloaded'), SUCCESS]))).toEqual({ status: 'failed', reason: 'cli_error' })
     expect(qoderAdapter.classify(fold([SUCCESS, erred('overloaded')]))).toEqual({ status: 'failed', reason: 'cli_error' })
+    expect(qoderAdapter.classify(fold([erred('overloaded'), '{"type":"result","subtype":"success"}']))).toEqual({ status: 'failed', reason: 'cli_error' })
     expect(qoderAdapter.classify(fold([erred('rate_limit'), SUCCESS]))).toEqual({ status: 'failed', reason: 'cli_error' })
     expect(qoderAdapter.classify(fold([clean, erred('authentication_failed'), SUCCESS]))).toEqual({ status: 'failed', reason: 'auth_missing' })
   })
