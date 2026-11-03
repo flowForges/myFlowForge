@@ -1,0 +1,3 @@
+{"type":"system","subtype":"init","apiKeySource":"none","qodercli_version":"1.0.29","protocol_version":"1.0.0","cwd":"/tmp/x","tools":[],"mcp_servers":[],"model":"auto","permissionMode":"bypassPermissions","session_id":"s1"}
+{"type":"assistant","message":{"role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"Not logged in · Please run /login"}]},"parent_tool_use_id":null,"error":"authentication_failed","session_id":"s1"}
+{"type":"result","subtype":"success","is_error":true,"duration_ms":0,"num_turns":1,"result":"Not logged in · Please run /login","stop_reason":"stop_sequence","total_cost_usd":0,"usage":{},"permission_denials":[],"session_id":"s1"}

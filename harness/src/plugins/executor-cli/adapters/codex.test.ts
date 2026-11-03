@@ -1,0 +1,370 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { describe, expect, it } from 'vitest'
+import { credentialRoots } from '../../../lib/fs/paths'
+import { codexAdapter, filesystemMap, tomlString } from './codex'
+import { WRITE_RUN_SUFFIX, type BuildInput, type RunEvent, type RunState } from './types'
+
+const fixture = (name: string) =>
+  readFileSync(fileURLToPath(new URL(`../../../../test/fixtures/executors/${name}`, import.meta.url)), 'utf8').split('\n').filter(Boolean)
+
+const input = (over: Partial<BuildInput> = {}): BuildInput => ({
+  prompt: 'do it',
+  cwd: '/work/repo',
+  readOnly: false,
+  isolation: 'own',
+  denyRead: [],
+  readOnlyPaths: [],
+  network: false,
+  ...over,
+})
+const state = (over: Partial<RunState> = {}): RunState => ({
+  code: 0, signal: null, completed: false, sawResult: false, errors: [], timedOut: false, stalled: false, cancelled: false, ...over,
+})
+
+/** 本测试只认这些形状:basic string、嵌套 inline table。解析不了就抛,说明产出不是合法的 TOML */
+function parseToml(src: string): unknown {
+  let i = 0
+  const fail = (why: string): never => { throw new Error(`${why} at ${i}: ${src}`) }
+  const str = (): string => {
+    if (src[i++] !== '"') fail('expected string')
+    let out = ''
+    while (i < src.length) {
+      const c = src[i++]
+      if (c === '"') return out
+      if (c.charCodeAt(0) < 0x20 && c !== '\t' || c === '\x7f') fail('raw control character')
+      if (c !== '\\') { out += c; continue }
+      const e = src[i++]
+      if (e === 'u') { out += String.fromCharCode(parseInt(src.slice(i, i + 4), 16)); i += 4; continue }
+      const m: Record<string, string> = { b: '\b', t: '\t', n: '\n', f: '\f', r: '\r', '"': '"', '\\': '\\' }
+      if (!(e in m)) fail('bad escape')
+      out += m[e]
+    }
+    return fail('unterminated')
+  }
+  const value = (): unknown => {
+    if (src[i] === '"') return str()
+    if (src[i] !== '{') fail('expected value')
+    i++
+    const out: Record<string, unknown> = {}
+    while (src[i] !== '}') {
+      const k = str()
+      if (k in out) fail(`duplicate key ${k}`)
+      if (src[i++] !== '=') fail('expected =')
+      out[k] = value()
+      if (src[i] === ',') i++
+      else if (src[i] !== '}') fail('expected , or }')
+    }
+    i++
+    return out
+  }
+  const v = value()
+  if (i !== src.length) fail('trailing')
+  return v
+}
+
+const flag = (args: string[], prefix: string) => args.find(a => a.startsWith(prefix))
+const fsTable = (args: string[]) =>
+  parseToml(flag(args, 'permissions.mffai.filesystem=')!.slice('permissions.mffai.filesystem='.length)) as Record<string, unknown>
+
+describe('codex buildArgs', () => {
+  it('matches spec §8.1 exactly', () => {
+    const { args, stdin } = codexAdapter.buildArgs(input({ denyRead: ['/h/.ssh'], readOnlyPaths: ['/work/repo/gen'], model: 'gpt-x' }))
+    expect(args).toEqual([
+      'exec', '--json', '--ephemeral', '--skip-git-repo-check', '--ignore-user-config', '--ignore-rules', '-C', '/work/repo',
+      '-c', 'approval_policy="never"',
+      '-c', 'web_search="disabled"',
+      '-c', 'default_permissions="mffai"',
+      '-c', 'permissions.mffai.filesystem={":root"="read",":project_roots"={"."="write"},":tmpdir"="write","/h/.ssh"="none","/work/repo/gen"="read"}',
+      '-c', 'permissions.mffai.network={enabled=false}',
+      '-m', 'gpt-x',
+      '-',
+    ])
+    expect(stdin).toBe(`do it\n\n${WRITE_RUN_SUFFIX}`)
+  })
+
+  it('every credential root and the data dir are "<path>"="none"', () => {
+    const roots = credentialRoots('/h', 'darwin', {})
+    expect(roots.length).toBeGreaterThan(5)
+    const denyRead = [...roots, '/h/.myFlowForge/mff-ai']
+    const raw = flag(codexAdapter.buildArgs(input({ denyRead })).args, 'permissions.mffai.filesystem=')!
+    for (const p of denyRead) expect(raw).toContain(`${tomlString(p)}="none"`)
+    const table = fsTable(codexAdapter.buildArgs(input({ denyRead, readOnly: true })).args)
+    for (const p of denyRead) expect(table[p]).toBe('none')
+  })
+
+  const matrix = [true, false].flatMap(readOnly =>
+    (['own', 'wrapped', 'none'] as const).flatMap(isolation =>
+      [true, false].flatMap(network => [undefined, 'gpt-x'].map(model => ({ readOnly, isolation, network, model }))),
+    ),
+  )
+
+  it('--ignore-rules is always there; bypass, -s and danger-full-access never are', () => {
+    for (const m of matrix) {
+      const { args } = codexAdapter.buildArgs(input(m))
+      expect(args).toContain('--ignore-rules')
+      expect(args).toContain('--ignore-user-config')
+      expect(args.at(-1)).toBe('-')
+      for (const bad of ['--dangerously-bypass-approvals-and-sandbox', '-s', '--sandbox', '--full-auto']) expect(args).not.toContain(bad)
+      expect(args.join(' ')).not.toContain('danger-full-access')
+    }
+  })
+
+  it('the prompt reaches stdin and never argv, even when it is a flag', () => {
+    for (const prompt of ['--dangerously-bypass-approvals-and-sandbox', '-s danger-full-access', 'plain-marker-text']) {
+      for (const m of matrix) {
+        const { args, stdin } = codexAdapter.buildArgs(input({ ...m, prompt }))
+        expect(stdin!.startsWith(prompt)).toBe(true)
+        expect(args.join('\0')).not.toContain(prompt)
+        expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox')
+      }
+    }
+  })
+
+  it('stdin is redacted; only write runs get the suffix, and a PEM with no END cannot swallow it', () => {
+    const key = 'sk-abcdefghijklmnopqrstuvwxyz'
+    const rw = codexAdapter.buildArgs(input({ prompt: `use ${key}` }))
+    expect(rw.stdin).not.toContain(key)
+    expect(rw.stdin).toBe(`use ***\n\n${WRITE_RUN_SUFFIX}`)
+    expect(codexAdapter.buildArgs(input({ prompt: `use ${key}`, readOnly: true })).stdin).toBe('use ***')
+    const pem = codexAdapter.buildArgs(input({ prompt: '-----BEGIN RSA PRIVATE KEY-----\nAAAA' }))
+    expect(pem.stdin).toBe(`***\n\n${WRITE_RUN_SUFFIX}`)
+    expect(codexAdapter.buildArgs(input({ prompt: key })).args.join(' ')).not.toContain(key)
+  })
+
+  it('readOnly removes :project_roots and keeps every narrowing entry', () => {
+    const rw = fsTable(codexAdapter.buildArgs(input({ denyRead: ['/h/.ssh'] })).args)
+    const ro = fsTable(codexAdapter.buildArgs(input({ denyRead: ['/h/.ssh'], readOnly: true })).args)
+    expect(rw[':project_roots']).toEqual({ '.': 'write' })
+    expect(ro).toEqual({ ':root': 'read', ':tmpdir': 'write', '/h/.ssh': 'none' })
+  })
+
+  it('network:true flips the network table and nothing else', () => {
+    const off = codexAdapter.buildArgs(input()).args
+    const on = codexAdapter.buildArgs(input({ network: true })).args
+    expect(flag(off, 'permissions.mffai.network=')).toBe('permissions.mffai.network={enabled=false}')
+    expect(flag(on, 'permissions.mffai.network=')).toBe('permissions.mffai.network={enabled=true}')
+    expect(on.filter(a => !a.startsWith('permissions.mffai.network='))).toEqual(off.filter(a => !a.startsWith('permissions.mffai.network=')))
+  })
+
+  it('a bad model never reaches argv', () => {
+    for (const model of ['--foo', '-s', '', 'a b', 'a\nb', 'x'.repeat(101), '--dangerously-bypass-approvals-and-sandbox']) {
+      expect(() => codexAdapter.buildArgs(input({ model }))).toThrow()
+    }
+  })
+
+  it('a cwd that is not absolute is refused', () => {
+    expect(() => codexAdapter.buildArgs(input({ cwd: '-x' }))).toThrow()
+    expect(() => codexAdapter.buildArgs(input({ cwd: '' }))).toThrow()
+  })
+})
+
+describe('filesystemMap and tomlString', () => {
+  it('a path with " and \\ survives', () => {
+    const p = '/h/we"ird\\dir'
+    expect(tomlString(p)).toBe('"/h/we\\"ird\\\\dir"')
+    expect(parseToml(tomlString(p))).toBe(p)
+    expect(fsTable(codexAdapter.buildArgs(input({ denyRead: [p] })).args)[p]).toBe('none')
+  })
+
+  it('control characters are escaped, so one argv value stays one valid TOML line', () => {
+    const p = '/h/a\nb\tc\rd\be\ff\u0000g\u001fh\u007fi'
+    const s = tomlString(p)
+    // eslint-disable-next-line no-control-regex
+    expect(s).not.toMatch(/[\u0000-\u001f\u007f]/)
+    expect(parseToml(s)).toBe(p)
+    // 换行想提前结束表、再塞一个键:仍只是这一个键的内容
+    const attack = '/h/x"="write","/etc'
+    const table = fsTable(codexAdapter.buildArgs(input({ denyRead: [attack] })).args)
+    expect(table[attack]).toBe('none')
+    expect(table['/etc']).toBeUndefined()
+    expect(table['/h/x']).toBeUndefined()
+  })
+
+  it('never has an empty key', () => {
+    const table = parseToml(filesystemMap({ denyRead: ['', '/h/.ssh', ''], readOnlyPaths: [''], readOnly: false })) as Record<string, unknown>
+    expect(Object.keys(table)).toEqual([':root', ':project_roots', ':tmpdir', '/h/.ssh'])
+    expect(filesystemMap({ denyRead: [''], readOnlyPaths: [], readOnly: false })).not.toContain('""')
+  })
+
+  it('a path listed twice stays one key and none beats read', () => {
+    // 重复键是非法 TOML;Codex 解析不了 -c 时不保证报错
+    const table = parseToml(filesystemMap({
+      denyRead: ['/h/.ssh', '/h/.ssh/', '/h/a/../.ssh', '/both'],
+      readOnlyPaths: ['/both', '/both/', '/ro', '/ro'],
+      readOnly: false,
+    })) as Record<string, unknown>
+    expect(table['/h/.ssh']).toBe('none')
+    expect(table['/both']).toBe('none')
+    expect(table['/ro']).toBe('read')
+    expect(Object.keys(table)).toHaveLength(6)
+  })
+
+  it('refuses a relative entry rather than dropping a deny or colliding with :root', () => {
+    for (const p of [':root', ':project_roots', '.', 'src/gen', '~/secrets']) {
+      expect(() => filesystemMap({ denyRead: [p], readOnlyPaths: [], readOnly: false })).toThrow()
+      expect(() => filesystemMap({ denyRead: [], readOnlyPaths: [p], readOnly: false })).toThrow()
+    }
+    expect(parseToml(filesystemMap({ denyRead: ['/'], readOnlyPaths: [], readOnly: false }))).toMatchObject({ '/': 'none' })
+  })
+})
+
+describe('codex selfTest', () => {
+  const st = (over = {}) => codexAdapter.selfTest!({ dir: '/tmp/st', secret: '/tmp/st-secret/key', flags: [], ...over })
+
+  it('uses the same -c as a real run plus the secret, and stops at -- for the script', () => {
+    const { args } = st({ denyRead: ['/h/.ssh'], flags: ['-c', 'x="y"'] })
+    const real = codexAdapter.buildArgs(input({ denyRead: ['/h/.ssh', '/tmp/st-secret/key'] })).args
+    const realFlags = real.slice(real.indexOf('-C') + 2, real.indexOf('-'))
+    expect(args).toEqual(['sandbox', '-C', '/tmp/st', ...realFlags, '-c', 'x="y"', '-P', 'mffai', '--'])
+    expect(fsTable(args)['/tmp/st-secret/key']).toBe('none')
+  })
+
+  const good = 'secret_read r=1\ncwd_write r=0\noutside_write r=1\ngit_write r=1\ntmp_write r=0\nnet_connect r=1\n'
+
+  it('all rows as expected → nothing failed', () => {
+    expect(st().parse(good)).toEqual([])
+  })
+
+  it('each row that went the wrong way is reported', () => {
+    for (const row of ['secret_read', 'outside_write', 'git_write', 'net_connect']) {
+      expect(st().parse(good.replace(`${row} r=1`, `${row} r=0`))).toEqual([row])
+    }
+    for (const row of ['cwd_write', 'tmp_write']) {
+      expect(st().parse(good.replace(`${row} r=0`, `${row} r=1`))).toEqual([row])
+    }
+  })
+
+  it('a missing marker fails; garbage fails every row', () => {
+    expect(st().parse(good.replace('git_write r=1\n', ''))).toEqual(['git_write'])
+    expect(st().parse('').length).toBe(6)
+    expect(st().parse('nope').length).toBe(6)
+  })
+
+  it('a second marker saying otherwise fails the row', () => {
+    expect(st().parse(`${good}secret_read r=0\n`)).toEqual(['secret_read'])
+    expect(st().parse(`secret_read r=0\n${good}`)).toEqual(['secret_read'])
+  })
+})
+
+describe('codex parseLine', () => {
+  const all = (lines: string[]): RunEvent[] => lines.flatMap(l => codexAdapter.parseLine(l))
+
+  it('reads the recorded 0.154 lines', () => {
+    expect(all(fixture('codex-exec-0.154.jsonl'))).toEqual([
+      { kind: 'native', id: '01a1a028-9e2d-7d12-9367-026a34cb36f7' },
+      { kind: 'progress', progress: 'think', text: 'Model metadata for `fake-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.' },
+      { kind: 'progress', progress: 'tool', text: '/bin/zsh -lc <clip>' },
+      { kind: 'progress', progress: 'tool', text: '/bin/zsh -lc <clip>' },
+      { kind: 'final', text: 'probe finished' },
+      { kind: 'usage', usage: { input: 22, cached: 6, output: 10 } },
+      { kind: 'completed' },
+    ])
+  })
+
+  it('file_change gives files plus file', () => {
+    expect(all(fixture('codex-file-change-derived.jsonl'))).toEqual([
+      { kind: 'files', files: ['a.ts'] },
+      { kind: 'progress', progress: 'file', text: 'a.ts' },
+    ])
+  })
+
+  it('turn.failed and top-level error are errors, in each shape the CLI has used', () => {
+    expect(codexAdapter.parseLine('{"type":"turn.failed","error":{"message":"boom"}}')).toEqual([{ kind: 'error', message: 'boom' }])
+    expect(codexAdapter.parseLine('{"type":"turn.failed","error":"boom"}')).toEqual([{ kind: 'error', message: 'boom' }])
+    expect(codexAdapter.parseLine('{"type":"error","message":"bad"}')).toEqual([{ kind: 'error', message: 'bad' }])
+    expect(codexAdapter.parseLine('{"type":"error","error":{"message":"nested"}}')).toEqual([{ kind: 'error', message: 'nested' }])
+    expect(codexAdapter.parseLine('{"type":"turn.failed"}')).toEqual([{ kind: 'error', message: 'turn.failed' }])
+  })
+
+  it('bad or odd lines give nothing and never throw', () => {
+    for (const l of ['', 'not json', '{', 'null', '3', '[]', '"x"', '{"type":"item.completed"}', '{"type":"item.completed","item":null}',
+      '{"type":"item.completed","item":{"type":"agent_message","text":5}}', '{"type":"item.completed","item":{"type":"file_change","changes":"x"}}',
+      '{"type":"item.completed","item":{"type":"command_execution"}}', '{"type":"thread.started","thread_id":5}', '{"type":"something.new"}']) {
+      expect(codexAdapter.parseLine(l)).toEqual([])
+    }
+  })
+
+  it('turn.completed without usable usage still completes', () => {
+    expect(codexAdapter.parseLine('{"type":"turn.completed"}')).toEqual([{ kind: 'completed' }])
+    expect(codexAdapter.parseLine('{"type":"turn.completed","usage":{"input_tokens":"x"}}')).toEqual([{ kind: 'completed' }])
+  })
+
+  it('file_change skips entries with no path', () => {
+    expect(codexAdapter.parseLine('{"type":"item.completed","item":{"type":"file_change","changes":[{"path":"a"},{"x":1},{"path":5}]}}')).toEqual([
+      { kind: 'files', files: ['a'] },
+      { kind: 'progress', progress: 'file', text: 'a' },
+    ])
+  })
+})
+
+describe('codex classify', () => {
+  /** 把解析出的事件折成 classify 的输入,与 Task 8 的做法一致 */
+  const fold = (lines: string[], over: Partial<RunState> = {}): RunState => {
+    const s = state(over)
+    for (const e of lines.flatMap(l => codexAdapter.parseLine(l))) {
+      if (e.kind === 'completed') { s.completed = true; s.sawResult = true }
+      if (e.kind === 'error') s.errors.push({ message: e.message, auth: e.auth })
+    }
+    return s
+  }
+  const recorded = fixture('codex-exec-0.154.jsonl')
+
+  it('recorded lines → ok, the warning item ignored', () => {
+    expect(codexAdapter.classify(fold(recorded))).toEqual({ status: 'ok' })
+  })
+
+  it('the same lines without turn.completed, exit 0 → no_result', () => {
+    expect(codexAdapter.classify(fold(recorded.filter(l => !l.includes('turn.completed'))))).toEqual({ status: 'failed', reason: 'no_result' })
+  })
+
+  it('table', () => {
+    const rows: [Partial<RunState>, object][] = [
+      [{ completed: true, code: 1 }, { status: 'failed', reason: 'exit_nonzero' }],
+      [{ code: 1 }, { status: 'failed', reason: 'exit_nonzero' }],
+      [{ code: null, signal: 'SIGKILL' }, { status: 'failed', reason: 'exit_nonzero' }],
+      [{ errors: [{ message: 'boom' }] }, { status: 'failed', reason: 'cli_error' }],
+      [{ code: 1, errors: [{ message: 'boom' }] }, { status: 'failed', reason: 'cli_error' }],
+      [{ code: 1, errors: [{ message: 'You hit your usage limit' }] }, { status: 'failed', reason: 'quota' }],
+      [{ errors: [{ message: 'QUOTA exceeded' }] }, { status: 'failed', reason: 'quota' }],
+      [{ errors: [{ message: '429 Rate Limit' }] }, { status: 'failed', reason: 'quota' }],
+      [{ errors: [{ message: 'HTTP 401' }] }, { status: 'failed', reason: 'auth_missing' }],
+      [{ errors: [{ message: 'Unauthorized' }] }, { status: 'failed', reason: 'auth_missing' }],
+      [{ errors: [{ message: 'not logged in' }] }, { status: 'failed', reason: 'auth_missing' }],
+      [{ errors: [{ message: 'x', auth: true }] }, { status: 'failed', reason: 'auth_missing' }],
+      // 401 只算一个独立的数,不算文件名或行号的一部分
+      [{ errors: [{ message: 'cannot open 14012.txt' }] }, { status: 'failed', reason: 'cli_error' }],
+    ]
+    for (const [s, want] of rows) expect(codexAdapter.classify(state(s))).toEqual(want)
+  })
+
+  it('the order is cancelled, timedOut, stalled, auth, quota, then exit', () => {
+    const everything = state({ completed: true, code: 1, errors: [{ message: 'quota' }, { message: 'x', auth: true }], cancelled: true, timedOut: true, stalled: true })
+    expect(codexAdapter.classify(everything)).toEqual({ status: 'cancelled', reason: 'cancelled' })
+    expect(codexAdapter.classify({ ...everything, cancelled: false })).toEqual({ status: 'timeout', reason: 'timeout' })
+    expect(codexAdapter.classify({ ...everything, cancelled: false, timedOut: false })).toEqual({ status: 'stalled', reason: 'stalled' })
+    expect(codexAdapter.classify({ ...everything, cancelled: false, timedOut: false, stalled: false })).toEqual({ status: 'failed', reason: 'auth_missing' })
+    expect(codexAdapter.classify(state({ completed: true, errors: [{ message: 'quota' }] }))).toEqual({ status: 'failed', reason: 'quota' })
+  })
+
+  it('a retry warning before a completed turn is still ok', () => {
+    expect(codexAdapter.classify(fold(['{"type":"error","message":"Reconnecting... 2/5"}', '{"type":"turn.completed"}']))).toEqual({ status: 'ok' })
+    expect(codexAdapter.classify(fold(['{"type":"error","message":"Reconnecting... 5/5"}']))).toEqual({ status: 'failed', reason: 'cli_error' })
+  })
+})
+
+describe('codex login and static fields', () => {
+  it('parseLogin checks Not logged in before Logged in', () => {
+    expect(codexAdapter.parseLogin('Not logged in')).toBe('missing')
+    expect(codexAdapter.parseLogin('not logged in\n')).toBe('missing')
+    expect(codexAdapter.parseLogin('Logged in using ChatGPT')).toBe('ok')
+    expect(codexAdapter.parseLogin('')).toBe('unknown')
+    expect(codexAdapter.parseLogin('error: unknown subcommand')).toBe('unknown')
+  })
+
+  it('static fields', () => {
+    expect(codexAdapter).toMatchObject({ id: 'codex', bin: 'codex', toolName: 'delegate_codex', isolationKind: 'translate', passEnv: ['CODEX_HOME'], hosts: [], loginArgs: ['login', 'status'] })
+    expect(codexAdapter.allowRead('/h', {})).toEqual([])
+    expect(codexAdapter.allowWrite('/h', {})).toEqual([])
+  })
+})

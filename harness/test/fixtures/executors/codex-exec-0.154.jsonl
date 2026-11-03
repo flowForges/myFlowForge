@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"01a1a028-9e2d-7d12-9367-026a34cb36f7"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `fake-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc <clip>","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc <clip>","aggregated_output":"<clip>","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"probe finished"}}
+{"type":"turn.completed","usage":{"input_tokens":22,"cached_input_tokens":6,"cache_write_input_tokens":0,"output_tokens":10,"reasoning_output_tokens":0}}

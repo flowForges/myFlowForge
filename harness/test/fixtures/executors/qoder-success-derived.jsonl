@@ -1,0 +1,2 @@
+{"type":"assistant","message":{"content":[{"type":"text","text":"…"},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}
+{"type":"result","subtype":"success","result":"…","usage":{"input_tokens":1,"output_tokens":1}}
