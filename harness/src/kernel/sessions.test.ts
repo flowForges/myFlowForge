@@ -134,13 +134,22 @@ describe('Sessions service', () => {
     expect(seen!.get(im.sessionId)?.origin).toBe('im')
   })
 
-  it('an old or unrecognised origin in session.created reads as app', () => {
+  it('only an absent origin reads as app; an unrecognised one is never treated as app', () => {
     const s = new Sessions(dir)
     const ev = (sessionId: string, payload: unknown): KernelEvent => ({ seq: 1, ts: 0, type: 'session.created', sessionId, payload })
-    s.load([ev('old', { title: 'old' }), ev('weird', { origin: 'cron' }), ev('kept', { origin: 'schedule' })])
-    expect(s.get('old')?.origin).toBe('app')
-    expect(s.get('weird')?.origin).toBe('app')
-    expect(s.get('kept')?.origin).toBe('schedule')
+    s.load([
+      ev('old', { title: 'old' }),
+      ev('noPayload', null),
+      ev('app', { origin: 'app' }),
+      ev('im', { origin: 'im' }),
+      ev('schedule', { origin: 'schedule' }),
+      ev('newer', { origin: 'webhook' }),
+      ev('nullish', { origin: null }),
+      ev('number', { origin: 3 }),
+    ])
+    for (const id of ['old', 'noPayload', 'app']) expect(s.get(id)?.origin).toBe('app')
+    expect(s.get('im')?.origin).toBe('im')
+    for (const id of ['schedule', 'newer', 'nullish', 'number']) expect(s.get(id)?.origin).toBe('schedule')
   })
 
   it('spillDir is dataDir/sessions/<id>/spill', () => {

@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createKernel, type Kernel } from './kernel'
 import { startRpcServer } from './rpcServer'
-import { toWire, WIRE_CONTENT_MAX } from './wire'
-import { connectClient, type KernelEvent } from '../protocol/index'
+import { toWire, WIRE_CONTENT_MAX, WIRE_LIST_MAX } from './wire'
+import { connectClient, ExecutorNoticePayloadSchema, ExecutorRunEndedPayloadSchema, type KernelEvent } from '../protocol/index'
 import { NO_SANDBOX } from '../../test/sandboxStub'
 
 const ev = (type: KernelEvent['type'], payload: unknown): KernelEvent => ({ seq: 1, ts: 2, type, sessionId: 's', payload })
@@ -56,18 +56,63 @@ describe('toWire', () => {
 })
 
 describe('toWire: 04 events', () => {
-  const long = 'x'.repeat(5000)
+  const ended = (changed: object, extra: object = {}) =>
+    ({ runId: 'r', turnId: 't', executor: 'codex', status: 'ok', ms: 1, changed, ...extra })
+  const paths = (n: number) => Array.from({ length: n }, (_, i) => `f${i}.ts`)
+
   it.each([
-    ['executor.run.queued', { runId: 'r', turnId: 't', callId: 'c', executor: 'codex', summary: long, readOnly: false, isolation: 'own', position: 0 }],
+    ['executor.run.queued', { runId: 'r', turnId: 't', callId: 'c', executor: 'codex', summary: 'codex: x', readOnly: false, isolation: 'own', position: 0 }],
     ['executor.run.started', { runId: 'r', turnId: 't', executor: 'codex', cwd: '/w', isolation: 'own' }],
-    ['executor.run.progress', { runId: 'r', turnId: 't', kind: 'text', text: long }],
-    ['executor.run.ended', { runId: 'r', turnId: 't', executor: 'codex', status: 'ok', ms: 1, changed: { files: [], source: 'none' } }],
-    ['executor.notice', { turnId: 't', step: 1, runId: 'r', text: long }],
+    ['executor.run.progress', { runId: 'r', turnId: 't', kind: 'text', text: 'x'.repeat(500) }],
+    ['executor.run.ended', ended({ files: ['a.ts'], source: 'git' }, { violations: ['a.env'] })],
+    ['executor.notice', { turnId: 't', step: 1, runId: 'r', text: 'n' }],
     ['turn.parked', { turnId: 't', step: 1, active: 1, pending: 0 }],
     ['turn.resumed', { turnId: 't', step: 1, cause: 'notice' }],
-  ] as const)('%s passes through unchanged', (type, payload) => {
+  ] as const)('%s at a normal size is returned by identity', (type, payload) => {
     const e = ev(type, payload)
     expect(toWire(e)).toBe(e)
+  })
+
+  it('cuts executor.notice text and marks it; the event itself keeps the full text', () => {
+    const e = ev('executor.notice', { turnId: 't', step: 1, runId: 'r', text: 'x'.repeat(12000) })
+    const w = toWire(e)
+    expect(ExecutorNoticePayloadSchema.parse(w.payload)).toEqual({ turnId: 't', step: 1, runId: 'r', text: 'x'.repeat(WIRE_CONTENT_MAX), truncated: true })
+    expect((e.payload as { text: string }).text).toHaveLength(12000)
+  })
+  it('a notice of exactly the limit is returned by identity', () => {
+    const e = ev('executor.notice', { turnId: 't', runId: 'r', text: 'x'.repeat(WIRE_CONTENT_MAX) })
+    expect(toWire(e)).toBe(e)
+  })
+  it('caps changed.files and violations and reports how many were dropped; the event keeps them all', () => {
+    expect(WIRE_LIST_MAX).toBe(200)
+    const e = ev('executor.run.ended', ended({ files: paths(250), source: 'git', concurrent: true }, { violations: paths(201), usage: { input: 1, output: 2 } }))
+    const w = toWire(e)
+    const p = ExecutorRunEndedPayloadSchema.parse(w.payload)
+    expect(p.changed).toEqual({ files: paths(200), source: 'git', concurrent: true, filesTruncated: 50 })
+    expect(p.violations).toEqual(paths(200))
+    expect(p.violationsTruncated).toBe(1)
+    expect(p.usage).toEqual({ input: 1, output: 2 })
+    const stored = e.payload as { changed: { files: string[] }; violations: string[] }
+    expect(stored.changed.files).toHaveLength(250)
+    expect(stored.violations).toHaveLength(201)
+  })
+  it('caps each list on its own', () => {
+    const w = toWire(ev('executor.run.ended', ended({ files: paths(201), source: 'git' }))).payload as Record<string, unknown>
+    expect(w.changed).toMatchObject({ filesTruncated: 1 })
+    expect(w).not.toHaveProperty('violationsTruncated')
+    const v = toWire(ev('executor.run.ended', ended({ files: [], source: 'none' }, { violations: paths(201) }))).payload as Record<string, unknown>
+    expect(v.changed).toEqual({ files: [], source: 'none' })
+    expect(v.violationsTruncated).toBe(1)
+  })
+  it('lists of exactly the limit, and malformed payloads, are returned by identity', () => {
+    for (const e of [
+      ev('executor.run.ended', ended({ files: paths(200), source: 'git' }, { violations: paths(200) })),
+      ev('executor.run.ended', { runId: 'r' }),
+      ev('executor.run.ended', { changed: { files: 'nope' }, violations: 'nope' }),
+      ev('executor.run.ended', null),
+      ev('executor.notice', { text: 3 }),
+      ev('executor.notice', null),
+    ]) expect(toWire(e)).toBe(e)
   })
 })
 

@@ -39,7 +39,7 @@ export const ApprovalRequestedPayloadSchema = z.object({
   callId: z.string(),
   tool: z.string(),
   summary: z.string(),
-  /** 命令不在沙箱里跑(沙箱级别 none) */
+  /** 这次不在隔离里跑:委派工具按这次运行的实际隔离,其他工具按会话的沙箱级别 none */
   unsandboxed: z.boolean().optional(),
 })
 export type ApprovalRequestedPayload = z.infer<typeof ApprovalRequestedPayloadSchema>
@@ -160,8 +160,16 @@ export const ExecutorRunEndedPayloadSchema = z.object({
   /** 用户套餐的用量,不算进 turn.usage */
   usage: z.object({ input: z.number(), output: z.number(), cached: z.number().optional() }).optional(),
   /** files 只有路径:CLI 自报时没有状态;要状态用 executor.changes */
-  changed: z.object({ files: z.array(z.string()), source: ExecutorChangesSourceSchema, concurrent: z.boolean().optional() }),
+  changed: z.object({
+    files: z.array(z.string()),
+    source: ExecutorChangesSourceSchema,
+    concurrent: z.boolean().optional(),
+    /** 只在 wire 视图里:files 被截掉的条数 */
+    filesTruncated: z.number().optional(),
+  }),
   violations: z.array(z.string()).optional(),
+  /** 只在 wire 视图里:violations 被截掉的条数 */
+  violationsTruncated: z.number().optional(),
   worktree: z.string().optional(),
   rawLog: z.string().optional(),
   nativeId: z.string().optional(),
@@ -169,8 +177,14 @@ export const ExecutorRunEndedPayloadSchema = z.object({
 })
 export type ExecutorRunEndedPayload = z.infer<typeof ExecutorRunEndedPayloadSchema>
 
-/** 给模型的;step 只有循环写时才有,finally 与崩溃恢复写的没有 */
-export const ExecutorNoticePayloadSchema = z.object({ turnId: z.string(), step: z.number().optional(), runId: z.string(), text: z.string() })
+/** 给模型的;step 只有循环写时才有,finally 与崩溃恢复写的没有。事件日志里是完整 text,wire 视图截断并加 truncated */
+export const ExecutorNoticePayloadSchema = z.object({
+  turnId: z.string(),
+  step: z.number().optional(),
+  runId: z.string(),
+  text: z.string(),
+  truncated: z.boolean().optional(),
+})
 export type ExecutorNoticePayload = z.infer<typeof ExecutorNoticePayloadSchema>
 
 export const TurnParkedPayloadSchema = z.object({ turnId: z.string(), step: z.number(), active: z.number(), pending: z.number() })

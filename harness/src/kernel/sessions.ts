@@ -18,6 +18,12 @@ export interface SessionInfo {
 
 const SAFE_ID = /^[A-Za-z0-9_-]+$/
 
+/** 没写 = app(只有不是 app 时才写进事件);不认识的值不当 app:app 是唯一在地写的来源 */
+function originOf(raw: unknown): SessionOrigin {
+  if (raw === undefined || raw === 'app') return 'app'
+  return raw === 'im' ? 'im' : 'schedule'
+}
+
 export class Sessions {
   private byId = new Map<string, SessionInfo>()
 
@@ -33,7 +39,7 @@ export class Sessions {
     const info: SessionInfo = {
       sessionId: e.sessionId,
       approvalMode: p.approvalMode === 'auto' ? 'auto' : 'ask', // v2 会话没有该字段
-      origin: p.origin === 'im' || p.origin === 'schedule' ? p.origin : 'app', // 只有不是 app 时才写进事件
+      origin: originOf(p.origin),
     }
     if (typeof p.cwd === 'string') info.cwd = p.cwd
     if (p.toolset === 'patch' || p.toolset === 'edit') info.toolset = p.toolset

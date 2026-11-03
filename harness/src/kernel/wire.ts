@@ -3,6 +3,7 @@ import type { KernelEvent } from '../protocol/index'
 // 推给客户端的视图(events.tail 与 events.subscribe 推送);事件日志本身保持完整
 
 export const WIRE_CONTENT_MAX = 2000
+export const WIRE_LIST_MAX = 200
 
 function cut(s: string): string {
   let end = WIRE_CONTENT_MAX
@@ -17,6 +18,25 @@ export function toWire(e: KernelEvent): KernelEvent {
   if (e.type === 'tool.ended') {
     if (typeof p.content !== 'string' || p.content.length <= WIRE_CONTENT_MAX) return e
     return { ...e, payload: { ...p, content: cut(p.content), truncated: true } }
+  }
+  if (e.type === 'executor.notice') {
+    if (typeof p.text !== 'string' || p.text.length <= WIRE_CONTENT_MAX) return e
+    return { ...e, payload: { ...p, text: cut(p.text), truncated: true } }
+  }
+  if (e.type === 'executor.run.ended') {
+    const changed = p.changed as Record<string, unknown> | null | undefined
+    const files = changed && typeof changed === 'object' ? changed.files : undefined
+    const manyFiles = Array.isArray(files) && files.length > WIRE_LIST_MAX
+    const manyViolations = Array.isArray(p.violations) && p.violations.length > WIRE_LIST_MAX
+    if (!manyFiles && !manyViolations) return e
+    const payload = { ...p }
+    if (manyFiles) payload.changed = { ...changed, files: files.slice(0, WIRE_LIST_MAX), filesTruncated: files.length - WIRE_LIST_MAX }
+    if (manyViolations) {
+      const violations = p.violations as unknown[]
+      payload.violations = violations.slice(0, WIRE_LIST_MAX)
+      payload.violationsTruncated = violations.length - WIRE_LIST_MAX
+    }
+    return { ...e, payload }
   }
   if (e.type === 'message.assistant' && Array.isArray(p.parts)) {
     const has = (x: unknown) => !!x && typeof x === 'object' && (x as { type?: unknown }).type === 'reasoning' && 'replay' in x
