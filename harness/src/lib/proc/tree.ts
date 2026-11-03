@@ -1,5 +1,5 @@
 // 进程树与杀进程阶梯(04 spec §9.3)。只发能证明是自己的:组靠启动时间 / 组员认,单个进程靠快照里的启动时间
-import { descendants, resolveDeps, signalGroup, signalMembers, treeMembers, verify, type Member, type PgidEntry, type ProcDeps, type Resolved } from './pgids'
+import { descendants, resolveDeps, signalGroup, signalMembers, treeMembers, verify, type PgidEntry, type Member, type ProcDeps, type ProcRow, type Resolved } from './pgids'
 
 export { descendants }
 
@@ -8,17 +8,24 @@ export interface LadderOpts extends Omit<ProcDeps, 'seed' | 'refreshMs' | 'listM
   fast?: boolean
   /** 组长的组还在吗 */
   alive: () => boolean
-  /** 组长是我们还没回收的子进程:pid 不可能被复用,不必再查(ps 失败也杀得了) */
+  /** 组长是我们还没回收的子进程:pid 不可能被复用,读不了进程表也能发组信号 */
   owned?: () => boolean
-  /** 组长调用时已不在:组里得有其中一个才算自己的。不给 → 现在就记 */
+  /** 组长调用时已不在:组里得有其中一个才算自己的 */
   anchors?: Member[]
   sleep?: (ms: number) => Promise<void>
   now?: () => number
 }
 
+export interface LadderResult {
+  /** 组和快照里的进程都没了。false = 没杀掉(如一个信号都发不出去),调用方不能当作已结束 */
+  gone: boolean
+}
+
 const POLL_MS = 25
-/** SIGKILL 前还要拍一次快照:提前这么多,让信号落在预算之内 */
-const SNAPSHOT_MS = 100
+/** SIGKILL 前还要读一次进程表:提前这么多,让信号落在预算之内 */
+const SNAPSHOT_MS = 200
+/** SIGKILL 之后,等内核和父进程收走 */
+const CONFIRM_MS = 300
 
 const pidExists = (pid: number, r: Resolved): boolean => {
   try {
@@ -32,61 +39,52 @@ const pidExists = (pid: number, r: Resolved): boolean => {
 /**
  * SIGINT 整组 → 宽限 → SIGTERM 整组与后代 → 宽限 → SIGKILL 整组与后代;组和后代都没了就提前结束。
  * SIGINT 打头:实测 SIGTERM 会留下 Codex 自成一组的命令,SIGINT 才能让它自己收尾(spec §2)。
- * 每次动手前都拍快照,SIGINT 前也拍:node 包装层一死,ppid 链就断了。
+ * 每一步读一张进程表:认组、走后代、比启动时间都出自同一次读取,一步只花一次 ps。SIGINT 前也读:node 包装层一死,ppid 链就断了。
  * 认不出的组、对不上启动时间的 pid 都不发信号;认不出组又没有快照时直接结束。
  */
-export async function killLadder(pid: number, o: LadderOpts): Promise<void> {
+export async function killLadder(pid: number, o: LadderOpts): Promise<LadderResult> {
   const r = resolveDeps(process.platform, o)
   const sleep = o.sleep ?? ((ms: number) => new Promise<void>(res => setTimeout(res, ms)))
   const now = o.now ?? Date.now
-  const members = () => {
-    try {
-      return r.groupMembers(pid).filter(m => m.pid !== pid)
-    } catch {
-      return []
-    }
-  }
-  const leaderStart = () => {
-    try {
-      return r.startTime(pid)
-    } catch {
-      return undefined
-    }
-  }
   const boot = r.bootId()
   const entry: PgidEntry = {
     pgid: pid,
     // '' 永远对不上:同一个 pid 上又出现活的组长,就是被复用了
-    start: (o.anchors ? undefined : leaderStart()) ?? '',
+    start: '',
     ...(boot !== undefined && { boot }),
-    members: o.anchors ?? members(),
+    members: o.anchors ?? [],
   }
-  const ours = () => o.owned?.() === true || verify(entry, r) === 'ours'
   const known = new Map<number, string>()
+  let first = true
 
-  const snapshot = () => {
-    // 已知的 pid 先比启动时间:被复用的不能当根,否则会把别人的子进程算进来
-    let current = new Map<number, string>()
+  /** 读一张表、更新快照。返回这一步能用的表,以及这个组这一步算不算自己的 */
+  const snapshot = (): { rows?: ProcRow[]; ours: boolean } => {
+    const owned = o.owned?.() === true
+    const isFirst = first
+    first = false
+    let rows: ProcRow[]
     try {
-      current = r.startTimes([...known.keys()])
-    } catch {
-      // 这次不从它们往下走
+      rows = r.procTable()
+    } catch (err) {
+      r.log.warn('process table unavailable', { error: String(err) })
+      return { ours: owned }
     }
-    const roots = [...known].filter(([p, s]) => current.get(p) === s).map(([p]) => p)
-    if (ours()) {
-      const group = members()
-      entry.members = group
-      roots.push(pid)
-      for (const m of group) {
-        known.set(m.pid, m.start)
-        roots.push(m.pid)
-      }
+    const byPid = new Map(rows.map(x => [x.pid, x]))
+    // 没了或被复用的:不再等,也不能当根,否则会把别人的子进程算进来
+    for (const [p, start] of known) if (byPid.get(p)?.start !== start) known.delete(p)
+    const lead = byPid.get(pid)
+    if (!o.anchors && !entry.start && lead && (owned || isFirst)) entry.start = lead.start
+    const view: Resolved = { ...r, startTime: p => byPid.get(p)?.start, groupMembers: g => rows.filter(x => x.pgid === g).map(x => ({ pid: x.pid, start: x.start })) }
+    const ours = owned || verify(entry, view) === 'ours'
+    const roots = [...known.keys()]
+    if (ours) {
+      const group = rows.filter(x => x.pgid === pid && x.pid !== pid).map(x => ({ pid: x.pid, start: x.start }))
+      if (group.length) entry.members = group
+      for (const m of group) known.set(m.pid, m.start)
+      roots.push(pid, ...group.map(m => m.pid))
     }
-    for (const m of treeMembers(roots, r)) known.set(m.pid, m.start)
-  }
-  const list = (): Member[] => [...known].map(([p, start]) => ({ pid: p, start }))
-  const send = (sig: NodeJS.Signals) => {
-    if (ours()) signalGroup(pid, sig, r)
+    for (const m of treeMembers(rows, roots)) known.set(m.pid, m.start)
+    return { rows, ours }
   }
   const gone = () => !o.alive() && ![...known.keys()].some(p => pidExists(p, r))
   /** 等到都没了(true)或到点(false) */
@@ -97,18 +95,22 @@ export async function killLadder(pid: number, o: LadderOpts): Promise<void> {
     }
     return gone()
   }
+  const send = (sig: NodeJS.Signals, members: boolean) => {
+    const s = snapshot()
+    if (s.ours) signalGroup(pid, sig, r)
+    if (members && s.rows) signalMembers([...known].map(([p, start]) => ({ pid: p, start })), sig, r, s.rows)
+    return s
+  }
 
   const t0 = now()
   const [intMs, totalMs] = o.fast ? [1500, 2500] : [3000, 5000]
-  snapshot()
-  if (!known.size && !ours()) return
-  send('SIGINT')
-  if (await waitGone(t0 + intMs)) return
-  snapshot()
-  send('SIGTERM')
-  signalMembers(list(), 'SIGTERM', r)
-  if (await waitGone(t0 + totalMs - SNAPSHOT_MS)) return
-  snapshot()
-  send('SIGKILL')
-  signalMembers(list(), 'SIGKILL', r)
+  const s = send('SIGINT', false)
+  if (!known.size && !s.ours) return { gone: !o.alive() }
+  if (await waitGone(t0 + intMs)) return { gone: true }
+  send('SIGTERM', true)
+  if (await waitGone(t0 + totalMs - SNAPSHOT_MS)) return { gone: true }
+  send('SIGKILL', true)
+  if (await waitGone(now() + CONFIRM_MS)) return { gone: true }
+  snapshot() // 只为去掉已被复用的 pid:它们不算没杀掉
+  return { gone: gone() }
 }

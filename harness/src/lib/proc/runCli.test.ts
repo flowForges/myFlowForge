@@ -189,6 +189,17 @@ describe.skipIf(!posix)('runCli', () => {
     expect(plan.released).toBe(1)
   })
 
+  it('M-2: spawnError never quotes env values, args or the message from Node', async () => {
+    const plan = planOf('/bin/echo', ['ARG-SECRET\0x'])
+    plan.env = { PATH: process.env.PATH, HTTPS_PROXY: 'http://u:ENV-SECRET\0x@h' } as never
+    const r = await runCli(plan, opts())
+    expect(r.spawnError).toBeTruthy()
+    expect(r.spawnError).not.toMatch(/SECRET/)
+    const plan2 = planOf(join(cwd, 'ARG-SECRET-nope'), ['ARG-SECRET'])
+    const r2 = await runCli(plan2, opts())
+    expect(r2.spawnError).toBe('spawn failed: ENOENT')
+  })
+
   it('timeout gives timedOut and kills the process', async () => {
     let pid = 0
     const t0 = Date.now()
@@ -292,7 +303,7 @@ describe.skipIf(!posix)('runCli', () => {
       ac.abort()
       const r = await p
       expect(Date.now() - t0).toBeLessThan(3000)
-      expect(r).toMatchObject({ code: 130, cancelled: true })
+      expect(r).toMatchObject({ code: 130, cancelled: true, leftovers: 'kept' })
       expect(plan.released).toBe(1)
       expect(isAlive(escaped)).toBe(true) // 进程树找不到它(spec §16):只保证不挂住。清理靠 cleanupFakes
     }, 10_000)
@@ -301,34 +312,58 @@ describe.skipIf(!posix)('runCli', () => {
       const fake = installFake({ escape: true, exit: 5, lines: ['done'] })
       const c = collect()
       const r = await runCli(fakePlan(fake), opts(c.cb))
-      expect(r).toMatchObject({ code: 5, timedOut: false, stalled: false, cancelled: false })
+      expect(r).toMatchObject({ code: 5, timedOut: false, stalled: false, cancelled: false, leftovers: 'kept' })
       expect(c.lines).toContain('done')
+      expect(isAlive(await fake.waitPid('escaped'))).toBe(true) // 还拿着管道、杀不到:如实报 kept
     }, 10_000)
 
-    it('leader exits leaving a same-group process holding stdout: the leftover is killed and it resolves', async () => {
+    it('leader exits leaving a same-group process holding stdout: the ladder kills it, reported as killed', async () => {
       const pidFile = join(cwd, 'bg')
       const r = await runCli(sh(`sleep 60 & echo $! > ${pidFile}; exit 6`), opts())
-      expect(r.code).toBe(6)
+      expect(r).toMatchObject({ code: 6, leftovers: 'killed' })
+      expect(r.killFailed).toBeUndefined()
       const bg = Number(readFileSync(pidFile, 'utf8').trim())
       expect(await waitDead(bg, 1000)).toBe(true)
     }, 10_000)
+  })
 
-    it('leader exits leaving a same-group process with stdio closed: no leftover, onClose sees the group gone', async () => {
+  describe('a CLI that exits by itself leaves what let go of its pipes (I-1)', () => {
+    it('a nohup server that closed the pipes stays alive, reported as kept, and the result is immediate', async () => {
       const fake = installFake({ background: true, exit: 0 })
-      const groupGoneAtClose: boolean[] = []
-      const r = await runCli(fakePlan(fake), opts({
-        onClose: pid => {
-          try {
-            process.kill(-pid, 0)
-            groupGoneAtClose.push(false)
-          } catch {
-            groupGoneAtClose.push(true)
-          }
-        },
-      }))
-      expect(r.code).toBe(0)
-      expect(await waitDead(await fake.waitPid('background'), 1000)).toBe(true)
-      expect(groupGoneAtClose).toEqual([true])
+      const closes: number[] = []
+      const t0 = Date.now()
+      const plan = fakePlan(fake)
+      const r = await runCli(plan, opts({ onClose: pid => closes.push(pid) }))
+      expect(Date.now() - t0).toBeLessThan(3000)
+      expect(r).toMatchObject({ code: 0, cancelled: false, leftovers: 'kept' })
+      expect(r.killFailed).toBeUndefined()
+      expect(isAlive(await fake.waitPid('background'))).toBe(true)
+      expect(closes).toHaveLength(1)
+      expect(plan.released).toBe(1)
+    }, 10_000)
+
+    it('nothing left over → no leftovers field', async () => {
+      expect((await runCli(sh('exit 0'), opts())).leftovers).toBeUndefined()
+    })
+  })
+
+  describe('a kill that could not happen is not reported as cancelled (I-3)', () => {
+    it('own group unknown: killFailed, not cancelled, process still alive, and it does not hang', async () => {
+      const fake = installFake({ sleep: 60_000 })
+      const ac = new AbortController()
+      const plan = fakePlan(fake)
+      const p = runCli(plan, opts({ signal: ac.signal, fast: () => true, procDeps: { ownPgid: () => undefined } }))
+      const cli = await fake.waitPid('cli')
+      ac.abort()
+      const r = await p
+      expect(r).toMatchObject({ cancelled: false, killFailed: true, leftovers: 'kept' })
+      expect(isAlive(cli)).toBe(true)
+      expect(plan.released).toBe(1)
+    }, 10_000)
+
+    it('a timeout that could not kill says both', async () => {
+      const r = await runCli(sh('sleep 30'), opts({ timeoutMs: 50, fast: () => true, procDeps: { ownPgid: () => undefined } }))
+      expect(r).toMatchObject({ timedOut: true, killFailed: true })
     }, 10_000)
   })
 

@@ -1,7 +1,7 @@
 // 起一个编码 CLI(04 spec §5、§9):按行读、超时、卡死、取消。不碰适配器,不做打码:内容由调用方处理
 import { spawn } from 'node:child_process'
 import type { ShellPlan } from '../tools/types'
-import { groupExists, groupMembers, type Kill, type Member } from './pgids'
+import { groupExists, groupMembers, ownPgid, type Kill, type Member, type ProcDeps } from './pgids'
 import { killLadder } from './tree'
 
 /** ShellPlan 或直接给的 {file, args, env};永远 shell:false,所以 file 必须是程序本身 */
@@ -27,6 +27,8 @@ export interface CliOpts {
   /** 动手杀的时候才问:内核关闭走短梯 */
   fast?: () => boolean
   maxLine?: number
+  /** 测试注入:交给杀进程阶梯 */
+  procDeps?: ProcDeps
 }
 
 export interface CliResult {
@@ -35,7 +37,16 @@ export interface CliResult {
   /** 三者互斥,第一个原因为准 */
   timedOut: boolean
   stalled: boolean
+  /** 取消了且确实杀掉了;杀不掉时是 killFailed */
   cancelled: boolean
+  /** 要杀但进程还在(如信号发不出去):不能当作已结束 */
+  killFailed?: boolean
+  /**
+   * 运行结束时还留着的进程。kept:CLI 自己退了,留下的进程已放开管道(不杀,进程组登记会留着),
+   * 或者有杀不到的进程还拿着管道。killed:CLI 自己退了,留下的进程拿着管道,被杀掉了
+   */
+  leftovers?: 'kept' | 'killed'
+  /** 只有错误码:Node 的报错文本会引用 env 和参数的值 */
   spawnError?: string
 }
 
@@ -109,6 +120,11 @@ class LineSplitter {
 
 const liveKill: Kill = (pid, sig) => process.kill(pid, sig)
 
+const spawnFailure = (e: unknown) => {
+  const code = (e as NodeJS.ErrnoException)?.code
+  return typeof code === 'string' && /^[A-Z0-9_]+$/.test(code) ? `spawn failed: ${code}` : 'spawn failed'
+}
+
 export function runCli(plan: CliPlan, o: CliOpts): Promise<CliResult> {
   let released = false
   const release = () => {
@@ -122,6 +138,8 @@ export function runCli(plan: CliPlan, o: CliOpts): Promise<CliResult> {
     return Promise.resolve({ ...nothing, cancelled: true })
   }
 
+  ownPgid() // 趁现在记住:CLI 把进程数用尽之后 ps 起不来,而 kill 还发得出去
+
   return new Promise(resolve => {
     let child: ReturnType<typeof spawn>
     try {
@@ -134,7 +152,7 @@ export function runCli(plan: CliPlan, o: CliOpts): Promise<CliResult> {
       })
     } catch (e) {
       release()
-      return resolve({ ...nothing, spawnError: String((e as Error).message ?? e) })
+      return resolve({ ...nothing, spawnError: spawnFailure(e) })
     }
 
     let done = false
@@ -147,9 +165,13 @@ export function runCli(plan: CliPlan, o: CliOpts): Promise<CliResult> {
     let drain: NodeJS.Timeout | undefined
     let timeout: NodeJS.Timeout | undefined
     let idle: NodeJS.Timeout | undefined
+    let isClosed = false
     let markClosed = () => {}
     const closed = new Promise<void>(res => {
-      markClosed = res
+      markClosed = () => {
+        isClosed = true
+        res()
+      }
     })
 
     const stopTimers = () => {
@@ -173,7 +195,7 @@ export function runCli(plan: CliPlan, o: CliOpts): Promise<CliResult> {
       err.end()
       if (child.pid !== undefined) quietly(() => o.onClose?.(child.pid!))
       release()
-      resolve({ ...nothing, code, signal, timedOut: cause === 'timedOut', stalled: cause === 'stalled', cancelled: cause === 'cancelled', ...extra })
+      resolve({ ...nothing, code, signal, timedOut: cause === 'timedOut', stalled: cause === 'stalled', cancelled: cause === 'cancelled' && !extra.killFailed, ...extra })
     }
 
     const kill = () => {
@@ -181,18 +203,21 @@ export function runCli(plan: CliPlan, o: CliOpts): Promise<CliResult> {
       killing = true
       stopTimers()
       const pid = child.pid!
+      const selfExited = exited
       let fast = false
       quietly(() => {
         fast = o.fast?.() === true
       })
       void (async () => {
+        let gone = false
         try {
-          await killLadder(pid, {
+          ;({ gone } = await killLadder(pid, {
+            ...o.procDeps,
             fast,
             alive: () => groupExists(pid, liveKill),
             owned: () => !exited,
             ...(exited && { anchors: exitAnchors }),
-          })
+          }))
         } catch {
           // 出错也要收尾:不能挂住调用方
         }
@@ -202,8 +227,10 @@ export function runCli(plan: CliPlan, o: CliOpts): Promise<CliResult> {
         clearTimeout(wait)
         child.stdin?.destroy()
         child.stdout?.destroy()
+        const held = !isClosed
         child.stderr?.destroy()
-        finish()
+        const leftovers = !gone || held ? 'kept' : selfExited ? 'killed' : undefined
+        finish({ ...(cause && !gone && { killFailed: true }), ...(leftovers && { leftovers }) })
       })()
     }
 
@@ -214,7 +241,7 @@ export function runCli(plan: CliPlan, o: CliOpts): Promise<CliResult> {
 
     child.on('error', e => {
       // pid 还在的 error 是"信号发不出去"这类,不是起不来
-      if (child.pid === undefined) finish({ spawnError: String(e.message ?? e) })
+      if (child.pid === undefined) finish({ spawnError: spawnFailure(e) })
     })
     if (child.pid === undefined) return // error 事件下一拍到
 
@@ -234,7 +261,7 @@ export function runCli(plan: CliPlan, o: CliOpts): Promise<CliResult> {
       exited = true
       if (killing) return
       stopTimers()
-      // 记下此刻的组员:之后组长已不在,靠它们认组
+      // 记下此刻的组员:之后组长已不在,靠它们认组(还拿着管道时要杀)
       if (groupExists(child.pid!, liveKill)) exitAnchors = groupMembers(child.pid!).filter(m => m.pid !== child.pid)
       drain = setTimeout(kill, EXIT_DRAIN_MS)
     })
@@ -242,9 +269,8 @@ export function runCli(plan: CliPlan, o: CliOpts): Promise<CliResult> {
       markClosed()
       if (killing) return
       clearTimeout(drain)
-      // 管道都关了,组里还有进程:运行结束不留后台进程
-      if (groupExists(child.pid!, liveKill)) kill()
-      else finish()
+      // 管道都放开了,组里还有进程:可能是用户要的后台服务,不杀,如实报;组长已退,进程组登记留着它
+      finish(groupExists(child.pid!, liveKill) ? { leftovers: 'kept' } : {})
     })
 
     timeout = setTimeout(() => trigger('timedOut'), Math.min(o.timeoutMs, MAX_TIMER))

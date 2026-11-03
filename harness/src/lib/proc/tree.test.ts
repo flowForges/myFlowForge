@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { cleanupFakes, installFake, isAlive, trackPid, waitDead, type FakeCli } from '../../../test/fakeCli'
-import { groupMembers, startTime, type Kill, type ProcDeps } from './pgids'
+import { procTable, type Kill, type ProcRow } from './pgids'
 import { descendants, killLadder } from './tree'
 
 const posix = process.platform === 'linux' || process.platform === 'darwin'
@@ -35,10 +35,14 @@ function recording() {
   return { sent, kill }
 }
 
+const row = (pid: number, ppid: number, start = 'S', pgid = pid): ProcRow => ({ pid, ppid, pgid, start })
+const TREE = [row(4242, 1), row(5001, 4242)]
+
 /** 假进程表 + 假时钟:不碰任何真进程 */
-function scripted(over: ProcDeps & { alive?: () => boolean } = {}) {
+function scripted(over: { procTable?: () => ProcRow[]; alive?: () => boolean; ownPgid?: () => number | undefined } = {}) {
   const log: string[] = []
   let t = 0
+  const table = over.procTable ?? (() => TREE)
   return {
     log,
     now: () => t,
@@ -46,13 +50,7 @@ function scripted(over: ProcDeps & { alive?: () => boolean } = {}) {
       kill: ((pid, sig) => {
         if (sig !== 0) log.push(`${t} ${pid} ${sig}`)
       }) as Kill,
-      descendants: ((root: number) => {
-        log.push(`snapshot ${root}`)
-        return root === 4242 ? [5001] : []
-      }) as typeof descendants,
       alive: () => true,
-      startTime: () => 'S',
-      groupMembers: () => [],
       ownPgid: () => OWN,
       bootId: () => 'B',
       now: () => t,
@@ -60,6 +58,10 @@ function scripted(over: ProcDeps & { alive?: () => boolean } = {}) {
         t += ms
       },
       ...over,
+      procTable: () => {
+        log.push('snapshot')
+        return table()
+      },
     },
   }
 }
@@ -99,147 +101,178 @@ describe('descendants', () => {
 })
 
 describe('killLadder order', () => {
-  it('SIGINT goes first, the tree is snapshotted before the first SIGTERM, then SIGKILL at the budget', async () => {
+  it('SIGINT goes first, the tree is read before the first SIGTERM, then SIGKILL inside the budget', async () => {
     const s = scripted()
-    await killLadder(4242, { ...s.opts, owned: () => true })
-    expect(signals(s.log)).toEqual(['0 -4242 SIGINT', '3000 -4242 SIGTERM', '3000 5001 SIGTERM', '4900 -4242 SIGKILL', '4900 5001 SIGKILL'])
-    expect(s.log.findIndex(l => l.startsWith('snapshot'))).toBeLessThan(s.log.findIndex(l => l.includes('SIGTERM')))
+    const res = await killLadder(4242, { ...s.opts, owned: () => true })
+    expect(signals(s.log)).toEqual(['0 -4242 SIGINT', '3000 -4242 SIGTERM', '3000 5001 SIGTERM', '4800 -4242 SIGKILL', '4800 5001 SIGKILL'])
+    expect(s.log.indexOf('snapshot')).toBeLessThan(s.log.findIndex(l => l.includes('SIGTERM')))
+    expect(res.gone).toBe(false) // 假进程表里它们永远活着
   })
 
-  it('takes a snapshot before the SIGINT too: a wrapper that dies on SIGINT breaks the ppid chain', async () => {
+  it('reads the table before the SIGINT too: a wrapper that dies on SIGINT breaks the ppid chain', async () => {
     const s = scripted()
     await killLadder(4242, { ...s.opts, owned: () => true })
-    expect(s.log[0]).toBe('snapshot 4242')
+    expect(s.log[0]).toBe('snapshot')
     expect(s.log[1]).toBe('0 -4242 SIGINT')
+  })
+
+  it('one table per step, however large the tree: 4 reads for 200 processes', async () => {
+    const big = [row(4242, 1), ...Array.from({ length: 200 }, (_, i) => row(5000 + i, 4242, 'S', 4242))]
+    const s = scripted({ procTable: () => big })
+    await killLadder(4242, { ...s.opts, owned: () => true })
+    expect(s.log.filter(l => l === 'snapshot')).toHaveLength(4) // INT、TERM、KILL,最后一次去掉复用的 pid
   })
 
   it('fast: 1.5 s + 1 s', async () => {
     const s = scripted()
     await killLadder(4242, { ...s.opts, owned: () => true, fast: true })
-    expect(signals(s.log)).toEqual(['0 -4242 SIGINT', '1500 -4242 SIGTERM', '1500 5001 SIGTERM', '2400 -4242 SIGKILL', '2400 5001 SIGKILL'])
+    expect(signals(s.log)).toEqual(['0 -4242 SIGINT', '1500 -4242 SIGTERM', '1500 5001 SIGTERM', '2300 -4242 SIGKILL', '2300 5001 SIGKILL'])
   })
 
   it('stops as soon as the group and the snapshot are gone', async () => {
-    const s = scripted({ descendants: () => [], alive: () => false })
-    await killLadder(4242, { ...s.opts, owned: () => true })
+    const s = scripted({ procTable: () => [row(4242, 1)], alive: () => false })
+    const res = await killLadder(4242, { ...s.opts, owned: () => true })
     expect(signals(s.log)).toEqual(['0 -4242 SIGINT'])
+    expect(res.gone).toBe(true)
   })
 
   it('group gone but a snapshot pid still alive → the ladder goes on, for that pid only', async () => {
-    let leaderUp = true
-    const s = scripted({ alive: () => false, startTime: pid => (pid === 4242 && !leaderUp ? undefined : 'S') })
-    const sleep = s.opts.sleep
-    await killLadder(4242, {
-      ...s.opts,
-      sleep: async ms => {
-        leaderUp = false
-        await sleep(ms)
-      },
+    let n = 0
+    const s = scripted({ alive: () => false, procTable: () => (n++ === 0 ? TREE : [row(5001, 1)]) })
+    await killLadder(4242, s.opts)
+    expect(signals(s.log).filter(l => l.includes(' 5001 ')).map(l => l.split(' ')[2])).toEqual(['SIGTERM', 'SIGKILL'])
+    expect(signals(s.log).filter(l => l.includes('-4242'))).toEqual(['0 -4242 SIGINT'])
+  })
+
+  it('a member that only the wrapper\'s group knows about is walked from, too', async () => {
+    let n = 0
+    const s = scripted({
+      procTable: () => (n++ === 0 ? [row(4242, 1), row(4300, 4242, 'S', 4242)] : [row(4300, 1, 'S', 4242), row(6000, 4300)]),
+      alive: () => true,
     })
-    expect(signals(s.log).filter(l => l.includes('5001')).map(l => l.split(' ')[2])).toEqual(['SIGTERM', 'SIGKILL'])
+    await killLadder(4242, { ...s.opts, owned: () => false })
+    expect(signals(s.log)).toContain('3000 6000 SIGTERM')
   })
 })
 
 describe('killLadder never signals what it cannot verify', () => {
-  it('a snapshot pid whose start time changed (pid reused) is never signalled', async () => {
-    let first = true
-    let walks = 0
-    const s = scripted({
-      descendants: () => (walks++ === 0 ? [5001] : []),
-      startTime: pid => {
-        if (pid !== 5001) return 'S'
-        if (first) {
-          first = false
-          return 'OLD'
-        }
-        return 'NEW'
-      },
+  it('a pid is only ever recorded with the start time from the row the walk saw', async () => {
+    // 走树那一行是 OLD;之后同一个 pid 变成别的进程(NEW,ppid 已不通向我们)
+    let n = 0
+    const s = scripted({ procTable: () => (n++ === 0 ? [row(4242, 1), row(5001, 4242, 'OLD')] : [row(4242, 1), row(5001, 77, 'NEW')]) })
+    await killLadder(4242, {
+      ...s.opts,
+      owned: () => true,
+      startTime: () => { throw new Error('the ladder must not read start times separately') },
+      groupMembers: () => { throw new Error('the ladder must not list the group separately') },
     })
-    await killLadder(4242, { ...s.opts, owned: () => true })
     expect(s.log.filter(l => l.includes(' 5001 '))).toEqual([])
   })
 
   it('a reused snapshot pid is not walked for children either', async () => {
-    const walked: number[] = []
     let n = 0
-    const s = scripted({
-      descendants: root => {
-        walked.push(root)
-        return root === 4242 && walked.length === 1 ? [5001] : root === 4242 ? [] : [6000]
-      },
-      startTime: pid => (pid === 5001 && n++ > 0 ? 'NEW' : 'S'),
-    })
+    const s = scripted({ procTable: () => (n++ === 0 ? [row(4242, 1), row(5001, 4242, 'OLD')] : [row(4242, 1), row(5001, 77, 'NEW'), row(6000, 5001)]) })
     await killLadder(4242, { ...s.opts, owned: () => true })
-    expect(walked.filter(r => r === 5001)).toEqual([])
     expect(s.log.filter(l => l.includes(' 6000 '))).toEqual([])
   })
 
+  it('a reused pid does not count as not killed', async () => {
+    let n = 0
+    const s = scripted({ alive: () => false, procTable: () => (n++ === 0 ? TREE : [row(5001, 77, 'NEW')]) })
+    const res = await killLadder(4242, { ...s.opts, owned: () => true })
+    expect(res.gone).toBe(true)
+  })
+
   it('leader pid reused mid-ladder → no further group signal', async () => {
-    let lead = 'S'
-    const s = scripted({ startTime: pid => (pid === 4242 ? lead : 'S'), descendants: () => [], alive: () => true })
-    const p = killLadder(4242, {
-      ...s.opts,
-      sleep: async ms => {
-        await s.opts.sleep(ms)
-        lead = 'SOMEONE-ELSE'
-      },
-    })
-    await p
+    let n = 0
+    const s = scripted({ procTable: () => (n++ === 0 ? [row(4242, 1)] : [row(4242, 77, 'SOMEONE-ELSE')]) })
+    await killLadder(4242, s.opts)
     expect(signals(s.log)).toEqual(['0 -4242 SIGINT'])
   })
 
-  it('ps failing while verifying → no group signal', async () => {
-    let boom = false
+  it('table unreadable and leader not provably ours → no group signal and no pid signal', async () => {
+    let n = 0
     const s = scripted({
-      descendants: () => [],
-      startTime: () => {
-        if (boom) throw new Error('ps timed out')
-        return 'S'
+      procTable: () => {
+        if (n++ > 0) throw new Error('ps timed out')
+        return TREE
       },
     })
-    await killLadder(4242, {
-      ...s.opts,
-      sleep: async ms => {
-        await s.opts.sleep(ms)
-        boom = true
-      },
-    })
+    await killLadder(4242, s.opts)
     expect(signals(s.log)).toEqual(['0 -4242 SIGINT'])
+  })
+
+  it('M-5: table unreadable at signal time with an owned leader → the group is signalled, single pids are not', async () => {
+    let n = 0
+    const s = scripted({
+      procTable: () => {
+        if (n++ > 0) throw new Error('ps timed out')
+        return TREE
+      },
+    })
+    await killLadder(4242, { ...s.opts, owned: () => true })
+    expect(signals(s.log)).toEqual(['0 -4242 SIGINT', '3000 -4242 SIGTERM', '4800 -4242 SIGKILL'])
+  })
+
+  it('M-3: one failed read does not lose the anchors', async () => {
+    let n = 0
+    const member = row(4300, 1, 'M', 4242)
+    const s = scripted({
+      alive: () => true,
+      procTable: () => {
+        const i = n++
+        if (i === 0) return [row(4242, 1), member]
+        if (i === 1) return [row(4242, 1)] // 组员这一次没读到
+        return [member]
+      },
+    })
+    await killLadder(4242, s.opts)
+    expect(signals(s.log).some(l => l.includes('-4242 SIGKILL'))).toBe(true)
   })
 
   it('leader gone with no anchors → nothing to prove the group by, nothing sent, no waiting', async () => {
-    const s = scripted({ startTime: () => undefined, descendants: () => [] })
-    await killLadder(4242, { ...s.opts, anchors: [] })
+    const s = scripted({ procTable: () => [row(7000, 1, 'A', 4242)] })
+    const res = await killLadder(4242, { ...s.opts, anchors: [] })
     expect(signals(s.log)).toEqual([])
     expect(s.now()).toBe(0)
+    expect(res.gone).toBe(false) // 组还在,只是认不出:不能说没了
   })
 
   it('leader gone: a group is ours only when an anchor is still in it', async () => {
     const anchors = [{ pid: 7000, start: 'A' }]
-    const ours = scripted({ startTime: () => undefined, descendants: () => [], groupMembers: () => [{ pid: 7000, start: 'A' }], alive: () => false })
+    const ours = scripted({ procTable: () => [row(7000, 1, 'A', 4242)], alive: () => false })
     await killLadder(4242, { ...ours.opts, anchors })
     expect(signals(ours.log)[0]).toBe('0 -4242 SIGINT')
 
-    const stranger = scripted({ startTime: () => undefined, descendants: () => [], groupMembers: () => [{ pid: 7000, start: 'B' }] })
+    const stranger = scripted({ procTable: () => [row(7000, 1, 'B', 4242)] })
     await killLadder(4242, { ...stranger.opts, anchors })
     expect(signals(stranger.log)).toEqual([])
   })
 
   it('never signals itself, its own group, or pid ≤ 1', async () => {
-    const s = scripted({ descendants: () => [1, 0, -5, process.pid, OWN, 5001] })
+    const s = scripted({ procTable: () => [row(4242, 1), row(process.pid, 4242), row(OWN, 4242), row(1, 4242), row(5001, 4242)] })
     await killLadder(4242, { ...s.opts, owned: () => true })
     const targets = new Set(signals(s.log).map(l => Number(l.split(' ')[1])))
     expect([...targets].sort()).toEqual([-4242, 5001].sort())
 
-    const own = scripted({ descendants: () => [] })
+    const own = scripted({ procTable: () => [row(OWN, 1)] })
     await killLadder(OWN, { ...own.opts, owned: () => true })
     expect(signals(own.log)).toEqual([])
   })
 
-  it('own group unknown → sends nothing', async () => {
+  it('I-3: own group unknown → sends nothing and says it is not gone', async () => {
     const s = scripted({ ownPgid: () => undefined })
-    await killLadder(4242, { ...s.opts, owned: () => true })
+    const res = await killLadder(4242, { ...s.opts, owned: () => true })
     expect(signals(s.log)).toEqual([])
+    expect(res.gone).toBe(false)
+  })
+
+  it('I-3: a failed own-group lookup is retried on the next signal', async () => {
+    let n = 0
+    const s = scripted({ ownPgid: () => (n++ === 0 ? undefined : OWN) })
+    await killLadder(4242, { ...s.opts, owned: () => true })
+    expect(signals(s.log)).toContain('3000 -4242 SIGTERM')
+    expect(signals(s.log)).not.toContain('0 -4242 SIGINT')
   })
 })
 
@@ -260,7 +293,7 @@ describe.skipIf(!posix)('killLadder against real fakes (Review Focus 1)', () => 
     const child = await fake.waitPid('child')
     const r = recording()
     const t0 = Date.now()
-    await killLadder(c.pid!, { kill: r.kill, descendants, startTime, groupMembers, alive: () => groupExists(c.pid!) })
+    await killLadder(c.pid!, { kill: r.kill, procTable: () => procTable(), alive: () => groupExists(c.pid!) })
     expect(Date.now() - t0).toBeLessThan(3000)
     expect(isAlive(child)).toBe(false)
     expect(groupExists(c.pid!)).toBe(false)
@@ -272,10 +305,35 @@ describe.skipIf(!posix)('killLadder against real fakes (Review Focus 1)', () => 
     const c = start(fake)
     const grandchild = await fake.waitPid('grandchild')
     const r = recording()
-    await killLadder(c.pid!, { kill: r.kill, descendants, startTime, groupMembers, alive: () => groupExists(c.pid!) })
+    await killLadder(c.pid!, { kill: r.kill, procTable: () => procTable(), alive: () => groupExists(c.pid!) })
     expect(await waitDead(grandchild, 500)).toBe(true)
     expect(r.sent).toContainEqual([grandchild, 'SIGKILL'])
   }, 12_000)
+
+  it('I-2: a group of 40 stubborn processes gets SIGKILL inside the budget', async () => {
+    const c = spawn('/bin/sh', ['-c', `trap '' INT TERM; i=0; while [ $i -lt 40 ]; do sleep 60 & i=$((i+1)); done; wait`], { detached: true, stdio: 'ignore' })
+    c.on('error', () => {})
+    trackPid(c.pid!)
+    try {
+      await vi.waitFor(() => expect(descendants(c.pid!).length).toBe(40), { timeout: 5000 })
+      const t0 = Date.now()
+      let killedAt = 0
+      const kill: Kill = (pid, sig) => {
+        if (sig === 'SIGKILL' && !killedAt) killedAt = Date.now() - t0
+        return process.kill(pid, sig)
+      }
+      const res = await killLadder(c.pid!, { kill, procTable: () => procTable(), alive: () => groupExists(c.pid!) })
+      expect(killedAt).toBeGreaterThan(0)
+      expect(killedAt).toBeLessThanOrEqual(5000)
+      expect(res.gone).toBe(true)
+    } finally {
+      try {
+        process.kill(-c.pid!, 'SIGKILL')
+      } catch {
+        // 已经没了
+      }
+    }
+  }, 15_000)
 
   for (const { fast, budget } of [{ fast: false, budget: 5000 }, { fast: true, budget: 2500 }]) {
     it(`stubborn${fast ? ' (fast)' : ''}: leader and own-session grandchild dead within ${budget} ms, grandchild killed by pid`, async () => {
@@ -284,7 +342,7 @@ describe.skipIf(!posix)('killLadder against real fakes (Review Focus 1)', () => 
       const grandchild = await fake.waitPid('grandchild')
       const r = recording()
       const t0 = Date.now()
-      await killLadder(c.pid!, { fast, kill: r.kill, descendants, startTime, groupMembers, alive: () => groupExists(c.pid!) })
+      await killLadder(c.pid!, { fast, kill: r.kill, procTable: () => procTable(), alive: () => groupExists(c.pid!) })
       expect(await waitDead(grandchild, 500)).toBe(true)
       expect(await waitDead(c.pid!, 500)).toBe(true)
       expect(Date.now() - t0).toBeLessThanOrEqual(budget + 500) // 500 ms:信号送达与进程回收的调度余量

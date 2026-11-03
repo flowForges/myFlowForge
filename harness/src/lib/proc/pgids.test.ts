@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { cleanupFakes, installFake, trackPid } from '../../../test/fakeCli'
-import { bootId, groupMembers, killLive, ownPgid, parseEntries, PgidRegistry, reapOrphans, startTime, startTimes, type Kill, type ProcDeps } from './pgids'
+import { bootId, groupMembers, killLive, ownPgid, parseEntries, PgidRegistry, procTable, reapOrphans, startTime, type Kill, type ProcDeps } from './pgids'
 
 const posix = process.platform === 'linux' || process.platform === 'darwin'
 
@@ -431,15 +431,17 @@ describe('reapOrphans walks the process tree (04 Review Focus 1)', () => {
     cleanupFakes()
   }, 10_000)
 
+  const rowsOf = (...r: [pid: number, ppid: number, pgid: number, start?: string][]) => r.map(([pid, ppid, pgid, start = 'S']) => ({ pid, ppid, pgid, start }))
+  const TREE = rowsOf([777, 1, 777], [801, 777, 801], [802, 801, 802])
   const fakeDeps = (log: string[], over: ProcDeps = {}): ProcDeps => ({
     kill: (pid, sig) => void (sig !== 0 && log.push(`kill ${pid}`)),
     startTime: () => 'S',
     groupMembers: () => [],
     ownPgid: () => 4242,
     bootId: () => 'B',
-    descendants: root => {
-      log.push(`walk ${root}`)
-      return root === 777 ? [801, 802] : []
+    procTable: () => {
+      log.push('table')
+      return TREE
     },
     ...over,
   })
@@ -449,7 +451,7 @@ describe('reapOrphans walks the process tree (04 Review Focus 1)', () => {
     writeEntries(f, line({ pgid: 777, start: 'S', boot: 'B' }))
     const log: string[] = []
     reapOrphans(f, { platform: 'linux', ...fakeDeps(log) })
-    expect(log).toEqual(['walk 777', 'kill -777', 'kill 801', 'kill 802'])
+    expect(log).toEqual(['table', 'kill -777', 'table', 'kill 801', 'kill 802'])
   })
 
   it('a snapshot pid whose start time changes before the kill (reused) is not signalled', () => {
@@ -457,8 +459,26 @@ describe('reapOrphans walks the process tree (04 Review Focus 1)', () => {
     writeEntries(f, line({ pgid: 777, start: 'S', boot: 'B' }))
     const log: string[] = []
     let n = 0
-    reapOrphans(f, { platform: 'linux', ...fakeDeps(log, { startTime: pid => (pid === 801 && n++ > 0 ? 'NEW' : 'S') }) })
-    expect(log.filter(l => l.startsWith('kill'))).toEqual(['kill -777', 'kill 802'])
+    reapOrphans(f, { platform: 'linux', ...fakeDeps(log, { procTable: () => (n++ === 0 ? TREE : rowsOf([801, 1, 801, 'NEW'], [802, 801, 802])) }) })
+    expect(log).toEqual(['kill -777', 'kill 802'])
+  })
+
+  it('table unreadable at the second read: the group still dies, single pids are not signalled', () => {
+    const f = join(root, 'f')
+    writeEntries(f, line({ pgid: 777, start: 'S', boot: 'B' }))
+    const log: string[] = []
+    let n = 0
+    const res = reapOrphans(f, {
+      platform: 'linux',
+      ...fakeDeps(log, {
+        procTable: () => {
+          if (n++ > 0) throw new Error('ps')
+          return TREE
+        },
+      }),
+    })
+    expect(res.killed).toEqual([777])
+    expect(log).toEqual(['kill -777'])
   })
 
   it('leader already gone: walks from the group members too', () => {
@@ -470,7 +490,7 @@ describe('reapOrphans walks the process tree (04 Review Focus 1)', () => {
       ...fakeDeps(log, {
         startTime: pid => (pid === 777 ? undefined : 'T'),
         groupMembers: () => [{ pid: 790, start: 'M' }],
-        descendants: r => (r === 790 ? [803] : []),
+        procTable: () => rowsOf([790, 1, 777, 'M'], [803, 790, 803, 'T']),
       }),
     })
     expect(log).toEqual(['kill -777', 'kill 803'])
@@ -492,33 +512,42 @@ describe('reapOrphans walks the process tree (04 Review Focus 1)', () => {
     expect(log).toEqual([])
   })
 
-  it('a descendants walk that throws does not stop the group kill', () => {
+  it('a table read that throws does not stop the group kill', () => {
     const f = join(root, 'f')
     writeEntries(f, line({ pgid: 777, start: 'S', boot: 'B' }))
     const log: string[] = []
-    const res = reapOrphans(f, { platform: 'linux', ...fakeDeps(log, { descendants: () => { throw new Error('ps') } }) })
+    const res = reapOrphans(f, { platform: 'linux', ...fakeDeps(log, { procTable: () => { throw new Error('ps') } }) })
     expect(res.killed).toEqual([777])
     expect(log).toEqual(['kill -777'])
   })
 
-  it('with an injected kill and no injected descendants, the real process table is not read', () => {
+  it('with an injected kill and no injected table, the real process table is not read', () => {
     const f = join(root, 'f')
     writeEntries(f, line({ pgid: process.ppid, start: 'S', boot: 'B' }))
     const log: string[] = []
-    const { descendants: _unused, ...rest } = fakeDeps(log)
+    const { procTable: _unused, ...rest } = fakeDeps(log)
     reapOrphans(f, { platform: 'linux', ...rest })
     expect(log).toEqual([`kill -${process.ppid}`])
   })
 
-  it.skipIf(!posix)('startTimes agrees with startTime and leaves out dead pids', async () => {
-    const c = spawnGroup('exit 0')
+  it.skipIf(!posix)('procTable: start agrees with startTime, ppid and pgid are right, dead pids are absent', async () => {
+    const c = spawnGroup('sleep 60')
+    await waitFor(() => startTime(c.pid!) !== undefined)
+    const rows = procTable()
+    const mine = rows.find(x => x.pid === process.pid)!
+    expect(mine.start).toBe(startTime(process.pid))
+    expect(mine.ppid).toBe(process.ppid)
+    const kid = rows.find(x => x.pid === c.pid)!
+    expect(kid).toMatchObject({ ppid: process.pid, pgid: c.pid, start: startTime(c.pid!) })
+    process.kill(-c.pid!, 'SIGKILL')
     await waitFor(() => exited(c))
-    const m = startTimes([process.pid, process.ppid, c.pid!])
-    expect(m.get(process.pid)).toBe(startTime(process.pid))
-    expect(m.get(process.ppid)).toBe(startTime(process.ppid))
-    expect(m.has(c.pid!)).toBe(false)
-    expect(startTimes([c.pid!]).size).toBe(0)
-    expect(startTimes([]).size).toBe(0)
+    expect(procTable().some(x => x.pid === c.pid)).toBe(false)
+  })
+
+  it.skipIf(!posix)('ownPgid remembers a success', () => {
+    const v = ownPgid()
+    expect(v).toBeGreaterThan(0)
+    expect(ownPgid()).toBe(v)
   })
 })
 

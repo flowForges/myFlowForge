@@ -21,7 +21,11 @@ import { dirname, join } from 'node:path'
 const BIN = dirname(process.argv[1])
 const argv = process.argv.slice(2)
 const pause = ms => new Promise(res => setTimeout(res, ms))
-const forever = () => setInterval(() => {}, 1000)
+/** 等信号。到点自己退:测试崩了也不会留下永远不死的进程 */
+const forever = () => {
+  setInterval(() => {}, 1000)
+  setTimeout(() => process.exit(0), 120_000).unref()
+}
 const ignore = sig => process.on(sig, () => {})
 
 /** 沙箱里写不了 bin 目录时不算错 */

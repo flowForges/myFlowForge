@@ -24,6 +24,14 @@ export interface PgidEntry {
   members?: Member[]
 }
 
+/** 进程表的一行:同一次读取里的 ppid 和启动时间,说的一定是同一个进程 */
+export interface ProcRow {
+  pid: number
+  ppid: number
+  pgid: number
+  start: string
+}
+
 export type Kill = (pid: number, signal: NodeJS.Signals | 0) => unknown
 
 /** 注入的函数:抛错 = 这次查不了(条目留到下次),返回 undefined = 进程不在 */
@@ -37,10 +45,8 @@ export interface ProcDeps {
   ownPgid?: () => number | undefined
   /** 本次开机的标识;Linux 必须有,其余平台不用 */
   bootId?: () => string | undefined
-  /** 一次查多个 pid 的启动时间;没给时用 startTime(注入了的话)或一次 ps。抛错 = 这次查不了 */
-  startTimes?: (pids: number[]) => Map<number, string>
-  /** 进程树的后代;注入了 kill 而没给它 → 不读真实进程表(假 pid 不该碰真进程) */
-  descendants?: typeof descendants
+  /** 进程表的一次读取;抛错 = 这次读不了。注入了 kill 而没给它 → 空表(假 pid 不该碰真进程) */
+  procTable?: () => ProcRow[]
   /** PgidRegistry:起始条目(reapOrphans 这次认不了、留到下次的),第一次写文件时一并写回 */
   seed?: PgidEntry[]
   /** 命令跑着时多久刷新一次组员,默认 2 s */
@@ -54,6 +60,8 @@ const REFRESH_MS = 2_000
 const PS = '/bin/ps'
 const PS_TIMEOUT = 2_000
 const PS_TREE_TIMEOUT = 3_000
+/** 杀进程的路上读表:读不出来也不能把预算耗光 */
+const PS_TABLE_TIMEOUT = 1_000
 const PS_OPTS = { env: { LC_ALL: 'C' }, timeout: PS_TIMEOUT, stdio: ['ignore', 'pipe', 'ignore'] as ('ignore' | 'pipe')[] }
 const nullLog: PgidLog = { warn() {} }
 
@@ -96,27 +104,47 @@ export function startTime(pid: number, platform: NodeJS.Platform = process.platf
   }
 }
 
-/** 多个 pid 的启动时间,格式同 startTime;不在的不进结果。查不了 → 抛错。darwin 一次 ps,不随 pid 数量多跑 */
-export function startTimes(pids: number[], platform: NodeJS.Platform = process.platform): Map<number, string> {
-  const out = new Map<number, string>()
-  if (!pids.length) return out
+/** 整张进程表,一次读取(darwin 一次 ps;Linux 扫 /proc)。start 与 startTime 同格式。读不了 → 抛错 */
+export function procTable(platform: NodeJS.Platform = process.platform): ProcRow[] {
+  const rows: ProcRow[] = []
   if (platform === 'linux') {
-    for (const p of pids) {
-      const s = procStat(p)?.[19]
-      if (s) out.set(p, s)
+    for (const n of readdirSync('/proc')) {
+      if (!/^\d+$/.test(n)) continue
+      let f: string[] | undefined
+      try {
+        f = procStat(Number(n))
+      } catch {
+        continue // 扫描途中退出的进程
+      }
+      if (f?.[19]) rows.push({ pid: Number(n), ppid: Number(f[1]), pgid: Number(f[2]), start: f[19] })
     }
   } else if (platform === 'darwin') {
-    let text: string
-    try {
-      text = execFileSync(PS, ['-o', 'pid=,lstart=', '-p', pids.join(',')], PS_OPTS).toString()
-    } catch (err) {
-      const e = err as { status?: number | null; stdout?: Buffer }
-      if (e.status === 1 && !e.stdout?.toString().trim()) return out // 全都不在
-      throw err
-    }
+    const text = execFileSync(PS, ['-Ao', 'pid=,ppid=,pgid=,lstart='], { ...PS_OPTS, timeout: PS_TABLE_TIMEOUT, maxBuffer: 16 * 1024 * 1024 }).toString()
     for (const line of text.split('\n')) {
-      const m = /^\s*(\d+)\s+(.+?)\s*$/.exec(line)
-      if (m) out.set(Number(m[1]), m[2])
+      const m = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.+?)\s*$/.exec(line)
+      if (m) rows.push({ pid: Number(m[1]), ppid: Number(m[2]), pgid: Number(m[3]), start: m[4] })
+    }
+  }
+  return rows
+}
+
+/** 从 roots 沿 ppid 往下走,不含 roots 自己 */
+function walkDown(edges: Iterable<{ pid: number; ppid: number }>, roots: number[]): Set<number> {
+  const kids = new Map<number, number[]>()
+  for (const { pid, ppid } of edges) {
+    const list = kids.get(ppid)
+    if (list) list.push(pid)
+    else kids.set(ppid, [pid])
+  }
+  const seen = new Set(roots)
+  const out = new Set<number>()
+  const todo = [...roots]
+  while (todo.length) {
+    for (const k of kids.get(todo.pop()!) ?? []) {
+      if (seen.has(k)) continue
+      seen.add(k)
+      out.add(k)
+      todo.push(k)
     }
   }
   return out
@@ -124,29 +152,17 @@ export function startTimes(pids: number[], platform: NodeJS.Platform = process.p
 
 /**
  * root 的所有后代(不含 root)。ps 失败 → []。root ≤ 1 → []:从 init 往下就是全机。
- * 只说明"此刻 ppid 链通到 root":调用方要先证明 root 是自己的,发信号前还要再比启动时间(signalMembers)
+ * 只有 pid 没有身份:要发信号的路径用 procTable + treeMembers,启动时间和 ppid 出自同一次读取
  */
 export function descendants(root: number, ps: () => string = psTree): number[] {
   if (!validPgid(root)) return []
   try {
-    const kids = new Map<number, number[]>()
+    const edges: { pid: number; ppid: number }[] = []
     for (const line of ps().split('\n')) {
       const m = /^\s*(\d+)\s+(\d+)\s*$/.exec(line)
-      if (!m) continue
-      const list = kids.get(Number(m[2]))
-      if (list) list.push(Number(m[1]))
-      else kids.set(Number(m[2]), [Number(m[1])])
+      if (m) edges.push({ pid: Number(m[1]), ppid: Number(m[2]) })
     }
-    const out = new Set<number>()
-    const todo = [root]
-    while (todo.length) {
-      for (const k of kids.get(todo.pop()!) ?? []) {
-        if (k === root || out.has(k)) continue
-        out.add(k)
-        todo.push(k)
-      }
-    }
-    return [...out]
+    return [...walkDown(edges, [root])]
   } catch {
     return []
   }
@@ -216,13 +232,20 @@ export async function listMembers(pgids: number[], platform: NodeJS.Platform = p
   return undefined
 }
 
+/** 进程的组在这里不会变:查到一次就记住,查不到不记,下次再查。fork 用尽时 ps 起不来,而 kill 不需要 fork */
+let ownCached: number | undefined
+
 export function ownPgid(platform: NodeJS.Platform = process.platform): number | undefined {
+  const mine = platform === process.platform
+  if (mine && ownCached !== undefined) return ownCached
   try {
     const v =
       platform === 'linux' ? Number(procStat('self')?.[2])
       : platform === 'darwin' ? Number(execFileSync(PS, ['-o', 'pgid=', '-p', String(process.pid)], PS_OPTS).toString().trim())
       : NaN
-    return Number.isInteger(v) && v > 0 ? v : undefined
+    if (!Number.isInteger(v) || v <= 0) return undefined
+    if (mine) ownCached = v
+    return v
   } catch {
     return undefined
   }
@@ -246,8 +269,7 @@ export interface Resolved {
   listMembers: (pgids: number[]) => Promise<Map<number, Member[]> | undefined>
   ownPgid: () => number | undefined
   bootId: () => string | undefined
-  startTimes: (pids: number[]) => Map<number, string>
-  descendants: (root: number) => number[]
+  procTable: () => ProcRow[]
   refreshMs: number
   log: PgidLog
 }
@@ -258,21 +280,15 @@ const once = <T>(fn: () => T): (() => T) => {
 }
 
 export function resolveDeps(platform: NodeJS.Platform, d: ProcDeps): Resolved {
-  const one = d.startTime
   return {
     platform,
     kill: d.kill ?? ((pid, sig) => process.kill(pid, sig)),
     startTime: d.startTime ?? (pid => startTimeStrict(pid, platform)),
     groupMembers: d.groupMembers ?? (pgid => groupMembersStrict(pgid, platform)),
     listMembers: d.listMembers ?? (pgids => listMembers(pgids, platform)),
-    ownPgid: once(d.ownPgid ?? (() => ownPgid(platform))),
+    ownPgid: d.ownPgid ?? (() => ownPgid(platform)),
     bootId: once(d.bootId ?? (() => bootId(platform))),
-    startTimes:
-      d.startTimes ??
-      (one
-        ? pids => new Map(pids.flatMap(p => { const s = one(p); return s === undefined ? [] : [[p, s] as const] }))
-        : pids => startTimes(pids, platform)),
-    descendants: root => (d.descendants ?? (d.kill ? () => [] : descendants))(root),
+    procTable: d.procTable ?? (d.kill ? () => [] : () => procTable(platform)),
     refreshMs: d.refreshMs ?? REFRESH_MS,
     log: d.log ?? nullLog,
   }
@@ -328,34 +344,28 @@ export function signalGroup(pgid: number, sig: NodeJS.Signals, r: Resolved): boo
   }
 }
 
-/** 这些根的后代连同启动时间(动手之前拍:父进程一死 ppid 链就断)。根必须已证明是自己的;查不了 → 有多少算多少 */
-export function treeMembers(roots: number[], r: Resolved): Member[] {
-  const pids = new Set<number>()
-  try {
-    for (const root of roots.slice(0, MAX_MEMBERS + 1)) for (const p of r.descendants(root)) if (validPgid(p) && p !== process.pid) pids.add(p)
-    const starts = r.startTimes([...pids])
-    return [...starts].map(([pid, start]) => ({ pid, start }))
-  } catch (err) {
-    r.log.warn('process tree snapshot failed', { error: String(err) })
-    return []
-  }
+/** 这张表里 roots 的后代,启动时间取自同一行(动手之前拍:父进程一死 ppid 链就断)。roots 必须已证明是自己的 */
+export function treeMembers(rows: ProcRow[], roots: number[]): Member[] {
+  const under = walkDown(rows, roots)
+  return rows.filter(x => under.has(x.pid) && validPgid(x.pid) && x.pid !== process.pid).map(x => ({ pid: x.pid, start: x.start }))
 }
 
 /**
- * 给快照里的单个进程发信号:发之前再比一次启动时间,对不上(pid 被复用)或查不了都不发。
- * 同样不碰 pid ≤ 1、本进程、本进程所在的组。
+ * 给快照里的单个进程发信号:表里同一个 pid 的启动时间要和快照一致,否则(pid 被复用)或读不了表都不发。
+ * 同样不碰 pid ≤ 1、本进程、本进程所在的组。rows 不给 → 现读一张。
  */
-export function signalMembers(members: Member[], sig: NodeJS.Signals, r: Resolved): void {
+export function signalMembers(members: Member[], sig: NodeJS.Signals, r: Resolved, rows?: ProcRow[]): void {
   const own = r.ownPgid()
   const safe = members.filter(m => validPgid(m.pid) && m.pid !== process.pid && own !== undefined && m.pid !== own)
   if (!safe.length) return
-  let now: Map<number, string>
+  let table: ProcRow[]
   try {
-    now = r.startTimes(safe.map(m => m.pid))
+    table = rows ?? r.procTable()
   } catch (err) {
-    r.log.warn('process start time unavailable, not signalled', { error: String(err) })
+    r.log.warn('process table unavailable, not signalled', { error: String(err) })
     return
   }
+  const now = new Map(table.map(x => [x.pid, x.start]))
   for (const m of safe) {
     if (now.get(m.pid) !== m.start) continue
     try {
@@ -599,15 +609,15 @@ export interface ReapResult {
   kept: PgidEntry[]
 }
 
-/** 从组长和现有组员往下走(组长可能已经不在了)。pgid 必须已证明是自己的 */
+/** 从组长和现有组员往下走(组长可能已经不在了),一张表。pgid 必须已证明是自己的;读不了 → [] */
 function groupTree(pgid: number, r: Resolved): Member[] {
-  let members: Member[] = []
   try {
-    members = r.groupMembers(pgid)
-  } catch {
-    // 只从组长走
+    const rows = r.procTable()
+    return treeMembers(rows, [pgid, ...rows.filter(x => x.pgid === pgid).map(x => x.pid)])
+  } catch (err) {
+    r.log.warn('process tree snapshot failed', { error: String(err) })
+    return []
   }
-  return treeMembers([pgid, ...members.map(m => m.pid)], r)
 }
 
 export function reapOrphans(file: string, opts: ProcDeps & { platform?: NodeJS.Platform } = {}): ReapResult {
