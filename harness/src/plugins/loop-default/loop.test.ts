@@ -903,13 +903,31 @@ describe('loop-default: Review Focus 3, the turn waits for runs', () => {
     expect(d.events.find(e => e.type === 'turn.resumed')?.payload).toEqual({ turnId: 't1', step: 1, cause: 'abort' })
   })
 
-  it('cancel while waiting after a failure does not write the failure', async () => {
+  it('cancel while waiting after a failure does not write the failure, but logs it with kind, masked message and cause', async () => {
     const runs = scriptedRuns()
     runs.start()
-    const d = drive(() => seq({ type: 'done', reason: 'error', error: { kind: 'unavailable', message: 'boom', retryable: false } }), { runs })
+    const warnings: { msg: string; data: unknown }[] = []
+    const key = 'sk-' + 'a'.repeat(32)
+    const d = drive(() => seq({ type: 'done', reason: 'error', error: { kind: 'unavailable', message: `boom ${key}`, retryable: false } }), { runs, warn: (msg, data) => warnings.push({ msg, data }) })
     await d.parked(1)
+    expect(warnings).toEqual([])
     d.controller.abort()
     expect(await d.result).toEqual({ type: 'turn.failed', payload: { turnId: 't1', reason: 'cancelled' } })
+    expect(warnings).toEqual([{ msg: 'turn failure replaced', data: { turnId: 't1', kind: 'unavailable', message: expect.stringContaining('boom'), cause: 'abort' } }])
+    expect(JSON.stringify(warnings)).not.toContain(key)
+  })
+
+  it('cancel while settling a clean end logs nothing', async () => {
+    const runs = scriptedRuns()
+    runs.start(2)
+    const warnings: unknown[] = []
+    const d = drive(n => say(`a${n}`), { runs, maxSteps: 1, warn: (_m, data) => warnings.push(data) })
+    await d.parked(1)
+    runs.end('run_a', 'N')
+    await d.parked(2) // 到了上限:settle 拿着 turn.ended 等第二个运行
+    d.controller.abort()
+    expect(await d.result).toEqual({ type: 'turn.failed', payload: { turnId: 't1', reason: 'cancelled' } })
+    expect(warnings).toEqual([])
   })
 
   it('byte identity: a later turn rebuilds exactly what the model received, with follow-ups and notices', async () => {
@@ -1202,6 +1220,20 @@ describe('loop-default: Review Focus 3a, a message wakes the parked turn', () =>
     expect(JSON.stringify(d.rebuilt().slice(0, m.length))).toBe(JSON.stringify(m))
   })
 
+  it('a follow-up renews the rate-limit retries', async () => {
+    const runs = scriptedRuns()
+    runs.start()
+    const limited = () => seq({ type: 'done', reason: 'error', error: { kind: 'rate_limit', message: 'slow', retryable: true, retryAfterMs: 0 } })
+    const d = drive(n => ([1, 2, 4, 5].includes(n) ? limited() : say(`a${n}`)), { runs, inbox: true })
+    await d.parked(1)
+    expect(d.requests).toHaveLength(3)
+    d.box.send('again')
+    await d.parked(2)
+    expect(d.requests).toHaveLength(6) // 没有续上时第 4 次就直接失败
+    runs.end('run_a', 'N')
+    expect(await d.result).toEqual(ended)
+  })
+
   it('a message replacing a model error: the failure is still logged, kind and message, and the secret in it is masked', async () => {
     const runs = scriptedRuns()
     runs.start()
@@ -1214,7 +1246,7 @@ describe('loop-default: Review Focus 3a, a message wakes the parked turn', () =>
     expect(warnings).toEqual([])
     d.box.send('retry please')
     await d.parked(2)
-    expect(warnings).toEqual([{ msg: 'turn failure replaced by a follow-up', data: { turnId: 't1', kind: 'unavailable', message: expect.stringContaining('boom') } }])
+    expect(warnings).toEqual([{ msg: 'turn failure replaced', data: { turnId: 't1', kind: 'unavailable', message: expect.stringContaining('boom'), cause: 'message' } }])
     expect(JSON.stringify(warnings)).not.toContain(key)
     runs.end('run_a', 'N')
     expect(await d.result).toEqual(ended)
@@ -1228,7 +1260,7 @@ describe('loop-default: Review Focus 3a, a message wakes the parked turn', () =>
     await d.parked(1)
     d.box.send('go on')
     await d.parked(2)
-    expect(warnings).toEqual([{ turnId: 't1', kind: 'max_steps' }])
+    expect(warnings).toEqual([{ turnId: 't1', kind: 'max_steps', cause: 'message' }])
     runs.end('run_a', 'N')
     await d.result
   })

@@ -574,6 +574,19 @@ describe('Review Focus 3a: a follow-up stays in the same turn (real kernel inbox
     expect(history).not.toContain('SECOND-MESSAGE')
   })
 
+  it.skipIf(!posix)('kernel.close during the wait after a model error: the failure is logged', async () => {
+    initRepo()
+    const runs = fakeRuns()
+    const k = await boot([], () => () => seq({ type: 'done', reason: 'error', error: { kind: 'unavailable', message: 'boom', retryable: false } }), undefined, [runs.plugin])
+    const sid = await create(k, GPT)
+    await prompt(k, sid, 'go')
+    await waitFor(() => parkedCount(k, sid) === 1)
+    expect(logs).not.toContain('[loop-default] turn failure replaced')
+    await k.close()
+    kernels = kernels.filter(x => x !== k)
+    expect(logs).toContain('[loop-default] turn failure replaced')
+  })
+
   it.skipIf(!posix)('killed after a follow-up: one turn.failed interrupted across two restarts, and the follow-up is in the next turn\'s history', async () => {
     initRepo()
     const calls: Message[][] = []

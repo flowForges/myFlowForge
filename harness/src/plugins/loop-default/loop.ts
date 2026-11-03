@@ -232,22 +232,28 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<TurnOut
     return cause
   }
 
+  /** 取消、关闭或后续消息顶替了等着写的失败:它不会进事件了,留一条日志,否则就没有任何记录 */
+  const logReplaced = (outcome: TurnOutcome, cause: 'message' | 'abort'): void => {
+    if (outcome.type !== 'turn.failed') return
+    const { reason: kind, message } = outcome.payload
+    deps.log.warn('turn failure replaced', { turnId, kind, ...(message !== undefined && { message: redact(message) }), cause })
+  }
+
   /**
    * 模型不会再被请求了(失败或到了上限),但运行还开着:不杀它们,等到结束,通知只写事件,再交出 outcome。
-   * 这段等待也算挂起:用户发来消息 → 'resume',调用方 continue,由下一步的开头给新预算。取消不经过这里
+   * 这段等待也算挂起:用户发来消息 → 'resume',调用方 continue,由下一步的开头给新预算。取消不走 settle 的 outcome,只记日志
    */
   async function settle(step: number, outcome: TurnOutcome): Promise<TurnOutcome | 'resume'> {
     for (;;) {
       deliverNotices(step)
       if (!background || !runsOpen()) return outcome
       const woke = await park(step, background)
-      if (woke === 'abort') return fail('cancelled')
+      if (woke === 'abort') {
+        logReplaced(outcome, woke)
+        return fail('cancelled')
+      }
       if (woke === 'message') {
-        // 这个失败不会写进事件了:留一条日志,否则就没有任何记录
-        if (outcome.type === 'turn.failed') {
-          const { reason: kind, message } = outcome.payload
-          deps.log.warn('turn failure replaced by a follow-up', { turnId, kind, ...(message !== undefined && { message: redact(message) }) })
-        }
+        logReplaced(outcome, woke)
         return 'resume'
       }
     }
@@ -268,6 +274,7 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<TurnOut
     if (followUps.length) {
       limit = step + maxSteps
       guard = new LoopGuard()
+      retries = 0
     }
     deliverNotices(step)
 

@@ -68,7 +68,7 @@ export interface FollowUp {
 
 /** 每轮一个,随 session.prompt 的总线载荷交给处理者;不调 park 的循环,轮一直回 ERR_BUSY */
 export interface TurnInbox {
-  /** 同步置 parked;有消息或轮中止时 resolve */
+  /** 同步置 parked;有消息、轮中止、unpark 或下一次 park 时 resolve。resolve 不代表有消息,要看 take() */
   park(): Promise<void>
   /** 同步清 parked */
   unpark(): void
