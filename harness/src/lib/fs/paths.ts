@@ -128,6 +128,7 @@ export function isInside(child: string, parent: string, platform: NodeJS.Platfor
 const HOME_ROOTS = [
   '.ssh', '.aws', '.gnupg', '.config/gh', '.config/gcloud', '.azure', '.kube', '.docker', '.netrc',
   '.git-credentials', '.npmrc', '.pypirc', '.codex', '.claude', 'Library/Keychains',
+  '.qoder/.auth', // 只有登录态;~/.qoder 其余不是密钥(沙箱里哪些可写由委派的 planExec 定)
 ]
 
 /** 05 spec §5.1:把凭据挪出家目录的环境变量;dir / file 取值本身,list 按平台分隔符拆,xdg 取其下的 gh、gcloud */
@@ -136,6 +137,7 @@ export const RELOCATED_ENV: readonly { name: string; kind: 'dir' | 'file' | 'lis
   { name: 'DOCKER_CONFIG', kind: 'dir' },
   { name: 'CODEX_HOME', kind: 'dir' },
   { name: 'CLAUDE_CONFIG_DIR', kind: 'dir' },
+  { name: 'QODER_CONFIG_DIR', kind: 'dir' }, // 含义没验证(04 spec C16):多拒不漏拒
   { name: 'GH_CONFIG_DIR', kind: 'dir' },
   { name: 'CLOUDSDK_CONFIG', kind: 'dir' },
   { name: 'AZURE_CONFIG_DIR', kind: 'dir' },

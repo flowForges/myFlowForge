@@ -158,8 +158,26 @@ describe('credential blacklist', () => {
   it('lists the spec §10.1 roots under home', () => {
     const r = credentialRoots('/h', 'darwin', {})
     for (const rel of ['.ssh', '.aws', '.gnupg', '.config/gh', '.config/gcloud', '.azure', '.kube', '.docker', '.netrc',
-      '.git-credentials', '.npmrc', '.pypirc', '.codex', '.claude', 'Library/Keychains'])
+      '.git-credentials', '.npmrc', '.pypirc', '.codex', '.claude', 'Library/Keychains', '.qoder/.auth'])
       expect(r).toContain(`/h/${rel}`)
+  })
+  it('only .qoder/.auth is hidden, not the rest of ~/.qoder', () => {
+    const r = credentialRoots('/h', 'darwin', {})
+    for (const p of ['/h/.qoder/.auth', '/h/.qoder/.auth/token.json', '/h/.QODER/.AUTH/x', '/h/.qodeR/.auth'])
+      expect(isCredentialPath(p, r, 'darwin'), p).toBe(true)
+    for (const p of ['/h/.qoder', '/h/.qoder/settings.json', '/h/.qoder/bin/qodercli/qodercli-1.0.29', '/h/.qoder/logs/runs', '/h/.qoder/.authx', '/h/x/.qoder/.auth/y'])
+      expect(isCredentialPath(p, r, 'darwin'), p).toBe(false)
+    expect(credentialRoots('C:\\Users\\u', 'win32', {})).toContain('C:\\Users\\u\\.qoder\\.auth')
+  })
+  it('a symlinked ~/.qoder or .auth is hidden through its target', () => {
+    mkdirSync(join(outside, 'q'))
+    symlinkSync(join(outside, 'q'), join(base, '.qoder'), 'dir')
+    const viaDir = canonicalRoots(credentialRoots(base, P, {}))
+    expect(isCredentialPath(join(outside, 'q', '.auth', 't'), viaDir, P)).toBe(true)
+    expect(isCredentialPath(join(outside, 'q', 'settings.json'), viaDir, P)).toBe(false)
+    mkdirSync(join(outside, 'tokens'))
+    symlinkSync(join(outside, 'tokens'), join(outside, 'q', '.auth'), 'dir')
+    expect(isCredentialPath(join(outside, 'tokens', 't'), canonicalRoots(credentialRoots(base, P, {})), P)).toBe(true)
   })
   it('adds %APPDATA% roots on win32', () => {
     const r = credentialRoots('C:\\Users\\u', 'win32', { APPDATA: 'C:\\Users\\u\\AppData\\Roaming' })
@@ -210,14 +228,14 @@ describe('credential blacklist', () => {
 
 describe('env-relocated credential roots (spec §5.1)', () => {
   it('dir and file variables add their absolute value', () => {
-    for (const name of ['GNUPGHOME', 'DOCKER_CONFIG', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GH_CONFIG_DIR', 'CLOUDSDK_CONFIG', 'AZURE_CONFIG_DIR',
+    for (const name of ['GNUPGHOME', 'DOCKER_CONFIG', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'QODER_CONFIG_DIR', 'GH_CONFIG_DIR', 'CLOUDSDK_CONFIG', 'AZURE_CONFIG_DIR',
       'AWS_CONFIG_FILE', 'AWS_SHARED_CREDENTIALS_FILE', 'GOOGLE_APPLICATION_CREDENTIALS', 'NPM_CONFIG_USERCONFIG', 'NETRC'])
       expect(relocatedCredentialRoots({ [name]: '/w/x' }, 'linux'), name).toEqual(['/w/x'])
   })
   it('the table matches the spec', () => {
     const kinds = Object.fromEntries(RELOCATED_ENV.map(e => [e.name, e.kind]))
     expect(kinds).toEqual({
-      GNUPGHOME: 'dir', DOCKER_CONFIG: 'dir', CODEX_HOME: 'dir', CLAUDE_CONFIG_DIR: 'dir', GH_CONFIG_DIR: 'dir', CLOUDSDK_CONFIG: 'dir', AZURE_CONFIG_DIR: 'dir',
+      GNUPGHOME: 'dir', DOCKER_CONFIG: 'dir', CODEX_HOME: 'dir', CLAUDE_CONFIG_DIR: 'dir', QODER_CONFIG_DIR: 'dir', GH_CONFIG_DIR: 'dir', CLOUDSDK_CONFIG: 'dir', AZURE_CONFIG_DIR: 'dir',
       AWS_CONFIG_FILE: 'file', AWS_SHARED_CREDENTIALS_FILE: 'file', GOOGLE_APPLICATION_CREDENTIALS: 'file', NPM_CONFIG_USERCONFIG: 'file', NETRC: 'file',
       KUBECONFIG: 'list', XDG_CONFIG_HOME: 'xdg',
     })

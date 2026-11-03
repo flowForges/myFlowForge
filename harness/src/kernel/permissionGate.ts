@@ -34,6 +34,9 @@ function execDefault(mode: ApprovalMode, sandbox: SandboxStatus, allowUnsandboxe
   return sandbox.level === 'none' && !allowUnsandboxedAuto ? 'ask' : 'allow'
 }
 
+/** 这次运行本身没有隔离:默认判定按无沙箱算,不看会话级别 */
+const NONE_LEVEL: SandboxStatus = { level: 'none', missing: [], autoDegraded: false }
+
 /**
  * 内置默认规则的显示形态(permissions.get 用;不可编辑)。判定里不走模式匹配,直接按 cwd 比较:
  * cwd 里的 `*`、`?`、括号不会被当成通配符或写法
@@ -71,7 +74,11 @@ export function decide(req: PermissionRequest, s: SessionInfo | undefined, env: 
   if (action === 'exec') {
     if (!s) return 'deny' // 没有会话就没有审批对象
     const user = evaluate(env.rules, { action, resource: resource ?? '' }, ctx(s.cwd ?? ''))
-    return user ?? execDefault(s.approvalMode, env.sandbox, env.allowUnsandboxedAuto)
+    if (user === 'deny' || user === 'ask') return user
+    // 比会话宽的运行、有规则落实不了的运行:只有人能放行,allow 规则和 allowUnsandboxedAuto 都不算(04 spec §6、C2、C3)
+    if (req.mustAsk || (req.unsandboxed && env.sandbox.level !== 'none')) return 'ask'
+    if (user === 'allow') return 'allow'
+    return execDefault(s.approvalMode, req.unsandboxed ? NONE_LEVEL : env.sandbox, env.allowUnsandboxedAuto)
   }
   return 'deny'
 }

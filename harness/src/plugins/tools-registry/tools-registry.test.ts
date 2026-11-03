@@ -10,7 +10,8 @@ import type { Plugin } from '../../kernel/pluginHost'
 import type { Sessions } from '../../kernel/sessions'
 import { OUTSIDE, resolveToolPath } from '../../lib/fs/paths'
 import { nullLogger } from '../../kernel/log'
-import { argsOf, type Tool, type ToolContext, type ToolResult, type ToolsService } from '../../lib/tools/types'
+import { sessionKey } from '../../lib/tools/commandKey'
+import { argsOf, type PermissionRequest, type Tool, type ToolContext, type ToolResult, type ToolsService } from '../../lib/tools/types'
 import toolsRegistry, { ToolsRegistry } from './index'
 import { createToolsCoding } from '../tools-coding/index'
 import { shellTool } from '../tools-coding/shell'
@@ -526,6 +527,267 @@ describe('tools-registry', () => {
         await reg.call('x', '{}', ctx)
       }
       expect(seen.map(r => r.unsandboxed)).toEqual([true, true, undefined])
+    })
+  })
+
+  describe('04: per-request approval fields', () => {
+    const requested = (k: Kernel) => k.events.after(0).filter(e => e.type === 'approval.requested')
+    const resolvedBy = (k: Kernel) => k.events.after(0).filter(e => e.type === 'approval.resolved').map(e => (e.payload as { by: string }).by)
+    const NONE: DetectResult = { level: 'none', missing: ['platform'] }
+    const FULL: DetectResult = { level: 'full', missing: [] }
+    const PARTIAL: DetectResult = { level: 'partial', missing: ['netns'] }
+    const CARD = { summary: 'codex: fix the build', key: 'executor:codex:rw' }
+
+    /** 假委派工具:请求字段全由调用参数给,和 executor-cli 的 permission() 同形 */
+    function delegate(b: Awaited<ReturnType<typeof boot>>) {
+      const runs: string[] = []
+      b.probe.tools!.register({
+        name: 'fdelegate', description: '', parameters: {}, delegate: true,
+        permission: a => [{ actor: 'tools', action: 'exec', resource: 'codex', ...(a as object) }],
+        run: async () => { runs.push('fdelegate'); return { content: 'started' } },
+      })
+      return { runs, go: (req: object) => b.call('fdelegate', req) }
+    }
+    /** 等第 n 张卡片,应答,等调用结束 */
+    async function answer(b: Awaited<ReturnType<typeof boot>>, n: number, decision: 'allow' | 'allow_session' | 'deny', p: Promise<{ r: ToolResult }>) {
+      await waitFor(() => requested(b.k).length === n)
+      const ev = requested(b.k)[n - 1].payload as Record<string, unknown>
+      await b.k.handle('approval.respond', { approvalId: ev.approvalId as string, decision })
+      return { ev, r: (await p).r }
+    }
+
+    it('the approval carries the custom summary, redacted and capped', async () => {
+      const b = await boot()
+      const d = delegate(b)
+      const p = d.go({ summary: `codex: use sk-abcdefghijklmnopqrstuvwxyz ${'x'.repeat(5000)}` })
+      await waitFor(() => requested(b.k).length === 1)
+      const ev = requested(b.k)[0].payload as { approvalId: string; tool: string; summary: string }
+      expect(ev.tool).toBe('fdelegate')
+      expect(ev.summary.startsWith('codex: use *** x')).toBe(true)
+      expect(ev.summary.length).toBeLessThanOrEqual(2000)
+      expect(JSON.stringify(b.k.events.after(0).filter(e => e.type.startsWith('approval.')))).not.toContain('sk-abc')
+      await b.k.handle('approval.respond', { approvalId: ev.approvalId, decision: 'deny' })
+      await p
+    })
+
+    it('summary and key fall back as before when the tool gives neither', async () => {
+      const seen: { summary: string; key?: string }[] = []
+      const reg = new ToolsRegistry({ gate: { check: () => 'ask' }, approvals: { request: async r => (seen.push(r), 'deny') }, append: () => {}, log: nullLogger })
+      const ctx: ToolContext = { sessionId: 's', turnId: 't', callId: 'c', cwd, spillDir: join(root, 'spill'), signal: new AbortController().signal }
+      const reqs = [{ action: 'exec', resource: 'npm test' }, { action: 'exec', resource: 'cat x' }, { action: 'write', resource: '/w/a' }, { action: 'exec' }, { action: 'exec', resource: 'codex', ...CARD }]
+      reg.register({ name: 'x', description: '', parameters: {}, permission: a => [{ actor: 'tools', ...reqs[(a as { i: number }).i] }], run: async () => ({ content: '' }) })
+      for (let i = 0; i < reqs.length; i++) await reg.call('x', JSON.stringify({ i }), ctx)
+      expect(seen.map(r => [r.summary, r.key])).toEqual([
+        ['npm test', 'npm test'],
+        ['cat x', undefined],
+        ['/w/a', undefined],
+        ['x', undefined],
+        [CARD.summary, CARD.key],
+      ])
+    })
+
+    it('the gate sees every field; the tool still cannot pick actor or session', async () => {
+      const seen: PermissionRequest[] = []
+      const reg = new ToolsRegistry({ gate: { check: r => (seen.push(r), 'allow') }, approvals: { request: async () => 'allow' }, append: () => {}, log: nullLogger })
+      const ctx: ToolContext = { sessionId: 's', turnId: 't', callId: 'c', cwd, spillDir: join(root, 'spill'), signal: new AbortController().signal }
+      reg.register({
+        name: 'x', description: '', parameters: {},
+        permission: () => [{ actor: 'kernel', sessionId: 'other', action: 'exec', resource: 'codex', ...CARD, unsandboxed: false, mustAsk: true }],
+        run: async () => ({ content: '' }),
+      })
+      await reg.call('x', '{}', ctx)
+      expect(seen).toEqual([{ actor: 'tools', sessionId: 's', action: 'exec', resource: 'codex', ...CARD, unsandboxed: false, mustAsk: true }])
+    })
+
+    it('allow_session on a custom key: the next request with that key runs without a card', async () => {
+      const b = await boot(cwd, 'ask', { detect: FULL })
+      const d = delegate(b)
+      const { r } = await answer(b, 1, 'allow_session', d.go({ ...CARD, unsandboxed: false }))
+      expect(r.content).toBe('started')
+      expect((await d.go({ ...CARD, unsandboxed: false })).r.content).toBe('started')
+      expect(requested(b.k)).toHaveLength(1)
+      expect(resolvedBy(b.k)).toEqual(['user', 'session'])
+      expect(d.runs).toHaveLength(2)
+    })
+
+    it('another key is not covered by the grant (rw is not ro, codex is not qoder)', async () => {
+      const b = await boot(cwd, 'ask', { detect: FULL })
+      const d = delegate(b)
+      await answer(b, 1, 'allow_session', d.go({ ...CARD, unsandboxed: false }))
+      await answer(b, 2, 'deny', d.go({ ...CARD, key: 'executor:codex:ro', unsandboxed: false }))
+      await answer(b, 3, 'deny', d.go({ ...CARD, key: 'executor:qoder:rw', unsandboxed: false }))
+      expect(d.runs).toHaveLength(1)
+    })
+
+    it('a key granted while sandboxed is not honoured for an unsandboxed run', async () => {
+      const b = await boot(cwd, 'ask', { detect: FULL })
+      const d = delegate(b)
+      const first = await answer(b, 1, 'allow_session', d.go({ ...CARD, unsandboxed: false }))
+      expect(first.ev).not.toHaveProperty('unsandboxed')
+      const second = await answer(b, 2, 'deny', d.go({ ...CARD, unsandboxed: true }))
+      expect(second.ev.unsandboxed).toBe(true)
+      expect(second.r).toEqual({ content: '用户拒绝了该操作', isError: true })
+      expect(d.runs).toHaveLength(1)
+    })
+
+    it('mustAsk gets no key: allow_session does not carry over, and an earlier grant is not used', async () => {
+      const b = await boot(cwd, 'auto', { detect: FULL })
+      const d = delegate(b)
+      expect((await answer(b, 1, 'allow_session', d.go({ ...CARD, mustAsk: true }))).r.content).toBe('started')
+      expect((await answer(b, 2, 'allow', d.go({ ...CARD, mustAsk: true }))).r.content).toBe('started')
+      expect(requested(b.k)).toHaveLength(2)
+      expect(resolvedBy(b.k)).toEqual(['user', 'user'])
+    })
+
+    it('mustAsk does not use a key granted before the rule existed', async () => {
+      const b = await boot(cwd, 'ask', { detect: FULL })
+      const d = delegate(b)
+      await answer(b, 1, 'allow_session', d.go({ ...CARD, unsandboxed: false }))
+      await answer(b, 2, 'deny', d.go({ ...CARD, unsandboxed: false, mustAsk: true }))
+      expect(d.runs).toHaveLength(1)
+    })
+
+    it('mustAsk reaches approvals with key undefined, even when the tool sends one', async () => {
+      const seen: { key?: string }[] = []
+      const reg = new ToolsRegistry({ gate: { check: () => 'ask' }, approvals: { request: async r => (seen.push(r), 'deny') }, append: () => {}, log: nullLogger })
+      const ctx: ToolContext = { sessionId: 's', turnId: 't', callId: 'c', cwd, spillDir: join(root, 'spill'), signal: new AbortController().signal }
+      reg.register({ name: 'x', description: '', parameters: {}, permission: () => [{ actor: 'tools', action: 'exec', resource: 'npm test', key: 'k', mustAsk: true }], run: async () => ({ content: '' }) })
+      await reg.call('x', '{}', ctx)
+      expect(seen).toHaveLength(1)
+      expect(seen[0].key).toBeUndefined() // resource 自带的 sessionKey 也不算
+    })
+
+    it('executor keys cannot come out of sessionKey, so a shell command cannot use the grant', async () => {
+      for (const command of ['executor:codex:rw', 'executor:codex:ro', 'executor:qoder:rw', 'executor:codex:rw --help', ' executor:codex:rw ', 'executor:codex:rw status'])
+        expect(sessionKey(command), command).toBeUndefined()
+      const b = await boot(cwd, 'ask', { detect: FULL })
+      const d = delegate(b)
+      await answer(b, 1, 'allow_session', d.go({ ...CARD, unsandboxed: false }))
+      await answer(b, 2, 'deny', b.call('fexec', { command: 'executor:codex:rw' }))
+      expect(b.probe.runs).toEqual([])
+    })
+
+    describe('the widening table through the registry', () => {
+      it.each([
+        ['full', FULL, {}],
+        ['partial', PARTIAL, {}],
+        ['full + allowUnsandboxedAuto', FULL, { allowUnsandboxedAuto: true }],
+        ['full + allow shell(codex)', FULL, { rules: [{ effect: 'allow', rule: 'shell(codex)' }] }],
+        ['partial + both', PARTIAL, { allowUnsandboxedAuto: true, rules: [{ effect: 'allow', rule: 'shell(codex)' }] }],
+      ] as const)('auto at %s, unsandboxed → card marked, runs only after approval', async (_n, detect, permissions) => {
+        const b = await boot(cwd, 'auto', { detect, permissions })
+        const d = delegate(b)
+        const p = d.go({ ...CARD, unsandboxed: true })
+        await waitFor(() => requested(b.k).length === 1)
+        expect(d.runs).toEqual([])
+        const { ev, r } = await answer(b, 1, 'allow', p)
+        expect(ev.unsandboxed).toBe(true)
+        expect(r.content).toBe('started')
+      })
+
+      it.each([['full', FULL], ['partial', PARTIAL]] as const)('auto at %s, unsandboxed:false → runs without a card', async (_n, detect) => {
+        const b = await boot(cwd, 'auto', { detect })
+        const d = delegate(b)
+        expect((await d.go({ ...CARD, unsandboxed: false })).r.content).toBe('started')
+        expect(requested(b.k)).toHaveLength(0)
+      })
+
+      it('auto at none with allowUnsandboxedAuto → runs without a card, either isolation', async () => {
+        const b = await boot(cwd, 'auto', { detect: NONE, permissions: { allowUnsandboxedAuto: true } })
+        const d = delegate(b)
+        expect((await d.go({ ...CARD, unsandboxed: true })).r.content).toBe('started')
+        expect((await d.go({ ...CARD, unsandboxed: false })).r.content).toBe('started')
+        expect(requested(b.k)).toHaveLength(0)
+      })
+
+      it('auto at none without the flag: own → card without 未隔离, none → card with it', async () => {
+        const b = await boot(cwd, 'auto', { detect: NONE })
+        const d = delegate(b)
+        expect((await answer(b, 1, 'deny', d.go({ ...CARD, unsandboxed: false }))).ev).not.toHaveProperty('unsandboxed')
+        expect((await answer(b, 2, 'deny', d.go({ ...CARD, unsandboxed: true }))).ev.unsandboxed).toBe(true)
+        expect(d.runs).toEqual([])
+      })
+
+      it('mustAsk at full + auto + allow rule → card, not marked when the run is isolated', async () => {
+        const b = await boot(cwd, 'auto', { detect: FULL, permissions: { allowUnsandboxedAuto: true, rules: [{ effect: 'allow', rule: 'shell(codex)' }] } })
+        const d = delegate(b)
+        const { ev } = await answer(b, 1, 'deny', d.go({ ...CARD, unsandboxed: false, mustAsk: true }))
+        expect(ev).not.toHaveProperty('unsandboxed')
+        expect(d.runs).toEqual([])
+      })
+
+      it('deny shell(codex*) → refused, nobody asked', async () => {
+        const b = await boot(cwd, 'auto', { detect: FULL, permissions: { rules: [{ effect: 'deny', rule: 'shell(codex*)' }] } })
+        const d = delegate(b)
+        const { r } = await d.go({ ...CARD, unsandboxed: false })
+        expect(r.isError).toBe(true)
+        expect(r.content).toMatch(/^拒绝:exec /)
+        expect(requested(b.k)).toHaveLength(0)
+        expect(d.runs).toEqual([])
+      })
+
+      it('ask shell(codex) → asked despite allowUnsandboxedAuto', async () => {
+        const b = await boot(cwd, 'auto', { detect: NONE, permissions: { allowUnsandboxedAuto: true, rules: [{ effect: 'ask', rule: 'shell(codex)' }] } })
+        const d = delegate(b)
+        await answer(b, 1, 'deny', d.go({ ...CARD, unsandboxed: false }))
+        expect(d.runs).toEqual([])
+      })
+
+      it('a deny added while the card is open stops the delegation after allow', async () => {
+        const b = await boot(cwd, 'auto', { detect: FULL })
+        const d = delegate(b)
+        const p = d.go({ ...CARD, unsandboxed: true })
+        await waitFor(() => requested(b.k).length === 1)
+        await b.k.handle('permissions.set', { commandId: 'perm-d', config: { rules: [{ effect: 'deny', rule: 'shell(codex*)' }] } })
+        const { r } = await answer(b, 1, 'allow', p)
+        expect(r.content).toMatch(/^拒绝:exec /)
+        expect(d.runs).toEqual([])
+      })
+    })
+
+    describe('the 未隔离 mark', () => {
+      it('explicit unsandboxed:false wins over session level none', async () => {
+        const b = await boot(cwd, 'ask', { detect: NONE })
+        expect((await answer(b, 1, 'deny', delegate(b).go({ ...CARD, unsandboxed: false }))).ev).not.toHaveProperty('unsandboxed')
+      })
+
+      it('explicit unsandboxed:true wins over session level full', async () => {
+        const b = await boot(cwd, 'ask', { detect: FULL })
+        expect((await answer(b, 1, 'deny', delegate(b).go({ ...CARD, unsandboxed: true }))).ev.unsandboxed).toBe(true)
+      })
+
+      it('a shell-style exec without the field is marked at level none', async () => {
+        const b = await boot(cwd, 'ask', { detect: NONE })
+        expect((await answer(b, 1, 'deny', b.call('fexec', { command: 'ls' }))).ev.unsandboxed).toBe(true)
+      })
+
+      it('a shell-style exec without the field is not marked at level full', async () => {
+        const b = await boot(cwd, 'ask', { detect: FULL })
+        expect((await answer(b, 1, 'deny', b.call('fexec', { command: 'ls' }))).ev).not.toHaveProperty('unsandboxed')
+      })
+
+      it('a write approval is never marked, even when the tool asks for it', async () => {
+        const b = await boot(cwd, 'ask', { detect: NONE, permissions: { rules: [{ effect: 'ask', rule: 'write(package.json)' }] } })
+        const off = b.probe.tools!.register({
+          name: 'fmarked', description: '', parameters: {},
+          permission: (_a, ctx) => [{ actor: 'tools', action: 'write', resource: resolved(ctx, 'package.json'), unsandboxed: true }],
+          run: async () => ({ content: 'ok' }),
+        })
+        expect((await answer(b, 1, 'deny', b.call('fmarked', {}))).ev).not.toHaveProperty('unsandboxed')
+        off()
+        expect((await answer(b, 2, 'deny', b.call('fwrite', { path: 'package.json', content: '{}' }))).ev).not.toHaveProperty('unsandboxed')
+      })
+
+      it('an explicit flag is not replaced by a failing sandbox service', async () => {
+        const seen: { unsandboxed?: boolean }[] = []
+        const sandbox = { status: () => { throw new Error('boom') } }
+        const reg = new ToolsRegistry({ gate: { check: () => 'ask' }, approvals: { request: async r => (seen.push(r), 'deny') }, sandbox, append: () => {}, log: nullLogger })
+        const ctx: ToolContext = { sessionId: 's', turnId: 't', callId: 'c', cwd, spillDir: join(root, 'spill'), signal: new AbortController().signal }
+        reg.register({ name: 'x', description: '', parameters: {}, permission: a => [{ actor: 'tools', action: 'exec', resource: 'codex', ...(a as object) }], run: async () => ({ content: '' }) })
+        await reg.call('x', JSON.stringify({ unsandboxed: false }), ctx)
+        await reg.call('x', JSON.stringify({ unsandboxed: true }), ctx)
+        expect(seen.map(r => r.unsandboxed)).toEqual([undefined, true])
+      })
     })
   })
 

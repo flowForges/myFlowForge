@@ -155,7 +155,8 @@ export class ToolsRegistry implements ToolsService {
       if (decision !== 'ask') continue
       asked = true
       if (req.action === 'exec') seen = this.levelNow(ctx.sessionId)
-      if (!(await this.approve(req, tool.name, ctx, req.action === 'exec' && seen === 'none'))) return failed(DENIED_BY_USER)
+      // 只有 exec 会标;工具显式给的(这次运行的实际隔离)优先于会话级别
+      if (!(await this.approve(req, tool.name, ctx, req.action === 'exec' && (req.unsandboxed ?? seen === 'none')))) return failed(DENIED_BY_USER)
     }
     if (ctx.signal.aborted) return failed('已取消')
     // 等审批期间权限配置可能变了(permissions.set):新加的 deny 照样生效
@@ -179,7 +180,7 @@ export class ToolsRegistry implements ToolsService {
 
   /** actor 与会话一律由注册表定:工具不能自称 kernel,也不能借别的会话的 cwd */
   private normalize(req: PermissionRequest, ctx: ToolContext): PermissionRequest {
-    return { action: req.action, resource: req.resource, actor: 'tools', sessionId: ctx.sessionId }
+    return { action: req.action, resource: req.resource, summary: req.summary, key: req.key, unsandboxed: req.unsandboxed, mustAsk: req.mustAsk, actor: 'tools', sessionId: ctx.sessionId }
   }
 
   private check(r: PermissionRequest): string {
@@ -210,8 +211,8 @@ export class ToolsRegistry implements ToolsService {
         turnId: ctx.turnId,
         callId: ctx.callId,
         tool,
-        summary: clip(redact(r.resource ?? tool), SHORT),
-        key: r.action === 'exec' && r.resource !== undefined ? sessionKey(r.resource) : undefined,
+        summary: clip(redact(r.summary ?? r.resource ?? tool), SHORT),
+        key: r.mustAsk ? undefined : r.key ?? (r.action === 'exec' && r.resource !== undefined ? sessionKey(r.resource) : undefined),
         ...(unsandboxed && { unsandboxed: true }),
         signal: ctx.signal,
       })

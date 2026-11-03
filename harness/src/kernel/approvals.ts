@@ -15,9 +15,9 @@ export interface ApprovalRequest {
   tool: string
   /** 调用方已打码的摘要(如命令全文),原样写进事件 */
   summary: string
-  /** allow_session 的键(lib/tools/commandKey 的 sessionKey);undefined → 永不自动放行 */
+  /** allow_session 的键(lib/tools/commandKey 的 sessionKey,或工具自己给的);undefined → 永不自动放行 */
   key?: string
-  /** 命令不在沙箱里跑(级别 none):载荷带 unsandboxed,卡片显示 `未隔离` */
+  /** 这次运行没有隔离(会话级别 none,或工具显式声明):载荷带 unsandboxed,卡片显示 `未隔离` */
   unsandboxed?: boolean
   signal: AbortSignal
 }

@@ -209,6 +209,15 @@ describe('validateCwd', () => {
 })
 
 describe('validateCwd: env-relocated credential roots', () => {
+  it('rejects a cwd inside ~/.qoder/.auth or QODER_CONFIG_DIR; ~/.qoder itself is not a credential root', () => {
+    const home = join(work, 'h')
+    mkdirSync(join(home, '.qoder', '.auth', 'sub'), { recursive: true })
+    mkdirSync(join(work, 'q'))
+    const o = { home, dataDir: join(dir, 'data'), platform: process.platform }
+    for (const p of [join(home, '.qoder', '.auth'), join(home, '.qoder', '.auth', 'sub')]) expect(() => validateCwd(p, o), p).toThrow('invalid cwd')
+    expect(validateCwd(join(home, '.qoder'), o)).toBe(realpathSync.native(join(home, '.qoder')))
+    expect(() => validateCwd(join(work, 'q'), { ...o, env: { QODER_CONFIG_DIR: join(work, 'q') } })).toThrow('invalid cwd')
+  })
   it('rejects a cwd inside GNUPGHOME / CLAUDE_CONFIG_DIR; ignores relative values', () => {
     mkdirSync(join(work, 'gpg', 'sub'), { recursive: true })
     mkdirSync(join(work, 'claude'))

@@ -82,6 +82,10 @@ describe('decide (table)', () => {
     ['write ~/.zshrc.bak is fine', req('write', '/h/.zshrc.bak'), atHome, 'allow'],
     ['write ~/.config/other is fine', req('write', '/h/.config/other/x'), atHome, 'allow'],
     ['NUL sentinel', req('read', resolveToolPath('/h/repo', 'a\0b', { platform: 'linux' })), ask, 'deny'],
+    ['read ~/.qoder/.auth/x, cwd = home', req('read', '/h/.qoder/.auth/x'), atHome, 'deny'],
+    ['write ~/.qoder/.auth/x, cwd = home', req('write', '/h/.qoder/.auth/x'), atHome, 'deny'],
+    ['read ~/.qoder/settings.json, cwd = home', req('read', '/h/.qoder/settings.json'), atHome, 'allow'],
+    ['read ~/.qoder/settings.json, cwd elsewhere', req('read', '/h/.qoder/settings.json'), ask, 'deny'],
   ]
   it.each(cases)('%s', (_name, r, s, want) => {
     expect(decide(r, s, env)).toBe(want)
@@ -230,6 +234,116 @@ describe('decide: layered rules (Review Focus 3)', () => {
   })
 })
 
+describe('decide: delegation can only narrow (04 spec §6)', () => {
+  const home = '/h'
+  const dataDir = '/h/.myFlowForge/mff-ai'
+  const base: DecideEnv = { roots: credentialRoots(home, 'linux', {}), persistence: persistenceRoots(home, 'linux'), dataDir, platform: 'linux', home, ...layered }
+  const session = (approvalMode: 'ask' | 'auto'): SessionInfo => ({ sessionId: 's1', cwd: '/h/repo', approvalMode, origin: 'app' })
+  const statusOf = (level: SandboxStatus['level']): SandboxStatus => ({ level, missing: level === 'full' ? [] : ['platform'], autoDegraded: false })
+  const ALLOW = { effect: 'allow', rule: 'shell(codex)' } as const
+
+  type Row = {
+    level: SandboxStatus['level']
+    mode: 'ask' | 'auto'
+    flag?: boolean
+    rules?: RuleSpec[]
+    unsandboxed?: boolean
+    mustAsk?: boolean
+    want: 'allow' | 'ask' | 'deny'
+  }
+  const table: Row[] = [
+    // own / wrapped: not wider than the session
+    { level: 'full', mode: 'auto', unsandboxed: false, want: 'allow' },
+    { level: 'partial', mode: 'auto', unsandboxed: false, want: 'allow' },
+    { level: 'full', mode: 'auto', flag: true, unsandboxed: false, want: 'allow' },
+    // isolation none in a sandboxed session: wider, a person has to allow it
+    { level: 'full', mode: 'auto', unsandboxed: true, want: 'ask' },
+    { level: 'partial', mode: 'auto', unsandboxed: true, want: 'ask' },
+    { level: 'full', mode: 'auto', flag: true, unsandboxed: true, want: 'ask' },
+    { level: 'partial', mode: 'auto', flag: true, unsandboxed: true, want: 'ask' },
+    { level: 'full', mode: 'auto', rules: [ALLOW], unsandboxed: true, want: 'ask' },
+    { level: 'partial', mode: 'auto', rules: [ALLOW], unsandboxed: true, want: 'ask' },
+    { level: 'full', mode: 'auto', flag: true, rules: [ALLOW], unsandboxed: true, want: 'ask' },
+    { level: 'full', mode: 'ask', rules: [ALLOW], unsandboxed: true, want: 'ask' },
+    // session none: same footing as shell
+    { level: 'none', mode: 'auto', unsandboxed: false, want: 'ask' },
+    { level: 'none', mode: 'auto', unsandboxed: true, want: 'ask' },
+    { level: 'none', mode: 'auto', flag: true, unsandboxed: false, want: 'allow' },
+    { level: 'none', mode: 'auto', flag: true, unsandboxed: true, want: 'allow' },
+    { level: 'none', mode: 'auto', rules: [ALLOW], unsandboxed: true, want: 'allow' },
+    // ask mode asks by default whatever the isolation
+    { level: 'full', mode: 'ask', unsandboxed: false, want: 'ask' },
+    { level: 'partial', mode: 'ask', flag: true, unsandboxed: false, want: 'ask' },
+    { level: 'none', mode: 'ask', unsandboxed: false, want: 'ask' },
+    { level: 'none', mode: 'ask', flag: true, unsandboxed: true, want: 'ask' },
+    // a user allow still beats the mode default when it doesn't widen anything (05 semantics)
+    { level: 'full', mode: 'ask', rules: [ALLOW], unsandboxed: false, want: 'allow' },
+    // other tools don't send the flag: session level decides, as in 05
+    { level: 'full', mode: 'auto', want: 'allow' },
+    { level: 'none', mode: 'auto', want: 'ask' },
+    { level: 'none', mode: 'auto', flag: true, want: 'allow' },
+  ]
+  it.each(table)('$level $mode flag=$flag unsandboxed=$unsandboxed rules=$rules.0.rule → $want', ({ level, mode, flag, rules: specs, unsandboxed, want }) => {
+    const env: DecideEnv = { ...base, sandbox: statusOf(level), allowUnsandboxedAuto: flag ?? false, rules: rules(...(specs ?? [])) }
+    expect(decide({ actor: 'tools', action: 'exec', resource: 'codex', sessionId: 's1', unsandboxed }, session(mode), env)).toBe(want)
+  })
+
+  const LEVELS: SandboxStatus['level'][] = ['full', 'partial', 'none']
+  const MODES = ['ask', 'auto'] as const
+  const FLAGS = [false, true]
+  const everywhere = LEVELS.flatMap(level => MODES.flatMap(mode => FLAGS.map(flag => [level, mode, flag] as const)))
+
+  it.each(everywhere)('mustAsk asks at %s / %s / allowUnsandboxedAuto=%s, also with allow shell(codex)', (level, mode, flag) => {
+    for (const specs of [[], [ALLOW]] as RuleSpec[][]) {
+      for (const unsandboxed of [undefined, false, true]) {
+        const env: DecideEnv = { ...base, sandbox: statusOf(level), allowUnsandboxedAuto: flag, rules: rules(...specs) }
+        expect(decide({ actor: 'tools', action: 'exec', resource: 'codex', sessionId: 's1', unsandboxed, mustAsk: true }, session(mode), env)).toBe('ask')
+      }
+    }
+  })
+
+  it.each(everywhere)('deny shell(codex*) denies at %s / %s / allowUnsandboxedAuto=%s, whatever the request says', (level, mode, flag) => {
+    const env: DecideEnv = { ...base, sandbox: statusOf(level), allowUnsandboxedAuto: flag, rules: rules({ effect: 'deny', rule: 'shell(codex*)' }, ALLOW) }
+    for (const extra of [{}, { unsandboxed: false }, { unsandboxed: true }, { mustAsk: true }, { key: 'executor:codex:rw' }])
+      expect(decide({ actor: 'tools', action: 'exec', resource: 'codex', sessionId: 's1', ...extra }, session(mode), env)).toBe('deny')
+  })
+
+  it.each(everywhere)('ask shell(codex) asks at %s / %s / allowUnsandboxedAuto=%s', (level, mode, flag) => {
+    const env: DecideEnv = { ...base, sandbox: statusOf(level), allowUnsandboxedAuto: flag, rules: rules({ effect: 'ask', rule: 'shell(codex)' }) }
+    for (const unsandboxed of [undefined, false, true])
+      expect(decide({ actor: 'tools', action: 'exec', resource: 'codex', sessionId: 's1', unsandboxed }, session(mode), env)).toBe('ask')
+  })
+
+  it('a rule for one executor does not reach the other', () => {
+    const env: DecideEnv = { ...base, rules: rules({ effect: 'deny', rule: 'shell(codex*)' }) }
+    expect(decide({ actor: 'tools', action: 'exec', resource: 'qoder', sessionId: 's1', unsandboxed: false }, session('auto'), env)).toBe('allow')
+  })
+
+  it('no session is still a deny, whatever the request says', () => {
+    expect(decide({ actor: 'tools', action: 'exec', resource: 'codex', mustAsk: true }, undefined, base)).toBe('deny')
+    expect(decide({ actor: 'tools', action: 'exec', resource: 'codex', unsandboxed: false }, undefined, { ...base, allowUnsandboxedAuto: true })).toBe('deny')
+  })
+
+  it('the flags change nothing for reads and writes: hard denies and the default stay', () => {
+    const s = session('auto')
+    for (const extra of [{ unsandboxed: true }, { unsandboxed: false }, { mustAsk: true }]) {
+      expect(decide({ actor: 'tools', action: 'read', resource: '/h/repo/a', sessionId: 's1', ...extra }, s, base)).toBe('allow')
+      expect(decide({ actor: 'tools', action: 'write', resource: '/h/repo/a', sessionId: 's1', ...extra }, s, base)).toBe('allow')
+      expect(decide({ actor: 'tools', action: 'read', resource: '/h/.ssh/id', sessionId: 's1', ...extra }, s, base)).toBe('deny')
+      expect(decide({ actor: 'tools', action: 'write', resource: '/tmp/x', sessionId: 's1', ...extra }, s, base)).toBe('deny')
+    }
+  })
+
+  it('C12: deny read(**) and deny write(**) stop the requests delegation adds for its cwd', () => {
+    const s = session('auto')
+    const noReads: DecideEnv = { ...base, rules: rules({ effect: 'deny', rule: 'read(**)' }) }
+    const noWrites: DecideEnv = { ...base, rules: rules({ effect: 'deny', rule: 'write(**)' }) }
+    expect(decide({ actor: 'tools', action: 'read', resource: '/h/repo', sessionId: 's1' }, s, noReads)).toBe('deny')
+    expect(decide({ actor: 'tools', action: 'write', resource: '/h/repo', sessionId: 's1' }, s, noWrites)).toBe('deny')
+    expect(decide({ actor: 'tools', action: 'read', resource: '/h/repo', sessionId: 's1' }, s, noWrites)).toBe('allow')
+  })
+})
+
 describe('PermissionGate.check (real tree)', () => {
   let home: string
   let dataDir: string
@@ -360,6 +474,42 @@ describe('PermissionGate.check (real tree)', () => {
     const { gate, cwd } = gateFor(join(home, 'repo'), 'auto', {}, [{ effect: 'deny', rule: 'read(src/gen/**)' }])
     expect(check(gate, 'read', resolveToolPath(cwd, 'src/gen/a.ts'))).toBe('deny')
     expect(check(gate, 'read', resolveToolPath(cwd, 'src/a.ts'))).toBe('allow')
+  })
+
+  it('~/.qoder: .auth is denied even when absent, the rest follows the default path logic', () => {
+    mkdirSync(join(home, '.qoder'))
+    writeFileSync(join(home, '.qoder', 'settings.json'), '{}')
+    const atHome = gateFor(home)
+    expect(check(atHome.gate, 'read', resolveToolPath(atHome.cwd, '.qoder/.auth/x'))).toBe('deny')
+    expect(check(atHome.gate, 'write', resolveToolPath(atHome.cwd, '.qoder/.auth/x'))).toBe('deny')
+    expect(check(atHome.gate, 'read', resolveToolPath(atHome.cwd, '.qoder/settings.json'))).toBe('allow')
+    const inRepo = gateFor(join(home, 'repo'))
+    expect(check(inRepo.gate, 'read', resolveToolPath(inRepo.cwd, '../.qoder/settings.json'))).toBe('deny') // cwd 外,照常兜底拒绝
+    expect(check(inRepo.gate, 'read', resolveToolPath(inRepo.cwd, '../.qoder/.auth/x'))).toBe('deny')
+  })
+
+  it('a user allow cannot open ~/.qoder/.auth', () => {
+    const { gate, cwd } = gateFor(home, 'auto', {}, [{ effect: 'allow', rule: 'read(~/.qoder/**)' }])
+    expect(check(gate, 'read', resolveToolPath(cwd, '.qoder/.auth/x'))).toBe('deny')
+    expect(check(gate, 'read', resolveToolPath(cwd, '.qoder/settings.json'))).toBe('allow')
+  })
+
+  it('QODER_CONFIG_DIR hides the whole relocated directory', () => {
+    mkdirSync(join(outside, 'q'))
+    writeFileSync(join(outside, 'q', 'state'), 'k')
+    const { gate, cwd } = gateFor(outside, 'auto', { QODER_CONFIG_DIR: join(outside, 'q') })
+    expect(check(gate, 'read', resolveToolPath(cwd, 'q/state'))).toBe('deny')
+    expect(check(gate, 'write', resolveToolPath(cwd, 'q/new'))).toBe('deny')
+    expect(check(gate, 'read', resolveToolPath(cwd, 'secret'))).toBe('allow')
+  })
+
+  it('the per-request flags reach the session sandbox level through check', () => {
+    const exec = (extra: object) => ({ actor: 'plugin:tools', action: 'exec', resource: 'codex', sessionId: 's1', ...extra })
+    const full = gateFor(join(home, 'repo'), 'auto', {}, [], { allowUnsandboxedAuto: true }).gate
+    expect(full.check(exec({ unsandboxed: false }))).toBe('allow')
+    expect(full.check(exec({ unsandboxed: true }))).toBe('ask')
+    expect(full.check(exec({ mustAsk: true }))).toBe('ask')
+    expect(full.checkMany([exec({ unsandboxed: false }), exec({ unsandboxed: true }), exec({ mustAsk: true })])).toEqual(['allow', 'ask', 'ask'])
   })
 
   it('a not-yet-existing relocated root is denied too', () => {
