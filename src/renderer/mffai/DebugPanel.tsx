@@ -10,14 +10,49 @@ interface Payload {
   turnId?: string; step?: number; text?: unknown; input?: number; output?: number
   callId?: string; name?: string; argsPreview?: string; ok?: boolean
   approvalId?: string; summary?: string
-  phase?: string; ref?: string; changed?: number; skipped?: unknown
+  phase?: string; ref?: string; changed?: unknown; skipped?: unknown
   unsandboxed?: unknown; host?: unknown; port?: unknown
+  runId?: unknown; executor?: unknown; status?: unknown
 }
 const payloadOf = (e: KernelEvent) => (e.payload ?? {}) as Payload
 const textOf = (e: KernelEvent) => String(payloadOf(e).text ?? '')
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
 
-type Kind = 'user' | 'assistant' | 'tool' | 'approval' | 'snapshot' | 'net'
+const RUN_STATUS = new Map<unknown, string>([
+  ['ok', '完成'], ['failed', '失败'], ['cancelled', '已取消'], ['timeout', '超时'], ['stalled', '卡住'], ['interrupted', '中断'],
+])
+/** 改动文件数。线上把长列表截断,截掉的数量在 filesTruncated */
+function fileCount(changed: unknown): number {
+  const c = changed as { files?: unknown; filesTruncated?: unknown } | null | undefined
+  if (!Array.isArray(c?.files)) return 0
+  return c.files.length + (typeof c.filesTruncated === 'number' ? c.filesTruncated : 0)
+}
+const runLabel = (p: Payload, label: string) => `${typeof p.executor === 'string' ? p.executor : ''} ${label}`.trim()
+
+/** 这些事件说明轮开过。不含运行结束、通知、快照:它们可能晚于终态,而终态可能已滑出窗口 */
+const OPENS_TURN: ReadonlySet<string> = new Set([
+  'message.user', 'turn.started', 'turn.parked', 'turn.resumed',
+  'message.assistant.delta', 'message.assistant', 'message.reasoning.delta',
+  'tool.started', 'approval.requested',
+  'executor.run.queued', 'executor.run.started', 'executor.run.progress',
+])
+
+/**
+ * 留最近 KEEP 条,超出时先丢最旧的进度:一个运行能写 2000 条进度,
+ * 否则几分钟就把用户行和 turn.parked 挤出窗口,而挂起的轮可能开 30 分钟
+ */
+function trimEvents(events: KernelEvent[]): KernelEvent[] {
+  let over = events.length - KEEP
+  if (over <= 0) return events
+  const out: KernelEvent[] = []
+  for (const e of events) {
+    if (over > 0 && e.type === 'executor.run.progress') over--
+    else out.push(e)
+  }
+  return out.slice(-KEEP)
+}
+
+type Kind = 'user' | 'assistant' | 'tool' | 'approval' | 'snapshot' | 'net' | 'run'
 interface Item {
   key: string
   kind: Kind
@@ -37,14 +72,14 @@ interface Item {
   failed?: boolean
 }
 
-interface Turn { sessionId?: string; started: boolean; terminal: boolean; failed: boolean; snapshotted: boolean; startRef: boolean; endRef: boolean; items: number[] }
+interface Turn { sessionId?: string; started: boolean; terminal: boolean; failed: boolean; parked: boolean; snapshotted: boolean; startRef: boolean; endRef: boolean; items: number[] }
 interface RolledBack { skipped: string[] }
 
 interface View { items: Item[]; turns: Map<string, Turn>; rolledBack: Map<string, RolledBack>; snapOrder: string[] }
 
 const LEVEL: Record<SandboxStatus['level'], string> = { full: '完整', partial: '部分', none: '未隔离' }
 
-const visible = (it: Item) => it.kind !== 'snapshot' && !(it.kind === 'approval' && it.resolved) &&
+const visible = (it: Item) => it.kind !== 'snapshot' && !((it.kind === 'approval' || it.kind === 'run') && it.resolved) &&
   !(it.kind === 'assistant' && !it.text && !it.reasoning && !it.usage)
 
 /**
@@ -57,9 +92,10 @@ function toView(events: KernelEvent[]): View {
   const turns = new Map<string, Turn>()
   const rolledBack = new Map<string, RolledBack>()
   const snapOrder: string[] = []
+  const userLines = new Map<string, number>()
   const turn = (id: string, sessionId?: string): Turn => {
     let t = turns.get(id)
-    if (!t) turns.set(id, (t = { sessionId, started: false, terminal: false, failed: false, snapshotted: false, startRef: false, endRef: false, items: [] }))
+    if (!t) turns.set(id, (t = { sessionId, started: false, terminal: false, failed: false, parked: false, snapshotted: false, startRef: false, endRef: false, items: [] }))
     t.sessionId ??= sessionId
     return t
   }
@@ -78,12 +114,42 @@ function toView(events: KernelEvent[]): View {
     const turnId = p.turnId
     const base = { turnId, sessionId: e.sessionId }
     const akey = turnId ? `a${turnId}:${p.step ?? ''}` : `s${e.seq}`
+    const runKey = typeof p.runId === 'string' && p.runId
+    if (turnId && OPENS_TURN.has(e.type)) turn(turnId, e.sessionId).started = true
     switch (e.type) {
-      case 'message.user':
-        // turnId 键:日志重置后 seq 会重复
-        item(turnId ? `u${turnId}` : `u#${e.seq}`, { kind: 'user', text: textOf(e), ...base })
-        if (turnId) turn(turnId, e.sessionId).started = true
+      case 'message.user': {
+        // turnId 键:日志重置后 seq 会重复。挂起时收下的后续消息同一 turnId,靠序号分行
+        const n = turnId ? userLines.get(turnId) ?? 0 : 0
+        if (turnId) {
+          userLines.set(turnId, n + 1)
+          turn(turnId, e.sessionId).parked = false
+        }
+        item(turnId ? (n ? `u${turnId}:${n}` : `u${turnId}`) : `u#${e.seq}`, { kind: 'user', text: textOf(e), ...base })
         break
+      }
+      case 'turn.parked':
+      case 'turn.resumed':
+        if (turnId) turn(turnId, e.sessionId).parked = e.type === 'turn.parked'
+        break
+      case 'executor.run.queued':
+        if (runKey) item(`r${runKey}`, { kind: 'run', text: runLabel(p, '排队中'), ...base })
+        break
+      case 'executor.run.started':
+        if (runKey) item(`r${runKey}`, { kind: 'run', text: '', ...base }).text = runLabel(p, '运行中')
+        break
+      case 'executor.run.progress':
+        if (runKey && textOf(e)) item(`g${runKey}:${e.seq}`, { kind: 'run', text: textOf(e), ...base })
+        break
+      case 'executor.run.ended': {
+        if (!runKey) break
+        // "运行中"那行到此为止,结果放在进度之后
+        const i = at.get(`r${runKey}`)
+        if (i != null) items[i].resolved = true
+        const n = fileCount(p.changed)
+        const label = RUN_STATUS.get(p.status) ?? String(p.status ?? '')
+        item(`e${runKey}`, { kind: 'run', text: runLabel(p, n ? `${label} ${n} 个文件` : label), ...base })
+        break
+      }
       case 'message.assistant.delta': {
         const it = item(akey, { kind: 'assistant', text: '', ...base })
         if (!it.final) it.text += textOf(e)
@@ -145,6 +211,7 @@ function toView(events: KernelEvent[]): View {
           const t = turn(turnId, e.sessionId)
           t.terminal = true
           t.failed ||= e.type === 'turn.failed'
+          t.parked = false
         }
         break
     }
@@ -175,6 +242,16 @@ function rollbackable(v: View, local: Map<string, RolledBack>): Set<string> {
   }))
 }
 
+/**
+ * 当前会话进行中的轮。当前会话 = 本面板最后发出的那一轮所在的会话;
+ * 还没发过(重开面板、app 重启,后台的轮还开着)就取日志里最新的进行中的轮
+ */
+function currentTurn(v: View, sent: string | undefined): (Turn & { sessionId: string }) | undefined {
+  const open = [...v.turns.values()].filter((t): t is Turn & { sessionId: string } => t.started && !t.terminal && !!t.sessionId)
+  const session = (sent ? v.turns.get(sent)?.sessionId : undefined) ?? open.at(-1)?.sessionId
+  return open.filter(t => t.sessionId === session).at(-1)
+}
+
 export function DebugPanel() {
   const [events, setEvents] = useState<KernelEvent[]>([])
   const [text, setText] = useState('')
@@ -189,6 +266,8 @@ export function DebugPanel() {
   const [rolling, setRolling] = useState<ReadonlySet<string>>(new Set())
   const [rollFailed, setRollFailed] = useState<ReadonlySet<string>>(new Set())
   const [sandbox, setSandbox] = useState<SandboxStatus | undefined>()
+  const [sentTurn, setSentTurn] = useState<string | undefined>()
+  const [stopping, setStopping] = useState(false)
 
   useEffect(() => {
     const api = window.forge.mffai
@@ -197,7 +276,7 @@ export function DebugPanel() {
     const refresh = () => void api.state().then(s => { if (alive) setSandbox(s.sandbox) }).catch(() => {})
     refresh()
     const off = api.onEvent(e => {
-      setEvents(es => [...es, e].slice(-KEEP))
+      setEvents(es => trimEvents([...es, e]))
       if (e.type === 'kernel.started' || e.type === 'permissions.updated') refresh()
     })
     void api.tail(KEEP).then(r => {
@@ -205,7 +284,7 @@ export function DebugPanel() {
       // 订阅先于 tail 返回:按 seq 去重合并
       setEvents(es => {
         const seen = new Set(es.map(x => x.seq))
-        return [...r.events.filter(x => !seen.has(x.seq)), ...es].sort((a, b) => a.seq - b.seq).slice(-KEEP)
+        return trimEvents([...r.events.filter(x => !seen.has(x.seq)), ...es].sort((a, b) => a.seq - b.seq))
       })
     }).catch(() => {})
     return () => { alive = false; off() }
@@ -213,6 +292,7 @@ export function DebugPanel() {
 
   const view = useMemo(() => toView(events), [events])
   const canRollback = useMemo(() => rollbackable(view, rolled), [view, rolled])
+  const current = useMemo(() => currentTurn(view, sentTurn), [view, sentTurn])
 
   const send = () => {
     const t = text.trim()
@@ -222,8 +302,22 @@ export function DebugPanel() {
     const dir = cwd.trim()
     const opts = dir || auto ? { ...(dir && { cwd: dir }), approvalMode: auto ? 'auto' as const : 'ask' as const } : undefined
     const api = window.forge.mffai
+    // 没发出去(ERR_BUSY 等):打的字放回去;这期间又打了字就接在后面
+    const restore = () => {
+      setText(cur => (cur ? `${text} ${cur}` : text))
+      setFailed(true)
+    }
     void (opts ? api.prompt(t, model, opts) : model ? api.prompt(t, model) : api.prompt(t))
-      .catch((e) => { console.error('mffai prompt', e); setFailed(true) })
+      .then(r => { if (r.accepted) setSentTurn(r.turnId); else restore() })
+      .catch((e) => { console.error('mffai prompt', e); restore() })
+  }
+
+  const stop = (sessionId: string) => {
+    setStopping(true)
+    setFailed(false)
+    void window.forge.mffai.cancel(sessionId)
+      .catch((e) => { console.error('mffai cancel', e); setFailed(true) })
+      .finally(() => setStopping(false))
   }
 
   const respond = (approvalId: string, decision: Decision) => {
@@ -287,6 +381,7 @@ export function DebugPanel() {
       )
     }
     if (it.kind === 'net') return <div key={it.key} className="mffai-line mffai-net">{it.text}</div>
+    if (it.kind === 'run') return <div key={it.key} className="mffai-line mffai-run">{it.text}{fail}</div>
     return (
       <div key={it.key} className={`mffai-line ${it.kind}`}>
         {it.reasoning && <details><summary>推理</summary>{it.reasoning}</details>}
@@ -314,6 +409,8 @@ export function DebugPanel() {
         <ModelPicker value={model} onChange={setModel} />
         <input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') send() }} />
         <button className="set-btn" onClick={send}>发送</button>
+        {current && <button className="set-btn" disabled={stopping} onClick={() => stop(current.sessionId)}>停止</button>}
+        {current?.parked && <span className="mffai-badge mffai-parked">挂起</span>}
         {failed && <span className="mffai-fail">失败</span>}
       </div>
     </div>

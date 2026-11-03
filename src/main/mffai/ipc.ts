@@ -120,6 +120,7 @@ export function registerMffaiIpc(deps: MffaiIpcDeps): void {
     return h.approvalRespond(str(id), decision as ApprovalDecision)
   }))
   deps.handle(CH.mffaiRollback, requireEnabled((h, sessionId, turnId) => h.rollback(str(sessionId), str(turnId))))
+  deps.handle(CH.mffaiCancel, requireEnabled((h, sessionId) => h.cancel(str(sessionId))))
   deps.handle(CH.mffaiPermissionsGet, requireEnabled((h, sessionId) => {
     const sid = str(sessionId)
     return sid ? h.permissionsGet(sid) : h.permissionsGet()

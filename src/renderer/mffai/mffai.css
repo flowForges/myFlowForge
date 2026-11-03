@@ -36,4 +36,5 @@
 .mffai-unsandboxed, .mffai-degraded, .mffai-sandbox.none { color: var(--del, #e5484d); border-color: currentColor; }
 .mffai-approval .mffai-unsandboxed { align-self: flex-start; }
 .mffai-sandbox.full { color: var(--accent); border-color: currentColor; }
-.mffai-net { font-family: var(--mono, monospace); color: var(--faint); }
+.mffai-net, .mffai-run { font-family: var(--mono, monospace); color: var(--faint); }
+.mffai-parked { align-self: center; white-space: nowrap; }

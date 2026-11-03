@@ -102,6 +102,7 @@ function fakeDaemon(dir: string) {
           case 'session.prompt': return { accepted: true, turnId: 't1' }
           case 'approval.respond': return { ok: true }
           case 'turn.rollback': return { ok: true, files: 1 }
+          case 'session.cancel': return { ok: true }
           case 'permissions.get': return { config: { rules: [] }, defaults: [], errors: [], sandbox: { level: 'full', missing: [], autoDegraded: false } }
           case 'permissions.set': return { ok: true }
         }
@@ -637,6 +638,19 @@ describe('mffai host', () => {
       { commandId: expect.any(String), sessionId: 's1', turnId: 't1' },
     ])
     expect(rb[0].commandId).not.toBe(rb[1].commandId)
+  })
+
+  it('cancel 转给 session.cancel,每次新 commandId', async () => {
+    const t = setup({ up: true })
+    await t.host.ensureRunning()
+    expect(await t.host.cancel('s1')).toEqual({ ok: true })
+    await t.host.cancel('s1')
+    const calls = t.d.workerCalls.filter(([x]) => x === 'session.cancel').map(([, p]) => p as any)
+    expect(calls).toEqual([
+      { commandId: expect.any(String), sessionId: 's1' },
+      { commandId: expect.any(String), sessionId: 's1' },
+    ])
+    expect(calls[0].commandId).not.toBe(calls[1].commandId)
   })
 
   it('models.* 透传给工作进程;addAccount 原样带 apiKey / restrictionAck 并生成 commandId', async () => {

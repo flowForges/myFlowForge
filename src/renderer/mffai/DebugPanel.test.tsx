@@ -10,6 +10,7 @@ const emit = (type: string, payload: any, sessionId = 's1') =>
   act(() => { const e = { seq: ++seq, ts: 1, type, sessionId, payload }; for (const cb of [...listeners]) cb(e) })
 
 beforeEach(() => {
+  vi.restoreAllMocks()
   seq = 0
   listeners = new Set()
   mffai = {
@@ -18,6 +19,7 @@ beforeEach(() => {
     prompt: vi.fn(async () => ({ accepted: true, turnId: 't1' })),
     approvalRespond: vi.fn(async () => ({ ok: true })),
     rollback: vi.fn(async () => ({ ok: true, files: 2 })),
+    cancel: vi.fn(async () => ({ ok: true })),
     onEvent: (cb: any) => { listeners.add(cb); return () => void listeners.delete(cb) },
     models: {
       catalog: vi.fn(async () => ({ presets: [], models: {} })),
@@ -273,6 +275,262 @@ describe('DebugPanel', () => {
     fireEvent.click(screen.getByText('发送'))
     expect(mffai.prompt).toHaveBeenLastCalledWith('chat', undefined, { approvalMode: 'auto' })
     await waitFor(() => expect(mffai.prompt).toHaveBeenCalledTimes(4))
+  })
+
+  describe('委派运行', () => {
+    const queued = { runId: 'run_1', turnId: 't1', callId: 'c1', executor: 'codex', summary: 'x', readOnly: false, isolation: 'own', position: 1 }
+    const started = { runId: 'run_1', turnId: 't1', executor: 'codex', cwd: '/r', isolation: 'own' }
+    const ended = (status: string, extra: object = {}) => ({ runId: 'run_1', turnId: 't1', executor: 'codex', status, ms: 5, ...extra })
+    const stop = () => screen.queryByRole('button', { name: '停止' })
+    const parkedChip = (c: HTMLElement) => c.querySelector('.mffai-send .mffai-parked')
+    const burst = (n: number, make: (i: number) => [string, any]) => act(() => {
+      for (let i = 0; i < n; i++) {
+        const [type, payload] = make(i)
+        const e = { seq: ++seq, ts: 1, type, sessionId: 's1', payload }
+        for (const cb of [...listeners]) cb(e)
+      }
+    })
+
+    it('排队 → 运行中 → 进度 → 结束:状态行跟着变,结束行在最后', () => {
+      const { container } = render(<DebugPanel />)
+      emit('executor.run.queued', queued)
+      expect(screen.getByText('codex 排队中')).toBeInTheDocument()
+      emit('executor.run.started', started)
+      expect(screen.queryByText('codex 排队中')).toBeNull()
+      expect(screen.getByText('codex 运行中')).toBeInTheDocument()
+      emit('executor.run.progress', { runId: 'run_1', turnId: 't1', kind: 'tool', text: 'ls -la' })
+      expect(screen.getByText('ls -la')).toBeInTheDocument()
+      emit('executor.run.ended', ended('ok', { changed: { files: ['a', 'b', 'c'], source: 'git' } }))
+      expect(screen.queryByText('codex 运行中')).toBeNull()
+      const lines = [...container.querySelectorAll('.mffai-log .mffai-line')].map(l => l.textContent)
+      expect(lines).toEqual(['ls -la', 'codex 完成 3 个文件'])
+    })
+
+    it.each([
+      ['ok', '完成'], ['failed', '失败'], ['cancelled', '已取消'],
+      ['timeout', '超时'], ['stalled', '卡住'], ['interrupted', '中断'],
+    ])('结束状态 %s → %s', (status, label) => {
+      render(<DebugPanel />)
+      emit('executor.run.ended', ended(status))
+      expect(screen.getByText(`codex ${label}`)).toBeInTheDocument()
+    })
+
+    it('文件数:线上截断的也算进去;空列表不显示', () => {
+      render(<DebugPanel />)
+      emit('executor.run.ended', ended('ok', { changed: { files: ['a', 'b'], filesTruncated: 998, source: 'git' } }))
+      expect(screen.getByText('codex 完成 1000 个文件')).toBeInTheDocument()
+      emit('executor.run.ended', { ...ended('interrupted', { changed: { files: [], source: 'none' } }), runId: 'run_2' })
+      expect(screen.getByText('codex 中断')).toBeInTheDocument()
+    })
+
+    it('executor.notice、turn.parked、turn.resumed 不成行', () => {
+      const { container } = render(<DebugPanel />)
+      emit('executor.notice', { turnId: 't1', runId: 'run_1', text: '给模型的通知' })
+      emit('turn.parked', { turnId: 't1', step: 1, active: 1, pending: 0 })
+      emit('turn.resumed', { turnId: 't1', step: 1, cause: 'notice' })
+      expect(container.querySelectorAll('.mffai-log .mffai-line')).toHaveLength(0)
+    })
+
+    it('不认识的字段与残缺载荷都不影响面板', () => {
+      const { container } = render(<DebugPanel />)
+      emit('executor.run.started', { ...started, extra: { deep: 1 } })
+      expect(screen.getByText('codex 运行中')).toBeInTheDocument()
+      emit('executor.run.progress', { runId: 'run_1', turnId: 't1', kind: 'new_kind', text: 'p1', more: true })
+      expect(screen.getByText('p1')).toBeInTheDocument()
+      emit('executor.run.ended', { ...ended('brand_new'), runId: 'run_3', changed: 7 })
+      expect(screen.getByText('codex brand_new')).toBeInTheDocument()
+      emit('executor.run.ended', { ...ended('constructor'), runId: 'run_4', changed: null })
+      expect(screen.getByText('codex constructor')).toBeInTheDocument()
+      const before = container.querySelectorAll('.mffai-log .mffai-line').length
+      emit('executor.run.started', {})
+      emit('executor.run.queued', null)
+      emit('executor.run.ended', { status: 'ok' })
+      emit('executor.run.progress', { runId: 'run_1' })
+      emit('some.future.event', { turnId: 't1' })
+      expect(container.querySelectorAll('.mffai-log .mffai-line')).toHaveLength(before)
+    })
+
+    it('旧后台没有这些事件:面板照常,轮结束后没有停止', () => {
+      const { container } = render(<DebugPanel />)
+      emit('message.user', { turnId: 't1', text: 'go' })
+      expect(stop()).not.toBeNull()
+      expect(parkedChip(container)).toBeNull()
+      emit('message.assistant', { turnId: 't1', text: 'ok' })
+      emit('turn.ended', { turnId: 't1' })
+      const lines = [...container.querySelectorAll('.mffai-log .mffai-line')].map(l => l.textContent)
+      expect(lines).toEqual(['go', 'ok'])
+      expect(stop()).toBeNull()
+    })
+
+    it('取消的轮:最后一行是运行结束行时也标失败', () => {
+      render(<DebugPanel />)
+      emit('message.user', { turnId: 't1', text: 'go' })
+      emit('executor.run.started', started)
+      emit('turn.failed', { turnId: 't1', reason: 'cancelled' })
+      expect(screen.getByText('codex 运行中')).toBeInTheDocument()
+      emit('executor.run.ended', ended('cancelled'))
+      expect(screen.getByText('codex 已取消').closest('.mffai-line')!.textContent).toContain('失败')
+    })
+
+    it('后续消息:同一轮第二条用户行,顺序不乱;相同文字也各占一行', () => {
+      const { container } = render(<DebugPanel />)
+      emit('message.user', { turnId: 't1', text: 'first' })
+      emit('message.assistant', { turnId: 't1', step: 1, text: 'on it' })
+      emit('turn.parked', { turnId: 't1', step: 1, active: 1, pending: 0 })
+      emit('message.user', { turnId: 't1', text: 'second', followUp: true })
+      emit('turn.resumed', { turnId: 't1', step: 1, cause: 'message' })
+      emit('message.assistant', { turnId: 't1', step: 2, text: 'noted' })
+      emit('message.user', { turnId: 't1', text: 'second', followUp: true })
+      const lines = [...container.querySelectorAll('.mffai-log .mffai-line')].map(l => l.textContent)
+      expect(lines).toEqual(['first', 'on it', 'second', 'noted', 'second'])
+      expect(container.querySelectorAll('.mffai-line.user')).toHaveLength(3)
+    })
+
+    it('tail 回放与实时事件重叠:后续消息不重复', async () => {
+      const ev = (s: number, type: string, payload: any) => ({ seq: s, ts: 1, type, sessionId: 's1', payload })
+      mffai.tail = vi.fn(async () => ({
+        events: [ev(1, 'message.user', { turnId: 't1', text: 'first' }), ev(2, 'message.user', { turnId: 't1', text: 'again', followUp: true })],
+      }))
+      const { container } = render(<DebugPanel />)
+      seq = 1
+      emit('message.user', { turnId: 't1', text: 'again', followUp: true })
+      await screen.findByText('first')
+      expect(container.querySelectorAll('.mffai-line.user')).toHaveLength(2)
+    })
+
+    it('挂起状态块:turn.parked 显示,被叫醒 / 后续消息 / 终态后消失', () => {
+      const { container } = render(<DebugPanel />)
+      emit('message.user', { turnId: 't1', text: 'go' })
+      expect(parkedChip(container)).toBeNull()
+      emit('turn.parked', { turnId: 't1', step: 1, active: 1, pending: 0 })
+      expect(parkedChip(container)?.textContent).toBe('挂起')
+      emit('turn.resumed', { turnId: 't1', step: 1, cause: 'notice' })
+      expect(parkedChip(container)).toBeNull()
+      emit('turn.parked', { turnId: 't1', step: 2, active: 1, pending: 0 })
+      emit('message.user', { turnId: 't1', text: 'more', followUp: true })
+      expect(parkedChip(container)).toBeNull()
+      emit('turn.parked', { turnId: 't1', step: 3, active: 1, pending: 0 })
+      expect(parkedChip(container)).not.toBeNull()
+      emit('turn.failed', { turnId: 't1', reason: 'cancelled' })
+      expect(parkedChip(container)).toBeNull()
+    })
+
+    it('停止:只在进行中的轮(含挂起)显示,点了 cancel(sessionId)', async () => {
+      render(<DebugPanel />)
+      expect(stop()).toBeNull()
+      emit('message.user', { turnId: 't1', text: 'go' })
+      expect(stop()).not.toBeNull()
+      emit('turn.parked', { turnId: 't1', step: 1, active: 1, pending: 0 })
+      expect(stop()).not.toBeNull()
+      fireEvent.click(stop()!)
+      expect(mffai.cancel).toHaveBeenCalledWith('s1')
+      await waitFor(() => expect((stop() as HTMLButtonElement).disabled).toBe(false))
+      emit('turn.failed', { turnId: 't1', reason: 'cancelled' })
+      expect(stop()).toBeNull()
+    })
+
+    it('停止:请求进行中按钮不可点,失败显示失败', async () => {
+      let reject!: (e: Error) => void
+      mffai.cancel = vi.fn(() => new Promise((_, r) => { reject = r }))
+      render(<DebugPanel />)
+      emit('message.user', { turnId: 't1', text: 'go' })
+      fireEvent.click(stop()!)
+      expect((stop() as HTMLButtonElement).disabled).toBe(true)
+      await act(async () => { reject(new Error('mff-ai not running')) })
+      expect((stop() as HTMLButtonElement).disabled).toBe(false)
+      expect(screen.getByText('失败')).toBeInTheDocument()
+    })
+
+    it('多个会话:优先本面板发的那一轮;没发过时取最新的轮', async () => {
+      const { container } = render(<DebugPanel />)
+      emit('message.user', { turnId: 'a', text: 'a' }, 's1')
+      emit('message.user', { turnId: 'b', text: 'b' }, 's2')
+      fireEvent.click(stop()!)
+      expect(mffai.cancel).toHaveBeenLastCalledWith('s2')
+      await waitFor(() => expect((stop() as HTMLButtonElement).disabled).toBe(false))
+      mffai.prompt = vi.fn(async () => ({ accepted: true, turnId: 'a', followUp: true }))
+      fireEvent.change(container.querySelector('.mffai-send input')!, { target: { value: 'hi' } })
+      fireEvent.click(screen.getByText('发送'))
+      await act(async () => {})
+      fireEvent.click(stop()!)
+      expect(mffai.cancel).toHaveBeenLastCalledWith('s1')
+      await waitFor(() => expect((stop() as HTMLButtonElement).disabled).toBe(false))
+      emit('turn.ended', { turnId: 'a' }, 's1')
+      expect(stop()).toBeNull()
+    })
+
+    it('大量进度挤满窗口:用户行、挂起、运行中、停止都还在', () => {
+      const { container } = render(<DebugPanel />)
+      emit('message.user', { turnId: 't1', text: 'go' })
+      emit('executor.run.started', started)
+      emit('turn.parked', { turnId: 't1', step: 1, active: 1, pending: 0 })
+      burst(600, i => ['executor.run.progress', { runId: 'run_1', turnId: 't1', kind: 'text', text: `p${i}` }])
+      expect(screen.getByText('go')).toBeInTheDocument()
+      expect(screen.getByText('codex 运行中')).toBeInTheDocument()
+      expect(parkedChip(container)).not.toBeNull()
+      expect(stop()).not.toBeNull()
+      expect(screen.queryByText('p0')).toBeNull()
+      expect(screen.getByText('p599')).toBeInTheDocument()
+      expect(container.querySelectorAll('.mffai-log .mffai-line').length).toBeLessThanOrEqual(500)
+    })
+
+    it('重开面板时 tail 里只剩进度:停止仍在;结束的运行之后的尾巴不算进行中', async () => {
+      const ev = (s: number, type: string, payload: any) => ({ seq: s, ts: 1, type, sessionId: 's1', payload })
+      mffai.tail = vi.fn(async () => ({ events: [ev(900, 'executor.run.progress', { runId: 'run_1', turnId: 't1', kind: 'text', text: 'tail' })] }))
+      const { unmount } = render(<DebugPanel />)
+      await screen.findByText('tail')
+      expect(stop()).not.toBeNull()
+      unmount()
+      mffai.tail = vi.fn(async () => ({ events: [ev(901, 'executor.run.ended', ended('cancelled'))] }))
+      render(<DebugPanel />)
+      await screen.findByText('codex 已取消')
+      expect(stop()).toBeNull()
+    })
+
+    it('发送失败(ERR_BUSY 等):文字回到输入框,显示失败', async () => {
+      mffai.prompt = vi.fn(async () => { throw new Error('ERR_BUSY') })
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      const { container } = render(<DebugPanel />)
+      const input = container.querySelector('.mffai-send input') as HTMLInputElement
+      fireEvent.change(input, { target: { value: ' keep me ' } })
+      fireEvent.click(screen.getByText('发送'))
+      expect(input.value).toBe('')
+      await waitFor(() => expect(input.value).toBe(' keep me '))
+      expect(screen.getByText('失败')).toBeInTheDocument()
+    })
+
+    it('发送失败时已经又打了字:两段都留下', async () => {
+      let reject!: (e: Error) => void
+      mffai.prompt = vi.fn(() => new Promise((_, r) => { reject = r }))
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      const { container } = render(<DebugPanel />)
+      const input = container.querySelector('.mffai-send input') as HTMLInputElement
+      fireEvent.change(input, { target: { value: 'one' } })
+      fireEvent.click(screen.getByText('发送'))
+      fireEvent.change(input, { target: { value: 'two' } })
+      await act(async () => { reject(new Error('ERR_BUSY')) })
+      expect(input.value).toBe('one two')
+    })
+
+    it('回执 accepted:false 也算没发出去', async () => {
+      mffai.prompt = vi.fn(async () => ({ accepted: false, turnId: 't9' }))
+      const { container } = render(<DebugPanel />)
+      const input = container.querySelector('.mffai-send input') as HTMLInputElement
+      fireEvent.change(input, { target: { value: 'nope' } })
+      fireEvent.click(screen.getByText('发送'))
+      await waitFor(() => expect(input.value).toBe('nope'))
+      expect(screen.getByText('失败')).toBeInTheDocument()
+    })
+
+    it('发送成功:输入框保持清空', async () => {
+      const { container } = render(<DebugPanel />)
+      const input = container.querySelector('.mffai-send input') as HTMLInputElement
+      fireEvent.change(input, { target: { value: 'fine' } })
+      fireEvent.click(screen.getByText('发送'))
+      await act(async () => {})
+      expect(input.value).toBe('')
+      expect(screen.queryByText('失败')).toBeNull()
+    })
   })
 
   describe('沙箱', () => {

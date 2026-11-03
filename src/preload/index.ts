@@ -546,6 +546,8 @@ const api = {
       ipcRenderer.invoke(CH.mffaiApprovalRespond, approvalId, decision),
     rollback: (sessionId: string, turnId: string): Promise<{ ok: true; files: number; skipped?: string[] }> =>
       ipcRenderer.invoke(CH.mffaiRollback, sessionId, turnId),
+    cancel: (sessionId: string): Promise<import('@mffai/protocol').WorkerResult<'session.cancel'>> =>
+      ipcRenderer.invoke(CH.mffaiCancel, sessionId),
     permissionsGet: (sessionId?: string): Promise<import('@mffai/protocol').WorkerResult<'permissions.get'>> =>
       ipcRenderer.invoke(CH.mffaiPermissionsGet, sessionId),
     permissionsSet: (config: import('@mffai/protocol').PermissionsConfig): Promise<{ ok: true }> =>

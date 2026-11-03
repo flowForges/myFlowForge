@@ -38,6 +38,7 @@ function setup(mffai: Settings['mffai']) {
     openExternal: vi.fn(async () => {}),
     approvalRespond: vi.fn(async () => ({ ok: true })),
     rollback: vi.fn(async () => ({ ok: true, files: 2 })),
+    cancel: vi.fn(async () => ({ ok: true })),
     permissionsGet: vi.fn(async () => ({ config: {}, defaults: [], errors: [], sandbox: { level: 'full', missing: [], autoDegraded: false } })),
     permissionsSet: vi.fn(async () => ({ ok: true })),
   }
@@ -69,7 +70,7 @@ describe('registerMffaiIpc', () => {
     const { handlers } = setup({ enabled: false, autostart: true })
     expect([...handlers.keys()].sort()).toEqual([
       CH.mffaiState, CH.mffaiEnable, CH.mffaiDisable, CH.mffaiRestart,
-      CH.mffaiResetTrip, CH.mffaiSetAutostart, CH.mffaiTail, CH.mffaiPrompt,
+      CH.mffaiResetTrip, CH.mffaiSetAutostart, CH.mffaiTail, CH.mffaiPrompt, CH.mffaiCancel,
       ...MODEL_CHANNELS, ...CODING_CHANNELS, ...PERMISSION_CHANNELS,
     ].sort())
   })
@@ -243,6 +244,16 @@ describe('mffai 审批 / 回滚通道', () => {
     expect(host.approvalRespond).toHaveBeenCalledTimes(3)
     expect(await invoke(CH.mffaiRollback, 's1', 't1')).toEqual({ ok: true, files: 2 })
     expect(host.rollback).toHaveBeenCalledWith('s1', 't1')
+  })
+
+  it('停止:未启用报未启用且不加载 host;已启用转给 host', async () => {
+    expect(CH.mffaiCancel).toBe('mffai:session:cancel')
+    const off = setup({ enabled: false, autostart: true })
+    await expect(off.invoke(CH.mffaiCancel, 's1')).rejects.toThrow('mff-ai 未启用')
+    expect(off.loadHost).not.toHaveBeenCalled()
+    const on = setup({ enabled: true, autostart: true })
+    expect(await on.invoke(CH.mffaiCancel, 's1')).toEqual({ ok: true })
+    expect(on.host.cancel).toHaveBeenCalledWith('s1')
   })
 
   it('prompt 的 opts 只放行 cwd(去空白)与 approvalMode(ask / auto)', async () => {

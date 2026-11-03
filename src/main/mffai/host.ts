@@ -344,6 +344,7 @@ export function createMffaiHost(deps: HostDeps) {
     },
     approvalRespond: (approvalId: string, decision: ApprovalDecision) => requireWorker().call('approval.respond', { approvalId, decision }),
     rollback: (sessionId: string, turnId: string) => requireWorker().call('turn.rollback', { commandId: randomUUID(), sessionId, turnId }),
+    cancel: (sessionId: string) => requireWorker().call('session.cancel', { commandId: randomUUID(), sessionId }),
     // —— 权限:有 sessionId 时内核按该会话展开默认规则,沙箱状态也按该会话(含它的代理失败);没有时是全局状态
     permissionsGet: async (sessionId?: string) => requireWorker().call('permissions.get', sessionId ? { sessionId } : {}),
     permissionsSet: async (config: object) => requireWorker().call('permissions.set', { commandId: randomUUID(), config }),
@@ -401,6 +402,7 @@ export const tail = (limit: number) => h().tail(limit)
 export const prompt = (text: string, model?: ModelRef, opts?: PromptOpts) => h().prompt(text, model, opts)
 export const approvalRespond = (approvalId: string, decision: ApprovalDecision) => h().approvalRespond(approvalId, decision)
 export const rollback = (sessionId: string, turnId: string) => h().rollback(sessionId, turnId)
+export const cancel = (sessionId: string) => h().cancel(sessionId)
 export const permissionsGet = (sessionId?: string) => h().permissionsGet(sessionId)
 export const permissionsSet = (config: object) => h().permissionsSet(config)
 export const modelsCatalog = () => h().modelsCatalog()
