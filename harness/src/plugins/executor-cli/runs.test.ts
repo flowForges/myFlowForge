@@ -12,6 +12,7 @@ import { createGit, type Git } from '../../lib/git/snapshot'
 import { parseRule, type Rule } from '../../lib/permissions/rules'
 import type { CliResult } from '../../lib/proc/runCli'
 import type { ExecPolicy, SandboxService, ShellPlan } from '../../lib/tools/types'
+import { ERR_BUSY } from '../../protocol/rpc'
 import { ExecutorRunEndedPayloadSchema, ExecutorRunStartedPayloadSchema, type ExecutorRunEndedPayload } from '../../protocol/tools'
 import { codexAdapter } from './adapters/codex'
 import { qoderAdapter } from './adapters/qoder'
@@ -2126,8 +2127,8 @@ describe('changes: in place (Review Focus 6, in-place half)', () => {
   })
 })
 
-describe('origin (worktrees arrive in Task 9)', () => {
-  it('a write run from a non-app session never runs in place', async () => {
+describe('origin', () => {
+  it('no worktree root configured: a write run from a non-app session never runs in place', async () => {
     const fake = installFake({ writeFiles: { 'a.txt': 'NOPE\n' }, lines: CODEX_OK })
     const rig = setup([fake])
     for (const origin of ['schedule', 'im'] as const) {
@@ -2138,11 +2139,782 @@ describe('origin (worktrees arrive in Task 9)', () => {
     expect(readFileSync(join(repo, 'a.txt'), 'utf8')).toBe('a\n')
   })
 
-  it('a read-only run from a non-app session runs in the session cwd', async () => {
+  it('a read-only run from a non-app session runs in the session cwd, with no worktree', async () => {
     const fake = installFake({ lines: CODEX_OK })
-    const rig = setup([fake])
-    const { end } = await one(rig, { origin: 'schedule', readOnly: true })
-    expect(end.status).toBe('ok')
+    const rig = setup([fake], { deps: { worktreeRoot: join(root, 'wt') } })
+    for (const origin of ['schedule', 'im'] as const) {
+      const { end } = await one(rig, { origin, readOnly: true, turnId: origin })
+      expect(end.status).toBe('ok')
+      expect(end.worktree).toBeUndefined()
+    }
+    expect(fake.calls().map(c => c.cwd)).toEqual([repo, repo])
+    expect(existsSync(join(root, 'wt'))).toBe(false)
+  })
+
+  it('an app session writes in place, with no worktree', async () => {
+    const fake = installFake({ lines: CODEX_OK })
+    const rig = setup([fake], { deps: { worktreeRoot: join(root, 'wt') } })
+    const { end } = await one(rig)
+    expect(end.worktree).toBeUndefined()
     expect(fake.calls()[0].cwd).toBe(repo)
+    expect(existsSync(join(root, 'wt'))).toBe(false)
+  })
+})
+
+describe('worktrees', () => {
+  usesGit()
+  const RUN = 'run_00aa'
+  const wtRoot = () => join(root, 'wt')
+  const wtPath = (run = RUN, sid = SID) => join(wtRoot(), sid, run)
+  const ug = (args: string[], cwd = repo) => execFileSync('git', args, { cwd, env: gitBase, stdio: ['ignore', 'pipe', 'ignore'] }).toString()
+  const worktreeList = () => ug(['worktree', 'list', '--porcelain']).split('\n').filter(l => l.startsWith('worktree ')).map(l => l.slice('worktree '.length))
+  const deps = (over: Partial<RunManagerDeps> = {}): Partial<RunManagerDeps> => ({ worktreeRoot: wtRoot(), newId: () => RUN, ...over })
+  const sched = (over: Partial<SubmitInput> = {}): Partial<SubmitInput> => ({ origin: 'schedule', ...over })
+  const write = (file: string) => JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't', name: 'Write', input: { file_path: file } }] } })
+  /** 目录内容的指纹:不看 .git */
+  const digest = (dir: string): string[] => {
+    const out: string[] = []
+    const walk = (d: string) => {
+      for (const e of readdirSync(d, { withFileTypes: true })) {
+        if (e.name === '.git') continue
+        const p = join(d, e.name)
+        if (e.isDirectory()) walk(p)
+        else out.push(`${p.slice(dir.length)}:${readFileSync(p).toString('hex')}`)
+      }
+    }
+    walk(dir)
+    return out.sort()
+  }
+  /** 用户的索引、HEAD、分支、stash 的字节 */
+  const userGit = () => {
+    const g = join(repo, '.git')
+    const files = ['index', 'HEAD', 'logs/HEAD', ...readdirSync(join(g, 'refs', 'heads')).map(b => `refs/heads/${b}`), ...(existsSync(join(g, 'refs', 'stash')) ? ['refs/stash', 'logs/refs/stash'] : [])]
+    return files.map(f => `${f}:${readFileSync(join(g, f)).toString('hex')}`)
+  }
+  const stashSomething = () => {
+    writeFileSync(join(repo, 'a.txt'), 'stashed\n')
+    ug(['stash', 'push', '-q', '-m', 'mine'])
+  }
+  const waitFor = async (check: () => boolean, ms = 10_000) => {
+    const end = Date.now() + ms
+    while (!check()) {
+      if (Date.now() > end) throw new Error('condition not reached')
+      await new Promise(res => setTimeout(res, 15))
+    }
+  }
+
+  describe('Review Focus 6', () => {
+    it('the fake runs in the worktree; session tree byte-identical; uncommitted input visible, ignored files not; discard removes it', async () => {
+      writeFileSync(join(repo, '.gitignore'), 'node_modules\n')
+      ug(['add', '-A'])
+      ug(['commit', '-qm', 'ignore'])
+      writeFileSync(join(repo, 'b.txt'), 'edited, not committed\n')
+      writeFileSync(join(repo, 'input.txt'), 'untracked input\n')
+      mkdirSync(join(repo, 'node_modules'))
+      writeFileSync(join(repo, 'node_modules', 'm.js'), 'ignored\n')
+      const before = digest(repo)
+      const fake = installFake({ writeFiles: { 'made.txt': 'made\n' }, deleteFiles: ['a.txt'], lines: CODEX_OK })
+      const rig = setup([fake], { deps: deps() })
+      const { runId, end, notice } = await one(rig, sched())
+
+      expect(fake.calls()[0].cwd).toBe(wtPath())
+      expect(digest(repo)).toEqual(before)
+      expect(readFileSync(join(wtPath(), 'input.txt'), 'utf8')).toBe('untracked input\n')
+      expect(readFileSync(join(wtPath(), 'b.txt'), 'utf8')).toBe('edited, not committed\n')
+      expect(existsSync(join(wtPath(), 'node_modules'))).toBe(false)
+
+      expect(end).toMatchObject({ status: 'ok', worktree: wtPath() })
+      expect(end.changed).toMatchObject({ source: 'git' })
+      expect(end.changed.files.sort()).toEqual(['a.txt', 'made.txt'])
+      expect(ExecutorRunEndedPayloadSchema.safeParse(end).success).toBe(true)
+      const started = rig.of('executor.run.started')[0].payload
+      expect(ExecutorRunStartedPayloadSchema.safeParse(started).success).toBe(true)
+      expect(started).toMatchObject({ cwd: wtPath(), worktree: wtPath() })
+      expect(notice).toContain(`worktree: ${wtPath()}`)
+
+      expect(worktreeList()).toContain(wtPath())
+      expect(await rig.manager.discard(SID, runId)).toEqual({ ok: true })
+      expect(existsSync(wtPath())).toBe(false)
+      expect(worktreeList()).toEqual([repo])
+      expect(digest(repo)).toEqual(before)
+    })
+
+    it('in a non-git cwd → worktree_unavailable, the fake never ran, nothing under the root', async () => {
+      const plain = join(root, 'plain')
+      mkdirSync(plain)
+      const fake = installFake({ lines: CODEX_OK })
+      const rig = setup([fake], { deps: deps(), sessionCwd: { [SID]: plain } })
+      const { end, notice } = await one(rig, sched({ cwd: plain }))
+      expect(end).toMatchObject({ status: 'failed', reason: 'worktree_unavailable' })
+      expect(end.worktree).toBeUndefined()
+      expect(notice).toContain('reason=worktree_unavailable')
+      expect(fake.calls()).toEqual([])
+      expect(existsSync(wtRoot())).toBe(false)
+    })
+  })
+
+  it('too large to snapshot → worktree_unavailable, never in place', async () => {
+    writeFileSync(join(repo, 'big.bin'), Buffer.alloc((20 << 20) + 1))
+    const fake = installFake({ lines: CODEX_OK })
+    const rig = setup([fake], { deps: deps() })
+    const { end } = await one(rig, sched())
+    expect(end).toMatchObject({ status: 'failed', reason: 'worktree_unavailable' })
+    expect(fake.calls()).toEqual([])
+  })
+
+  it('git refusing to add → worktree_unavailable, the reservation is gone', async () => {
+    const real = createGit({ base: gitBase })
+    const git: Git = async (args, o) => (args.includes('worktree') && args.includes('add') ? { code: 128, stdout: Buffer.alloc(0), stderr: 'fatal: no' } : real(args, o))
+    const fake = installFake({ lines: CODEX_OK })
+    const rig = setup([fake], { git, deps: deps() })
+    const { end } = await one(rig, sched())
+    expect(end).toMatchObject({ status: 'failed', reason: 'worktree_unavailable' })
+    expect(end.worktree).toBeUndefined()
+    expect(fake.calls()).toEqual([])
+    expect(existsSync(wtPath())).toBe(false)
+    expect(worktreeList()).toEqual([repo])
+  })
+
+  it('the session repo gains only worktrees/<name>, our refs and objects; the user\'s index, HEAD, branch and stash stay byte-identical', async () => {
+    stashSomething()
+    writeFileSync(join(repo, 'a.txt'), 'dirty\n')
+    ug(['add', 'a.txt'])
+    writeFileSync(join(repo, 'b.txt'), 'unstaged\n')
+    const bytes = userGit()
+    const top = readdirSync(join(repo, '.git')).sort()
+    const refs = ug(['for-each-ref', '--format=%(refname)']).split('\n').filter(Boolean)
+    const status = ug(['status', '--porcelain'])
+    const fake = installFake({ writeFiles: { 'made.txt': 'made\n' }, lines: CODEX_OK })
+    const rig = setup([fake], { deps: deps() })
+    const { end, runId } = await one(rig, sched())
+    expect(end.status).toBe('ok')
+
+    expect(userGit()).toEqual(bytes)
+    expect(ug(['status', '--porcelain'])).toBe(status)
+    expect(readdirSync(join(repo, '.git')).filter(n => !top.includes(n))).toEqual(['worktrees'])
+    expect(readdirSync(join(repo, '.git', 'worktrees'))).toEqual([runId])
+    expect(ug(['for-each-ref', '--format=%(refname)']).split('\n').filter(Boolean).filter(r => !refs.includes(r)).sort())
+      .toEqual([`refs/mffai/runs/${SID}/${runId}-end`, `refs/mffai/runs/${SID}/${runId}-start`])
+
+    await rig.manager.discard(SID, runId)
+    expect(userGit()).toEqual(bytes)
+  })
+
+  it('a post-checkout hook in the repo does not run, for the run or the discard', async () => {
+    const mark = join(root, 'hook-ran')
+    for (const hook of ['post-checkout', 'reference-transaction', 'post-index-change']) {
+      writeFileSync(join(repo, '.git', 'hooks', hook), `#!/bin/sh\necho ${hook} >> ${JSON.stringify(mark)}\n`)
+      chmodSync(join(repo, '.git', 'hooks', hook), 0o755)
+    }
+    const fake = installFake({ writeFiles: { 'made.txt': 'made\n' }, lines: CODEX_OK })
+    const rig = setup([fake], { deps: deps() })
+    const { runId } = await one(rig, sched())
+    expect(await rig.manager.discard(SID, runId)).toEqual({ ok: true })
+    expect(existsSync(mark)).toBe(false)
+  })
+
+  describe('a session in a subdirectory', () => {
+    it('the CLI runs in the matching subdirectory; the diff is scoped to it, repo-relative', async () => {
+      const sub = join(repo, 'sub')
+      mkdirSync(sub)
+      writeFileSync(join(sub, 's.txt'), 's\n')
+      const fake = installFake({ writeFiles: { 'new.txt': 'n\n' }, lines: CODEX_OK })
+      const rig = setup([fake], { deps: deps(), sessionCwd: { [SID]: sub } })
+      const { end } = await one(rig, sched({ cwd: sub }))
+      expect(fake.calls()[0].cwd).toBe(join(wtPath(), 'sub'))
+      expect(end.worktree).toBe(wtPath())
+      expect(end.changed).toMatchObject({ source: 'git', files: ['sub/new.txt'] })
+      expect(existsSync(join(sub, 'new.txt'))).toBe(false)
+    })
+
+    it('an empty subdirectory (git does not keep it) still gets a cwd in the worktree', async () => {
+      const sub = join(repo, 'empty', 'deep')
+      mkdirSync(sub, { recursive: true })
+      const fake = installFake({ lines: CODEX_OK })
+      const rig = setup([fake], { deps: deps(), sessionCwd: { [SID]: sub } })
+      const { end } = await one(rig, sched({ cwd: sub }))
+      expect(end.status).toBe('ok')
+      expect(fake.calls()[0].cwd).toBe(join(wtPath(), 'empty', 'deep'))
+    })
+
+    it('rules map by repo: deny write(secret/**) from the session cwd is judged on the session\'s tree', async () => {
+      const sub = join(repo, 'sub')
+      mkdirSync(sub)
+      const fake = installFake({ writeFiles: { 'secret/k.txt': 'k\n', 'ok.txt': 'k\n' }, lines: CODEX_OK })
+      rules = [rule('deny', 'write(secret/**)')]
+      const rig = setup([fake], { deps: deps(), sessionCwd: { [SID]: sub } })
+      const { end } = await one(rig, sched({ cwd: sub }))
+      expect(end.changed.files.sort()).toEqual(['sub/ok.txt', 'sub/secret/k.txt'])
+      expect(end.violations).toEqual(['sub/secret/k.txt'])
+    })
+  })
+
+  describe('the policy sees the worktree', () => {
+    it('Codex: deny read and deny write reach -C <worktree>, the rule roots are mapped, and the .git file is read-only', async () => {
+      mkdirSync(join(repo, 'hidden'))
+      writeFileSync(join(repo, 'hidden', 'h.txt'), 'h\n')
+      const seen: string[] = []
+      const policy = (cwd: string) => {
+        seen.push(cwd)
+        return { ...POLICY, ruleDenyRead: [join(cwd, 'hidden')], ruleDenyWrite: [join(cwd, 'gen')] }
+      }
+      const fake = installFake({ lines: CODEX_OK })
+      const rig = setup([fake], { policy, deps: deps() })
+      await one(rig, sched())
+      expect(seen).toContain(wtPath())
+      const argv = fake.calls()[0].argv
+      expect(argv[argv.indexOf('-C') + 1]).toBe(wtPath())
+      const profile = argv.find(a => a.startsWith('permissions.mffai.filesystem='))!
+      expect(profile).toContain(`"${join(wtPath(), 'hidden')}"="none"`)
+      expect(profile).toContain(`"${join(repo, 'hidden')}"="none"`)
+      expect(profile).toContain(`"${join(wtPath(), 'gen')}"="read"`)
+      expect(profile).toContain(`"${join(wtPath(), '.git')}"="read"`)
+      // :root 已经只读:用户的 refs 不用再写一遍
+      expect(profile).not.toContain(join(repo, '.git', 'refs'))
+    })
+
+    it('a subdirectory session: a rule root elsewhere in the repo has a copy in the checkout too, and it is mapped', async () => {
+      const sub = join(repo, 'sub')
+      mkdirSync(sub)
+      const policy = () => ({ ...POLICY, ruleDenyRead: [join(repo, 'other', 'hidden')] })
+      const fake = installFake({ lines: CODEX_OK })
+      const rig = setup([fake], { policy, deps: deps(), sessionCwd: { [SID]: sub } })
+      await one(rig, sched({ cwd: sub }))
+      const profile = fake.calls()[0].argv.find(a => a.startsWith('permissions.mffai.filesystem='))!
+      expect(profile).toContain(`"${join(wtPath(), 'other', 'hidden')}"="none"`)
+    })
+
+    it('Qoder: planExec gets the worktree, both trees\' rules, and the user\'s git state write-protected', async () => {
+      const policy = (cwd: string) => ({ ...POLICY, ruleDenyRead: [join(cwd, 'hidden')], ruleDenyWrite: [join(cwd, 'gen')] })
+      const fake = installFake({ lines: QODER_OK }, 'qodercli')
+      const cwds: string[] = []
+      const rig = setup([fake], {
+        policy,
+        deps: deps(),
+        planExec: async (file, args, s, env, opts) => {
+          cwds.push(s.cwd)
+          captured = opts
+          return { file, args, env, sandboxed: true, level: 'full', release: () => {} }
+        },
+      })
+      let captured: Parameters<SandboxService['planExec']>[4] | undefined
+      await one(rig, sched({ adapter: 'qoder', isolation: 'wrapped' }))
+      expect(cwds).toEqual([wtPath()])
+      expect(captured!.denyRead).toEqual(expect.arrayContaining([join(wtPath(), 'hidden'), join(repo, 'hidden')]))
+      const g = join(repo, '.git')
+      expect(captured!.denyWrite).toEqual(expect.arrayContaining([join(wtPath(), 'gen'), join(repo, 'gen'), join(wtPath(), '.git'), join(g, 'index'), join(g, 'HEAD'), join(g, 'refs'), join(g, 'packed-refs'), join(g, 'logs', 'refs')]))
+      const argv = fake.calls()[0].argv
+      expect(argv[argv.indexOf('--cwd') + 1]).toBe(wtPath())
+    })
+
+    it('an in-place run does not write-protect the git state', async () => {
+      const fake = installFake({ lines: QODER_OK }, 'qodercli')
+      const rig = setup([fake])
+      await one(rig, { adapter: 'qoder', isolation: 'wrapped' })
+      expect(rig.planCalls[0].opts.denyWrite.some(p => p.includes('.git'))).toBe(false)
+    })
+
+    it('the binary check covers the session cwd too, and no worktree is made', async () => {
+      const fake = installFake({ lines: CODEX_OK })
+      const inRepo = join(repo, 'tools')
+      mkdirSync(inRepo)
+      copyFileSync(fake.file, join(inRepo, 'codex'))
+      chmodSync(join(inRepo, 'codex'), 0o755)
+      const rig = setup([fake], { infos: { codex: { path: join(inRepo, 'codex'), binaryKey: binaryKey(join(inRepo, 'codex')) } }, deps: deps() })
+      const { end } = await one(rig, sched())
+      expect(end).toMatchObject({ status: 'failed', reason: 'untrusted_binary' })
+      expect(fake.calls()).toEqual([])
+      expect(existsSync(wtRoot())).toBe(false)
+    })
+
+    it('a PATH dir inside the session is not on the CLI\'s PATH', async () => {
+      const fake = installFake({ lines: CODEX_OK })
+      const inRepo = join(repo, 'bin')
+      mkdirSync(inRepo)
+      const rig = setup([fake], { deps: deps(), env: { PATH: `${inRepo}:${dirname(process.execPath)}:/usr/bin:/bin`, HOME: home } })
+      await one(rig, sched())
+      const path = fake.calls()[0].env.PATH
+      expect(path).not.toContain(inRepo)
+      expect(path).toContain('/usr/bin')
+    })
+
+    it('a worktree path Codex cannot express safely → wider than approved, so no run, and the worktree goes', async () => {
+      const glob = join(root, 'w[t]')
+      const fake = installFake({ lines: CODEX_OK })
+      const rig = setup([fake], { deps: deps({ worktreeRoot: glob }) })
+      const { end } = await one(rig, sched())
+      expect(end).toMatchObject({ status: 'failed', reason: 'sandbox_unavailable' })
+      expect(end.worktree).toBeUndefined()
+      expect(fake.calls()).toEqual([])
+      expect(existsSync(join(glob, SID))).toBe(false)
+      expect(worktreeList()).toEqual([repo])
+    })
+  })
+
+  describe('Qoder\'s absolute paths map back to the session tree', () => {
+    const unenforceable = () => ({ ...POLICY, untranslatedRules: 1, totalRules: 1 })
+
+    it('an allowed file written in the worktree is no violation; a denied one is, named on the session\'s tree', async () => {
+      writeFileSync(join(repo, '.gitignore'), 'ignored\n')
+      ug(['add', '-A'])
+      ug(['commit', '-qm', 'ignore'])
+      const fake = installFake({ lines: [write(join(wtPath(), 'ignored', 'ok.txt')), write(join(wtPath(), 'ignored', 'secret', 'k')), ...QODER_OK] }, 'qodercli')
+      rules = [rule('deny', 'write(ignored/secret/**)')]
+      const rig = setup([fake], { policy: unenforceable, deps: deps() })
+      const { end, notice } = await one(rig, sched({ adapter: 'qoder', isolation: 'wrapped', asked: true }))
+      expect(end.violations).toEqual([join(repo, 'ignored', 'secret', 'k')])
+      expect(notice).toContain(join(repo, 'ignored', 'secret', 'k'))
+    })
+
+    it('a file both in the diff and reported appears once', async () => {
+      const fake = installFake({ writeFiles: { 'x.env': 'A=1\n' }, lines: [write(join(wtPath(), 'x.env')), ...QODER_OK] }, 'qodercli')
+      rules = [rule('deny', 'write(**/*.env)')]
+      const rig = setup([fake], { policy: unenforceable, deps: deps() })
+      const { end } = await one(rig, sched({ adapter: 'qoder', isolation: 'wrapped', asked: true }))
+      expect(end.violations).toEqual(['x.env'])
+    })
+
+    it('in a subdirectory session too', async () => {
+      const sub = join(repo, 'sub')
+      mkdirSync(sub)
+      const fake = installFake({ lines: [write(join(wtPath(), 'sub', 'fine.txt')), write(join(wtPath(), 'top.txt')), ...QODER_OK] }, 'qodercli')
+      const rig = setup([fake], { deps: deps(), sessionCwd: { [SID]: sub } })
+      const { end } = await one(rig, sched({ adapter: 'qoder', isolation: 'wrapped', cwd: sub }))
+      expect(end.violations).toEqual([join(repo, 'top.txt')])
+    })
+
+    it('a path that climbs out of the worktree is judged where it really points', async () => {
+      const fake = installFake({ lines: [write(`${wtPath()}/../../../escaped.txt`), ...QODER_OK] }, 'qodercli')
+      const rig = setup([fake], { deps: deps() })
+      const { end } = await one(rig, sched({ adapter: 'qoder', isolation: 'wrapped' }))
+      expect(end.violations).toHaveLength(1)
+      expect(end.violations![0]).not.toContain(repo)
+    })
+  })
+
+  describe('a planted .git never reaches git outside the sandbox', () => {
+    /** 一个带 clean 过滤器的假 git 目录:沙箱外的 add -A 要是认了它,过滤器就在沙箱外跑了 */
+    const evilRepo = (mark: string) => {
+      const evil = join(root, 'evil')
+      cpSync(join(repo, '.git'), evil, { recursive: true })
+      writeFileSync(join(evil, 'config'), `[core]\n\trepositoryformatversion = 0\n\tbare = false\n[filter "x"]\n\tclean = touch ${JSON.stringify(mark).slice(1, -1)}; cat\n\trequired = true\n`)
+      return evil
+    }
+
+    it('.git repointed at a repo with a filter → no end snapshot, the filter does not run, the CLI\'s list stands', async () => {
+      const mark = join(root, 'filter-ran')
+      const evil = evilRepo(mark)
+      const fake = installFake({ writeFiles: { '.git': `gitdir: ${evil}\n`, '.gitattributes': '* filter=x\n', 'n.txt': 'n\n' }, lines: [write(join(wtPath(), 'n.txt')), ...QODER_OK] }, 'qodercli')
+      const rig = setup([fake], { deps: deps() })
+      const { end, runId } = await one(rig, sched({ adapter: 'qoder', isolation: 'wrapped' }))
+      expect(existsSync(mark)).toBe(false)
+      expect(end.changed.source).toBe('cli')
+      expect(rig.warnings.some(w => w.includes('worktree'))).toBe(true)
+      // 重启后 changes 也不认它;discard 仍然删得掉
+      const restarted = setup([fake], { deps: deps({ history: () => rig.events as never }) })
+      expect((await restarted.manager.changes(SID, runId)).source).toBe('cli')
+      expect(existsSync(mark)).toBe(false)
+      expect(await restarted.manager.discard(SID, runId)).toEqual({ ok: true })
+      expect(existsSync(wtPath())).toBe(false)
+      expect(worktreeList()).toEqual([repo])
+    })
+
+    it('tampered after the run: executor.changes does not snapshot it, it reports what run.ended recorded', async () => {
+      const fake = installFake({ writeFiles: { 'made.txt': 'made\n' }, lines: CODEX_OK })
+      const rig = setup([fake], { deps: deps() })
+      const { runId } = await one(rig, sched())
+      ug(['update-ref', '-d', `refs/mffai/runs/${SID}/${runId}-end`])
+      const mark = join(root, 'filter-ran')
+      const evil = evilRepo(mark)
+      writeFileSync(join(wtPath(), '.git'), `gitdir: ${evil}\n`)
+      writeFileSync(join(wtPath(), '.gitattributes'), '* filter=x\n')
+      const restarted = setup([fake], { deps: deps({ history: () => rig.events as never }) })
+      expect(await restarted.manager.changes(SID, runId)).toEqual({ files: [{ path: 'made.txt', status: 'M' }], source: 'git' })
+      expect(existsSync(mark)).toBe(false)
+    })
+
+    it('a .git directory planted under a subdirectory cwd stops the snapshot too', async () => {
+      const sub = join(repo, 'sub')
+      mkdirSync(sub)
+      const mark = join(root, 'filter-ran')
+      const evil = evilRepo(mark)
+      const fake = installFake({ run: `cp -R "${evil}" .git; printf '* filter=x\\n' > .gitattributes; echo n > n.txt` }, 'qodercli')
+      const rig = setup([fake], { deps: deps(), sessionCwd: { [SID]: sub } })
+      const { end } = await one(rig, sched({ adapter: 'qoder', isolation: 'wrapped', cwd: sub }))
+      expect(existsSync(mark)).toBe(false)
+      expect(end.changed.source).not.toBe('git')
+    })
+  })
+
+  describe('a worktree nothing ran in is removed', () => {
+    it('bad input: spawn_failed, no worktree field, nothing on disk', async () => {
+      const fake = installFake({ lines: CODEX_OK })
+      const rig = setup([fake], { deps: deps() })
+      const { end, notice } = await one(rig, sched({ model: '--nope' }))
+      expect(end).toMatchObject({ status: 'failed', reason: 'spawn_failed' })
+      expect(end.worktree).toBeUndefined()
+      expect(notice).toContain('worktree: -')
+      expect(fake.calls()).toEqual([])
+      expect(existsSync(wtPath())).toBe(false)
+      expect(worktreeList()).toEqual([repo])
+    })
+
+    it('a cancel during the worktree add: nothing spawned, nothing left', async () => {
+      const real = createGit({ base: gitBase })
+      let release = () => {}
+      const gate = new Promise<void>(res => { release = res })
+      let reached = false
+      const git: Git = async (args, o) => {
+        if (args.includes('worktree') && args.includes('add')) {
+          reached = true
+          await gate
+        }
+        return real(args, o)
+      }
+      const fake = installFake({ lines: CODEX_OK })
+      const rig = setup([fake], { git, deps: deps() })
+      const runId = submit(rig, sched())
+      await waitFor(() => reached)
+      rig.manager.cancel(SID, runId)
+      release()
+      await drain(rig)
+      expect(rig.ended(runId)).toMatchObject({ status: 'cancelled' })
+      expect(rig.ended(runId)!.worktree).toBeUndefined()
+      expect(fake.calls()).toEqual([])
+      expect(existsSync(wtPath())).toBe(false)
+      expect(worktreeList()).toEqual([repo])
+    })
+
+    it('removal failing only warns: the run still ends, and the field stays so the worktree can be found', async () => {
+      const real = createGit({ base: gitBase })
+      const sessionDir = join(wtRoot(), SID)
+      const git: Git = async (args, o) => {
+        // 删不掉:session 目录不让改
+        if (args.includes('remove')) chmodSync(sessionDir, 0o500)
+        return real(args, o)
+      }
+      const fake = installFake({ lines: CODEX_OK })
+      const rig = setup([fake], { git, deps: deps() })
+      try {
+        const { end } = await one(rig, sched({ model: '--nope' }))
+        expect(end).toMatchObject({ status: 'failed', reason: 'spawn_failed', worktree: wtPath() })
+        expect(rig.warnings.some(w => w.includes('worktree'))).toBe(true)
+      } finally {
+        chmodSync(sessionDir, 0o700)
+      }
+    })
+  })
+
+  describe('worktree_limit', () => {
+    const occupy = (n: number) => {
+      for (let i = 0; i < n; i++) mkdirSync(join(wtRoot(), 's-other', `r${i}`), { recursive: true })
+    }
+
+    it('20 under the root → the next fails, the fake never ran, nothing is deleted', async () => {
+      occupy(20)
+      const fake = installFake({ lines: CODEX_OK })
+      const rig = setup([fake], { deps: deps() })
+      const { end, notice } = await one(rig, sched())
+      expect(end).toMatchObject({ status: 'failed', reason: 'worktree_limit' })
+      expect(notice).toContain('reason=worktree_limit')
+      expect(fake.calls()).toEqual([])
+      expect(readdirSync(join(wtRoot(), 's-other'))).toHaveLength(20)
+      expect(existsSync(wtPath())).toBe(false)
+    })
+
+    it('19 → it runs', async () => {
+      occupy(19)
+      const fake = installFake({ lines: CODEX_OK })
+      const rig = setup([fake], { deps: deps() })
+      const { end } = await one(rig, sched())
+      expect(end).toMatchObject({ status: 'ok', worktree: wtPath() })
+    })
+
+    it('two at once with one slot left: exactly one gets it', async () => {
+      occupy(19)
+      const fake = installFake({ lines: CODEX_OK })
+      let n = 0
+      const rig = setup([fake], { deps: deps({ newId: () => `run_${n++}` }) })
+      const a = submit(rig, sched())
+      const b = submit(rig, sched())
+      await drain(rig)
+      expect([rig.ended(a)!.reason, rig.ended(b)!.reason].filter(r => r === 'worktree_limit')).toHaveLength(1)
+      expect([rig.ended(a)!.status, rig.ended(b)!.status].sort()).toEqual(['failed', 'ok'])
+    })
+
+    it('after a discard there is room again', async () => {
+      occupy(19)
+      const fake = installFake({ lines: CODEX_OK })
+      let n = 0
+      const rig = setup([fake], { deps: deps({ newId: () => `run_${n++}` }) })
+      const first = await one(rig, sched({ turnId: 'a' }))
+      expect(first.end.status).toBe('ok')
+      expect((await one(rig, sched({ turnId: 'b' }))).end.reason).toBe('worktree_limit')
+      await rig.manager.discard(SID, first.runId)
+      expect((await one(rig, sched({ turnId: 'c' }))).end.status).toBe('ok')
+    })
+  })
+
+  describe('discard', () => {
+    it('after a simulated restart: found from the events alone, by a manager that never saw the run', async () => {
+      const fake = installFake({ writeFiles: { 'made.txt': 'made\n' }, lines: CODEX_OK })
+      const rig = setup([fake], { deps: deps() })
+      const { runId } = await one(rig, sched())
+      expect(existsSync(wtPath())).toBe(true)
+      const restarted = setup([fake], { deps: deps({ history: () => rig.events as never }) })
+      expect(await restarted.manager.discard(SID, runId)).toEqual({ ok: true })
+      expect(existsSync(wtPath())).toBe(false)
+      expect(worktreeList()).toEqual([repo])
+    })
+
+    it('the run crashed before run.ended: started is enough', async () => {
+      const fake = installFake({ lines: CODEX_OK })
+      const rig = setup([fake], { deps: deps() })
+      const { runId } = await one(rig, sched())
+      const history = rig.events.filter(e => e.type !== 'executor.run.ended')
+      const restarted = setup([fake], { deps: deps({ history: () => history as never }) })
+      expect(await restarted.manager.discard(SID, runId)).toEqual({ ok: true })
+      expect(existsSync(wtPath())).toBe(false)
+    })
+
+    it('the run crashed between the add and the spawn: no started event, the path still follows from the ids', async () => {
+      const fake = installFake({ lines: CODEX_OK })
+      const rig = setup([fake], { deps: deps() })
+      const { runId } = await one(rig, sched())
+      const history = rig.events.filter(e => e.type === 'executor.run.queued')
+      const restarted = setup([fake], { deps: deps({ history: () => history as never }) })
+      expect(await restarted.manager.discard(SID, runId)).toEqual({ ok: true })
+      expect(existsSync(wtPath())).toBe(false)
+    })
+
+    it('running or queued → ERR_BUSY, the worktree stays; afterwards it goes', async () => {
+      const fake = installFake({ forwarding: true })
+      let n = 0
+      const rig = setup([fake], { config: { maxGlobal: 1 }, deps: deps({ newId: () => `run_${n++}` }) })
+      const running = submit(rig, sched())
+      const queued = submit(rig, sched())
+      await fake.waitPid('cli')
+      await expect(rig.manager.discard(SID, running)).rejects.toMatchObject({ code: ERR_BUSY })
+      await expect(rig.manager.discard(SID, queued)).rejects.toMatchObject({ code: ERR_BUSY })
+      expect(existsSync(wtPath(running))).toBe(true)
+      rig.manager.cancel(SID, queued)
+      rig.manager.cancel(SID, running)
+      await drain(rig)
+      expect(await rig.manager.discard(SID, running)).toEqual({ ok: true })
+      expect(await rig.manager.discard(SID, queued)).toEqual({ ok: false })
+    }, 30_000)
+
+    it('unknown, another session\'s run, or an in-place run → ok:false, nothing removed', async () => {
+      const fake = installFake({ lines: CODEX_OK })
+      const rig = setup([fake], { deps: deps({ history: id => (id === SID ? rig.events : []) as never }) })
+      const { runId } = await one(rig, sched())
+      expect(await rig.manager.discard(SID, 'run_nope')).toEqual({ ok: false })
+      expect(await rig.manager.discard('s2', runId)).toEqual({ ok: false })
+      expect(existsSync(wtPath())).toBe(true)
+      let m = 0
+      const inPlace = setup([fake], { deps: deps({ newId: () => `run_app${m++}` }) })
+      const app = await one(inPlace, { turnId: 'app' })
+      expect(await inPlace.manager.discard(SID, app.runId)).toEqual({ ok: false })
+    })
+
+    it('another session\'s run while it runs → ok:false, not ERR_BUSY', async () => {
+      const fake = installFake({ forwarding: true })
+      const rig = setup([fake], { deps: deps({ history: id => (id === SID ? rig.events : []) as never }) })
+      const runId = submit(rig, sched())
+      await fake.waitPid('cli')
+      expect(await rig.manager.discard('s2', runId)).toEqual({ ok: false })
+      rig.manager.cancel(SID, runId)
+      await drain(rig)
+    }, 30_000)
+
+    it('twice: the second has nothing to remove', async () => {
+      const fake = installFake({ lines: CODEX_OK })
+      const rig = setup([fake], { deps: deps() })
+      const { runId } = await one(rig, sched())
+      expect(await rig.manager.discard(SID, runId)).toEqual({ ok: true })
+      expect(await rig.manager.discard(SID, runId)).toEqual({ ok: false })
+    })
+
+    it('a recorded path outside the root is refused, whatever the log says', async () => {
+      const fake = installFake({ lines: CODEX_OK })
+      const rig = setup([fake], { deps: deps() })
+      const { runId } = await one(rig, sched())
+      const forged = rig.events.map(e => (e.type === 'executor.run.ended' || e.type === 'executor.run.started' ? { ...e, payload: { ...(e.payload as object), worktree: repo } } : e))
+      const restarted = setup([fake], { deps: deps({ history: () => forged as never }) })
+      expect(await restarted.manager.discard(SID, runId)).toEqual({ ok: false })
+      expect(existsSync(join(repo, 'a.txt'))).toBe(true)
+    })
+
+    it('the last worktree of a session takes the empty session directory with it', async () => {
+      const fake = installFake({ lines: CODEX_OK })
+      const rig = setup([fake], { deps: deps() })
+      const { runId } = await one(rig, sched())
+      await rig.manager.discard(SID, runId)
+      expect(existsSync(join(wtRoot(), SID))).toBe(false)
+    })
+  })
+
+  describe('executor.changes', () => {
+    it('after a restart, with no end snapshot, it snapshots the worktree and compares', async () => {
+      const fake = installFake({ writeFiles: { 'made.txt': 'made\n' }, lines: CODEX_OK })
+      const rig = setup([fake], { deps: deps() })
+      const { runId } = await one(rig, sched())
+      ug(['update-ref', '-d', `refs/mffai/runs/${SID}/${runId}-end`])
+      const before = digest(repo)
+      const restarted = setup([fake], { deps: deps({ history: () => rig.events as never }) })
+      expect(await restarted.manager.changes(SID, runId)).toEqual({ files: [{ path: 'made.txt', status: 'A' }], source: 'git' })
+      expect(digest(repo)).toEqual(before)
+    })
+
+    it('a subdirectory session: the same scope as the run', async () => {
+      const sub = join(repo, 'sub')
+      mkdirSync(sub)
+      const fake = installFake({ writeFiles: { 'new.txt': 'n\n' }, lines: CODEX_OK })
+      const rig = setup([fake], { deps: deps(), sessionCwd: { [SID]: sub } })
+      const { runId } = await one(rig, sched({ cwd: sub }))
+      ug(['update-ref', '-d', `refs/mffai/runs/${SID}/${runId}-end`])
+      const restarted = setup([fake], { deps: deps({ history: () => rig.events as never }), sessionCwd: { [SID]: sub } })
+      expect((await restarted.manager.changes(SID, runId)).files).toEqual([{ path: 'sub/new.txt', status: 'A' }])
+    })
+
+    it('after a discard it reports what run.ended recorded', async () => {
+      const fake = installFake({ writeFiles: { 'made.txt': 'made\n' }, lines: CODEX_OK })
+      const rig = setup([fake], { deps: deps() })
+      const { runId } = await one(rig, sched())
+      await rig.manager.discard(SID, runId)
+      expect(await rig.manager.changes(SID, runId)).toEqual({ files: [{ path: 'made.txt', status: 'M' }], source: 'git' })
+    })
+  })
+
+  it('two worktree writers are not concurrent: they do not share a tree', async () => {
+    const fake = installFake({ writeFiles: { 'made.txt': 'made\n' }, lines: CODEX_OK, sleep: 300 })
+    let n = 0
+    const rig = setup([fake], { deps: deps({ newId: () => `run_${n++}` }) })
+    const a = submit(rig, sched())
+    const b = submit(rig, sched())
+    await drain(rig)
+    expect(rig.ended(a)!.changed.concurrent).toBeUndefined()
+    expect(rig.ended(b)!.changed.concurrent).toBeUndefined()
+    expect(rig.ended(a)!.changed.files).toEqual(['made.txt'])
+    expect(rig.ended(b)!.changed.files).toEqual(['made.txt'])
+  }, 30_000)
+
+  describe('real Seatbelt', () => {
+    const usable = process.platform === 'darwin' && spawnSync('/usr/bin/sandbox-exec', ['-p', '(version 1)(allow default)', '/usr/bin/true'], { stdio: 'ignore' }).status === 0
+
+    const service = () => createSandboxService({
+      platform: 'darwin', dataDir: join(root, 'data'), home, env: {}, detected: { level: 'full', missing: [] },
+      permissions: () => ({ rules: [], network: { allow: [] }, sandbox: { enabled: true, allowLoopback: false }, allowUnsandboxedAuto: false }),
+      rules: () => rules,
+      append: () => {},
+      git: createGit({ base: gitBase }),
+      lookup: async () => [{ address: '93.184.216.34', family: 4 }],
+    })
+
+    it.skipIf(!usable)('deny read(hidden/**) protects the worktree\'s copy and the session\'s; deny write(gen/**) too', async () => {
+      mkdirSync(join(repo, 'hidden'))
+      writeFileSync(join(repo, 'hidden', 'h.txt'), 'HIDDENTEXT\n')
+      mkdirSync(join(repo, 'gen'))
+      writeFileSync(join(repo, 'gen', 'g.txt'), 'g\n')
+      writeFileSync(join(repo, 'visible.txt'), 'VISIBLETEXT\n')
+      const script = [
+        'cat visible.txt',
+        'cat hidden/h.txt',
+        `cat "${join(repo, 'hidden', 'h.txt')}"`,
+        '(mv hidden "$TMPDIR/stolen") && echo MOVED-HIDDEN',
+        '(echo x >> gen/g.txt) && echo WROTE-GEN',
+        '(echo x > out.txt) && echo WROTE-WORKTREE',
+        `(echo x > "${join(repo, 'escaped.txt')}") && echo WROTE-SESSION`,
+        'exit 0',
+      ].join('\n')
+      const fake = installFake({ run: script }, 'qodercli')
+      rules = [rule('deny', 'read(hidden/**)'), rule('deny', 'write(gen/**)')]
+      const sandbox = service()
+      try {
+        const rig = setup([fake], { deps: deps({ sandbox }) })
+        const before = digest(repo)
+        const { end } = await one(rig, sched({ adapter: 'qoder', isolation: 'wrapped' }))
+        const raw = rawLogOf(end)
+        expect(raw).not.toContain('HIDDENTEXT')
+        expect(raw).not.toContain('MOVED-HIDDEN')
+        expect(raw).not.toContain('WROTE-GEN')
+        expect(raw).not.toContain('WROTE-SESSION')
+        // 对照:这段脚本确实跑了,worktree 里那份确实存在
+        expect(raw).toContain('VISIBLETEXT')
+        expect(raw).toContain('WROTE-WORKTREE')
+        expect(readFileSync(join(wtPath(), 'hidden', 'h.txt'), 'utf8')).toBe('HIDDENTEXT\n')
+        expect(digest(repo)).toEqual(before)
+        expect(end).toMatchObject({ worktree: wtPath() })
+        expect(end.changed).toMatchObject({ source: 'git', files: ['out.txt'] })
+      } finally {
+        await sandbox.close()
+      }
+    }, 30_000)
+
+    it.skipIf(!usable)('the git dir stays protected: config, hooks, the .git file and the admin files; the user\'s branch, index and stash too. A commit in the worktree still works', async () => {
+      stashSomething()
+      writeFileSync(join(repo, 'a.txt'), 'dirty\n')
+      ug(['add', 'a.txt'])
+      const g = join(repo, '.git')
+      const admin = join(g, 'worktrees', RUN)
+      const script = [
+        'export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.invalid GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.invalid',
+        // 不该成功的
+        `(echo x >> "${join(g, 'config')}") && echo WROTE-CONFIG`,
+        `(echo x > "${join(g, 'hooks', 'post-commit')}") && echo WROTE-HOOK`,
+        '(echo x >> .git) && echo WROTE-GITFILE',
+        '(rm .git) && echo REMOVED-GITFILE',
+        '(mv .git gitfile) && echo MOVED-GITFILE',
+        `(echo x >> "${join(admin, 'commondir')}") && echo WROTE-COMMONDIR`,
+        `(echo x >> "${join(admin, 'gitdir')}") && echo WROTE-GITDIR`,
+        `(echo x > "${join(admin, 'config.worktree')}") && echo WROTE-CONFIGWT`,
+        `(mv "${admin}" "${admin}-moved") && echo MOVED-ADMIN`,
+        `(mkdir "${join(g, 'worktrees', 'planted')}") && echo PLANTED-ADMIN`,
+        `(git worktree add -q --detach "${join(root, 'second')}") && echo WORKTREE-ADDED`,
+        `(echo x >> "${join(g, 'index')}") && echo WROTE-INDEX`,
+        `(echo x >> "${join(g, 'HEAD')}") && echo WROTE-HEAD`,
+        '(git update-ref refs/heads/stolen HEAD) && echo MADE-BRANCH',
+        '(git update-ref -d refs/stash) && echo DROPPED-STASH',
+        '(echo changed > b.txt; git stash push -q) && echo STASHED',
+        'git checkout -q -- b.txt',
+        // 该成功的
+        'echo x > out.txt',
+        'git add out.txt && git commit -qm in-worktree && echo COMMITTED',
+        'git rev-parse HEAD',
+        'git log -1 --format=%s',
+        'exit 0',
+      ].join('\n')
+      const fake = installFake({ run: script }, 'qodercli')
+      const sandbox = service()
+      try {
+        const rig = setup([fake], { deps: deps({ sandbox }) })
+        const bytes = userGit()
+        const refs = ug(['for-each-ref', '--format=%(refname) %(objectname)'])
+        const config = readFileSync(join(g, 'config'), 'utf8')
+        const { end, runId } = await one(rig, sched({ adapter: 'qoder', isolation: 'wrapped' }))
+        const raw = rawLogOf(end)
+        for (const word of ['WROTE-CONFIG', 'WROTE-HOOK', 'WROTE-GITFILE', 'REMOVED-GITFILE', 'MOVED-GITFILE', 'WROTE-COMMONDIR', 'WROTE-GITDIR', 'WROTE-CONFIGWT', 'MOVED-ADMIN', 'PLANTED-ADMIN', 'WORKTREE-ADDED', 'WROTE-INDEX', 'WROTE-HEAD', 'MADE-BRANCH', 'DROPPED-STASH', 'STASHED']) {
+          expect(raw, word).not.toContain(word)
+        }
+        expect(raw).toContain('COMMITTED')
+        expect(raw).toContain('in-worktree')
+        // 提交就在 worktree 的游离 HEAD 上,用户的分支没动
+        expect(ug(['log', '-1', '--format=%s'], wtPath()).trim()).toBe('in-worktree')
+        expect(userGit()).toEqual(bytes)
+        expect(readFileSync(join(g, 'config'), 'utf8')).toBe(config)
+        expect(existsSync(join(g, 'hooks', 'post-commit'))).toBe(false)
+        expect(readdirSync(join(g, 'worktrees'))).toEqual([RUN])
+        const after = ug(['for-each-ref', '--format=%(refname) %(objectname)']).split('\n').filter(l => !l.startsWith('refs/mffai/'))
+        expect(after.join('\n')).toBe(refs.split('\n').filter(l => !l.startsWith('refs/mffai/')).join('\n'))
+        // 跑完的结果照常:差异算得出,丢弃也干净
+        expect(end.changed).toMatchObject({ source: 'git' })
+        expect(end.changed.files).toContain('out.txt')
+        expect(await rig.manager.discard(SID, runId)).toEqual({ ok: true })
+        expect(worktreeList()).toEqual([repo])
+        expect(userGit()).toEqual(bytes)
+      } finally {
+        await sandbox.close()
+      }
+    }, 60_000)
   })
 })

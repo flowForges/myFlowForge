@@ -1,20 +1,22 @@
 // 运行管理(04 spec §9、§10、§12):排队、上限、生命周期、节流事件、原始日志、改动与通知。
 // 一条规矩:运行离开 active 只有 leave() 一个出口,而 leave() 一定留下通知并叫醒 wait,否则这一轮就永远挂着
 import { randomBytes } from 'node:crypto'
-import { closeSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeSync } from 'node:fs'
 import { homedir, tmpdir, userInfo } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import type { PermissionGate } from '../../kernel/permissionGate'
 import type { Logger } from '../../kernel/log'
 import { RpcError } from '../../kernel/rpcError'
 import { isInside, resolveToolPath } from '../../lib/fs/paths'
 import { changes as gitChanges, pruneRefs, repoInfo, takeSnapshot, type Git } from '../../lib/git/snapshot'
+import { addWorktree, removeWorktree, reserveWorktree, sessionRepo, userGitState, worktreeIntact } from '../../lib/git/worktree'
 import type { PgidRegistry } from '../../lib/proc/pgids'
 import { runCli as realRunCli, type CliPlan, type CliResult } from '../../lib/proc/runCli'
 import { redact } from '../../lib/tools/redact'
 import { shellEnv } from '../../lib/tools/shellEnv'
 import type { BackgroundRuns, ExecPolicy, RunNotice, SandboxService } from '../../lib/tools/types'
 import type { KernelEvent } from '../../protocol/index'
+import { ERR_BUSY } from '../../protocol/rpc'
 import type { ExecutorChangesSource, ExecutorIsolation, ExecutorRunReason, ExecutorRunStatus, FileChange } from '../../protocol/tools'
 import { foldEvent, type Adapter, type Outcome, type RunEvent, type RunState } from './adapters/types'
 import { binaryChanged, binaryDirs, isolationOf, trustedPath, type ExecutorInfo } from './detect'
@@ -59,13 +61,6 @@ export interface SubmitInput {
   asked: boolean
 }
 
-/** Task 9 实现。没有它之前,app 以外的写运行一律 worktree_unavailable */
-export interface WorktreeOps {
-  root: string
-  add(repoCwd: string, path: string, commit: string): Promise<void>
-  remove(repoCwd: string, path: string): Promise<void>
-}
-
 export interface RunManagerDeps {
   append(e: Omit<KernelEvent, 'seq' | 'ts'>): KernelEvent
   sessions: { get(id: string): { cwd?: string } | undefined }
@@ -82,7 +77,8 @@ export interface RunManagerDeps {
   config(): ExecutorsConfig
   /** ctx.events.history:changes 只靠它和引用名,重启后也能用 */
   history(sessionId: string): KernelEvent[]
-  worktree?: WorktreeOps
+  /** app 以外的会话,写运行放在 <root>/<sid>/<runId>。不给 = 这样的运行一律 worktree_unavailable,绝不退回在地 */
+  worktreeRoot?: string
   /**
    * 程序变了、不见了或不可信:重新探测,要等它。Task 10 接到 detectExecutor,先更新 info(id) 再 resolve。
    * 不给 = 不能重新探测,这样的运行一律失败
@@ -387,8 +383,10 @@ interface Run {
   raw?: RawLog
   done?: Promise<void>
   startedAt?: number
-  /** CLI 跑的地方。Task 9 换成 worktree;s.cwd 始终是会话的目录 */
+  /** CLI 跑的地方;s.cwd 始终是会话的目录 */
   cwd: string
+  /** 进了 worktree。有它不代表 CLI 跑过:没跑的在 finish 里删掉,字段也清掉 */
+  worktree?: { path: string; sessionTop: string; userState: string[] }
   writer: boolean
   concurrent: boolean
   startRef?: string
@@ -440,6 +438,7 @@ const REFUSALS: Partial<Record<Reason, string>> = {
   untrusted_binary: 'Not started: the CLI program is not trusted, or changed since it was checked.',
   sandbox_unavailable: 'Not started: the isolation this run was approved with is no longer available.',
   worktree_unavailable: 'Not started: this session must run writes in a worktree, and none could be created.',
+  worktree_limit: 'Not started: too many worktrees are kept. Discard some first; they are never removed automatically.',
 }
 
 const BINARY_CHANGED = 'Not started: the CLI program changed since it was checked and is being re-checked; try again shortly.'
@@ -623,11 +622,15 @@ export class RunManager implements BackgroundRuns {
   private assess(run: Run, info: ExecutorInfo, pathDirs: string[], allowWrite: string[]): Assessment {
     const { deps, platform } = this
     const { s, adapter } = run
-    const policy = treePolicy(cwd => deps.sandbox.execPolicy(s.sessionId, cwd, adapter.id), s.cwd, run.cwd)
+    const wt = run.worktree
+    const policy = treePolicy(cwd => deps.sandbox.execPolicy(s.sessionId, cwd, adapter.id), s.cwd, run.cwd, wt && { session: wt.sessionTop, run: wt.path })
     const protect = protectDirs({
       kind: adapter.isolationKind, pathDirs, binary: binaryDirs(info), cwd: run.cwd, keepWritable: [run.cwd, s.spillDir, ...allowWrite], platform,
     })
-    const t = translate(policy, protect)
+    // worktree 的 .git 文件决定沙箱外的 git 认哪个仓库。用户的分支、索引、stash 在共用的 git 目录里,只有沙箱才可能写得到:
+    // Codex 的 :root 本来只读,写上去只会多一条可能让权限档不可信的路径
+    const guard = wt ? [join(wt.path, '.git'), ...(adapter.isolationKind === 'wrap' ? wt.userState : [])] : []
+    const t = translate(policy, [...protect, ...guard])
     const level = deps.sandbox.status(s.sessionId).level
     const { isolation, missing } = isolationOf(adapter, info, level, deps.config(), { cwd: run.cwd, denyRead: t.denyRead, readOnlyPaths: t.readOnlyPaths })
     return { info, policy, t, isolation, missing }
@@ -694,13 +697,23 @@ export class RunManager implements BackgroundRuns {
         view = this.assess(run, fresh, pathDirs, allowWrite)
       }
     }
-    const { info, policy, t, isolation } = view
-    run.isolation = isolation
-    run.untranslated = t.untranslated
-
-    const refused = this.refusal(run, view, redetected)
+    const settle = (v: Assessment) => {
+      run.isolation = v.isolation
+      run.untranslated = v.t.untranslated
+      return this.refusal(run, v, redetected)
+    }
+    // 先按会话那棵树判一次:不该跑的不白建 worktree,程序在会话 cwd 里(shell 写得到)也在这里挡下
+    const refused = settle(view)
     if (refused) return refused
-    if (s.origin !== 'app' && !s.readOnly) return failed('worktree_unavailable', REFUSALS.worktree_unavailable!)
+    if (s.origin !== 'app' && !s.readOnly) {
+      const failure = await this.enterWorktree(run)
+      if (failure) return failure
+      // 规则、隔离都要按真正跑的那棵树再算一遍;worktree 的路径也可能让隔离变宽
+      view = this.assess(run, view.info, pathDirs, allowWrite)
+      const again = settle(view)
+      if (again) return again
+    }
+    const { info, policy, t, isolation } = view
 
     // 抛错(模型名不合规、路径是相对的)走 execute 的 catch:spawn_failed
     const built = adapter.buildArgs({
@@ -736,7 +749,7 @@ export class RunManager implements BackgroundRuns {
           run.concurrent = true
         }
       }
-      await this.startSnapshot(run)
+      if (!run.startRef) await this.startSnapshot(run)
       if (run.abort.signal.aborted) return this.stoppedAttempt(run)
     }
 
@@ -796,6 +809,7 @@ export class RunManager implements BackgroundRuns {
           }
           this.write('executor.run.started', s.sessionId, {
             runId: run.runId, turnId: s.turnId, executor: adapter.id, cwd: run.cwd, isolation,
+            ...(run.worktree && { worktree: run.worktree.path }),
             ...(t.untranslated > 0 && { untranslatedRules: t.untranslated }),
           })
         },
@@ -812,6 +826,53 @@ export class RunManager implements BackgroundRuns {
       throw e
     }
     return { outcome: this.classify(run, cli), cli, ...(cli.spawnError && { message: cli.spawnError }) }
+  }
+
+  /**
+   * 开始快照 → 占位 → 建 worktree,run.cwd 换过去。worktree 在沙箱外建(沙箱里不许在 .git/worktrees 下新建和改名)。
+   * 拍不了、建不了 → 失败,绝不退回在地。
+   * 上限和占位在同一拍里,并发的运行不会一起超
+   */
+  private async enterWorktree(run: Run): Promise<Attempt | undefined> {
+    const { git, tmpDir, worktreeRoot } = this.deps
+    const { s } = run
+    const unavailable = failed('worktree_unavailable', REFUSALS.worktree_unavailable!)
+    if (!worktreeRoot) return unavailable
+    await this.startSnapshot(run)
+    if (run.abort.signal.aborted) return this.stoppedAttempt(run)
+    if (!run.startRef) return unavailable
+    try {
+      const repo = await sessionRepo(s.cwd, git, { tmpDir })
+      if (!repo) return unavailable
+      if (run.abort.signal.aborted) return this.stoppedAttempt(run)
+      const path = reserveWorktree(worktreeRoot, s.sessionId, run.runId)
+      if (!path) return failed('worktree_limit', REFUSALS.worktree_limit!)
+      // 从这里起 finish 负责收拾:没跑就删
+      run.worktree = { path, sessionTop: repo.top, userState: userGitState(repo) }
+      await addWorktree(s.cwd, path, run.startRef, git, { tmpDir, root: worktreeRoot })
+      if (run.abort.signal.aborted) return this.stoppedAttempt(run)
+      // 会话的子目录在快照里可能没有(空目录、全被忽略)
+      const cwd = join(path, repo.prefix)
+      mkdirSync(cwd, { recursive: true })
+      if (!isInside(realpathSync(cwd), path, this.platform)) return unavailable
+      run.cwd = cwd
+      return undefined
+    } catch (e) {
+      this.log.warn('worktree not created', { runId: run.runId, error: e instanceof Error ? redact(e.message) : 'unknown' })
+      return unavailable
+    }
+  }
+
+  /** CLI 没跑过的 worktree 里没有谁要的东西,也不该占名额。删不掉只告警,字段留着,还能 discard */
+  private async dropUnusedWorktree(run: Run): Promise<void> {
+    const { git, tmpDir, worktreeRoot } = this.deps
+    if (!run.worktree || run.spawned) return
+    try {
+      await removeWorktree(run.s.cwd, run.worktree.path, git, { tmpDir, root: worktreeRoot! })
+      run.worktree = undefined
+    } catch (e) {
+      this.log.warn('unused worktree not removed', { runId: run.runId, error: e instanceof Error ? redact(e.message) : 'unknown' })
+    }
   }
 
   private async startSnapshot(run: Run): Promise<void> {
@@ -902,6 +963,7 @@ export class RunManager implements BackgroundRuns {
     } catch (e) {
       this.log.warn('run raw log not closed', { error: e instanceof Error ? redact(e.message) : 'unknown' })
     }
+    await this.dropUnusedWorktree(run)
     const changed = await this.collectChanges(run)
     const violations = await this.violations(run, changed)
     this.conclude(run, attempt, changed, violations)
@@ -914,6 +976,11 @@ export class RunManager implements BackgroundRuns {
     const none = (source: ExecutorChangesSource, raw: string[]) => ({ files: raw.slice(0, FILES_MAX).map(run.redactor.mask), source, raw })
     if (run.startRef && run.spawned && !run.stopping) {
       try {
+        // 沙箱外的 git 不能认 CLI 改过的 .git:它指向的配置里可以有 clean 过滤器
+        if (run.worktree && !(await worktreeIntact(run.s.cwd, run.worktree.path, run.cwd, git, { tmpDir }))) {
+          log.warn('worktree .git changed, no end snapshot', { runId: run.runId })
+          return run.files.size > 0 ? none('cli', [...run.files]) : none('none', [])
+        }
         const end = await takeSnapshot(run.cwd, runRef(run.s.sessionId, run.runId, 'end'), git, { tmpDir })
         if (end.ref) {
           const list = await gitChanges(run.cwd, run.startRef, end.ref, git, { tmpDir })
@@ -930,13 +997,13 @@ export class RunManager implements BackgroundRuns {
   /**
    * 跑后过门(§8.4):git 的 diff 加上 CLI 自报的。快照不看被忽略的文件,也只看 cwd 前缀,所以 gitignore 里的 `x.env`、
    * cwd 外的写只有 CLI 自报这一条线索。git 的路径相对仓库根,CLI 的相对会话目录(Qoder 的是绝对路径);
-   * 规则针对的是会话那棵树,worktree 运行也一样
+   * 规则针对的是会话那棵树,worktree 运行也一样,所以 worktree 里的绝对路径先映射回去
    */
   private async violations(run: Run, changed: { source: ExecutorChangesSource; raw: string[] }): Promise<string[]> {
     const { deps } = this
     const { s } = run
     const fromGit = changed.source === 'git' ? changed.raw : []
-    const reported = [...run.files]
+    const reported = [...new Set([...run.files].map(f => this.toSessionTree(run, f)))]
     if (fromGit.length === 0 && reported.length === 0) return []
     try {
       const sessionDir = deps.sessions.get(s.sessionId)?.cwd ?? s.cwd
@@ -957,6 +1024,14 @@ export class RunManager implements BackgroundRuns {
     }
   }
 
+  /** worktree 里的绝对路径 → 会话仓库里的同一个文件。爬出 worktree 的不算,按它真正指向的判 */
+  private toSessionTree(run: Run, file: string): string {
+    const wt = run.worktree
+    if (!wt || !isAbsolute(file)) return file
+    const abs = resolve(file)
+    return isInside(abs, wt.path, this.platform) ? join(wt.sessionTop, relative(wt.path, abs)) : file
+  }
+
   /** 写结束事件、算通知、删临时目录、离开。到这里之后没有 await,也不会抛 */
   private conclude(run: Run, attempt: Attempt, changed: { files: string[]; source: ExecutorChangesSource }, violations: string[]): void {
     const { s, adapter, runId } = run
@@ -974,6 +1049,7 @@ export class RunManager implements BackgroundRuns {
       ...(run.usage && { usage: run.usage }),
       changed: changedField,
       ...(violations.length > 0 && { violations }),
+      ...(run.worktree && { worktree: run.worktree.path }),
       ...(run.raw?.path && { rawLog: run.raw.path }),
       ...(run.nativeId && { nativeId: run.nativeId }),
       ...(dropped > 0 && { droppedProgress: dropped }),
@@ -990,7 +1066,7 @@ export class RunManager implements BackgroundRuns {
     try {
       return noticeText({
         id: run.adapter.id, run: run.runId, status, reason: outcome.reason, exit: cli?.code, signal: cli?.signal, ms,
-        isolation: run.isolation, changed, violations, untranslated: run.untranslated, usage: run.usage, rawLog: run.raw?.path,
+        isolation: run.isolation, changed, violations, untranslated: run.untranslated, usage: run.usage, rawLog: run.raw?.path, worktree: run.worktree?.path,
         stderrTail: run.stderrTail, final: run.final ?? run.lastError ?? message,
         killFailed: cli?.killFailed, leftovers: cli?.leftovers, networkLost: run.networkLost, droppedLines: run.droppedLines,
       }, run.redactor.mask)
@@ -1100,11 +1176,15 @@ export class RunManager implements BackgroundRuns {
       return { files: files.map(path => ({ path, status: 'M' as const })), source, ...concurrent }
     }
     if (!started) return reported()
-    const cwd = started.worktree ?? started.cwd
+    const { cwd } = started
     const startRef = runRef(sessionId, runId, 'start')
     const endRef = runRef(sessionId, runId, 'end')
     const exists = async (ref: string) => (await git(['rev-parse', '-q', '--verify', ref], { cwd })).code === 0
     try {
+      if (started.worktree) {
+        const repoCwd = this.deps.sessions.get(sessionId)?.cwd
+        if (repoCwd === undefined || !(await worktreeIntact(repoCwd, started.worktree, cwd, git, { tmpDir }))) return reported()
+      }
       if (!(await exists(startRef))) return reported()
       if (!(await exists(endRef))) {
         const end = await takeSnapshot(cwd, endRef, git, { tmpDir })
@@ -1115,6 +1195,40 @@ export class RunManager implements BackgroundRuns {
     } catch (e) {
       log.warn('executor.changes failed', { runId, error: e instanceof Error ? redact(e.message) : 'unknown' })
       return reported()
+    }
+  }
+
+  /**
+   * 路径从事件来,重启后也找得到。没有 started 也没有 ended(崩在建好之后、起进程之前)时按 id 推:
+   * 运行确实属于这个会话才走到那一步。路径不在根下 removeWorktree 拒绝,所以日志里写什么都删不到别处
+   */
+  async discard(sessionId: string, runId: string): Promise<{ ok: boolean }> {
+    const { git, tmpDir, worktreeRoot } = this.deps
+    const live = this.live.get(runId)
+    if (live?.s.sessionId === sessionId) throw new RpcError(ERR_BUSY, 'run in progress')
+    if (live || !worktreeRoot) return { ok: false }
+    const events = this.deps.history(sessionId)
+    const payloads = events.filter(e => (e.payload as { runId?: string } | undefined)?.runId === runId)
+    const of = (type: string) => payloads.find(e => e.type === type)?.payload as { worktree?: string } | undefined
+    if (!of('executor.run.queued')) return { ok: false }
+    const recorded = of('executor.run.started')?.worktree ?? of('executor.run.ended')?.worktree
+    let path = recorded
+    if (path === undefined) {
+      try {
+        path = join(realpathSync(worktreeRoot), sessionId, runId)
+      } catch {
+        return { ok: false }
+      }
+    }
+    const present = existsSync(path)
+    if (!present && recorded === undefined) return { ok: false }
+    const repoCwd = this.deps.sessions.get(sessionId)?.cwd ?? worktreeRoot
+    try {
+      await removeWorktree(repoCwd, path, git, { tmpDir, root: worktreeRoot })
+      return { ok: present }
+    } catch (e) {
+      this.log.warn('worktree not discarded', { runId, error: e instanceof Error ? redact(e.message) : 'unknown' })
+      return { ok: false }
     }
   }
 }

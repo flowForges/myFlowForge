@@ -92,7 +92,7 @@ async function run(git: Git, args: string[], o: Parameters<Git>[1]): Promise<Buf
 const guardArgs = (hooks: string) => ['-c', `core.hooksPath=${hooks}`, '-c', 'core.fsmonitor=false', '-c', 'core.splitIndex=false']
 
 /** 建一个临时目录(含空的 hooks/),给 fn 一个带 guardArgs 的 git;结束时整个目录删掉 */
-async function guarded<T>(git: Git, tmpDir: string | undefined, fn: (g: Git, dir: string) => Promise<T>): Promise<T> {
+export async function guarded<T>(git: Git, tmpDir: string | undefined, fn: (g: Git, dir: string) => Promise<T>): Promise<T> {
   const dir = await mkdtemp(join(tmpDir ?? tmpdir(), 'mffai-snap-'))
   try {
     const hooks = join(dir, 'hooks')

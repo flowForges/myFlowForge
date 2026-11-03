@@ -315,6 +315,13 @@ describe('treePolicy: rule roots in a worktree (Task 6 review)', () => {
     expect(p.denyRead).toEqual(['/cred'])
   })
 
+  it('a session in a subdirectory: an absolute root elsewhere in the repo maps too, the checkout has that copy as well', () => {
+    const policy = (cwd: string): ExecPolicy => ({ ...policyOf(cwd), ruleDenyRead: [`${cwd}/hidden`, '/repo/abs', '/elsewhere'], ruleDenyWrite: ['/repo/gen'] })
+    const p = treePolicy(policy, '/repo/sub', '/wt/run_a/sub', { session: '/repo', run: '/wt/run_a' })
+    expect(p.ruleDenyRead.sort()).toEqual(['/elsewhere', '/repo/abs', '/repo/sub/hidden', '/wt/run_a/abs', '/wt/run_a/sub/hidden'].sort())
+    expect(p.ruleDenyWrite.sort()).toEqual(['/repo/gen', '/wt/run_a/gen'].sort())
+  })
+
   it('the larger untranslated count wins: a rule one tree can\'t translate still has to ask', () => {
     expect(treePolicy(policyOf, '/repo', '/wt/run_a').untranslatedRules).toBe(1)
     expect(treePolicy(cwd => ({ ...policyOf(cwd), untranslatedRules: cwd === '/repo' ? 0 : 2 }), '/repo', '/wt/run_a').untranslatedRules).toBe(2)
