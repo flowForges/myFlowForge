@@ -578,7 +578,7 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
           allowLoopback,
         })
         const { file, args } = sandboxExecArgs(profile, command)
-        return { file, args, env: sandboxEnv(env, { tmp, proxyPort: proxy?.port, level, allowLoopback }), sandboxed: true, level, release }
+        return { file, args, env: sandboxEnv(env, { tmp, proxyPort: proxy?.port, level, allowLoopback }), sandboxed: true, level, release, ...(e?.failed && { networkLost: true as const }) }
       }
 
       // linux(bwrap)
@@ -628,6 +628,8 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
         sandboxed: true,
         level,
         release,
+        // 没有命名空间(bwLevel partial)时网络本来就是开的,代理怎样都不算断网
+        ...(bwLevel === 'full' && !relay && { networkLost: true as const }),
       }
     } catch (err) {
       release()

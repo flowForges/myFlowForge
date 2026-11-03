@@ -390,3 +390,14 @@ describe('noticeText escaping variants (Task 4 review C-4)', () => {
     }
   })
 })
+
+describe('fixed lines added by the Task 8 review', () => {
+  const base: Diagnostic = { id: 'qoder', run: 'run_a', status: 'failed', reason: 'exit_nonzero', ms: 1 }
+
+  it('network and dropped lines appear only when set', () => {
+    expect(formatDiagnostic(base)).not.toMatch(/^(network|dropped-lines):/m)
+    const text = noticeText({ ...base, networkLost: true, droppedLines: 2 })
+    expect(text).toMatch(/^network: off; /m)
+    expect(text).toMatch(/^dropped-lines: 2; /m)
+  })
+})

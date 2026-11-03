@@ -7,18 +7,19 @@ import { join } from 'node:path'
 import type { PermissionGate } from '../../kernel/permissionGate'
 import type { Logger } from '../../kernel/log'
 import { RpcError } from '../../kernel/rpcError'
+import { isInside, resolveToolPath } from '../../lib/fs/paths'
 import { changes as gitChanges, pruneRefs, repoInfo, takeSnapshot, type Git } from '../../lib/git/snapshot'
 import type { PgidRegistry } from '../../lib/proc/pgids'
 import { runCli as realRunCli, type CliPlan, type CliResult } from '../../lib/proc/runCli'
 import { redact } from '../../lib/tools/redact'
 import { shellEnv } from '../../lib/tools/shellEnv'
-import type { BackgroundRuns, RunNotice, SandboxService } from '../../lib/tools/types'
+import type { BackgroundRuns, ExecPolicy, RunNotice, SandboxService } from '../../lib/tools/types'
 import type { KernelEvent } from '../../protocol/index'
 import type { ExecutorChangesSource, ExecutorIsolation, ExecutorRunReason, ExecutorRunStatus, FileChange } from '../../protocol/tools'
 import { foldEvent, type Adapter, type Outcome, type RunEvent, type RunState } from './adapters/types'
 import { binaryChanged, binaryDirs, isolationOf, trustedPath, type ExecutorInfo } from './detect'
 import { cleanText, clip, noticeText } from './diagnostics'
-import { checkViolations, mustAsk, protectDirs, translate, treePolicy } from './policy'
+import { checkViolations, mustAsk, protectDirs, translate, treePolicy, type TranslatedPolicy } from './policy'
 
 export type Reason = ExecutorRunReason
 
@@ -82,8 +83,13 @@ export interface RunManagerDeps {
   /** ctx.events.history:changes 只靠它和引用名,重启后也能用 */
   history(sessionId: string): KernelEvent[]
   worktree?: WorktreeOps
-  /** 程序变了:这次运行失败,Task 10 在后台重新探测 */
-  onBinaryChanged?(id: string): void
+  /**
+   * 程序变了、不见了或不可信:重新探测,要等它。Task 10 接到 detectExecutor,先更新 info(id) 再 resolve。
+   * 不给 = 不能重新探测,这样的运行一律失败
+   */
+  redetect?(id: string): Promise<ExecutorInfo>
+  /** 等重新探测的上限;探测最坏约 50 s。超过了这次运行失败,探测接着跑 */
+  redetectWaitMs?: number
   /** 快照的临时目录 */
   tmpDir?: string
   home?: string
@@ -92,9 +98,13 @@ export interface RunManagerDeps {
   newId?: () => string
   /** 只给测试 */
   runCli?: typeof realRunCli
+  /** 只给测试:进度节流的窗口 */
+  progressIntervalMs?: number
 }
 
 const KEEP_RUNS = 50
+const REDETECT_WAIT_MS = 60_000
+const REPORTED_PATH_MAX = 4096
 const SUMMARY_MAX = 300
 const PROGRESS_MAX = 500
 const PROGRESS_CAP = 2000
@@ -112,6 +122,9 @@ const AUTH_FILE_MAX = 64 * 1024
 const AUTH_FILES_MAX = 64
 const AUTH_DEPTH_MAX = 4
 const SECRET_MIN = 16
+
+/** 与 classifyOutcome 的认证判定同一组词 */
+const AUTH_HINT = /\b401\b|unauthorized|not logged in/i
 
 const PEM_BEGIN = /BEGIN [A-Z0-9 ]*PRIVATE KEY/g
 const PEM_END = /END [A-Z0-9 ]*PRIVATE KEY/g
@@ -248,7 +261,8 @@ export class ProgressThrottle {
     const wait = this.last + this.intervalMs - this.now()
     if (wait <= 0) return this.send(kind, text)
     this.pending = { kind, text }
-    this.timer = setTimeout(() => this.flush(), wait)
+    // 时钟往回跳时 wait 会很大:等不能超过一个窗口,否则运行收不了尾
+    this.timer = setTimeout(() => this.flush(), Math.min(wait, this.intervalMs))
   }
 
   private send(kind: ProgressKind, text: string): void {
@@ -388,6 +402,8 @@ interface Run {
   files: Set<string>
   nativeId?: string
   stderrTail: string
+  networkLost?: boolean
+  droppedLines: number
 }
 
 interface Attempt {
@@ -395,6 +411,16 @@ interface Attempt {
   cli?: CliResult
   /** 没有 CLI 输出时放进 final 的话:只有我们自己的固定文字 */
   message?: string
+  /** 程序变了造成的失败,不是模型派多了:不占 maxPerTurn */
+  uncounted?: boolean
+}
+
+interface Assessment {
+  info: ExecutorInfo
+  policy: ExecPolicy
+  t: TranslatedPolicy
+  isolation: ExecutorIsolation
+  missing: string[]
 }
 
 interface TurnState {
@@ -416,6 +442,11 @@ const REFUSALS: Partial<Record<Reason, string>> = {
   worktree_unavailable: 'Not started: this session must run writes in a worktree, and none could be created.',
 }
 
+const BINARY_CHANGED = 'Not started: the CLI program changed since it was checked and is being re-checked; try again shortly.'
+const BINARY_GONE = 'Not started: the CLI program is gone. It is being looked for again; install it, or try again.'
+const BINARY_UNTRUSTED = 'Not started: the CLI program failed the trust check. Fix its owner and permissions, then try again.'
+const RECHECK_WIDER = 'Not started: the CLI program changed, and its re-check came out less isolated than this run was approved for. Call the tool again to ask for approval.'
+
 const runRef = (sessionId: string, runId: string, phase: 'start' | 'end') => `refs/mffai/runs/${sessionId}/${runId}-${phase}`
 
 export class RunManager implements BackgroundRuns {
@@ -424,6 +455,8 @@ export class RunManager implements BackgroundRuns {
   private running = new Set<Run>()
   private turns = new Map<string, TurnState>()
   private seq = 0
+  /** 同一个执行器只探测一次 */
+  private redetects = new Map<string, Promise<ExecutorInfo>>()
   /** abandonAll 或内核关闭之后不再起新的 */
   private stopped = false
   /** 日志出错不能挡住收尾 */
@@ -478,7 +511,7 @@ export class RunManager implements BackgroundRuns {
       runId, adapter, s, seq: this.seq++, phase: 'queued', abort: new AbortController(), stopping: false,
       isolation: s.isolation, redactor: new RunRedactor(), cwd: s.cwd, writer: false, concurrent: false, spawned: false,
       state: { code: null, signal: null, completed: false, sawResult: false, errors: [], timedOut: false, stalled: false, cancelled: false },
-      files: new Set(), stderrTail: '',
+      files: new Set(), stderrTail: '', droppedLines: 0,
     }
     t.submitted++
     t.active++
@@ -512,8 +545,17 @@ export class RunManager implements BackgroundRuns {
         .catch(e => this.log.error('run end failed', { error: e instanceof Error ? redact(e.message) : 'unknown' }))
         .finally(() => {
           this.running.delete(run)
-          this.dispatch()
+          this.dispatchQuietly()
         })
+    }
+  }
+
+  /** 名额空出来时用:配置读不了只记日志,不能把 run.done 变成 rejected */
+  private dispatchQuietly(): void {
+    try {
+      this.dispatch()
+    } catch (e) {
+      this.log.error('run queue stalled', { error: e instanceof Error ? redact(e.message) : 'unknown' })
     }
   }
 
@@ -555,26 +597,74 @@ export class RunManager implements BackgroundRuns {
     }
   }
 
-  /** 出队时再过一次门(C13)。返回拒绝的原因 */
-  private refusal(run: Run, info: ExecutorInfo, isolation: ExecutorIsolation, missing: string[], must: boolean, summary: string): Reason | undefined {
+  /** 出队时再过一次门(C13)。redetected:这次的 info 是刚探测出来的 */
+  private refusal(run: Run, view: Assessment, redetected: boolean): Attempt | undefined {
     const { s, adapter } = run
-    const { deps } = this
+    const { info, isolation, missing, policy } = view
     const base = { actor: 'tools', sessionId: s.sessionId }
-    const [exec, read, write] = deps.gate.checkMany([
-      { ...base, action: 'exec', resource: adapter.id, summary, unsandboxed: isolation === 'none', mustAsk: must },
+    const summary = `${adapter.id}: ${clip(redact(s.prompt), SUMMARY_MAX)}`
+    const [exec, read, write] = this.deps.gate.checkMany([
+      { ...base, action: 'exec', resource: adapter.id, summary, unsandboxed: isolation === 'none', mustAsk: mustAsk(policy, isolation) },
       { ...base, action: 'read', resource: s.cwd },
       { ...base, action: 'write', resource: s.cwd },
     ])
-    if (exec === 'deny' || read === 'deny' || (!s.readOnly && write === 'deny')) return 'denied'
-    if (missing.includes('untrusted_binary')) return 'untrusted_binary'
-    if (!info.installed || info.path === undefined) return 'not_installed'
-    const changed = binaryChanged(info)
-    if (changed) deps.onBinaryChanged?.(adapter.id)
-    // 比批准时宽:人批准的是有隔离的那次运行,asked 也不算(05 review I1)
-    if (s.isolation !== 'none' && isolation === 'none') return 'sandbox_unavailable'
-    if (changed) return 'untrusted_binary'
-    if (exec === 'ask' && !s.asked) return 'denied'
+    if (exec === 'deny' || read === 'deny' || (!s.readOnly && write === 'deny')) return failed('denied', REFUSALS.denied!)
+    const binary = (reason: Reason, message: string): Attempt => ({ ...failed(reason, message), uncounted: true })
+    if (missing.includes('untrusted_binary')) return binary('untrusted_binary', redetected ? BINARY_UNTRUSTED : REFUSALS.untrusted_binary!)
+    if (!info.installed || info.path === undefined) return binary('not_installed', redetected ? BINARY_GONE : REFUSALS.not_installed!)
+    if (binaryChanged(info)) return binary('untrusted_binary', BINARY_CHANGED)
+    // 比批准时宽:人批准的是有隔离的那次运行,asked 也不算(05 review I1)。重试会重新过门
+    if (s.isolation !== 'none' && isolation === 'none') return redetected ? binary('sandbox_unavailable', RECHECK_WIDER) : failed('sandbox_unavailable', REFUSALS.sandbox_unavailable!)
+    if (exec === 'ask' && !s.asked) return failed('denied', REFUSALS.denied!)
     return undefined
+  }
+
+  /** 这次运行在这份 info 下的策略和隔离 */
+  private assess(run: Run, info: ExecutorInfo, pathDirs: string[], allowWrite: string[]): Assessment {
+    const { deps, platform } = this
+    const { s, adapter } = run
+    const policy = treePolicy(cwd => deps.sandbox.execPolicy(s.sessionId, cwd, adapter.id), s.cwd, run.cwd)
+    const protect = protectDirs({
+      kind: adapter.isolationKind, pathDirs, binary: binaryDirs(info), cwd: run.cwd, keepWritable: [run.cwd, s.spillDir, ...allowWrite], platform,
+    })
+    const t = translate(policy, protect)
+    const level = deps.sandbox.status(s.sessionId).level
+    const { isolation, missing } = isolationOf(adapter, info, level, deps.config(), { cwd: run.cwd, denyRead: t.denyRead, readOnlyPaths: t.readOnlyPaths })
+    return { info, policy, t, isolation, missing }
+  }
+
+  /** 同一个执行器只探测一次;等的人被取消或等过了上限就先走,探测接着跑 */
+  private startRedetect(id: string): Promise<ExecutorInfo> | undefined {
+    const { redetect } = this.deps
+    if (!redetect) return undefined
+    let p = this.redetects.get(id)
+    if (!p) {
+      p = Promise.resolve().then(() => redetect(id)).finally(() => this.redetects.delete(id))
+      p.catch(e => this.log.warn('re-detection failed', { id, error: e instanceof Error ? redact(e.message) : 'unknown' }))
+      this.redetects.set(id, p)
+    }
+    return p
+  }
+
+  private async awaitRedetect(run: Run): Promise<ExecutorInfo | undefined> {
+    const pending = this.startRedetect(run.adapter.id)
+    if (!pending) return undefined
+    const { signal } = run.abort
+    let timer: NodeJS.Timeout | undefined
+    let onAbort = () => {}
+    try {
+      return await Promise.race([
+        pending.catch(() => undefined),
+        new Promise<undefined>(res => { timer = setTimeout(() => res(undefined), this.deps.redetectWaitMs ?? REDETECT_WAIT_MS) }),
+        new Promise<undefined>(res => {
+          onAbort = () => res(undefined)
+          signal.addEventListener('abort', onAbort, { once: true })
+        }),
+      ])
+    } finally {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', onAbort)
+    }
   }
 
   private async attempt(run: Run): Promise<Attempt> {
@@ -591,22 +681,25 @@ export class RunManager implements BackgroundRuns {
     for (const [k, v] of Object.entries(fallbackEnv())) env[k] ??= v
 
     const cfg = deps.config()
-    const info = deps.info(adapter.id)
     const allowRead = adapter.allowRead(home, deps.env)
     const allowWrite = adapter.allowWrite(home, deps.env)
-    const policy = treePolicy(cwd => deps.sandbox.execPolicy(s.sessionId, cwd, adapter.id), s.cwd, run.cwd)
-    const protect = protectDirs({
-      kind: adapter.isolationKind, pathDirs, binary: binaryDirs(info), cwd: run.cwd, keepWritable: [run.cwd, s.spillDir, ...allowWrite], platform,
-    })
-    const t = translate(policy, protect)
-    const level = deps.sandbox.status(s.sessionId).level
-    const { isolation, missing } = isolationOf(adapter, info, level, cfg, { cwd: run.cwd, denyRead: t.denyRead, readOnlyPaths: t.readOnlyPaths })
+    let view = this.assess(run, deps.info(adapter.id), pathDirs, allowWrite)
+    // 程序变了、不见了或不可信:先等重新探测,再按新结果重新判隔离和权限。只有探测确认过的文件才可能跑
+    let redetected = false
+    if (binaryChanged(view.info) || view.missing.includes('untrusted_binary')) {
+      const fresh = await this.awaitRedetect(run)
+      if (run.abort.signal.aborted) return this.stoppedAttempt(run)
+      if (fresh) {
+        redetected = true
+        view = this.assess(run, fresh, pathDirs, allowWrite)
+      }
+    }
+    const { info, policy, t, isolation } = view
     run.isolation = isolation
     run.untranslated = t.untranslated
 
-    const summary = `${adapter.id}: ${clip(redact(s.prompt), SUMMARY_MAX)}`
-    const refused = this.refusal(run, info, isolation, missing, mustAsk(policy, isolation), summary)
-    if (refused) return failed(refused, REFUSALS[refused] ?? 'Not started.')
+    const refused = this.refusal(run, view, redetected)
+    if (refused) return refused
     if (s.origin !== 'app' && !s.readOnly) return failed('worktree_unavailable', REFUSALS.worktree_unavailable!)
 
     // 抛错(模型名不合规、路径是相对的)走 execute 的 catch:spawn_failed
@@ -638,7 +731,7 @@ export class RunManager implements BackgroundRuns {
     if (!s.readOnly) {
       run.writer = true
       for (const other of this.running) {
-        if (other !== run && other.writer && other.cwd === run.cwd) {
+        if (other !== run && other.writer && (isInside(other.cwd, run.cwd, this.platform) || isInside(run.cwd, other.cwd, this.platform))) {
           other.concurrent = true
           run.concurrent = true
         }
@@ -659,7 +752,7 @@ export class RunManager implements BackgroundRuns {
           p.release()
           return failed('sandbox_unavailable', REFUSALS.sandbox_unavailable!)
         }
-        if (p.level === 'partial') this.log.warn('run sandbox is partial', { runId: run.runId })
+        run.networkLost = p.networkLost === true
         plan = p
       } catch (e) {
         this.log.warn('run sandbox plan failed', { runId: run.runId, error: e instanceof Error ? redact(e.message) : 'unknown' })
@@ -671,36 +764,53 @@ export class RunManager implements BackgroundRuns {
       }
     }
 
-    run.raw = new RawLog(s.spillDir, run.runId, deps.log)
+    // 快照可能拍了很久:起之前再看一眼,程序换过就不跑
+    if (binaryChanged(info)) {
+      plan.release?.()
+      void this.startRedetect(adapter.id)
+      return { ...failed('untrusted_binary', BINARY_CHANGED), uncounted: true }
+    }
+
+    run.raw = new RawLog(s.spillDir, run.runId, this.log)
     run.throttle = new ProgressThrottle(
       (kind, text) => deps.append({ type: 'executor.run.progress', sessionId: s.sessionId, payload: { runId: run.runId, turnId: s.turnId, kind, text } } as Omit<KernelEvent, 'seq' | 'ts'>),
       this.now,
+      { intervalMs: deps.progressIntervalMs },
     )
 
-    const cli = await (deps.runCli ?? realRunCli)(plan, {
-      cwd: run.cwd,
-      stdin: built.stdin,
-      timeoutMs: s.timeoutMs,
-      idleMs: cfg.idleMinutes * 60_000,
-      signal: run.abort.signal,
-      fast: () => run.stopping,
-      onSpawn: pid => {
-        run.spawned = true
-        try {
-          deps.registry?.add(pid)
-        } catch (e) {
-          this.log.warn('run pgid not registered', { runId: run.runId, error: e instanceof Error ? redact(e.message) : 'unknown' })
-        }
-        this.write('executor.run.started', s.sessionId, {
-          runId: run.runId, turnId: s.turnId, executor: adapter.id, cwd: run.cwd, isolation,
-          ...(t.untranslated > 0 && { untranslatedRules: t.untranslated }),
-        })
-      },
-      onClose: pid => deps.registry?.settle(pid),
-      onLine: line => this.onLine(run, line),
-      onDroppedLine: bytes => run.raw?.line(`{"droppedLine":${bytes}}`),
-      onStderrLine: line => this.onStderr(run, line),
-    })
+    let cli: CliResult
+    try {
+      cli = await (deps.runCli ?? realRunCli)(plan, {
+        cwd: run.cwd,
+        stdin: built.stdin,
+        timeoutMs: s.timeoutMs,
+        idleMs: cfg.idleMinutes * 60_000,
+        signal: run.abort.signal,
+        fast: () => run.stopping,
+        onSpawn: pid => {
+          run.spawned = true
+          try {
+            deps.registry?.add(pid)
+          } catch (e) {
+            this.log.warn('run pgid not registered', { runId: run.runId, error: e instanceof Error ? redact(e.message) : 'unknown' })
+          }
+          this.write('executor.run.started', s.sessionId, {
+            runId: run.runId, turnId: s.turnId, executor: adapter.id, cwd: run.cwd, isolation,
+            ...(t.untranslated > 0 && { untranslatedRules: t.untranslated }),
+          })
+        },
+        onClose: pid => deps.registry?.settle(pid),
+        onLine: line => this.onLine(run, line),
+        onDroppedLine: bytes => {
+          run.droppedLines++
+          run.raw?.line(`{"droppedLine":${bytes}}`)
+        },
+        onStderrLine: line => this.onStderr(run, line),
+      })
+    } catch (e) {
+      plan.release?.()
+      throw e
+    }
     return { outcome: this.classify(run, cli), cli, ...(cli.spawnError && { message: cli.spawnError }) }
   }
 
@@ -737,7 +847,7 @@ export class RunManager implements BackgroundRuns {
         run.throttle?.push(e.progress, clip(redactor.text('progress', e.text), PROGRESS_MAX))
         return
       case 'files':
-        for (const f of e.files) if (run.files.size < FILES_MAX) run.files.add(f)
+        for (const f of e.files) if (run.files.size < FILES_MAX && f.length <= REPORTED_PATH_MAX) run.files.add(f)
         return
       case 'final':
         run.final = redactor.text('final', e.text)
@@ -746,12 +856,21 @@ export class RunManager implements BackgroundRuns {
         run.usage = e.usage
         return
       case 'error':
-        run.lastError = redactor.text('error', clip(e.message, ERROR_TEXT_MAX))
-        if (run.state.errors.length < ERRORS_MAX || e.fatal) run.state = foldEvent(run.state, { ...e, message: clip(e.message, ERROR_TEXT_MAX) })
+        // 先打码再截:截掉 BEGIN 后正文就认不出了,半个令牌也认不出
+        run.lastError = clip(redactor.text('error', e.message), ERROR_TEXT_MAX)
+        if (this.keepsError(run.state, e)) run.state = foldEvent(run.state, { ...e, message: clip(e.message, ERROR_TEXT_MAX) })
         return
       default:
         run.state = foldEvent(run.state, e)
     }
+  }
+
+  /** 过了上限只再留第一个 fatal、第一个认证错误:判定用得上的都在,刷屏也撑不大 */
+  private keepsError(state: RunState, e: Extract<RunEvent, { kind: 'error' }>): boolean {
+    const { errors } = state
+    if (errors.length < ERRORS_MAX) return true
+    const isAuth = (x: { message: string; auth?: boolean }) => x.auth === true || AUTH_HINT.test(x.message)
+    return (e.fatal === true && !errors.some(x => x.fatal)) || (isAuth(e) && !errors.some(isAuth))
   }
 
   /** killFailed 第一个看:进程还在就不能当作已结束,不管别的旗标怎么说 */
@@ -792,13 +911,13 @@ export class RunManager implements BackgroundRuns {
   private async collectChanges(run: Run): Promise<{ files: string[]; source: ExecutorChangesSource; raw: string[] }> {
     const { git, tmpDir } = this.deps
     const { log } = this
-    const none = (source: ExecutorChangesSource, raw: string[]) => ({ files: raw.map(run.redactor.mask), source, raw })
+    const none = (source: ExecutorChangesSource, raw: string[]) => ({ files: raw.slice(0, FILES_MAX).map(run.redactor.mask), source, raw })
     if (run.startRef && run.spawned && !run.stopping) {
       try {
         const end = await takeSnapshot(run.cwd, runRef(run.s.sessionId, run.runId, 'end'), git, { tmpDir })
         if (end.ref) {
           const list = await gitChanges(run.cwd, run.startRef, end.ref, git, { tmpDir })
-          return none('git', list.map(f => f.path).slice(0, FILES_MAX))
+          return none('git', list.map(f => f.path))
         }
         if (end.reason === 'error') log.warn('run end snapshot failed', { runId: run.runId })
       } catch (e) {
@@ -809,20 +928,29 @@ export class RunManager implements BackgroundRuns {
   }
 
   /**
-   * 跑后过门(§8.4)。git 给的路径相对仓库根,CLI 自报的相对 cwd;repoRoot 永远是会话那棵树,worktree 运行也一样,规则针对的是它
+   * 跑后过门(§8.4):git 的 diff 加上 CLI 自报的。快照不看被忽略的文件,也只看 cwd 前缀,所以 gitignore 里的 `x.env`、
+   * cwd 外的写只有 CLI 自报这一条线索。git 的路径相对仓库根,CLI 的相对会话目录(Qoder 的是绝对路径);
+   * 规则针对的是会话那棵树,worktree 运行也一样
    */
   private async violations(run: Run, changed: { source: ExecutorChangesSource; raw: string[] }): Promise<string[]> {
-    if (changed.raw.length === 0) return []
     const { deps } = this
     const { s } = run
+    const fromGit = changed.source === 'git' ? changed.raw : []
+    const reported = [...run.files]
+    if (fromGit.length === 0 && reported.length === 0) return []
     try {
       const sessionDir = deps.sessions.get(s.sessionId)?.cwd ?? s.cwd
       let repoRoot = sessionDir
-      if (changed.source === 'git') {
+      if (fromGit.length > 0) {
         const repo = await repoInfo(sessionDir, deps.git, { tmpDir: deps.tmpDir }).catch(() => undefined)
         if (repo) repoRoot = repo.top
       }
-      return checkViolations(deps.gate, s.sessionId, changed.raw, repoRoot).map(run.redactor.mask)
+      const inDiff = new Set(fromGit.map(f => resolveToolPath(repoRoot, f)))
+      const extra = reported.filter(f => !inDiff.has(resolveToolPath(sessionDir, f)))
+      return [
+        ...checkViolations(deps.gate, s.sessionId, fromGit, repoRoot),
+        ...checkViolations(deps.gate, s.sessionId, extra, sessionDir),
+      ].map(run.redactor.mask)
     } catch (e) {
       this.log.warn('run violations not checked', { runId: run.runId, error: e instanceof Error ? redact(e.message) : 'unknown' })
       return []
@@ -850,6 +978,10 @@ export class RunManager implements BackgroundRuns {
       ...(run.nativeId && { nativeId: run.nativeId }),
       ...(dropped > 0 && { droppedProgress: dropped }),
     })
+    if (attempt.uncounted) {
+      const t = this.turn(s.turnId)
+      t.submitted = Math.max(0, t.submitted - 1)
+    }
     this.leave(run, this.notice(run, attempt, ms, changedField, violations, outcome.status))
   }
 
@@ -860,7 +992,7 @@ export class RunManager implements BackgroundRuns {
         id: run.adapter.id, run: run.runId, status, reason: outcome.reason, exit: cli?.code, signal: cli?.signal, ms,
         isolation: run.isolation, changed, violations, untranslated: run.untranslated, usage: run.usage, rawLog: run.raw?.path,
         stderrTail: run.stderrTail, final: run.final ?? run.lastError ?? message,
-        killFailed: cli?.killFailed, leftovers: cli?.leftovers,
+        killFailed: cli?.killFailed, leftovers: cli?.leftovers, networkLost: run.networkLost, droppedLines: run.droppedLines,
       }, run.redactor.mask)
     } catch (e) {
       this.log.warn('run notice fell back', { runId: run.runId, error: e instanceof Error ? redact(e.message) : 'unknown' })
@@ -939,7 +1071,7 @@ export class RunManager implements BackgroundRuns {
       }
     }
     await Promise.allSettled(waits)
-    this.dispatch()
+    this.dispatchQuietly()
   }
 
   /** 插件停用、内核关闭:所有轮。之后 submit 一律拒绝 */
@@ -961,10 +1093,11 @@ export class RunManager implements BackgroundRuns {
     const started = find<{ cwd: string; worktree?: string }>('executor.run.started')
     const ended = find<{ changed?: { files: string[]; source: ExecutorChangesSource; concurrent?: boolean } }>('executor.run.ended')
     const concurrent = ended?.changed?.concurrent ? { concurrent: true } : {}
+    /** 算不了就报 run.ended 记下的。没有状态,一律按改过算 */
     const reported = () => {
-      const files = ended?.changed?.source === 'cli' ? ended.changed.files : []
-      // CLI 自报没有状态,一律按改过算
-      return { files: files.map(path => ({ path, status: 'M' as const })), source: files.length > 0 ? ('cli' as const) : ('none' as const), ...concurrent }
+      const files = ended?.changed?.files ?? []
+      const source: ExecutorChangesSource = files.length > 0 ? ended!.changed!.source : 'none'
+      return { files: files.map(path => ({ path, status: 'M' as const })), source, ...concurrent }
     }
     if (!started) return reported()
     const cwd = started.worktree ?? started.cwd

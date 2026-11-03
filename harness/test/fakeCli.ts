@@ -33,13 +33,11 @@ const jsonl = (f: string) =>
         .map(l => JSON.parse(l))
     : []
 
-export function installFake(scenario: object = {}, name = 'codex'): FakeCli {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'mffai-fakecli-')))
+function makeFake(dir: string, name: string): FakeCli {
   const file = join(dir, name)
   // 绝对路径的解释器:测试给子进程的 PATH 可能没有 node
   writeFileSync(file, readFileSync(SOURCE, 'utf8').replace(/^#!.*/, `#!${process.execPath}`))
   chmodSync(file, 0o755)
-  writeFileSync(join(dir, 'scenario.json'), JSON.stringify(scenario))
   const fake: FakeCli = {
     dir,
     file,
@@ -55,8 +53,34 @@ export function installFake(scenario: object = {}, name = 'codex'): FakeCli {
       }
     },
   }
+  return fake
+}
+
+export function installFake(scenario: object = {}, name = 'codex'): FakeCli {
+  const fake = makeFake(realpathSync(mkdtempSync(join(tmpdir(), 'mffai-fakecli-'))), name)
+  writeFileSync(join(fake.dir, 'scenario.json'), JSON.stringify(scenario))
   fakes.push(fake)
   return fake
+}
+
+const reusable = new Map<string, FakeCli>()
+
+/**
+ * 同一个文件反复用,只换剧本:macOS 第一次执行新文件要多花约 0.4 s(实测),用例多的文件全花在这上面。
+ * 改文件本身(chmod、mtime)的用例不能用它。parent 要活过单个用例。文件结束时调 disposeReusableFakes
+ */
+export function reusableFake(scenario: object, name: string, parent: string): FakeCli {
+  let fake = reusable.get(name)
+  if (!fake) reusable.set(name, (fake = makeFake(realpathSync(mkdtempSync(join(parent, 'mffai-fakecli-'))), name)))
+  rmSync(join(fake.dir, 'calls.jsonl'), { force: true })
+  rmSync(join(fake.dir, 'pids.jsonl'), { force: true })
+  writeFileSync(join(fake.dir, 'scenario.json'), JSON.stringify(scenario))
+  return fake
+}
+
+export function disposeReusableFakes(): void {
+  for (const f of reusable.values()) rmSync(f.dir, { recursive: true, force: true })
+  reusable.clear()
 }
 
 /** 记下测试自己起的进程(spawn 之后立刻调);清理时启动时间仍一致才杀 */
@@ -79,6 +103,10 @@ export function cleanupFakes(): void {
   for (const f of fakes.splice(0)) {
     for (const p of f.pids()) killIfSame(p)
     rmSync(f.dir, { recursive: true, force: true })
+  }
+  for (const f of reusable.values()) {
+    for (const p of f.pids()) killIfSame(p)
+    rmSync(join(f.dir, 'pids.jsonl'), { force: true })
   }
   for (const p of extra.splice(0)) killIfSame(p)
 }

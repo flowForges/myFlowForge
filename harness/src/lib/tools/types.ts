@@ -112,6 +112,8 @@ export interface ShellPlan {
   sandboxed: boolean
   /** 本条命令实际的级别(ToolResult.meta.sandbox) */
   level: SandboxStatus['level']
+  /** 代理没起来,而沙箱只放行代理,所以这次没有网络。level 是 partial 不等于这个:Linux 没有网络命名空间时也是 partial,网络却是开的 */
+  networkLost?: true
   /** 命令结束后调用一次(多调无害):会话代理从此按空闲计时。不调 → 代理一直开到内核关闭 */
   release(): void
 }

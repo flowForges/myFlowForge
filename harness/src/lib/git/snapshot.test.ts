@@ -46,6 +46,30 @@ function initRepo(cwd = repo) {
   ug(['init', '-q', '-b', 'main'], cwd)
 }
 
+describe('createGit timeout (Task 8 review I-4)', () => {
+  it('resolves with -1 even when a helper keeps holding the pipes, and keeps what was read', async () => {
+    const pidFile = join(root, 'helper.pid')
+    // 超时要够 git 拉起别名(负载高时几百毫秒);sleep 比它长得多,不放开管道就一定超过断言的上限
+    const g = createGit({ base: base(), extraEnv: injected(), timeoutMs: 2000 })
+    const t0 = Date.now()
+    try {
+      const r = await g(['-c', `alias.hang=!echo early; echo $$ > '${pidFile}'; exec sleep 30`, 'hang'], { cwd: root })
+      expect(r.code).toBe(-1)
+      expect(r.stdout.toString()).toContain('early')
+      expect(Date.now() - t0).toBeLessThan(10_000)
+    } finally {
+      if (existsSync(pidFile)) process.kill(Number(readFileSync(pidFile, 'utf8').trim()), 'SIGKILL')
+    }
+  })
+
+  it('a git that ends in time is untouched by the timer', async () => {
+    const g = createGit({ base: base(), extraEnv: injected(), timeoutMs: 5000 })
+    const r = await g(['--version'], { cwd: root })
+    expect(r.code).toBe(0)
+    expect(r.stdout.toString()).toContain('git version')
+  })
+})
+
 describe('gitEnv', () => {
   it('drops every inherited GIT_* and sets the mff-ai identity', () => {
     const env = gitEnv({ PATH: '/bin', GIT_DIR: '/x', git_work_tree: '/y', GIT_INDEX_FILE: '/z', GIT_AUTHOR_NAME: 'me', HOME: '/h' })

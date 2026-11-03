@@ -1,11 +1,11 @@
 // 运行管理(04 Task 8)。假 CLI 经 runCli 真跑;沙箱是桩或真 Seatbelt(skipIf),权限门是真的
 import { execFileSync, spawnSync } from 'node:child_process'
 import { getEventListeners } from 'node:events'
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanupFakes, installFake, isAlive, waitDead, type FakeCli } from '../../../test/fakeCli'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { cleanupFakes, disposeReusableFakes, installFake as freshFake, isAlive, reusableFake, waitDead, type FakeCli } from '../../../test/fakeCli'
 import { PermissionGate } from '../../kernel/permissionGate'
 import { createSandboxService } from '../../kernel/sandbox'
 import { createGit, type Git } from '../../lib/git/snapshot'
@@ -36,6 +36,33 @@ let gitBase: NodeJS.ProcessEnv
 let rules: Rule[]
 const managers: RunManager[] = []
 const ORIGINAL_TMPDIR = process.env.TMPDIR
+const tmpdir0 = tmpdir()
+const installFake = (scenario: object = {}, name = 'codex') => reusableFake(scenario, name, tmpdir0)
+let template: string
+/** 写运行每次十来条 git:只有看快照结果的用例才真跑 */
+let realGit = false
+const noGit: Git = async () => { throw new Error('this test does not use git') }
+const usesGit = () => beforeEach(() => { realGit = true })
+const gitEnvFor = (dir: string): NodeJS.ProcessEnv => ({ PATH: '/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin', HOME: dir, GIT_CONFIG_GLOBAL: join(dir, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1' })
+
+// 每个用例复制一份,不重新 init:一百多个用例,四次 git 就是二十多秒
+beforeAll(() => {
+  template = realpathSync(mkdtempSync(join(tmpdir0, 'mffai-runs-template-')))
+  writeFileSync(join(template, 'gitconfig'), '[user]\n\tname = t\n\temail = t@example.invalid\n')
+  const dir = join(template, 'repo')
+  mkdirSync(dir)
+  const g = (...args: string[]) => execFileSync('git', args, { cwd: dir, env: gitEnvFor(template), stdio: 'ignore' })
+  g('init', '-q')
+  writeFileSync(join(dir, 'a.txt'), 'a\n')
+  writeFileSync(join(dir, 'b.txt'), 'b\n')
+  g('add', '-A')
+  g('commit', '-qm', 'init')
+})
+
+afterAll(() => {
+  disposeReusableFakes()
+  rmSync(template, { recursive: true, force: true })
+})
 
 const rule = (effect: 'deny' | 'ask' | 'allow', text: string): Rule => {
   const r = parseRule({ effect, rule: text })
@@ -49,16 +76,11 @@ beforeEach(() => {
   repo = join(root, 'repo')
   spill = join(root, 'data', 'sessions', SID, 'spill')
   mkdirSync(home)
-  mkdirSync(repo)
-  gitBase = { PATH: '/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin', HOME: home, GIT_CONFIG_GLOBAL: join(home, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1' }
+  cpSync(join(template, 'repo'), repo, { recursive: true })
+  gitBase = gitEnvFor(home)
   writeFileSync(join(home, 'gitconfig'), '[user]\n\tname = t\n\temail = t@example.invalid\n')
-  const g = (...args: string[]) => execFileSync('git', args, { cwd: repo, env: gitBase, stdio: 'ignore' })
-  g('init', '-q')
-  writeFileSync(join(repo, 'a.txt'), 'a\n')
-  writeFileSync(join(repo, 'b.txt'), 'b\n')
-  g('add', '-A')
-  g('commit', '-qm', 'init')
   rules = []
+  realGit = false
   // TMPDIR 跟着这个测试走:跑完 root 一删,没删掉的 mffai-run-* 也看得出来
   process.env.TMPDIR = join(root, 'tmp')
   mkdirSync(process.env.TMPDIR)
@@ -133,7 +155,7 @@ function setup(fakes: FakeCli[], o: Options = {}) {
     sessions: { get: session as never },
     sandbox,
     gate,
-    git: o.git ?? createGit({ base: gitBase }),
+    git: o.git ?? (realGit ? createGit({ base: gitBase }) : noGit),
     log: { info() {}, warn: (m: string) => void warnings.push(m), error() {} },
     env: o.env ?? { PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, HOME: home },
     loginPath: async () => '',
@@ -141,6 +163,8 @@ function setup(fakes: FakeCli[], o: Options = {}) {
     info: id => infos[id] ?? { id, installed: false, auth: 'unknown', isolation: 'none', missing: ['not_installed'] },
     config: () => ({ ...DEFAULT_EXECUTORS_CONFIG, ...o.config }),
     history: () => events as never,
+    // 只有验 ≤ 2/s 的用例用真窗口:否则每个运行结尾都要等最后一条进度
+    progressIntervalMs: 1,
     ...o.deps,
   })
   managers.push(manager)
@@ -205,7 +229,7 @@ describe('Review Focus 5: output can not flood the log or leak', () => {
       // 正文比 stderr 尾部窗口长:BEGIN 那行落在窗口外
       stderr: [`err ${SECRET}`, '-----BEGIN PRIVATE KEY-----', ...pemLines, '-----END PRIVATE KEY-----', 'last stderr line'],
     })
-    const rig = setup([fake])
+    const rig = setup([fake], { deps: { progressIntervalMs: undefined } })
     const { notice, end } = await one(rig)
 
     const progress = rig.of('executor.run.progress')
@@ -317,6 +341,333 @@ describe('Review Focus 5: output can not flood the log or leak', () => {
     expect(end.reason).toBe('cli_error')
     expect(notice).toContain('Incorrect API key provided')
     expect(notice).not.toContain(SECRET)
+  })
+})
+
+describe('review fixes', () => {
+  describe('I-1: mask before clipping', () => {
+    it('a long error with a PEM in the part clip would cut: no body line in the notice', async () => {
+      const body = Array.from({ length: 60 }, (_, i) => `${PEM_BODY}${String(i).padStart(4, '0')}`)
+      const message = ['p'.repeat(2000), '-----BEGIN PRIVATE KEY-----', ...body, '-----END PRIVATE KEY-----', 'tail text'].join('\n')
+      const fake = installFake({ lines: [JSON.stringify({ type: 'turn.failed', error: { message } })], exit: 1 })
+      const rig = setup([fake])
+      const { notice, end } = await one(rig)
+      expect(end.reason).toBe('cli_error')
+      expect(notice).not.toContain(PEM_BODY)
+      expect(notice).toContain('tail text')
+    })
+
+    // clip 留头 1333、尾 2660:前三个切在令牌头上,后两个切在尾部窗口的开头
+    it.each([[1310, 6000], [1320, 6000], [1333, 6000], [3000, 2640], [3000, 2650]])('a token across the clip point leaves nothing readable (%i, %i)', async (pad, rest) => {
+      const TOKEN = 'qoder-secret-token-0123456789abcdef'
+      mkdirSync(join(home, '.qoder', '.auth'), { recursive: true })
+      writeFileSync(join(home, '.qoder', '.auth', 't'), `${TOKEN}\n`)
+      const error = `${'p'.repeat(pad)}${TOKEN} ${SECRET}${'q'.repeat(rest)}`
+      const fake = installFake({ lines: [JSON.stringify({ type: 'assistant', message: { content: [] }, error })], exit: 1 }, 'qodercli')
+      const rig = setup([fake])
+      const { notice, end } = await one(rig, { adapter: 'qoder', isolation: 'wrapped' })
+      expect(end.reason).toBe('cli_error')
+      expect(notice).toContain('ppp')
+      for (const part of ['qoder-secret', 'token-0123', '0123456789abcdef', 'sk-a', 'abcdefghijklmnop']) expect(notice).not.toContain(part)
+    })
+  })
+
+  describe('I-2: violations judge the diff and what the CLI reported', () => {
+  usesGit()
+    const write = (file: string) => JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't', name: 'Write', input: { file_path: file } }] } })
+    const unenforceable = () => ({ ...POLICY, untranslatedRules: 1, totalRules: 1 })
+
+    it('a gitignored x.env the CLI reported is a violation, though changed.files is still the diff', async () => {
+      writeFileSync(join(repo, '.gitignore'), '*.env\n')
+      execFileSync('git', ['add', '-A'], { cwd: repo, env: gitBase })
+      execFileSync('git', ['commit', '-qm', 'ignore'], { cwd: repo, env: gitBase })
+      const fake = installFake({ writeFiles: { 'x.env': 'A=1\n', 'ok.txt': 'x\n' }, lines: [write(join(repo, 'x.env')), ...QODER_OK] }, 'qodercli')
+      const rig = setup([fake], { policy: unenforceable })
+      rules = [rule('deny', 'write(**/*.env)')]
+      const { end, notice } = await one(rig, { adapter: 'qoder', isolation: 'wrapped', asked: true })
+      expect(end.changed).toMatchObject({ source: 'git', files: ['ok.txt'] })
+      expect(end.violations).toEqual([join(repo, 'x.env')])
+      expect(notice).toContain('x.env')
+    })
+
+    it('a reported write outside the session cwd prefix counts, in a subdirectory session', async () => {
+      const sub = join(repo, 'sub')
+      mkdirSync(sub)
+      const fake = installFake({ lines: [write(join(repo, 'sibling.txt')), ...QODER_OK] }, 'qodercli')
+      const rig = setup([fake], { sessionCwd: { [SID]: sub } })
+      const { end } = await one(rig, { adapter: 'qoder', isolation: 'wrapped', cwd: sub })
+      expect(end.violations).toEqual([join(repo, 'sibling.txt')])
+    })
+
+    it('a file both in the diff and reported appears once', async () => {
+      const fake = installFake({ writeFiles: { 'x.env': 'A=1\n' }, lines: [write(join(repo, 'x.env')), ...QODER_OK] }, 'qodercli')
+      const rig = setup([fake], { policy: unenforceable })
+      rules = [rule('deny', 'write(**/*.env)')]
+      const { end } = await one(rig, { adapter: 'qoder', isolation: 'wrapped', asked: true })
+      expect(end.violations).toEqual(['x.env'])
+    })
+
+    it('a violation past the file cap is still found (M-5)', async () => {
+      const fake = installFake({ lines: CODEX_OK })
+      const real = createGit({ base: gitBase })
+      const names = Array.from({ length: 5001 }, (_, i) => `f${i}.txt`)
+      names[5000] = 'late.env'
+      const git: Git = async (args, o) => (args.includes('--name-status') ? { code: 0, stdout: Buffer.from(names.flatMap(n => ['M', n]).join('\0') + '\0'), stderr: '' } : real(args, o))
+      const rig = setup([fake], { git, policy: unenforceable })
+      rules = [rule('deny', 'write(**/*.env)')]
+      const { end } = await one(rig, { asked: true })
+      expect(end.changed.files).toHaveLength(5000)
+      expect(end.violations).toEqual(['late.env'])
+    })
+  })
+
+  describe('I-3: a changed binary is re-detected at dequeue', () => {
+    const touchLater = (f: string) => {
+      const later = new Date(Date.now() + 60_000)
+      utimesSync(f, later, later)
+    }
+    const fresh = (f: FakeCli, id: string, over: Partial<ExecutorInfo> = {}): ExecutorInfo => ({ id, installed: true, auth: 'ok', isolation: id === 'codex' ? 'own' : 'wrapped', missing: [], path: f.file, binaryKey: binaryKey(f.file), ...over })
+    const gone = (id: string): ExecutorInfo => ({ id, installed: false, auth: 'unknown', isolation: 'none', missing: ['not_installed'] })
+
+    it('an upgrade: the run waits, then proceeds on the new result; two runs share one re-detect', async () => {
+      const fake = freshFake({ lines: CODEX_OK })
+      const calls: string[] = []
+      const rig = setup([fake], {
+        deps: { redetect: async id => {
+          calls.push(id)
+          await new Promise(res => setTimeout(res, 100))
+          rig.infos[id] = fresh(fake, id)
+          return rig.infos[id]
+        } },
+      })
+      touchLater(fake.file)
+      const a = submit(rig, { readOnly: true })
+      const b = submit(rig, { readOnly: true })
+      await drain(rig)
+      expect(rig.ended(a)!.status).toBe('ok')
+      expect(rig.ended(b)!.status).toBe('ok')
+      expect(fake.calls()).toHaveLength(2)
+      expect(calls).toEqual(['codex'])
+    })
+
+    it('wider than approved: fails with a clear message, does not count against maxPerTurn, and the retry goes through the gate', async () => {
+      const fake = freshFake({ lines: CODEX_OK })
+      const rig = setup([fake], { config: { maxPerTurn: 1 }, deps: { redetect: async id => fresh(fake, id, { missing: ['codex_selftest'] }) } })
+      touchLater(fake.file)
+      const { end, notice } = await one(rig)
+      expect(end).toMatchObject({ status: 'failed', reason: 'sandbox_unavailable' })
+      expect(notice).toContain('re-check')
+      expect(fake.calls()).toEqual([])
+      expect(rig.manager.submit(input({ readOnly: true, turnId: 't1' }))).not.toHaveProperty('failure')
+      await drain(rig)
+    })
+
+    it('narrower than approved: approved as none, verified now → runs at own', async () => {
+      const fake = freshFake({ lines: CODEX_OK })
+      const rig = setup([fake], { infos: { codex: { missing: ['codex_selftest'] } }, deps: { redetect: async id => fresh(fake, id) } })
+      touchLater(fake.file)
+      const { end, notice } = await one(rig, { isolation: 'none', asked: true })
+      expect(end.status).toBe('ok')
+      expect(notice).toContain('isolation=own')
+    })
+
+    it('still none, approved as none: permissions are re-evaluated and it runs', async () => {
+      const fake = freshFake({ lines: CODEX_OK })
+      const rig = setup([fake], { infos: { codex: { missing: ['codex_selftest'] } }, deps: { redetect: async id => fresh(fake, id, { missing: ['codex_selftest'] }) } })
+      touchLater(fake.file)
+      expect((await one(rig, { isolation: 'none', asked: true })).end.status).toBe('ok')
+      touchLater(fake.file)
+      const unasked = setup([fake], { infos: { codex: { binaryKey: 'stale', missing: ['codex_selftest'] } }, deps: { redetect: async id => fresh(fake, id, { missing: ['codex_selftest'] }) } })
+      expect((await one(unasked, { isolation: 'none', asked: false, turnId: 't9' })).end).toMatchObject({ status: 'failed', reason: 'denied' })
+    })
+
+    it('the path is gone: not_installed, re-detect asked for, not counted', async () => {
+      const fake = freshFake({ lines: CODEX_OK })
+      const calls: string[] = []
+      const rig = setup([fake], { config: { maxPerTurn: 1 }, deps: { redetect: async id => { calls.push(id); return gone(id) } } })
+      rmSync(fake.file)
+      const { end, notice } = await one(rig)
+      expect(end).toMatchObject({ status: 'failed', reason: 'not_installed' })
+      expect(notice).toContain('gone')
+      expect(calls).toEqual(['codex'])
+      expect(rig.manager.submit(input({ turnId: 't1' }))).not.toHaveProperty('failure')
+      await drain(rig)
+    })
+
+    it('fails the trust check after re-detection: untrusted_binary, not counted', async () => {
+      const fake = freshFake({ lines: CODEX_OK })
+      const calls: string[] = []
+      const rig = setup([fake], { config: { maxPerTurn: 1 }, deps: { redetect: async id => { calls.push(id); return { ...gone(id), installed: true, missing: ['untrusted_binary'] } } } })
+      chmodSync(fake.dir, 0o777) // 其他人可写:isolationOf 判不可信
+      const { end, notice } = await one(rig)
+      chmodSync(fake.dir, 0o755)
+      expect(end).toMatchObject({ status: 'failed', reason: 'untrusted_binary' })
+      expect(notice).toContain('trust')
+      expect(calls).toEqual(['codex'])
+      expect(rig.manager.submit(input({ turnId: 't1' }))).not.toHaveProperty('failure')
+      await drain(rig)
+    })
+
+    it('a gate deny is not forgiven: a denied run still counts', async () => {
+      const fake = freshFake({ lines: CODEX_OK })
+      const rig = setup([fake], { config: { maxPerTurn: 1 }, deps: { redetect: async id => fresh(fake, id) } })
+      rules = [rule('deny', 'shell(codex*)')]
+      touchLater(fake.file)
+      expect((await one(rig)).end.reason).toBe('denied')
+      expect(rig.manager.submit(input({ turnId: 't1' }))).toEqual({ failure: 'too_many_runs' })
+    })
+
+    it('a re-detect that outlasts the bound or throws fails closed with the "try again" message, and is not counted', async () => {
+      const fake = freshFake({ lines: CODEX_OK })
+      const rig = setup([fake], { config: { maxPerTurn: 1 }, deps: { redetect: () => new Promise(() => {}), redetectWaitMs: 50 } })
+      touchLater(fake.file)
+      const { end, notice } = await one(rig)
+      expect(end).toMatchObject({ status: 'failed', reason: 'untrusted_binary' })
+      expect(notice).toContain('try again')
+      expect(fake.calls()).toEqual([])
+      const rig2 = setup([fake], { deps: { redetect: async () => { throw new Error('boom') } } })
+      touchLater(fake.file)
+      expect((await one(rig2, { turnId: 't2' })).end.reason).toBe('untrusted_binary')
+    })
+
+    it('cancel and abandon cut the wait short', async () => {
+      const fake = freshFake({ lines: CODEX_OK })
+      const rig = setup([fake], { deps: { redetect: () => new Promise(() => {}) } })
+      touchLater(fake.file)
+      const a = submit(rig, { readOnly: true })
+      await new Promise(res => setTimeout(res, 30))
+      rig.manager.cancel(SID, a)
+      await drain(rig)
+      expect(rig.ended(a)).toMatchObject({ status: 'cancelled' })
+      const b = submit(rig, { readOnly: true, turnId: 't2' })
+      await new Promise(res => setTimeout(res, 30))
+      await rig.manager.abandon('t2', 'kernel_stopping')
+      expect(rig.ended(b)).toMatchObject({ status: 'interrupted', reason: 'kernel_stopping' })
+    })
+
+    it('the file changing during the start snapshot: not spawned, re-detect started, plan released (M-9)', async () => {
+      const fake = freshFake({ lines: QODER_OK }, 'qodercli')
+      const real = createGit({ base: gitBase })
+      let touched = false
+      const calls: string[] = []
+      let released = 0
+      const rig = setup([fake], {
+        git: (a, o) => {
+          if (!touched) { touched = true; touchLater(fake.file) }
+          return real(a, o)
+        },
+        planExec: async (file, args, _s, env) => ({ file, args, env, sandboxed: true, level: 'full', release: () => void released++ }),
+        deps: { redetect: async id => { calls.push(id); return fresh(fake, id) } },
+      })
+      const { end, notice } = await one(rig, { adapter: 'qoder', isolation: 'wrapped' })
+      expect(end).toMatchObject({ status: 'failed', reason: 'untrusted_binary' })
+      expect(notice).toContain('try again')
+      expect(fake.calls()).toEqual([])
+      expect(released).toBe(1)
+      expect(calls).toEqual(['qoder'])
+    })
+  })
+
+  describe('I-5: the notice says when the run has no network', () => {
+    const plan = (over: Partial<ShellPlan>): SandboxService['planExec'] => async (file, args, _s, env) => ({ file, args, env, sandboxed: true, level: 'full', release: () => {}, ...over })
+
+    it('only when the plan says the proxy failure took the network away', async () => {
+      const fake = installFake({ lines: QODER_OK }, 'qodercli')
+      const lost = setup([fake], { planExec: plan({ level: 'partial', networkLost: true }) })
+      expect((await one(lost, { adapter: 'qoder', isolation: 'wrapped' })).notice).toMatch(/^network: off/m)
+    })
+
+    it('level partial alone says nothing: a Linux session without a netns has the network open', async () => {
+      const fake = installFake({ lines: QODER_OK }, 'qodercli')
+      const rig = setup([fake], { level: 'partial', planExec: plan({ level: 'partial' }) })
+      expect((await one(rig, { adapter: 'qoder', isolation: 'wrapped' })).notice).not.toContain('network:')
+    })
+  })
+
+  describe('minors', () => {
+    it('M-2: a one-line PEM with a digit in its label is masked', () => {
+      const line = `{"c":"-----BEGIN PKCS8 PRIVATE KEY-----\\n${PEM_BODY}\\n-----END PKCS8 PRIVATE KEY-----"}`
+      expect(new RunRedactor().line('out', line)).toBe('{"c":"***"}')
+    })
+
+    it('M-1: a clock stepping back can not hold the end of a run', async () => {
+      vi.useFakeTimers()
+      try {
+        let now = 1_000_000_000
+        const sent: string[] = []
+        const t = new ProgressThrottle((_k, x) => sent.push(x), () => now)
+        t.push('text', 'a')
+        now -= 3_600_000
+        t.push('text', 'b')
+        const closing = t.close(true)
+        await vi.advanceTimersByTimeAsync(600)
+        await closing
+        expect(sent).toEqual(['a', 'b'])
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('M-3: a flood of fatal errors stays bounded, and an auth error past the cap still counts', async () => {
+      const failLine = JSON.stringify({ type: 'turn.failed', error: { message: 'boom' } })
+      const auth = JSON.stringify({ type: 'error', message: 'HTTP 401 unauthorized' })
+      const fake = installFake({ lines: [...Array.from({ length: 300 }, () => failLine), auth], exit: 1 })
+      const rig = setup([fake])
+      expect((await one(rig)).end.reason).toBe('auth_missing')
+    })
+
+    it('M-4: an absurdly long reported path is ignored', async () => {
+      const line = JSON.stringify({ type: 'item.completed', item: { type: 'file_change', changes: [{ path: 'a'.repeat(5000) }, { path: 'short.ts' }] } })
+      const plain = join(root, 'plain')
+      mkdirSync(plain)
+      const fake = installFake({ lines: [line, FINISH] })
+      const rig = setup([fake], { sessionCwd: { [SID]: plain } })
+      expect((await one(rig, { cwd: plain })).end.changed.files).toEqual(['short.ts'])
+    })
+
+    it('M-6: changes() returns what run.ended recorded when git can no longer answer', async () => {
+      realGit = true
+      const fake = installFake({ writeFiles: { 'a.txt': 'x\n' }, lines: CODEX_OK })
+      const rig = setup([fake])
+      const { runId } = await one(rig)
+      const broken = setup([fake], { git: async () => { throw new Error('no git') }, deps: { history: () => rig.events as never } })
+      expect(await broken.manager.changes(SID, runId)).toEqual({ files: [{ path: 'a.txt', status: 'M' }], source: 'git' })
+    })
+
+    it('M-7: writers in repo and repo/sub count as concurrent', async () => {
+      realGit = true
+      const sub = join(repo, 'sub')
+      mkdirSync(sub)
+      const fake = installFake({ lines: CODEX_OK, sleep: 300 })
+      const rig = setup([fake])
+      const a = submit(rig)
+      const b = submit(rig, { cwd: sub })
+      await drain(rig)
+      expect(rig.ended(a)!.changed.concurrent).toBe(true)
+      expect(rig.ended(b)!.changed.concurrent).toBe(true)
+    })
+
+    it('M-8: config() throwing while freeing a slot only logs; nothing unhandled', async () => {
+      const fake = installFake({ lines: CODEX_OK })
+      const rig: Rig = setup([fake], { deps: { config: () => { if (rig.of('executor.run.ended').length > 0) throw new Error('bad config'); return DEFAULT_EXECUTORS_CONFIG } } })
+      const { end } = await one(rig, { readOnly: true })
+      expect(end.status).toBe('ok')
+      await rig.manager.abandon('t1')
+    })
+
+    it('M-9: runCli throwing releases the plan', async () => {
+      const fake = installFake({ lines: QODER_OK }, 'qodercli')
+      const rig = setup([fake], { deps: { runCli: () => { throw new Error('spawn exploded') } } })
+      const { end } = await one(rig, { adapter: 'qoder', isolation: 'wrapped', readOnly: true })
+      expect(end.reason).toBe('spawn_failed')
+      expect(rig.planCalls[0].released()).toBe(1)
+    })
+
+    it('M-9: dropped over-long lines are counted in the notice', async () => {
+      const fake = installFake({ bigLine: { bytes: 2 * 1024 * 1024 }, lines: CODEX_OK })
+      const rig = setup([fake])
+      expect((await one(rig, { readOnly: true })).notice).toMatch(/^dropped-lines: 1/m)
+    })
   })
 })
 
@@ -675,23 +1026,16 @@ describe('Review Focus 2: env and binary', () => {
       utimesSync(f, later, later)
     }
 
-    it('own at submit, the file changed since detection → sandbox_unavailable, never spawned, re-detect asked for', async () => {
-      const fake = installFake({ lines: CODEX_OK })
-      const changed: string[] = []
-      const rig = setup([fake], { deps: { onBinaryChanged: id => changed.push(id) } })
-      touchLater(fake.file)
-      const { end } = await one(rig)
-      expect(end).toMatchObject({ status: 'failed', reason: 'sandbox_unavailable' })
-      expect(fake.calls()).toEqual([])
-      expect(changed).toEqual(['codex'])
-    })
-
-    it('approved as none, or wrapped: a changed file fails closed as untrusted_binary', async () => {
-      const codex = installFake({ lines: CODEX_OK })
-      const qoder = installFake({ lines: QODER_OK }, 'qodercli')
-      const rig = setup([codex, qoder], { infos: { codex: { missing: ['codex_selftest'] } } })
+    it('with no way to re-detect, a changed file fails closed as untrusted_binary at any isolation, and does not count', async () => {
+      const codex = freshFake({ lines: CODEX_OK })
+      const qoder = freshFake({ lines: QODER_OK }, 'qodercli')
+      const rig = setup([codex, qoder], { config: { maxPerTurn: 1 }, infos: { codex: { missing: ['codex_selftest'] } } })
+      const owned = setup([codex], { config: { maxPerTurn: 1 } })
       touchLater(codex.file)
       touchLater(qoder.file)
+      const { end, notice } = await one(owned)
+      expect(end.reason).toBe('untrusted_binary')
+      expect(notice).toContain('try again')
       expect((await one(rig, { isolation: 'none', asked: true })).end.reason).toBe('untrusted_binary')
       expect((await one(rig, { adapter: 'qoder', isolation: 'wrapped' })).end.reason).toBe('untrusted_binary')
       expect(codex.calls()).toEqual([])
@@ -852,6 +1196,7 @@ describe('sandbox wiring (Tasks 6, 7)', () => {
 })
 
 describe('sandbox wiring, real Seatbelt', () => {
+  usesGit()
   const usable = process.platform === 'darwin' && spawnSync('/usr/bin/sandbox-exec', ['-p', '(version 1)(allow default)', '/usr/bin/true'], { stdio: 'ignore' }).status === 0
 
   it.skipIf(!usable)('rules, the exemption, and write-protected PATH dirs all arrive through the manager', async () => {
@@ -1033,14 +1378,11 @@ describe('queue', () => {
   })
 
   it('the timeout counts from the real start, not from the queue', async () => {
-    const codex = installFake({ sleep: 500, lines: [FINISH] })
+    const codex = installFake({ sleep: 300, lines: [FINISH] })
     const rig = setup([codex], { config: { maxGlobal: 1 } })
-    const a = submit(rig, { timeoutMs: 1500, readOnly: true })
-    const b = submit(rig, { timeoutMs: 1500, readOnly: true })
-    const c = submit(rig, { timeoutMs: 1500, readOnly: true })
-    const d = submit(rig, { timeoutMs: 1500, readOnly: true })
+    const ids = [1, 2, 3, 4].map(() => submit(rig, { timeoutMs: 800, readOnly: true }))
     await drain(rig)
-    for (const id of [a, b, c, d]) expect(rig.ended(id)!.status).toBe('ok')
+    for (const id of ids) expect(rig.ended(id)!.status).toBe('ok')
   }, 30_000)
 })
 
@@ -1075,7 +1417,7 @@ describe('every way out of active produces a notice and wakes wait (Task 4 revie
   })
 
   it('a spawn failure', async () => {
-    const fake = installFake({ lines: CODEX_OK })
+    const fake = freshFake({ lines: CODEX_OK })
     chmodSync(fake.file, 0o644)
     const rig = setup([fake], { infos: { codex: { binaryKey: binaryKey(fake.file) } } })
     let runId = ''
@@ -1370,15 +1712,20 @@ describe('outcomes', () => {
       expect(await cancelInDrain(fake, setup([fake]))).toMatchObject({ status: 'ok', exit: 0 })
     }, 15_000)
 
-    it('exit 0 with no completion is its real outcome too', async () => {
-      const fake = holder([])
-      expect(await cancelInDrain(fake, setup([fake]))).toMatchObject({ status: 'failed', reason: 'no_result', exit: 0 })
-    }, 15_000)
-
-    it('a CLI that exits by itself with a failure keeps that failure', async () => {
-      const fake = holder([], 3)
-      expect(await cancelInDrain(fake, setup([fake]))).toMatchObject({ status: 'failed', reason: 'exit_nonzero', exit: 3 })
-    }, 15_000)
+    // 真信号的路径上面测过一次(约 4 s:后台 sleep 不理 SIGINT);这两条只看归类
+    it.each([
+      [[], 0, 'no_result'],
+      [[], 3, 'exit_nonzero'],
+    ] as const)('classified from the CLI\'s own end: lines %j exit %i → %s', async (lines, code, reason) => {
+      const fake = installFake({})
+      const rig = setup([fake], {
+        deps: { runCli: async (_p, o) => {
+          for (const l of lines) o.onLine(l)
+          return { code, signal: null, timedOut: false, stalled: false, cancelled: true, exitedFirst: true, leftovers: 'killed' }
+        } },
+      })
+      expect((await one(rig, { readOnly: true })).end).toMatchObject({ status: 'failed', reason, exit: code })
+    })
 
     it('a CLI that exits 0 because of our SIGINT is cancelled', async () => {
       const fake = installFake({ run: "trap 'exit 0' INT; while :; do sleep 0.05; done" })
@@ -1606,6 +1953,7 @@ describe('abandon', () => {
 })
 
 describe('changes: in place (Review Focus 6, in-place half)', () => {
+  usesGit()
   it('a fake writes a.txt and deletes b.txt without reporting them → changed lists both, source git', async () => {
     const fake = installFake({ writeFiles: { 'a.txt': 'changed\n', 'new/c.txt': 'c\n' }, deleteFiles: ['b.txt'], lines: CODEX_OK })
     const rig = setup([fake])
@@ -1653,7 +2001,7 @@ describe('changes: in place (Review Focus 6, in-place half)', () => {
   })
 
   it('two concurrent writers → concurrent:true on both; a writer alone or a concurrent reader → not', async () => {
-    const fake = installFake({ lines: CODEX_OK, sleep: 800 })
+    const fake = installFake({ lines: CODEX_OK, sleep: 300 })
     const rig = setup([fake])
     const a = submit(rig)
     const b = submit(rig)

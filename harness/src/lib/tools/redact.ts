@@ -6,7 +6,7 @@ const B = String.raw`(?:(?<![A-Za-z0-9])|(?<=\\[nrtbf])|(?<=\\u[0-9A-Fa-f]{4})|(
 
 const PATTERNS: RegExp[] = [
   // PEM 私钥;没有 END(被截断)时打码到结尾
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----|[\s\S]*)/g,
+  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----(?:[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----|[\s\S]*)/g,
   new RegExp(B + 'sk-[A-Za-z0-9_-]{16,}', 'g'),
   new RegExp(B + 'github_pat_[A-Za-z0-9_]{20,}', 'g'),
   new RegExp(B + 'gh[pousr]_[A-Za-z0-9]{20,}', 'g'),

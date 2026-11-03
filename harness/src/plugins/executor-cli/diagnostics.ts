@@ -36,6 +36,10 @@ export interface Diagnostic {
   killFailed?: boolean
   /** 运行结束时还留着的进程;它们之后改的文件不在 changed 里 */
   leftovers?: 'kept' | 'killed'
+  /** 运行的代理没起来,所以没有网络 */
+  networkLost?: boolean
+  /** 超长、没有写进任何地方的行数 */
+  droppedLines?: number
 }
 
 /** 这次运行的打码表(RunRedactor.mask);要在清掉控制字符之后、截断之前用 */
@@ -129,6 +133,8 @@ function processLines(d: Diagnostic): string[] {
   return [
     ...(d.killFailed ? ['kill-failed: true; the process may still be running'] : []),
     ...(d.leftovers === 'kept' || d.leftovers === 'killed' ? [`leftovers: ${d.leftovers}; files they change after the run ended are not in changed`] : []),
+    ...(d.networkLost ? ["network: off; the run's proxy failed to start"] : []),
+    ...(d.droppedLines ? [`dropped-lines: ${count(d.droppedLines)}; longer than 1 MB, kept nowhere, so final may be missing`] : []),
   ]
 }
 

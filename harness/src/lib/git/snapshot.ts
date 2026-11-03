@@ -30,10 +30,12 @@ export function gitEnv(base: NodeJS.ProcessEnv): Record<string, string> {
 }
 
 const STDERR_MAX = 64 << 10
+/** SIGKILL 之后等 close 的时间(与 runCli 的 AFTER_KILL_MS 同样的道理) */
+const HELD_PIPE_MS = 500
 
 /**
  * 默认的 git:`gitEnv(base)` 之上叠 extraEnv(测试注入 GIT_CONFIG_GLOBAL 等)与每次调用的 env。
- * stdout 总是 Buffer(binary 只是提示);超时 → SIGKILL,code = -1;起不来 → reject
+ * stdout 总是 Buffer(binary 只是提示);超时 → SIGKILL,code = -1,有子进程拿着管道也一样返回;起不来 → reject
  */
 export function createGit(opts: { base?: NodeJS.ProcessEnv; extraEnv?: Record<string, string>; timeoutMs?: number } = {}): Git {
   return (args, o) =>
@@ -43,19 +45,32 @@ export function createGit(opts: { base?: NodeJS.ProcessEnv; extraEnv?: Record<st
       const out: Buffer[] = []
       let err = ''
       let done = false
-      const timer = setTimeout(() => child.kill('SIGKILL'), opts.timeoutMs ?? 120_000)
+      let grace: NodeJS.Timeout | undefined
+      const finish = (code: number | null) => {
+        clearTimeout(timer)
+        clearTimeout(grace)
+        if (!done) (done = true), resolve({ code: code ?? -1, stdout: Buffer.concat(out), stderr: err.slice(0, STDERR_MAX) })
+      }
+      // 过滤器之类的子进程会继承管道,杀了 git 也等不到 close:放开管道,不等它
+      const timer = setTimeout(() => {
+        child.kill('SIGKILL')
+        grace = setTimeout(() => {
+          child.stdin?.destroy()
+          child.stdout?.destroy()
+          child.stderr?.destroy()
+          finish(-1)
+        }, HELD_PIPE_MS)
+      }, opts.timeoutMs ?? 120_000)
       child.stdout!.on('data', (d: Buffer) => out.push(d))
       child.stderr!.on('data', (d: Buffer) => {
         if (err.length < STDERR_MAX) err += d.toString()
       })
       child.on('error', e => {
         clearTimeout(timer)
+        clearTimeout(grace)
         if (!done) (done = true), reject(e)
       })
-      child.on('close', code => {
-        clearTimeout(timer)
-        if (!done) (done = true), resolve({ code: code ?? -1, stdout: Buffer.concat(out), stderr: err.slice(0, STDERR_MAX) })
-      })
+      child.on('close', finish)
       if (o.input) {
         child.stdin!.on('error', () => {}) // git 提前退出 → EPIPE,结果看退出码
         child.stdin!.end(o.input)
