@@ -69,6 +69,20 @@ export function faultCode(prefix: string, err: unknown): string {
 type ParamsOf<M extends WorkerMethodName> = z.infer<(typeof WorkerMethods)[M]['params']>
 
 /** 删到一半的进度。text 在 memory.sqlite 的 meta 里,做完才清:这是重试能重新扫事件的唯一依据 */
+/**
+ * 有删除已经开始、还没把日志扫完:这时读到的事件还是原文。扫完之后(swept)日志是干净的,只差落盘。
+ * 记录读不懂也算没扫完,写手那边宁可少算一份
+ */
+export function deleteInFlight(store: Pick<Store, 'metaWithPrefix'>): boolean {
+  return store.metaWithPrefix(PENDING).some(r => {
+    try {
+      return (JSON.parse(r.value) as { swept?: unknown } | null)?.swept !== true
+    } catch {
+      return true
+    }
+  })
+}
+
 interface PendingPurge {
   id: string
   text?: string
@@ -403,6 +417,7 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
       if (session !== undefined) saw.add(session)
     }
     const listed = new Set(ids)
+    const rawSeqs = new Set(p.rawSeqs)
 
     const edits = new Map<string, RedactEdit>()
     const add = (edit: RedactEdit) => edits.set(`${edit.seq}\0${edit.needle ?? ''}\0${edit.callId ?? ''}`, edit)
@@ -455,6 +470,8 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
         if (e.type === 'executor.notice' && typeof run === 'string') namedRuns.add(run)
       }
       const session = e.sessionId
+      // 笔记的证据在这里,或者原话逐字在这里:这个会话的摘要可能转述过它
+      if (rawSeqs.has(e.seq)) noteSaw(session)
       switch (e.type) {
         case 'executor.run.progress': {
           const run = (e.payload as { runId?: unknown }).runId
@@ -502,7 +519,10 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
               noteSaw(session)
             }
           }
-          if (inScope(session) && quoted(namedText(e) ?? '')) quotedBy.add(e.seq)
+          if (inScope(session) && quoted(namedText(e) ?? '')) {
+            quotedBy.add(e.seq)
+            noteSaw(session)
+          }
           // 点名的这一步:delta 只能整段换,针跨块匹配不到
           if (e.seq === ownSeq) for (const seq of state.seqs) add({ seq })
           return
@@ -558,7 +578,10 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
           return
         }
         case 'message.user': {
-          if (inScope(session) && quoted(textField(e) ?? '')) quotedBy.add(e.seq)
+          if (inScope(session) && quoted(textField(e) ?? '')) {
+            quotedBy.add(e.seq)
+            noteSaw(session)
+          }
           return
         }
         case 'memory.injected': {

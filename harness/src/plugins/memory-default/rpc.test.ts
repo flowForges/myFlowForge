@@ -13,6 +13,7 @@ import { calling, done, fakeModels, memoryKernel, say, type FakeModels, type Mem
 import { buildMessages } from '../loop-default/history'
 import { createLoopDefault } from '../loop-default'
 import toolsRegistry from '../tools-registry'
+import { deleteInFlight } from './rpc'
 import { CONSOLIDATION_CURSOR } from './store'
 import { createMemoryDefault, type MemoryDefaultOpts, type MemoryDefaultPlugin } from './index'
 
@@ -164,6 +165,64 @@ async function seedFull(h: H) {
   h.ctx().append({ type: 'memory.checkpoint', sessionId: a, payload: { throughSeq: 1, asOfSeq: 1, text: '目标是发布,摘要里没有那句原话', model: 'm', tokens: 1, covers: 1 } })
   return { ...seeded, a, firstTurn }
 }
+
+describe('a checkpoint in a session the note came from', () => {
+  const checkpoint = (h: H, sid: string, text: string) =>
+    h.ctx().append({ type: 'memory.checkpoint', sessionId: sid, payload: { throughSeq: 1, asOfSeq: 1, text, model: 'm', tokens: 1, covers: 1 } })
+  const at = (h: H, seq: number) => h.events().find(e => e.seq === seq)!.payload as { text: string; redacted?: boolean }
+
+  it('the evidence was said there and the summary paraphrases it: voided', async () => {
+    const h = await boot()
+    const { witness } = await h.seedNote()
+    const cp = checkpoint(h, witness, '发布走老地方,这是转述')
+    await del(h, 'n_seed')
+    expect(at(h, cp.seq)).toMatchObject({ text: REDACTED, redacted: true })
+  })
+
+  it('the user typed the note word for word there and the summary paraphrases it: voided', async () => {
+    const h = await boot()
+    await h.seedNote()
+    const typed = await h.session()
+    h.ctx().append({ type: 'message.user', sessionId: typed, payload: { turnId: 't', text: `我说过 ${NOTE}` } })
+    const cp = checkpoint(h, typed, '端口不要动,这是转述')
+    await del(h, 'n_seed')
+    expect(at(h, cp.seq)).toMatchObject({ text: REDACTED, redacted: true })
+  })
+
+  it('the assistant quoted the note word for word there: voided', async () => {
+    const h = await boot()
+    await h.seedNote()
+    const quoted = await h.session()
+    h.ctx().append({ type: 'message.assistant', sessionId: quoted, payload: { turnId: 't', step: 1, text: `记得 ${NOTE}`, parts: [{ type: 'text', text: `记得 ${NOTE}` }] } })
+    const cp = checkpoint(h, quoted, '端口不要动,这是转述')
+    await del(h, 'n_seed')
+    expect(at(h, cp.seq)).toMatchObject({ text: REDACTED, redacted: true })
+  })
+
+  it('another scope saying the same words: its checkpoint stays', async () => {
+    const h = await boot()
+    await h.seedNote()
+    const group = await h.session({ origin: 'im' })
+    h.ctx().append({ type: 'message.user', sessionId: group, payload: { turnId: 't', text: NOTE } })
+    const cp = checkpoint(h, group, '群里的摘要')
+    await del(h, 'n_seed')
+    expect(at(h, cp.seq)).toEqual(expect.objectContaining({ text: '群里的摘要' }))
+  })
+
+  it('deleteInFlight: a record not swept yet counts, a swept one does not, a damaged one counts', async () => {
+    const h = await boot()
+    const { store } = h.memory().inspect()
+    expect(deleteInFlight(store)).toBe(false)
+    store.setMeta('purge:n_a', JSON.stringify({ id: 'n_a', text: 'x', evidence: [], removedIds: ['n_a'], rawSeqs: [] }))
+    expect(deleteInFlight(store)).toBe(true)
+    store.setMeta('purge:n_a', JSON.stringify({ id: 'n_a', evidence: [], removedIds: ['n_a'], rawSeqs: [], swept: true }))
+    expect(deleteInFlight(store)).toBe(false)
+    store.setMeta('purge:n_b', '{not json')
+    expect(deleteInFlight(store)).toBe(true)
+    store.deleteMeta('purge:n_a')
+    store.deleteMeta('purge:n_b')
+  })
+})
 
 describe('reads', () => {
   it('memory.list: newest first, paged by before, and no row is lost at a tie', async () => {
