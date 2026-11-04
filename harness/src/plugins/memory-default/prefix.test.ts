@@ -173,7 +173,9 @@ describe('Review Focus 1: the prefix never moves, with recall on', () => {
     h.queue.push(() => calling('c1', 'memory_search', { query: '发布流程' }), () => say('turn one'))
     await h.prompt(sid, QUESTION)
 
-    h.write('USER.md', '- 用 yarn\n')
+    // 真的 memory.file.set。只加不去:去掉的行按删除处理,那个前缀变一次(spec §19),rpc.test.ts 钉那种情况
+    const { hash } = (await h.r.k.handle('memory.file.get', { file: 'USER.md' })) as { hash: string }
+    await h.r.k.handle('memory.file.set', { commandId: 'set-user', file: 'USER.md', content: '- 用 pnpm\n- 用 yarn\n', expectedHash: hash })
     await h.prompt(sid, '第二轮的问题,和前面无关')
 
     // 后台写了检查点、MEMORY.md 被手改:都不能动已发的字节

@@ -5,7 +5,7 @@ import type { SessionInfo } from '../../kernel/sessions'
 import { clip } from '../../lib/tools/diagnostics'
 import { scrub } from '../../lib/memory/scrub'
 import type { KernelEvent } from '../../protocol/events'
-import { CONSOLIDATION_CURSOR, type RawRole, type Store } from './store'
+import { CONSOLIDATION_CURSOR, damaged, type RawRole, type Store } from './store'
 
 const BATCH = 500
 /** 带时间上限的追赶一次拉这么多:一条大的工具结果要几毫秒,500 条一个事务就是几秒,整个内核都在等 */
@@ -17,7 +17,9 @@ const WAKE_AFTER = 200
 const FLUSH_MS = 250
 const CLIP_MESSAGE = 16_000
 const CLIP_TOOL = 4_000
-const FAILING = 'ingest is failing, see the log'
+const FAILING = 'ingest_failing'
+/** 文件中段坏了打开时看不出来,只有读写到那一页才报:health 要能说出来 */
+const CORRUPT = 'db_corrupt'
 const SKIPPED = 'ingest_skipped_events'
 // 这几种 SQLite 错误只和这一行有关:TOOBIG、CONSTRAINT、MISMATCH、RANGE
 const SQLITE_ROW_FAULTS = new Set([18, 19, 20, 25])
@@ -60,7 +62,7 @@ export interface IngestDeps {
 }
 
 /** after(x, 1) 有结果 ⇔ x 小于最后一个 seq。倍增加二分,不用把整个日志读一遍 */
-function lastSeqOf(after: IngestDeps['events']['after']): number {
+export function lastSeqOf(after: IngestDeps['events']['after']): number {
   const more = (seq: number) => after(seq, 1).length > 0
   if (!more(0)) return 0
   let low = 0
@@ -183,16 +185,23 @@ export class Ingest {
       }
       if (this.failing) {
         this.failing = false
-        store.problems.splice(store.problems.indexOf(FAILING), 1)
+        this.setProblems(false, false)
       }
       return batch.length
     } catch (err) {
       log.error('memory ingest failed', { error: safeMessage(err) })
-      if (!this.failing) {
-        this.failing = true
-        store.problems.push(FAILING)
-      }
+      this.failing = true
+      this.setProblems(true, damaged(err))
       return 0
+    }
+  }
+
+  private setProblems(failing: boolean, corrupt: boolean): void {
+    const { problems } = this.deps.store
+    for (const [code, on] of [[FAILING, failing], [CORRUPT, corrupt]] as const) {
+      const at = problems.indexOf(code)
+      if (on && at < 0) problems.push(code)
+      if (!on && at >= 0) problems.splice(at, 1)
     }
   }
 

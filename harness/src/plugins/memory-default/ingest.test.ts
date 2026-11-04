@@ -247,7 +247,7 @@ describe('one pull path', () => {
     expect(rowCount(h.store)).toBe(0)
     expect(h.store.cursor()).toBe(0)
     expect(errors).toHaveLength(1)
-    expect(h.store.problems.join()).toContain('ingest')
+    expect(h.store.problems).toEqual(['ingest_failing'])
     broken = false
     i.flush()
     expect(texts(h.store)).toEqual(['a', 'b'])
@@ -363,7 +363,7 @@ describe('a bad event', () => {
     i.flush()
     expect(texts(h.store)).toEqual(['a'])
     expect(lines).toEqual([{ msg: 'memory ingest failed', data: { error: 'database or disk is full' } }])
-    expect(h.store.problems).toEqual(['ingest is failing, see the log'])
+    expect(h.store.problems).toEqual(['ingest_failing'])
     const cursor = h.store.cursor()
     expect(h.ctx().events.after(cursor, 1)[0].sessionId).toBe(BAD_SESSION) // 坏事件还没过
   })

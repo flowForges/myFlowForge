@@ -70,8 +70,7 @@ describe('openStore', () => {
     const bad = readdirSync(join(dir, 'plugin')).filter(f => f.startsWith('memory.sqlite.bad-'))
     expect(bad).toHaveLength(1)
     expect(bytes(join(dir, 'plugin', bad[0])).toString()).toContain('not a database')
-    expect(s.problems).toHaveLength(1)
-    expect(s.problems[0]).toContain(bad[0])
+    expect(s.problems).toEqual(['db_recovered'])
     expect(pragma(s, 'user_version')).toBe(1)
     s.insertRaw(raw(1, '夜间整合'))
     expect(s.searchRaw({ q: '夜间整合', scopes: ['owner'], limit: 5 })).toHaveLength(1)
@@ -96,7 +95,7 @@ describe('openStore', () => {
     db.close()
     const s = open()
     expect(pragma(s, 'user_version')).toBe(1)
-    expect(s.problems[0]).toContain('newer')
+    expect(s.problems).toEqual(['db_recovered'])
     expect(s.db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name = 'future'").get()).toEqual({ n: 0 })
   })
 

@@ -186,7 +186,10 @@ export const MemoryHealthSchema = z.object({
   // 预算相关字段由后台任务(Task 8)提供
   budget: z.object({ tokens: z.number(), usd: z.number(), tokensLimit: z.number(), usdLimit: z.number() }).optional(),
   backgroundModel: ModelRefSchema.optional(),
-  /** 稳定代码,如 db_recovered、file_over_cap:USER.md */
+  /**
+   * 稳定代码,如 db_recovered、delete_pending:<id>。file_over_cap:<文件> 后面跟着细节,要按前缀比。
+   * 插件激活失败(plugin.failed)时这个方法不存在:-32601,调用方看 status 的 plugins
+   */
   problems: z.array(z.string()),
 })
 export type MemoryHealth = z.infer<typeof MemoryHealthSchema>

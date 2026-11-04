@@ -272,13 +272,33 @@ export class MemoryFiles {
     return { content: scrubDoc(raw).text, hash: sha256(raw), cap: capOf(name) as number }
   }
 
-  /** removed:给 memory.file.set 按删除处理。证据只在行尾注释里,这之后就没了 */
+  /**
+   * 写之前要知道的:冲突和超限在这里报。removed 给 memory.file.set 按删除处理,证据只在行尾注释里,写完就没了。
+   * 文本还在、只是 id 变了(注释被编辑掉)的不算删除。
+   * 文件已经就是这份内容 = 上次写成了只是后面失败,同一个 commandId 重试要能过这一关
+   */
+  planWrite(file: string, content: string, expectedHash: string): { removed: { id: string; text: string; evidence: string[] }[] } {
+    const name = this.checked(file)
+    const raw = this.load(name)
+    const { text } = scrubDoc(content)
+    if (sha256(raw) !== expectedHash) {
+      if (sha256(raw) === sha256(text)) return { removed: [] }
+      throw new RpcError(ERR_BUSY, 'file changed')
+    }
+    assertRoom(name, text)
+    const after = parseEntries(text)
+    const ids = new Set(after.map(e => e.id))
+    const texts = new Set(after.map(e => e.text))
+    const gone = parseEntries(scrubDoc(raw).text).filter(e => !ids.has(e.id) && !texts.has(e.text))
+    return { removed: gone.map(e => ({ id: e.id, text: e.text, evidence: e.evidence })) }
+  }
+
   write(file: string, content: string, expectedHash: string, source: string): { hash: string; masked: number; removed: { id: string; text: string; evidence: string[] }[] } {
     const name = this.checked(file)
     const raw = this.load(name)
-    if (sha256(raw) !== expectedHash) throw new RpcError(ERR_BUSY, 'file changed')
+    const { removed } = this.planWrite(name, content, expectedHash)
     const { text, masked } = scrubDoc(content)
-    assertRoom(name, text)
+    if (sha256(raw) === sha256(text)) return { hash: sha256(text), masked, removed: [] }
     const before = new Map(parseEntries(scrubDoc(raw).text).map(e => [e.id, e]))
     const after = new Map(parseEntries(text).map(e => [e.id, e.text]))
     this.save(name, text)
@@ -291,7 +311,6 @@ export class MemoryFiles {
       for (const [id, was] of before) if (!after.has(id)) this.change(id, name, 'remove', was.text, null, source)
     })
     this.updated({ file: name, op: 'set', source })
-    const removed = [...before.values()].filter(e => !after.has(e.id)).map(e => ({ id: e.id, text: e.text, evidence: e.evidence }))
     return { hash: sha256(text), masked, removed }
   }
 
@@ -333,19 +352,34 @@ export class MemoryFiles {
     return { id, masked: clean.masked }
   }
 
+  /** 删除开始之前:先把文本记下来,否则删到一半失败,重试就找不到要清的东西了 */
+  findEntry(id: string): { text: string; scope: string; evidence: string[] } | undefined {
+    this.reconcile('all')
+    const note = this.store.getNote(id)
+    if (note && !note.file) return { text: note.text, scope: note.scope, evidence: [] }
+    const named = this.list('all').flatMap(f => this.locate(f, e => e.id === id).hits)
+    const text = note?.text ?? named[0]?.text ?? this.lastChangeText(id)
+    return text === undefined ? undefined : { text, scope: note?.scope ?? 'owner', evidence: [...new Set(named.flatMap(e => e.evidence))] }
+  }
+
+  evidenceOf(file: string, id: string): string[] {
+    return [...new Set(this.locate(file, e => e.id === id).hits.flatMap(e => e.evidence))]
+  }
+
   /**
    * spec §16 第一步。原始层和事件日志归调用方;这里给它们文本和证据。
    * 整行相同的文本一起删:同一条记忆的日记、归档副本。短文本也一样,比的是整行。
    * 行已经不在了(memory.file.set 去掉的、编辑器里删的)时文本从 changes 找;再删一次就什么都没有了。
-   * removedIds:连带删掉的都在里面,界面要能告诉用户
+   * removedIds:连带删掉的都在里面,界面要能告诉用户。
+   * knownText:上次删到一半失败时记下的文本。行和索引都没了也要清同文本的提议、候选和变更记录
    */
-  deleteEntry(id: string): { text?: string; evidence: string[]; removedIds: string[] } {
+  deleteEntry(id: string, knownText?: string): { text?: string; evidence: string[]; removedIds: string[] } {
     this.reconcile('all')
     const note = this.store.getNote(id)
     if (note && !note.file) return this.deleteSessionNote(id, note.text)
     const all = this.list('all')
     const named = all.flatMap(f => this.locate(f, e => e.id === id).hits)
-    const text = note?.text ?? named[0]?.text ?? this.lastChangeText(id)
+    const text = note?.text ?? named[0]?.text ?? knownText ?? this.lastChangeText(id)
     if (text === undefined) {
       this.removeBadCopies()
       return { evidence: [], removedIds: [] }
@@ -693,7 +727,7 @@ export class MemoryFiles {
   }
 
   /** 被挪开的坏库里可能有这段文本 */
-  private removeBadCopies(): void {
+  removeBadCopies(): void {
     for (const name of readdirSync(this.root)) {
       if (name.startsWith('memory.sqlite.bad-')) rmSync(join(this.root, name), { force: true })
     }

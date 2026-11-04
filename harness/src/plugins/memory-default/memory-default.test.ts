@@ -251,7 +251,8 @@ describe('memory failing does not stop the kernel', () => {
       writeFileSync(join(dir, 'memory.sqlite'), 'this is not a database, not even close to one')
     })
     expect(stateOf(r)?.state).toBe('active')
-    expect((await health(r)).problems.join()).toContain('moved to memory.sqlite.bad-')
+    expect((await health(r)).problems).toEqual(['db_recovered'])
+    expect(readdirSync(pluginDir(r)).some(f => f.startsWith('memory.sqlite.bad-'))).toBe(true)
   })
 })
 

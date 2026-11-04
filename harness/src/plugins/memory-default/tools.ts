@@ -23,9 +23,9 @@ const DURABLE_PER_TURN = 2
 const MAX_PENDING = 50
 /** 按轮计数只在内存里;轮早就结束的不留着 */
 const TURNS_KEPT = 256
-const NOTE_LAYERS = ['user', 'memory', 'topic', 'diary', 'session']
+export const NOTE_LAYERS = ['user', 'memory', 'topic', 'diary', 'session']
 /** 和 store 的 seq 同一个形状:r_12x、r_012、r_1e3 都不是这条 */
-const RAW_ID = /^r_([1-9]\d{0,15})$/
+export const RAW_ID = /^r_([1-9]\d{0,15})$/
 
 const SearchArgs = z.object({
   query: z.string().min(1).max(200),
@@ -76,7 +76,7 @@ export interface MemoryToolDeps {
 const refused = (content: string): ToolResult => ({ content, isError: true })
 
 /** user 只给主人自己说的话:定时任务的提示词是写好的,群里的话不知道是谁说的 */
-function rawSource(r: RawRow): string {
+export function rawSource(r: RawRow): string {
   if (r.role !== 'user') return r.role
   if (r.scope.startsWith('session:')) return 'group'
   return r.origin === 'schedule' ? 'schedule' : 'user'
@@ -86,7 +86,7 @@ const rawItem = (r: RawRow, text: string): ResultItem => ({ id: `r_${r.seq}`, la
 const noteItem = (n: NoteRow, text: string): ResultItem => ({ id: n.id, layer: n.layer, source: n.source, date: localDate(n.ts), text, flags: n.flags as Flag[] })
 
 /** 两层轮流取:一层再多也不会把另一层挤没 */
-function interleave<T>(a: T[], b: T[], limit: number): T[] {
+export function interleave<T>(a: T[], b: T[], limit: number): T[] {
   const out: T[] = []
   for (let i = 0; out.length < limit && (i < a.length || i < b.length); i++) {
     if (i < a.length) out.push(a[i])

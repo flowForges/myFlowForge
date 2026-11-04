@@ -1,17 +1,16 @@
 // memory-default:记忆插件的装配(06 spec §4)。记忆坏了不能挡内核启动,也不能挡这一轮:
 // 库打不开时插件仍是 active,服务和工具都在,问题报在 memory.health
-import { statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Plugin, PluginContext } from '../../kernel/pluginHost'
 import type { Sessions } from '../../kernel/sessions'
 import { parseMemoryConfig, type MemoryService } from '../../lib/memory/types'
 import type { ToolsService } from '../../lib/tools/types'
-import type { MemoryHealth } from '../../protocol/rpc'
 import { createContextFor } from './context'
 import { MemoryFiles } from './files'
 import { Ingest, type IngestTimers } from './ingest'
 import { manifest } from './manifest'
 import { scopeOf } from './policy'
+import { faultCode, registerMemoryRpc, type LiveMemory, type PurgeStep } from './rpc'
 import { openStore, type Store } from './store'
 import { createMemoryTools, storeProposals } from './tools'
 
@@ -23,6 +22,8 @@ export interface MemoryDefaultOpts {
   catchUpMs?: number
   /** false:不跑夜间整合(Task 10 接上) */
   nightly?: false
+  /** 测试用:memory.delete 每一步之前调,抛错 = 这一步失败 */
+  onPurgeStep?(step: PurgeStep): void
 }
 
 export interface MemoryDefaultPlugin extends Plugin {
@@ -32,20 +33,7 @@ export interface MemoryDefaultPlugin extends Plugin {
   inspect(): { store: Store }
 }
 
-interface Live {
-  store: Store
-  files: MemoryFiles
-  ingest: Ingest
-}
-
-/** 错误信息里有路径,给 health 的只留代码 */
-function problemCode(err: unknown): string {
-  const e = err as { code?: unknown; errstr?: unknown; name?: unknown }
-  const code = [e.code, e.errstr, e.name].find(v => typeof v === 'string' && v !== '')
-  return `store_unavailable:${String(code ?? 'unknown').replace(/\s+/g, '_')}`
-}
-
-function openLive(ctx: PluginContext, sessions: Sessions, o: MemoryDefaultOpts, now: () => number): Live {
+function openLive(ctx: PluginContext, sessions: Sessions, o: MemoryDefaultOpts, now: () => number): LiveMemory {
   const store = openStore(join(ctx.dataDir, 'memory.sqlite'), { log: ctx.log, now })
   try {
     const files = new MemoryFiles(ctx.dataDir, store, { now, log: ctx.log, append: e => ctx.append(e) })
@@ -70,23 +58,8 @@ function openLive(ctx: PluginContext, sessions: Sessions, o: MemoryDefaultOpts, 
   }
 }
 
-/** Task 7 的 rpc.ts 接手之前,先让问题看得见 */
-function healthOf(ctx: PluginContext, file: string, live: Live | undefined, problems: string[]): MemoryHealth {
-  if (!live) return { dbBytes: 0, rawRows: 0, noteRows: 0, cursorLag: 0, pendingProposals: 0, problems }
-  const { db, problems: storeProblems } = live.store
-  const count = (sql: string) => (db.prepare(sql).get() as { n: number }).n
-  return {
-    dbBytes: statSync(file, { throwIfNoEntry: false })?.size ?? 0,
-    rawRows: count('SELECT COUNT(*) AS n FROM raw'),
-    noteRows: count('SELECT COUNT(*) AS n FROM notes'),
-    cursorLag: ctx.events.after(live.store.cursor(), 500).length,
-    pendingProposals: count("SELECT COUNT(*) AS n FROM proposals WHERE status = 'pending'"),
-    problems: [...problems, ...storeProblems],
-  }
-}
-
 export function createMemoryDefault(opts: MemoryDefaultOpts = {}): MemoryDefaultPlugin {
-  let current: Live | undefined
+  let current: LiveMemory | undefined
   return {
     manifest,
     flushNow: () => current?.ingest.flush(),
@@ -99,11 +72,11 @@ export function createMemoryDefault(opts: MemoryDefaultOpts = {}): MemoryDefault
       if (!sessions) throw new Error('sessions service missing')
       const now = opts.now ?? Date.now
       const problems: string[] = []
-      let live: Live | undefined
+      let live: LiveMemory | undefined
       try {
         live = openLive(ctx, sessions, opts, now)
       } catch (err) {
-        const code = problemCode(err)
+        const code = faultCode('store_unavailable', err)
         problems.push(code)
         ctx.log.error('memory is unavailable', { problem: code })
       }
@@ -130,8 +103,9 @@ export function createMemoryDefault(opts: MemoryDefaultOpts = {}): MemoryDefault
         noteContext() {},
       }
       ctx.services.provide<MemoryService>('memory', service)
-      const file = join(ctx.dataDir, 'memory.sqlite')
-      ctx.rpc.register('memory.health', async () => healthOf(ctx, file, live, problems))
+      const rpc = registerMemoryRpc({ ctx, sessions, live, problems, dbFile: join(ctx.dataDir, 'memory.sqlite'), ...(opts.onPurgeStep && { onPurgeStep: opts.onPurgeStep }) })
+      // 后登记先释放:库关之前等扫到一半的删除停下
+      ctx.effect(() => rpc.stop())
 
       const tools = ctx.services.get<ToolsService>('tools')
       if (!tools) {

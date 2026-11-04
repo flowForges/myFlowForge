@@ -99,6 +99,16 @@ export interface NoteRow extends NoteInput {
 }
 export type NoteHit = NoteRow & { excerpt: string }
 
+export interface ChangeRow {
+  ts: number
+  entry_id: string | null
+  file: string | null
+  op: string
+  before: string | null
+  after: string | null
+  source: string
+}
+
 type Row = Record<string, SQLInputValue>
 
 const toRaw = (r: Row): RawRow => ({
@@ -129,6 +139,7 @@ const toNote = (r: Row): NoteRow => ({
 })
 
 const marks = (n: number) => Array(n).fill('?').join(', ')
+const scopeFilter = (scopes: string[] | 'all'): Filter => (scopes === 'all' ? { sql: '1 = 1', params: [] } : { sql: `scope IN (${marks(scopes.length)})`, params: scopes })
 const clampLimit = (limit: number) => Math.min(Math.max(0, Math.floor(limit)), MAX_LIMIT)
 
 interface Filter {
@@ -173,6 +184,14 @@ export class Store {
     this.setMetaStmt.run(key, value)
   }
 
+  deleteMeta(key: string): void {
+    this.db.prepare('DELETE FROM meta WHERE key = ?').run(key)
+  }
+
+  metaWithPrefix(prefix: string): { key: string; value: string }[] {
+    return this.db.prepare('SELECT key, value FROM meta WHERE substr(key, 1, ?) = ?').all(prefix.length, prefix) as { key: string; value: string }[]
+  }
+
   /** 接入游标:这个 seq 及之前都处理过 */
   cursor(): number {
     return Number(this.getMeta('cursor') ?? 0)
@@ -204,6 +223,11 @@ export class Store {
     })
   }
 
+  /** 同范围内逐字含这段文本的行。instr 比字节:LIKE 不分大小写,也不是"逐字" */
+  rawSeqsHolding(text: string, scope: string): number[] {
+    return (this.db.prepare('SELECT seq FROM raw WHERE scope = ? AND instr(text, ?) > 0').all(scope, text) as { seq: number }[]).map(r => r.seq)
+  }
+
   upsertNote(n: NoteInput): void {
     this.db
       .prepare(
@@ -223,21 +247,24 @@ export class Store {
     this.db.prepare('DELETE FROM notes WHERE id = ?').run(id)
   }
 
-  searchRaw(o: { q: string; scopes: string[]; limit: number; includeRolledBack?: boolean }): RawHit[] {
+  /** scopes 是 'all' 只有 RPC 这么传:app 带 token,看得到全部(spec §9) */
+  searchRaw(o: { q: string; scopes: string[] | 'all'; limit: number; includeRolledBack?: boolean }): RawHit[] {
     if (o.scopes.length === 0) return []
+    const scope = scopeFilter(o.scopes)
     const filter: Filter = {
-      sql: `scope IN (${marks(o.scopes.length)})${o.includeRolledBack ? '' : ' AND rolled_back = 0'}`,
-      params: o.scopes,
+      sql: `${scope.sql}${o.includeRolledBack ? '' : ' AND rolled_back = 0'}`,
+      params: scope.params,
     }
     const { rows, terms } = this.find(RAW, o.q, filter, o.limit)
     return rows.map(r => ({ ...toRaw(r), excerpt: excerpt(r.text as string, terms) }))
   }
 
-  searchNotes(o: { q: string; scopes: string[]; layers: string[]; limit: number; noFlags?: boolean }): NoteHit[] {
+  searchNotes(o: { q: string; scopes: string[] | 'all'; layers: string[]; limit: number; noFlags?: boolean }): NoteHit[] {
     if (o.scopes.length === 0 || o.layers.length === 0) return []
+    const scope = scopeFilter(o.scopes)
     const filter: Filter = {
-      sql: `scope IN (${marks(o.scopes.length)}) AND layer IN (${marks(o.layers.length)}) AND status = 'active'${o.noFlags ? " AND flags = '[]'" : ''}`,
-      params: [...o.scopes, ...o.layers],
+      sql: `${scope.sql} AND layer IN (${marks(o.layers.length)}) AND status = 'active'${o.noFlags ? " AND flags = '[]'" : ''}`,
+      params: [...scope.params, ...o.layers],
     }
     const { rows, terms } = this.find(NOTES, o.q, filter, o.limit)
     return rows.map(r => ({ ...toNote(r), excerpt: excerpt(r.text as string, terms) }))
@@ -264,6 +291,21 @@ export class Store {
     return this.recallRows(NOTES, o.q, filter, o.limit, toNote)
   }
 
+  /** 新的在前。见 newest:同一时刻的行不拆开 */
+  listRaw(o: { before?: number; limit: number }): RawRow[] {
+    return this.newest(RAW, { sql: 'rolled_back = 0', params: [] }, o).map(toRaw)
+  }
+
+  listNotes(o: { layers: string[]; before?: number; limit: number }): NoteRow[] {
+    if (o.layers.length === 0) return []
+    return this.newest(NOTES, { sql: `layer IN (${marks(o.layers.length)}) AND status = 'active'`, params: o.layers }, o).map(toNote)
+  }
+
+  /** 新的在前,只给 limit 条 */
+  listChanges(limit: number): ChangeRow[] {
+    return this.db.prepare('SELECT * FROM changes ORDER BY n DESC LIMIT ?').all(clampLimit(limit)) as unknown as ChangeRow[]
+  }
+
   /** 这个文件的索引行;contextFor 用它知道块里有哪些条目 */
   notesInFile(file: string): NoteRow[] {
     return (this.db.prepare('SELECT * FROM notes WHERE file = ? ORDER BY n').all(file) as Row[]).map(toNote)
@@ -283,6 +325,15 @@ export class Store {
 
   close(): void {
     if (this.db.isOpen) this.db.close()
+  }
+
+  /** before 按 ts 翻页:第 limit 条同一时刻的行都带上,否则下一页的 ts < before 会把它们漏掉。所以可能多于 limit */
+  private newest(t: Indexed, filter: Filter, o: { before?: number; limit: number }): Row[] {
+    const before = o.before ?? Number.MAX_SAFE_INTEGER
+    const where = `${filter.sql} AND ts < ?`
+    const sql = `SELECT * FROM ${t.table} WHERE ${where} AND ts >= COALESCE((SELECT ts FROM ${t.table} WHERE ${where} ORDER BY ts DESC LIMIT 1 OFFSET ?), 0)
+      ORDER BY ts DESC, ${t.key} DESC`
+    return this.db.prepare(sql).all(...filter.params, before, ...filter.params, before, Math.max(clampLimit(o.limit) - 1, 0)) as Row[]
   }
 
   /** AND 没有结果才退到 OR */
@@ -337,7 +388,7 @@ export class Store {
 class NewerVersion extends Error {}
 
 /** 只有文件本身坏了才挪走。锁、权限、磁盘满时好好的库不能丢:候选、提议、习惯都不能从日志重建 */
-function damaged(err: unknown): boolean {
+export function damaged(err: unknown): boolean {
   if (err instanceof NewerVersion) return true
   const code = (err as { errcode?: unknown }).errcode
   const SQLITE_CORRUPT = 11
@@ -399,7 +450,7 @@ export function openStore(file: string, o: OpenStoreOpts): Store {
     const reason = err instanceof Error ? err.message : String(err)
     const bad = setAside(file, (o.now ?? Date.now)())
     o.log.warn('memory store set aside, rebuilding', { reason, moved: basename(bad) })
-    problems.push(`memory store was unusable (${reason}), moved to ${basename(bad)} and rebuilt`)
+    problems.push('db_recovered')
     closeSync(openSync(file, 'a', 0o600))
     db = connect(file, busyTimeoutMs)
   }
