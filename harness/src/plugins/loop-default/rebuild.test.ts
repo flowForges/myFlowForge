@@ -272,7 +272,7 @@ describe('switching to a checkpoint', () => {
   it('tried once, even when a second try would now pass: only a later turn looks at it again', async () => {
     const h = harness()
     const through = h.past('t1', 'first', 10).seq
-    const cp = h.checkpoint(through)
+    h.checkpoint(through)
     const big = h.past('t2', 'second', CHARS(0.75))
     const result = h.events.find(e => e.type === 'tool.ended' && e.seq < big.seq && (e.payload as { turnId: string }).turnId === 't2')!
     await h.run('t3', 'third', n => {
@@ -284,7 +284,6 @@ describe('switching to a checkpoint', () => {
     expect(h.markers()).toEqual([])
     await h.run('t4', 'fourth')
     expect(h.markers()).toEqual([]) // 这一轮的历史本身已经小了,不到 70%
-    expect(cp.seq).toBeGreaterThan(0)
   })
 
   it('an older marker stays when the newest valid checkpoint does not cover more', async () => {
@@ -307,7 +306,7 @@ describe('switching to a checkpoint', () => {
     const task = `TASK-HEAD${'t'.repeat(9000)}`
     let through = 0
     let cpSeq = 0
-    await h.run('t2', task, (n, req) => {
+    await h.run('t2', task, n => {
       if (n === 1) {
         // 这一步的回答和结果在边界之后,边界落在这一轮中间
         through = h.events[h.events.length - 1].seq
@@ -316,12 +315,9 @@ describe('switching to a checkpoint', () => {
       if (n === 2) {
         // 写手这时才交卷:下一步越过 70%
         cpSeq = h.checkpoint(through).seq
-        h.ev('turn.usage', { turnId: 't2', step: 2, input: 1, output: 1 })
         return of({ type: 'text', delta: 'x'.repeat(CHARS(0.25)) }, { type: 'tool_call', id: 'c2', name: 'read', argsDelta: '{"path":"c2"}' }, { type: 'done', reason: 'tool_calls' })
       }
-      if (n === 3) return calling('c3')
-      expect(req).toBeDefined()
-      return say('done')
+      return n === 3 ? calling('c3') : say('done')
     })
     expect(h.markers()).toHaveLength(1)
     expect(h.markers()[0]).toMatchObject({ step: 3, checkpointSeq: cpSeq, throughSeq: through })
@@ -669,107 +665,155 @@ describe('the provider says the context overflowed', () => {
   })
 })
 
-describe('a replay removed on a step of the current turn (memory.delete while the turn runs)', () => {
+// 规则来自 Anthropic 的 preserved thinking 文档:推理的签名绑定它产生时的前缀,keep-tail 压缩留下的推理整个请求 400;
+// 假模型按这条拒绝。真实厂商的行为在实测清单
+describe('thinking blocks across a rebuild', () => {
   const REPLAY = { type: 'thinking', thinking: 'T', signature: 'S' }
   const thinkingCall = (id: string) => of({ type: 'reasoning', replay: REPLAY }, { type: 'tool_call', id, name: 'read', argsDelta: `{"path":"${id}"}` }, { type: 'done', reason: 'tool_calls' })
+  const hasThinking = (m: Message[]) => allText(m).includes('"thinking":"T"')
   /** 和 eventLog 的 redact 一样:reasoning part 去掉 replay */
   const stripReplay = (h: ReturnType<typeof harness>) => {
     const step = h.events.filter(e => e.type === 'message.assistant').pop()!
     for (const p of (step.payload as { parts: { type: string; replay?: unknown }[] }).parts) if (p.type === 'reasoning') delete p.replay
   }
 
-  it('the tail step lost its thinking: no switch on that step, so Anthropic has nothing to refuse; the next step switches', async () => {
+  it('no switch inside a thinking tool round; the next turn switches, and what it keeps carries no thinking from before the marker', async () => {
     const h = harness()
     const through = h.past('t1', 'q1', CHARS(0.8)).seq
-    h.past('tx', 'qx')
     const outcome = await h.run('t2', 'q2', (n, req) => {
-      if (anthropicRefuses(req)) return refuse('messages.1: Expected `thinking` or `redacted_thinking`, but found `tool_use`')
-      if (n === 1) return thinkingCall('c1')
-      if (n === 2) {
-        // 下一步才写好检查点,并且上一步的 replay 已被删除
-        stripReplay(h)
+      expect(anthropicRefuses(req)).toBe(false)
+      if (n === 1) h.checkpoint(through)
+      return n <= 2 ? thinkingCall(`c${n}`) : say('ok')
+    })
+    expect(outcome.type).toBe('turn.ended')
+    expect(h.markers()).toEqual([])
+    expect(hasThinking(h.requests[2].messages)).toBe(true)
+
+    await h.run('t3', 'q3', n => (n === 4 ? thinkingCall('c9') : say('ok')))
+    expect(h.markers().map(m => m.turnId)).toEqual(['t3'])
+    const switched = h.requests[3].messages
+    expect(hasThinking(switched)).toBe(false)
+    expect(allText(switched)).toContain('result of c1') // 文本和调用留着
+
+    // 切换之后产生的推理绑定新前缀:留下,而且之后每次都一样
+    const after = h.requests[4].messages
+    expect(JSON.stringify(after.slice(0, switched.length))).toBe(JSON.stringify(switched))
+    expect(hasThinking(after)).toBe(true)
+    await h.run('t4', 'q4')
+    expect(JSON.stringify(lastOf(h.requests).messages.slice(0, after.length))).toBe(JSON.stringify(after))
+  })
+
+  it('a replay removed on the current step (memory.delete while the turn runs): the live request goes out, no switch', async () => {
+    const h = harness()
+    const through = h.past('t1', 'q1', CHARS(0.8)).seq
+    const outcome = await h.run('t2', 'q2', (n, req) => {
+      expect(anthropicRefuses(req)).toBe(false)
+      if (n === 1) {
         h.checkpoint(through)
-        return thinkingCall('c2')
+        return thinkingCall('c1')
       }
-      if (n === 3) return thinkingCall('c3')
+      return say('ok')
+    }, {
+      tools: {
+        list: () => [],
+        call: async (name: string, _a: string, ctx: { callId: string }) => {
+          h.ev('tool.ended', { turnId: 't2', callId: ctx.callId, name, ok: true, ms: 1, content: 'r' })
+          stripReplay(h)
+          return { content: 'r' }
+        },
+      } as unknown as ToolsService,
+    })
+    expect(outcome.type).toBe('turn.ended')
+    expect(h.markers()).toEqual([])
+    expect(hasThinking(h.requests[1].messages)).toBe(true)
+  })
+
+  it('a step without thinking still switches mid-turn', async () => {
+    const h = harness()
+    const through = h.past('t1', 'q1', CHARS(0.8)).seq
+    await h.run('t2', 'q2', n => {
+      if (n === 1) h.checkpoint(through)
+      return n === 1 ? calling('c1') : say('ok')
+    })
+    expect(h.markers().map(m => m.step)).toEqual([2])
+  })
+
+  it('above 90% in a thinking round: nothing is dropped until the provider refuses; then the retry carries no stale thinking', async () => {
+    const h = harness()
+    for (let i = 0; i < 12; i++) h.past(`t${i}`, `q${i} ${'u'.repeat(CHARS(0.1))}`)
+    let step = 0
+    const outcome = await h.run('last', 'the question', () => {
+      step++
+      if (step === 1) return thinkingCall('c1')
+      if (step === 2) return refuse('prompt is too long')
       return say('ok')
     })
     expect(outcome.type).toBe('turn.ended')
-    expect(h.markers().map(m => m.step)).toEqual([3])
+    // 第一步的尾部没有推理,照常丢了;之后的请求前缀不变
+    expect(allText(h.requests[0].messages)).toContain('[已省略')
+    expect(hasThinking(h.requests[1].messages)).toBe(true)
+    expect(hasThinking(h.requests[2].messages)).toBe(false)
+  })
+
+  it('a tool result that jumps above 90% inside a thinking round is not dropped around', async () => {
+    const h = harness()
+    h.past('t1', 'q1')
+    await h.run('t2', 'q2', n => (n === 1 ? thinkingCall('c1') : say('ok')), {
+      tools: {
+        list: () => [],
+        call: async (name: string, _a: string, ctx: { callId: string }) => {
+          const content = 'x'.repeat(CHARS(0.95))
+          h.ev('tool.ended', { turnId: 't2', callId: ctx.callId, name, ok: true, ms: 1, content })
+          return { content }
+        },
+      } as unknown as ToolsService,
+    })
+    expect(allText(h.requests[1].messages)).not.toContain('[已省略')
+    expect(hasThinking(h.requests[1].messages)).toBe(true)
+  })
+
+  it('a turn-start drop leaves no thinking from the old prefix, and the tail keeps its calls', async () => {
+    const h = harness()
+    h.ev('message.user', { turnId: 't0', text: 'q0' })
+    h.ev('message.assistant', { turnId: 't0', step: 1, text: 'a', parts: [{ type: 'reasoning', replay: REPLAY, accountId: REF.accountId, modelId: REF.modelId }, { type: 'text', text: 'a' }] })
+    h.ev('turn.ended', { turnId: 't0' })
+    for (let i = 1; i < 12; i++) h.past(`t${i}`, `q${i} ${'u'.repeat(CHARS(0.1))}`)
+    h.ev('message.user', { turnId: 'tz', text: 'qz' })
+    h.ev('message.assistant', { turnId: 'tz', step: 1, text: 'z', parts: [{ type: 'reasoning', replay: REPLAY, accountId: REF.accountId, modelId: REF.modelId }, { type: 'text', text: 'KEPT-TEXT' }] })
+    h.ev('turn.ended', { turnId: 'tz' })
+    await h.run('last', 'the question')
+    const sent = h.requests[0].messages
+    expect(allText(sent)).toContain('[已省略')
+    expect(allText(sent)).toContain('KEPT-TEXT')
+    expect(hasThinking(sent)).toBe(false)
+  })
+
+  it('an overflow in a thinking round with a checkpoint: forced, and the retry carries no stale thinking', async () => {
+    const h = harness()
+    const through = h.past('t1', 'q1', CHARS(0.3)).seq
+    const outcome = await h.run('t2', 'q2', n => {
+      if (n === 1) {
+        h.checkpoint(through)
+        return thinkingCall('c1')
+      }
+      return n === 2 ? refuse('prompt is too long') : say('ok')
+    })
+    expect(outcome.type).toBe('turn.ended')
+    expect(h.markers().map(m => m.step)).toEqual([2])
+    expect(hasThinking(h.requests[1].messages)).toBe(true)
+    expect(hasThinking(h.requests[2].messages)).toBe(false)
     expect(allText(h.requests[2].messages)).toContain('<checkpoint')
   })
 
-  it('the step right before the switch has lost its replay: the live request goes out instead', async () => {
+  it('a voided marker still changed the prefix: thinking from before it stays out', async () => {
     const h = harness()
-    const through = h.past('t1', 'q1', CHARS(0.8)).seq
-    h.past('tx', 'qx')
-    const refused: number[] = []
-    const outcome = await h.run('t2', 'q2', (n, req) => {
-      if (anthropicRefuses(req)) refused.push(n)
-      if (n === 1) {
-        h.checkpoint(through)
-        return thinkingCall('c1')
-      }
-      return say('ok')
-    }, {
-      // 工具跑完、下一步请求之前,memory.delete 抹掉了这一步的 replay
-      tools: {
-        list: () => [],
-        call: async (name: string, _a: string, ctx: { callId: string }) => {
-          h.ev('tool.ended', { turnId: 't2', callId: ctx.callId, name, ok: true, ms: 1, content: 'r' })
-          stripReplay(h)
-          return { content: 'r' }
-        },
-      } as unknown as ToolsService,
-    })
-    expect(outcome.type).toBe('turn.ended')
-    expect(refused).toEqual([])
-    expect(h.markers()).toEqual([])
-    expect(allText(h.requests[1].messages)).toContain('"thinking":"T"')
-  })
-
-  it('an overflow on such a step: no switch, the drop works on the live messages, which keep the thinking', async () => {
-    const h = harness()
-    const through = h.past('t1', 'q1', CHARS(0.3)).seq
-    const outcome = await h.run('t2', 'q2', (n, req) => {
-      expect(anthropicRefuses(req)).toBe(false)
-      if (n === 1) {
-        h.checkpoint(through)
-        return thinkingCall('c1')
-      }
-      if (n === 2) return refuse('prompt is too long')
-      return say('ok')
-    }, {
-      tools: {
-        list: () => [],
-        call: async (name: string, _a: string, ctx: { callId: string }) => {
-          h.ev('tool.ended', { turnId: 't2', callId: ctx.callId, name, ok: true, ms: 1, content: 'r' })
-          stripReplay(h)
-          return { content: 'r' }
-        },
-      } as unknown as ToolsService,
-    })
-    expect(outcome.type).toBe('turn.ended')
-    expect(h.markers()).toEqual([])
-    expect(allText(h.requests[2].messages)).toContain('[已省略')
-    expect(allText(h.requests[2].messages)).toContain('"thinking":"T"')
-  })
-
-  it('with the replay intact a tool step rebuilds with its thinking first', async () => {
-    const h = harness()
-    const through = h.past('t1', 'q1', CHARS(0.8)).seq
-    const outcome = await h.run('t2', 'q2', (n, req) => {
-      expect(anthropicRefuses(req)).toBe(false)
-      if (n === 1) {
-        h.checkpoint(through)
-        return thinkingCall('c1')
-      }
-      return say('ok')
-    })
-    expect(outcome.type).toBe('turn.ended')
-    // 第一步已经省够了,第二步才看到检查点:切换在第二步,thinking 跟着步走
-    expect(h.markers().map(m => m.step)).toEqual([2])
-    expect(allText(h.requests[1].messages)).toContain('"thinking":"T"')
+    h.ev('message.user', { turnId: 't1', text: 'q1' })
+    h.ev('message.assistant', { turnId: 't1', step: 1, text: 'a', parts: [{ type: 'reasoning', replay: REPLAY, accountId: REF.accountId, modelId: REF.modelId }, { type: 'text', text: 'a' }] })
+    const end = h.ev('turn.ended', { turnId: 't1' })
+    h.marker(h.checkpoint(end.seq, '[已删除]', { redacted: true }), end.seq)
+    await h.run('t2', 'q2')
+    expect(allText(h.requests[0].messages)).not.toContain('<checkpoint')
+    expect(hasThinking(h.requests[0].messages)).toBe(false)
   })
 })
 

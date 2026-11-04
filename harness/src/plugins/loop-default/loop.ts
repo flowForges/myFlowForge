@@ -50,21 +50,21 @@ const RETRY_MAX_MS = 60_000
 /** 模型厂商说上下文爆了(06 §12);认不出来的就是 03 的失败 */
 const OVERFLOW = /context|too long|too large|maximum.*token|reduce the length/i
 
-const lastAssistantOf = (messages: Message[]): Message | undefined => {
-  for (let i = messages.length - 1; i >= 0; i--) if (messages[i].role === 'assistant') return messages[i]
-  return undefined
-}
-const hasPart = (m: Message, type: Part['type']) => m.parts.some(p => p.type === type)
-
 /**
- * 候选里最后一个工具步丢了推理 replay(轮中 memory.delete 就地抹掉的):Anthropic 和 DeepSeek 会拒绝工具循环里没有推理的那一步。
- * 这一步不切换;下一步的尾部有新的推理,再切
+ * 尾部是带推理的工具步:正在工具循环里。这时动前缀两头都可能被拒:留着推理,签名对不上新前缀;
+ * 去掉推理,旧模型要求工具循环的最后一步以推理打头。所以平时等它过去,厂商已经拒了(force)才动
  */
-function tailLostReplay(live: Message[], candidate: Message[]): boolean {
-  const before = lastAssistantOf(live)
-  const after = lastAssistantOf(candidate)
-  return !!before && !!after && hasPart(before, 'reasoning') && hasPart(after, 'tool_call') && !hasPart(after, 'reasoning')
+function inThinkingRound(messages: Message[]): boolean {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role !== 'assistant') continue
+    return messages[i].parts.some(p => p.type === 'reasoning') && messages[i].parts.some(p => p.type === 'tool_call')
+  }
+  return false
 }
+
+/** 前缀被 dropOldest 改了:留下的推理全都对不上了。这之后新产生的绑定新前缀 */
+const withoutReplays = (messages: Message[]): Message[] =>
+  messages.map(m => (m.parts.some(p => p.type === 'reasoning') ? { ...m, parts: m.parts.filter(p => p.type !== 'reasoning') } : m))
 
 export interface LoopDeps {
   models: ModelsService
@@ -179,13 +179,13 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<TurnOut
 
   /** 新的有效检查点值得切换就写标记并换掉消息。force = 模型厂商已经说爆了,省多少都切 */
   function trySwitch(step: number, force: boolean): boolean {
+    if (!force && inThinkingRound(messages)) return false // 不算试过:这一轮结束后再切
     const events = deps.history(sessionId)
     const cp = selectCheckpoint(events)
     const active = activeRebuild(events)
     if (!cp || cp.seq === lastTried || (active && cp.throughSeq <= active.throughSeq)) return false
     const includeCurrent = { ...buildOpts, includeCurrent: true }
     const candidate = rebuildHistory(events, turnId, req.text, { ...includeCurrent, rebuild: cp }).messages
-    if (tailLostReplay(messages, candidate)) return false
     lastTried = cp.seq
     const before = estimateTokens(messages)
     const after = estimateTokens(candidate)
@@ -208,9 +208,9 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<TurnOut
       const tokens = estimateTokens(messages)
       if (force && !(switched && tokens <= context * 0.5)) {
         // 没切换时估算可能比厂商的算法偏小(目录里的窗口也可能不准):低于 50% 还被拒,就再减一半,否则重试发的是同一份
-        messages = dropOldest(messages, { context, target: switched ? 0.5 : Math.min(0.5, (0.5 * tokens) / context), keepRecent: 0, currentOpening })
-      } else if (tokens > context * 0.9) {
-        messages = dropOldest(messages, { context, target: 0.6, keepRecent: Math.min(24_000, Math.floor(context * 0.3)), currentOpening })
+        messages = withoutReplays(dropOldest(messages, { context, target: switched ? 0.5 : Math.min(0.5, (0.5 * tokens) / context), keepRecent: 0, currentOpening }))
+      } else if (tokens > context * 0.9 && !inThinkingRound(messages)) {
+        messages = withoutReplays(dropOldest(messages, { context, target: 0.6, keepRecent: Math.min(24_000, Math.floor(context * 0.3)), currentOpening }))
       }
     }
     if (memory && concrete) {

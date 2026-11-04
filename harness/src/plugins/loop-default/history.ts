@@ -105,6 +105,8 @@ export function rebuildHistory(events: KernelEvent[], currentTurnId: string, cur
   const rebuild = opts.rebuild ?? activeRebuild(events)
   // throughSeq 及之前的步和后续消息不进:工具结果跟着它的步走,配对不会断在边界上
   const through = rebuild?.throughSeq ?? -Infinity
+  // 推理的签名绑定它产生时的前缀:留在尾部、产生于换前缀之前的 replay,Anthropic 会整个请求 400(被回滚作废的标记也换过前缀)。文本和调用留着
+  const replayFrom = opts.rebuild ? Infinity : events.reduce((seq, e) => (e.type === 'context.rebuilt' ? e.seq : seq), -Infinity)
   const turns = new Map<string, Turn>()
   const order: string[] = []
   for (const e of events) {
@@ -125,7 +127,7 @@ export function rebuildHistory(events: KernelEvent[], currentTurnId: string, cur
     const t = turns.get(id)
     if (!t) continue
     if (e.type === 'message.assistant') {
-      const parts = stepParts(p, opts.origin)
+      const parts = stepParts(p, e.seq < replayFrom ? undefined : opts.origin)
       if (parts.length) t.steps.push({ kind: 'assistant', parts, results: parts.filter(x => x.type === 'tool_call').map(() => undefined) })
     } else if (e.type === 'executor.notice') {
       if (str(p.text)) t.steps.push({ kind: 'notice', text: p.text })
