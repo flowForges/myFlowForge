@@ -7,6 +7,7 @@ import { parseMemoryConfig, type MemoryConfig, type MemoryService } from '../../
 import type { ModelsService } from '../../lib/models/types'
 import type { ToolsService } from '../../lib/tools/types'
 import { Background } from './background'
+import { CheckpointWriter } from './checkpoints'
 import { createContextFor } from './context'
 import { MemoryFiles } from './files'
 import { Ingest, type IngestTimers } from './ingest'
@@ -32,7 +33,7 @@ export interface MemoryDefaultPlugin extends Plugin {
   /** 测试用:不等批量定时器,把日志拉进原始层 */
   flushNow(): void
   /** 测试用:最近一次激活打开的库 */
-  inspect(): { store: Store; background: Background }
+  inspect(): { store: Store; background: Background; checkpoints: CheckpointWriter }
 }
 
 function openLive(ctx: PluginContext, sessions: Sessions, o: MemoryDefaultOpts, now: () => number, config: MemoryConfig): LiveMemory {
@@ -63,13 +64,13 @@ function openLive(ctx: PluginContext, sessions: Sessions, o: MemoryDefaultOpts, 
 }
 
 export function createMemoryDefault(opts: MemoryDefaultOpts = {}): MemoryDefaultPlugin {
-  let current: LiveMemory | undefined
+  let current: (LiveMemory & { checkpoints: CheckpointWriter }) | undefined
   return {
     manifest,
     flushNow: () => current?.ingest.flush(),
     inspect() {
       if (!current) throw new Error('memory store is not open')
-      return { store: current.store, background: current.background }
+      return { store: current.store, background: current.background, checkpoints: current.checkpoints }
     },
     activate(ctx) {
       const sessions = ctx.services.get<Sessions>('sessions')
@@ -85,28 +86,42 @@ export function createMemoryDefault(opts: MemoryDefaultOpts = {}): MemoryDefault
         problems.push(code)
         ctx.log.error('memory is unavailable', { problem: code })
       }
-      current = live
-      if (live) {
-        const { store, ingest, background } = live
+      const opened = live
+      const checkpoints =
+        opened &&
+        new CheckpointWriter({
+          events: ctx.events,
+          append: e => ctx.append(e),
+          store: opened.store,
+          background: opened.background,
+          models: () => ctx.services.get<ModelsService>('models'),
+          config: () => config,
+          catchUp: () => opened.ingest.catchUp(opts.catchUpMs),
+          now,
+          log: ctx.log,
+        })
+      current = opened && checkpoints && { ...opened, checkpoints }
+      if (opened && checkpoints) {
+        const { store, ingest } = opened
+        const stillCurrent = current
         // 最先登记、最后释放:工具和 RPC 都撤了才停接入、关库
         ctx.effect(() => {
           try {
             ingest.stop()
           } finally {
             store.close()
-            if (current === live) current = undefined
+            if (current === stillCurrent) current = undefined
           }
         })
-        // 后登记先释放:后台任务停干净了才关库
-        ctx.effect(() => background.close())
+        // 后登记先释放:写手和后台任务停干净了才关库
+        ctx.effect(() => checkpoints.close())
       }
 
-      const opened = live
       const service: MemoryService = {
         contextFor: opened
           ? createContextFor({ store: opened.store, files: opened.files, sessions, catchUp: () => opened.ingest.catchUp(opts.catchUpMs), recall: () => config.recall, log: ctx.log })
           : () => [],
-        noteContext() {},
+        noteContext: req => checkpoints?.note(req),
       }
       ctx.services.provide<MemoryService>('memory', service)
       const rpc = registerMemoryRpc({ ctx, sessions, live, problems, dbFile: join(ctx.dataDir, 'memory.sqlite'), ...(opts.onPurgeStep && { onPurgeStep: opts.onPurgeStep }) })

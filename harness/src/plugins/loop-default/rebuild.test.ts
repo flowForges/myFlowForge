@@ -554,6 +554,13 @@ describe('noteContext', () => {
     expect(h.noted[1].tokens).toBe(estimateTokens(h.requests[1].messages))
   })
 
+  it('is not called without a model: nothing to name in the request, nothing for a job to run on', async () => {
+    const h = harness({ ref: 'default' as never })
+    const base = { catalog: () => ({ presets: [], models: {}, default: undefined }), accounts: () => [], stream: () => say('ok') } as unknown as ModelsService
+    expect((await h.run('t1', 'q1', undefined, { models: base })).type).toBe('turn.ended')
+    expect(h.noted).toHaveLength(0)
+  })
+
   it('a throwing noteContext does not cost the turn', async () => {
     const h = harness({ memory: { noteContext() { throw new Error('nope') } } })
     expect((await h.run('t1', 'q1')).type).toBe('turn.ended')
