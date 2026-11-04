@@ -6,15 +6,16 @@ import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { Logger } from '../../kernel/log'
 import type { SessionInfo, Sessions } from '../../kernel/sessions'
+import { activeRebuild, selectCheckpoint } from '../../lib/memory/checkpoint'
 import { injectMemory } from '../../lib/memory/inject'
 import type { MemoryService } from '../../lib/memory/types'
 import type { Message, ModelError, ModelEvent, ModelRequest, ModelsService, Part } from '../../lib/models/types'
 import { redact } from '../../lib/tools/redact'
 import type { BackgroundRuns, FollowUp, ToolsService, TurnInbox } from '../../lib/tools/types'
 import type { KernelEvent, ModelRef } from '../../protocol/index'
-import { charsToTokens, compact, contextWindow } from './compact'
+import { charsToTokens, compact, contextWindow, dropOldest, estimateTokens } from './compact'
 import { accountProtocol, family, toolDefs, toolsetFor } from './family'
-import { buildMessages, followUpMessage, INTERRUPTED, noticeMessage, type BuildOpts, type ReplayOrigin } from './history'
+import { followUpMessage, INTERRUPTED, noticeMessage, rebuildHistory, type BuildOpts, type ReplayOrigin } from './history'
 import { LOOP_REMINDER, LoopGuard } from './loopGuard'
 import { dateReminder, environmentBlock, systemPrompt } from './prompts/index'
 
@@ -46,6 +47,24 @@ export function loggedArgs(raw: string): string {
 const MAX_RETRIES = 2
 const RETRY_DEFAULT_MS = 5_000
 const RETRY_MAX_MS = 60_000
+/** 模型厂商说上下文爆了(06 §12);认不出来的就是 03 的失败 */
+const OVERFLOW = /context|too long|too large|maximum.*token|reduce the length/i
+
+const lastAssistantOf = (messages: Message[]): Message | undefined => {
+  for (let i = messages.length - 1; i >= 0; i--) if (messages[i].role === 'assistant') return messages[i]
+  return undefined
+}
+const hasPart = (m: Message, type: Part['type']) => m.parts.some(p => p.type === type)
+
+/**
+ * 候选里最后一个工具步丢了推理 replay(轮中 memory.delete 就地抹掉的):Anthropic 和 DeepSeek 会拒绝工具循环里没有推理的那一步。
+ * 这一步不切换;下一步的尾部有新的推理,再切
+ */
+function tailLostReplay(live: Message[], candidate: Message[]): boolean {
+  const before = lastAssistantOf(live)
+  const after = lastAssistantOf(candidate)
+  return !!before && !!after && hasPart(before, 'reasoning') && hasPart(after, 'tool_call') && !hasPart(after, 'reasoning')
+}
 
 export interface LoopDeps {
   models: ModelsService
@@ -143,7 +162,12 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<TurnOut
   if (deps.memory) {
     injectMemory(deps.memory, { sessionId, turnId, text: req.text, events: deps.history(sessionId), contextTokens: context }, p => ev('memory.injected', p), deps.log)
   }
-  let messages: Message[] = buildMessages(deps.history(sessionId), turnId, req.text, buildOpts)
+  const built = rebuildHistory(deps.history(sessionId), turnId, req.text, buildOpts)
+  let messages: Message[] = built.messages
+  /** 当前轮的开场消息:折叠不碰用户消息,dropOldest 也不换它,所以按对象认得出 */
+  let opening: Message | undefined = messages[built.opening]
+  /** 这一轮试过的检查点:省不够的不再算一遍 */
+  let lastTried: number | undefined
 
   // 只有 step 往上数;后续消息把上限推后,并重置死循环检测(§7.6)
   let limit = maxSteps
@@ -153,10 +177,54 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<TurnOut
   const sleep = deps.sleep ?? defaultSleep
   let retries = 0
 
-  /** 一次模型请求:转发 delta / 用量,收齐文本、推理 replay 与工具调用 */
-  async function streamStep(step: number): Promise<StepResult> {
+  /** 新的有效检查点值得切换就写标记并换掉消息。force = 模型厂商已经说爆了,省多少都切 */
+  function trySwitch(step: number, force: boolean): boolean {
+    const events = deps.history(sessionId)
+    const cp = selectCheckpoint(events)
+    const active = activeRebuild(events)
+    if (!cp || cp.seq === lastTried || (active && cp.throughSeq <= active.throughSeq)) return false
+    const includeCurrent = { ...buildOpts, includeCurrent: true }
+    const candidate = rebuildHistory(events, turnId, req.text, { ...includeCurrent, rebuild: cp }).messages
+    if (tailLostReplay(messages, candidate)) return false
+    lastTried = cp.seq
+    const before = estimateTokens(messages)
+    const after = estimateTokens(candidate)
+    if (force ? after >= before : before - after < context * 0.2) return false
+    ev('context.rebuilt', { step, checkpointSeq: cp.seq, throughSeq: cp.throughSeq, before, after })
+    const rebuilt = rebuildHistory(deps.history(sessionId), turnId, req.text, includeCurrent)
+    messages = rebuilt.messages
+    opening = messages[rebuilt.opening]
+    return true
+  }
+
+  /** 每步请求前(06 §12):先看重建,再折叠,再兜底。没有记忆服务时只有 03 的折叠 */
+  function fitContext(step: number, force: boolean): void {
+    const memory = deps.memory
+    const switched = !!memory && (force || estimateTokens(messages) > context * 0.7) && trySwitch(step, force)
     // 折叠结果留在本轮的消息里:之后几步的前缀不变,直到再次越过高水位
     messages = compact(messages, { context, cwd: info.cwd })
+    if (memory) {
+      const currentOpening = opening ? messages.indexOf(opening) : -1
+      const tokens = estimateTokens(messages)
+      if (force && !(switched && tokens <= context * 0.5)) {
+        // 估算可能比厂商的算法偏小(目录里的窗口也可能不准):低于 50% 还被拒,就再减一半,否则重试发的是同一份
+        messages = dropOldest(messages, { context, target: Math.min(0.5, (0.5 * tokens) / context), keepRecent: 0, currentOpening })
+      } else if (tokens > context * 0.9) {
+        messages = dropOldest(messages, { context, target: 0.6, keepRecent: Math.min(24_000, Math.floor(context * 0.3)), currentOpening })
+      }
+    }
+    if (memory && concrete) {
+      try {
+        memory.noteContext({ sessionId, ref: concrete, tokens: estimateTokens(messages), context })
+      } catch (err) {
+        deps.log.warn('noteContext failed', { error: err instanceof Error ? err.name : 'unknown' })
+      }
+    }
+  }
+
+  /** 一次模型请求:转发 delta / 用量,收齐文本、推理 replay 与工具调用 */
+  async function streamStep(step: number, force = false): Promise<StepResult> {
+    fitContext(step, force)
     const request: Omit<ModelRequest, 'model'> = {
       system,
       messages: messages.slice(),
@@ -288,14 +356,24 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<TurnOut
     deliverNotices(step)
 
     let r = await streamStep(step)
-    // 限流且这一步还没吐出文本 / 工具调用:等一会儿重试(每轮最多 2 次,可被取消)
-    while (r.kind === 'error' && r.error.kind === 'rate_limit' && r.error.retryable && !r.produced && retries < MAX_RETRIES) {
-      retries++
-      const wait = Math.min(RETRY_MAX_MS, Math.max(0, r.error.retryAfterMs ?? RETRY_DEFAULT_MS))
-      deps.log.info('rate limited, retrying', { step, wait })
-      await sleep(wait, signal)
-      if (signal.aborted) return fail('cancelled')
-      r = await streamStep(step)
+    let overflowRetried = false
+    while (r.kind === 'error' && !r.produced) {
+      if (r.error.kind === 'rate_limit' && r.error.retryable && retries < MAX_RETRIES) {
+        // 限流且这一步还没吐出文本 / 工具调用:等一会儿重试(每轮最多 2 次,可被取消)
+        retries++
+        const wait = Math.min(RETRY_MAX_MS, Math.max(0, r.error.retryAfterMs ?? RETRY_DEFAULT_MS))
+        deps.log.info('rate limited, retrying', { step, wait })
+        await sleep(wait, signal)
+        if (signal.aborted) return fail('cancelled')
+        r = await streamStep(step)
+      } else if (deps.memory && r.error.kind === 'bad_request' && OVERFLOW.test(r.error.message) && !overflowRetried) {
+        // 上下文真的爆了:这一步强制重建或丢旧消息,只重试一次,不占限流的次数。再失败走 03 的失败
+        overflowRetried = true
+        deps.log.warn('context overflow, retrying once', { step })
+        r = await streamStep(step, true)
+      } else {
+        break
+      }
     }
     if (r.kind === 'cancelled') return fail('cancelled')
     if (r.kind === 'error') {
