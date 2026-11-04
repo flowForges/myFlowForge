@@ -14,6 +14,7 @@ import { clip } from '../../lib/tools/diagnostics'
 import type { KernelEvent } from '../../protocol/events'
 import type { MemoryHealth, MemoryItem, MemoryLayer, WorkerMethodName } from '../../protocol/rpc'
 import { MEMORY_ID, WorkerMethods } from '../../protocol/rpc'
+import type { Background } from './background'
 import type { MemoryFiles } from './files'
 import { lastSeqOf, type Ingest } from './ingest'
 import { scopeOf } from './policy'
@@ -45,6 +46,7 @@ export interface LiveMemory {
   store: Store
   files: MemoryFiles
   ingest: Ingest
+  background: Background
 }
 
 export interface MemoryRpcDeps {
@@ -215,12 +217,14 @@ export function registerMemoryRpc(d: MemoryRpcDeps): { stop(): Promise<void> } {
     })),
   }))
 
-  ctx.rpc.register('memory.health', async () => health())
+  ctx.rpc.register('memory.health', () => health())
 
-  function health(): MemoryHealth {
+  async function health(): Promise<MemoryHealth> {
     const empty = { dbBytes: 0, rawRows: 0, noteRows: 0, cursorLag: 0, pendingProposals: 0 }
     if (!live) return { ...empty, problems: [...d.problems] }
-    const { store, files } = live
+    const { store, files, background } = live
+    // status 自己兜住了卡住的额度读取和读不了的账本
+    const spend = await background.status()
     const faults: string[] = []
     const guarded = <T>(fallback: T, read: () => T): T => {
       try {
@@ -245,7 +249,9 @@ export function registerMemoryRpc(d: MemoryRpcDeps): { stop(): Promise<void> } {
       cursorLag: guarded(0, () => Math.max(0, lastSeqOf((seq, limit) => ctx.events.after(seq, limit)) - store.cursor())),
       pendingProposals: count("SELECT COUNT(*) AS n FROM proposals WHERE status = 'pending'"),
       ...(lastConsolidation !== undefined && { lastConsolidation }),
-      problems: [...new Set([...d.problems, ...store.problems, ...pending.map(pendingCode), ...faults])],
+      budget: spend.budget,
+      ...(spend.backgroundModel && { backgroundModel: spend.backgroundModel }),
+      problems: [...new Set([...d.problems, ...store.problems, ...pending.map(pendingCode), ...faults, ...(spend.problem ? [spend.problem] : [])])],
     }
   }
 

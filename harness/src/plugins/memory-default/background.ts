@@ -426,7 +426,7 @@ export class Background {
         else if (events % YIELD_EVERY === 0) await new Promise(setImmediate)
       }
     } catch {
-      got.reason = undefined
+      // 没有 done:调用方按 error 算,已产出的照样记账
     }
     // 不等:停不下来的流 return() 也不会回来
     try {

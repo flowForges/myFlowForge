@@ -362,7 +362,7 @@ describe('writes', () => {
 })
 
 describe('memory.health', () => {
-  it('matches the schema, counts rows, and the optional background fields are absent', async () => {
+  it('matches the schema, counts rows, and shows the background model and budget', async () => {
     const h = await boot()
     await h.seedNote()
     h.memory().flushNow()
@@ -371,8 +371,7 @@ describe('memory.health', () => {
     expect(result).toMatchObject({ noteRows: 1, cursorLag: 0, pendingProposals: 0, problems: [] })
     expect(result.rawRows).toBe(1)
     expect(result.dbBytes).toBeGreaterThan(0)
-    expect(result).not.toHaveProperty('budget')
-    expect(result).not.toHaveProperty('backgroundModel')
+    expect(result).toMatchObject({ backgroundModel: { accountId: 'acc', modelId: 'gpt-5' }, budget: { tokens: 0, usd: 0, tokensLimit: 100_000, usdLimit: 1 } })
   })
 
   it('cursorLag counts the real gap past one page of events, then closes', async () => {

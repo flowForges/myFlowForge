@@ -3,8 +3,10 @@
 import { join } from 'node:path'
 import type { Plugin, PluginContext } from '../../kernel/pluginHost'
 import type { Sessions } from '../../kernel/sessions'
-import { parseMemoryConfig, type MemoryService } from '../../lib/memory/types'
+import { parseMemoryConfig, type MemoryConfig, type MemoryService } from '../../lib/memory/types'
+import type { ModelsService } from '../../lib/models/types'
 import type { ToolsService } from '../../lib/tools/types'
+import { Background } from './background'
 import { createContextFor } from './context'
 import { MemoryFiles } from './files'
 import { Ingest, type IngestTimers } from './ingest'
@@ -30,10 +32,10 @@ export interface MemoryDefaultPlugin extends Plugin {
   /** 测试用:不等批量定时器,把日志拉进原始层 */
   flushNow(): void
   /** 测试用:最近一次激活打开的库 */
-  inspect(): { store: Store }
+  inspect(): { store: Store; background: Background }
 }
 
-function openLive(ctx: PluginContext, sessions: Sessions, o: MemoryDefaultOpts, now: () => number): LiveMemory {
+function openLive(ctx: PluginContext, sessions: Sessions, o: MemoryDefaultOpts, now: () => number, config: MemoryConfig): LiveMemory {
   const store = openStore(join(ctx.dataDir, 'memory.sqlite'), { log: ctx.log, now })
   try {
     const files = new MemoryFiles(ctx.dataDir, store, { now, log: ctx.log, append: e => ctx.append(e) })
@@ -51,7 +53,9 @@ function openLive(ctx: PluginContext, sessions: Sessions, o: MemoryDefaultOpts, 
       log: ctx.log,
     })
     ingest.start()
-    return { store, files, ingest }
+    // 每次取:models 插件可能比这里晚激活,也可能没有
+    const background = new Background({ models: () => ctx.services.get<ModelsService>('models'), config: () => config, store, now, log: ctx.log })
+    return { store, files, ingest, background }
   } catch (err) {
     store.close()
     throw err
@@ -65,16 +69,17 @@ export function createMemoryDefault(opts: MemoryDefaultOpts = {}): MemoryDefault
     flushNow: () => current?.ingest.flush(),
     inspect() {
       if (!current) throw new Error('memory store is not open')
-      return { store: current.store }
+      return { store: current.store, background: current.background }
     },
     activate(ctx) {
       const sessions = ctx.services.get<Sessions>('sessions')
       if (!sessions) throw new Error('sessions service missing')
       const now = opts.now ?? Date.now
       const problems: string[] = []
+      const config = parseMemoryConfig(ctx.config.memory, m => ctx.log.warn(m))
       let live: LiveMemory | undefined
       try {
-        live = openLive(ctx, sessions, opts, now)
+        live = openLive(ctx, sessions, opts, now, config)
       } catch (err) {
         const code = faultCode('store_unavailable', err)
         problems.push(code)
@@ -82,7 +87,7 @@ export function createMemoryDefault(opts: MemoryDefaultOpts = {}): MemoryDefault
       }
       current = live
       if (live) {
-        const { store, ingest } = live
+        const { store, ingest, background } = live
         // 最先登记、最后释放:工具和 RPC 都撤了才停接入、关库
         ctx.effect(() => {
           try {
@@ -92,9 +97,10 @@ export function createMemoryDefault(opts: MemoryDefaultOpts = {}): MemoryDefault
             if (current === live) current = undefined
           }
         })
+        // 后登记先释放:后台任务停干净了才关库
+        ctx.effect(() => background.close())
       }
 
-      const config = parseMemoryConfig(ctx.config.memory, m => ctx.log.warn(m))
       const opened = live
       const service: MemoryService = {
         contextFor: opened

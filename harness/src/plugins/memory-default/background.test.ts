@@ -2,11 +2,13 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { done, fakeClock, fakeModels, say, type FakeAccount, type FakeModelsOpts, type FakeModels } from '../../../test/memoryRig'
+import { done, fakeClock, fakeModels, memoryKernel, say, type FakeAccount, type FakeModelsOpts, type FakeModels, type MemoryRig } from '../../../test/memoryRig'
 import { nullLogger } from '../../kernel/log'
 import { MemoryConfigSchema, type MemoryConfig } from '../../lib/memory/types'
 import type { ModelError, ModelEvent } from '../../lib/models/types'
+import { MemoryHealthSchema, type MemoryHealth } from '../../protocol/rpc'
 import { Background, dateKey, pickBackground, type BackgroundRun } from './background'
+import { createMemoryDefault, type MemoryDefaultPlugin } from './index'
 import { openStore, type Store } from './store'
 
 const cfg = (over: Partial<MemoryConfig> = {}): MemoryConfig => ({ ...MemoryConfigSchema.parse({}), ...over })
@@ -561,5 +563,55 @@ describe('status', () => {
     expect(ok).toEqual({ backgroundModel: A, budget: { tokens: 0, usd: 0, tokensLimit: 400_000, usdLimit: 1 } })
     const none = await rig({ noModels: true }).bg.status()
     expect(none).toEqual({ budget: { tokens: 0, usd: 0, tokensLimit: 400_000, usdLimit: 1 } })
+  })
+})
+
+describe('inside the plugin', () => {
+  const boot = async (o: FakeModelsOpts & { memory?: object } = {}) => {
+    const fake = fakeModels(o)
+    const memory: MemoryDefaultPlugin = createMemoryDefault({ nightly: false })
+    const r: MemoryRig = await memoryKernel({ models: fake, plugins: [memory], ...(o.memory && { config: { memory: o.memory } }) })
+    cleanups.push(() => r.close())
+    return { fake, memory, r, health: () => r.k.handle('memory.health', {}) as Promise<MemoryHealth> }
+  }
+
+  it('memory.health shows the model, the spend and the limits', async () => {
+    const h = await boot({ script: () => say('ok', { input: 30, output: 12 }) })
+    const before = await h.health()
+    expect(MemoryHealthSchema.safeParse(before).success).toBe(true)
+    expect(before.backgroundModel).toEqual({ accountId: 'acc', modelId: 'gpt-5' })
+    expect(before.budget).toEqual({ tokens: 0, usd: 0, tokensLimit: 100_000, usdLimit: 1 })
+    const { background } = h.memory.inspect()
+    await new Promise(resolve => background.enqueue(async run => resolve(await run.text({ accountId: 'acc', modelId: 'gpt-5' }, REQ))))
+    expect((await h.health()).budget).toMatchObject({ tokens: 42, usd: (30 * 10 + 12 * 10) / 1e6 })
+  })
+
+  it('an explicit model on a restricted account is refused and reported, and nothing is called', async () => {
+    const pick = ref('r', 'x')
+    const h = await boot({ accounts: [{ id: 'r', restriction: 'coding-tools-only', models: [{ id: 'x' }] }], memory: { backgroundModel: pick } })
+    const seen = await h.health()
+    expect(seen.backgroundModel).toBeUndefined()
+    expect(seen.problems).toContain('background_model:restricted')
+    const { background } = h.memory.inspect()
+    expect(await new Promise(resolve => background.enqueue(async run => resolve(await run.text(pick, REQ))))).toEqual({ ok: false, reason: 'restricted' })
+    expect(h.fake.calls).toHaveLength(0)
+  })
+
+  it('closing the kernel aborts a blocked call and waits for the job, then the database closes', async () => {
+    const h = await boot({ script: () => (async function* (): AsyncIterable<ModelEvent> { await new Promise(() => {}) })() })
+    const { store, background } = h.memory.inspect()
+    const seen: { result?: unknown; openAfterAbort?: boolean; openAtEnd?: boolean } = {}
+    background.enqueue(async run => {
+      seen.result = await run.text({ accountId: 'acc', modelId: 'gpt-5' }, REQ)
+      seen.openAfterAbort = store.db.isOpen
+      await new Promise(r => setTimeout(r, 10))
+      seen.openAtEnd = store.db.isOpen
+    })
+    await expect.poll(() => h.fake.calls.length).toBe(1)
+    const signal = h.fake.calls[0].req.signal
+    await h.r.k.close()
+    expect(signal.aborted).toBe(true)
+    expect(seen).toEqual({ result: { ok: false, reason: 'aborted' }, openAfterAbort: true, openAtEnd: true })
+    expect(store.db.isOpen).toBe(false)
   })
 })
