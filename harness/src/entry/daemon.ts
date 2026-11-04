@@ -5,6 +5,7 @@ import { PROTOCOL_VERSION, connectControlClient, dataDir, ensureToken, runtimePa
 import { startControlServer } from '../supervisor/controlServer'
 import { createFileLogger } from '../supervisor/fileLog'
 import { Supervisor } from '../supervisor/supervisor'
+import { workerEnvFor } from './proxyEnv'
 import { runWorker } from './worker'
 
 // mffaiDaemon.js:无参数为监管进程,--worker 为工作进程
@@ -86,11 +87,8 @@ export async function runSupervisor(): Promise<void> {
   const supervisor = new Supervisor({
     workerCmd: process.execPath,
     workerArgs: [__filename, '--worker'],
-    env: {
-      ...process.env, ELECTRON_RUN_AS_NODE: '1', MFFAI_DATA_DIR: dir,
-      // 工作进程才上网:有代理环境变量就让内置 fetch 走代理
-      ...(['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy'].some(k => process.env[k]) && { NODE_USE_ENV_PROXY: '1' }),
-    },
+    // 工作进程才上网:代理环境变量由 app 给,登录项启动时从 run/proxy.json 恢复
+    env: { ...workerEnvFor(process.env, paths.proxy, log), ELECTRON_RUN_AS_NODE: '1', MFFAI_DATA_DIR: dir },
     log,
     onState: s => held && writeJson(s),
   })

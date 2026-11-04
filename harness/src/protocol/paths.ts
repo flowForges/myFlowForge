@@ -16,6 +16,8 @@ export interface RuntimePaths {
   controlAddr: string
   token: string
   supervisorJson: string
+  /** app 最后给的代理(0600,可含账号;只给监管进程读写,不进日志和 RPC) */
+  proxy: string
   startVbs: string
   db: string
   logs: string
@@ -35,6 +37,7 @@ export function runtimePaths(dir: string, platform: NodeJS.Platform = process.pl
     controlAddr: addr('control'),
     token: join(run, 'token'),
     supervisorJson: join(run, 'supervisor.json'),
+    proxy: join(run, 'proxy.json'),
     startVbs: join(run, 'start.vbs'),
     db: join(dir, 'db', 'events.sqlite'),
     logs: join(dir, 'logs'),

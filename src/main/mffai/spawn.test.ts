@@ -10,7 +10,7 @@ describe('daemonEnv', () => {
     }
     expect(daemonEnv(base, '/data')).toEqual({
       PATH: '/usr/bin', HOME: '/home/u', HTTPS_PROXY: 'http://p:1', http_proxy: 'http://p:2', NO_PROXY: 'localhost',
-      ELECTRON_RUN_AS_NODE: '1', MFFAI_DATA_DIR: '/data', NODE_USE_ENV_PROXY: '1',
+      ELECTRON_RUN_AS_NODE: '1', MFFAI_DATA_DIR: '/data', MFFAI_SPAWNED_BY_APP: '1', NODE_USE_ENV_PROXY: '1',
     })
     expect(base.NODE_OPTIONS).toBe('--inspect') // 不改原对象
   })
@@ -20,5 +20,10 @@ describe('daemonEnv', () => {
     expect(env.NO_PROXY).toBe('corp,localhost,127.0.0.1')
     expect(env.NODE_USE_ENV_PROXY).toBe('1')
     expect(daemonEnv({ PATH: '/b' }, '/d', '').NODE_USE_ENV_PROXY).toBeUndefined()
+  })
+  it('MFFAI_SPAWNED_BY_APP=1 is always set, with or without a proxy, and overrides an inherited value', () => {
+    expect(daemonEnv({ PATH: '/b' }, '/d').MFFAI_SPAWNED_BY_APP).toBe('1')
+    expect(daemonEnv({ PATH: '/b' }, '/d', 'http://127.0.0.1:1').MFFAI_SPAWNED_BY_APP).toBe('1')
+    expect(daemonEnv({ MFFAI_SPAWNED_BY_APP: '0' }, '/d').MFFAI_SPAWNED_BY_APP).toBe('1')
   })
 })

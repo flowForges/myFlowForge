@@ -29,6 +29,7 @@ export function daemonEnv(base: NodeJS.ProcessEnv, dataDir: string, proxy?: stri
   }
   env.ELECTRON_RUN_AS_NODE = '1'
   env.MFFAI_DATA_DIR = dataDir
+  env.MFFAI_SPAWNED_BY_APP = '1' // 监管据此知道是 app 拉起的:环境里的代理才可信、才存盘
   const p = proxy?.trim()
   if (p) {
     for (const k of PROXY_KEYS) env[k] = p
