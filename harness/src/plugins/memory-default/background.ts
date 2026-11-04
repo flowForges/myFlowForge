@@ -10,6 +10,10 @@ const MIN_CONTEXT = 16_000
 /** spec §12:一次后台调用最多 120 s,额度读取也算在里面 */
 const TIMEOUT_MS = 120_000
 const QUEUE_MAX = 8
+/** 整个任务的上限:任务卡在 text 以外的地方时,队列不能跟着卡死 */
+const JOB_TIMEOUT_MS = 600_000
+/** 中止之后留给任务收尾的时间,超过就不等了 */
+const CLOSE_GRACE_MS = 5000
 /** 额度读不到的账号,吃的是用户前台的额度而且看不见 */
 const BLIND_TOKENS = 100_000
 const QUOTA_LOW_PERCENT = 75
@@ -89,6 +93,8 @@ export interface BackgroundOpts {
   now(): number
   log: Logger
   timeoutMs?: number
+  jobTimeoutMs?: number
+  closeGraceMs?: number
 }
 
 type Job = (run: BackgroundRun) => Promise<void> | void
@@ -177,7 +183,7 @@ export class Background {
     return true
   }
 
-  /** 中止,等跑着的任务结束。之后才能关库 */
+  /** 中止,等跑着的任务结束,最多等 closeGraceMs。之后才能关库 */
   async close(): Promise<void> {
     this.closed = true
     this.queue.length = 0
@@ -234,6 +240,15 @@ export class Background {
     }
   }
 
+  /** 日志坏了不能影响调用和队列 */
+  private warn(msg: string, data?: unknown): void {
+    try {
+      this.o.log.warn(msg, data)
+    } catch {
+      // 没地方说了
+    }
+  }
+
   private pump(): void {
     if (this.active || this.closed) return
     const job = this.queue.shift()
@@ -257,22 +272,45 @@ export class Background {
           const r = await this.send(ref, req, abort.signal)
           if (!r.ok) failed = r.reason
           return r
-        })
+        }).catch(() => no('error'))
         tail = result
         return result
       },
     }
     try {
-      if (!abort.signal.aborted) await job(run)
+      if (!abort.signal.aborted) await this.settleOrAbandon(job, run, abort)
     } catch (err) {
-      this.o.log.warn('background job failed', { error: err instanceof Error ? err.name : 'unknown' })
+      this.warn('background job failed', { error: err instanceof Error ? err.name : 'unknown' })
     } finally {
       // 任务结束了,它留下的 run 不能再发;没等完的那个也要停,否则会和下一个任务同时在飞
       abort.abort()
-      await tail
+      await tail.catch(() => {})
       this.active = undefined
       this.pump()
     }
+  }
+
+  /** 到上限或被中止后,再等一小会就放手。放手的任务还在跑,但它的 text 只会回 aborted */
+  private settleOrAbandon(job: Job, run: BackgroundRun, abort: AbortController): Promise<void> {
+    return new Promise((resolve, reject) => {
+      let grace: ReturnType<typeof setTimeout> | undefined
+      const cap = setTimeout(() => abort.abort(), this.o.jobTimeoutMs ?? JOB_TIMEOUT_MS)
+      const giveUp = () => {
+        clearTimeout(cap)
+        grace = setTimeout(() => {
+          this.warn('background job abandoned')
+          resolve()
+        }, this.o.closeGraceMs ?? CLOSE_GRACE_MS)
+      }
+      abort.signal.addEventListener('abort', giveUp, { once: true })
+      void (async () => job(run))()
+        .then(resolve, reject)
+        .finally(() => {
+          clearTimeout(cap)
+          clearTimeout(grace)
+          abort.signal.removeEventListener('abort', giveUp)
+        })
+    })
   }
 
   private async send(ref: ModelRef, req: TextReq, closing: AbortSignal): Promise<BackgroundText> {
@@ -283,7 +321,7 @@ export class Background {
     try {
       return await this.fencedCall(ref, req, gate)
     } catch (err) {
-      this.o.log.warn('background call failed', { error: err instanceof Error ? err.name : 'unknown' })
+      this.warn('background call failed', { error: err instanceof Error ? err.name : 'unknown' })
       return no('error')
     } finally {
       clearTimeout(timer)
@@ -307,10 +345,10 @@ export class Background {
     if (this.brokenDay === day) return undefined
     try {
       const ledger = parseLedger(this.o.store.getMeta(BUDGET + day))
-      if (!ledger) this.o.log.warn('background budget ledger is damaged')
+      if (!ledger) this.warn('background budget ledger is damaged')
       return ledger
     } catch (err) {
-      this.o.log.warn('background budget ledger is unreadable', { error: err instanceof Error ? err.name : 'unknown' })
+      this.warn('background budget ledger is unreadable', { error: err instanceof Error ? err.name : 'unknown' })
       return undefined
     }
   }
@@ -322,7 +360,7 @@ export class Background {
       for (const { key } of this.o.store.metaWithPrefix(BUDGET)) if (key !== BUDGET + day) this.o.store.deleteMeta(key)
       return true
     } catch (err) {
-      this.o.log.warn('background budget ledger is unwritable', { error: err instanceof Error ? err.name : 'unknown' })
+      this.warn('background budget ledger is unwritable', { error: err instanceof Error ? err.name : 'unknown' })
       return false
     }
   }
@@ -375,7 +413,7 @@ export class Background {
     const usd = billed(input, output)
     const accountOut = got.error && !gate.stop && (got.error.kind === 'quota' || got.error.kind === 'auth' || got.error.kind === 'restricted')
     const out = accountOut && !base.out.includes(ref.accountId) ? [...base.out, ref.accountId] : base.out
-    if (accountOut) this.o.log.warn('background account is out for the day', { accountId: ref.accountId, kind: got.error?.kind })
+    if (accountOut) this.warn('background account is out for the day', { accountId: ref.accountId, kind: got.error?.kind })
     if (!this.writeLedger(day, { tokens: base.tokens + tokens, usd: base.usd + usd, out })) this.brokenDay = dateKey(this.o.now())
 
     const reason = gate.stop ?? this.failureOf(got)

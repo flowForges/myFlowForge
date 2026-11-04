@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { done, fakeClock, fakeModels, memoryKernel, say, type FakeAccount, type FakeModelsOpts, type FakeModels, type MemoryRig } from '../../../test/memoryRig'
-import { nullLogger } from '../../kernel/log'
+import { nullLogger, type Logger } from '../../kernel/log'
 import { MemoryConfigSchema, type MemoryConfig } from '../../lib/memory/types'
 import type { ModelError, ModelEvent } from '../../lib/models/types'
 import { MemoryHealthSchema, type MemoryHealth } from '../../protocol/rpc'
@@ -78,7 +78,7 @@ interface Rig {
   reopen(): Background
 }
 
-function rig(o: Partial<FakeModelsOpts> & { config?: Partial<MemoryConfig>; timeoutMs?: number; noModels?: boolean } = {}): Rig {
+function rig(o: Partial<FakeModelsOpts> & { config?: Partial<MemoryConfig>; timeoutMs?: number; noModels?: boolean; jobTimeoutMs?: number; closeGraceMs?: number; log?: Logger } = {}): Rig {
   const dir = mkdtempSync(join(tmpdir(), 'mffai-bg-'))
   const clock = fakeClock(noon)
   const store = openStore(join(dir, 'memory.sqlite'), { log: nullLogger, now: clock.now })
@@ -89,8 +89,10 @@ function rig(o: Partial<FakeModelsOpts> & { config?: Partial<MemoryConfig>; time
       config: () => cfg(o.config),
       store,
       now: clock.now,
-      log: nullLogger,
+      log: o.log ?? nullLogger,
       ...(o.timeoutMs !== undefined && { timeoutMs: o.timeoutMs }),
+      ...(o.jobTimeoutMs !== undefined && { jobTimeoutMs: o.jobTimeoutMs }),
+      ...(o.closeGraceMs !== undefined && { closeGraceMs: o.closeGraceMs }),
     })
     cleanups.push(() => made.close())
     return made
@@ -482,6 +484,29 @@ describe('the queue', () => {
     expect((await h.one()).ok).toBe(true)
   })
 
+  it('a job hanging on something else is abandoned at the cap, and the next one runs', async () => {
+    const h = rig({ jobTimeoutMs: 20, closeGraceMs: 10 })
+    let kept: BackgroundRun | undefined
+    h.bg.enqueue(run => {
+      kept = run
+      return new Promise(() => {})
+    })
+    expect((await h.one()).ok).toBe(true)
+    expect(await kept!.text(A, REQ)).toEqual({ ok: false, reason: 'aborted' })
+    expect(h.fake.calls).toHaveLength(1)
+  })
+
+  it('a logger that throws cannot jam the slot or make text throw', async () => {
+    const bad = () => { throw new Error('log down') }
+    const h = rig({ log: { info: bad, warn: bad, error: bad } })
+    const accounts = h.fake.service.accounts
+    h.fake.service.accounts = () => { throw new Error('boom') }
+    expect(await h.one()).toEqual({ ok: false, reason: 'error' })
+    h.fake.service.accounts = accounts
+    h.bg.enqueue(async () => { throw new Error('job') })
+    expect((await h.one()).ok).toBe(true)
+  })
+
   it('a run kept after its job ended cannot send', async () => {
     const h = rig()
     let kept: BackgroundRun | undefined
@@ -519,6 +544,18 @@ describe('close', () => {
     expect(queuedRan).toBe(false)
     expect(h.bg.enqueue(async () => {})).toBe(false)
     await h.bg.close() // 再关一次没事
+  })
+
+  it('a job hanging on something else cannot hold close forever', async () => {
+    const h = rig({ closeGraceMs: 20 })
+    let started = false
+    h.bg.enqueue(() => {
+      started = true
+      return new Promise(() => {})
+    })
+    await expect.poll(() => started).toBe(true)
+    await h.bg.close()
+    expect(h.bg.enqueue(async () => {})).toBe(false)
   })
 
   it('text after close returns aborted without calling models', async () => {
