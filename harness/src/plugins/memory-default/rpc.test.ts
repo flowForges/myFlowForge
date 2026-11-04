@@ -269,6 +269,14 @@ describe('writes', () => {
     expect(ofType(h, 'memory.updated')).toHaveLength(updates)
   })
 
+  it('memory.update of a session-layer note has the same size cap as memory_write', async () => {
+    const h = await boot()
+    const group = await h.session({ origin: 'im' })
+    const { meta } = await h.call('memory_write', { text: '群笔记原文' }, group)
+    expect(await codeOf(handle(h, 'memory.update', { commandId: 'u1', id: meta!.id, text: 'x'.repeat(2001) }))).toBe(-32602)
+    expect(await handle(h, 'memory.get', { id: meta!.id })).toMatchObject({ text: '群笔记原文' })
+  })
+
   it('memory.update of a session-layer note stays in SQLite; of a raw row or unknown id it is -32602', async () => {
     const h = await boot()
     const group = await h.session({ origin: 'im' })
@@ -887,7 +895,15 @@ describe('memory.delete: Review Focus 7', () => {
     expect((await health(h)).problems).toEqual([])
   })
 
-  it('closing the kernel while a delete sweeps: it stops, leaves no receipt, and a restart can finish it', async () => {
+  const settledHealth = async (h: H) => {
+    for (let i = 0; i < 2000; i++) {
+      if (!(await health(h)).problems.some(p => p.startsWith('delete_pending:'))) return
+      await new Promise(res => setTimeout(res, 5))
+    }
+    throw new Error('the delete never finished')
+  }
+
+  it('closing the kernel while a delete sweeps: it stops, leaves no receipt, and the restart finishes it without anyone asking', async () => {
     const h = await boot()
     const { witness } = await seedFull(h)
     for (let i = 0; i < 1500; i++) h.ctx().append({ type: 'turn.usage', sessionId: witness, payload: { turnId: 'filler', step: 1, input: 1, output: 1 } })
@@ -895,10 +911,97 @@ describe('memory.delete: Review Focus 7', () => {
     const pending = del(h, 'n_seed', 'closing').catch((e: { code?: number }) => e.code ?? 'threw')
     await h.r.restart()
     await pending
-    const result = await del(h, 'n_seed', 'closing')
-    expect(result.ok).toBe(true)
+    await settledHealth(h)
     h.memory().flushNow()
     expect(h.bytes()).not.toContain(NOTE)
+    expect(h.memory().inspect().store.getMeta('purge:n_seed')).toBeUndefined()
+  })
+
+  it.each(['deleted', 'raw', 'tombstone', 'redact', 'purge'] as const)('a delete that failed at "%s" and was never retried is finished by the next start', async failAt => {
+    let armed = true
+    const h = await boot({
+      onPurgeStep: step => {
+        if (armed && step === failAt) throw new Error('step failed')
+      },
+    })
+    const { evidenceSeq } = await seedFull(h)
+    h.memory().flushNow()
+    expect(await codeOf(del(h, 'n_seed'))).toBe(-32603)
+    expect((await health(h)).problems).toEqual(['delete_pending:n_seed'])
+    armed = false
+    await h.r.restart()
+    await settledHealth(h)
+    h.memory().flushNow()
+    expect(h.bytes()).not.toContain(NOTE)
+    expect(h.memory().inspect().store.getRaw(evidenceSeq)).toBeUndefined()
+    expect((await health(h)).problems).toEqual([])
+    expect(await codeOf(del(h, 'n_seed'))).toBe(-32602)
+  })
+
+  it('a delete that keeps failing stops being retried at startup, is reported as stuck, and a client retry can still finish it', async () => {
+    let failing = true
+    let tries = 0
+    const h = await boot({
+      onPurgeStep: step => {
+        if (step !== 'purge') return
+        tries++
+        if (failing) throw new Error('step failed')
+      },
+    })
+    await h.seedNote()
+    h.memory().flushNow()
+    expect(await codeOf(del(h, 'n_seed', 'stuck'))).toBe(-32603)
+    const waitTries = async (n: number) => {
+      for (let i = 0; i < 2000 && tries < n; i++) await new Promise(res => setTimeout(res, 5))
+      await new Promise(res => setTimeout(res, 20))
+    }
+    for (let i = 2; i <= 4; i++) {
+      await h.r.restart()
+      await waitTries(i)
+      expect(tries).toBe(i)
+    }
+    await h.r.restart()
+    await new Promise(res => setTimeout(res, 100))
+    expect(tries).toBe(4) // 不再试了:一个做不完的删除不能让每次启动都阻塞
+    expect((await health(h)).problems).toEqual(['delete_stuck:n_seed'])
+    expect(h.r.k.status().plugins.find(p => p.id === 'memory-default')?.state).toBe('active')
+    failing = false
+    await del(h, 'n_seed', 'stuck')
+    expect((await health(h)).problems).toEqual([])
+    h.memory().flushNow()
+    expect(h.bytes()).not.toContain(NOTE)
+  })
+
+  it('a crash between recording a dropped line and writing the file purges nothing: the line is still there', async () => {
+    const h = await boot()
+    await h.seedNote()
+    const { store } = h.memory().inspect()
+    store.setMeta('purge:n_seed', JSON.stringify({ id: 'n_seed', text: NOTE, scope: 'owner', evidence: [], removedIds: ['n_seed'], rawSeqs: [], file: 'MEMORY.md' }))
+    h.beforeReopen(() => {})
+    await h.r.restart()
+    await settledHealth(h)
+    expect(h.read('MEMORY.md')).toContain(NOTE)
+    expect(ofType(h, 'memory.deleted')).toEqual([])
+    expect(h.memory().inspect().store.getMeta('purge:n_seed')).toBeUndefined()
+  })
+
+  it('the FTS index loses the trigrams too, not only the literal text', async () => {
+    const h = await boot()
+    await seedFull(h)
+    h.memory().flushNow()
+    const { db } = h.memory().inspect().store
+    const trigrams = ['端口固', '不要改', '改动它']
+    const held = (table: string) => {
+      db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS temp.v_${table} USING fts5vocab(main, ${table}, 'row')`)
+      const terms = new Set((db.prepare(`SELECT term FROM temp.v_${table}`).all() as { term: string }[]).map(r => r.term))
+      const blobs = (db.prepare(`SELECT block FROM ${table}_data`).all() as { block: Uint8Array }[]).map(r => Buffer.from(r.block))
+      return trigrams.filter(t => terms.has(t) || blobs.some(b => b.includes(Buffer.from(t))))
+    }
+    expect(held('notes_fts')).toEqual(trigrams)
+    expect(held('raw_fts')).toEqual(trigrams)
+    await del(h, 'n_seed')
+    expect(held('notes_fts')).toEqual([])
+    expect(held('raw_fts')).toEqual([])
   })
 
   it('it refuses to finish while ingest cannot catch up: rows past the cursor would come back', async () => {

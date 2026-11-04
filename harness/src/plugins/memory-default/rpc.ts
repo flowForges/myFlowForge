@@ -32,6 +32,10 @@ const LITERAL_MIN = 12
 const PAGE = 500
 const CATCH_UP_SLICE_MS = 25
 const PENDING = 'purge:'
+/** 启动时接着做:一个做不完的删除不能让每次启动都阻塞,更不能把进程拖进崩溃循环 */
+const MAX_RESUMES = 3
+const RESUME_BATCH = 16
+const SQLITE_FULL = 13
 const SPILL_MARK = '[已截断,完整输出:'
 
 /** 测试用:每一步开始之前,抛错 = 这一步失败 */
@@ -75,6 +79,8 @@ interface PendingPurge {
   tombstoneSeq?: number
   /** 要删的落盘文件。事件换掉之后才删,换之前要留着当依据;换完就只有这里记得 */
   spills?: string[]
+  /** 启动时试过几次 */
+  resumes?: number
   swept?: boolean
   redacted?: number
   sources?: string[]
@@ -125,6 +131,7 @@ export function registerMemoryRpc(d: MemoryRpcDeps): { stop(): Promise<void> } {
   const { ctx, live } = d
   let stopped = false
   let chain: Promise<unknown> = Promise.resolve()
+  let resuming: NodeJS.Immediate | undefined
 
   /** 一次一个删除:FTS optimize、WAL 截断、扫事件都不该交叉 */
   const exclusive = <T>(fn: () => Promise<T>): Promise<T> => {
@@ -226,7 +233,11 @@ export function registerMemoryRpc(d: MemoryRpcDeps): { stop(): Promise<void> } {
     const count = (sql: string) => guarded(0, () => (store.db.prepare(sql).get() as { n: number }).n)
     guarded(undefined, () => files.reconcile('core'))
     const lastConsolidation = guarded(undefined, () => store.getMeta('lastConsolidation'))
-    const pending = guarded<{ key: string }[]>([], () => store.metaWithPrefix(PENDING))
+    const pending = guarded<{ key: string; value: string }[]>([], () => store.metaWithPrefix(PENDING))
+    const pendingCode = (r: { key: string; value: string }) => {
+      const stuck = ((JSON.parse(r.value) as PendingPurge).resumes ?? 0) >= MAX_RESUMES
+      return `${stuck ? 'delete_stuck' : 'delete_pending'}:${r.key.slice(PENDING.length)}`
+    }
     return {
       dbBytes: guarded(0, () => statSync(d.dbFile, { throwIfNoEntry: false })?.size ?? 0),
       rawRows: count('SELECT COUNT(*) AS n FROM raw'),
@@ -234,7 +245,7 @@ export function registerMemoryRpc(d: MemoryRpcDeps): { stop(): Promise<void> } {
       cursorLag: guarded(0, () => Math.max(0, lastSeqOf((seq, limit) => ctx.events.after(seq, limit)) - store.cursor())),
       pendingProposals: count("SELECT COUNT(*) AS n FROM proposals WHERE status = 'pending'"),
       ...(lastConsolidation !== undefined && { lastConsolidation }),
-      problems: [...new Set([...d.problems, ...store.problems, ...pending.map(p => `delete_pending:${p.key.slice(PENDING.length)}`), ...faults])],
+      problems: [...new Set([...d.problems, ...store.problems, ...pending.map(pendingCode), ...faults])],
     }
   }
 
@@ -266,6 +277,12 @@ export function registerMemoryRpc(d: MemoryRpcDeps): { stop(): Promise<void> } {
         return { ok: true, hash: m.files.read(file).hash, masked }
       }),
     )
+    // 上次没做完的:客户端可能永远不会重试,而文本还在库里。让激活先走完
+    resuming = setImmediate(() => {
+      exclusive(() => purger.resumeAll()).catch((err: unknown) => {
+        if (!stopped) ctx.log.error('memory delete resume failed', { error: err instanceof Error ? err.name : 'unknown' })
+      })
+    })
   } else {
     for (const method of ['memory.delete', 'memory.file.set'] as const) register(method, () => undefined)
   }
@@ -273,6 +290,7 @@ export function registerMemoryRpc(d: MemoryRpcDeps): { stop(): Promise<void> } {
   return {
     async stop() {
       stopped = true
+      if (resuming) clearImmediate(resuming)
       await chain
     },
   }
@@ -640,14 +658,51 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
     step('purge')
     if (touched.length === 0) return
     // optimize 也是同步的,库大了一样会让监管以为卡死:放进同一段要来的时间
-    await ctx.events.purge({
-      extraBytes: statSync(d.dbFile, { throwIfNoEntry: false })?.size ?? 0,
-      then: () => {
-        store.purge()
-        for (const id of touched) store.deleteMeta(keyOf(id))
-        store.purge()
-      },
+    try {
+      await ctx.events.purge({
+        extraBytes: statSync(d.dbFile, { throwIfNoEntry: false })?.size ?? 0,
+        then: () => {
+          store.purge()
+          for (const id of touched) store.deleteMeta(keyOf(id))
+          store.purge()
+        },
+      })
+    } catch (err) {
+      if ((err as { errcode?: unknown }).errcode === SQLITE_FULL) throw new RpcError(INTERNAL, 'not enough disk space to finish the delete: it needs about twice the event log, in the data directory and TMPDIR')
+      throw err
+    }
+  }
+
+  /** 记下了要去掉这一行,文件却没写成(写之前崩溃):这行还在,不是删除。已经开始删的不在此列 */
+  const notStarted = (p: PendingPurge) => p.file !== undefined && p.tombstoneSeq === undefined && p.swept !== true && p.text !== undefined && files.holdsText(p.text)
+
+  function pendingRecords(): PendingPurge[] {
+    const records = store.metaWithPrefix(PENDING).map(r => JSON.parse(r.value) as PendingPurge)
+    return records.filter(p => {
+      if (!notStarted(p)) return true
+      store.deleteMeta(keyOf(p.id))
+      return false
     })
+  }
+
+  /** 有上限:一次启动最多这么多条,每条最多试 MAX_RESUMES 次,之后只报在 health 里,等客户端重试 */
+  async function resumeAll(): Promise<void> {
+    const due = pendingRecords().filter(p => (p.resumes ?? 0) < MAX_RESUMES).slice(0, RESUME_BATCH)
+    if (due.length === 0) return
+    // 先记次数再动手:动手的时候进程没了也算一次
+    for (const p of due) save({ ...p, resumes: (p.resumes ?? 0) + 1 })
+    const done: string[] = []
+    for (const p of due) {
+      alive()
+      try {
+        await removeEntry(p.id)
+        done.push(p.id)
+      } catch (err) {
+        if (err instanceof RpcError && err.message === 'memory is closing') throw err
+        ctx.log.error('memory delete resume failed', { id: p.id, error: err instanceof Error ? err.name : 'unknown' })
+      }
+    }
+    await finish(done)
   }
 
   async function purgeEntry(id: string): Promise<{ redacted: number; sources: string[] }> {
@@ -660,14 +715,10 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
     purgeEntry,
     removeEntry,
     finish,
+    resumeAll,
     /** memory.file.set:写文件之前 */
     remember: (p: PendingPurge) => save(p),
     forget: (id: string) => store.deleteMeta(keyOf(id)),
-    pendingForFile: (file: string) =>
-      store
-        .metaWithPrefix(PENDING)
-        .map(r => JSON.parse(r.value) as PendingPurge)
-        .filter(p => p.file === file)
-        .map(p => p.id),
+    pendingForFile: (file: string) => pendingRecords().filter(p => p.file === file).map(p => p.id),
   }
 }

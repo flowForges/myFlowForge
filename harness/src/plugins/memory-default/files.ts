@@ -64,6 +64,8 @@ export interface MemoryFilesOpts {
   beforeRename?(from: string, to: string): void
 }
 
+/** 和 memory_write 的 text 一样 */
+const SESSION_NOTE_MAX = 2000
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex')
 const chars = (s: string) => [...s].length
 
@@ -334,6 +336,11 @@ export class MemoryFiles {
     return { hash: sha256(text), masked, removed }
   }
 
+  /** 这段文本还在哪个核心或主题文件里 */
+  holdsText(text: string): boolean {
+    return this.textsElsewhere('').has(text)
+  }
+
   private incoming(raw: string, content: string): string {
     return keepKnownComments(scrubDoc(content).text, scrubDoc(raw).text)
   }
@@ -361,6 +368,7 @@ export class MemoryFiles {
     const clean = cleanEntry(text)
     if (clean.text === '') throw new RpcError(INVALID_PARAMS, 'empty')
     if (!note.file) {
+      if (chars(clean.text) > SESSION_NOTE_MAX) throw full() // 只在 SQLite,没有文件上限管它
       this.store.transaction(() => {
         this.store.upsertNote({ ...note, text: clean.text, source, flags: scanInjection(clean.text) })
         this.change(id, null, 'update', note.text, clean.text, source)
