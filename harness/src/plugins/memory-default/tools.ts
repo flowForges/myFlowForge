@@ -74,7 +74,14 @@ export interface MemoryToolDeps {
 
 const refused = (content: string): ToolResult => ({ content, isError: true })
 
-const rawItem = (r: RawRow, text: string): ResultItem => ({ id: `r_${r.seq}`, layer: 'raw', source: r.role, date: localDate(r.ts), text, flags: scanInjection(r.text) })
+/** user 只给主人自己说的话:定时任务的提示词是写好的,群里的话不知道是谁说的 */
+function rawSource(r: RawRow): string {
+  if (r.role !== 'user') return r.role
+  if (r.scope.startsWith('session:')) return 'group'
+  return r.origin === 'schedule' ? 'schedule' : 'user'
+}
+
+const rawItem = (r: RawRow, text: string): ResultItem => ({ id: `r_${r.seq}`, layer: 'raw', source: rawSource(r), date: localDate(r.ts), text, flags: scanInjection(r.text) })
 const noteItem = (n: NoteRow, text: string): ResultItem => ({ id: n.id, layer: n.layer, source: n.source, date: localDate(n.ts), text, flags: n.flags as Flag[] })
 
 /** 两层轮流取:一层再多也不会把另一层挤没 */

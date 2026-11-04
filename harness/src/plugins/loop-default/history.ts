@@ -2,6 +2,8 @@
 // message.user → user;message.assistant(按 step,有 parts 用 parts,否则按纯文本)→ assistant;
 // 该步之后的 tool.ended → 一条 role:'tool' 消息。未配对的调用补"已中断";已回滚的轮与当前轮跳过。
 // executor.notice、followUp 的 message.user → 同一轮里按 seq 排的 user 消息(本轮的循环用同样的构造,逐字节相同)
+// memory.injected(06 §7):会话块进第一条,轮块进它那一轮的开场消息。只读事件,不读文件
+import { blocksOf } from '../../lib/memory/inject'
 import type { Message, Part } from '../../lib/models/types'
 import type { KernelEvent } from '../../protocol/index'
 
@@ -55,10 +57,12 @@ function stepParts(payload: Record<string, unknown>, origin: ReplayOrigin | unde
   return parts.some(p => p.type === 'text' || p.type === 'tool_call') ? parts : []
 }
 
-function userMessage(text: string, ts: number, opts: BuildOpts, first: boolean): Message {
+function userMessage(text: string, ts: number, opts: BuildOpts, first: boolean, memory: { session?: string; turn?: string } = {}): Message {
   const parts: Part[] = []
   if (first && opts.environment) parts.push({ type: 'text', text: opts.environment })
+  if (first && memory.session) parts.push({ type: 'text', text: memory.session })
   if (opts.reminder) parts.push({ type: 'text', text: opts.reminder(ts) })
+  if (memory.turn) parts.push({ type: 'text', text: memory.turn })
   parts.push({ type: 'text', text })
   return { role: 'user', parts }
 }
@@ -66,7 +70,7 @@ function userMessage(text: string, ts: number, opts: BuildOpts, first: boolean):
 /** 运行的完成通知:一条 user 消息,没有提醒,也没有环境块 */
 export const noticeMessage = (text: string): Message => ({ role: 'user', parts: [{ type: 'text', text }] })
 
-/** 挂起时收下的后续消息:带它自己时间的提醒;不是第一条,没有环境块 */
+/** 挂起时收下的后续消息:带它自己时间的提醒;不是第一条,没有环境块,也不带记忆块 */
 export const followUpMessage = (text: string, ts: number, opts: BuildOpts): Message => userMessage(text, ts, opts, false)
 
 function lastAssistant(steps: Step[]): AssistantStep | undefined {
@@ -119,11 +123,13 @@ export function buildMessages(events: KernelEvent[], currentTurnId: string, curr
     }
   }
 
+  const blocks = blocksOf(events)
   const out: Message[] = []
-  const user = (text: string, ts: number): Message => userMessage(text, ts, opts, !out.length)
+  const user = (text: string, ts: number, turnId?: string): Message =>
+    userMessage(text, ts, opts, !out.length, { session: blocks.session, turn: turnId === undefined ? undefined : blocks.turns.get(turnId) })
   for (const id of order) {
     const t = turns.get(id)!
-    out.push(user(t.user, t.ts))
+    out.push(user(t.user, t.ts, id))
     for (const s of t.steps) {
       if (s.kind === 'notice') {
         out.push(noticeMessage(s.text))
@@ -142,6 +148,6 @@ export function buildMessages(events: KernelEvent[], currentTurnId: string, curr
       })
     }
   }
-  out.push(user(currentText, currentTs ?? opts.now ?? Date.now()))
+  out.push(user(currentText, currentTs ?? opts.now ?? Date.now(), currentTurnId))
   return out
 }

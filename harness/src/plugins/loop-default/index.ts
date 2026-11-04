@@ -7,6 +7,7 @@ import type { Plugin } from '../../kernel/pluginHost'
 import { RpcError } from '../../kernel/rpcError'
 import type { Sessions } from '../../kernel/sessions'
 import { createGit, NO_REPO, type Git } from '../../lib/git/snapshot'
+import type { MemoryService } from '../../lib/memory/types'
 import type { ModelsService } from '../../lib/models/types'
 import type { BackgroundRuns, ToolsService, TurnInbox } from '../../lib/tools/types'
 import { ERR_BUSY, type ModelRef, type WorkerParams } from '../../protocol/index'
@@ -78,6 +79,7 @@ export function createLoopDefault(opts: LoopDefaultOpts = {}): Plugin {
         }
         // 只经服务,不 import 插件;没有 executor-cli 时循环与 03 完全一样
         const background = ctx.services.get<BackgroundRuns>('executors')
+        const memory = ctx.services.get<MemoryService>('memory')
         active.add(sessionId)
         const target = { sessionId, cwd, pin: info.repo ?? NO_REPO }
         let startRef: string | undefined
@@ -98,6 +100,7 @@ export function createLoopDefault(opts: LoopDefaultOpts = {}): Plugin {
               ...(opts.sleep && { sleep: opts.sleep }),
               ...(background && { background }),
               ...(inbox && { inbox }),
+              ...(memory && { memory }),
             },
             { sessionId, turnId, text, info: { ...info, cwd }, ref },
           )

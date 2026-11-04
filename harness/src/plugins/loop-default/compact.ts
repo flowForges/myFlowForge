@@ -1,10 +1,9 @@
 // 上下文压缩(spec §8.4):只改发给模型的消息,不改事件。纯函数、确定性:同样的输入折叠同样的结果,
 // 前缀尽量逐字节不变;只折工具结果,用户消息(含第一条里的 <environment>)永不动
 import { posix } from 'node:path'
-import type { Message, ModelsService, Part } from '../../lib/models/types'
-import type { ModelRef } from '../../protocol/index'
+import type { Message, Part } from '../../lib/models/types'
 
-export const DEFAULT_CONTEXT = 128_000
+export { contextWindow, DEFAULT_CONTEXT } from '../../lib/models/contextWindow'
 const CHARS_PER_TOKEN = 3.5
 /** 图片按约 1000 token 计 */
 const IMAGE_CHARS = 3_500
@@ -136,14 +135,4 @@ export function compact(messages: Message[], opts: CompactOpts): Message[] {
     if (text.length < s.chars) fold(s, text)
   }
   return out
-}
-
-/** 模型上下文:账号自己的模型清单优先,其次目录里该预设的模型,缺省 128 000 */
-export function contextWindow(models: Pick<ModelsService, 'catalog' | 'accounts'>, ref: ModelRef | 'default'): number {
-  const concrete = ref === 'default' ? models.catalog().default : ref
-  if (!concrete) return DEFAULT_CONTEXT
-  const acc = models.accounts().find(a => a.id === concrete.accountId)
-  if (!acc) return DEFAULT_CONTEXT
-  const entry = acc.models?.find(m => m.id === concrete.modelId) ?? models.catalog().models[acc.presetId]?.find(m => m.id === concrete.modelId)
-  return entry && entry.context > 0 ? entry.context : DEFAULT_CONTEXT
 }

@@ -6,6 +6,8 @@ import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { Logger } from '../../kernel/log'
 import type { SessionInfo, Sessions } from '../../kernel/sessions'
+import { injectMemory } from '../../lib/memory/inject'
+import type { MemoryService } from '../../lib/memory/types'
 import type { Message, ModelError, ModelEvent, ModelRequest, ModelsService, Part } from '../../lib/models/types'
 import { redact } from '../../lib/tools/redact'
 import type { BackgroundRuns, FollowUp, ToolsService, TurnInbox } from '../../lib/tools/types'
@@ -63,6 +65,8 @@ export interface LoopDeps {
   background?: BackgroundRuns
   /** 本轮的收件箱;没有 = 挂起时只有通知能叫醒 */
   inbox?: TurnInbox
+  /** `memory` 服务;没有 = 不注入 */
+  memory?: MemoryService
 }
 
 export interface TurnRequest {
@@ -130,11 +134,16 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<TurnOut
     reminder: dateReminder,
     now: (deps.now?.() ?? new Date()).getTime(),
   }
-  let messages: Message[] = buildMessages(deps.history(sessionId), turnId, req.text, buildOpts)
 
   // 压缩的预算:模型上下文减去系统提示词与工具定义
   const fixed = charsToTokens(system.length + JSON.stringify(defs).length)
   const context = Math.max(1, contextWindow(models, req.ref) - fixed)
+
+  // 记忆先写进事件,下面的重建才读得到;之后每轮、每次重启读到的都是这同一段字节
+  if (deps.memory) {
+    injectMemory(deps.memory, { sessionId, turnId, text: req.text, events: deps.history(sessionId), contextTokens: context }, p => ev('memory.injected', p), deps.log)
+  }
+  let messages: Message[] = buildMessages(deps.history(sessionId), turnId, req.text, buildOpts)
 
   // 只有 step 往上数;后续消息把上限推后,并重置死循环检测(§7.6)
   let limit = maxSteps

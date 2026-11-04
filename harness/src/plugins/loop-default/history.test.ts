@@ -286,3 +286,69 @@ describe('request bodies: tool result, then a notice, then the next user message
     expect(JSON.stringify(body.input[at + 2].content)).toContain('NEXT')
   })
 })
+
+describe('buildMessages: memory blocks (06 spec §7)', () => {
+  const injected = (turnId: string, kind: 'session' | 'turn', text: string) => ev('memory.injected', { turnId, kind, text, items: [] })
+  const OPTS = { environment: 'ENV', reminder: (ts: number) => `R${ts}` }
+  const texts = (m: { parts: unknown[] }) => (m.parts as { text: string }[]).map(p => p.text)
+
+  it('first message: environment, session block, reminder, turn block, text; later ones: reminder, turn block, text', () => {
+    const u1 = ev('message.user', { turnId: 't1', text: 'q1' })
+    const events = [
+      u1,
+      injected('t1', 'session', 'SESSION'),
+      injected('t1', 'turn', 'RECALL1'),
+      ev('message.assistant', { turnId: 't1', step: 1, text: 'a1', parts: [{ type: 'text', text: 'a1' }] }),
+      ev('turn.ended', { turnId: 't1' }),
+    ]
+    const u2 = ev('message.user', { turnId: 't2', text: 'q2' })
+    events.push(u2, injected('t2', 'turn', 'RECALL2'))
+    const out = buildMessages(events, 't2', 'q2', OPTS)
+    expect(texts(out[0])).toEqual(['ENV', 'SESSION', `R${u1.ts}`, 'RECALL1', 'q1'])
+    expect(texts(out[2])).toEqual([`R${u2.ts}`, 'RECALL2', 'q2'])
+  })
+
+  it('the current turn takes its own blocks from the log, not from an argument', () => {
+    const u = ev('message.user', { turnId: 't1', text: 'q' })
+    const out = buildMessages([u, injected('t1', 'session', 'S'), injected('t1', 'turn', 'T')], 't1', 'q', OPTS)
+    expect(texts(out[0])).toEqual(['ENV', 'S', `R${u.ts}`, 'T', 'q'])
+  })
+
+  it('the first turn rolled back: its session block moves with "first", its turn block leaves with the turn', () => {
+    const events = [
+      ev('message.user', { turnId: 't1', text: 'q1' }),
+      injected('t1', 'session', 'S'),
+      injected('t1', 'turn', 'GONE'),
+      ev('turn.ended', { turnId: 't1' }),
+      ev('turn.rolledBack', { turnId: 't1' }),
+    ]
+    const u2 = ev('message.user', { turnId: 't2', text: 'q2' })
+    events.push(u2)
+    const out = buildMessages(events, 't2', 'q2', OPTS)
+    expect(out).toHaveLength(1)
+    expect(texts(out[0])).toEqual(['ENV', 'S', `R${u2.ts}`, 'q2'])
+  })
+
+  it('a follow-up and a notice carry no block, live or rebuilt', () => {
+    const u = ev('message.user', { turnId: 't1', text: 'q1' })
+    const follow = ev('message.user', { turnId: 't1', text: 'more', followUp: true })
+    const events = [
+      u,
+      injected('t1', 'turn', 'T'),
+      ev('message.assistant', { turnId: 't1', step: 1, text: 'a', parts: [{ type: 'text', text: 'a' }] }),
+      follow,
+      ev('executor.notice', { turnId: 't1', runId: 'r', text: 'note' }),
+    ]
+    const out = buildMessages(events, 't2', 'next', OPTS)
+    expect(texts(out[0])).toEqual(['ENV', `R${u.ts}`, 'T', 'q1'])
+    expect(out[2]).toEqual(followUpMessage('more', follow.ts, OPTS))
+    expect(texts(out[2])).toEqual([`R${follow.ts}`, 'more'])
+    expect(out[3]).toEqual(noticeMessage('note'))
+  })
+
+  it('without memory events the message is what it always was', () => {
+    const u = ev('message.user', { turnId: 't1', text: 'q' })
+    expect(texts(buildMessages([u], 't1', 'q', OPTS)[0])).toEqual(['ENV', `R${u.ts}`, 'q'])
+    expect(texts(buildMessages([u], 't1', 'q')[0])).toEqual(['q'])
+  })
+})

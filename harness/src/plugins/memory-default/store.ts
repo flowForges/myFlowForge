@@ -245,23 +245,28 @@ export class Store {
 
   /** 自动召回:只有主人在其他会话里自己说的话,只用 OR 模式,命中不同的窗 ≥2 个才算(spec §7) */
   recallUserRaw(o: { q: string; excludeSession: string; limit: number }): RawHit[] {
-    const limit = clampLimit(o.limit)
-    const windows = windowTerms(o.q)
-    if (limit === 0 || windows.length === 0) return []
+    return this.recallRows(
+      RAW,
+      o.q,
+      { sql: "scope = 'owner' AND role = 'user' AND origin != 'schedule' AND rolled_back = 0 AND session_id != ?", params: [o.excludeSession] },
+      o.limit,
+      toRaw,
+    )
+  }
+
+  /** 自动召回的笔记:和上面同样的 OR 模式和阈值,searchNotes 的 AND 再退到 OR 没有阈值 */
+  recallNotes(o: { q: string; scopes: string[]; layers: string[]; limit: number }): NoteHit[] {
+    if (o.scopes.length === 0 || o.layers.length === 0) return []
     const filter: Filter = {
-      sql: "scope = 'owner' AND role = 'user' AND origin != 'schedule' AND rolled_back = 0 AND session_id != ?",
-      params: [o.excludeSession],
+      sql: `scope IN (${marks(o.scopes.length)}) AND layer IN (${marks(o.layers.length)}) AND status = 'active'`,
+      params: [...o.scopes, ...o.layers],
     }
-    const lowered = [...new Set(windows.map(w => w.toLowerCase()))]
-    const hits: RawHit[] = []
-    for (const row of this.matchRows(RAW, windows.map(quote).join(' OR '), [], filter, RECALL_FETCH)) {
-      const text = (row.text as string).toLowerCase()
-      if (lowered.filter(w => text.includes(w)).length < 2) continue
-      if (scanInjection(row.text as string).length > 0) continue // raw 没有标记列
-      hits.push({ ...toRaw(row), excerpt: excerpt(row.text as string, windows) })
-      if (hits.length === limit) break
-    }
-    return hits
+    return this.recallRows(NOTES, o.q, filter, o.limit, toNote)
+  }
+
+  /** 这个文件的索引行;contextFor 用它知道块里有哪些条目 */
+  notesInFile(file: string): NoteRow[] {
+    return (this.db.prepare('SELECT * FROM notes WHERE file = ? ORDER BY n').all(file) as Row[]).map(toNote)
   }
 
   /** 让删掉的文本离开文件:FTS 的 trigram 只有 optimize 之后才真的消失,WAL 里的旧页要截掉(spec §16) */
@@ -295,6 +300,23 @@ export class Store {
       for (const r of this.likeRows(t, likes, ' OR ', filter, limit)) if (!seen.has(r[t.key]) && rows.length < limit) rows.push(r)
     }
     return { rows, terms: [...windows, ...terms] }
+  }
+
+  /** 有标记的现扫,不看 flags 列:raw 没有这一列,扫描规则升级后老笔记也按新的算 */
+  private recallRows<T>(t: Indexed, q: string, filter: Filter, rawLimit: number, map: (r: Row) => T): (T & { excerpt: string })[] {
+    const limit = clampLimit(rawLimit)
+    const windows = windowTerms(q)
+    if (limit === 0 || windows.length === 0) return []
+    const lowered = [...new Set(windows.map(w => w.toLowerCase()))]
+    const hits: (T & { excerpt: string })[] = []
+    for (const row of this.matchRows(t, windows.map(quote).join(' OR '), [], filter, RECALL_FETCH)) {
+      const text = (row.text as string).toLowerCase()
+      if (lowered.filter(w => text.includes(w)).length < 2) continue
+      if (scanInjection(row.text as string).length > 0) continue
+      hits.push({ ...map(row), excerpt: excerpt(row.text as string, windows) })
+      if (hits.length === limit) break
+    }
+    return hits
   }
 
   private matchRows(t: Indexed, match: string, likes: string[], filter: Filter, limit: number): Row[] {

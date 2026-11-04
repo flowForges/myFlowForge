@@ -4,9 +4,10 @@ import { statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Plugin, PluginContext } from '../../kernel/pluginHost'
 import type { Sessions } from '../../kernel/sessions'
-import type { MemoryService } from '../../lib/memory/types'
+import { parseMemoryConfig, type MemoryService } from '../../lib/memory/types'
 import type { ToolsService } from '../../lib/tools/types'
 import type { MemoryHealth } from '../../protocol/rpc'
+import { createContextFor } from './context'
 import { MemoryFiles } from './files'
 import { Ingest, type IngestTimers } from './ingest'
 import { manifest } from './manifest'
@@ -118,7 +119,14 @@ export function createMemoryDefault(opts: MemoryDefaultOpts = {}): MemoryDefault
         })
       }
 
-      const service: MemoryService = { contextFor: () => [], noteContext() {} }
+      const config = parseMemoryConfig(ctx.config.memory, m => ctx.log.warn(m))
+      const opened = live
+      const service: MemoryService = {
+        contextFor: opened
+          ? createContextFor({ store: opened.store, files: opened.files, sessions, flush: () => opened.ingest.flush(), recall: () => config.recall, log: ctx.log })
+          : () => [],
+        noteContext() {},
+      }
       ctx.services.provide<MemoryService>('memory', service)
       const file = join(ctx.dataDir, 'memory.sqlite')
       ctx.rpc.register('memory.health', async () => healthOf(ctx, file, live, problems))

@@ -312,6 +312,26 @@ describe('memory_search and memory_get', () => {
     expect(raw.content).toContain('source="user"')
   })
 
+  it('labels a raw row by who wrote it: the owner, a schedule, or a group participant', async () => {
+    const h = await boot()
+    const labelled = async (params: Record<string, unknown>, word: string) => {
+      const s = await h.session(params)
+      const seq = h.user(s, `${word} said here`, `turn-${word}`)
+      h.ctx.append({ type: 'message.assistant', sessionId: s, payload: { turnId: `turn-${word}`, text: `${word} answered here` } })
+      const searched = (await h.call('memory_search', { query: word, layer: 'raw' }, s)).content
+      const got = (await h.call('memory_get', { id: `r_${seq}` }, s)).content
+      const userItem = searched.split('</item>').find(i => i.includes('said here'))!
+      const assistantItem = searched.split('</item>').find(i => i.includes('answered here'))!
+      return { user: /source="(\w+)"/.exec(userItem)?.[1], got: /source="(\w+)"/.exec(got)?.[1], assistant: /source="(\w+)"/.exec(assistantItem)?.[1] }
+    }
+    const same = (source: string) => ({ user: source, got: source, assistant: 'assistant' })
+    expect(await labelled({}, 'appword')).toEqual(same('user'))
+    expect(await labelled({ origin: 'im', audience: 'owner' }, 'dmword')).toEqual(same('user'))
+    expect(await labelled({ origin: 'schedule' }, 'schedword')).toEqual(same('schedule'))
+    expect(await labelled({ origin: 'im' }, 'groupword')).toEqual(same('group'))
+    expect(await labelled({ origin: 'schedule', audience: 'group' }, 'schedgroup')).toEqual(same('group'))
+  })
+
   it('sees what happened just now without waiting for the batch timer, including a rollback', async () => {
     const h = await boot()
     const s = await h.session()
