@@ -1,7 +1,7 @@
 // Markdown 是记忆的准绳(06 spec §5):条目一行,来源放行尾注释;notes 只是它的索引,可重建。
 // 文件里的原文和索引、注入看到的打码版可以不同:用户手写的不改,但不让它往外走
 import { createHash, randomBytes } from 'node:crypto'
-import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeSync } from 'node:fs'
+import { chmodSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import type { Logger } from '../../kernel/log'
 import { RpcError } from '../../kernel/rpcError'
@@ -23,6 +23,13 @@ const SRC = /^[a-z_]{1,32}$/
 const EVIDENCE = /^[A-Za-z0-9_.:-]{1,64}$/
 const HEADING = /^\s{0,3}#{1,6}(?:\s|$)/
 const BULLET = /^\s*[-*+]\s+/
+const SUBDIRS = ['topics', 'diary', 'archive']
+/** 用户确认过的、自己写的:超上限时最后才截 */
+const CONFIRMED = new Set(['user', 'confirmed'])
+/** stat 的占位:符号链接之类,按没有这个文件处理 */
+const REFUSED = 'refused'
+const CUT_NAMED = 3
+const CUT_WORDS = 24
 
 export interface Entry {
   id: string
@@ -113,29 +120,45 @@ export function parseEntries(md: string): Entry[] {
   return entries
 }
 
-/** 去掉来源注释的内容:版本和上限都按这个算 */
-function visible(md: string): string {
-  return md
-    .split('\n')
-    .map(line => {
-      const comment = trailingComment(line)
-      return (comment ? line.slice(0, comment.at) : line).trimEnd()
-    })
-    .join('\n')
-    .trim()
+function stripComment(line: string): string {
+  const comment = trailingComment(line)
+  return (comment ? line.slice(0, comment.at) : line).trimEnd()
 }
 
-/** 整行整行地留;一行就超了就是空 */
-function fitLines(text: string, cap: number): string {
-  if (chars(text) <= cap) return text
-  const kept: string[] = []
-  let used = 0
-  for (const line of text.split('\n')) {
-    used += chars(line) + (kept.length > 0 ? 1 : 0)
-    if (used > cap) break
-    kept.push(line)
+/** 去掉来源注释的内容:版本和上限都按这个算 */
+const visible = (md: string) => md.split('\n').map(stripComment).join('\n').trim()
+
+/**
+ * 手改超上限时的注入内容:整行地留,先留用户确认的和手写的,再按文件顺序放别的,放不下的跳过。
+ * 留下的仍按文件顺序。标题和空行没有来源,算在后一批
+ */
+function fitBlock(scrubbed: string, cap: number): { text: string; cut: string[] } {
+  const text = visible(scrubbed)
+  if (chars(text) <= cap) return { text, cut: [] }
+  const srcs = new Map(parseEntries(scrubbed).map(e => [e.line, e.src]))
+  const all = scrubbed.split('\n').map((raw, i) => ({ i, line: stripComment(raw), first: CONFIRMED.has(srcs.get(i) ?? '') }))
+  const kept = new Set<number>()
+  let room = cap + 1 // 每行连换行算,最后一行不用换行
+  for (const { i, line } of [...all.filter(l => l.first), ...all.filter(l => !l.first)]) {
+    const n = chars(line) + 1
+    if (n > room) continue
+    kept.add(i)
+    room -= n
   }
-  return kept.join('\n').trimEnd()
+  return {
+    text: all.filter(l => kept.has(l.i)).map(l => l.line).join('\n').trim(),
+    cut: all.filter(l => !kept.has(l.i) && l.line.trim() !== '').map(l => l.line),
+  }
+}
+
+/** 给 memory.health:截了几行、各是什么开头。文本已打码,单行,有界 */
+function describeCut(cut: string[]): string {
+  const named = cut.slice(0, CUT_NAMED).map(line => {
+    const words = line.replace(BULLET, '').trim()
+    return `"${[...words].slice(0, CUT_WORDS).join('')}${chars(words) > CUT_WORDS ? '…' : ''}"`
+  })
+  if (cut.length > CUT_NAMED) named.push(`+${cut.length - CUT_NAMED} more`)
+  return `(${cut.length} lines cut: ${named.join(', ')})`
 }
 
 /** 先打码再压成一行:多行的 PEM 压完就认不出了。去掉注释记号可能把密钥拼回来,所以再打一遍 */
@@ -195,6 +218,7 @@ function layerOf(file: string): string {
 
 const full = () => new RpcError(INVALID_PARAMS, 'full')
 const notFound = () => new RpcError(INVALID_PARAMS, 'not found')
+const badEntry = () => new RpcError(INVALID_PARAMS, 'bad entry')
 
 function assertRoom(file: string, doc: string): void {
   const cap = capOf(file)
@@ -209,7 +233,7 @@ function localDate(ms: number): string {
 
 export class MemoryFiles {
   private dir: string
-  /** 文件 → 上次索引时的 stat。没文件是 '' */
+  /** 文件 → 上次索引时的 stat。没文件是 '',被拒绝的是 REFUSED */
   private known = new Map<string, string>()
   private views = new Map<string, string>()
 
@@ -219,7 +243,10 @@ export class MemoryFiles {
     private o: MemoryFilesOpts,
   ) {
     this.dir = join(root, 'files')
-    for (const dir of [root, this.dir, join(this.dir, 'topics'), join(this.dir, 'diary'), join(this.dir, 'archive')]) {
+    mkdirSync(root, { recursive: true, mode: 0o700 })
+    this.tighten(root, 0o700)
+    for (const dir of [this.dir, ...SUBDIRS.map(sub => join(this.dir, sub))]) {
+      if (!this.realDir(dir) || !this.realDir(this.dir)) continue // 不穿过符号链接建目录、改权限
       mkdirSync(dir, { recursive: true, mode: 0o700 })
       this.tighten(dir, 0o700)
     }
@@ -228,7 +255,8 @@ export class MemoryFiles {
   /** 只有 stat 变了才碰文件和库:每轮都调,闲着的轮不拿写锁 */
   reconcile(scope: 'core' | 'all'): void {
     if (scope === 'all') this.sweepTemps()
-    const names = new Set([...CORE, ...this.list(scope), ...this.known.keys(), ...this.indexedFiles()])
+    this.checkDirs()
+    const names = new Set([...this.listed(scope), ...this.known.keys(), ...this.indexedFiles()])
     const changed = [...names].filter(f => (scope === 'all' || !/^(?:diary|archive)\//.test(f)) && this.stamp(f) !== this.known.get(f))
     if (changed.length > 0) this.reindex(changed)
   }
@@ -278,6 +306,7 @@ export class MemoryFiles {
   }
 
   updateEntry(id: string, text: string, source: string): { id: string; masked: number } {
+    if (!SRC.test(source)) throw badEntry()
     this.reconcile('all')
     const note = this.store.getNote(id)
     if (!note || note.status !== 'active') throw notFound()
@@ -307,9 +336,10 @@ export class MemoryFiles {
   /**
    * spec §16 第一步。原始层和事件日志归调用方;这里给它们文本和证据。
    * 整行相同的文本一起删:同一条记忆的日记、归档副本。短文本也一样,比的是整行。
-   * 行已经不在了(memory.file.set 去掉的、编辑器里删的)时文本从 changes 找;再删一次就什么都没有了
+   * 行已经不在了(memory.file.set 去掉的、编辑器里删的)时文本从 changes 找;再删一次就什么都没有了。
+   * removedIds:连带删掉的都在里面,界面要能告诉用户
    */
-  deleteEntry(id: string): { text?: string; evidence: string[] } {
+  deleteEntry(id: string): { text?: string; evidence: string[]; removedIds: string[] } {
     this.reconcile('all')
     const note = this.store.getNote(id)
     if (note && !note.file) return this.deleteSessionNote(id, note.text)
@@ -318,7 +348,7 @@ export class MemoryFiles {
     const text = note?.text ?? named[0]?.text ?? this.lastChangeText(id)
     if (text === undefined) {
       this.removeBadCopies()
-      return { evidence: [] }
+      return { evidence: [], removedIds: [] }
     }
     const { db } = this.store
     const candidates = new Set(named.flatMap(e => (e.candidate ? [e.candidate] : [])))
@@ -349,7 +379,7 @@ export class MemoryFiles {
     })
     this.removeBadCopies()
     this.updated({ id, op: 'delete', source: 'user' })
-    return { text, evidence: [...evidence] }
+    return { text, evidence: [...evidence], removedIds: [...gone] }
   }
 
   /** 回滚的轮不留记忆(spec §5)。接入会重放,崩溃也可能让文件先于索引,所以只看现状 */
@@ -371,6 +401,7 @@ export class MemoryFiles {
 
   /** 先写归档再去原行:中间崩溃两边都有,重做时认得出 */
   supersede(id: string, byId: string): void {
+    if (!ID.test(byId)) throw badEntry()
     this.reconcile('all')
     const note = this.store.getNote(id)
     if (!note?.file || note.status !== 'active') return
@@ -389,8 +420,8 @@ export class MemoryFiles {
 
   coreText(): { user: string; memory: string; topics: string[]; version: string } {
     this.reconcile('core')
-    const user = fitLines(this.views.get('USER.md') ?? '', CAPS['USER.md'])
-    const memory = fitLines(this.views.get('MEMORY.md') ?? '', CAPS['MEMORY.md'])
+    const user = this.views.get('USER.md') ?? ''
+    const memory = this.views.get('MEMORY.md') ?? ''
     const topics = this.list('core')
       .filter(f => f.startsWith('topics/'))
       .map(f => basename(f, '.md'))
@@ -400,7 +431,7 @@ export class MemoryFiles {
 
   private addLine(file: string, text: string, meta: EntryMeta, track: boolean): { id: string; masked: number } {
     const id = meta.id ?? `n_${randomBytes(6).toString('hex')}`
-    if (!ID.test(id) || !SRC.test(meta.src)) throw new RpcError(INVALID_PARAMS, 'bad entry')
+    if (!ID.test(id) || !SRC.test(meta.src) || (meta.candidate !== undefined && !ID.test(meta.candidate))) throw badEntry()
     const raw = this.load(file)
     // 崩溃重做:可能已经写了文件没进索引,也可能已经被挪进归档
     if (parseEntries(raw).some(e => e.id === id) || this.store.getNote(id)) return { id, masked: 0 }
@@ -421,7 +452,7 @@ export class MemoryFiles {
     return { id, masked: clean.masked }
   }
 
-  private deleteSessionNote(id: string, text: string): { text: string; evidence: string[] } {
+  private deleteSessionNote(id: string, text: string): { text: string; evidence: string[]; removedIds: string[] } {
     this.store.transaction(() => {
       this.store.deleteNote(id)
       this.blankChanges(new Set([id]))
@@ -429,7 +460,7 @@ export class MemoryFiles {
     })
     this.removeBadCopies()
     this.updated({ id, op: 'delete', source: 'user' })
-    return { text, evidence: [] }
+    return { text, evidence: [], removedIds: [id] }
   }
 
   /** RPC 的 file 参数:schema 已经挡过一次,这里不信任调用方再挡一次 */
@@ -455,10 +486,11 @@ export class MemoryFiles {
     const order = [...files].sort((a, b) => Number(a.startsWith('archive/')) - Number(b.startsWith('archive/')))
     const plans = order.map(file => {
       // 改模式会动 ctime,要在记 stat 之前
-      if (existsSync(this.path(file))) this.tighten(this.path(file), 0o600)
+      if (this.refusedAt(file) === undefined) this.tighten(this.path(file), 0o600)
       const stamp = this.stamp(file)
       const scrubbed = scrubDoc(this.load(file)).text
-      return { file, stamp, scrubbed, mtime: stamp === '' ? this.o.now() : Math.floor(statSync(this.path(file)).mtimeMs) }
+      const absent = stamp === '' || stamp === REFUSED
+      return { file, stamp, scrubbed, mtime: absent ? this.o.now() : Math.floor(lstatSync(this.path(file)).mtimeMs) }
     })
     this.store.transaction(() => {
       for (const p of plans) this.indexRows(p.file, p.scrubbed, p.mtime)
@@ -466,7 +498,8 @@ export class MemoryFiles {
     })
     for (const p of plans) {
       this.known.set(p.file, p.stamp)
-      this.noteView(p.file, visible(p.scrubbed))
+      this.setProblem(`file_refused:${p.file}`, this.refusedAt(p.file) === p.file)
+      this.noteView(p.file, p.scrubbed)
     }
   }
 
@@ -497,18 +530,26 @@ export class MemoryFiles {
     }
   }
 
-  private noteView(file: string, view: string): void {
-    if (CORE.includes(file)) this.views.set(file, view)
+  private noteView(file: string, scrubbed: string): void {
     const cap = capOf(file)
     if (cap === undefined) return
     const code = `file_over_cap:${file}`
-    const { problems } = this.store
-    const at = problems.indexOf(code)
-    if (chars(view) > cap) {
-      if (at < 0) problems.push(code)
-    } else if (at >= 0) {
-      problems.splice(at, 1)
+    if (CORE.includes(file)) {
+      const { text, cut } = fitBlock(scrubbed, cap)
+      this.views.set(file, text)
+      this.setProblem(code, cut.length > 0, cut.length > 0 ? `${code} ${describeCut(cut)}` : undefined)
+    } else {
+      this.setProblem(code, chars(visible(scrubbed)) > cap)
     }
+  }
+
+  /** 同一个代码只留一条;detail 变了就换掉,不堆积 */
+  private setProblem(code: string, on: boolean, detail = code): void {
+    const { problems } = this.store
+    const at = problems.findIndex(p => p === code || p.startsWith(`${code} `))
+    if (on && at >= 0) problems[at] = detail
+    else if (on) problems.push(detail)
+    else if (at >= 0) problems.splice(at, 1)
   }
 
   private change(id: string, file: string | null, op: string, before: string | null, after: string | null, source: string): void {
@@ -537,7 +578,44 @@ export class MemoryFiles {
     return join(this.dir, file)
   }
 
+  /** 没有这个路径,或者它是个真目录 */
+  private realDir(path: string): boolean {
+    const s = this.lstat(path)
+    return s === undefined || (!s.isSymbolicLink() && s.isDirectory())
+  }
+
+  private lstat(path: string) {
+    try {
+      return lstatSync(path)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+      throw err
+    }
+  }
+
+  /**
+   * 路径上第一个不能用的地方。符号链接会把数据目录外的内容读进索引和模型,或者把写入带到外面;
+   * 文件位置上不是普通文件的(FIFO 读起来会卡死)同样不碰
+   */
+  private refusedAt(file: string): string | undefined {
+    if (!this.realDir(this.dir)) return 'files'
+    const parts = file.split('/')
+    for (let i = 1; i < parts.length; i++) {
+      const dir = parts.slice(0, i).join('/')
+      if (!this.realDir(this.path(dir))) return dir
+    }
+    const s = this.lstat(this.path(file))
+    return s === undefined || s.isFile() ? undefined : file
+  }
+
+  private checkDirs(): void {
+    const top = this.realDir(this.dir)
+    this.setProblem('file_refused:files', !top)
+    for (const sub of SUBDIRS) this.setProblem(`file_refused:${sub}`, top && !this.realDir(this.path(sub)))
+  }
+
   private load(file: string): string {
+    if (this.refusedAt(file) !== undefined) return ''
     try {
       return readFileSync(this.path(file), 'utf8')
     } catch (err) {
@@ -547,29 +625,32 @@ export class MemoryFiles {
   }
 
   private stamp(file: string): string {
-    try {
-      const s = statSync(this.path(file))
-      return `${s.size}:${s.mtimeMs}:${s.ctimeMs}`
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return ''
-      throw err
-    }
+    if (this.refusedAt(file) !== undefined) return REFUSED
+    const s = this.lstat(this.path(file))
+    return s ? `${s.size}:${s.mtimeMs}:${s.ctimeMs}` : ''
   }
 
+  /** 不穿过符号链接列目录 */
   private names(sub: string, ok: (name: string) => boolean): string[] {
+    if (!this.realDir(this.dir) || !this.realDir(this.path(sub))) return []
     try {
-      return readdirSync(join(this.dir, sub)).filter(ok).map(n => `${sub}/${n}`)
+      return readdirSync(this.path(sub)).filter(ok).map(n => `${sub}/${n}`)
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
       throw err
     }
   }
 
+  /** 目录里看到的名字,包括要拒绝的:对账才报得出来 */
+  private listed(scope: 'core' | 'all'): string[] {
+    const core = [...CORE, ...this.names('topics', n => MemoryFileSchema.safeParse(`topics/${n}`).success)]
+    if (scope === 'core') return core
+    return [...core, ...this.names('diary', n => DIARY_NAME.test(n)), ...this.names('archive', n => ARCHIVE_NAME.test(n))]
+  }
+
+  /** 真的在、能用的文件 */
   private list(scope: 'core' | 'all'): string[] {
-    const present = CORE.filter(f => existsSync(this.path(f)))
-    const topics = this.names('topics', n => MemoryFileSchema.safeParse(`topics/${n}`).success)
-    if (scope === 'core') return [...present, ...topics]
-    return [...present, ...topics, ...this.names('diary', n => DIARY_NAME.test(n)), ...this.names('archive', n => ARCHIVE_NAME.test(n))]
+    return this.listed(scope).filter(f => !['', REFUSED].includes(this.stamp(f)))
   }
 
   /** 索引里有、磁盘上没有的文件:关着插件时被删的 */
@@ -580,6 +661,7 @@ export class MemoryFiles {
 
   /** 临时文件 + fsync + 改名。崩溃留下的只会是临时文件,对账时清掉 */
   private save(file: string, content: string): void {
+    if (this.refusedAt(file) !== undefined) throw new RpcError(INVALID_PARAMS, 'refused')
     const target = this.path(file)
     const tmp = join(target, '..', `.${basename(file)}.${randomBytes(4).toString('hex')}.tmp`)
     try {
@@ -600,6 +682,7 @@ export class MemoryFiles {
 
   /** 崩溃留下的临时文件里可能有已删的文本 */
   private sweepTemps(): void {
+    if (!this.realDir(this.dir)) return
     const walk = (dir: string) => {
       for (const d of readdirSync(dir, { withFileTypes: true })) {
         if (d.isDirectory()) walk(join(dir, d.name))
@@ -618,7 +701,8 @@ export class MemoryFiles {
 
   private tighten(path: string, mode: number): void {
     try {
-      if ((statSync(path).mode & 0o777) !== mode) chmodSync(path, mode)
+      const s = lstatSync(path)
+      if (!s.isSymbolicLink() && (s.mode & 0o777) !== mode) chmodSync(path, mode)
     } catch (err) {
       this.o.log.warn('memory files chmod failed', { path: basename(path), error: err instanceof Error ? err.name : 'unknown' })
     }

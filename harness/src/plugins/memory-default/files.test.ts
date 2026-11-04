@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -58,7 +58,7 @@ function allPaths(dir: string): string[] {
 /** 插件目录下所有文件的原始字节里有没有这段文本 */
 const leftIn = (needle: string) =>
   allPaths(root)
-    .filter(p => statSync(p).isFile() && readFileSync(p).includes(Buffer.from(needle)))
+    .filter(p => lstatSync(p).isFile() && readFileSync(p).includes(Buffer.from(needle)))
     .map(p => p.slice(root.length + 1))
 
 beforeEach(() => {
@@ -231,6 +231,24 @@ describe('entries', () => {
     expect(note(hand.id).text).toBe('手写改了')
   })
 
+  it.each(['USER', 'a b', 'x -->', '', 'src=user'])('updateEntry refuses the source %j, on files and on session notes', source => {
+    const { id } = files.addEntry('MEMORY.md', 'plain', { src: 'confirmed' })
+    store.upsertNote({ id: 'n_s', layer: 'session', scope: 'session:s', source: 'model', text: 'group', ts: 1 })
+    const before = disk('MEMORY.md')
+    rejects(() => files.updateEntry(id, 'changed', source), -32602)
+    rejects(() => files.updateEntry('n_s', 'changed', source), -32602)
+    expect(disk('MEMORY.md')).toBe(before)
+    expect(note('n_s').text).toBe('group')
+  })
+
+  it('a replacing id or a candidate that could break the comment is refused', () => {
+    const { id } = files.addEntry('MEMORY.md', 'plain', { src: 'confirmed' })
+    const before = disk('MEMORY.md')
+    rejects(() => files.supersede(id, 'x --> <!-- mff id=y src=user'), -32602)
+    rejects(() => files.addEntry('MEMORY.md', 'y', { src: 'model', candidate: 'x -->' }), -32602)
+    expect(disk('MEMORY.md')).toBe(before)
+  })
+
   it('updateEntry honours the cap and an unknown id is refused', () => {
     const { id } = files.addEntry('USER.md', 'short', { src: 'confirmed' })
     rejects(() => files.updateEntry(id, 'x'.repeat(CAPS['USER.md'] + 1), 'user'), -32602, 'full')
@@ -303,7 +321,8 @@ describe('coreText and reconcile', () => {
     expect([...user].length).toBeLessThanOrEqual(CAPS['USER.md'])
     expect(user.split('\n')).toEqual(lines.slice(0, user.split('\n').length))
     expect(user.split('\n').length).toBeGreaterThan(15)
-    expect(store.problems).toEqual(['file_over_cap:USER.md'])
+    expect(store.problems).toHaveLength(1)
+    expect(store.problems[0]).toMatch(/^file_over_cap:USER\.md /)
     // 文件不动
     expect(disk('USER.md')).toBe(lines.join('\n'))
     // 索引里每行都在,搜得到
@@ -311,6 +330,75 @@ describe('coreText and reconcile', () => {
     handEdit('USER.md', lines[0])
     files.coreText()
     expect(store.problems).toEqual([])
+  })
+
+  describe('over the cap, cutting the block', () => {
+    const word = (w: string, n = 400) => `${w}${'字'.repeat(n)}`
+    const model = (w: string, i: number) => `- ${word(w)} <!-- mff id=n_${i} src=consolidated ts=1 -->`
+
+    it('user-confirmed and hand-written lines stay, wherever they are, and in file order', () => {
+      const confirmed = `- ${word('确认的')} <!-- mff id=n_c src=confirmed ts=1 -->`
+      const hand = `- ${word('手写的')}`
+      handEdit('USER.md', [model('甲', 1), model('乙', 2), model('丙', 3), model('丁', 4), hand, confirmed].join('\n'))
+      const { user } = files.coreText()
+      expect([...user].length).toBeLessThanOrEqual(CAPS['USER.md'])
+      const kept = user.split('\n')
+      expect(kept.at(-2)).toBe(hand)
+      expect(kept.at(-1)).toBe(`- ${word('确认的')}`)
+      expect(kept.slice(0, -2)).toEqual([`- ${word('甲')}`, `- ${word('乙')}`])
+    })
+
+    it('leading blank lines do not shift which line is whose', () => {
+      const confirmed = `- ${word('确认的', 1000)} <!-- mff id=n_c src=confirmed ts=1 -->`
+      handEdit('USER.md', ['', '', `- ${word('模型的', 1500)} <!-- mff id=n_m src=consolidated ts=1 -->`, confirmed, `- ${word('手写的', 900)}`].join('\n'))
+      expect(files.coreText().user).toBe(`- ${word('确认的', 1000)}\n- ${word('手写的', 900)}`)
+    })
+
+    it('a line that does not fit is passed over, a later one that fits still goes in', () => {
+      handEdit('USER.md', [`- ${word('长', 1990)}`, `- ${word('超长', 1990)}`, '- 短的'].join('\n'))
+      expect(files.coreText().user).toBe(`- ${word('长', 1990)}\n- 短的`)
+    })
+
+    it('problems give the count and first words of the cut lines, and no secret', () => {
+      handEdit('USER.md', [`- 留下 ${word('', 1990)}`, `- 第一条被截的内容 ${SECRET} ${word('a', 300)}`, `- 第二条被截的内容 ${word('b', 300)}`, ''].join('\n'))
+      files.coreText()
+      expect(store.problems).toHaveLength(1)
+      const [p] = store.problems
+      expect(p.startsWith('file_over_cap:USER.md ')).toBe(true)
+      expect(p).toContain('2 lines cut')
+      expect(p).toContain('第一条被截的内容')
+      expect(p).toContain('第二条被截的内容')
+      expect(p).not.toContain(SECRET)
+      expect(p).not.toContain('\n')
+      expect(p).not.toContain('mff')
+      expect(p.length).toBeLessThan(300)
+    })
+
+    it('many cut lines stay bounded in problems', () => {
+      handEdit('MEMORY.md', Array.from({ length: 100 }, (_, i) => `- 第${i}条 ${word('', 100)}`).join('\n'))
+      files.coreText()
+      expect(store.problems).toHaveLength(1)
+      expect(store.problems[0]).toMatch(/\d+ lines cut/)
+      expect(store.problems[0].length).toBeLessThan(300)
+    })
+
+    it('the entry is replaced, not stacked, as the file changes; deleting a cut line takes its words out', () => {
+      const big = `- ${word('留下', 1995)}`
+      handEdit('USER.md', `${big}\n- 要删的被截内容\n- 另一条被截内容\n`)
+      files.coreText()
+      expect(store.problems).toHaveLength(1)
+      expect(store.problems[0]).toContain('要删的被截内容')
+      files.deleteEntry(parseEntries(disk('USER.md'))[1].id)
+      expect(store.problems).toHaveLength(1)
+      expect(store.problems[0]).not.toContain('要删的被截内容')
+      expect(store.problems[0]).toContain('另一条被截内容')
+    })
+
+    it('a topic is not injected whole, so nothing is cut: the code alone', () => {
+      handEdit('topics/a.md', 'x'.repeat(CAPS.topic + 1))
+      files.coreText()
+      expect(store.problems).toEqual(['file_over_cap:topics/a.md'])
+    })
   })
 
   it('the cap counts text without comments, in characters', () => {
@@ -642,7 +730,7 @@ describe('deleteEntry', () => {
     expect(files.deleteEntry(id).text).toBe(TEXT)
     store.purge()
     expect(leftIn(TEXT)).toEqual([])
-    expect(files.deleteEntry(id)).toEqual({ evidence: [] })
+    expect(files.deleteEntry(id)).toEqual({ evidence: [], removedIds: [] })
   })
 
   it('a line removed in an editor can still be deleted through changes', () => {
@@ -653,12 +741,27 @@ describe('deleteEntry', () => {
     expect(leftIn(TEXT)).toEqual([])
   })
 
+  it('names every id it removed, including identical words under another id', () => {
+    const { id } = files.addEntry('MEMORY.md', TEXT, { src: 'consolidated', candidate: 'c_1' })
+    handEdit('USER.md', `- ${TEXT}\n- 留着\n`)
+    const hand = parseEntries(disk('USER.md'))[0].id
+    const linked = files.appendDiary('同一候选的说法', { src: 'extract', candidate: 'c_1' })
+    const out = files.deleteEntry(id)
+    expect(out.removedIds.sort()).toEqual([id, hand, linked.id].sort())
+    expect(disk('USER.md')).toBe('- 留着\n')
+  })
+
+  it('a session note reports just itself', () => {
+    store.upsertNote({ id: 'n_s', layer: 'session', scope: 'session:a', source: 'model', text: TEXT, ts: 1 })
+    expect(files.deleteEntry('n_s').removedIds).toEqual(['n_s'])
+  })
+
   it('an unknown id, and a second delete, do nothing and report no text', () => {
     const { id } = files.addEntry('MEMORY.md', TEXT, { src: 'confirmed' })
     files.deleteEntry(id)
     const eventCount = events.length
-    expect(files.deleteEntry(id)).toEqual({ evidence: [] })
-    expect(files.deleteEntry('n_never')).toEqual({ evidence: [] })
+    expect(files.deleteEntry(id)).toEqual({ evidence: [], removedIds: [] })
+    expect(files.deleteEntry('n_never')).toEqual({ evidence: [], removedIds: [] })
     expect(events).toHaveLength(eventCount)
   })
 
@@ -834,6 +937,158 @@ describe('path safety', () => {
     rejects(() => files.addEntry(file, 'x', { src: 'user' }), -32602)
     expect(existsSync(join(root, 'x.md'))).toBe(false)
     expect(existsSync(join(root, '..', 'x.md'))).toBe(false)
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('symlinks', () => {
+  let outside: string
+  const PRIVATE = '外面的私密内容 marker-outside'
+
+  beforeEach(() => {
+    outside = realpathSync(mkdtempSync(join(tmpdir(), 'mffai-outside-')))
+    mkdirSync(join(outside, 'dir'))
+    writeFileSync(join(outside, 'secret.md'), `- ${PRIVATE}\n`)
+    writeFileSync(join(outside, 'dir', 'deploy.md'), `- ${PRIVATE}\n`)
+    writeFileSync(join(outside, 'dir', '2026-11-04.md'), `- ${PRIVATE}\n`)
+    chmodSync(join(outside, 'secret.md'), 0o644)
+    chmodSync(join(outside, 'dir'), 0o755)
+  })
+  afterEach(() => rmSync(outside, { recursive: true, force: true }))
+
+  const linkFile = (file: string) => {
+    rmSync(pathOf(file), { force: true })
+    symlinkSync(join(outside, 'secret.md'), pathOf(file))
+  }
+  const linkDir = (sub: string) => {
+    rmSync(pathOf(sub), { recursive: true, force: true })
+    symlinkSync(join(outside, 'dir'), pathOf(sub))
+  }
+  const outsideUntouched = () => {
+    expect(readFileSync(join(outside, 'secret.md'), 'utf8')).toBe(`- ${PRIVATE}\n`)
+    expect(statSync(join(outside, 'secret.md')).mode & 0o777).toBe(0o644)
+    expect(statSync(join(outside, 'dir')).mode & 0o777).toBe(0o755)
+    expect(readdirSync(join(outside, 'dir')).sort()).toEqual(['2026-11-04.md', 'deploy.md'])
+  }
+  const searched = () => store.searchNotes({ q: 'marker-outside', scopes: ['owner'], layers: ['user', 'memory', 'topic', 'diary'], limit: 5 })
+
+  it.each(['USER.md', 'MEMORY.md'])('%s as a symlink reads as absent, reports, and is never written', file => {
+    linkFile(file)
+    const core = files.coreText()
+    expect(core.user + core.memory).toBe('')
+    expect(store.problems).toEqual([`file_refused:${file}`])
+    expect(searched()).toEqual([])
+    const read = files.read(file)
+    expect(read.content).toBe('')
+    rejects(() => files.write(file, '- x\n', read.hash, 'user'), -32602, 'refused')
+    rejects(() => files.addEntry(file, 'x', { src: 'confirmed' }), -32602, 'refused')
+    expect(lstatSync(pathOf(file)).isSymbolicLink()).toBe(true)
+    outsideUntouched()
+    expect(leftIn(PRIVATE)).toEqual([])
+  })
+
+  it('a symlink that replaces an indexed file drops its rows; restoring a real file clears the problem', () => {
+    handEdit('USER.md', '- 原来的\n')
+    files.coreText()
+    expect(noteIds()).toHaveLength(1)
+    linkFile('USER.md')
+    expect(files.coreText().user).toBe('')
+    expect(noteIds()).toEqual([])
+    expect(store.problems).toEqual(['file_refused:USER.md'])
+    rmSync(pathOf('USER.md'))
+    expect(files.coreText().user).toBe('')
+    expect(store.problems).toEqual([])
+    handEdit('USER.md', '- 新的\n')
+    expect(files.coreText().user).toBe('- 新的')
+  })
+
+  it('a symlink in topics/ is not listed or read', () => {
+    handEdit('topics/real.md', '- 真的\n')
+    linkFile('topics/deploy.md')
+    expect(files.coreText().topics).toEqual(['real'])
+    expect(searched()).toEqual([])
+    expect(store.problems).toEqual(['file_refused:topics/deploy.md'])
+    rejects(() => files.addEntry('topics/deploy.md', 'x', { src: 'user' }), -32602, 'refused')
+    outsideUntouched()
+  })
+
+  it('topics/ as a symlink: nothing read, nothing written there', () => {
+    linkDir('topics')
+    expect(files.coreText().topics).toEqual([])
+    expect(searched()).toEqual([])
+    expect(store.problems).toEqual(['file_refused:topics'])
+    rejects(() => files.addEntry('topics/deploy.md', 'x', { src: 'user' }), -32602, 'refused')
+    rejects(() => files.addEntry('topics/new.md', 'x', { src: 'user' }), -32602, 'refused')
+    outsideUntouched()
+  })
+
+  it('diary/ as a symlink: reconcile skips it, appendDiary refuses and leaves no temp outside', () => {
+    linkDir('diary')
+    files.reconcile('all')
+    expect(searched()).toEqual([])
+    expect(store.problems).toEqual(['file_refused:diary'])
+    rejects(() => files.appendDiary('x', { src: 'model' }), -32602, 'refused')
+    outsideUntouched()
+  })
+
+  it('a symlink at a diary path is refused', () => {
+    linkFile(DIARY)
+    files.reconcile('all')
+    expect(searched()).toEqual([])
+    expect(store.problems).toEqual([`file_refused:${DIARY}`])
+    rejects(() => files.appendDiary('x', { src: 'model' }), -32602, 'refused')
+    outsideUntouched()
+  })
+
+  it('archive/ as a symlink: supersede refuses and the line stays where it was', () => {
+    const { id } = files.addEntry('MEMORY.md', '留在原处', { src: 'confirmed' })
+    linkDir('archive')
+    rejects(() => files.supersede(id, 'n_new'), -32602, 'refused')
+    expect(disk('MEMORY.md')).toContain('留在原处')
+    outsideUntouched()
+  })
+
+  it('files/ itself as a symlink refuses everything under it', () => {
+    rmSync(join(root, 'files'), { recursive: true, force: true })
+    symlinkSync(join(outside, 'dir'), join(root, 'files'))
+    writeFileSync(join(outside, 'dir', 'USER.md'), `- ${PRIVATE}\n`)
+    writeFileSync(join(outside, 'dir', '.x.tmp'), 'temp')
+    const fresh = make()
+    expect(fresh.coreText().user).toBe('')
+    fresh.reconcile('all')
+    expect(store.problems).toContain('file_refused:files')
+    expect(existsSync(join(outside, 'dir', '.x.tmp'))).toBe(true)
+    rejects(() => fresh.addEntry('USER.md', 'x', { src: 'confirmed' }), -32602, 'refused')
+    expect(statSync(join(outside, 'dir')).mode & 0o777).toBe(0o755)
+  })
+
+  it('a dangling symlink directory does not stop the plugin starting', () => {
+    rmSync(pathOf('topics'), { recursive: true, force: true })
+    symlinkSync(join(outside, 'nowhere'), pathOf('topics'))
+    const fresh = make()
+    expect(fresh.coreText().topics).toEqual([])
+    expect(store.problems).toEqual(['file_refused:topics'])
+    expect(existsSync(join(outside, 'nowhere'))).toBe(false)
+  })
+
+  it('delete and rollback pass over a symlink, the temp sweep does not follow one', () => {
+    linkFile('USER.md')
+    linkDir('diary')
+    writeFileSync(join(outside, 'dir', '.old.tmp'), 'keep')
+    const { id } = files.addEntry('MEMORY.md', PRIVATE, { src: 'confirmed' })
+    files.deleteEntry(id)
+    files.removeByTurn('t')
+    expect(existsSync(join(outside, 'dir', '.old.tmp'))).toBe(true)
+    rmSync(join(outside, 'dir', '.old.tmp'))
+    outsideUntouched()
+  })
+
+  it('anything but a regular file at a core path is refused', () => {
+    handEdit('USER.md', '- x\n')
+    rmSync(pathOf('USER.md'))
+    mkdirSync(pathOf('USER.md'))
+    expect(files.coreText().user).toBe('')
+    expect(store.problems).toEqual(['file_refused:USER.md'])
+    rmSync(pathOf('USER.md'), { recursive: true })
   })
 })
 
