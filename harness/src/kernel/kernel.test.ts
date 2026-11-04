@@ -938,12 +938,58 @@ describe('plugin event tap (06)', () => {
     const created = r.k.events.bySession(sessionId)[0]
     const e = r.k.events.append({ type: 'message.user', sessionId, payload: { turnId: 't', text: 'SECRET' } })
     expect(() => other.events.redact([{ seq: e.seq }])).toThrow()
-    expect(() => other.events.purge()).toThrow()
+    await expect(other.events.purge()).rejects.toThrow()
     expect((r.k.events.after(e.seq - 1, 1)[0].payload as { text: string }).text).toBe('SECRET')
     expect(() => owner.events.redact([{ seq: created.seq }])).toThrow()
     expect(owner.events.redact([{ seq: e.seq }])).toBe(1)
     expect((r.k.events.after(e.seq - 1, 1)[0].payload as { text: string }).text).toBe(REDACTED)
     expect(r.k.events.after(e.seq).at(-1)).toMatchObject({ type: 'events.redacted', payload: { by: 'memory-default', seqs: [e.seq] } })
+  })
+
+  it('purge asks the supervisor for time scaled to the log, blocks only once it has it, and always gives it back', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mffai-hold-'))
+    const db = openDb(join(root, 'k.db'))
+    const log = new EventLog(db)
+    const order: string[] = []
+    let refuse = false
+    const realPurge = log.purge.bind(log)
+    log.purge = () => {
+      order.push('vacuum')
+      realPurge()
+    }
+    let ctx!: PluginContext
+    const holdWatchdog = async (ms: number) => {
+      order.push(ms > 0 ? 'hold' : 'release')
+      if (ms > 0) holds.push(ms)
+      if (ms > 0 && refuse) throw new Error('no ack')
+    }
+    const holds: number[] = []
+    const host = new PluginHost({
+      services: new ServiceRegistry(), events: new EventBus({}), rpc: new RpcRegistry(), append: e => log.append(e), eventLog: log, holdWatchdog, log: nullLogger, dataDir: root, secrets: {} as SecretStore,
+    })
+    await host.activateAll([probe('memory-default', c => { ctx = c })], [])
+
+    await ctx.events.purge({ then: () => order.push('then') })
+    expect(order).toEqual(['hold', 'vacuum', 'then', 'release'])
+    await ctx.events.purge({ extraBytes: 1024 * 1_048_576 })
+    expect(holds[1] - holds[0]).toBeGreaterThanOrEqual(100_000)
+
+    order.length = 0
+    refuse = true
+    await expect(ctx.events.purge()).rejects.toThrow('no ack')
+    expect(order).toEqual(['hold'])
+
+    refuse = false
+    order.length = 0
+    log.purge = () => {
+      order.push('vacuum')
+      throw new Error('disk full')
+    }
+    await expect(ctx.events.purge()).rejects.toThrow('disk full')
+    expect(order).toEqual(['hold', 'vacuum', 'release'])
+    await host.deactivateAll()
+    db.close()
+    rmSync(root, { recursive: true, force: true })
   })
 
   it('without an event log the tap is inert and redact still refuses', async () => {
@@ -958,7 +1004,7 @@ describe('plugin event tap (06)', () => {
     expect(ctx.events.after(0, 10)).toEqual([])
     expect(ctx.events.onAppend(() => {})).toBeTypeOf('function')
     expect(() => ctx.events.redact([{ seq: 1 }])).toThrow()
-    expect(() => ctx.events.purge()).toThrow()
+    await expect(ctx.events.purge()).rejects.toThrow()
     await host.deactivateAll()
     db.close()
     rmSync(root, { recursive: true, force: true })

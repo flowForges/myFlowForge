@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { DatabaseSync } from 'node:sqlite'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { build } from 'esbuild'
@@ -47,6 +48,60 @@ function make(mode: string, extra: Partial<ConstructorParameters<typeof Supervis
   return { sup, delays, states }
 }
 const fakeLog = () => (existsSync(join(dir, 'fake.log')) ? readFileSync(join(dir, 'fake.log'), 'utf8') : '')
+
+describe('a worker that asks for time before blocking', () => {
+  const holdModule = async () => {
+    const out = join(dir, 'hold.mjs')
+    await build({ entryPoints: [resolve(__dirname, '../entry/watchdogHold.ts')], outfile: out, bundle: true, platform: 'node', format: 'esm', logLevel: 'silent' })
+    return out
+  }
+  /** 够大:VACUUM 比 pingMs × missLimit 长得多,没有 hold 就一定被杀 */
+  const bigDb = () => {
+    const file = join(dir, 'big.sqlite')
+    const db = new DatabaseSync(file)
+    db.exec('PRAGMA journal_mode=WAL; CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT, payload TEXT)')
+    const ins = db.prepare('INSERT INTO events(payload) VALUES (?)')
+    db.exec('BEGIN')
+    for (let i = 0; i < 40_000; i++) ins.run('y'.repeat(2000))
+    db.exec('COMMIT')
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+    db.close()
+    return file
+  }
+  const withEnv = async (extra: Record<string, string>) => ({ ...process.env, FAKE_LOG: join(dir, 'fake.log'), FAKE_HOLD_MODULE: await holdModule(), ...extra })
+
+  it('control: the same VACUUM without a hold gets the worker killed', async () => {
+    const env = await withEnv({ FAKE_MODE: 'vacuum', FAKE_DB: bigDb() })
+    const { sup } = make('vacuum', { env, pingMs: 20 })
+    await sup.start()
+    await waitFor(() => sup.state().state === 'running')
+    const first = sup.state().workerPid!
+    await waitFor(() => sup.state().restarts >= 1 && sup.state().workerPid !== first, 30_000)
+  }, 60_000)
+
+  it('with a hold the real VACUUM finishes, the worker lives and the misses start over', async () => {
+    const env = await withEnv({ FAKE_MODE: 'vacuum-held', FAKE_DB: bigDb() })
+    const { sup } = make('vacuum-held', { env, pingMs: 20 })
+    await sup.start()
+    await waitFor(() => sup.state().state === 'running')
+    const pid = sup.state().workerPid!
+    await waitFor(() => fakeLog().includes('vacuumed'), 30_000)
+    expect(Number(/vacuumed (\d+)/.exec(fakeLog())![1])).toBeGreaterThan(60) // 比杀掉它的时限长,这个用例才有意义
+    await new Promise(r => setTimeout(r, 300))
+    expect(sup.state()).toMatchObject({ state: 'running', workerPid: pid, restarts: 0 })
+  }, 60_000)
+
+  it('a hold is bounded: past the cap a worker that stays blocked is killed', async () => {
+    const env = await withEnv({ FAKE_MODE: 'hold-then-block' })
+    const { sup } = make('hold-then-block', { env, maxHoldMs: 200 })
+    await sup.start()
+    await waitFor(() => sup.state().state === 'running')
+    const first = sup.state().workerPid!
+    await waitFor(() => fakeLog().includes('holding'))
+    await waitFor(() => sup.state().restarts >= 1 && sup.state().workerPid !== first)
+    expect(alive(first)).toBe(false)
+  }, 30_000)
+})
 
 describe('Supervisor', () => {
   it('ready -> running with a worker pid', async () => {

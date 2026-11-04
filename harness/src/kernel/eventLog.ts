@@ -235,13 +235,20 @@ export class EventLog {
 
   /**
    * 删除的最后一步:重写整个库文件。secure_delete 只管还算数的格子;日常追加时页分裂留在空隙里的旧副本不归它管(实测 60 个库 38 个有残留)。
-   * 同步跑,约 10 ms/MB,只在用户点删除时才有。seq、自增计数、receipts 都不变。做不到就抛错,调用方不留回执、可重试
+   * 同步跑,约 13 ms/MB,要 2 倍磁盘(TMPDIR 一份、WAL 一份),只在用户点删除时才有。seq、自增计数、receipts 都不变。
+   * 做不到就抛错,调用方不留回执、可重试。阻塞的时间要先向监管要,见 PluginContext.events.purge
    */
   purge(): void {
     if (pending.has(this.db)) throw new Error('purge: inside a transaction')
     this.db.exec('VACUUM')
     const r = this.db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get() as { busy?: number } | undefined
     if (r?.busy) throw new Error('purge: wal checkpoint busy')
+  }
+
+  /** 库文件多大:purge 要向监管要多少时间 */
+  sizeBytes(): number {
+    const size = (pragma: string) => Object.values(this.db.prepare(`PRAGMA ${pragma}`).get() as Record<string, number>)[0]
+    return size('page_count') * size('page_size')
   }
 
   /** 旧文本还在 WAL 里;尽力而为。外层事务提交之前做不了,由调用方重试 */

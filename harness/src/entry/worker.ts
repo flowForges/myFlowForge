@@ -8,6 +8,7 @@ import { sweepStaleNetDirs } from '../lib/sandbox/net/proxy'
 import { HARNESS_VERSION } from '../kernel/version'
 import { dataDir, ensureToken, runtimePaths } from '../protocol/index'
 import { createFileLogger } from '../supervisor/fileLog'
+import { createWatchdogHold } from './watchdogHold'
 
 
 /** 工作进程:组装内核 → 监听 worker.sock → 告诉监管 ready;响应 ping / drain */
@@ -57,7 +58,7 @@ export async function runWorker(): Promise<void> {
     }
     // MFFAI_SECRETS_PLAINTEXT=1:端到端测试用,不碰系统钥匙串
     const secrets = { osBackend: process.env.MFFAI_SECRETS_PLAINTEXT !== '1' }
-    kernel = await createKernel({ dataDir: dir, plugins: BUILTIN_PLUGINS, log, secrets, pgidFile: pgids, pgidSeed: kept })
+    kernel = await createKernel({ dataDir: dir, plugins: BUILTIN_PLUGINS, log, secrets, pgidFile: pgids, pgidSeed: kept, holdWatchdog: createWatchdogHold() })
     const k = kernel
     server = await startRpcServer({
       addr: paths.workerAddr,

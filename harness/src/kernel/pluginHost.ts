@@ -29,8 +29,11 @@ export interface PluginContext {
     onAppend(cb: (e: KernelEvent) => void): () => void
     /** 用户删除记忆时就地换掉文本(见 EventLog.redact);只有 EVENT_REDACTORS 能调,否则抛错。返回改了几个事件 */
     redact(edits: RedactEdit[]): number
-    /** redact 之后把文本从库文件的空隙里也清掉(见 EventLog.purge);权限同 redact。做不到就抛错 */
-    purge(): void
+    /**
+     * redact 之后把文本从库文件的空隙里也清掉(见 EventLog.purge);权限同 redact。做不到就 reject。
+     * 这期间整个工作进程同步阻塞,所以先向监管要时间,要不到就不做。then:同一段时间里要做的别的阻塞活,extraBytes 是它的体量
+     */
+    purge(o?: { then?(): void; extraBytes?: number }): Promise<void>
   }
   effect(dispose: () => void | Promise<void>): void
   /** 注册工作进程 RPC 方法:参数先由内核按 WorkerMethods 校验;随插件停用自动注销 */
@@ -71,13 +74,19 @@ export interface PluginState {
   error?: string
 }
 
+/** 实测约 13 ms/MB;机器忙的时候留够 7 倍,再加一段启动余量 */
+export function purgeHoldMs(bytes: number): number {
+  return 30_000 + Math.ceil(bytes / 1_048_576) * 100
+}
+
 export interface PluginHostDeps {
   services: ServiceRegistry
   events: EventBus
   rpc: RpcRegistry
   append(e: Omit<KernelEvent, 'seq' | 'ts'>): KernelEvent
   history?(sessionId: string): KernelEvent[]
-  eventLog?: Pick<EventLog, 'after' | 'onAppend' | 'redact' | 'purge'>
+  eventLog?: Pick<EventLog, 'after' | 'onAppend' | 'redact' | 'purge' | 'sizeBytes'>
+  holdWatchdog?: (ms: number) => Promise<void>
   log: Logger
   dataDir: string
   injectTimeoutMs?: number
@@ -161,10 +170,17 @@ export class PluginHost {
             if (!log || !EVENT_REDACTORS.includes(id)) throw new Error(`plugin ${id} may not redact events`)
             return log.redact(edits, id)
           },
-          purge: () => {
+          purge: async o => {
             const log = this.deps.eventLog
             if (!log || !EVENT_REDACTORS.includes(id)) throw new Error(`plugin ${id} may not redact events`)
-            log.purge()
+            const hold = this.deps.holdWatchdog
+            await hold?.(purgeHoldMs(log.sizeBytes() + (o?.extraBytes ?? 0)))
+            try {
+              log.purge()
+              o?.then?.()
+            } finally {
+              await hold?.(0)
+            }
           },
         },
         effect: d => scope.add(d),

@@ -14,6 +14,8 @@ export interface SupervisorOpts {
   drainMs?: number
   // 拉起后多久内必须 ready,否则当卡死处理
   startupMs?: number
+  /** 工作进程一次能要到的最长 hold */
+  maxHoldMs?: number
   log?: Logger
   // 测试注入
   delayFn?: (ms: number) => Promise<void>
@@ -23,6 +25,7 @@ export interface SupervisorOpts {
 
 const STABLE_MS = 60_000 // 正常跑满这么久,连续失败计数清零
 const HISTORY_MS = 30 * 60_000 // 熔断判断用到的最长窗口
+const MAX_HOLD_MS = 30 * 60_000 // 工作进程说"我要阻塞一会儿"的上限:真卡死了最多晚这么久才杀
 const STDERR_TAIL = 8192
 const STDERR_FLUSH_MS = 200
 
@@ -132,6 +135,7 @@ export class Supervisor {
     let readyAt: number | undefined
     let misses = 0
     let heard = false // 收到过任何消息:IPC 已通,开始按漏 ping 计
+    let holdUntil = 0 // 这之前工作进程说好了会阻塞:不数漏 ping,启动超时也不算
     const spawnedAt = this.now()
     let hung = false
     let done = false
@@ -148,7 +152,12 @@ export class Supervisor {
     child.on('message', (m: { t?: string }) => {
       heard = true
       if (m?.t === 'pong') misses = 0
-      else if (m?.t === 'ready' && this.child === child) {
+      else if (m?.t === 'hold') {
+        const ms = Math.min(Number((m as { ms?: unknown }).ms) || 0, this.opts.maxHoldMs ?? MAX_HOLD_MS)
+        holdUntil = ms > 0 ? this.now() + ms : 0
+        misses = 0
+        if (ms > 0 && child.connected) child.send({ t: 'hold-ack' }, () => { /* 通道已关 */ })
+      } else if (m?.t === 'ready' && this.child === child) {
         readyAt = this.now()
         misses = 0
         if (this.st === 'starting' || this.st === 'restarting') this.set('running')
@@ -156,6 +165,7 @@ export class Supervisor {
     })
 
     const ping = setInterval(() => {
+      if (this.now() < holdUntil) return
       // 进程刚起(Node 启动可能慢于几次 ping)不算漏;启动超时另算
       const stuck = (heard && misses >= this.missLimit) || (readyAt === undefined && this.now() - spawnedAt >= this.startupMs)
       if (stuck) {

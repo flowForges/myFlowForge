@@ -255,7 +255,7 @@ export function registerMemoryRpc(d: MemoryRpcDeps): { stop(): Promise<void> } {
         // 去掉几行都只重写一次事件库
         const ids = purger.pendingForFile(file)
         for (const id of ids) await purger.removeEntry(id)
-        purger.finish(ids)
+        await purger.finish(ids)
         return { ok: true, hash: m.files.read(file).hash, masked }
       }),
     )
@@ -575,18 +575,27 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
   }
 
   /** 第 6 步:落盘。什么都没动的 id 不用重写事件库。进度最后才清,这一步失败还能重试 */
-  function finish(ids: string[]): void {
+  async function finish(ids: string[]): Promise<void> {
     const touched = ids.filter(id => load(id) !== undefined)
     step('purge')
-    if (touched.length > 0) ctx.events.purge()
-    store.purge()
-    for (const id of touched) store.deleteMeta(keyOf(id))
-    if (touched.length > 0) store.purge()
+    if (touched.length === 0) {
+      store.purge()
+      return
+    }
+    // optimize 也是同步的,库大了一样会让监管以为卡死:放进同一段要来的时间
+    await ctx.events.purge({
+      extraBytes: statSync(d.dbFile, { throwIfNoEntry: false })?.size ?? 0,
+      then: () => {
+        store.purge()
+        for (const id of touched) store.deleteMeta(keyOf(id))
+        store.purge()
+      },
+    })
   }
 
   async function purgeEntry(id: string): Promise<{ redacted: number; sources: string[] }> {
     const result = await removeEntry(id)
-    finish([id])
+    await finish([id])
     return result
   }
 

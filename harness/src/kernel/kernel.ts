@@ -65,6 +65,8 @@ export interface KernelOpts {
   pgidFile?: string
   /** 启动时 reapOrphans 认不了、留到下次的条目(`ReapResult.kept`),登记从它们开始 */
   pgidSeed?: PgidEntry[]
+  /** 长时间同步阻塞之前向监管要时间(entry/watchdogHold.ts);不给 = 没有监管。ms 为 0 = 还回去 */
+  holdWatchdog?: (ms: number) => Promise<void>
   /** 收紧 db/ 和 events.sqlite 用的 chmod;测试注入失败 */
   chmod?: (path: string, mode: number) => void
   /**
@@ -227,7 +229,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   // 后端故障不抛错:状态为 unavailable / unreadable,内核照常启动
   const secrets = await openSecretStore({ ...opts.secrets, dataDir: opts.dataDir, log })
   const host = new PluginHost({
-    services, events: bus, rpc, append, history: sid => eventLog.bySession(sid), eventLog, log, dataDir: opts.dataDir, injectTimeoutMs: opts.injectTimeoutMs, secrets, config: configAccess,
+    services, events: bus, rpc, append, history: sid => eventLog.bySession(sid), eventLog, log, dataDir: opts.dataDir, injectTimeoutMs: opts.injectTimeoutMs, secrets, config: configAccess, ...(opts.holdWatchdog && { holdWatchdog: opts.holdWatchdog }),
   })
 
   let state: StatusResult['state'] = 'starting'
