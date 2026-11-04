@@ -42,9 +42,9 @@ const CLIPPED = '\n[这条消息太长,后面的内容省略了]'
 const SECTIONS = ['## 目标', '## 用户的要求与决定', '## 关键事实', '## 进展与待办']
 const QUOTES_HEADING = '## 用户原话'
 const FILES_HEADING = '## 动过的文件'
-/** 不是用户本人说的(群聊成员、定时任务、ACP 客户端):块里写明只有 用户原话 才算用户,所以不能用那个标题 */
+/** 不是用户本人说的(群聊成员、定时任务、ACP 客户端、转发来的):块里写明只有 用户原话 才算用户,所以不能用那个标题 */
 const OTHERS_HEADING = '## 对话原话'
-const OTHERS_NOTE = '(群聊成员或程序发的消息,不是用户本人的话)'
+const OTHERS_NOTE = '(群聊成员或程序发的消息,或转发来的别人的话,不是用户本人的话)'
 /** 比较前去掉标点空白、统一全半角和大小写。模型把标题写成什么样都还是这几节 */
 const HOST_KEYS = ['用户原话', '用戶原話', '对话原话', '對話原話', '动过的文件', '動過的文件', 'userquotes', 'userwords', 'userswords', 'quotesfromtheuser']
 const keyOf = (line: string) => line.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
@@ -107,7 +107,8 @@ function renderAssistant(p: Payload): string[] {
 function renderEvent(e: KernelEvent, p: Payload): string[] {
   switch (e.type) {
     case 'message.user':
-      return str(p.text) && !blank(p.text) ? [`[user] ${dataText(p.text)}`] : []
+      // SYSTEM 让模型只信 <conversation> 里用户自己说的:转发来的不能标成 user
+      return str(p.text) && !blank(p.text) ? [`[${p.external === true ? 'forwarded' : 'user'}] ${dataText(p.text)}`] : []
     case 'executor.notice':
       return str(p.text) && !blank(p.text) ? [`[notice] ${clipped(p.text, RESULT_CHARS)}`] : []
     case 'message.assistant':
@@ -168,6 +169,7 @@ function touchedFiles(p: Payload): string[] {
 export function hostSections(events: KernelEvent[], throughSeq = Infinity, fromUser = true): string {
   const rolled = rolledBackOf(events)
   const quotes: string[] = []
+  const external: string[] = []
   const files = new Set<string>()
   const opened = new Set<unknown>()
   for (const e of events) {
@@ -176,12 +178,14 @@ export function hostSections(events: KernelEvent[], throughSeq = Infinity, fromU
     const stray = e.type === 'message.user' && opened.has(p.turnId) && p.followUp !== true
     if (e.type === 'message.user') opened.add(p.turnId)
     if (stray || e.seq > throughSeq || rolled.has(p.turnId as string)) continue
-    if (e.type === 'message.user' && str(p.text) && !blank(p.text)) quotes.push(`- ${headOf(oneLine(scrub(p.text).text), QUOTE_CHARS)}`)
+    if (e.type === 'message.user' && str(p.text) && !blank(p.text)) (fromUser && p.external === true ? external : quotes).push(`- ${headOf(oneLine(scrub(p.text).text), QUOTE_CHARS)}`)
     if (e.type === 'message.assistant') for (const f of touchedFiles(p)) files.add(`- ${headOf(oneLine(scrub(f).text), FILE_CHARS)}`)
   }
   const section = (heading: string, lines: string[]) => [heading, ...(lines.length ? lines : ['(无)'])].join('\n')
-  const said = fromUser ? section(QUOTES_HEADING, quotes.slice(-QUOTES)) : section(OTHERS_HEADING, [OTHERS_NOTE, ...quotes.slice(-QUOTES)])
-  return `${said}\n\n${section(FILES_HEADING, [...files].slice(-FILES))}`
+  const others = (lines: string[]) => section(OTHERS_HEADING, [OTHERS_NOTE, ...lines.slice(-QUOTES)])
+  // 主人的会话里转发来的单独一节(07 §12.1);没有转发时文本和原来逐字节一样
+  const said = fromUser ? [section(QUOTES_HEADING, quotes.slice(-QUOTES)), ...(external.length ? [others(external)] : [])] : [others(quotes)]
+  return [...said, section(FILES_HEADING, [...files].slice(-FILES))].join('\n\n')
 }
 
 export type Verdict = { ok: true } | { ok: false; reason: 'missing_section' | 'too_long' | 'flagged' }

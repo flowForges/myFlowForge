@@ -231,7 +231,8 @@ export class Ingest {
       case 'message.user': {
         const session = e.sessionId ? this.deps.sessions.get(e.sessionId) : undefined
         if (session) this.deps.countHabit?.(e, session, e.ts)
-        return this.row(e, 'user', p.text, CLIP_MESSAGE)
+        // 07 §12.1:转发来的是别人的话。notice 不算提取证据、不进自动召回,memory_search 查得到
+        return this.row(e, p.external === true ? 'notice' : 'user', p.text, CLIP_MESSAGE)
       }
       case 'message.assistant':
         return this.row(e, 'assistant', p.text, CLIP_MESSAGE)

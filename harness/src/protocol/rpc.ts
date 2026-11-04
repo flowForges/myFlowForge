@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { KernelEventSchema, MemoryConsolidatedPayloadSchema, MemoryProposalStatusSchema, MemoryProposalTargetSchema } from './events'
+import { ChannelStateSchema, KernelEventSchema, MemoryConsolidatedPayloadSchema, MemoryProposalStatusSchema, MemoryProposalTargetSchema } from './events'
 import {
   AccountProtocolSchema,
   AccountViewSchema,
@@ -200,6 +200,39 @@ export type MemoryHealth = z.infer<typeof MemoryHealthSchema>
 
 const MemoryItems = z.object({ items: z.array(MemoryItemSchema) })
 
+// 07:Telegram 渠道(spec §13)。账号和聊天的 id 都是字符串
+const TelegramBotSchema = z.object({ id: z.number(), username: z.string() })
+
+export const TelegramProjectSchema = z.object({ name: z.string(), path: z.string(), auto: z.boolean() })
+export type TelegramProject = z.infer<typeof TelegramProjectSchema>
+
+export const TelegramConfigSchema = z.object({ enabled: z.boolean(), staleMinutes: z.number(), projects: z.array(TelegramProjectSchema) })
+export type TelegramConfig = z.infer<typeof TelegramConfigSchema>
+
+export const TelegramStatusSchema = z.object({
+  state: ChannelStateSchema,
+  reason: z.string().optional(),
+  enabled: z.boolean(),
+  tokenSet: z.boolean(),
+  bot: TelegramBotSchema.optional(),
+  secretsBackend: SecretsBackendSchema,
+  /** 只说是哪一类,不带 URL */
+  proxy: z.enum(['none', 'env', 'socks']),
+  lastOkAt: z.number().optional(),
+  paired: z.array(z.object({ accountId: z.string(), name: z.string(), pairedAt: z.number() })),
+  pairing: z.object({ active: z.boolean(), expiresAt: z.number().optional() }),
+  dropped: z.object({ unpaired: z.number(), stale: z.number(), group: z.number(), attachment: z.number(), badUpdate: z.number() }),
+  undelivered: z.number(),
+  problems: z.array(z.string()),
+})
+export type TelegramStatus = z.infer<typeof TelegramStatusSchema>
+
+export const TelegramChatsSchema = z.object({
+  chats: z.array(z.object({ chatId: z.string(), accountId: z.string(), sessionId: z.string(), project: z.string().optional(), model: ModelRefSchema.optional(), queued: z.number(), running: z.boolean() })),
+  worktrees: z.array(z.object({ id: z.string(), project: z.string(), path: z.string(), sessionIds: z.array(z.string()), createdAt: z.number(), usedByChat: z.string().optional() })),
+})
+export type TelegramChats = z.infer<typeof TelegramChatsSchema>
+
 export const WorkerMethods = {
   ...AuthMethods,
   hello: {
@@ -230,7 +263,8 @@ export const WorkerMethods = {
     result: z.object({ sessionId: z.string() }),
   },
   'session.prompt': {
-    params: z.object({ commandId: z.string(), sessionId: z.string(), text: z.string() }),
+    // external:转发或经内联机器人来的,不是用户本人的话(07 §12.1)
+    params: z.object({ commandId: z.string(), sessionId: z.string(), text: z.string(), external: z.boolean().optional() }),
     // followUp:消息被挂起的那一轮收下,turnId 是那一轮
     result: z.object({ accepted: z.boolean(), turnId: z.string(), followUp: z.boolean().optional() }),
   },
@@ -325,6 +359,20 @@ export const WorkerMethods = {
   'memory.habits.list': { params: Empty, result: z.object({ items: z.array(MemoryHabitSchema) }) },
   'memory.habits.decide': { params: z.object({ commandId: z.string(), id: z.string(), decision: z.enum(['confirmed', 'dismissed']) }), result: Ok },
   'memory.recommendations.set': { params: z.object({ commandId: z.string(), routine: z.boolean() }), result: Ok },
+  // 07。setToken、clearToken、pairing.* 故意没有 commandId:kernel.handle 给任何带这个名字的参数写回执,配对码就进库了。
+  // token 这里只限长度,形状由处理者查:zod 的 issue 不能有机会带上它
+  'channel.telegram.status': { params: Empty, result: TelegramStatusSchema },
+  'channel.telegram.setToken': { params: z.object({ token: z.string().max(256) }), result: z.object({ ok: z.boolean(), bot: TelegramBotSchema }) },
+  'channel.telegram.clearToken': { params: Empty, result: Ok },
+  'channel.telegram.clearWebhook': { params: z.object({ commandId: z.string() }), result: Ok },
+  'channel.telegram.pairing.begin': { params: Empty, result: z.object({ code: z.string(), expiresAt: z.number(), link: z.string().optional() }) },
+  'channel.telegram.pairing.cancel': { params: Empty, result: Ok },
+  'channel.telegram.unpair': { params: z.object({ commandId: z.string(), accountId: z.string() }), result: Ok },
+  'channel.telegram.config.get': { params: Empty, result: TelegramConfigSchema },
+  // config 宽松收下,由插件校验(项目路径要过 validateCwd)
+  'channel.telegram.config.set': { params: z.object({ commandId: z.string(), config: z.unknown() }), result: Ok },
+  'channel.telegram.chats': { params: Empty, result: TelegramChatsSchema },
+  'channel.telegram.worktree.discard': { params: z.object({ commandId: z.string(), worktreeId: z.string() }), result: Ok },
 } as const
 
 export const ControlMethods = {

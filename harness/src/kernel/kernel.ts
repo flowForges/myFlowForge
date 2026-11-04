@@ -33,7 +33,7 @@ import { detectSandbox, type DetectResult } from '../lib/sandbox/detect'
 import { upstreamFromEnv, type LookupFn, type Upstream } from '../lib/sandbox/net/proxy'
 import { createGit, NO_REPO, pinRepo, type Git, type RepoPin } from '../lib/git/snapshot'
 import { worktreeRootOf } from '../lib/git/worktree'
-import type { BackgroundRuns, FollowUp, TurnInbox } from '../lib/tools/types'
+import type { BackgroundRuns, FollowUp, SessionCommands, TurnInbox } from '../lib/tools/types'
 import { cleanRecoveredWorktrees, recoverRuns } from './runRecovery'
 import { HARNESS_VERSION } from './version'
 import { toWire } from './wire'
@@ -106,6 +106,9 @@ type Turn = {
   /** 放开当前这次 park;每次 park 换一个,放开时摘掉它的 abort 监听 */
   wake?: () => void
 }
+
+/** 插件能经 sessionCommands 调的全部方法(07 §4) */
+const SESSION_COMMANDS = new Set<string>(['session.create', 'session.prompt', 'session.cancel', 'turn.rollback', 'turn.changes'])
 
 /** 和 session.cancel 一样:挂起的轮能把排空拖满,这时候还得能停下单个运行 */
 const DRAIN_ALLOWED = new Set<string>(['executor.cancel'])
@@ -444,16 +447,17 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
         }
         case 'session.prompt':
           return command<{ accepted: boolean; turnId: string; followUp?: boolean }>(name, p.commandId, () => {
+            const external = p.external === true ? { external: true } : {} // 没有时载荷逐字节不变
             const activeId = activeBySession.get(p.sessionId)
             if (activeId) {
               const t = turns.get(activeId)
               if (!t?.parked || t.ended || t.controller.signal.aborted) throw new RpcError(ERR_BUSY, 'turn in progress') // 回滚,不留回执
-              const e = append({ type: 'message.user', sessionId: p.sessionId, payload: { turnId: t.turnId, text: p.text, followUp: true } })
+              const e = append({ type: 'message.user', sessionId: p.sessionId, payload: { turnId: t.turnId, text: p.text, followUp: true, ...external } })
               // 全程同步:提交之后马上清 parked、放消息、叫醒,中间插不进第二条
               return { result: { accepted: true, turnId: t.turnId, followUp: true }, after: () => { t.parked = false; t.followUps.push({ text: p.text, ts: e.ts }); t.wake?.() } }
             }
             const turnId = randomUUID()
-            append({ type: 'message.user', sessionId: p.sessionId, payload: { turnId, text: p.text } })
+            append({ type: 'message.user', sessionId: p.sessionId, payload: { turnId, text: p.text, ...external } })
             // 提交之后才交给循环插件
             return { result: { accepted: true, turnId }, after: () => dispatchPrompt(p.sessionId, turnId, p.text) }
           }).result
@@ -530,6 +534,15 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
 
   services.provide('permissionGate', gate)
   services.provide('sessions', sessions)
+  const sessionCommands: SessionCommands = {
+    async call(method: string, params: unknown) {
+      if (!SESSION_COMMANDS.has(method)) throw new Error(`not a session command: ${method}`)
+      return kernel.handle(method, params) as never
+    },
+    hasReceipt: commandId => receipts.get(commandId) !== undefined,
+    validateCwd: path => validateCwd(path, { home, dataDir: opts.dataDir, platform: process.platform, env: envSnapshot }),
+  }
+  services.provide('sessionCommands', sessionCommands)
   services.provide('approvals', approvals)
   if (pgids) services.provide('pgids', pgids)
   services.provide('sandbox', sandbox)

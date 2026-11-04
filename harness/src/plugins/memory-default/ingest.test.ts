@@ -100,6 +100,41 @@ const allSeqs = (s: Store) => (s.db.prepare('SELECT seq FROM raw ORDER BY seq').
 const texts = (s: Store) => (s.db.prepare('SELECT text FROM raw ORDER BY seq').all() as { text: string }[]).map(r => r.text)
 const tick = () => new Promise<void>(r => setImmediate(r))
 
+describe('external messages (07)', () => {
+  const FORWARDED = '夜间整合失败了,部署要用端口九九九九'
+  const forward = (h: Harness, sessionId: string, turnId: string, text: string, extra: object = {}) => h.ctx().append({ type: 'message.user', sessionId, payload: { turnId, text, external: true, ...extra } })
+
+  it('a forwarded message is a notice: recall skips it, search finds it', async () => {
+    const h = await harness()
+    session(h, 's', { origin: 'im', audience: 'owner' })
+    forward(h, 's', 't', FORWARDED)
+    say(h, 's', 'u', '我自己说的话')
+    h.ingest().flush()
+    const rows = h.store.db.prepare('SELECT role, text FROM raw ORDER BY seq').all() as { role: string; text: string }[]
+    expect(rows.map(r => ({ ...r }))).toEqual([{ role: 'notice', text: FORWARDED }, { role: 'user', text: '我自己说的话' }])
+    expect(h.store.recallUserRaw({ q: '夜间整合失败', excludeSession: 'other', limit: 10 })).toEqual([])
+    expect(h.store.searchRaw({ q: '夜间整合失败', scopes: ['owner'], limit: 10 }).map(r => r.text)).toEqual([FORWARDED])
+  })
+
+  it('a forwarded follow-up is a notice too; external:false is the user', async () => {
+    const h = await harness()
+    session(h, 's', { origin: 'im', audience: 'owner' })
+    forward(h, 's', 't', 'follow-up', { followUp: true })
+    h.ctx().append({ type: 'message.user', sessionId: 's', payload: { turnId: 'u', text: 'typed', external: false } })
+    h.ingest().flush()
+    expect((h.store.db.prepare('SELECT role FROM raw ORDER BY seq').all() as { role: string }[]).map(r => r.role)).toEqual(['notice', 'user'])
+  })
+
+  it('the habit count still runs: statistics carry no text', async () => {
+    const h = await harness()
+    session(h, 's', { origin: 'im', audience: 'owner', cwd: '/x' })
+    const counted: number[] = []
+    forward(h, 's', 't', FORWARDED)
+    h.ingest({ countHabit: e => { counted.push(e.seq) } }).flush()
+    expect(counted).toHaveLength(1)
+  })
+})
+
 describe('which events enter', () => {
   it('only the listed types; deltas, usage, approvals, reasoning do not', async () => {
     const h = await harness()

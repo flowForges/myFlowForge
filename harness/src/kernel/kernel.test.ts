@@ -20,7 +20,7 @@ import type { Plugin } from './pluginHost'
 import loopEcho from '../plugins/loop-echo'
 import { BUILTIN_PLUGINS } from '../plugins'
 import type { Approvals } from './approvals'
-import type { FollowUp, TurnInbox } from '../lib/tools/types'
+import type { FollowUp, SessionCommands, TurnInbox } from '../lib/tools/types'
 import { sessionKey } from '../lib/tools/commandKey'
 import { NO_SANDBOX } from '../../test/sandboxStub'
 
@@ -469,6 +469,20 @@ describe('kernel approvals', () => {
     expect(g.modelRequests).toBe(1)
   })
 
+  it('approval.respond cannot claim a channel: via is stripped by the schema; the service writes it', async () => {
+    const { k, approvalId } = await bootGated()
+    expect(await k.handle('approval.respond', { approvalId, decision: 'allow', via: 'telegram:42' })).toEqual({ ok: true })
+    await waitFor(() => types(k).includes('turn.ended'))
+    expect(Object.hasOwn(resolvedOf(k)[0].payload as object, 'via')).toBe(false)
+  })
+
+  it('approvals.respond with via ends up in the log', async () => {
+    const { k, g, approvalId } = await bootGated()
+    expect(g.approvals!.respond(approvalId, 'allow', 'telegram:42')).toBe(true)
+    await waitFor(() => types(k).includes('turn.ended'))
+    expect(resolvedOf(k)[0].payload).toMatchObject({ approvalId, decision: 'allow', by: 'user', via: 'telegram:42' })
+  })
+
   it('kernel.close() with a pending approval → deny by cancel and the promise settles', async () => {
     const { k, g, approvalId } = await bootGated()
     const pending = g.approvals!.request({ sessionId: 's', turnId: 't', callId: 'c', tool: 'shell', summary: 'x', signal: new AbortController().signal })
@@ -483,6 +497,136 @@ describe('kernel approvals', () => {
     ]))
     expect(byClose).toHaveLength(2)
     expect(existsSync(g.marker)).toBe(false)
+  })
+})
+
+describe('kernel: session commands for plugins (07)', () => {
+  async function bootProbe(over: { plugins?: Plugin[]; env?: NodeJS.ProcessEnv; home?: string } = {}) {
+    let cmd!: SessionCommands
+    const probe: Plugin = { manifest: { id: 'probe', version: '0', kernel: '*', inject: ['sessionCommands'] }, activate: ctx => { cmd = ctx.services.get<SessionCommands>('sessionCommands')! } }
+    const k = await createKernel({ sandbox: NO_SANDBOX, dataDir: dir, plugins: [probe, ...(over.plugins ?? [])], secrets: { osBackend: false }, ...(over.env && { env: over.env }), ...(over.home && { home: over.home }) })
+    kernels.push(k)
+    return { k, cmd }
+  }
+  const prompts = (k: Kernel) => k.events.after(0).filter(e => e.type === 'message.user')
+
+  it('anything off the closed list is refused and runs nothing', async () => {
+    const { k, cmd } = await bootProbe()
+    for (const m of ['permissions.set', 'approval.respond', 'memory.delete', 'channel.telegram.unpair', 'hasOwnProperty', '__proto__']) {
+      await expect(cmd.call(m as never, { commandId: 'x', config: {} } as never)).rejects.toThrow(/not a session command/)
+    }
+    expect(types(k)).not.toContain('permissions.updated')
+  })
+
+  it('session.create returns a session, replays by commandId, and honours draining', async () => {
+    const { k, cmd } = await bootProbe()
+    const a = await cmd.call('session.create', { commandId: 'tg:1:1', origin: 'im', audience: 'owner', title: 'Telegram' })
+    expect(a.sessionId).toEqual(expect.any(String))
+    expect(await cmd.call('session.create', { commandId: 'tg:1:1', origin: 'im', audience: 'owner', title: 'Telegram' })).toEqual(a)
+    expect(types(k).filter(t => t === 'session.created')).toHaveLength(1)
+    expect(k.events.after(0).find(e => e.type === 'session.created')!.payload).toMatchObject({ origin: 'im', audience: 'owner' })
+    await k.drain(0)
+    await expect(cmd.call('session.create', { commandId: 'tg:1:2' })).rejects.toMatchObject({ code: ERR_DRAINING })
+    expect(await cmd.call('session.create', { commandId: 'tg:1:1' })).toEqual(a)
+  })
+
+  it('params are checked exactly as for a client', async () => {
+    const { cmd } = await bootProbe()
+    await expect(cmd.call('session.prompt', { commandId: 'p' } as never)).rejects.toMatchObject({ code: -32602 })
+  })
+
+  it('a plugin method on the list goes through the same path: no provider is -32601', async () => {
+    const { cmd } = await bootProbe()
+    await expect(cmd.call('turn.changes', { sessionId: 's', turnId: 't' })).rejects.toMatchObject({ code: -32601 })
+  })
+
+  it('hasReceipt: false before, false after a refused command, true after success, and it runs nothing', async () => {
+    const { k, cmd } = await bootProbe({ plugins: [loopEcho] })
+    const { sessionId } = await cmd.call('session.create', { commandId: 'c' })
+    expect(cmd.hasReceipt('p')).toBe(false)
+    expect(prompts(k)).toHaveLength(0)
+    await cmd.call('session.prompt', { commandId: 'p', sessionId, text: 'hi' })
+    expect(cmd.hasReceipt('p')).toBe(true)
+    expect(cmd.hasReceipt('c')).toBe(true)
+    expect(prompts(k)).toHaveLength(1)
+    await waitFor(() => types(k).includes('turn.ended'))
+    expect(cmd.hasReceipt('p')).toBe(true)
+    expect(prompts(k)).toHaveLength(1)
+    await k.drain(0)
+    await expect(cmd.call('session.prompt', { commandId: 'q', sessionId, text: 'hi' })).rejects.toMatchObject({ code: ERR_DRAINING })
+    expect(cmd.hasReceipt('q')).toBe(false)
+  })
+
+  it('validateCwd uses the kernel\'s env snapshot: a credential root moved by env is refused, a plain directory passes', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'mffai-cwd-'))
+    try {
+      const claude = join(outside, 'moved-claude')
+      const work = join(outside, 'work')
+      mkdirSync(claude)
+      mkdirSync(work)
+      const { cmd } = await bootProbe({ env: { CLAUDE_CONFIG_DIR: claude }, home: join(outside, 'home') })
+      expect(() => cmd.validateCwd(claude)).toThrow('invalid cwd')
+      expect(cmd.validateCwd(work)).toEqual(expect.stringContaining('work'))
+      expect(() => cmd.validateCwd(join(outside, 'missing'))).toThrow('invalid cwd')
+      expect(() => cmd.validateCwd(dir)).toThrow('invalid cwd') // 数据目录本身
+    } finally {
+      rmSync(outside, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('kernel: channel methods and config (07)', () => {
+  it('channel.* is not reserved: a plugin registers it, and before that it answers -32601', async () => {
+    const k = await boot([])
+    const calls: [string, object][] = [
+      ['channel.telegram.status', {}], ['channel.telegram.setToken', { token: 'x' }], ['channel.telegram.clearToken', {}], ['channel.telegram.clearWebhook', { commandId: 'c1' }],
+      ['channel.telegram.pairing.begin', {}], ['channel.telegram.pairing.cancel', {}], ['channel.telegram.unpair', { commandId: 'c2', accountId: '1' }],
+      ['channel.telegram.config.get', {}], ['channel.telegram.config.set', { commandId: 'c3', config: {} }], ['channel.telegram.chats', {}], ['channel.telegram.worktree.discard', { commandId: 'c4', worktreeId: 'w' }],
+    ]
+    for (const [m, p] of calls) await expect(k.handle(m, p)).rejects.toMatchObject({ code: -32601 })
+    await k.close()
+    kernels = []
+    let begun = 0
+    const p: Plugin = { manifest: { id: 'channel-telegram', version: '0', kernel: '*' }, activate: ctx => {
+      ctx.rpc.register('channel.telegram.status', async () => ({ state: 'no_token' }))
+      ctx.rpc.register('channel.telegram.pairing.begin', async () => { begun++; return { code: 'CODE', expiresAt: 1 } })
+    } }
+    const k2 = await boot([p])
+    expect(types(k2)).not.toContain('plugin.failed')
+    expect(await k2.handle('channel.telegram.status', {})).toEqual({ state: 'no_token' })
+    // 配对码方法即使被传了 commandId 也不走回执:schema 剥掉它,每次都执行,结果不进 receipts
+    await k2.handle('channel.telegram.pairing.begin', { commandId: 'rc' })
+    await k2.handle('channel.telegram.pairing.begin', { commandId: 'rc' })
+    expect(begun).toBe(2)
+  })
+
+  it('a token of the wrong size is refused without quoting it', async () => {
+    const k = await boot([])
+    const token = 'S'.repeat(300)
+    const err = (await k.handle('channel.telegram.setToken', { token }).catch(e => e)) as { message: string; data: unknown }
+    expect(err).toMatchObject({ code: -32602 })
+    expect(JSON.stringify({ message: err.message, data: err.data })).not.toContain('SSSS')
+  })
+
+  it('config.json with a junk channels value still loads, accounts intact; the plugin can read and write its section', async () => {
+    const accounts = [{ id: 'a1', presetId: 'p', label: 'keep' }]
+    writeFileSync(join(dir, 'config.json'), JSON.stringify({ version: 1, models: { accounts }, channels: 'junk' }))
+    let ctx!: PluginContext
+    const p: Plugin = { manifest: { id: 'channel-telegram', version: '0', kernel: '*' }, activate: c => { ctx = c } }
+    await boot([p])
+    expect(ctx.config.channels).toBe('junk')
+    const cfg = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'))
+    expect(cfg.models.accounts).toEqual(accounts)
+    ctx.updateConfig('channels', { telegram: { enabled: false } })
+    expect(JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')).channels).toEqual({ telegram: { enabled: false } })
+    expect(() => ctx.updateConfig('models', {})).toThrow(/not writable/)
+  })
+
+  it('another plugin cannot write channels', async () => {
+    let ctx!: PluginContext
+    const p: Plugin = { manifest: { id: 'other', version: '0', kernel: '*' }, activate: c => { ctx = c } }
+    await boot([p])
+    expect(() => ctx.updateConfig('channels', {})).toThrow(/not writable/)
   })
 })
 
@@ -534,6 +678,32 @@ describe('kernel: Review Focus 3a, a parked turn accepts the message', () => {
   }
   const users = (k: Kernel) => k.events.after(0).filter(e => e.type === 'message.user')
   const busy = { code: ERR_BUSY, message: 'turn in progress' }
+
+  it('external: written on a new turn and on a follow-up to a parked turn, only when true; otherwise the payload is unchanged byte for byte', async () => {
+    const loop = parkingLoop()
+    const k = await boot([loop.plugin])
+    const { sessionId } = (await k.handle('session.create', { commandId: 'c' })) as { sessionId: string }
+    const first = (await k.handle('session.prompt', { commandId: 'p1', sessionId, text: 'first', external: true })) as { turnId: string }
+    await waitFor(() => loop.parks === 1)
+    const second = (await k.handle('session.prompt', { commandId: 'p2', sessionId, text: 'second', external: true })) as { turnId: string; followUp?: boolean }
+    await waitFor(() => loop.parks === 2)
+    expect(second).toEqual({ accepted: true, turnId: first.turnId, followUp: true })
+    const third = (await k.handle('session.prompt', { commandId: 'p3', sessionId, text: 'third', external: false })) as { followUp?: boolean }
+    await waitFor(() => loop.parks === 3)
+    expect(third.followUp).toBe(true)
+    await k.handle('session.prompt', { commandId: 'p4', sessionId, text: 'fourth' })
+    await waitFor(() => loop.parks === 4)
+    expect(users(k).map(e => JSON.stringify(e.payload))).toEqual([
+      JSON.stringify({ turnId: first.turnId, text: 'first', external: true }),
+      JSON.stringify({ turnId: first.turnId, text: 'second', followUp: true, external: true }),
+      JSON.stringify({ turnId: first.turnId, text: 'third', followUp: true }),
+      JSON.stringify({ turnId: first.turnId, text: 'fourth', followUp: true }),
+    ])
+    expect(loop.taken.map(f => f.text)).toEqual(['second', 'third', 'fourth'])
+    await k.handle('session.cancel', { commandId: 'x', sessionId })
+    const fresh = (await k.handle('session.prompt', { commandId: 'p5', sessionId, text: 'plain', external: false })) as { turnId: string }
+    expect(JSON.stringify(users(k).at(-1)!.payload)).toBe(JSON.stringify({ turnId: fresh.turnId, text: 'plain' }))
+  })
 
   it('parked: same turn, followUp receipt and event, the inbox gets the text with that event\'s ts, and the handler wakes', async () => {
     const { k, loop, sessionId, turnId } = await parkedTurn()

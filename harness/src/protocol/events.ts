@@ -41,6 +41,10 @@ export const EVENT_TYPES = [
   'memory.proposal',
   'memory.consolidated',
   'memory.recommendation',
+  'channel.status',
+  'channel.paired',
+  'channel.unpaired',
+  'channel.pairing.burned',
 ] as const
 
 export const EventTypeSchema = z.enum(EVENT_TYPES)
@@ -152,3 +156,23 @@ export const MemoryRecommendationPayloadSchema = z.object({
   cwd: z.string(),
 })
 export type MemoryRecommendationPayload = z.infer<typeof MemoryRecommendationPayloadSchema>
+
+// 07:IM 渠道(spec §13)。都不带令牌、配对码、陌生人的文本。状态是稳定代码,界面直接显示
+export const ChannelIdSchema = z.enum(['telegram'])
+export type ChannelId = z.infer<typeof ChannelIdSchema>
+
+export const ChannelStateSchema = z.enum(['starting', 'online', 'reconnecting', 'unauthorized', 'conflict', 'no_token', 'disabled', 'secrets_unavailable'])
+export type ChannelState = z.infer<typeof ChannelStateSchema>
+
+export const ChannelStatusPayloadSchema = z.object({ channel: ChannelIdSchema, state: ChannelStateSchema, reason: z.string().optional() })
+export type ChannelStatusPayload = z.infer<typeof ChannelStatusPayloadSchema>
+
+/** accountId 是字符串:渠道中立,Telegram 的数字 id 转成十进制 */
+export const ChannelPairedPayloadSchema = z.object({ channel: ChannelIdSchema, accountId: z.string(), name: z.string() })
+export type ChannelPairedPayload = z.infer<typeof ChannelPairedPayloadSchema>
+
+export const ChannelUnpairedPayloadSchema = z.object({ channel: ChannelIdSchema, accountId: z.string(), by: z.enum(['app', 'im']) })
+export type ChannelUnpairedPayload = z.infer<typeof ChannelUnpairedPayloadSchema>
+
+export const ChannelPairingBurnedPayloadSchema = z.object({ channel: ChannelIdSchema })
+export type ChannelPairingBurnedPayload = z.infer<typeof ChannelPairingBurnedPayloadSchema>

@@ -1,6 +1,6 @@
 // 工具与 tools 服务的接口(spec §6);实现在 plugins/tools-registry
 import type { ZodType } from 'zod'
-import type { SandboxStatus } from '../../protocol/rpc'
+import type { SandboxStatus, WorkerParams, WorkerResult } from '../../protocol/rpc'
 
 /** 权限请求;路径资源由工具解析成绝对路径后给出(lib/fs/paths 的 resolveToolPath) */
 export interface PermissionRequest {
@@ -166,4 +166,19 @@ export interface SandboxService {
   /** plan() 的 argv 版本:CLI 主程序包进沙箱;失败 → reject,绝不退回无沙箱 */
   planExec(file: string, args: string[], s: { sessionId: string; cwd: string; spillDir: string }, env: NodeJS.ProcessEnv, o: ExecPlanOpts): Promise<ShellPlan>
   close(): Promise<void>
+}
+
+export type SessionCommandName = 'session.create' | 'session.prompt' | 'session.cancel' | 'turn.rollback' | 'turn.changes'
+
+/**
+ * 内核 `sessionCommands` 服务(07 spec §4):渠道插件发起会话的窄入口。转给 kernel.handle,校验、回执、排空都和客户端一样。
+ * 清单是闭合的。09 的子进程宿主不转发它
+ */
+export interface SessionCommands {
+  /** 清单外的方法 reject,什么都不做 */
+  call<M extends SessionCommandName>(method: M, params: WorkerParams<M>): Promise<WorkerResult<M>>
+  /** 只回真假,不执行:过期的冻结批次要先知道它跑过没有(07 §7.3) */
+  hasReceipt(commandId: string): boolean
+  /** 内核的环境快照,插件没有(07 §8.1)。不合法 → 抛错 */
+  validateCwd(path: string): string
 }

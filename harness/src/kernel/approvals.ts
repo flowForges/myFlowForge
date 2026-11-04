@@ -34,7 +34,7 @@ export interface ApprovalsOpts {
   log?: Logger
 }
 
-type Pending = { req: ApprovalRequest; settle(decision: ApprovalDecision, by: By): void }
+type Pending = { req: ApprovalRequest; settle(decision: ApprovalDecision, by: By, via?: string): void }
 
 export class Approvals {
   private pending = new Map<string, Pending>()
@@ -63,11 +63,11 @@ export class Approvals {
         req.signal.removeEventListener('abort', onAbort)
       }
       // 计时器 / 监听器 / 回调里调用:写事件失败只记日志,不外抛,promise 照样结束
-      const settle = (decision: ApprovalDecision, by: By) => {
+      const settle = (decision: ApprovalDecision, by: By, via?: string) => {
         if (!this.pending.delete(approvalId)) return
         cleanup()
         try {
-          this.resolved(req, approvalId, decision, by)
+          this.resolved(req, approvalId, decision, by, via)
         } catch (err) {
           this.log.error('approval.resolved append failed', { error: err instanceof Error ? err.message : String(err) })
         }
@@ -89,8 +89,8 @@ export class Approvals {
     })
   }
 
-  /** 用户应答;未知 / 已结束的 id → false */
-  respond(approvalId: string, decision: 'allow' | 'allow_session' | 'deny'): boolean {
+  /** 用户应答;未知 / 已结束的 id → false。via:渠道插件填,写进 resolved;approval.respond 不传 */
+  respond(approvalId: string, decision: 'allow' | 'allow_session' | 'deny', via?: string): boolean {
     const p = this.pending.get(approvalId)
     if (!p) return false
     if (decision === 'allow_session' && p.req.key !== undefined) {
@@ -99,7 +99,7 @@ export class Approvals {
       keys.set(p.req.key, keys.get(p.req.key) === true || p.req.unsandboxed === true)
       this.allowed.set(p.req.sessionId, keys)
     }
-    p.settle(decision === 'deny' ? 'deny' : 'allow', 'user')
+    p.settle(decision === 'deny' ? 'deny' : 'allow', 'user', via)
     return true
   }
 
@@ -109,11 +109,11 @@ export class Approvals {
     for (const p of [...this.pending.values()]) p.settle('deny', 'cancel')
   }
 
-  private resolved(req: ApprovalRequest, approvalId: string, decision: ApprovalDecision, by: By): ApprovalDecision {
+  private resolved(req: ApprovalRequest, approvalId: string, decision: ApprovalDecision, by: By, via?: string): ApprovalDecision {
     this.opts.append({
       type: 'approval.resolved',
       sessionId: req.sessionId,
-      payload: { approvalId, turnId: req.turnId, callId: req.callId, decision, by },
+      payload: { approvalId, turnId: req.turnId, callId: req.callId, decision, by, ...(via !== undefined && { via }) },
     })
     return decision
   }

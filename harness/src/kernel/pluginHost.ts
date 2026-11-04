@@ -57,7 +57,7 @@ export interface Plugin {
 }
 
 /** 插件可写的内核配置段:收紧为白名单 */
-export const CONFIG_SECTIONS: Record<string, (keyof KernelConfig)[]> = { 'models-registry': ['models'], 'executor-cli': ['executors'], 'memory-default': ['memory'] }
+export const CONFIG_SECTIONS: Record<string, (keyof KernelConfig)[]> = { 'models-registry': ['models'], 'executor-cli': ['executors'], 'memory-default': ['memory'], 'channel-telegram': ['channels'] }
 
 /** 能就地改事件日志的插件:日志只追加的唯一例外(06 spec §16) */
 export const EVENT_REDACTORS: readonly string[] = ['memory-default']

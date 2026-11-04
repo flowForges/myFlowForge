@@ -47,6 +47,30 @@ describe('Approvals', () => {
     expect(requested()).toHaveLength(1)
   })
 
+  it('via is written when the caller gives it, and only then', async () => {
+    const a = ask('x')
+    approvals.respond(lastId(), 'allow', 'telegram:42')
+    await a
+    expect(resolved()[0]).toMatchObject({ decision: 'allow', by: 'user', via: 'telegram:42' })
+    const b = ask('y')
+    approvals.respond(lastId(), 'deny')
+    await b
+    expect(Object.hasOwn(resolved()[1], 'via')).toBe(false)
+    expect(Object.keys(resolved()[1]).sort()).toEqual(['approvalId', 'by', 'callId', 'decision', 'turnId'])
+  })
+
+  it('via is not written on what the user did not answer: timeout, cancel, session', async () => {
+    const t = ask('x')
+    vi.advanceTimersByTime(60)
+    await t
+    const c = new AbortController()
+    const p = ask('y', { signal: c.signal })
+    c.abort()
+    await p
+    expect(resolved().map(r => r.by)).toEqual(['timeout', 'cancel'])
+    for (const r of resolved()) expect(Object.hasOwn(r, 'via')).toBe(false)
+  })
+
   it('deny', async () => {
     const p = ask('rm -rf build')
     expect(approvals.respond(lastId(), 'deny')).toBe(true)

@@ -31,6 +31,8 @@ export const KernelConfigSchema = z.object({
   executors: z.unknown().optional(),
   // 06:同样宽松收下,由 memory-default 解析(lib/memory/types.ts 的 parseMemoryConfig)
   memory: z.unknown().optional(),
+  // 07:同样宽松收下,由 channel-telegram 解析;写坏了退回默认值并告警
+  channels: z.unknown().optional(),
 })
 export type KernelConfig = z.infer<typeof KernelConfigSchema>
 

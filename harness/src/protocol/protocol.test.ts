@@ -9,6 +9,7 @@ import {
   ExecutorRunStartedPayloadSchema, SessionOriginSchema, TurnParkedPayloadSchema, TurnResumedPayloadSchema,
   ContextRebuiltPayloadSchema, EventsRedactedPayloadSchema, MemoryCheckpointPayloadSchema, MemoryConsolidatedPayloadSchema, MemoryDeletedPayloadSchema,
   MemoryInjectedPayloadSchema, MemoryProposalPayloadSchema, MemoryRecommendationPayloadSchema, MemoryUpdatedPayloadSchema, SessionAudienceSchema,
+  ChannelPairedPayloadSchema, ChannelPairingBurnedPayloadSchema, ChannelStatusPayloadSchema, ChannelUnpairedPayloadSchema,
 } from './index'
 
 describe('framing', () => {
@@ -458,5 +459,80 @@ describe('06 schemas', () => {
     expect(result('memory.file.set', { ok: true, hash: 'h', masked: 0 })).toBe(true)
     // 预算和后台模型 Task 8 才有,没有也要过
     expect(result('memory.health', { dbBytes: 1, rawRows: 0, noteRows: 0, cursorLag: 0, pendingProposals: 0, problems: [] })).toBe(true)
+  })
+})
+
+describe('channels (07)', () => {
+  it('the four events exist, the version does not move', () => {
+    for (const t of ['channel.status', 'channel.paired', 'channel.unpaired', 'channel.pairing.burned'] as const) expect(EVENT_TYPES).toContain(t)
+    expect(PROTOCOL_VERSION).toBe(3)
+  })
+
+  it('event payloads', () => {
+    expect(ChannelStatusPayloadSchema.parse({ channel: 'telegram', state: 'conflict', reason: 'webhook' })).toEqual({ channel: 'telegram', state: 'conflict', reason: 'webhook' })
+    for (const state of ['starting', 'online', 'reconnecting', 'unauthorized', 'conflict', 'no_token', 'disabled', 'secrets_unavailable']) {
+      expect(ChannelStatusPayloadSchema.safeParse({ channel: 'telegram', state }).success).toBe(true)
+    }
+    expect(ChannelStatusPayloadSchema.safeParse({ channel: 'telegram', state: 'fine' }).success).toBe(false)
+    expect(ChannelPairedPayloadSchema.safeParse({ channel: 'telegram', accountId: '42', name: 'a' }).success).toBe(true)
+    expect(ChannelPairedPayloadSchema.safeParse({ channel: 'telegram', accountId: '42' }).success).toBe(false)
+    for (const by of ['app', 'im']) expect(ChannelUnpairedPayloadSchema.safeParse({ channel: 'telegram', accountId: '42', by }).success).toBe(true)
+    expect(ChannelUnpairedPayloadSchema.safeParse({ channel: 'telegram', accountId: '42', by: 'x' }).success).toBe(false)
+    expect(ChannelPairingBurnedPayloadSchema.safeParse({ channel: 'telegram' }).success).toBe(true)
+    expect(ChannelPairingBurnedPayloadSchema.safeParse({}).success).toBe(false)
+  })
+
+  it('methods from spec §13', () => {
+    const shape = (m: keyof typeof WorkerMethods) => Object.keys((WorkerMethods[m].params as unknown as { shape: object }).shape)
+    expect(shape('channel.telegram.status')).toEqual([])
+    expect(shape('channel.telegram.setToken')).toEqual(['token'])
+    expect(shape('channel.telegram.clearWebhook')).toEqual(['commandId'])
+    expect(shape('channel.telegram.unpair').sort()).toEqual(['accountId', 'commandId'])
+    expect(shape('channel.telegram.config.get')).toEqual([])
+    expect(shape('channel.telegram.config.set').sort()).toEqual(['commandId', 'config'])
+    expect(shape('channel.telegram.chats')).toEqual([])
+    expect(shape('channel.telegram.worktree.discard').sort()).toEqual(['commandId', 'worktreeId'])
+  })
+
+  it('methods that carry a secret, or start from one, have no commandId: the kernel writes a receipt for any param of that name', () => {
+    for (const m of ['channel.telegram.setToken', 'channel.telegram.clearToken', 'channel.telegram.pairing.begin', 'channel.telegram.pairing.cancel'] as const) {
+      const parsed = WorkerMethods[m].params.parse({ token: 'x', commandId: 'c' }) as Record<string, unknown>
+      expect(parsed.commandId).toBeUndefined()
+    }
+  })
+
+  it('the token is length-limited and only that: its shape is checked in the handler, so no zod issue can quote it', () => {
+    const p = WorkerMethods['channel.telegram.setToken'].params
+    expect(p.safeParse({ token: 'not-a-token' }).success).toBe(true)
+    const over = 'S'.repeat(257)
+    const r = p.safeParse({ token: over })
+    expect(r.success).toBe(false)
+    expect(JSON.stringify(r.error?.issues)).not.toContain('SSSS')
+  })
+
+  it('results', () => {
+    const status = {
+      state: 'online', enabled: true, tokenSet: true, bot: { id: 1, username: 'b' }, secretsBackend: 'plaintext-file', proxy: 'none', lastOkAt: 1,
+      paired: [{ accountId: '42', name: 'a', pairedAt: 1 }], pairing: { active: true, expiresAt: 2 },
+      dropped: { unpaired: 0, stale: 0, group: 0, attachment: 0, badUpdate: 0 }, undelivered: 0, problems: ['state_recovered'],
+    }
+    expect(WorkerMethods['channel.telegram.status'].result.safeParse(status).success).toBe(true)
+    expect(WorkerMethods['channel.telegram.status'].result.safeParse({ ...status, proxy: 'http://user:pw@host' }).success).toBe(false)
+    expect(WorkerMethods['channel.telegram.setToken'].result.safeParse({ ok: true, bot: { id: 1, username: 'b' } }).success).toBe(true)
+    expect(WorkerMethods['channel.telegram.pairing.begin'].result.safeParse({ code: 'K7M2-9QXA', expiresAt: 1 }).success).toBe(true)
+    expect(WorkerMethods['channel.telegram.config.get'].result.safeParse({ enabled: true, staleMinutes: 10, projects: [{ name: 'api', path: '/x', auto: false }] }).success).toBe(true)
+    expect(WorkerMethods['channel.telegram.chats'].result.safeParse({
+      chats: [{ chatId: '42', accountId: '42', sessionId: 's', queued: 0, running: false }],
+      worktrees: [{ id: 'wt_1', project: 'api', path: '/x', sessionIds: ['s'], createdAt: 1, usedByChat: '42' }],
+    }).success).toBe(true)
+  })
+
+  it('session.prompt takes external; approval.respond takes no via; approval.resolved can carry one', () => {
+    const prompt = WorkerMethods['session.prompt'].params
+    expect(prompt.parse({ commandId: 'c', sessionId: 's', text: 't', external: true })).toEqual({ commandId: 'c', sessionId: 's', text: 't', external: true })
+    expect(prompt.parse({ commandId: 'c', sessionId: 's', text: 't' })).toEqual({ commandId: 'c', sessionId: 's', text: 't' })
+    expect(WorkerMethods['approval.respond'].params.parse({ approvalId: 'a', decision: 'allow', via: 'telegram:1' })).toEqual({ approvalId: 'a', decision: 'allow' })
+    expect(ApprovalResolvedPayloadSchema.parse({ approvalId: 'a', decision: 'allow', by: 'user', via: 'telegram:1' }).via).toBe('telegram:1')
+    expect(ApprovalResolvedPayloadSchema.parse({ approvalId: 'a', decision: 'allow', by: 'user' }).via).toBeUndefined()
   })
 })

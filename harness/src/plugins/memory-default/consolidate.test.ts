@@ -184,6 +184,33 @@ describe('grounded, daysSeen, jaccard3', () => {
   })
 })
 
+describe('external messages (07)', () => {
+  it('a forwarded message is not offered to extraction and cannot evidence a fact', async () => {
+    const h = await boot()
+    const sid = await h.session({ origin: 'im', audience: 'owner' })
+    const forward = (d: number) => {
+      const seq = h.ctx().append({ type: 'message.user', sessionId: sid, payload: { turnId: `f${d}`, text: FACT, external: true } }).seq
+      h.ctx().append({ type: 'turn.ended', sessionId: sid, payload: { turnId: `f${d}` } })
+      h.memory().flushNow()
+      h.db().prepare('UPDATE raw SET ts = ? WHERE seq = ?').run(new Date(2026, 10, 4 + d, 10).getTime(), seq)
+      return `r_${seq}`
+    }
+    const first = forward(0)
+    h.at(0)
+    h.extract([{ text: FACT, kind: 'fact', evidence: [first] }])
+    await h.run()
+    expect(h.prompts().join('\n')).not.toContain(FACT)
+    const second = forward(1)
+    h.at(1)
+    h.extract([{ text: FACT, kind: 'fact', evidence: [first, second] }])
+    await h.run()
+    expect(h.prompts().join('\n')).not.toContain(FACT)
+    expect(h.read('MEMORY.md')).not.toContain(FACT)
+    expect(h.candidates()).toEqual([])
+    expect(h.proposals()).toEqual([])
+  })
+})
+
 describe('one fact over several nights', () => {
   it('one night only: a candidate, not in MEMORY.md, a draft line', async () => {
     const h = await boot()
