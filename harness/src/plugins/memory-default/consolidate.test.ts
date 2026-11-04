@@ -13,6 +13,7 @@ import toolsRegistry from '../tools-registry'
 import { daysSeen, grounded, jaccard3, nearVerbatim, SYSTEM, twoOccasions } from './consolidate'
 import { localDate, normalize, parseEntries } from './files'
 import { createMemoryDefault, type MemoryDefaultOpts, type MemoryDefaultPlugin } from './index'
+import { liveEvidence } from './proposals'
 import { CONSOLIDATION_CURSOR } from './store'
 
 const HOUR = 3_600_000
@@ -1298,6 +1299,9 @@ describe('review reproductions: automatic promotion is near-verbatim or it is a 
   it('nearVerbatim', () => {
     expect(nearVerbatim(FACT, `记一下,${FACT}。`)).toBe(true)
     expect(nearVerbatim('deploy always through staging first', 'I said: Deploy, always, through staging first!')).toBe(true)
+    // 短句里 10 个字的上限管不到,只有 80% 管:12 个字引到 9 个是 75%
+    expect(nearVerbatim('abcdefghijkl', 'abcdefghi')).toBe(false)
+    expect(nearVerbatim('abcdefghijkl', 'abcdefghij')).toBe(true)
     expect(nearVerbatim('好', '好的')).toBe(false)
     expect(nearVerbatim('用 pnpm', '用 pnpm')).toBe(false)
     // 散落各处的字母不算
@@ -1525,6 +1529,8 @@ describe('review reproductions: automatic promotion is near-verbatim or it is a 
     const store = h.memory().inspect().store
     expect(store.recallUserRaw({ q: `ACP-MARKER ${FACT}`, excludeSession: owner, limit: 3 })).toEqual([])
     expect(store.getRaw(Number(ev.slice(2)))).toMatchObject({ origin: 'acp', scope: 'owner' })
+    // 第二道:批次的 SQL 之外,证据复查和批准时读的也是它
+    expect(liveEvidence(store, ev)).toBeUndefined()
   })
 })
 
