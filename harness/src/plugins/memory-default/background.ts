@@ -19,8 +19,13 @@ const BLIND_TOKENS = 100_000
 const QUOTA_LOW_PERCENT = 75
 const UNPRICED = { input: 10, output: 10 }
 const CHARS_PER_TOKEN = 3.5
-/** 不理 maxOutput 的流在这里截断:正常回复一个 token 到不了这么多字符 */
-const MAX_CHARS_PER_OUTPUT_TOKEN = 8
+/** 中日韩文字一个字约 1 到 2 个 token,按 3.5 字符一个算会少算好几倍 */
+const TOKENS_PER_CJK = 1.5
+const CJK = /[\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff\uff00-\uffef\u{20000}-\u{3ffff}]/gu
+/** 上限:调用方传多大都只预留、只发这么多 */
+const MAX_OUTPUT = 4096
+/** 不理 maxOutput 的流在这里截断:估算值比 maxOutput 多出这么多倍,就不是估算的误差了 */
+const OUTPUT_OVERRUN = 2.5
 /** 全是微任务的流会饿死定时器,隔一段让一次事件循环 */
 const YIELD_EVERY = 256
 /** health 不能被一次卡住的额度读取拖住 */
@@ -108,7 +113,11 @@ interface Ledger {
 }
 
 const no = (reason: BackgroundReason): BackgroundText => ({ ok: false, reason })
-const estimate = (chars: number) => Math.ceil(chars / CHARS_PER_TOKEN)
+/** 没取整:流式的时候一段一段累加 */
+function estimate(text: string): number {
+  const cjk = text.match(CJK)?.length ?? 0
+  return cjk * TOKENS_PER_CJK + (text.length - cjk) / CHARS_PER_TOKEN
+}
 const spendable = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n >= 0
 const dollars = (cost: { input: number; output: number }, input: number, output: number) => (input * cost.input + output * cost.output) / 1e6
 
@@ -374,12 +383,17 @@ export class Background {
     const cost = fence.entry?.cost ?? UNPRICED
     const billed = (input: number, output: number) => (fence.metered ? dollars(cost, input, output) : 0)
 
-    const reserve = estimate(req.system.length + req.prompt.length)
+    if (!Number.isInteger(req.maxOutput) || req.maxOutput <= 0) return no('error')
+    const maxOutput = Math.min(req.maxOutput, MAX_OUTPUT)
+    const promptTokens = Math.ceil(estimate(req.system) + estimate(req.prompt))
+    // 按最坏情况占住,调用结束再退回去:一次调用越不过日线,进程没了也算足
+    const held = promptTokens + maxOutput
+    const heldUsd = billed(promptTokens, maxOutput)
     const refusal = (ledger: Ledger | undefined, tokensLimit: number): BackgroundReason | undefined => {
       if (!ledger) return 'budget'
       if (ledger.out.includes(ref.accountId)) return 'account_out'
-      if (ledger.tokens >= tokensLimit || ledger.tokens + reserve > tokensLimit) return 'budget'
-      if (fence.metered && (ledger.usd >= cfg.usdPerDay || ledger.usd + billed(reserve, 0) > cfg.usdPerDay)) return 'budget'
+      if (ledger.tokens >= tokensLimit || ledger.tokens + held > tokensLimit) return 'budget'
+      if (fence.metered && (ledger.usd >= cfg.usdPerDay || ledger.usd + heldUsd > cfg.usdPerDay)) return 'budget'
       return undefined
     }
     // 账本先看:花光了就不用去读额度
@@ -402,13 +416,13 @@ export class Background {
     const base = this.readLedger(day)
     const late = refusal(base, tokensLimit)
     if (late || !base) return no(late ?? 'budget')
-    if (!this.writeLedger(day, { ...base, tokens: base.tokens + reserve, usd: base.usd + billed(reserve, 0) })) return no('budget')
+    if (!this.writeLedger(day, { ...base, tokens: base.tokens + held, usd: base.usd + heldUsd })) return no('budget')
 
-    const got = await this.collect(models, ref, req, gate)
+    const got = await this.collect(models, ref, { ...req, maxOutput }, gate)
 
-    const refused = got.error && REFUSED.has(got.error.kind) && !got.usage && got.chars === 0
-    const input = refused ? 0 : got.usage && got.usage.input > 0 ? got.usage.input : reserve
-    const output = refused ? 0 : got.usage && got.usage.output > 0 ? got.usage.output : estimate(got.chars)
+    const refused = got.error && REFUSED.has(got.error.kind) && !got.usage && got.output === 0
+    const input = refused ? 0 : got.usage && got.usage.input > 0 ? got.usage.input : promptTokens
+    const output = refused ? 0 : got.usage && got.usage.output > 0 ? got.usage.output : Math.ceil(got.output)
     const tokens = input + output
     const usd = billed(input, output)
     const accountOut = got.error && !gate.stop && (got.error.kind === 'quota' || got.error.kind === 'auth' || got.error.kind === 'restricted')
@@ -430,8 +444,8 @@ export class Background {
 
   /** 不抛错。流怎么坏都走到这里的返回值:停在 gate、没有 done、或者抛了 */
   private async collect(models: ModelsService, ref: ModelRef, req: TextReq, gate: CallGate): Promise<Collected> {
-    const got: Collected = { text: '', chars: 0 }
-    const cap = req.maxOutput * MAX_CHARS_PER_OUTPUT_TOKEN
+    const got: Collected = { text: '', output: 0 }
+    const cap = req.maxOutput * OUTPUT_OVERRUN
     let iterator: AsyncIterator<ModelEvent> | undefined
     try {
       iterator = models
@@ -457,10 +471,10 @@ export class Background {
         if (e.type === 'usage') got.usage = { input: spendable(e.input) ? e.input : 0, output: spendable(e.output) ? e.output : 0 }
         else if (e.type === 'text') {
           got.text += e.delta
-          got.chars += e.delta.length
-        } else if (e.type === 'reasoning') got.chars += e.delta?.length ?? 0
-        else got.chars += e.argsDelta.length
-        if (got.chars > cap) gate.halt('length')
+          got.output += estimate(e.delta)
+        } else if (e.type === 'reasoning') got.output += estimate(e.delta ?? '')
+        else got.output += estimate(e.argsDelta)
+        if (got.output > cap) gate.halt('length')
         else if (events % YIELD_EVERY === 0) await new Promise(setImmediate)
       }
     } catch {
@@ -478,8 +492,8 @@ export class Background {
 
 interface Collected {
   text: string
-  /** 模型产出的全部字符,没有 usage 时按它估算 */
-  chars: number
+  /** 模型产出的全部内容估算成 token,没有 usage 时按它记账 */
+  output: number
   usage?: { input: number; output: number }
   reason?: Extract<ModelEvent, { type: 'done' }>['reason']
   error?: ModelError

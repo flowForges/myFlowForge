@@ -244,6 +244,44 @@ describe('budget', () => {
     expect(h.fake.calls).toHaveLength(0)
   })
 
+  it('room for maxOutput is required: a call that could cross the line is not sent', async () => {
+    const windows = { windows: [{ label: 'w', usedPercent: 1 }] }
+    const tokens = rig({ config: { tokensPerDay: 500 }, quota: () => windows })
+    expect(await new Promise(resolve => tokens.bg.enqueue(async run => resolve(await run.text(A, { system: '', prompt: 'p', maxOutput: 500 }))))).toEqual({ ok: false, reason: 'budget' })
+    expect(tokens.fake.calls).toHaveLength(0)
+    const usd = rig({ accounts: [{ id: 'acc', models: [{ id: 'm', cost: { input: 1, output: 1000 } }] }], quota: () => windows })
+    expect(await new Promise(resolve => usd.bg.enqueue(async run => resolve(await run.text(A, { system: '', prompt: 'p', maxOutput: 1001 }))))).toEqual({ ok: false, reason: 'budget' })
+    expect(usd.fake.calls).toHaveLength(0)
+  })
+
+  it('the hold for maxOutput is released down to what the call really cost', async () => {
+    const h = rig({ script: () => usage(3, 4) })
+    expect((await h.one()).ok).toBe(true)
+    expect(await h.bg.status()).toMatchObject({ budget: { tokens: 7, usd: 70 / 1e6 } })
+  })
+
+  it.each([undefined, Number.NaN, 0, -1, 1.5, Number.POSITIVE_INFINITY])('maxOutput %s: no call', async maxOutput => {
+    const h = rig()
+    const r = await new Promise(resolve => h.bg.enqueue(async run => resolve(await run.text(A, { system: '', prompt: 'p', maxOutput: maxOutput as number }))))
+    expect(r).toEqual({ ok: false, reason: 'error' })
+    expect(h.fake.calls).toHaveLength(0)
+  })
+
+  it('a huge maxOutput is sent at the ceiling', async () => {
+    const h = rig()
+    await new Promise(resolve => h.bg.enqueue(async run => resolve(await run.text(A, { system: '', prompt: 'p', maxOutput: 1e9 }))))
+    expect(h.fake.calls[0].req.maxOutput).toBe(4096)
+  })
+
+  it('chinese counts at 1.5 tokens a character, not chars / 3.5', async () => {
+    const h = rig({ config: { tokensPerDay: 1000 }, quota: () => ({ windows: [{ label: 'w', usedPercent: 1 }] }) })
+    const r = await new Promise(resolve => h.bg.enqueue(async run => resolve(await run.text(A, { system: '', prompt: '中'.repeat(1000), maxOutput: 10 }))))
+    expect(r).toEqual({ ok: false, reason: 'budget' })
+    const free = rig({ script: async function* () { yield { type: 'text', delta: '好'.repeat(20) }; yield done() } })
+    const cost = await new Promise(resolve => free.bg.enqueue(async run => resolve(await run.text(A, { system: '', prompt: '中'.repeat(100), maxOutput: 100 }))))
+    expect(cost).toMatchObject({ ok: true, tokens: 150 + 30 })
+  })
+
   it('usage missing is estimated at chars / 3.5', async () => {
     const h = rig({ script: async function* () { yield { type: 'text', delta: 'z'.repeat(35) }; yield done() } })
     const r = await new Promise(resolve => h.bg.enqueue(async run => resolve(await run.text(A, { system: 'y'.repeat(14), prompt: 'x'.repeat(21), maxOutput: 100 }))))
@@ -325,7 +363,7 @@ describe('budget', () => {
     const h = rig({ script: async function* () { await blocked.opened; yield done() } })
     const seen = new Promise(resolve => h.bg.enqueue(async run => resolve(await run.text(A, { system: '', prompt: 'x'.repeat(350), maxOutput: 10 }))))
     await expect.poll(() => h.fake.calls.length).toBe(1)
-    expect((await h.bg.status()).budget.tokens).toBe(100)
+    expect((await h.bg.status()).budget.tokens).toBe(110) // 输入估算 100 + maxOutput 10
     blocked.open()
     await seen
   })
