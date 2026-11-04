@@ -198,7 +198,7 @@ export function dropOldest(messages: Message[], opts: DropOpts): Message[] {
     if (!startsTail(out, c)) continue
     if (charsToTokens(after[c]) < opts.keepRecent) break
     cut = c
-    const kept = head + after[c] + (opening >= 0 && opening < c ? openingChars : 0) + droppedNote(0).parts.reduce((n, p) => n + partChars(p), 0)
+    const kept = head + after[c] + (opening >= 0 && opening < c ? openingChars : 0) + messageChars(droppedNote(0))
     if (charsToTokens(kept) <= limit) break
   }
   const keepsOpening = opening >= pinned && opening < cut

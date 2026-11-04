@@ -9,6 +9,7 @@ import { createGit } from '../../lib/git/snapshot'
 import type { Plugin, PluginContext } from '../../kernel/pluginHost'
 import type { Message, ModelEvent } from '../../lib/models/types'
 import type { ContextBlock, MemoryService } from '../../lib/memory/types'
+import { checkpointBlock } from '../../lib/memory/wrap'
 import type { BackgroundRuns, RunNotice } from '../../lib/tools/types'
 import { calling, done, fakeModels, memoryKernel, say, type FakeModels, type MemoryRig } from '../../../test/memoryRig'
 import { buildMessages } from '../loop-default/history'
@@ -80,9 +81,12 @@ interface H {
   sent(): Message[][]
 }
 
-async function boot(o: { config?: Record<string, unknown>; memory?: () => Plugin } = {}): Promise<H> {
+async function boot(o: { config?: Record<string, unknown>; memory?: () => Plugin; context?: number } = {}): Promise<H> {
   const queue: Stream[] = []
-  const models = fakeModels({ script: () => (queue.shift() ?? (() => say('ok')))() })
+  const models = fakeModels({
+    ...(o.context && { accounts: [{ id: 'acc', models: [{ id: 'gpt-5', context: o.context }] }] }),
+    script: () => (queue.shift() ?? (() => say('ok')))(),
+  })
   const runs = fakeRuns()
   let ctx!: PluginContext
   const probe: Plugin = { manifest: { id: 'probe', version: '0', kernel: '^0.1.0' }, activate: c => { ctx = c } }
@@ -419,6 +423,125 @@ describe('Review Focus 1: the prefix never moves, with recall on', () => {
     await h.prompt(sid, '再问一个问题呀')
     expectPrefix([...h.sent()[h.sent().length - 2], assistant('ok')], lastOf(h.sent()))
     expect(textsOf(lastOf(lastOf(h.sent())))).toHaveLength(2)
+  })
+})
+
+describe('Review Focus 1 and 5: context.rebuilt and includeCurrent', () => {
+  const VERBATIM = '端口是五一七三这句原话要能搜回来'
+  const big = (head: string, n = 35_000) => `${head} ${'正文'.repeat(n / 2)}`
+  const cpOf = (h: H, sid: string, throughSeq: number, text = 'CHECKPOINT-TEXT') =>
+    h.ctx().append({ type: 'memory.checkpoint', sessionId: sid, payload: { throughSeq, asOfSeq: lastOf(h.r.k.events.bySession(sid)).seq, text, model: 'm', tokens: 1, covers: 1 } })
+  const history = (h: H, sid: string) => h.r.k.events.bySession(sid)
+  const turnEnd = (h: H, sid: string) => lastOf(history(h, sid).filter(e => e.type === 'turn.ended')).seq
+
+  it('a checkpoint and no marker: the prefix does not move; after the switch every later request keeps the new prefix, through a restart and with the plugin gone', async () => {
+    let memoryOn = true
+    const h = await boot({
+      context: 30_000,
+      memory: () => (memoryOn ? createMemoryDefault({ nightly: false }) : { manifest: { id: 'no-memory', version: '0', kernel: '^0.1.0' }, activate() {} }),
+    })
+    h.write('USER.md', '- 用 pnpm\n')
+    const sid = await h.session()
+    // 原话在截断点之后:重建后的第一条里不会有它,只能搜回来
+    await h.prompt(sid, `${'前文'.repeat(2500)}${VERBATIM}${big('后文')}`)
+    const through = turnEnd(h, sid)
+    const r1 = h.sent()[0]
+
+    // 检查点来了,但没到 70%:字节不动
+    cpOf(h, sid, through)
+    await h.prompt(sid, '第二轮很短的问题')
+    expectPrefix([...r1, assistant('ok')], lastOf(h.sent()))
+    expect(json(lastOf(h.sent()))).not.toContain('CHECKPOINT-TEXT')
+    expect(history(h, sid).some(e => e.type === 'context.rebuilt')).toBe(false)
+
+    const countBefore = history(h, sid)
+    await h.prompt(sid, big('第三轮很长,越过七成'))
+    expect(history(h, sid).filter(e => e.type === 'context.rebuilt')).toHaveLength(1)
+    const switched = lastOf(h.sent())
+    expect(json(switched)).not.toContain(VERBATIM)
+
+    // 事件只多不少,原文还在日志里、搜得到
+    const after = history(h, sid)
+    for (const e of countBefore) expect(after.find(x => x.seq === e.seq)).toEqual(e)
+    expect(after.length).toBeGreaterThan(countBefore.length)
+    h.queue.push(() => calling('s1', 'memory_search', { query: VERBATIM }), () => say('searched'))
+    await h.prompt(sid, '搜一下刚才的原话')
+    const searched = lastOf(h.sent())
+    expectPrefix([...switched, assistant('ok')], searched)
+    expect(json(lastOf(searched))).toContain(VERBATIM)
+
+    // 这一轮之后和以后每一轮:重建出的前缀一字不差
+    const rebuilt = lastOf(h.sent())
+    const sentAll = [...rebuilt, assistant('searched')]
+    await h.prompt(sid, '再问一句')
+    expectPrefix(sentAll, lastOf(h.sent()))
+    expect(textsOf(lastOf(h.sent())[1])).toEqual([checkpointBlock(through, 'CHECKPOINT-TEXT')])
+    const sent2 = [...lastOf(h.sent()), assistant('ok')]
+    expectPrefix(sent2, rebuild(h, sid, h.sent()[0][0]))
+
+    await h.r.restart()
+    expectPrefix(sent2, rebuild(h, sid, h.sent()[0][0]))
+    await h.prompt(sid, '重启之后再问一句')
+    expectPrefix(sent2, lastOf(h.sent()))
+    const sent3 = [...lastOf(h.sent()), assistant('ok')]
+
+    // 插件拿掉:标记和检查点都在事件里,循环自己重建出同样的字节
+    memoryOn = false
+    await h.r.restart()
+    expectPrefix(sent3, rebuild(h, sid, h.sent()[0][0]))
+    await h.prompt(sid, '没有插件了再问一句')
+    expectPrefix(sent3, lastOf(h.sent()))
+    expect(history(h, sid).filter(e => e.type === 'context.rebuilt')).toHaveLength(1)
+  })
+
+  it('an update in a covered turn is sent again in the next turn, and only there', async () => {
+    const h = await boot()
+    h.write('USER.md', '- u1\n')
+    const sid = await h.session()
+    await h.prompt(sid, 'first question here')
+    h.write('USER.md', '- UPDATE-MARK\n')
+    await h.prompt(sid, 'second question here')
+    const through = turnEnd(h, sid)
+    const cp = cpOf(h, sid, through)
+    h.ctx().append({ type: 'context.rebuilt', sessionId: sid, payload: { turnId: 'seeded', step: 1, checkpointSeq: cp.seq, throughSeq: through, before: 2, after: 1 } })
+    await h.prompt(sid, 'third question here')
+    const r3 = lastOf(h.sent())
+    expect(textsOf(r3[1])).toEqual([checkpointBlock(through, 'CHECKPOINT-TEXT')])
+    expect(json(r3.slice(0, -1))).not.toContain('UPDATE-MARK')
+    expect(textsOf(lastOf(r3))[1]).toContain('UPDATE-MARK')
+    await h.prompt(sid, 'fourth question here')
+    const r4 = lastOf(h.sent())
+    expectPrefix([...r3, assistant('ok')], r4)
+    expect(textsOf(lastOf(r4))).toHaveLength(2)
+  })
+
+  it('a parked turn resumed by a notice and by a follow-up, rebuilt from events with includeCurrent: the live bytes', async () => {
+    const h = await boot()
+    h.write('USER.md', '- 用 pnpm\n')
+    const sid = await h.session()
+    const parkedCount = () => history(h, sid).filter(e => e.type === 'turn.parked').length
+    h.runs.start(2)
+    h.queue.push(
+      () => calling('c1', 'memory_search', { query: '发布流程' }),
+      () => say('步骤一,等运行'),
+      () => say('收到通知,再等'),
+      () => say('收到后续消息,收尾'),
+    )
+    const turnId = await h.start(sid, QUESTION)
+    await h.waitFor(() => parkedCount() === 1)
+    h.runs.finish('run1', 'run1 结束了')
+    await h.waitFor(() => parkedCount() === 2)
+    await h.r.k.handle('session.prompt', { commandId: 'fu', sessionId: sid, text: '再补一句' })
+    await h.waitFor(() => parkedCount() === 3)
+    h.runs.finish('run2', 'run2 结束了')
+    await h.finished(sid, turnId)
+    const reqs = h.sent()
+    const live = [...lastOf(reqs), assistant('ok')]
+    const events = history(h, sid)
+    const opts = { environment: textsOf(reqs[0][0])[0], reminder: dateReminder }
+    expect(json(buildMessages(events, turnId, 'NOT-USED', { ...opts, includeCurrent: true }))).toBe(json(live))
+    await h.r.restart()
+    expect(json(buildMessages(history(h, sid), turnId, 'NOT-USED', { ...opts, includeCurrent: true }))).toBe(json(live))
   })
 })
 

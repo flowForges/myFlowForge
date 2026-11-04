@@ -1,6 +1,7 @@
 // contextFor(06 spec §7):这一轮该往消息里加什么。只决定文本;文本写进事件之后,重建再也不读文件
 import type { Logger } from '../../kernel/log'
 import type { SessionInfo } from '../../kernel/sessions'
+import { activeRebuild, isCovered } from '../../lib/memory/checkpoint'
 import { blocksOf } from '../../lib/memory/inject'
 import type { ContextBlock, MemoryService } from '../../lib/memory/types'
 import { coreBlock, dataText, recallBlock, updateBlock } from '../../lib/memory/wrap'
@@ -39,7 +40,7 @@ const turnOf = (e: KernelEvent) => (e.payload as { turnId?: unknown } | null)?.t
 const holdsCore = (text: string) => text.startsWith('<memory kind=') || text.startsWith('<memory-update>')
 
 /**
- * 模型当前历史里还看得见的核心块,按日志顺序:会话块,加上没回滚的轮块。
+ * 模型当前历史里还看得见的核心块,按日志顺序:会话块,加上没回滚、没被生效的重建标记盖住的轮块。
  * 没有 cwd 的会话(loop-direct)只留有回答、已结束的轮;会话块总在第一条消息里。
  * memory.delete 把一块整段换掉后它就不算了:版本可能没变,不补发模型就再也见不到
  */
@@ -47,10 +48,17 @@ function visibleCore(events: KernelEvent[], hasCwd: boolean): Shown[] {
   const rolledBack = new Set<unknown>()
   const ended = new Set<unknown>()
   const answered = new Set<unknown>()
+  const firstUser = new Map<unknown, number>()
   for (const e of events) {
+    if (e.type === 'message.user' && !firstUser.has(turnOf(e))) firstUser.set(turnOf(e), e.seq)
     if (e.type === 'turn.rolledBack') rolledBack.add(turnOf(e))
     else if (e.type === 'turn.ended') ended.add(turnOf(e))
     else if (e.type === 'message.assistant') answered.add(turnOf(e))
+  }
+  const active = activeRebuild(events)
+  const covered = (turn: unknown) => {
+    const first = firstUser.get(turn)
+    return !!active && first !== undefined && isCovered(first, active.throughSeq)
   }
   const shown: Shown[] = []
   let sessionSeen = false
@@ -58,7 +66,7 @@ function visibleCore(events: KernelEvent[], hasCwd: boolean): Shown[] {
     if (e.type !== 'memory.injected') continue
     const p = e.payload as { kind?: unknown; text?: unknown; coreVersion?: unknown }
     const session = p.kind === 'session'
-    const visible = session ? !sessionSeen : !rolledBack.has(turnOf(e)) && (hasCwd || (ended.has(turnOf(e)) && answered.has(turnOf(e))))
+    const visible = session ? !sessionSeen : !rolledBack.has(turnOf(e)) && !covered(turnOf(e)) && (hasCwd || (ended.has(turnOf(e)) && answered.has(turnOf(e))))
     sessionSeen ||= session
     if (visible && typeof p.text === 'string' && holdsCore(p.text)) shown.push({ text: p.text, ...(typeof p.coreVersion === 'string' && { coreVersion: p.coreVersion }) })
   }

@@ -269,6 +269,24 @@ describe('switching to a checkpoint', () => {
     expect(h.requests.slice(0, 3).every(r => !allText(r.messages).includes('<checkpoint'))).toBe(true)
   })
 
+  it('tried once, even when a second try would now pass: only a later turn looks at it again', async () => {
+    const h = harness()
+    const through = h.past('t1', 'first', 10).seq
+    const cp = h.checkpoint(through)
+    const big = h.past('t2', 'second', CHARS(0.75))
+    const result = h.events.find(e => e.type === 'tool.ended' && e.seq < big.seq && (e.payload as { turnId: string }).turnId === 't2')!
+    await h.run('t3', 'third', n => {
+      // 第一步省不够。之后事件里的大结果没了,这份候选再算一次就省够了;活的消息还带着它
+      if (n === 1) (result.payload as { content: string }).content = '[已删除]'
+      return n === 1 ? calling('c1') : say('ok')
+    })
+    expect(h.requests).toHaveLength(2)
+    expect(h.markers()).toEqual([])
+    await h.run('t4', 'fourth')
+    expect(h.markers()).toEqual([]) // 这一轮的历史本身已经小了,不到 70%
+    expect(cp.seq).toBeGreaterThan(0)
+  })
+
   it('an older marker stays when the newest valid checkpoint does not cover more', async () => {
     const h = harness()
     const t1 = h.past('t1', 'first', 10).seq
@@ -708,6 +726,33 @@ describe('a replay removed on a step of the current turn (memory.delete while th
     expect(refused).toEqual([])
     expect(h.markers()).toEqual([])
     expect(allText(h.requests[1].messages)).toContain('"thinking":"T"')
+  })
+
+  it('an overflow on such a step: no switch, the drop works on the live messages, which keep the thinking', async () => {
+    const h = harness()
+    const through = h.past('t1', 'q1', CHARS(0.3)).seq
+    const outcome = await h.run('t2', 'q2', (n, req) => {
+      expect(anthropicRefuses(req)).toBe(false)
+      if (n === 1) {
+        h.checkpoint(through)
+        return thinkingCall('c1')
+      }
+      if (n === 2) return refuse('prompt is too long')
+      return say('ok')
+    }, {
+      tools: {
+        list: () => [],
+        call: async (name: string, _a: string, ctx: { callId: string }) => {
+          h.ev('tool.ended', { turnId: 't2', callId: ctx.callId, name, ok: true, ms: 1, content: 'r' })
+          stripReplay(h)
+          return { content: 'r' }
+        },
+      } as unknown as ToolsService,
+    })
+    expect(outcome.type).toBe('turn.ended')
+    expect(h.markers()).toEqual([])
+    expect(allText(h.requests[2].messages)).toContain('[已省略')
+    expect(allText(h.requests[2].messages)).toContain('"thinking":"T"')
   })
 
   it('with the replay intact a tool step rebuilds with its thinking first', async () => {

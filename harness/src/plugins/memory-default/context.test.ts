@@ -735,3 +735,91 @@ describe('catching up is bounded (review I2)', () => {
     expect(h.turn(group, QUESTION).blocks[0].items).toEqual(['n_keep'])
   })
 })
+
+describe('contextFor: a turn block covered by the active marker (06 spec §7, §12)', () => {
+  const lastOf = <T>(a: T[]) => a[a.length - 1]
+  const checkpoint = (h: H, sid: string, throughSeq: number, extra: object = {}) =>
+    h.append({ type: 'memory.checkpoint', sessionId: sid, payload: { throughSeq, asOfSeq: lastOf(h.ctx.events.history(sid)).seq, text: 'S', model: 'm', tokens: 1, covers: 1, ...extra } })
+  const marker = (h: H, sid: string, cpSeq: number, throughSeq: number) =>
+    h.append({ type: 'context.rebuilt', sessionId: sid, payload: { turnId: 'mt', step: 1, checkpointSeq: cpSeq, throughSeq, before: 2, after: 1 } })
+
+  async function withUpdate() {
+    const h = await boot()
+    h.file('USER.md', '- u1\n')
+    const sid = await h.session()
+    h.turn(sid, 'first question')
+    h.file('USER.md', '- u2\n')
+    const { blocks } = h.turn(sid, 'second question')
+    expect(blocks[0].text).toContain('<memory-update>')
+    return { h, sid, through: lastOf(h.ctx.events.history(sid)).seq }
+  }
+
+  it('covered: the update is sent again', async () => {
+    const { h, sid, through } = await withUpdate()
+    const cp = checkpoint(h, sid, through)
+    marker(h, sid, cp.seq, through)
+    const { blocks } = h.turn(sid, 'third question')
+    expect(blocks[0].text).toContain('<memory-update>')
+    expect(blocks[0].text).toContain('u2')
+  })
+
+  it('a checkpoint with no marker covers nothing: no resend', async () => {
+    const { h, sid, through } = await withUpdate()
+    checkpoint(h, sid, through)
+    expect(h.turn(sid, 'third question').blocks).toEqual([])
+  })
+
+  it('a marker below the update turn: still visible, no resend', async () => {
+    const h = await boot()
+    h.file('USER.md', '- u1\n')
+    const sid = await h.session()
+    h.turn(sid, 'first question')
+    const through = lastOf(h.ctx.events.history(sid)).seq
+    h.file('USER.md', '- u2\n')
+    h.turn(sid, 'second question')
+    const cp = checkpoint(h, sid, through)
+    marker(h, sid, cp.seq, through)
+    expect(h.turn(sid, 'third question').blocks).toEqual([])
+  })
+
+  it('a straddling turn: its block is dropped from the opening, so it counts as covered', async () => {
+    const h = await boot()
+    h.file('USER.md', '- u1\n')
+    const sid = await h.session()
+    h.turn(sid, 'first question')
+    h.file('USER.md', '- u2\n')
+    const { turnId } = h.turn(sid, 'second question', { end: false })
+    const through = lastOf(h.ctx.events.history(sid)).seq
+    h.append({ type: 'message.assistant', sessionId: sid, payload: { turnId, step: 1, text: 'a', parts: [{ type: 'text', text: 'a' }] } })
+    const cp = checkpoint(h, sid, through)
+    marker(h, sid, cp.seq, through)
+    h.append({ type: 'turn.ended', sessionId: sid, payload: { turnId } })
+    expect(h.turn(sid, 'third question').blocks[0].text).toContain('u2')
+  })
+
+  it('a resent block is itself seen, once; the session block is never covered', async () => {
+    const { h, sid, through } = await withUpdate()
+    const cp = checkpoint(h, sid, through)
+    marker(h, sid, cp.seq, through)
+    expect(h.turn(sid, 'third question').blocks).toHaveLength(1)
+    expect(h.turn(sid, 'fourth question').blocks).toEqual([])
+  })
+
+  it('no change since the session block, all turns covered: nothing to resend', async () => {
+    const h = await boot()
+    h.file('USER.md', '- u1\n')
+    const sid = await h.session()
+    h.turn(sid, 'first question')
+    const through = lastOf(h.ctx.events.history(sid)).seq
+    const cp = checkpoint(h, sid, through)
+    marker(h, sid, cp.seq, through)
+    expect(h.turn(sid, 'second question').blocks).toEqual([])
+  })
+
+  it('the marker voided (redacted checkpoint): the update is visible again, no resend', async () => {
+    const { h, sid, through } = await withUpdate()
+    const cp = checkpoint(h, sid, through, { redacted: true })
+    marker(h, sid, cp.seq, through)
+    expect(h.turn(sid, 'third question').blocks).toEqual([])
+  })
+})

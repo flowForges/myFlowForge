@@ -207,8 +207,8 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<TurnOut
       const currentOpening = opening ? messages.indexOf(opening) : -1
       const tokens = estimateTokens(messages)
       if (force && !(switched && tokens <= context * 0.5)) {
-        // 估算可能比厂商的算法偏小(目录里的窗口也可能不准):低于 50% 还被拒,就再减一半,否则重试发的是同一份
-        messages = dropOldest(messages, { context, target: Math.min(0.5, (0.5 * tokens) / context), keepRecent: 0, currentOpening })
+        // 没切换时估算可能比厂商的算法偏小(目录里的窗口也可能不准):低于 50% 还被拒,就再减一半,否则重试发的是同一份
+        messages = dropOldest(messages, { context, target: switched ? 0.5 : Math.min(0.5, (0.5 * tokens) / context), keepRecent: 0, currentOpening })
       } else if (tokens > context * 0.9) {
         messages = dropOldest(messages, { context, target: 0.6, keepRecent: Math.min(24_000, Math.floor(context * 0.3)), currentOpening })
       }
