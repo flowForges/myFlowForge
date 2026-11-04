@@ -237,7 +237,8 @@ describe('one pull path', () => {
     const errors: string[] = []
     const i = h.ingest({
       scopeOf: s => {
-        if (broken && ++calls === 2) throw new Error('disk full') // 第一行已经写进事务了
+        // 第一行已经写进事务了。errcode 是 node:sqlite 的形状:13 = SQLITE_FULL
+        if (broken && ++calls === 2) throw Object.assign(new Error('database or disk is full'), { errcode: 13 })
         return scopeOf(s)
       },
       log: { ...log, error: (m: string) => errors.push(m) },
@@ -252,6 +253,138 @@ describe('one pull path', () => {
     expect(texts(h.store)).toEqual(['a', 'b'])
     expect(h.store.problems).toEqual([])
     expect(h.store.cursor()).toBe(h.ctx().events.after(0, 1000).at(-1)!.seq)
+  })
+})
+
+describe('a bad event', () => {
+  /** 这个会话的事件一处理就抛错;错误文本里带着内容,看它有没有进日志 */
+  const BAD_SESSION = 'bad'
+  const poisoned = (s: { sessionId: string; audience: string } | undefined) => {
+    if (s?.sessionId === BAD_SESSION) throw new Error('boom 私密内容')
+    return scopeOf(s)
+  }
+  const recorder = () => {
+    const lines: { msg: string; data: unknown }[] = []
+    return { lines, log: { ...log, error: (msg: string, data?: unknown) => lines.push({ msg, data }) } }
+  }
+
+  it('is skipped by seq, the rest of its batch goes in, and the cursor reaches the end', async () => {
+    const h = await harness()
+    session(h, 's')
+    session(h, BAD_SESSION)
+    say(h, 's', 't1', 'before')
+    say(h, BAD_SESSION, 't2', '私密内容')
+    say(h, 's', 't3', 'after')
+    const all = h.ctx().events.after(0, 1000)
+    const bad = all.find(e => e.type === 'message.user' && e.sessionId === BAD_SESSION)!
+    const { lines, log: recording } = recorder()
+    h.ingest({ scopeOf: poisoned, log: recording }).flush()
+    expect(texts(h.store)).toEqual(['before', 'after'])
+    expect(h.store.cursor()).toBe(all.at(-1)!.seq)
+    expect(lines).toEqual([{ msg: expect.any(String), data: { seq: bad.seq, kind: 'message.user' } }])
+    expect(h.store.problems).toEqual(['ingest_skipped_events'])
+  })
+
+  it('no content from the event or the error reaches the log', async () => {
+    const h = await harness()
+    session(h, BAD_SESSION)
+    say(h, BAD_SESSION, 't', '私密内容')
+    const { lines, log: recording } = recorder()
+    h.ingest({ scopeOf: poisoned, log: recording }).flush()
+    expect(lines).toHaveLength(1)
+    expect(JSON.stringify(lines)).not.toContain('私密内容')
+    expect(JSON.stringify(lines)).not.toContain('boom')
+  })
+
+  it('does not hold ingest back after a restart, and new events keep flowing', async () => {
+    const h = await harness()
+    session(h, 's')
+    session(h, BAD_SESSION)
+    say(h, BAD_SESSION, 't1', 'x')
+    const first = recorder()
+    h.ingest({ scopeOf: poisoned, log: first.log }).flush()
+    expect(first.lines).toHaveLength(1)
+    h.store = h.reopen()
+    say(h, 's', 't2', 'later')
+    const second = recorder()
+    h.ingest({ scopeOf: poisoned, log: second.log }).flush()
+    expect(texts(h.store)).toEqual(['later'])
+    expect(second.lines).toEqual([]) // 跳过的不再试
+    expect(h.store.cursor()).toBe(h.ctx().events.after(0, 1000).at(-1)!.seq)
+  })
+
+  it('a batch keeps nothing from the failed attempt: rows are not doubled and hooks may run twice', async () => {
+    const h = await harness()
+    session(h, 's')
+    session(h, BAD_SESSION)
+    say(h, 's', 'gone', 'x')
+    h.ctx().append({ type: 'turn.rolledBack', sessionId: 's', payload: { turnId: 'gone' } })
+    say(h, BAD_SESSION, 't', 'y')
+    const hook: string[] = []
+    h.ingest({ scopeOf: poisoned, onRolledBack: t => hook.push(t) }).flush()
+    expect(rowCount(h.store)).toBe(1)
+    expect(h.store.searchRaw({ q: 'x', scopes: ['owner'], limit: 5 })).toEqual([])
+    expect(hook).toEqual(['gone', 'gone'])
+  })
+
+  it('every bad event of a large backlog is skipped across batches', async () => {
+    const h = await harness()
+    session(h, 's')
+    session(h, BAD_SESSION)
+    for (let n = 0; n < 600; n++) say(h, n % 100 === 0 ? BAD_SESSION : 's', 't', `m${n}`)
+    const { lines, log: recording } = recorder()
+    h.ingest({ scopeOf: poisoned, log: recording }).flush()
+    expect(rowCount(h.store)).toBe(594)
+    expect(lines).toHaveLength(6)
+    expect(h.store.cursor()).toBe(h.ctx().events.after(0, 2000).at(-1)!.seq)
+  })
+
+  it('a database fault is never blamed on an event: it stops at that event, nothing is skipped', async () => {
+    const h = await harness()
+    session(h, 's')
+    session(h, BAD_SESSION)
+    say(h, 's', 't1', 'a')
+    say(h, BAD_SESSION, 't2', 'bad')
+    say(h, 's', 't3', 'b')
+    let full = false
+    const { lines, log: recording } = recorder()
+    const i = h.ingest({
+      scopeOf: s => {
+        // 第一遍抛坏事件,逐条重试时磁盘满了
+        if (s?.sessionId === BAD_SESSION) {
+          if (full) throw Object.assign(new Error('database or disk is full'), { errcode: 13 })
+          full = true
+          throw new Error('bad event')
+        }
+        return scopeOf(s)
+      },
+      log: recording,
+    })
+    i.flush()
+    expect(texts(h.store)).toEqual(['a'])
+    expect(lines).toEqual([{ msg: 'memory ingest failed', data: { error: 'database or disk is full' } }])
+    expect(h.store.problems).toEqual(['ingest is failing, see the log'])
+    const cursor = h.store.cursor()
+    expect(h.ctx().events.after(cursor, 1)[0].sessionId).toBe(BAD_SESSION) // 坏事件还没过
+  })
+
+  it('a constraint failure belongs to the event, an extended code still counts', async () => {
+    const h = await harness()
+    session(h, 's')
+    session(h, BAD_SESSION)
+    say(h, BAD_SESSION, 't1', 'bad')
+    say(h, 's', 't2', 'good')
+    const { lines, log: recording } = recorder()
+    h.ingest({
+      scopeOf: s => {
+        // 2067 = SQLITE_CONSTRAINT_UNIQUE
+        if (s?.sessionId === BAD_SESSION) throw Object.assign(new Error('UNIQUE constraint failed'), { errcode: 2067 })
+        return scopeOf(s)
+      },
+      log: recording,
+    }).flush()
+    expect(texts(h.store)).toEqual(['good'])
+    expect(lines).toHaveLength(1)
   })
 })
 

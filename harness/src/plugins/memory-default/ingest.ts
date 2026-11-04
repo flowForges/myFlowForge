@@ -13,6 +13,21 @@ const FLUSH_MS = 250
 const CLIP_MESSAGE = 16_000
 const CLIP_TOOL = 4_000
 const FAILING = 'ingest is failing, see the log'
+const SKIPPED = 'ingest_skipped_events'
+// 这几种 SQLite 错误只和这一行有关:TOOBIG、CONSTRAINT、MISMATCH、RANGE
+const SQLITE_ROW_FAULTS = new Set([18, 19, 20, 25])
+
+/** 库本身的问题(满了、锁了、坏了)每条都会抛,不能算到事件头上:逐条跳过会把后面的全部丢掉 */
+function faultOfEvent(err: unknown): boolean {
+  const code = (err as { errcode?: unknown }).errcode
+  return typeof code !== 'number' || SQLITE_ROW_FAULTS.has(code & 0xff)
+}
+
+/** SQLite 的报错只提表和约束;别的错误可能引用事件内容(JSON.parse 带原文片段),只留类型 */
+function safeMessage(err: unknown): string {
+  if (typeof (err as { errcode?: unknown }).errcode === 'number') return (err as Error).message
+  return err instanceof Error ? err.name : 'unknown'
+}
 
 export interface IngestTimers {
   setTimeout(fn: () => void, ms: number): unknown
@@ -126,22 +141,45 @@ export class Ingest {
     try {
       const batch = events.after(store.cursor(), BATCH)
       if (batch.length === 0) return 0
-      store.transaction(() => {
-        for (const e of batch) this.apply(e)
-        store.setCursor(batch[batch.length - 1].seq)
-      })
+      try {
+        store.transaction(() => {
+          for (const e of batch) this.apply(e)
+          store.setCursor(batch[batch.length - 1].seq)
+        })
+      } catch (err) {
+        if (!faultOfEvent(err)) throw err
+        this.applyEach(batch)
+      }
       if (this.failing) {
         this.failing = false
         store.problems.splice(store.problems.indexOf(FAILING), 1)
       }
       return batch.length
     } catch (err) {
-      log.error('memory ingest failed', { error: err instanceof Error ? err.message : String(err) })
+      log.error('memory ingest failed', { error: safeMessage(err) })
       if (!this.failing) {
         this.failing = true
         store.problems.push(FAILING)
       }
       return 0
+    }
+  }
+
+  /** 一条坏事件不能让整批永远回滚:逐条再来,跳过它,游标照走。之前试过的已回滚,回滚钩子会再跑一次 */
+  private applyEach(batch: KernelEvent[]): void {
+    const { store, log } = this.deps
+    for (const e of batch) {
+      try {
+        store.transaction(() => {
+          this.apply(e)
+          store.setCursor(e.seq)
+        })
+      } catch (err) {
+        if (!faultOfEvent(err)) throw err
+        log.error('memory ingest skipped a bad event', { seq: e.seq, kind: e.type })
+        if (!store.problems.includes(SKIPPED)) store.problems.push(SKIPPED)
+        store.setCursor(e.seq)
+      }
     }
   }
 
@@ -177,7 +215,7 @@ export class Ingest {
       onRolledBack?.(turnId)
     } catch (err) {
       // 这一步坏了不能卡住接入:卡住之后所有新消息都进不来
-      log.error('memory rollback hook failed', { error: err instanceof Error ? err.message : String(err) })
+      log.error('memory rollback hook failed', { error: safeMessage(err) })
     }
   }
 
