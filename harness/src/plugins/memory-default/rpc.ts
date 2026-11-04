@@ -17,6 +17,7 @@ import { MEMORY_ID, WorkerMethods } from '../../protocol/rpc'
 import type { Background } from './background'
 import { consolidateProblems, type Summary } from './consolidate'
 import type { MemoryFiles } from './files'
+import { decideHabit, listHabits } from './habits'
 import { lastSeqOf, type Ingest } from './ingest'
 import { scopeOf } from './policy'
 import { forget, type Proposals } from './proposals'
@@ -62,6 +63,8 @@ export interface MemoryRpcDeps {
   now(): number
   /** 排进后台,等它结束。库打不开时没有 */
   consolidate?(): Promise<Summary>
+  /** 写 config.json 的 memory 段,并更新插件自己那份 */
+  setRoutine(routine: boolean): void
   onPurgeStep?(step: PurgeStep): void
 }
 
@@ -249,6 +252,18 @@ export function registerMemoryRpc(d: MemoryRpcDeps): { stop(): Promise<void> } {
   register('memory.consolidate', () => {
     if (!d.consolidate) throw new RpcError(INTERNAL, 'memory is unavailable')
     return d.consolidate()
+  })
+
+  register('memory.habits.list', m => ({ items: listHabits(m.store) }))
+
+  register('memory.habits.decide', (m, { id, decision }) => {
+    if (!decideHabit(m.store, id, decision, d.now())) throw notFound()
+    return { ok: true }
+  })
+
+  register('memory.recommendations.set', (_m, { routine }) => {
+    d.setRoutine(routine)
+    return { ok: true }
   })
 
   register('memory.changes', (m, { limit }) => ({

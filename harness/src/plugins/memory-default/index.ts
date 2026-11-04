@@ -3,7 +3,7 @@
 import { join } from 'node:path'
 import type { Plugin, PluginContext } from '../../kernel/pluginHost'
 import type { Sessions } from '../../kernel/sessions'
-import { parseMemoryConfig, type MemoryConfig, type MemoryService } from '../../lib/memory/types'
+import { MemoryConfigSchema, parseMemoryConfig, type MemoryConfig, type MemoryService } from '../../lib/memory/types'
 import type { ModelsService } from '../../lib/models/types'
 import type { ToolsService } from '../../lib/tools/types'
 import { Background } from './background'
@@ -11,6 +11,7 @@ import { CheckpointWriter } from './checkpoints'
 import { Consolidator, type ConsolidateStep } from './consolidate'
 import { createContextFor } from './context'
 import { MemoryFiles } from './files'
+import { computeHabits, countHabit, maybeRecommend, noteTurn } from './habits'
 import { Ingest, REAL_TIMERS, type IngestTimers } from './ingest'
 import { manifest } from './manifest'
 import { scopeOf } from './policy'
@@ -27,7 +28,7 @@ export interface MemoryDefaultOpts {
   catchUpMs?: number
   /** false:不开夜间定时,memory.consolidate 还能手动跑 */
   nightly?: false
-  /** Task 11 接上:整合的最后一步 */
+  /** 测试用:替换整合的最后一步 */
   habits?(): void
   /** 测试用:整合走到这一步时调,抛错 = 崩溃 */
   onConsolidateStep?(step: ConsolidateStep): void
@@ -55,6 +56,7 @@ function openLive(ctx: PluginContext, sessions: Sessions, o: MemoryDefaultOpts, 
       scopeOf,
       // removeByTurn 只看现状,重放也安全
       onRolledBack: turnId => files.removeByTurn(turnId),
+      countHabit: (e, session, ts) => countHabit(store, e, session, ts),
       timers: o.timers,
       flushMs: o.flushMs,
       log: ctx.log,
@@ -85,6 +87,16 @@ export function createMemoryDefault(opts: MemoryDefaultOpts = {}): MemoryDefault
       const now = opts.now ?? Date.now
       const problems: string[] = []
       const config = parseMemoryConfig(ctx.config.memory, m => ctx.log.warn(m))
+      // 写回时只动推荐这一项,用户写的其他键原样留着;这一段写坏了就没什么可留的,否则下次启动开关又丢了
+      let section = MemoryConfigSchema.safeParse(ctx.config.memory ?? {}).success ? ((ctx.config.memory ?? {}) as Record<string, unknown>) : {}
+      const setRoutine = (routine: boolean) => {
+        const next = { ...section, recommendations: { routine } }
+        ctx.updateConfig('memory', next)
+        section = next
+        // 就地改:ctx.config 是快照,各处读的都是这一份
+        config.recommendations.routine = routine
+      }
+      const openTurns = new Set<string>()
       let live: LiveMemory | undefined
       try {
         live = openLive(ctx, sessions, opts, now, config)
@@ -122,7 +134,18 @@ export function createMemoryDefault(opts: MemoryDefaultOpts = {}): MemoryDefault
           log: ctx.log,
           timers: opts.timers ?? REAL_TIMERS,
           scheduled: opts.nightly !== false,
-          ...(opts.habits && { habits: opts.habits }),
+          habits: opts.habits ?? (() => computeHabits(opened.store, now())),
+          tick: () =>
+            maybeRecommend(
+              {
+                store: opened.store,
+                config: () => config,
+                hasOpenTurn: () => openTurns.size > 0,
+                catchUp: () => opened.ingest.catchUp(opts.catchUpMs),
+                append: e => ctx.append(e),
+              },
+              now(),
+            ),
           ...(opts.onConsolidateStep && { onStep: opts.onConsolidateStep }),
         })
       current = opened && checkpoints && consolidator && { ...opened, checkpoints, consolidator }
@@ -142,7 +165,10 @@ export function createMemoryDefault(opts: MemoryDefaultOpts = {}): MemoryDefault
         ctx.effect(() => checkpoints.close())
         // 再后登记:定时先停,排着的 RPC 先得到答复,然后才中止跑着的
         ctx.effect(() => consolidator.close())
-        ctx.events.onAppend(e => consolidator.observe(e))
+        ctx.events.onAppend(e => {
+          consolidator.observe(e)
+          noteTurn(openTurns, e)
+        })
         consolidator.start()
       }
 
@@ -153,7 +179,7 @@ export function createMemoryDefault(opts: MemoryDefaultOpts = {}): MemoryDefault
         noteContext: req => checkpoints?.note(req),
       }
       ctx.services.provide<MemoryService>('memory', service)
-      const rpc = registerMemoryRpc({ ctx, sessions, live, problems, dbFile: join(ctx.dataDir, 'memory.sqlite'), now, ...(consolidator && { consolidate: () => consolidator.manual() }), ...(opts.onPurgeStep && { onPurgeStep: opts.onPurgeStep }) })
+      const rpc = registerMemoryRpc({ ctx, sessions, live, problems, dbFile: join(ctx.dataDir, 'memory.sqlite'), now, setRoutine, ...(consolidator && { consolidate: () => consolidator.manual() }), ...(opts.onPurgeStep && { onPurgeStep: opts.onPurgeStep }) })
       // 后登记先释放:库关之前等扫到一半的删除停下
       ctx.effect(() => rpc.stop())
 

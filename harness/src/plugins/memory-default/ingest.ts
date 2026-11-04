@@ -54,6 +54,8 @@ export interface IngestDeps {
   scopeOf(session: SessionInfo | undefined): { read: string[] }
   /** 和这一批同一个事务:抛错只记日志 */
   onRolledBack?(turnId: string): void
+  /** 和这一批同一个事务:重放不重复 */
+  countHabit?(e: KernelEvent, session: SessionInfo, ts: number): void
   timers?: IngestTimers
   flushMs?: number
   log: Pick<Logger, 'error'>
@@ -226,8 +228,11 @@ export class Ingest {
   private apply(e: KernelEvent): void {
     const p = (e.payload ?? {}) as Record<string, unknown>
     switch (e.type) {
-      case 'message.user':
+      case 'message.user': {
+        const session = e.sessionId ? this.deps.sessions.get(e.sessionId) : undefined
+        if (session) this.deps.countHabit?.(e, session, e.ts)
         return this.row(e, 'user', p.text, CLIP_MESSAGE)
+      }
       case 'message.assistant':
         return this.row(e, 'assistant', p.text, CLIP_MESSAGE)
       case 'executor.notice':

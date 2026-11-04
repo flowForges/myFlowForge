@@ -161,7 +161,7 @@ export interface ConsolidationDeps {
   now(): number
   append(e: Omit<KernelEvent, 'seq' | 'ts'>): unknown
   log: Pick<Logger, 'warn' | 'error'>
-  /** Task 11 接上:不用模型,所以没有模型也照做 */
+  /** 不用模型,所以没有模型也照做 */
   habits?(): void
   /** 测试用:抛错 = 这一步崩溃 */
   onStep?(step: ConsolidateStep): void
@@ -586,6 +586,8 @@ export interface ConsolidatorDeps extends Omit<ConsolidationDeps, 'run' | 'sessi
   timers: IngestTimers
   /** false:不开定时,手动的还能跑 */
   scheduled: boolean
+  /** 每小时跟着定时跑一次,和整合无关:抛错不影响下一次 */
+  tick?(): void
 }
 
 /** 定时、开着的轮、排进后台。一天一次,错过的醒来补一次:积压多的话一晚吃一批,不连发 */
@@ -642,6 +644,11 @@ export class Consolidator {
         this.check()
       } catch (err) {
         this.d.log.error('consolidation schedule failed', { error: nameOf(err) })
+      }
+      try {
+        this.d.tick?.()
+      } catch (err) {
+        this.d.log.error('hourly tick failed', { error: nameOf(err) })
       }
     }, ms)
   }
