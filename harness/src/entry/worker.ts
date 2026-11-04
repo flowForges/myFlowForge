@@ -1,5 +1,7 @@
+import { statSync } from 'node:fs'
 import { BUILTIN_PLUGINS } from '../plugins/index'
 import { createKernel, type Kernel } from '../kernel/kernel'
+import { purgeHoldMs } from '../kernel/pluginHost'
 import { proxySocketParents, wipeSessionTmp } from '../kernel/sandbox'
 import { startRpcServer } from '../kernel/rpcServer'
 import { DRAIN_MS } from '../kernel/shutdown'
@@ -58,7 +60,11 @@ export async function runWorker(): Promise<void> {
     }
     // MFFAI_SECRETS_PLAINTEXT=1:端到端测试用,不碰系统钥匙串
     const secrets = { osBackend: process.env.MFFAI_SECRETS_PLAINTEXT !== '1' }
-    kernel = await createKernel({ dataDir: dir, plugins: BUILTIN_PLUGINS, log, secrets, pgidFile: pgids, pgidSeed: kept, holdWatchdog: createWatchdogHold() })
+    // 启动时整个事件日志同步读好几遍(约 30 ms/MB),这期间回不了 ping:日志大了会被当成卡死,杀了又起,再也起不来
+    const holdWatchdog = createWatchdogHold()
+    const logBytes = statSync(paths.db, { throwIfNoEntry: false })?.size ?? 0
+    await holdWatchdog(purgeHoldMs(logBytes)).catch((err: unknown) => log.warn('startup hold refused', { error: String(err) }))
+    kernel = await createKernel({ dataDir: dir, plugins: BUILTIN_PLUGINS, log, secrets, pgidFile: pgids, pgidSeed: kept, holdWatchdog })
     const k = kernel
     server = await startRpcServer({
       addr: paths.workerAddr,
@@ -78,4 +84,5 @@ export async function runWorker(): Promise<void> {
   if (stopping) return
   log.info('worker ready', { pid: process.pid, addr: paths.workerAddr })
   process.send?.({ t: 'ready' })
+  await createWatchdogHold()(0)
 }

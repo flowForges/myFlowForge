@@ -24,7 +24,7 @@ const SCRIPT = [
   () => toolCall('call_read', 'read', { path: 'hello.txt' }),
   () => toolCall('call_edit', 'edit', { path: 'hello.txt', old: 'world', new: 'mff' }),
 ]
-const finalText = () => chunk({ role: 'assistant', content: 'done' }) + chunk({}, 'stop') + usage + DONE
+const finalText = () => textReply('done')
 
 const bodyOf = (req: IncomingMessage) => new Promise<string>((resolve) => {
   const parts: Buffer[] = []
@@ -32,7 +32,11 @@ const bodyOf = (req: IncomingMessage) => new Promise<string>((resolve) => {
   req.on('end', () => resolve(Buffer.concat(parts).toString('utf8')))
 })
 
-export async function startFakeOpenai(o: { script?: Array<() => string> } = {}): Promise<FakeOpenai> {
+/** 一段文本回复,给 route 用 */
+export const textReply = (text: string) => chunk({ role: 'assistant', content: text }) + chunk({}, 'stop') + usage + DONE
+
+/** route:按请求内容回 SSE,不占脚本的序号(后台请求和前台的先后不定);返回 undefined 才走脚本 */
+export async function startFakeOpenai(o: { script?: Array<() => string>; route?: (body: string) => string | undefined } = {}): Promise<FakeOpenai> {
   const script = o.script ?? SCRIPT
   const requests: FakeOpenaiRequest[] = []
   let chats = 0
@@ -45,9 +49,9 @@ export async function startFakeOpenai(o: { script?: Array<() => string> } = {}):
         return res.end(JSON.stringify({ object: 'list', data: [{ id: FAKE_MODEL, object: 'model', owned_by: 'fake' }] }))
       }
       if (req.method === 'POST' && url.endsWith('/chat/completions')) {
-        const step = script[chats++] ?? finalText
+        const reply = o.route?.(body) ?? (script[chats++] ?? finalText)()
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
-        return res.end(step())
+        return res.end(reply)
       }
       res.writeHead(404, { 'content-type': 'application/json' })
       res.end('{"error":{"message":"not found"}}')

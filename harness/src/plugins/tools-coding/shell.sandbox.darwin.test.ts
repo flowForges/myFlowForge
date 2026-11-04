@@ -202,6 +202,17 @@ describe.skipIf(!usable)('shell tool in the real macOS sandbox', () => {
     }
   })
 
+  it('06 Review Focus 2: the memory files in the data directory cannot be read from a command', async () => {
+    const { call, dataDir } = await boot()
+    const dir = join(dataDir, 'plugins', 'memory-default', 'files')
+    mkdirSync(dir, { recursive: true })
+    const file = join(dir, 'USER.md')
+    writeFileSync(file, '- MEMORY-SECRET-MARKER\n')
+    const r = await call(`cat ${q(file)}`)
+    expect(exitOf(r)).not.toBe(0)
+    expect(r.content).not.toContain('MEMORY-SECRET-MARKER')
+  })
+
   it('Review Focus 1: .git/hooks is not writable, but git add + commit works', async () => {
     const { call } = await boot()
     const hook = await call('echo x > .git/hooks/pre-commit')

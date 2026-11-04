@@ -205,7 +205,12 @@ export async function memoryKernel(opts: MemoryKernelOpts = {}): Promise<MemoryR
       return rig.k
     },
     async close() {
-      await rig.k.close().catch(() => {})
+      // 用例中途失败时内核可能已经关过,再关会同步抛错:临时目录照样要删
+      try {
+        await rig.k.close()
+      } catch {
+        /* 已关 */
+      }
       rmSync(root, { recursive: true, force: true })
     },
   }

@@ -4,12 +4,15 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSy
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { Readable, Writable } from 'node:stream'
 import { client, ndJsonStream } from '@agentclientprotocol/sdk'
 import { PROTOCOL_VERSION, connectClient, connectControlClient, runtimePaths, type KernelEvent } from '../src/protocol/index'
 import { startTime } from '../src/lib/proc/pgids'
+import { SYSTEM as CHECKPOINT_SYSTEM } from '../src/plugins/memory-default/checkpoints'
+import { SYSTEM as EXTRACT_SYSTEM } from '../src/plugins/memory-default/consolidate'
 import { cleanupFakes, installFake, waitDead, type FakeCli } from './fakeCli'
-import { FAKE_MODEL, startFakeOpenai, toolCall, type FakeOpenai } from './fakeOpenai'
+import { FAKE_MODEL, startFakeOpenai, textReply, toolCall, type FakeOpenai } from './fakeOpenai'
 import { startFakeUpstream } from './fakeUpstream'
 
 // 构建产物端到端:MFFAI_E2E=1 且已 `npm run build`。环境全部封在临时目录里。
@@ -531,5 +534,297 @@ describe.skipIf(!E2E)('built daemon e2e', () => {
       await d.shutdown()
       await waitFor(() => !alive(worker), 35_000, 'new worker gone')
     }, 180_000)
+  })
+
+  // 06 记忆:构建产物、Electron 的 Node、真 FTS5、真监管。模型是假的,后台请求按 SYSTEM 文本认,和前台的先后无关
+  describe('memory', () => {
+    const NOTE = '包管理器用 pnpm'
+    type Body = { messages: unknown[]; tools?: unknown }
+    const parsed = (b: string) => JSON.parse(b) as Body
+    const systemOf = (b: string) => {
+      const m = parsed(b).messages[0] as { role?: string; content?: unknown }
+      return typeof m?.content === 'string' ? m.content : ''
+    }
+    const background = (b: string) => [CHECKPOINT_SYSTEM, EXTRACT_SYSTEM].includes(systemOf(b))
+    const bodies = (fake: FakeOpenai) => fake.requests.filter(r => r.method === 'POST' && r.url.endsWith('/chat/completions')).map(r => r.body)
+    const foreground = (fake: FakeOpenai) => bodies(fake).filter(b => !background(b))
+    /** 前一个请求的 messages 逐字节是后一个的前缀;system 和 tools 也一样(内容里没有密钥和循环提醒) */
+    const expectPrefix = (before: string, after: string) => {
+      const [a, b] = [parsed(before), parsed(after)]
+      expect(b.messages.length).toBeGreaterThan(a.messages.length)
+      expect(JSON.stringify(b.messages.slice(0, a.messages.length))).toBe(JSON.stringify(a.messages))
+      expect(JSON.stringify(b.tools)).toBe(JSON.stringify(a.tools))
+    }
+    /** 真的按字节扫数据目录:库、WAL、笔记文件、日志 */
+    const filesUnder = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap(d => {
+      const p = join(dir, d.name)
+      return d.isDirectory() ? filesUnder(p) : d.isFile() ? [p] : []
+    })
+    const holding = (data: string, text: string) => filesUnder(data).filter(f => readFileSync(f).includes(Buffer.from(text)))
+    type Daemon = Awaited<ReturnType<typeof startDaemon>>
+    type Client = Awaited<ReturnType<typeof connectClient>>
+
+    async function attach(d: Daemon, fromEnd = false) {
+      // 删除时事件库要整个重写:调用的超时要盖得住
+      const w = await connectClient({ addr: d.paths.workerAddr, token: d.tokenOf(), timeoutMs: 120_000 })
+      expect((await w.call('hello', { clientVersion: '0.0.0', protocolVersion: PROTOCOL_VERSION })).compatible).toBe(true)
+      const events: KernelEvent[] = []
+      w.onEvent(e => events.push(e))
+      // fromEnd:大日志从 0 订阅会同步读完整个日志,超过漏 ping 的上限就被杀(见计划的 Verification results)
+      await w.call('events.subscribe', { after: fromEnd ? ((await w.call('events.tail', { limit: 1 })).events.at(-1)?.seq ?? 0) : 0 })
+      return { w, events }
+    }
+    type Conn = Awaited<ReturnType<typeof attach>>
+
+    async function boot(fake: FakeOpenai) {
+      const d = await startDaemon()
+      const conn = await attach(d)
+      const acc = await conn.w.call('models.addAccount', { commandId: 'e2e-mem-add', presetId: 'custom-openai', baseUrl: fake.base, apiKey: 'sk-e2e-memory-0123456789' })
+      await waitFor(async () => ((await conn.w.call('models.accounts')).accounts.find(a => a.id === acc.id)?.models ?? []).some(m => m.id === FAKE_MODEL), 10_000, 'model list')
+      await conn.w.call('models.setDefault', { accountId: acc.id, modelId: FAKE_MODEL })
+      const cwd = mkdtempSync(join(tmpdir(), 'mffai-e2e-mem-'))
+      temps.push(cwd)
+      return { d, conn, acc, cwd }
+    }
+
+    /** 杀掉工作进程,等监管起新的,重新连上 */
+    async function killWorker(d: Daemon, conn: Conn, waitMs = 30_000, fromEnd = false): Promise<Conn> {
+      const { workerPid } = await d.ctl().then(async c => { try { return await c.call('status') } finally { c.close() } })
+      conn.w.close()
+      process.kill(workerPid!, 'SIGKILL')
+      let worker = 0
+      await waitFor(async () => {
+        try {
+          const c = await d.ctl()
+          try { const s = await c.call('status'); worker = s.workerPid ?? 0; return s.state === 'running' && worker > 0 && worker !== workerPid } finally { c.close() }
+        } catch { return false }
+      }, waitMs, 'supervisor started a new worker')
+      pids.push(worker)
+      return attach(d, fromEnd)
+    }
+
+    let commands = 0
+    const newSession = async (w: Client, cwd: string) => (await w.call('session.create', { commandId: `e2e-mem-s${++commands}`, cwd, approvalMode: 'auto' })).sessionId
+    /** 发一条,等这一轮结束。按 turnId 认:重连之后老事件还在重放 */
+    async function say({ w, events }: Conn, sessionId: string, text: string) {
+      const { turnId } = await w.call('session.prompt', { commandId: `e2e-mem-p${++commands}`, sessionId, text })
+      const ended = () => events.find(e => e.sessionId === sessionId && (e.type === 'turn.ended' || e.type === 'turn.failed') && (e.payload as { turnId?: string }).turnId === turnId)
+      await waitFor(() => ended() !== undefined, 30_000, `turn end: ${text.slice(0, 40)}`)
+      expect(ended()!.type, JSON.stringify(ended()!.payload)).toBe('turn.ended')
+    }
+    const setFile = async (w: Client, file: 'USER.md' | 'MEMORY.md', content: string) => {
+      const { hash } = await w.call('memory.file.get', { file })
+      return w.call('memory.file.set', { commandId: `e2e-mem-f${++commands}`, file, content, expectedHash: hash })
+    }
+
+    it('memory and delete rounds: core block, exact prefix across a worker kill, Chinese search, delete survives another kill', async () => {
+      const fake = await startFakeOpenai({ script: [] })
+      closers.push(() => fake.close())
+      const { d, conn: first, cwd } = await boot(fake)
+      let conn = first
+      await setFile(conn.w, 'USER.md', `- ${NOTE}\n`)
+
+      const a = await newSession(conn.w, cwd)
+      await say(conn, a, '依赖装不上,pnpm install 报错了')
+      expect(foreground(fake)).toHaveLength(1)
+      expect(foreground(fake)[0]).toContain('<memory kind=\\"core\\">') // 请求体是 JSON,引号转义过
+      expect(foreground(fake)[0]).toContain(NOTE)
+
+      await say(conn, a, '换个镜像再试试看')
+      expect(foreground(fake)).toHaveLength(2)
+      expectPrefix(foreground(fake)[0], foreground(fake)[1])
+
+      conn = await killWorker(d, conn)
+      await say(conn, a, '还是不行,接着看')
+      expect(foreground(fake)).toHaveLength(3)
+      expectPrefix(foreground(fake)[1], foreground(fake)[2])
+
+      // 打包的运行时里 FTS5 trigram 真的能搜中文;接入的游标活过了 SIGKILL:正好一行,没有漏也没有重
+      const notes = (await conn.w.call('memory.search', { query: '包管理器' })).items
+      expect(notes.map(i => i.text)).toContain(NOTE)
+      const raw = (await conn.w.call('memory.search', { query: 'pnpm', layer: 'raw' })).items
+      expect(raw.filter(i => i.text.includes('pnpm install'))).toHaveLength(1)
+      expect((await conn.w.call('memory.search', { query: '换个镜像', layer: 'raw' })).items).toHaveLength(1)
+      const healthy = await conn.w.call('memory.health')
+      expect(healthy.problems).toEqual([])
+
+      // 删除:真工作进程要向真监管要时间,监管不确认就抛错
+      const entry = notes.find(i => i.text === NOTE)!
+      const { workerPid } = await d.ctl().then(async c => { try { return await c.call('status') } finally { c.close() } })
+      expect(await conn.w.call('memory.delete', { commandId: 'e2e-mem-del', id: entry.id })).toMatchObject({ ok: true })
+      const still = await d.ctl().then(async c => { try { return await c.call('status') } finally { c.close() } })
+      expect(still).toMatchObject({ state: 'running', workerPid })
+      expect(holding(d.data, NOTE)).toEqual([])
+      expect((await conn.w.call('memory.search', { query: '包管理器' })).items).toEqual([])
+      expect(conn.events.filter(e => e.type === 'memory.deleted')).toHaveLength(1)
+      expect(conn.events.filter(e => e.type === 'events.redacted').length).toBeGreaterThan(0)
+
+      await say(conn, a, '删掉之后再说一句')
+      expect(foreground(fake).at(-1)).not.toContain(NOTE)
+      const afterDelete = foreground(fake).at(-1)!
+      await say(conn, a, '再说一句,看前缀')
+      expectPrefix(afterDelete, foreground(fake).at(-1)!)
+
+      const fresh = await newSession(conn.w, cwd)
+      await say(conn, fresh, '新开一个会话问问')
+      expect(foreground(fake).at(-1)).not.toContain(NOTE)
+      expect(foreground(fake).at(-1)).not.toContain('<memory kind=')
+
+      // 还是没有:重启后没有哪条路把它带回来
+      conn = await killWorker(d, conn)
+      expect(holding(d.data, NOTE)).toEqual([])
+      expect((await conn.w.call('memory.search', { query: '包管理器' })).items).toEqual([])
+      await say(conn, a, '重启之后再说一句')
+      expect(foreground(fake).at(-1)).not.toContain(NOTE)
+      const later = await newSession(conn.w, cwd)
+      await say(conn, later, '重启之后的新会话')
+      expect(foreground(fake).at(-1)).not.toContain(NOTE)
+      expect((await conn.w.call('memory.health')).problems).toEqual([])
+      conn.w.close()
+      await d.shutdown()
+    }, 180_000)
+
+    it('delete on a large log: the VACUUM outlasts the ping limit, the supervisor holds off, the same worker answers afterwards', async () => {
+      const fake = await startFakeOpenai({ script: [] })
+      closers.push(() => fake.close())
+      const { d, conn: first, cwd } = await boot(fake)
+      let conn = first
+      await setFile(conn.w, 'USER.md', `- ${NOTE}\n`)
+      const a = await newSession(conn.w, cwd)
+      await say(conn, a, '随便说一句')
+
+      // 约 13 ms/MB,漏 3 次 ping(约 4 s)就杀:灌到 VACUUM 明显超过这条线。第二个连接直接写,新工作进程读得到
+      const db = new DatabaseSync(join(d.data, 'db', 'events.sqlite'))
+      const line = `src/x.ts:42: error TS2345 argument 端口 5173 ${'x'.repeat(60)}\n`
+      const text = line.repeat(Math.ceil(8000 / line.length)).slice(0, 8000)
+      const insert = db.prepare('INSERT INTO events(ts, type, session_id, payload) VALUES (?, ?, ?, ?)')
+      db.exec('PRAGMA busy_timeout = 5000')
+      db.exec('BEGIN')
+      for (let n = 0; n < 65_000; n++) {
+        insert.run(Date.now(), 'message.assistant.delta', a, JSON.stringify({ turnId: `seeded-${Math.floor(n / 100)}`, text: `${n} ${text}` }))
+        if (n % 5000 === 4999) { db.exec('COMMIT'); db.exec('BEGIN') }
+      }
+      db.exec('COMMIT')
+      db.exec('PRAGMA wal_checkpoint(PASSIVE)')
+      db.close()
+      const mb = Math.round(statSync(join(d.data, 'db', 'events.sqlite')).size / 1_048_576)
+      expect(mb).toBeGreaterThan(450)
+
+      const bootAt = Date.now()
+      // 启动要读整个日志:读的这段时间回不了 ping,靠启动时要的 hold 才不被当成卡死
+      conn = await killWorker(d, conn, 90_000, true)
+      const bootMs = Date.now() - bootAt
+      const status = () => d.ctl().then(async c => { try { return await c.call('status') } finally { c.close() } })
+      const { workerPid } = await status()
+      const notes = (await conn.w.call('memory.search', { query: '包管理器' })).items
+      const at = Date.now()
+      try {
+      expect(await conn.w.call('memory.delete', { commandId: 'e2e-mem-big', id: notes.find(i => i.text === NOTE)!.id })).toMatchObject({ ok: true })
+      } catch (err) {
+        process.stderr.write(`DBGLOG at ${Date.now() - at} ${filesUnder(d.paths.logs).map(f => readFileSync(f, 'utf8')).join('\n').split('\n').slice(-14).join('\nDBGLOG ')}\n`)
+        throw err
+      }
+      const deleteMs = Date.now() - at
+      process.stderr.write(`MFFAI_E2E_DELETE logMb=${mb} bootMs=${bootMs} deleteMs=${deleteMs}\n`)
+      expect(await status()).toMatchObject({ state: 'running', workerPid })
+      expect(alive(workerPid!)).toBe(true)
+      const log = filesUnder(d.paths.logs).map(f => readFileSync(f, 'utf8')).join('\n')
+      expect(log).not.toContain('worker hung')
+      expect(holding(join(d.data, 'db'), NOTE)).toEqual([])
+      conn.w.close()
+      const stopAt = Date.now()
+      await d.shutdown()
+      process.stderr.write(`MFFAI_E2E_SHUTDOWN logMb=${mb} ms=${Date.now() - stopAt}\n`)
+    }, 300_000)
+
+    it('compaction round: a small context gets a checkpoint from the route past 45%, a rebuild past 70%, and old text stays searchable', async () => {
+      const CHECKPOINT = ['## 目标', '修 bug', '## 用户的要求与决定', '无', '## 关键事实', '端口 5173', '## 进展与待办', '继续'].join('\n')
+      let calls = 0
+      const fake = await startFakeOpenai({
+        route: body => {
+          if (systemOf(body) === CHECKPOINT_SYSTEM) return textReply(CHECKPOINT)
+          const last = parsed(body).messages.at(-1) as { role?: string }
+          return last.role === 'tool' ? textReply('看完了') : toolCall(`c${++calls}`, 'read', { path: 'big.txt' })
+        },
+      })
+      closers.push(() => fake.close())
+      const { d, conn: first, acc, cwd } = await boot(fake)
+      const line = 'filler line with some long tool output to read 端口 '.padEnd(190, 'y') + '\n'
+      // 一轮只涨几个百分点:45% 和 70% 之间走好几轮,检查点有时间写完,也够两次(第一次省得不够 20%)
+      writeFileSync(join(cwd, 'big.txt'), line.repeat(24))
+
+      // 这个账号的窗口改小:配置在磁盘上,新工作进程读到的就是它
+      const configFile = join(d.data, 'config.json')
+      const config = JSON.parse(readFileSync(configFile, 'utf8')) as { models: { accounts: { id: string; models: { id: string; context: number }[] }[] } }
+      const entry = config.models.accounts.find(x => x.id === acc.id)!.models.find(m => m.id === FAKE_MODEL)!
+      entry.context = 24_000
+      writeFileSync(configFile, JSON.stringify(config))
+      let conn = await killWorker(d, first)
+      await waitFor(async () => ((await conn.w.call('models.accounts')).accounts.find(a => a.id === acc.id)?.models ?? []).some(m => m.id === FAKE_MODEL && m.context === 24_000), 10_000, 'small context')
+
+      const s = await newSession(conn.w, cwd)
+      const FIRST = '最开始说的话带一个记号 zebra-marker-7788'
+      const mine = (type: string) => conn.events.filter(e => e.sessionId === s && e.type === type)
+      await say(conn, s, FIRST)
+      for (let i = 0; i < 40 && mine('context.rebuilt').length === 0; i++) {
+        await say(conn, s, `第 ${i} 轮,再读一遍这个文件`)
+        // 检查点在后台写:写完之前过了 70% 只会折叠
+        await sleep(150)
+      }
+      expect(mine('memory.checkpoint').length).toBeGreaterThan(0)
+      expect(mine('context.rebuilt').length).toBeGreaterThan(0)
+      const rebuilt = mine('context.rebuilt')[0]
+      const countBefore = fake.requests.length
+      await say(conn, s, '重建之后接着说')
+      expect(fake.requests.length).toBeGreaterThan(countBefore)
+      expect(foreground(fake).at(-1)).toContain('<checkpoint')
+      expect(rebuilt.seq).toBeGreaterThan(mine('memory.checkpoint')[0].seq)
+      // 后台请求:不带工具
+      const bg = bodies(fake).filter(background)
+      expect(bg.length).toBeGreaterThan(0)
+      for (const b of bg) expect(parsed(b).tools).toBeUndefined()
+      // 重建不丢东西:最早的话不在请求里了,搜得到
+      const found = (await conn.w.call('memory.search', { query: 'zebra-marker-7788', layer: 'raw' })).items
+      expect(found.map(i => i.text)).toContain(FIRST)
+      conn.w.close()
+      await d.shutdown()
+    }, 180_000)
+
+    it('nightly round: a scripted extraction makes a proposal, nothing written until approved, then a new session has it', async () => {
+      const FACT = '以后都用 tab 缩进写代码'
+      const fake = await startFakeOpenai({
+        route: body => {
+          if (systemOf(body) !== EXTRACT_SYSTEM) return textReply('好的')
+          const user = JSON.stringify(parsed(body).messages[1])
+          const id = /\[(r_\d+) [^\]]*\][^\[]*tab 缩进/.exec(user)?.[1]
+          return textReply(JSON.stringify({ items: id ? [{ text: FACT, kind: 'preference', evidence: [id] }] : [] }))
+        },
+      })
+      closers.push(() => fake.close())
+      const { d, conn, cwd } = await boot(fake)
+      const s = await newSession(conn.w, cwd)
+      await say(conn, s, FACT)
+      const before = await conn.w.call('memory.file.get', { file: 'USER.md' })
+
+      const result = await conn.w.call('memory.consolidate', { commandId: 'e2e-mem-night' })
+      expect(result, JSON.stringify(result)).toMatchObject({ extracted: 1, proposed: 1 })
+      await waitFor(() => conn.events.some(e => e.type === 'memory.proposal'), 5000, 'memory.proposal event')
+      expect((await conn.w.call('memory.file.get', { file: 'USER.md' })).hash).toBe(before.hash)
+      const next = await newSession(conn.w, cwd)
+      await say(conn, next, '先开一个会话看看')
+      expect(foreground(fake).at(-1)).not.toContain('<memory kind=')
+
+      const { items } = await conn.w.call('memory.proposals.list', { status: 'pending' })
+      expect(items).toHaveLength(1)
+      expect(await conn.w.call('memory.proposals.decide', { commandId: 'e2e-mem-ok', id: items[0].id, decision: 'approve' })).toMatchObject({ ok: true })
+      expect((await conn.w.call('memory.file.get', { file: 'USER.md' })).content).toContain(FACT)
+
+      const after = await newSession(conn.w, cwd)
+      await say(conn, after, '再开一个新会话')
+      expect(foreground(fake).at(-1)).toContain('<memory kind=')
+      expect(foreground(fake).at(-1)).toContain(FACT)
+      conn.w.close()
+      await d.shutdown()
+    }, 120_000)
   })
 })
