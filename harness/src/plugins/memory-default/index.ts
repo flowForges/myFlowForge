@@ -112,6 +112,7 @@ export function createMemoryDefault(opts: MemoryDefaultOpts = {}): MemoryDefault
           events: ctx.events,
           append: e => ctx.append(e),
           store: opened.store,
+          sessions,
           background: opened.background,
           models: () => ctx.services.get<ModelsService>('models'),
           config: () => config,

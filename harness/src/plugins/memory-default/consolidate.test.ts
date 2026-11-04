@@ -1268,6 +1268,19 @@ describe('the schedule', () => {
     expect(runs()).toBe(1)
   })
 
+  it('final review M3: the batch fits a small model', async () => {
+    const accounts: FakeAccount[] = [{ id: 'a', models: [{ id: 'small', context: 16_000 }] }]
+    const h = await boot({ accounts, default: { accountId: 'a', modelId: 'small' } })
+    const s = await h.session()
+    for (let i = 0; i < 40; i++) h.say(s, `第 ${i} 条消息 ${'内容'.repeat(200)}`, 0)
+    await h.run()
+    const sent = h.models.background().map(c => (c.req.messages[0].parts[0] as { text: string }).text)
+    expect(sent).toHaveLength(1)
+    expect(sent[0].length + SYSTEM.length).toBeLessThanOrEqual(Math.floor((16_000 - 4096) / 1.5) + 100)
+    expect(sent[0]).toContain('第 0 条消息')
+    expect(sent[0]).not.toContain('第 39 条消息')
+  })
+
   it('the job scope carries the default account as sessionRef', async () => {
     const accounts: FakeAccount[] = [{ id: 'a', models: [{ id: 'm-a' }] }, { id: 'b', models: [{ id: 'm-b' }] }]
     const h = await boot({ accounts, default: { accountId: 'a', modelId: 'm-a' } })

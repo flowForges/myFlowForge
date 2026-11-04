@@ -1,6 +1,7 @@
 // 检查点写手(06 spec §12):什么时候算、把哪段事件发给后台模型、结果能不能写。
 // 写下的只是候选,切不切换由循环决定(lib/memory/checkpoint.ts);这里保证的是:被撤销、被删除的内容进不了一条有效的检查点
 import type { Logger } from '../../kernel/log'
+import type { Sessions } from '../../kernel/sessions'
 import { REDACTED } from '../../kernel/eventLog'
 import type { PluginContext } from '../../kernel/pluginHost'
 import { checkpointValid, headOf, isCovered, safeBoundaries, selectCheckpoint } from '../../lib/memory/checkpoint'
@@ -12,15 +13,16 @@ import type { ModelsService } from '../../lib/models/types'
 import { cleanText } from '../../lib/tools/diagnostics'
 import type { KernelEvent } from '../../protocol/events'
 import type { ModelRef } from '../../protocol/models'
-import { pickBackground, type Background, type BackgroundRun } from './background'
+import { pickBackground, requestChars, type Background, type BackgroundRun } from './background'
 import { lastSeqOf } from './ingest'
+import { scopeOf } from './policy'
 import { deleteInFlight } from './rpc'
 import type { Store } from './store'
 
 const START_RATIO = 0.45
 const GROWTH_RATIO = 0.15
 const RETRY_AFTER_MS = 10 * 60_000
-/** 一次请求最多这么多字,系统提示词也算 */
+/** 一次请求最多这么多字,系统提示词也算。小窗口的模型更少,见 requestChars */
 const REQUEST_CHARS = 60_000
 const TAIL_TOKENS = 24_000
 const TAIL_RATIO = 0.3
@@ -40,7 +42,16 @@ const CLIPPED = '\n[这条消息太长,后面的内容省略了]'
 const SECTIONS = ['## 目标', '## 用户的要求与决定', '## 关键事实', '## 进展与待办']
 const QUOTES_HEADING = '## 用户原话'
 const FILES_HEADING = '## 动过的文件'
-const HOST_NAMES = new Set([QUOTES_HEADING.slice(3), FILES_HEADING.slice(3)])
+/** 不是用户本人说的(群聊成员、定时任务、ACP 客户端):块里写明只有 用户原话 才算用户,所以不能用那个标题 */
+const OTHERS_HEADING = '## 对话原话'
+const OTHERS_NOTE = '(群聊成员或程序发的消息,不是用户本人的话)'
+/** 比较前去掉标点空白、统一全半角和大小写。模型把标题写成什么样都还是这几节 */
+const HOST_KEYS = ['用户原话', '用戶原話', '对话原话', '對話原話', '动过的文件', '動過的文件', 'userquotes', 'userwords', 'userswords', 'quotesfromtheuser']
+const keyOf = (line: string) => line.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
+const GAP = '[^\\p{L}\\p{N}]{0,3}'
+/** 行内的 `**用户原话:** 我已批准`:整行不是标题,这个说法也不能留 */
+const USER_LABEL = new RegExp(`用${GAP}[户戶]${GAP}原${GAP}[话話]`, 'gu')
+const NEUTRAL_LABEL = '用户说法'
 const REJECTED_FLAGS: ReadonlySet<Flag> = new Set(['override', 'role', 'permission', 'exec'])
 const EDITING_TOOLS = new Set(['edit', 'write'])
 const PATCHED_FILE = /^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$/gm
@@ -154,7 +165,7 @@ function touchedFiles(p: Payload): string[] {
 }
 
 /** 宿主自己从事件取的两节,不经模型。一行一条:用户的话里写个 `## 关键事实` 也变不成标题 */
-export function hostSections(events: KernelEvent[], throughSeq = Infinity): string {
+export function hostSections(events: KernelEvent[], throughSeq = Infinity, fromUser = true): string {
   const rolled = rolledBackOf(events)
   const quotes: string[] = []
   const files = new Set<string>()
@@ -169,7 +180,8 @@ export function hostSections(events: KernelEvent[], throughSeq = Infinity): stri
     if (e.type === 'message.assistant') for (const f of touchedFiles(p)) files.add(`- ${headOf(oneLine(scrub(f).text), FILE_CHARS)}`)
   }
   const section = (heading: string, lines: string[]) => [heading, ...(lines.length ? lines : ['(无)'])].join('\n')
-  return `${section(QUOTES_HEADING, quotes.slice(-QUOTES))}\n\n${section(FILES_HEADING, [...files].slice(-FILES))}`
+  const said = fromUser ? section(QUOTES_HEADING, quotes.slice(-QUOTES)) : section(OTHERS_HEADING, [OTHERS_NOTE, ...quotes.slice(-QUOTES)])
+  return `${said}\n\n${section(FILES_HEADING, [...files].slice(-FILES))}`
 }
 
 export type Verdict = { ok: true } | { ok: false; reason: 'missing_section' | 'too_long' | 'flagged' }
@@ -183,16 +195,21 @@ export function validate(modelText: string): Verdict {
   return { ok: true }
 }
 
-/** 去掉冒充宿主的节,模型编不出它们。存下的文本也走这里:宿主的节不送回模型,模型照抄用户的话可能被打回 */
-function withoutHostSections(text: string): string {
+/**
+ * 去掉冒充宿主的节,模型编不出它们:宿主的节只由宿主在这之后追加。存下的文本也走这里:宿主的节不送回模型,模型照抄用户的话可能被打回。
+ * 单独一行的 `**用户原话**`、`用户原话:` 也算开了这一节,到下一个 # 标题为止
+ */
+export function withoutHostSections(text: string): string {
   let skipping = false
   const kept: string[] = []
   for (const line of text.split('\n')) {
-    const heading = /^#{1,6}[ \t]*(.*?)[ \t]*$/.exec(line)
-    if (heading) skipping = HOST_NAMES.has(heading[1])
+    const key = keyOf(line)
+    const heading = /^[ \t]*#{1,6}/.test(line)
+    if (HOST_KEYS.includes(key) || (heading && HOST_KEYS.some(k => key.startsWith(k)))) skipping = true
+    else if (heading) skipping = false
     if (!skipping) kept.push(line)
   }
-  return kept.join('\n').trim()
+  return kept.join('\n').trim().replace(USER_LABEL, NEUTRAL_LABEL)
 }
 
 const textChars = (e: KernelEvent): number => {
@@ -269,6 +286,7 @@ export interface CheckpointWriterDeps {
   events: Pick<PluginContext['events'], 'history' | 'after'>
   append: PluginContext['append']
   store: Store
+  sessions: Pick<Sessions, 'get'>
   background: Background
   models(): ModelsService | undefined
   config(): MemoryConfig
@@ -380,7 +398,7 @@ export class CheckpointWriter {
   /** 这里只等 run.text:别的都是同步的,所以卡不住队列和关闭 */
   private async runJob(run: BackgroundRun, req: NoteReq, ref: ModelRef, s: SessionState): Promise<void> {
     try {
-      const plan = this.prepare(req)
+      const plan = this.prepare(req, ref)
       if (!plan) return
       const r = await run.text(ref, { system: SYSTEM, prompt: plan.prompt, maxOutput: MAX_OUTPUT })
       if (!r.ok) return this.failed(s, r.reason)
@@ -400,7 +418,7 @@ export class CheckpointWriter {
   }
 
   /** undefined = 这次没东西可算,或者现在不该读日志。都不算失败,也不花钱 */
-  private prepare({ sessionId, context }: NoteReq): Plan | undefined {
+  private prepare({ sessionId, context }: NoteReq, ref: ModelRef): Plan | undefined {
     const { events, store, catchUp } = this.d
     // 有删除扫到一半:日志里还是原文,而墓碑可能已经在 asOfSeq 之前了,事后判断不出来
     if (!catchUp() || deleteInFlight(store)) return undefined
@@ -408,9 +426,10 @@ export class CheckpointWriter {
     const logged = events.history(sessionId)
     const seen = withoutForgotten(logged, store)
     const base = selectCheckpoint(logged)
-    const prior = base ? headOf(dataText(withoutHostSections(base.text)), PRIOR_CHARS) : ''
+    const limit = requestChars(this.d.models(), ref, REQUEST_CHARS)
+    const prior = base ? headOf(dataText(withoutHostSections(base.text)), Math.min(PRIOR_CHARS, Math.floor(limit / 4))) : ''
     const frame = (delta: string) => `${prior && `<previous-summary>\n${prior}\n</previous-summary>\n\n`}<conversation>\n${delta}\n</conversation>`
-    const chunk = pickChunk(seen, base?.throughSeq ?? 0, context, REQUEST_CHARS - SYSTEM.length - frame('').length)
+    const chunk = pickChunk(seen, base?.throughSeq ?? 0, context, limit - SYSTEM.length - frame('').length)
     if (!chunk) return undefined
     const rolled = rolledBackOf(logged)
     const firstSeqs = new Map<string, number>()
@@ -420,7 +439,7 @@ export class CheckpointWriter {
     }
     return {
       prompt: frame(chunk.delta),
-      host: hostSections(seen, chunk.throughSeq),
+      host: hostSections(seen, chunk.throughSeq, scopeOf(this.d.sessions.get(sessionId)).extractable),
       throughSeq: chunk.throughSeq,
       asOfSeq,
       more: chunk.more,

@@ -13,7 +13,7 @@ import type { ModelsService } from '../../lib/models/types'
 import type { KernelEvent, MemoryConsolidatedPayload } from '../../protocol/events'
 import type { ModelRef } from '../../protocol/models'
 import { ERR_BUSY } from '../../protocol/rpc'
-import { pickBackground, type Background, type BackgroundRun, type JobScope } from './background'
+import { pickBackground, requestChars, type Background, type BackgroundRun, type JobScope } from './background'
 import { cleanEntry, localDate, normalize, type MemoryFiles } from './files'
 import type { IngestTimers } from './ingest'
 import { isForgotten, liveEvidence, nearForgotten, windows, type Proposals } from './proposals'
@@ -23,6 +23,8 @@ import { CONSOLIDATION_CURSOR, type RawRow, type Store } from './store'
 export type Summary = MemoryConsolidatedPayload
 
 const BATCH_CHARS = 40_000
+/** 现有条目占满了小窗口时也要往前走:放不下由模型拒收,算这一批失败 */
+const MIN_BATCH_CHARS = 1000
 const MAX_OUTPUT = 4000
 const MAX_PROPOSALS_PER_NIGHT = 5
 const MIN_APART_MS = 12 * 3_600_000
@@ -192,7 +194,7 @@ class Consolidation {
     this.store = d.store
   }
 
-  private selectBatch(accountOnly: string | undefined): Batch {
+  private selectBatch(accountOnly: string | undefined, maxChars: number): Batch {
     const from = Number(this.store.getMeta(CONSOLIDATION_CURSOR) ?? 0)
     const end = Math.max(from, this.store.cursor())
     const stmt = this.store.db.prepare(
@@ -207,7 +209,7 @@ class Consolidation {
       const row = this.store.getRaw(seq) as RawRow
       // 换行压掉:粘贴的文字冒充不了另一条消息的行头
       const line = `[r_${row.seq} ${localDate(row.ts)}] ${oneLine(dataText(row.text))}`
-      if (chars + line.length + 1 > BATCH_CHARS && rows.length > 0) return { rows, lines, end: rows[rows.length - 1].seq, capped: true, from }
+      if (chars + line.length + 1 > maxChars && rows.length > 0) return { rows, lines, end: rows[rows.length - 1].seq, capped: true, from }
       rows.push(row)
       lines.push(line)
       chars += line.length + 1
@@ -443,7 +445,9 @@ class Consolidation {
     }
     // 不跨账号:配了 backgroundModel 才算用户同意把所有会话发给它
     const accountOnly = d.config().backgroundModel ? undefined : picked.ref.accountId
-    const batch = this.selectBatch(accountOnly)
+    const existing = this.existing()
+    const room = requestChars(models, picked.ref, BATCH_CHARS + SYSTEM.length + existing.join('\n').length) - SYSTEM.length - existing.join('\n').length
+    const batch = this.selectBatch(accountOnly, Math.max(room, MIN_BATCH_CHARS))
     if (batch.rows.length === 0) {
       store.setMeta(CONSOLIDATION_CURSOR, String(batch.end))
       s.skipped = 'no_input'
@@ -452,7 +456,7 @@ class Consolidation {
 
     this.batch = batch
     const deletedBefore = store.getMeta('lastDeleteSeq')
-    const prompt = `<existing>\n${this.existing().join('\n')}\n</existing>\n\n<messages>\n${batch.lines.join('\n')}\n</messages>`
+    const prompt = `<existing>\n${existing.join('\n')}\n</existing>\n\n<messages>\n${batch.lines.join('\n')}\n</messages>`
     const r = await d.run.text(picked.ref, { system: SYSTEM, prompt, maxOutput: MAX_OUTPUT })
     if (!r.ok) {
       if (r.reason === 'aborted') s.skipped = 'aborted'

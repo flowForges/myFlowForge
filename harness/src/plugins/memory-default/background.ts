@@ -76,6 +76,16 @@ export function pickBackground(models: ModelsView, cfg: MemoryConfig, sessionRef
   return current && !usable(current) ? { none: 'no_model' } : { ref: base }
 }
 
+/**
+ * 这个模型放得下一次多少字:按全是中日韩文字算,留出输出。60k 字中文约 90k token,16k 窗口的便宜模型每次都会拒收。
+ * 查不到窗口的按调用方的上限
+ */
+export function requestChars(models: ModelsView | undefined, ref: ModelRef, ceiling: number): number {
+  const entry = models && accountOf(models, ref.accountId)?.list.find(m => m.id === ref.modelId)
+  if (!entry || !(entry.context > 0)) return ceiling
+  return Math.min(ceiling, Math.max(0, Math.floor((entry.context - MAX_OUTPUT) / TOKENS_PER_CJK)))
+}
+
 export type BackgroundReason = 'budget' | 'quota_low' | 'account_out' | 'restricted' | 'timeout' | 'error' | 'aborted' | 'length'
 export type BackgroundText = { ok: true; text: string; tokens: number; model: string; usd: number } | { ok: false; reason: BackgroundReason }
 
