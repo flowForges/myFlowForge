@@ -20,8 +20,11 @@ const NO_MATCHES = 'No matches.'
 
 /** 进上下文的自由文本:cleanText 和打码都在 scrub 里。存储里不转义,端口和命令逐字 */
 export function dataText(s: string): string {
-  return scrub(s).text.replace(/<(?=[A-Za-z/!?])/g, '&lt;')
+  return escapeTags(scrub(s).text)
 }
+
+/** 像标签的 < 都转义。转义过的文本再过一遍不变 */
+const escapeTags = (s: string) => s.replace(/<(?=[A-Za-z/!?])/g, '&lt;')
 
 /**
  * Markdown 条目:压成一行、去掉注释记号,否则模型能在行尾伪造 `src=user`。
@@ -117,7 +120,10 @@ export function resultsBlock(items: ResultItem[]): string {
   return `<memory-results>\n${RESULTS_PREFACE}\n${body.length > 0 ? body.join('\n') : NO_MATCHES}\n</memory-results>`
 }
 
-/** text 写事件时已过 dataText:这里只加包裹,历史字节才不随以后的打码规则变化 */
+/**
+ * text 写事件时已过 dataText,这里不再打码:历史字节不随以后的打码规则变化。
+ * 只转义标签,写手以外来的文本也伪造不了结束标签;写手的文本本来就没有,字节不变
+ */
 export function checkpointBlock(throughSeq: number, text: string): string {
-  return `<checkpoint through="${throughSeq}">\n${CHECKPOINT_PREFACE}\n${text}\n</checkpoint>`
+  return `<checkpoint through="${throughSeq}">\n${CHECKPOINT_PREFACE}\n${escapeTags(text)}\n</checkpoint>`
 }
