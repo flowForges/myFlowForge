@@ -1,4 +1,5 @@
 import type { Plugin } from '../kernel/pluginHost'
+import channelTelegram from './channel-telegram'
 import executorCli from './executor-cli'
 import loopDefault from './loop-default'
 import loopDirect from './loop-direct'
@@ -11,5 +12,5 @@ import modelsRegistry from './models-registry'
 import toolsCoding from './tools-coding'
 import toolsRegistry from './tools-registry'
 
-// 本期静态登记的内置插件;顺序:models-registry → 协议适配器 → tools-registry → tools-coding → executor-cli → memory-default → loop-default → loop-direct → loop-echo
-export const BUILTIN_PLUGINS: Plugin[] = [modelsRegistry, modelOpenai, modelAnthropic, modelChatgpt, toolsRegistry, toolsCoding, executorCli, memoryDefault, loopDefault, loopDirect, loopEcho]
+// 本期静态登记的内置插件;顺序:models-registry → 协议适配器 → tools-registry → tools-coding → executor-cli → memory-default → loop-default → loop-direct → loop-echo → channel-telegram
+export const BUILTIN_PLUGINS: Plugin[] = [modelsRegistry, modelOpenai, modelAnthropic, modelChatgpt, toolsRegistry, toolsCoding, executorCli, memoryDefault, loopDefault, loopDirect, loopEcho, channelTelegram]

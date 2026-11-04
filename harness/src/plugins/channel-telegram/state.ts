@@ -14,7 +14,7 @@ export const StateSchema = z.object({
   offset: Count.default(0),
   lastUpdateAt: z.number().optional(),
   pairings: z.array(z.object({ accountId: z.string(), name: z.string(), pairedAt: z.number() })).default(() => []),
-  senders: z.record(z.string(), z.object({ wrong: Count, lockedUntil: z.number().optional() })).default(() => ({})),
+  senders: z.record(z.string(), z.object({ wrong: Count, lockedUntil: z.number().optional(), /** 上次错的时间:淘汰最旧的用,数字键的对象顺序靠不住 */ at: z.number().optional() })).default(() => ({})),
   leftChats: z.array(z.string()).default(() => []),
   /** 归 chats.ts */
   chats: z.record(z.string(), z.unknown()).default(() => ({})),
@@ -106,7 +106,7 @@ export class TelegramState {
   }
 
   /**
-   * getMe 或 setToken 拿到的机器人。换了机器人(§5.1):清 offset、配对、聊天映射,卡片跟着聊天走。
+   * getMe 或 setToken 拿到的机器人。换了机器人(§5.1):清 offset、配对、聊天映射,卡片跟着聊天走;失败记录和退过的群也是旧机器人的。
    * 返回有没有改动,改了要存盘。旧 ackOffset 是另一个机器人的,不能再发出去
    */
   adoptBot(bot: TelegramBot): boolean {
@@ -117,6 +117,8 @@ export class TelegramState {
       this.ackOffset = 0
       delete this.data.lastUpdateAt
       this.data.pairings = []
+      this.data.senders = {}
+      this.data.leftChats = []
       this.data.chats = {}
       this.data.cards = []
     }

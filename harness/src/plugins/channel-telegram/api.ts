@@ -56,7 +56,7 @@ export const MAX_BODY_BYTES = 16 * 1024 * 1024
 /** 再小的 retry_after 也不能变成毫秒级的重试 */
 const MIN_RETRY_AFTER_S = 1
 
-const REAL_TIMERS: ApiTimers = {
+export const REAL_TIMERS: ApiTimers = {
   setTimeout: (fn, ms) => setTimeout(fn, ms).unref(),
   clearTimeout: handle => clearTimeout(handle as NodeJS.Timeout),
 }

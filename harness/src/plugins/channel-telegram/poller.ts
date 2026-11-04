@@ -280,7 +280,7 @@ export class Poller {
 }
 
 /** 只有稳定代码进日志:别的错的 message 里可能有消息内容 */
-function codeOf(err: unknown): string {
+export function codeOf(err: unknown): string {
   if (err instanceof TelegramError) return err.code
   const code = (err as NodeJS.ErrnoException | null | undefined)?.code
   return typeof code === 'string' && /^[A-Za-z_]{1,32}$/.test(code) ? code : 'internal'

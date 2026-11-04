@@ -191,6 +191,16 @@ describe('TelegramState', () => {
       expect(s.data.chats['1']).toBeDefined()
     })
 
+    it('换了机器人:失败记录和退过的群也是旧机器人的,一起清', () => {
+      const s = TelegramState.open(file, log)
+      s.adoptBot({ id: 1 })
+      s.data.senders['7'] = { wrong: 3, lockedUntil: 9 }
+      s.data.leftChats.push('-5')
+      s.adoptBot({ id: 2 })
+      expect(s.data.senders).toEqual({})
+      expect(s.data.leftChats).toEqual([])
+    })
+
     it('换了机器人:清 offset、配对、聊天映射、卡片', () => {
       const s = TelegramState.open(file, log)
       s.adoptBot({ id: 1, username: 'a' })
