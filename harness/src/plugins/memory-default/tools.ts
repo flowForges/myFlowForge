@@ -11,6 +11,7 @@ import { argsOf, type Tool, type ToolContext, type ToolResult } from '../../lib/
 import type { KernelEvent } from '../../protocol/events'
 import { cleanEntry, localDate, type MemoryFiles } from './files'
 import { scopeOf } from './policy'
+import type { Proposals } from './proposals'
 import type { NoteRow, RawRow, Store } from './store'
 
 const NOT_FOUND = '未找到'
@@ -41,31 +42,11 @@ function jsonSchema(schema: ZodType): object {
   return rest
 }
 
-/** 夜间整合之前的收件箱:只进不出。Task 10 的 Proposals 接同一个接口 */
-export interface ProposalInbox {
-  pending(): number
-  create(p: { text: string; flags: string[]; turnId: string }): string
-}
-
-export function storeProposals(store: Store, now: () => number, append: (e: Omit<KernelEvent, 'seq' | 'ts'>) => unknown): ProposalInbox {
-  return {
-    pending: () => (store.db.prepare("SELECT COUNT(*) AS n FROM proposals WHERE status = 'pending'").get() as { n: number }).n,
-    create({ text, flags, turnId }) {
-      const id = `p_${randomBytes(6).toString('hex')}`
-      store.db
-        .prepare("INSERT INTO proposals(id, target, op, text, source, flags, status, turn_id, created_at) VALUES (?, 'MEMORY.md', 'add', ?, 'model', ?, 'pending', ?, ?)")
-        .run(id, text, JSON.stringify(flags), turnId, now())
-      append({ type: 'memory.proposal', payload: { id, target: 'MEMORY.md', status: 'pending' } })
-      return id
-    },
-  }
-}
-
 export interface MemoryToolDeps {
   store: Store
   files: Pick<MemoryFiles, 'reconcile' | 'appendDiary'>
   sessions: { get(id: string): SessionInfo | undefined }
-  proposals: ProposalInbox
+  proposals: Pick<Proposals, 'pending' | 'create'>
   now(): number
   append(e: Omit<KernelEvent, 'seq' | 'ts'>): unknown
   /** 有上限地追事件日志,返回追上了没有。追上了,刚发生的回滚和删除这一次读就算数 */
@@ -172,8 +153,14 @@ function createHandlers(d: MemoryToolDeps) {
       if (propose) {
         counts.durable++
         try {
-          proposal = d.proposals.create({ text: clean.text, flags, turnId: ctx.turnId })
-          lines.push('The user will be asked to confirm it as lasting memory.')
+          // 目标定 MEMORY.md:工具没有 target 参数,USER.md 更敏感,用户确认时可以改文本
+          const made = d.proposals.create({ target: 'MEMORY.md', op: 'add', text: clean.text, source: 'model', flags, turnId: ctx.turnId })
+          if ('refused' in made) {
+            lines.push('The user could not be asked to confirm it: the draft is saved, the request is not.')
+          } else {
+            proposal = made.id
+            lines.push('The user will be asked to confirm it as lasting memory.')
+          }
         } catch (err) {
           d.log.error('memory proposal failed', { error: err instanceof Error ? err.name : 'unknown' })
           lines.push('The user could not be asked to confirm it: the draft is saved, the request is not.')

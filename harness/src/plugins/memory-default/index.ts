@@ -13,9 +13,10 @@ import { MemoryFiles } from './files'
 import { Ingest, type IngestTimers } from './ingest'
 import { manifest } from './manifest'
 import { scopeOf } from './policy'
+import { Proposals } from './proposals'
 import { faultCode, registerMemoryRpc, type LiveMemory, type PurgeStep } from './rpc'
 import { openStore, type Store } from './store'
-import { createMemoryTools, storeProposals } from './tools'
+import { createMemoryTools } from './tools'
 
 export interface MemoryDefaultOpts {
   now?: () => number
@@ -33,7 +34,7 @@ export interface MemoryDefaultPlugin extends Plugin {
   /** 测试用:不等批量定时器,把日志拉进原始层 */
   flushNow(): void
   /** 测试用:最近一次激活打开的库 */
-  inspect(): { store: Store; background: Background; checkpoints: CheckpointWriter }
+  inspect(): { store: Store; background: Background; checkpoints: CheckpointWriter; proposals: Proposals }
 }
 
 function openLive(ctx: PluginContext, sessions: Sessions, o: MemoryDefaultOpts, now: () => number, config: MemoryConfig): LiveMemory {
@@ -56,7 +57,8 @@ function openLive(ctx: PluginContext, sessions: Sessions, o: MemoryDefaultOpts, 
     ingest.start()
     // 每次取:models 插件可能比这里晚激活,也可能没有
     const background = new Background({ models: () => ctx.services.get<ModelsService>('models'), config: () => config, store, now, log: ctx.log })
-    return { store, files, ingest, background }
+    const proposals = new Proposals({ store, files, now, append: e => ctx.append(e) })
+    return { store, files, ingest, background, proposals }
   } catch (err) {
     store.close()
     throw err
@@ -70,7 +72,7 @@ export function createMemoryDefault(opts: MemoryDefaultOpts = {}): MemoryDefault
     flushNow: () => current?.ingest.flush(),
     inspect() {
       if (!current) throw new Error('memory store is not open')
-      return { store: current.store, background: current.background, checkpoints: current.checkpoints }
+      return { store: current.store, background: current.background, checkpoints: current.checkpoints, proposals: current.proposals }
     },
     activate(ctx) {
       const sessions = ctx.services.get<Sessions>('sessions')
@@ -137,7 +139,7 @@ export function createMemoryDefault(opts: MemoryDefaultOpts = {}): MemoryDefault
         store: live.store,
         files: live.files,
         sessions,
-        proposals: storeProposals(live.store, now, e => ctx.append(e)),
+        proposals: live.proposals,
         now,
         append: (e: Parameters<PluginContext['append']>[0]) => ctx.append(e),
         catchUp: () => live.ingest.catchUp(opts.catchUpMs),

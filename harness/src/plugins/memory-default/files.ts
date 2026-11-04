@@ -489,6 +489,30 @@ export class MemoryFiles {
     this.updated({ id, file, op: 'supersede', source: byId })
   }
 
+  /** 现在写得下吗。replacing:这一行会先被挪走,它占的地方算数 */
+  assertFits(file: string, text: string, replacing?: string): void {
+    const name = this.checked(file)
+    this.reconcile('core')
+    const { doc, hits } = this.locate(name, e => e.id === replacing)
+    assertRoom(name, withLine(withoutLines(doc, new Set(hits.map(e => e.line))), `- ${cleanEntry(text).text}`))
+  }
+
+  /** 这些候选的草稿行。核心文件里升级过的那行不动:它是用户能看到、能删的记忆 */
+  removeCandidateLines(candidates: string[]): void {
+    if (candidates.length === 0) return
+    const ids = new Set(candidates)
+    const touched: string[] = []
+    for (const file of this.list('all').filter(f => f.startsWith('diary/'))) {
+      const { doc, hits } = this.locate(file, e => e.candidate !== undefined && ids.has(e.candidate))
+      if (hits.length === 0) continue
+      this.save(file, withoutLines(doc, new Set(hits.map(e => e.line))))
+      touched.push(file)
+    }
+    if (touched.length === 0) return
+    this.reindex(touched)
+    this.updated({ op: 'remove', source: 'extract' })
+  }
+
   coreText(): { user: string; memory: string; topics: string[]; version: string } {
     this.reconcile('core')
     const user = this.views.get('USER.md') ?? ''

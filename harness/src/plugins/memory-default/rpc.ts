@@ -18,6 +18,7 @@ import type { Background } from './background'
 import type { MemoryFiles } from './files'
 import { lastSeqOf, type Ingest } from './ingest'
 import { scopeOf } from './policy'
+import type { Proposals } from './proposals'
 import { damaged, type NoteRow, type RawRow, type Store } from './store'
 import { interleave, NOTE_LAYERS, RAW_ID, rawSource } from './tools'
 
@@ -47,6 +48,7 @@ export interface LiveMemory {
   files: MemoryFiles
   ingest: Ingest
   background: Background
+  proposals: Proposals
 }
 
 export interface MemoryRpcDeps {
@@ -225,6 +227,8 @@ export function registerMemoryRpc(d: MemoryRpcDeps): { stop(): Promise<void> } {
 
   register('memory.file.get', (m, { file }) => m.files.read(file))
 
+  register('memory.proposals.list', (m, { status }) => ({ items: m.proposals.list(status) }))
+
   register('memory.changes', (m, { limit }) => ({
     items: m.store.listChanges(capped(limit)).map(c => ({
       ts: c.ts, id: c.entry_id ?? '', ...(c.file !== null && { file: c.file }), op: c.op, before: c.before, after: c.after, source: c.source,
@@ -297,6 +301,16 @@ export function registerMemoryRpc(d: MemoryRpcDeps): { stop(): Promise<void> } {
         return { ok: true, hash: m.files.read(file).hash, masked }
       }),
     )
+    // 和删除排在一起:删除扫到一半时批准同样的文本,就把刚删的又写回去了
+    register('memory.proposals.decide', (m, { id, decision, text }) =>
+      exclusive(async () => {
+        alive()
+        // 没追上时证据可能已经回滚或删除,这里还看不到。不留回执,可以重试
+        if (!m.ingest.catchUp()) throw new RpcError(INTERNAL, 'memory is still indexing')
+        m.proposals.decide(id, decision, text)
+        return { ok: true }
+      }),
+    )
     // 上次没做完的:客户端可能永远不会重试,而文本还在库里。让激活先走完
     resuming = setImmediate(() => {
       exclusive(() => purger.resumeAll()).catch((err: unknown) => {
@@ -304,7 +318,7 @@ export function registerMemoryRpc(d: MemoryRpcDeps): { stop(): Promise<void> } {
       })
     })
   } else {
-    for (const method of ['memory.delete', 'memory.file.set'] as const) register(method, () => undefined)
+    for (const method of ['memory.delete', 'memory.file.set', 'memory.proposals.decide'] as const) register(method, () => undefined)
   }
 
   return {
