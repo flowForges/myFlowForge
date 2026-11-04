@@ -418,7 +418,7 @@ export class MemoryFiles {
    * removedIds:连带删掉的都在里面,界面要能告诉用户。
    * knownText:上次删到一半失败时记下的文本。行和索引都没了也要清同文本的提议、候选和变更记录
    */
-  deleteEntry(id: string, knownText?: string): { text?: string; evidence: string[]; removedIds: string[] } {
+  deleteEntry(id: string, knownText?: string): { text?: string; evidence: string[]; removedIds: string[]; alsoForget?: string[] } {
     this.reconcile('all')
     const note = this.store.getNote(id)
     if (note && !note.file) return this.deleteSessionNote(id, note.text)
@@ -437,7 +437,12 @@ export class MemoryFiles {
       for (const r of rows as { evidence: string }[]) for (const e of JSON.parse(r.evidence) as string[]) evidence.add(e)
     }
     addEvidence(db.prepare(`SELECT evidence FROM candidates WHERE id IN (${[...candidates].map(() => '?').join(', ') || 'NULL'})`).all(...candidates))
-    addEvidence(db.prepare('SELECT evidence FROM proposals WHERE text = ? OR replaces = ?').all(text, id))
+    const candidateRows = db.prepare(`SELECT text FROM candidates WHERE id IN (${[...candidates].map(() => '?').join(', ') || 'NULL'})`).all(...candidates) as { text: string }[]
+    // 大小写不同的、候选的原文(批准时改过字,这行和提议就对不上了)、批准出这一条的那行(n_x 来自 p_x)
+    const said = new Set([normalize(text), ...candidateRows.map(c => normalize(c.text))])
+    const proposals = (db.prepare('SELECT id, text, replaces, evidence FROM proposals').all() as { id: string; text: string; replaces: string | null; evidence: string }[])
+      .filter(r => r.id === id.replace(/^n_/, 'p_') || r.replaces === id || (r.text !== '' && said.has(normalize(r.text))))
+    addEvidence(proposals)
 
     const gone = new Set([id])
     const touched: string[] = []
@@ -450,7 +455,8 @@ export class MemoryFiles {
     }
     this.reindex(touched, () => {
       this.store.deleteNote(id)
-      db.prepare('DELETE FROM proposals WHERE text = ? OR replaces = ?').run(text, id)
+      const dropProposal = db.prepare('DELETE FROM proposals WHERE id = ?')
+      for (const r of proposals) dropProposal.run(r.id)
       const del = db.prepare('DELETE FROM candidates WHERE id = ?')
       for (const c of candidates) del.run(c)
       this.blankChanges(gone, text)
@@ -458,7 +464,39 @@ export class MemoryFiles {
     })
     this.removeBadCopies()
     this.updated({ id, op: 'delete', source: 'user' })
-    return { text, evidence: [...evidence], removedIds: [...gone] }
+    return { text, evidence: [...evidence], removedIds: [...gone], alsoForget: candidateRows.map(c => c.text) }
+  }
+
+  /**
+   * 这些原始行被删了:从它们提取出来的草稿行、候选、等回答的提议一起走,哪怕还有别的证据。
+   * 核心文件和归档里引用它们的条目不动(那是用户看得到、自己能删的),只报出来。
+   * found 在动手之前调:调用方先记下 id,中途崩溃重试时这些行已经没了
+   */
+  removeDerived(rawIds: string[], found: (d: { notes: string[]; others: string[]; kept: string[] }) => void): void {
+    if (rawIds.length === 0) return
+    this.reconcile('all')
+    const { db } = this.store
+    const raw = new Set(rawIds)
+    const cites = (r: { evidence: string }) => (JSON.parse(r.evidence) as string[]).some(e => raw.has(e))
+    const candidates = (db.prepare('SELECT id, text, evidence FROM candidates').all() as { id: string; text: string; evidence: string }[]).filter(cites)
+    const ids = new Set(candidates.map(c => c.id))
+    const said = new Set(candidates.map(c => normalize(c.text)))
+    const proposals = (db.prepare("SELECT id, text, evidence FROM proposals WHERE status = 'pending'").all() as { id: string; text: string; evidence: string }[]).filter(r => cites(r) || said.has(normalize(r.text)))
+    const isDerived = (e: Entry) => e.evidence.some(x => raw.has(x)) || (e.candidate !== undefined && ids.has(e.candidate))
+    const files = this.list('all')
+    const diary = files.filter(f => f.startsWith('diary/')).map(f => ({ file: f, ...this.locate(f, isDerived) })).filter(d => d.hits.length > 0)
+    const notes = [...new Set(diary.flatMap(d => d.hits.map(e => e.id)))]
+    const kept = [...new Set(files.filter(f => !f.startsWith('diary/')).flatMap(f => this.locate(f, e => e.evidence.some(x => raw.has(x))).hits.map(e => e.id)))]
+    found({ notes, others: [...ids, ...proposals.map(r => r.id)], kept })
+    if (notes.length === 0 && ids.size === 0 && proposals.length === 0) return
+    for (const d of diary) this.save(d.file, withoutLines(d.doc, new Set(d.hits.map(e => e.line))))
+    this.reindex(diary.map(d => d.file), () => {
+      const dropProposal = db.prepare('DELETE FROM proposals WHERE id = ?')
+      for (const r of proposals) dropProposal.run(r.id)
+      const dropCandidate = db.prepare('DELETE FROM candidates WHERE id = ?')
+      for (const c of ids) dropCandidate.run(c)
+    })
+    this.updated({ op: 'remove', source: 'user' })
   }
 
   /** 回滚的轮不留记忆(spec §5)。接入会重放,崩溃也可能让文件先于索引,所以只看现状 */

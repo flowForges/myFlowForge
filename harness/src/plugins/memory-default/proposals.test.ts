@@ -9,7 +9,7 @@ import { fakeModels, memoryKernel, type MemoryRig } from '../../../test/memoryRi
 import toolsRegistry from '../tools-registry'
 import { parseEntries } from './files'
 import { createMemoryDefault, type MemoryDefaultPlugin } from './index'
-import { normalize, PROPOSAL_TTL_MS } from './proposals'
+import { forget, normalize, PROPOSAL_TTL_MS, Proposals } from './proposals'
 
 const DAY = 86_400_000
 const SECRET = `sk-${'x'.repeat(24)}`
@@ -43,6 +43,7 @@ async function boot() {
     write: (name: string, content: string) => writeFileSync(join(files, name), content),
     inbox: () => memory.inspect().proposals,
     db: () => memory.inspect().store.db,
+    store: () => memory.inspect().store,
     advance: (ms: number) => {
       t += ms
     },
@@ -98,8 +99,8 @@ describe('Proposals.create', () => {
     const h = await boot()
     const id = idOf(h.inbox().create({ target: 'USER.md', op: 'add', text: '喜欢长回复', source: 'extract' }))
     await h.decide(id, 'reject')
-    const again = h.inbox().create({ target: 'USER.md', op: 'add', text: '喜欢长回复', source: 'extract' })
-    expect(again).toMatchObject({ id, deduped: true })
+    expect(h.inbox().create({ target: 'USER.md', op: 'add', text: '喜欢长回复', source: 'extract' })).toEqual({ refused: 'forgotten' })
+    expect(h.inbox().create({ target: 'USER.md', op: 'add', text: '喜欢长回复!', source: 'extract' })).toEqual({ refused: 'forgotten' })
     expect(h.inbox().pending()).toBe(0)
     idOf(h.inbox().create({ target: 'MEMORY.md', op: 'add', text: '喜欢长回复', source: 'model' }))
     expect(h.inbox().pending()).toBe(1)
@@ -236,6 +237,81 @@ describe('memory.proposals.decide', () => {
     for (const p of items) MemoryProposalSchema.parse(p)
     expect((await h.list('pending')).map(p => p.text)).toEqual(['第二条的文本'])
     expect((await h.list('pending'))[0].flags).toEqual(['ungrounded'])
+  })
+})
+
+describe('only a pending proposal holds text', () => {
+  const texts = (h: Awaited<ReturnType<typeof boot>>) => h.db().prepare('SELECT status, text FROM proposals').all()
+
+  it('rejected, expired and approved rows keep their status and lose the text', async () => {
+    const h = await boot()
+    const rejected = idOf(h.inbox().create({ target: 'MEMORY.md', op: 'add', text: '被拒绝的这一句话', source: 'model' }))
+    const approved = idOf(h.inbox().create({ target: 'MEMORY.md', op: 'add', text: '被批准的这一句话', source: 'model' }))
+    idOf(h.inbox().create({ target: 'MEMORY.md', op: 'add', text: '没人理的这一句话', source: 'model' }))
+    await h.decide(rejected, 'reject')
+    await h.decide(approved, 'approve', '批准时改过的这一句话')
+    h.advance(PROPOSAL_TTL_MS)
+    h.inbox().expire(h.now())
+    expect((texts(h) as { status: string; text: string }[]).map(r => [r.status, r.text]).sort()).toEqual([['approved', ''], ['expired', ''], ['rejected', '']])
+    expect((await h.list()).map(p => p.text)).toEqual(['', '', ''])
+    for (const p of await h.list()) MemoryProposalSchema.parse(p)
+  })
+
+  it('an expired text can be asked again, a rejected one cannot', async () => {
+    const h = await boot()
+    const rejected = idOf(h.inbox().create({ target: 'MEMORY.md', op: 'add', text: '被拒绝的这一句话', source: 'extract' }))
+    idOf(h.inbox().create({ target: 'MEMORY.md', op: 'add', text: '没人理的这一句话', source: 'extract' }))
+    await h.decide(rejected, 'reject')
+    h.advance(PROPOSAL_TTL_MS)
+    h.inbox().expire(h.now())
+    expect(h.inbox().create({ target: 'MEMORY.md', op: 'add', text: '被拒绝的这一句话', source: 'extract' })).toEqual({ refused: 'forgotten' })
+    idOf(h.inbox().create({ target: 'MEMORY.md', op: 'add', text: '没人理的这一句话', source: 'extract' }))
+  })
+
+  it('deleting a note approved with edited text leaves neither wording behind', async () => {
+    const h = await boot()
+    const id = idOf(h.inbox().create({ target: 'MEMORY.md', op: 'add', text: '原来的文本内容是这样', source: 'model' }))
+    await h.decide(id, 'approve', '批准时改过的文本内容')
+    const [entry] = parseEntries(h.read('MEMORY.md'))
+    await h.r.k.handle('memory.delete' as never, { commandId: 'del', id: entry.id } as never)
+    expect(h.db().prepare('SELECT COUNT(*) AS n FROM proposals').get()).toEqual({ n: 0 })
+    expect(h.read('MEMORY.md')).toBe('')
+  })
+
+  it('a case-variant pending proposal is withdrawn by the delete and cannot be approved back', async () => {
+    const h = await boot()
+    const variant = idOf(h.inbox().create({ target: 'MEMORY.md', op: 'add', text: 'USE PNPM ONLY, ALWAYS', source: 'extract' }))
+    h.write('MEMORY.md', '- use pnpm only always <!-- mff id=n_del src=confirmed ts=1 -->\n')
+    await h.r.k.handle('memory.delete' as never, { commandId: 'del', id: 'n_del' } as never)
+    expect(await h.list()).toEqual([])
+    expect(await codeOf(h.decide(variant, 'approve'))).toBe('-32602 not found')
+    expect(h.read('MEMORY.md')).toBe('')
+  })
+
+  it('an extracted proposal for a text deleted since it was made expires instead of writing it back', async () => {
+    const h = await boot()
+    const id = idOf(h.inbox().create({ target: 'MEMORY.md', op: 'add', text: 'use pnpm only always', source: 'extract' }))
+    forget(h.store(), 'USE PNPM ONLY, ALWAYS')
+    expect(await codeOf(h.decide(id, 'approve'))).toBe('-32602 expired')
+    expect(h.read('MEMORY.md')).toBe('')
+    expect((await h.list())[0]).toMatchObject({ status: 'expired', text: '' })
+  })
+
+  it('what the user asks the model to keep again after a delete can be approved: that is a new request', async () => {
+    const h = await boot()
+    forget(h.store(), '重新记一下这一句话')
+    const id = idOf(h.inbox().create({ target: 'MEMORY.md', op: 'add', text: '重新记一下这一句话', source: 'model' }))
+    await h.decide(id, 'approve')
+    expect(h.read('MEMORY.md')).toContain('重新记一下这一句话')
+  })
+
+  it('rows retired before this rule lose their text at the next start', async () => {
+    const h = await boot()
+    const id = idOf(h.inbox().create({ target: 'MEMORY.md', op: 'add', text: '旧版本留下的这一句话', source: 'model' }))
+    await h.decide(id, 'reject')
+    h.db().prepare("UPDATE proposals SET text = '旧版本留下的这一句话'").run()
+    new Proposals({ store: h.store(), files: {} as never, now: h.now, append: () => undefined })
+    expect((await h.list())[0].text).toBe('')
   })
 })
 

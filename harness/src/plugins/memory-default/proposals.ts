@@ -30,7 +30,7 @@ export interface ProposalInput {
   turnId?: string
 }
 
-export type CreateResult = { id: string; deduped?: true } | { refused: 'too_many' | 'empty' }
+export type CreateResult = { id: string; deduped?: true } | { refused: 'too_many' | 'empty' | 'forgotten' }
 
 export interface ProposalsDeps {
   store: Store
@@ -124,19 +124,22 @@ export function liveEvidence(store: Pick<Store, 'getRaw'>, id: string) {
 }
 
 export class Proposals {
-  constructor(private readonly d: ProposalsDeps) {}
+  /** 只有等回答的提议存文本:结束了的只留状态,不让提取再问靠 forget 的哈希 */
+  constructor(private readonly d: ProposalsDeps) {
+    d.store.db.exec("UPDATE proposals SET text = '' WHERE status != 'pending' AND text != ''")
+  }
 
   pending(): number {
     return (this.d.store.db.prepare("SELECT COUNT(*) AS n FROM proposals WHERE status = 'pending'").get() as { n: number }).n
   }
 
-  /** 打码、按归一化文本去重。提取不再问用户拒绝过的;用户让模型记的可以再问 */
+  /** 打码、按归一化文本去重。提取不再问用户拒绝过、删过的;用户让模型记的可以再问 */
   create(p: ProposalInput): CreateResult {
     const clean = cleanEntry(p.text)
     if (clean.text === '') return { refused: 'empty' }
-    const statuses = p.source === 'extract' ? "('pending', 'rejected')" : "('pending')"
+    if (p.source === 'extract' && isForgotten(this.d.store, clean.text)) return { refused: 'forgotten' }
     const norm = normalize(clean.text)
-    const rows = this.d.store.db.prepare(`SELECT id, text FROM proposals WHERE status IN ${statuses}`).all() as { id: string; text: string }[]
+    const rows = this.d.store.db.prepare("SELECT id, text FROM proposals WHERE status = 'pending'").all() as { id: string; text: string }[]
     const same = rows.find(r => normalize(r.text) === norm)
     if (same) return { id: same.id, deduped: true }
     if (this.pending() >= MAX_PENDING) return { refused: 'too_many' }
@@ -175,7 +178,8 @@ export class Proposals {
       this.retire(row, 'rejected')
       return
     }
-    if (!this.backed(row)) {
+    // 提取来的提议不能把删掉的话写回去。用户让模型重新记的另算:那是他这次说的
+    if (!this.backed(row) || (row.source === 'extract' && isForgotten(this.d.store, row.text))) {
       this.retire(row, 'expired')
       throw new RpcError(INVALID_PARAMS, 'expired')
     }
@@ -232,7 +236,7 @@ export class Proposals {
   }
 
   private setStatus(row: Row, status: Status): void {
-    this.d.store.db.prepare('UPDATE proposals SET status = ?, decided_at = ? WHERE id = ?').run(status, this.d.now(), row.id)
+    this.d.store.db.prepare('UPDATE proposals SET status = ?, decided_at = ?, text = \'\' WHERE id = ?').run(status, this.d.now(), row.id)
     this.notify({ id: row.id, target: row.target, status })
   }
 

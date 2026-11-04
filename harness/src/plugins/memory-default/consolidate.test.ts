@@ -291,7 +291,7 @@ describe('one fact over several nights', () => {
     h.at(1)
     await h.run()
     expect(h.pending().map(p => p.text)).toEqual(['模型建的提议'])
-    expect(h.proposals().find(p => p.text.startsWith('回复'))?.status).toBe('expired')
+    expect(h.proposals().map(p => p.status).sort()).toEqual(['expired', 'pending'])
     expect(model).toHaveProperty('id')
   })
 
@@ -1290,6 +1290,76 @@ describe('the schedule', () => {
     await expect(h.run('retry')).rejects.toMatchObject({ code: -32003 })
     bg.enqueue = enqueue
     await expect(h.run('retry')).resolves.toMatchObject({ extracted: 0 })
+  })
+})
+
+describe('final review I2: deleting a message takes what was extracted from it', () => {
+  const ADDRESS = 'my home address is 12 quiet lane'
+
+  it('diary line, candidate and proposal go now, not at the next sweep, and sources says so', async () => {
+    const h = await boot()
+    const s = await h.session()
+    const said = h.say(s, ADDRESS, 0)
+    h.extract([{ text: ADDRESS, kind: 'preference', evidence: [said] }])
+    await h.run()
+    const [proposal] = h.pending()
+    const candidate = h.candidates()[0].id
+    const [line] = parseEntries(h.diary())
+    const { sources } = await h.del(said)
+    expect(h.diary()).not.toContain('quiet lane')
+    expect(h.candidates()).toEqual([])
+    expect(h.pending()).toEqual([])
+    expect(h.db().prepare('SELECT COUNT(*) AS n FROM proposals').get()).toEqual({ n: 0 })
+    expect((await h.r.k.handle('memory.search', { query: 'quiet lane' }) as { items: unknown[] }).items).toEqual([])
+    expect(sources).toEqual(expect.arrayContaining([line.id, candidate, proposal.id]))
+  })
+
+  it('other evidence does not save it: the deleted row was a source', async () => {
+    const h = await boot()
+    const s = await h.session()
+    const a = h.say(s, ADDRESS, 0)
+    const b = h.say(s, ADDRESS, 1)
+    h.at(1)
+    h.extract([{ text: ADDRESS, kind: 'preference', evidence: [a, b] }])
+    await h.run()
+    await h.del(a)
+    expect(h.candidates()).toEqual([])
+    expect(h.pending()).toEqual([])
+    expect(h.diary()).not.toContain('quiet lane')
+  })
+
+  it('an entry promoted from that row stays, and is named so the user can delete it', async () => {
+    const h = await boot()
+    const s = await h.session()
+    const { first } = await twoNights(h, s)
+    const [entry] = parseEntries(h.read('MEMORY.md'))
+    const { sources } = await h.del(first)
+    expect(sources).toContain(entry.id)
+    expect(h.read('MEMORY.md')).toContain(FACT)
+    expect(h.candidates()).toEqual([])
+    await h.del(entry.id)
+    expect(h.read('MEMORY.md')).toBe('')
+  })
+
+  it('facts from the same message go with a note whose delete removes that row', async () => {
+    const h = await boot()
+    const s = await h.session()
+    const said = h.say(s, `${ADDRESS}. and the deploy port is 5173 for everything`, 0)
+    h.extract([{ text: ADDRESS, kind: 'preference', evidence: [said] }, { text: 'the deploy port is 5173 for everything', kind: 'preference', evidence: [said] }])
+    await h.run()
+    expect(h.pending()).toHaveLength(2)
+    h.write('USER.md', `- ${ADDRESS} <!-- mff id=n_addr src=user ts=1 ev=${said} -->\n`)
+    await h.del('n_addr')
+    expect(h.pending()).toEqual([])
+    expect(h.candidates()).toEqual([])
+  })
+
+  it('a message nothing was extracted from reports only itself', async () => {
+    const h = await boot()
+    const s = await h.session()
+    const said = h.say(s, 'just a passing remark about nothing', 0)
+    const { sources } = await h.del(said)
+    expect(sources.filter(x => x !== said)).toEqual([])
   })
 })
 

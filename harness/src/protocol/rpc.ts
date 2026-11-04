@@ -307,7 +307,7 @@ export const WorkerMethods = {
     result: MemoryItems,
   },
   'memory.update': { params: z.object({ commandId: z.string(), id: MemoryIdSchema, text: z.string() }), result: z.object({ ok: z.boolean(), masked: z.number() }) },
-  // sources:用户自己的原话,还留在对话记录里(08 列给用户,逐条删)
+  // sources:用户自己的原话,还留在对话记录里(08 列给用户,逐条删);r_ 派生的草稿行、候选、提议(已一起删)和还引用它的核心条目(n_,可删)
   'memory.delete': { params: z.object({ commandId: z.string(), id: MemoryIdSchema }), result: z.object({ ok: z.boolean(), redacted: z.number(), sources: z.array(z.string()) }) },
   'memory.file.get': { params: z.object({ file: MemoryFileSchema }), result: z.object({ content: z.string(), hash: z.string(), cap: z.number() }) },
   'memory.file.set': {

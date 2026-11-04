@@ -121,6 +121,8 @@ interface PendingPurge {
   swept?: boolean
   redacted?: number
   sources?: string[]
+  /** 从删掉的原始行提取出来的:已经一起删了的,和核心文件里还引用它们的 */
+  derived?: string[]
 }
 
 const notFound = () => new RpcError(INVALID_PARAMS, 'not found')
@@ -695,6 +697,7 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
         // 连带删掉的 id 和证据只有这一次机会拿到:行已经没了,重试时靠它们找 memory_write 和证据行
         if (p.text !== undefined) save(p)
         if (p.text !== undefined) forget(store, p.text)
+        for (const text of gone.alsoForget ?? []) forget(store, text)
       }
 
       // 第 2 步:原始层。先记下再删,删完就再也扫不出来了
@@ -708,6 +711,12 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
       const literal = !RAW_ID.test(id) && p.text !== undefined && p.scope !== undefined && codePoints(p.text) >= LITERAL_MIN ? store.rawSeqsHolding(p.text, p.scope) : []
       p.rawSeqs = [...new Set([...p.rawSeqs, ...evidence, ...literal])]
       if (p.text !== undefined || p.rawSeqs.length > 0) save(p)
+      files.removeDerived(p.rawSeqs.map(seq => `r_${seq}`), ({ notes, others, kept }) => {
+        // 按 id 换掉召回过、搜到过这些草稿行的载荷
+        p.removedIds = [...new Set([...p.removedIds, ...notes])]
+        p.derived = [...new Set([...(p.derived ?? []), ...notes, ...others, ...kept])].filter(x => x !== id)
+        save(p)
+      })
       store.deleteRaw(p.rawSeqs)
 
       // 第 3 步:墓碑。从日志重建时删过的不回来
@@ -721,7 +730,7 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
       step('redact')
       p.redacted = ctx.events.redact(edits)
       for (const file of p.spills) rmSync(file, { force: true })
-      p.sources = sourcesOf(p, quotedBy)
+      p.sources = [...sourcesOf(p, quotedBy), ...(p.derived ?? [])]
       if (RAW_ID.test(id)) ctx.append({ type: 'memory.updated', payload: { id, op: 'delete', source: 'user' } })
       p.swept = true
       save(p)
