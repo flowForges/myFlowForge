@@ -277,6 +277,13 @@ describe('maybeRecommend', () => {
     expect(MemoryRecommendationPayloadSchema.safeParse(events[0].payload).success).toBe(true)
   })
 
+  it.each([['C:\\work\\win-repo', 'win-repo'], ['C:\\work\\win-repo\\', 'win-repo'], ['/home/me/posix-repo/', 'posix-repo']])('the template splits %s at the right separator', async (cwd, name) => {
+    const h = await boot()
+    h.confirmed(cwd)
+    recommender(h)(monday(3))
+    expect((h.recommendations()[0].payload as { text: string }).text).toBe(`每周一 9 点你常在 ${name} 工作`)
+  })
+
   it('the template names Sunday and only the last path segment', async () => {
     const h = await boot()
     const sunday = (week: number) => new Date(2026, 10, 8 + 7 * week, 21, 5).getTime()

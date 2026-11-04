@@ -1,6 +1,6 @@
 // 习惯与推荐(06 spec §15):只有统计,不花钱。推荐只发一个事件,不开会话、不进上下文
 import { createHash } from 'node:crypto'
-import { basename } from 'node:path'
+import { win32 } from 'node:path'
 import type { SessionInfo } from '../../kernel/sessions'
 import { scrub } from '../../lib/memory/scrub'
 import type { MemoryConfig } from '../../lib/memory/types'
@@ -22,6 +22,7 @@ const CLOSING = new Set<string>(['turn.ended', 'turn.failed'])
 type HabitStore = Pick<Store, 'db'>
 type HabitRow = { id: string; key: string; status: MemoryHabit['status']; last_recommended_at: number | null }
 
+// cwd 可能是 Windows 路径:win32 两种分隔符都认,posix 的 basename 只认 /
 const slotKey = (weekday: number, hour: number, cwd: string) => `${weekday}|${hour}|${cwd}`
 
 function parseSlot(key: string): { weekday: number; hour: number; cwd: string } | undefined {
@@ -137,7 +138,7 @@ export function maybeRecommend(d: RecommendDeps, now: number): void {
     id: `rec_${row.id}_${localDate(now)}`,
     category: KIND,
     habitId: row.id,
-    text: `每周${DAY_NAMES[slot.weekday]} ${slot.hour} 点你常在 ${scrub(basename(slot.cwd)).text} 工作`,
+    text: `每周${DAY_NAMES[slot.weekday]} ${slot.hour} 点你常在 ${scrub(win32.basename(slot.cwd)).text} 工作`,
     cwd: slot.cwd,
   }
   d.append({ type: 'memory.recommendation', payload })

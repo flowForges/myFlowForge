@@ -123,12 +123,12 @@ export class Ingest {
     return this.deps.events.after(this.deps.store.cursor(), 1).length === 0
   }
 
-  /** 拉最后一批,剩下的下次启动追 */
+  /** 最后再追一会儿,剩下的下次启动追。按时间不按行数:500 条大事件要好几秒,关停时监管不会一直等 */
   stop(): void {
     if (this.stopped) return
     this.off?.()
     this.cancel()
-    this.pull()
+    this.runFor(CATCH_UP_MS)
     this.stopped = true
   }
 

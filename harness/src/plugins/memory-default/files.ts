@@ -549,8 +549,11 @@ export class MemoryFiles {
       ...(meta.candidate !== undefined && { candidate: meta.candidate }),
     }))
     assertRoom(file, next)
+    // 日记只追加,一天可以很长:索引和磁盘一致时只加这一行(300 行时一次写 94 ms,大部分花在重建上)。手改过的走全量
+    const appendOnly = !track && this.known.get(file) === this.stamp(file) && this.stamp(file) !== ''
     this.save(file, next)
-    this.reindex([file], track ? () => this.change(id, file, 'add', null, clean.text, meta.src) : undefined)
+    if (appendOnly) this.indexAppended(file, next)
+    else this.reindex([file], track ? () => this.change(id, file, 'add', null, clean.text, meta.src) : undefined)
     this.updated({ id, file, op: 'add', source: meta.src })
     return { id, masked: clean.masked }
   }
@@ -606,9 +609,21 @@ export class MemoryFiles {
     }
   }
 
+  /** 文件的最后一行刚写进去,前面的行索引里都有 */
+  private indexAppended(file: string, doc: string): void {
+    const stamp = this.stamp(file)
+    const line = scrubDoc(doc.trimEnd().split('\n').at(-1) as string).text
+    this.store.transaction(() => this.indexEntries(file, line, Math.floor(lstatSync(this.path(file)).mtimeMs)))
+    this.known.set(file, stamp)
+  }
+
   private indexRows(file: string, scrubbed: string, mtime: number): void {
+    this.store.db.prepare('DELETE FROM notes WHERE file = ?').run(file)
+    this.indexEntries(file, scrubbed, mtime)
+  }
+
+  private indexEntries(file: string, scrubbed: string, mtime: number): void {
     const { store } = this
-    store.db.prepare('DELETE FROM notes WHERE file = ?').run(file)
     const archived = file.startsWith('archive/')
     const seen = new Set<string>()
     // 每行都查,文件大了每次写都要重建索引:只准备一次

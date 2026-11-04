@@ -291,7 +291,7 @@ describe('limits', () => {
     for (let i = 0; i < 300; i++) await h.call('memory_write', { text: 'turn note' }, s, `turn-${i}`)
     for (let i = 0; i < 5; i++) await h.call('memory_write', { text: 'current note' }, s, 'current')
     expect((await h.call('memory_write', { text: 'over' }, s, 'current')).isError).toBe(true)
-  }, 60_000) // 300 次写,每次都重建整个日记的索引:单跑约 17 s,机器忙时超过默认的 20 s
+  }, 60_000) // 300 次写,每次一次 fsync:单跑约 8 s,机器忙时可能超过默认的 20 s
 })
 
 describe('memory_search and memory_get', () => {

@@ -197,7 +197,8 @@ describe('one pull path', () => {
     session(h, 's')
     let pulls = 0
     h.onPull = () => { pulls++ }
-    const i = h.ingest()
+    // 时钟不走:一批的时间上限不看机器忙不忙。真时钟下每批只有 25 ms,这里一个 tick 不一定拉得完(见下一条)
+    const i = h.ingest({ clock: () => 0 })
     i.start()
     await tick()
     const before = pulls
@@ -207,6 +208,23 @@ describe('one pull path', () => {
     expect(pulls).toBe(before)
     await tick()
     expect(rowCount(h.store)).toBe(200)
+  })
+
+  it('a slow machine: one tick stops at its time budget, and the following ticks bring in the rest', async () => {
+    const h = await harness()
+    session(h, 's')
+    let t = 0
+    // 每次读时钟走 7 ms:三小批之后估计放不下第四批(21 + 7 ≥ 25)。这正是机器忙时"期望 200、实际 30"的来源
+    const i = h.ingest({ clock: () => (t += 7) })
+    i.start()
+    await tick()
+    t = 0
+    for (let n = 0; n < 200; n++) say(h, 's', 't', `m${n}`)
+    await tick()
+    expect(rowCount(h.store)).toBe(30)
+    await vi.waitFor(() => expect(rowCount(h.store)).toBe(200))
+    expect(texts(h.store).at(-1)).toBe('m199')
+    expect(h.store.cursor()).toBe(h.ctx().events.after(0, 1000).at(-1)!.seq)
   })
 
   it('flush catches up at once and stop pulls one last time', async () => {
@@ -225,6 +243,19 @@ describe('one pull path', () => {
     h.clock.advance(1000)
     await tick()
     expect(texts(h.store)).toEqual(['a', 'b'])
+  })
+
+  it('stop is bounded by the clock, not by a batch of rows: big events cannot hold up shutdown, and the next start picks up the rest', async () => {
+    const h = await harness()
+    session(h, 's')
+    for (let n = 0; n < 1000; n++) say(h, 's', 't', `m${n}`)
+    let t = 0
+    h.ingest({ clock: () => (t += 50) }).stop()
+    const stopped = rowCount(h.store)
+    expect(stopped).toBeGreaterThan(0)
+    expect(stopped).toBeLessThan(100)
+    h.ingest().flush()
+    expect(rowCount(h.store)).toBe(1000)
   })
 
   it('row and cursor move together: a failure mid-batch leaves neither, and the next wake retries', async () => {
