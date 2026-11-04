@@ -31,6 +31,8 @@ export interface FakeTelegram {
   outbox(chatId: number | string): FakeMessage[]
   /** 接下来 n 次 method 这样回;先于这个方法的一切规则,不产生效果 */
   fail(method: string, n: number, reply: FakeReply): void
+  /** 排着的 fail 全不要了:服务恢复 */
+  clearFailures(): void
   /** 用户在手机上删了这条 */
   deleteMessage(chatId: number | string, messageId: number): void
   /** 还没有被任何一次 getUpdates 拿走的更新数 */
@@ -277,6 +279,7 @@ export async function startFakeTelegram(opts: FakeTelegramOpts): Promise<FakeTel
       queue.push({ left: n, reply })
       failures.set(method, queue)
     },
+    clearFailures: () => failures.clear(),
     deleteMessage(chatId, messageId) {
       const list = chats.get(String(chatId))
       const at = list?.findIndex(m => m.id === messageId) ?? -1

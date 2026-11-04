@@ -4,10 +4,14 @@ import { join } from 'node:path'
 import { z } from 'zod'
 import type { Plugin, PluginContext } from '../../kernel/pluginHost'
 import { RpcError } from '../../kernel/rpcError'
+import type { Sessions } from '../../kernel/sessions'
+import { scrub } from '../../lib/memory/scrub'
+import type { ModelsService } from '../../lib/models/types'
 import type { SandboxService, SessionCommands } from '../../lib/tools/types'
 import { type ChannelState, type WorkerMethodName } from '../../protocol/index'
 import type { TelegramConfig, TelegramStatus } from '../../protocol/rpc'
 import { createApi, REAL_TIMERS, TelegramError, type ApiTimers } from './api'
+import { Chats } from './chats'
 import { classify, isExternal, type DmInbound, type Inbound } from './inbound'
 import { manifest } from './manifest'
 import { Pairing, PairingError, parsePairCommand } from './pairing'
@@ -44,17 +48,6 @@ const ConfigSchema = z.object({
 
 const DEFAULT_CONFIG: TelegramConfig = { enabled: true, staleMinutes: 10, projects: [] }
 
-/** 一条已配对账号的私聊。Task 9 接手,在这之前只回 ok */
-export interface PairedDm {
-  dm: DmInbound
-  /** tg:<botId>:<updateId>:重投时一样,内核回执挡住第二次执行 */
-  commandId: string
-  /** 不是用户本人写的(§12.1) */
-  external: boolean
-  commands: SessionCommands
-  reply(text: string): void
-}
-
 export interface ChannelTelegramOpts {
   /** 只有代码能改:配置、环境变量、RPC 都送不走令牌(§4) */
   apiBase?: string
@@ -64,7 +57,10 @@ export interface ChannelTelegramOpts {
   random?(): number
   pollTimeoutS?: number
   fetch?: typeof fetch
-  onPairedDm?(d: PairedDm): void | Promise<void>
+  /** 进队列的防抖,默认 700 ms */
+  debounceMs?: number
+  /** 只给测试:一条配对私聊进队列之前。慢的一批、抛错的一条都靠它造出来 */
+  beforePairedDm?(dm: DmInbound): void | Promise<void>
 }
 
 const ERR_INVALID_PARAMS = -32602
@@ -103,7 +99,8 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
       const lifetime = new AbortController()
       const commands = ctx.services.get<SessionCommands>('sessionCommands')
       const sandbox = ctx.services.get<SandboxService>('sandbox')
-      if (!commands || !sandbox) throw new Error('channel-telegram: kernel services missing')
+      const sessions = ctx.services.get<Sessions>('sessions')
+      if (!commands || !sandbox || !sessions) throw new Error('channel-telegram: kernel services missing')
 
       // ctx.dataDir 是这个插件自己的目录:TelegramState 要把上一层改成 0700
       const state = TelegramState.open(join(ctx.dataDir, 'state.json'), ctx.log)
@@ -145,17 +142,13 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
         try {
           state.save()
           noteSaved()
+          return true
         } catch (err) {
           noteSaveFailure(err)
+          return false
         }
       }
       const chatRecord = (chatId: string) => state.data.chats[chatId] as { blocked?: boolean } | undefined
-      const setBlocked = (chatId: string, blocked: boolean) => {
-        const { blocked: _old, ...rest } = chatRecord(chatId) ?? {}
-        const next = blocked ? { ...rest, blocked: true } : rest
-        if (Object.keys(next).length > 0) state.data.chats[chatId] = next
-        else delete state.data.chats[chatId]
-      }
 
       // —— 发送:不挡轮询,不挡轮。blocked 只记配对账号的:陌生人的 403 不能往 chats 里写东西
       const sender = new Sender({
@@ -163,17 +156,43 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
         now,
         timers,
         random: opts.random ?? Math.random,
-        onChange: saveNow,
-        onUndelivered: () => void state.data.undelivered++,
+        onChange: chatId => {
+          chats.onDeliveryChange(chatId)
+          saveNow()
+        },
+        onUndelivered: chatId => chats.onUndelivered(chatId),
         isBlocked: chatId => chatRecord(chatId)?.blocked === true,
         onBlocked: chatId => {
           if (!isPaired(chatId, chatId)) return
-          setBlocked(chatId, true)
+          chats.setBlocked(chatId, true)
           saveNow()
         },
         log: ctx.log,
       })
       const reply = (chatId: string, text: string) => void sender.send(chatId, { text })
+
+      /** 出站文本:scrub 再加令牌字面值(§9.4)。令牌在这个闭包里 */
+      const mask = (text: string) => {
+        const masked = scrub(text).text
+        return token ? masked.split(token).join('***') : masked
+      }
+      const chats = new Chats({
+        state,
+        commands,
+        sessions,
+        models: () => ctx.services.get<ModelsService>('models'),
+        sender,
+        history: sessionId => ctx.events.history(sessionId),
+        now,
+        timers,
+        ...(opts.debounceMs !== undefined && { debounceMs: opts.debounceMs }),
+        log: ctx.log,
+        isPaired: chatId => isPaired(chatId, chatId),
+        mask,
+        staleMs: () => config.staleMinutes * 60_000,
+        save: saveNow,
+      })
+      ctx.events.onAppend(e => chats.onEvent(e))
 
       // —— 配对
       const pairing = new Pairing({
@@ -200,7 +219,7 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
           return
         }
         // 他刚发了消息,不可能还封着机器人
-        setBlocked(i.chatId, false)
+        chats.setBlocked(i.chatId, false)
         reply(i.chatId, PAIRED_LINE)
       }
 
@@ -226,12 +245,15 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
           reply(i.chatId, ALREADY_PAIRED_LINE)
           return
         }
-        const botId = state.data.bot?.id
         // getMe 成功之前不会有更新;真到了这里不猜 commandId
+        const botId = state.data.bot?.id
         if (botId === undefined) throw new Error('no bot')
-        const delivered: PairedDm = { dm: i, commandId: `tg:${botId}:${i.updateId}`, external, commands, reply: text => reply(i.chatId, text) }
-        if (opts.onPairedDm) await opts.onPairedDm(delivered)
-        else delivered.reply('ok')
+        if (opts.beforePairedDm) {
+          await opts.beforePairedDm(i)
+          // 等的时候可能撤销、换机器人了
+          if (state.data.bot?.id !== botId || !isPaired(i.accountId, i.chatId)) return
+        }
+        chats.onDm(i)
       }
 
       // —— 退群:陌生人拉群不能让机器人无限发请求(R16)
@@ -254,7 +276,7 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
           state.data.dropped.unpaired++
           return
         }
-        setBlocked(i.chatId, i.blocked)
+        chats.setBlocked(i.chatId, i.blocked)
       }
 
       const handleUpdate = async (update: unknown): Promise<void> => {
@@ -296,16 +318,20 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
       const onBatch = async (updates: unknown[]) => {
         // 处理到一半换了机器人:剩下的不处理,offset 不推进。名单和 offset 已经是新机器人的了
         const botId = state.data.bot?.id
-        for (const update of updates) {
-          if (state.data.bot?.id !== botId) return
-          try {
-            await handleUpdate(update)
-          } catch (err) {
-            ctx.log.warn('telegram update failed', { code: codeOf(err) })
-            if (state.data.bot?.id === botId) state.data.dropped.badUpdate++
+        try {
+          for (const update of updates) {
+            if (state.data.bot?.id !== botId) return
+            try {
+              await handleUpdate(update)
+            } catch (err) {
+              ctx.log.warn('telegram update failed', { code: codeOf(err) })
+              if (state.data.bot?.id === botId) state.data.dropped.badUpdate++
+            }
+            if (state.data.bot?.id !== botId) return
+            state.advance((update as { update_id: number }).update_id)
           }
-          if (state.data.bot?.id !== botId) return
-          state.advance((update as { update_id: number }).update_id)
+        } finally {
+          chats.endBatch()
         }
       }
 
@@ -334,7 +360,10 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
         if (!config.enabled) setState('disabled')
         else if (secretsLocked()) setState('secrets_unavailable')
         else if (!token) setState('no_token')
-        else poller.start()
+        else {
+          chats.resume()
+          poller.start()
+        }
       }
 
       // 同一时间只有一个改令牌或启停的操作
@@ -347,6 +376,8 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
 
       const adopt = (bot: TelegramBot) => {
         const before = state.data.bot?.id
+        // 旧机器人的轮要在聊天映射清掉之前取消:配对没了就是撤销
+        if (before !== undefined && before !== bot.id) chats.revokeAll()
         if (!state.adoptBot(bot)) return
         if (before !== undefined && before !== bot.id) {
           pairing.cancel()
@@ -471,7 +502,8 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
         const at = pairings.findIndex(p => p.accountId === params.accountId)
         if (at >= 0) {
           pairings.splice(at, 1)
-          // 私聊的 chat id 就是账号 id;还排着的不再发给他
+          // 私聊的 chat id 就是账号 id;这一轮取消,排着的不再发给他。名单已经改了:上面的事件一条都到不了他
+          chats.revoke(params.accountId)
           sender.drop(params.accountId)
           ctx.append({ type: 'channel.unpaired', payload: { channel: 'telegram', accountId: params.accountId, by: 'app' } })
         } else if (!state.problems.includes(SAVE_FAILED)) {
@@ -486,6 +518,8 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
         }
         return { ok: true }
       })
+
+      register('channel.telegram.chats', async () => ({ chats: chats.list(), worktrees: [] }))
 
       register('channel.telegram.config.get', async () => structuredClone(config))
 
@@ -524,8 +558,11 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
         timers.clearTimeout(statusTimer)
         statusTimer = undefined
         await poller.stop()
+        // 关内核时轮已经停了:终态在这里交给发送器。发不出去的 delivery 还开着,下次启动补
+        chats.dispose()
         await sender.flush(FLUSH_MS)
         sender.close()
+        saveNow()
       })
 
       try {

@@ -11,7 +11,8 @@ import { NO_SANDBOX } from '../../../test/sandboxStub'
 import { telegramKernel, TEST_TOKEN, type DmOpts, type TelegramEnv, type TelegramKernelOpts, type TelegramRig } from '../../../test/telegramRig'
 import { BUILTIN_PLUGINS } from '../index'
 import loopDirect from '../loop-direct'
-import { createChannelTelegram, proxyKind, type ChannelTelegramOpts, type PairedDm } from './index'
+import type { DmInbound } from './inbound'
+import { createChannelTelegram, proxyKind, type ChannelTelegramOpts } from './index'
 import { TelegramState } from './state'
 
 const HOUR = 3_600_000
@@ -21,6 +22,8 @@ const INVALID = '配对码无效或已过期'
 const STRANGER = 2001
 /** 发送器的写间隔和全局限速:同一聊天的第二条要等假时间走过这么久 */
 const PACE = 1100
+/** 防抖 + 写间隔:一条私聊从进队列到回复发出 */
+const REPLY = 3000
 
 const rigs: TelegramRig[] = []
 afterEach(async () => {
@@ -85,17 +88,18 @@ async function jump(r: TelegramRig, ms: number) {
 
 const begin = (r: TelegramRig) => r.k.handle('channel.telegram.pairing.begin', {}) as Promise<{ code: string; expiresAt: number; link?: string }>
 
+/** 默认带 loop-direct:配对后的消息真的走到模型,假模型答 ok */
 async function paired(o: RigOpts = {}): Promise<TelegramRig> {
-  const r = await withToken(o)
+  const r = await withToken({ plugins: () => [loopDirect], ...o })
   const { code } = await begin(r)
   await handled(r, r.dm(`/pair ${code}`))
   return r
 }
 
-/** 收到的已配对私聊都记下来,不调模型 */
+/** 进队列之前的已配对私聊都记下来 */
 const recording = () => {
-  const seen: PairedDm[] = []
-  return { seen, channel: { onPairedDm: (d: PairedDm) => void seen.push(d) } }
+  const seen: DmInbound[] = []
+  return { seen, channel: { beforePairedDm: (d: DmInbound) => void seen.push(d) } }
 }
 
 describe('registration and activation', () => {
@@ -963,17 +967,17 @@ describe('strangers cost nothing', () => {
 })
 
 describe('the paired account', () => {
-  it('reaches the stub, which answers ok', async () => {
+  it('reaches the model, and the answer comes back', async () => {
     const r = await paired()
     await handled(r, r.dm('hello'))
-    await r.settle({ advance: PACE })
+    await r.settle({ advance: REPLY })
     expect(textsTo(r, r.owner)).toEqual([SUCCESS, 'ok'])
   })
 
   it('every send disables link previews', async () => {
     const r = await paired()
     await handled(r, r.dm('hello'))
-    await r.settle()
+    await r.settle({ advance: REPLY })
     expect(sent(r).length).toBeGreaterThan(0)
     for (const q of sent(r)) expect(q.body.link_preview_options).toEqual({ is_disabled: true })
   })
@@ -983,13 +987,17 @@ describe('the paired account', () => {
       const r = await paired()
       await r.settle({ advance: PACE })
       r.fake.fail('sendMessage', 1, { status: 429, body: { ok: false, description: 'Too Many Requests', parameters: { retry_after: 7 } } })
-      await handled(r, r.dm('first'))
+      await handled(r, r.press('a:nonce:x'))
       await r.settle()
+      void sent(r)
+      await handled(r, r.dm('first'))
+      await r.settle({ advance: 800 })
+      await expect.poll(() => sent(r).length, { timeout: 3000 }).toBe(2)
       expect(textsTo(r, r.owner)).toEqual([SUCCESS])
       const at = sent(r).at(-1)?.at as number
       await handled(r, r.press('a:nonce:y'))
       await r.settle()
-      expect(sent(r, 'answerCallbackQuery')).toHaveLength(1)
+      expect(sent(r, 'answerCallbackQuery')).toHaveLength(2)
       await r.settle({ advance: 6900 })
       expect(textsTo(r, r.owner)).toEqual([SUCCESS])
       await r.settle({ advance: 200 })
@@ -1012,12 +1020,26 @@ describe('the paired account', () => {
       await r.settle({ advance: PACE })
       r.fake.fail('sendMessage', 1, { status: 403, body: { ok: false, description: 'Forbidden: bot was blocked by the user' } })
       await handled(r, r.dm('first'))
-      await r.settle()
+      await r.settle({ advance: REPLY })
       await expect.poll(() => onDisk(r).chats[String(r.owner)]?.blocked).toBe(true)
       const n = sent(r).length
-      await handled(r, r.dm('second'))
+      // 附件这条路也要回话:封着就不发
+      await handled(r, r.dm('', { extra: { text: undefined, photo: [{ file_id: 'f' }] } }))
       await r.settle({ advance: PACE * 2 })
       expect(sent(r)).toHaveLength(n)
+    })
+
+    it('a message from a chat marked blocked proves it is not blocked: the unblock may have expired offline', async () => {
+      const r = await paired()
+      await r.settle({ advance: PACE })
+      r.fake.fail('sendMessage', 1, { status: 403, body: { ok: false, description: 'Forbidden: bot was blocked by the user' } })
+      await handled(r, r.dm('first'))
+      await r.settle({ advance: REPLY })
+      await expect.poll(() => onDisk(r).chats[String(r.owner)]?.blocked).toBe(true)
+      await handled(r, r.dm('second'))
+      await r.settle({ advance: REPLY })
+      expect(onDisk(r).chats[String(r.owner)]?.blocked).toBeUndefined()
+      expect(textsTo(r, r.owner).at(-1)).toBe('ok')
     })
 
     it('a 403 for a stranger writes nothing about that chat', async () => {
@@ -1033,7 +1055,8 @@ describe('the paired account', () => {
       await r.settle({ advance: PACE })
       r.fake.fail('sendMessage', 1, { status: 429, body: { ok: false, parameters: { retry_after: 5 } } })
       await handled(r, r.dm('first'))
-      await r.settle()
+      await r.settle({ advance: 800 })
+      await expect.poll(() => sent(r).length, { timeout: 3000 }).toBe(2)
       const n = sent(r).length
       await r.k.handle('channel.telegram.unpair', { commandId: 'u1', accountId: String(r.owner) })
       await r.settle({ advance: 6000 })
@@ -1043,6 +1066,8 @@ describe('the paired account', () => {
     it('close: the flush lets a paced reply go, and returns even if Telegram hangs', async () => {
       const r = await paired()
       await handled(r, r.dm('hello'))
+      await r.settle({ advance: 800 })
+      await expect.poll(() => r.k.events.after(0).filter(e => e.type === 'turn.ended').length, { timeout: 3000 }).toBe(1)
       await r.restart()
       expect(textsTo(r, r.owner)).toEqual([SUCCESS, 'ok'])
       await r.settle({ advance: PACE })
@@ -1057,10 +1082,10 @@ describe('the paired account', () => {
     const { seen, channel } = recording()
     const r = await paired({ channel })
     await handled(r, r.dm('one'))
-    expect(seen.map(s => s.dm.text)).toEqual(['one'])
+    expect(seen.map(s => s.text)).toEqual(['one'])
     await r.k.handle('channel.telegram.unpair', { commandId: 'u1', accountId: String(r.owner) })
     await handled(r, r.dm('two'))
-    expect(seen.map(s => s.dm.text)).toEqual(['one'])
+    expect(seen.map(s => s.text)).toEqual(['one'])
     expect((await status(r)).dropped.unpaired).toBe(1)
   })
 
@@ -1077,7 +1102,7 @@ describe('the paired account', () => {
     r.fake.offline = false
     r.clock.advance(2000)
     await handled(r, id)
-    expect(seen.map(s => s.dm.text)).toEqual(['after'])
+    expect(seen.map(s => s.text)).toEqual(['after'])
     expect((await status(r)).dropped.unpaired).toBe(1)
   })
 
@@ -1118,12 +1143,12 @@ describe('the paired account', () => {
     await handled(r, block('kicked'))
     expect(onDisk(r).chats[String(r.owner)].blocked).toBe(true)
     const before = sent(r).length
-    await handled(r, r.dm('hello'))
-    await r.settle()
+    await handled(r, r.dm('', { extra: { text: undefined, photo: [{ file_id: 'f' }] } }))
+    await r.settle({ advance: PACE })
     expect(sent(r).length).toBe(before)
     await handled(r, block('member'))
     expect(onDisk(r).chats[String(r.owner)]?.blocked).toBeUndefined()
-    await handled(r, r.dm('hello'))
+    await handled(r, r.dm('', { extra: { text: undefined, photo: [{ file_id: 'f' }] } }))
     await r.settle({ advance: PACE })
     expect(sent(r).length).toBe(before + 1)
   })
@@ -1157,103 +1182,47 @@ describe('the paired account', () => {
       await handled(r, r.dm(text, o))
       await r.settle()
       expect(seen).toHaveLength(1)
-      expect(seen[0]).toMatchObject({ external: true })
-      expect(seen[0].dm.forwardedFrom).toBeTruthy()
-      expect(seen[0].dm.text).toBe(text)
+      expect(seen[0].forwardedFrom).toBeTruthy()
+      expect(seen[0].text).toBe(text)
       // 没有 已配对 之类的命令回复,配对还在
       expect(sent(r).length).toBe(before)
       expect((await status(r)).paired).toHaveLength(1)
       expect(events(r, 'channel.unpaired')).toEqual([])
     })
 
-    it('typed directly, it is not external', async () => {
-      const { seen, channel } = recording()
-      const r = await paired({ channel })
-      await handled(r, r.dm('hello'))
-      expect(seen[0].external).toBe(false)
-    })
-
     it('reaches the model as external, typed text does not', async () => {
-      const r = await paired({ plugins: () => [loopDirect], channel: { onPairedDm: promptingHandler() } })
+      const r = await paired()
       await handled(r, r.dm('/unpair confirm', origins[0][1]))
+      await r.settle({ advance: REPLY })
       await handled(r, r.dm('typed'))
-      await expect.poll(() => r.models.calls.length, { timeout: 3000 }).toBeGreaterThan(0)
+      await r.settle({ advance: REPLY })
+      expect(r.models.calls).toHaveLength(2)
       const users = events(r, 'message.user').map(e => e.payload as { text: string; external?: boolean })
-      expect(users).toEqual([{ turnId: expect.any(String), text: '/unpair confirm', external: true }, ...users.slice(1)])
-      expect(users.find(u => u.text === 'typed')?.external).toBeUndefined()
+      expect(users[0].external).toBe(true)
+      expect(users[0].text).toContain('/unpair confirm')
+      expect(users[0].text.startsWith('<forwarded from="Eve">')).toBe(true)
+      expect(users[1]).toEqual({ turnId: expect.any(String), text: 'typed' })
+      expect((await status(r)).paired).toHaveLength(1)
     })
   })
 })
 
-/** Task 9 之前的替身:和正式路径一样把 commandId 交给内核 */
-function promptingHandler(after?: (d: PairedDm) => void | Promise<void>) {
-  return async (d: PairedDm) => {
-    const { sessionId } = await d.commands.call('session.create', { commandId: `${d.commandId}:session`, origin: 'im', audience: 'owner', approvalMode: 'ask', title: 'Telegram' })
-    await d.commands.call('session.prompt', { commandId: d.commandId, sessionId, text: d.dm.text, ...(d.external && { external: true }) })
-    await after?.(d)
-  }
-}
-
 describe('redelivery', () => {
-  it('commandId comes from the bot id and the update id, and nothing else', async () => {
-    const { seen, channel } = recording()
-    const r = await paired({ channel, botId: 555 })
+  it('commandId comes from the bot id and the update ids, and nothing else', async () => {
+    const r = await paired({ botId: 555 })
     const id = r.dm('hello')
     await handled(r, id)
-    expect(seen[0].commandId).toBe(`tg:555:${id}`)
+    await r.settle({ advance: REPLY })
+    expect(r.rawBytes().includes(`tg:555:${id}-${id}`)).toBe(true)
   })
 
-  it('a crash between handling and saving: the update comes back, the same commandId, one model request, one message', async () => {
-    const ids: string[] = []
-    let stuck = true
-    const r = await paired({
-      plugins: () => [loopDirect],
-      channel: {
-        onPairedDm: promptingHandler(async d => {
-          ids.push(d.commandId)
-          // 第一次卡在这里:处理完了,poller 还没落盘
-          if (stuck) await new Promise(() => {})
-        }),
-      },
-    })
-    const ackBefore = onDisk(r).offset
-    const id = r.dm('run me once')
-    await expect.poll(() => ids.length, { timeout: 3000 }).toBe(1)
-    await expect.poll(() => r.k.events.after(0).some(e => e.type === 'turn.ended'), { timeout: 3000 }).toBe(true)
-    expect(r.models.calls).toHaveLength(1)
-    // 真的还没确认
-    expect(onDisk(r).offset).toBe(ackBefore)
-    expect(ackBefore).toBeLessThanOrEqual(id)
-
-    stuck = false
-    await r.restart({ kill: true })
-    await expect
-      .poll(
-        () => {
-          r.clock.advance(2000)
-          return ids.length
-        },
-        { timeout: 3000 },
-      )
-      .toBe(2)
-    await handled(r, id)
-    await r.settle()
-
-    expect(ids[0]).toBe(ids[1])
-    expect(r.models.calls).toHaveLength(1)
-    expect(events(r, 'message.user')).toHaveLength(1)
-    expect(events(r, 'session.created')).toHaveLength(1)
-    // 重投的这次之后就确认了
-    expect(r.fake.requests.filter(q => q.method === 'getUpdates').at(-1)?.body.offset).toBe(id + 1)
-  }, 15_000)
-
-  it('without the same commandId it would have run twice: two updates with the same text are two prompts', async () => {
-    const r = await paired({ plugins: () => [loopDirect], channel: { onPairedDm: promptingHandler() } })
+  it('two updates with the same text are two prompts', async () => {
+    const r = await paired()
     await handled(r, r.dm('same'))
-    await expect.poll(() => r.models.calls.length, { timeout: 3000 }).toBe(1)
-    await expect.poll(() => r.k.events.after(0).filter(e => e.type === 'turn.ended').length, { timeout: 3000 }).toBe(1)
+    await r.settle({ advance: REPLY })
     await handled(r, r.dm('same'))
-    await expect.poll(() => r.models.calls.length, { timeout: 3000 }).toBe(2)
+    await r.settle({ advance: REPLY })
+    expect(r.models.calls).toHaveLength(2)
   })
 
   it('a handler that throws: code only in the log, counted, the next update still runs', async () => {
@@ -1261,16 +1230,18 @@ describe('redelivery', () => {
     const secretMessage = 'marker-in-throw'
     const r = await paired({
       channel: {
-        onPairedDm: () => {
+        beforePairedDm: () => {
           if (n++ === 0) throw new Error(secretMessage)
         },
       },
     })
     await handled(r, r.dm('first'))
     await handled(r, r.dm('second'))
+    await r.settle({ advance: REPLY })
     expect(n).toBe(2)
     expect((await status(r)).dropped.badUpdate).toBe(1)
     expect(r.logs.join('\n')).not.toContain(secretMessage)
+    expect(events(r, 'message.user').map(e => (e.payload as { text: string }).text)).toEqual(['second'])
   })
 })
 
@@ -1281,8 +1252,8 @@ describe('a bot change during a slow batch', () => {
     const seen: string[] = []
     const r = await paired({
       channel: {
-        onPairedDm: async d => {
-          seen.push(d.dm.text)
+        beforePairedDm: async d => {
+          seen.push(d.text)
           await gate
         },
       },

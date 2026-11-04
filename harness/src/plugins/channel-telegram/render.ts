@@ -100,7 +100,8 @@ interface Run { executor: string; phase: 'queued' | 'running' | 'ended'; progres
 const obj = (v: unknown): Record<string, unknown> => (v !== null && typeof v === 'object' ? (v as Record<string, unknown>) : {})
 const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
 
-function failureLine(reason: unknown): string {
+/** 失败的那一行。`message` 不发:厂商报错里可能有 URL 和账号(§9.3) */
+export function failureLine(reason: unknown): string {
   if (reason === 'interrupted') return '后台重启,这轮中断了'
   return `失败(${typeof reason === 'string' && CODE.test(reason) ? reason : 'error'})`
 }

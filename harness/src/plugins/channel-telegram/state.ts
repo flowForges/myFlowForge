@@ -25,6 +25,7 @@ export const StateSchema = z.object({
   dropped: z
     .object({ unpaired: Count.default(0), stale: Count.default(0), group: Count.default(0), attachment: Count.default(0), badUpdate: Count.default(0) })
     .default(() => ({ unpaired: 0, stale: 0, group: 0, attachment: 0, badUpdate: 0 })),
+  /** 现在还欠着的最终内容(chats.ts 数),补上了就减。不是累计 */
   undelivered: Count.default(0),
 })
 
