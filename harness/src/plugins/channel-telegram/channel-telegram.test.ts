@@ -167,11 +167,34 @@ describe('registration and activation', () => {
     expect(statSync(join(r.dataDir, 'plugins')).mode & 0o777).toBe(statSync(plain).mode & 0o777)
   })
 
-  it('a broken config falls back to defaults with a warning, it does not fail activation', async () => {
-    const r = await start({ config: { channels: { telegram: { enabled: 'yes', staleMinutes: -1, projects: 'x' } } } })
-    expect(await r.k.handle('channel.telegram.config.get', {})).toEqual({ enabled: true, staleMinutes: 10, projects: [] })
-    expect((await status(r)).problems).toContain('config_invalid')
+  it.each([
+    ['a bad section', { telegram: { enabled: 'yes', staleMinutes: -1, projects: 'x' } }],
+    ['the user turned it off and another field is bad', { telegram: { enabled: false, staleMinutes: 0 } }],
+    ['enabled:true and another field is bad', { telegram: { enabled: true, staleMinutes: 0 } }],
+    ['channels is not an object', 5],
+    ['telegram is not an object', { telegram: 5 }],
+  ])('%s: disabled, reported, no request, activation fine', async (_name, channels) => {
+    const r = await start({ config: { channels } })
+    await r.k.handle('channel.telegram.setToken', { token: TEST_TOKEN })
+    await r.settle()
+    expect(await r.k.handle('channel.telegram.config.get', {})).toEqual({ enabled: false, staleMinutes: 10, projects: [] })
+    const s = await status(r)
+    expect(s.state).toBe('disabled')
+    expect(s.problems).toContain('config_invalid')
     expect(r.logs.join('\n')).toContain('telegram config invalid')
+    expect(sent(r, 'getUpdates')).toEqual([])
+    await r.restart()
+    await r.settle()
+    expect((await status(r)).state).toBe('disabled')
+    expect(sent(r, 'getUpdates')).toEqual([])
+  })
+
+  it('a valid config.set clears config_invalid and can switch it on', async () => {
+    const r = await start({ config: { channels: { telegram: { enabled: false, staleMinutes: 0 } } } })
+    await r.k.handle('channel.telegram.config.set', { commandId: 'c1', config: { enabled: true } })
+    const s = await status(r)
+    expect(s.problems).not.toContain('config_invalid')
+    expect(s.state).toBe('no_token')
   })
 
   it('unknown config fields are ignored, missing ones defaulted', async () => {
@@ -741,6 +764,48 @@ describe('pairing in the chat', () => {
     expect(textsTo(r, r.owner)).toEqual([INVALID])
   })
 
+  it('an event that cannot be written: no pairing at all, in memory or on disk, and the next update runs', async () => {
+    let failing = true
+    const r = await telegramKernel({
+      plugin: env => {
+        const p = createChannelTelegram(env)
+        return {
+          manifest: p.manifest,
+          activate: ctx =>
+            p.activate(
+              Object.create(ctx, {
+                append: {
+                  value: (e: Parameters<PluginContext['append']>[0]) => {
+                    if (e.type === 'channel.paired' && failing) {
+                      failing = false
+                      throw new Error('database is locked')
+                    }
+                    return ctx.append(e)
+                  },
+                },
+              }) as PluginContext,
+            ),
+        }
+      },
+    })
+    rigs.push(r)
+    await r.k.handle('channel.telegram.setToken', { token: TEST_TOKEN })
+    await expect.poll(async () => (await status(r)).state).toBe('online')
+    const { code } = await begin(r)
+    const id = r.dm(`/pair ${code}`)
+    await handled(r, id)
+    await r.settle()
+    expect((await status(r)).paired).toEqual([])
+    expect(onDisk(r).pairings).toEqual([])
+    expect(textsTo(r, r.owner)).not.toContain(SUCCESS)
+    expect((await status(r)).dropped.badUpdate).toBe(1)
+    expect(failing).toBe(false)
+    const next = await begin(r)
+    await handled(r, r.dm(`/pair ${next.code}`))
+    expect((await status(r)).paired).toHaveLength(1)
+    expect(events(r, 'channel.paired')).toHaveLength(1)
+  })
+
   it('the event is on disk even when the crash comes right after: a pairing is never silent', async () => {
     const r = await withToken()
     const { code } = await begin(r)
@@ -1128,6 +1193,46 @@ describe('redelivery', () => {
     expect(n).toBe(2)
     expect((await status(r)).dropped.badUpdate).toBe(1)
     expect(r.logs.join('\n')).not.toContain(secretMessage)
+  })
+})
+
+describe('a bot change during a slow batch', () => {
+  it('the old batch stops, its offset never lands under the new bot, the new bot polls from nothing', async () => {
+    let release = () => {}
+    const gate = new Promise<void>(res => (release = res))
+    const seen: string[] = []
+    const r = await paired({
+      channel: {
+        onPairedDm: async d => {
+          seen.push(d.dm.text)
+          await gate
+        },
+      },
+    })
+    await r.settle()
+    // 断网时攒两条,回来一批收到
+    r.fake.offline = true
+    await expect.poll(async () => (await status(r)).state, { timeout: 3000, interval: 2 }).toBe('reconnecting')
+    r.dm('first')
+    r.dm('second')
+    r.fake.offline = false
+    r.clock.advance(2000)
+    await expect.poll(() => seen, { timeout: 3000 }).toEqual(['first'])
+
+    const other = 777
+    r.fake.fail('getMe', 1, { status: 200, body: { ok: true, result: { id: other, username: 'other_bot' } } })
+    await r.k.handle('channel.telegram.setToken', { token: TEST_TOKEN })
+    const polledBefore = sent(r, 'getUpdates').length
+    expect(onDisk(r)).toMatchObject({ offset: 0, bot: { id: other } })
+
+    r.fake.fail('getMe', 1, { status: 200, body: { ok: true, result: { id: other, username: 'other_bot' } } })
+    release()
+    await expect.poll(() => sent(r, 'getUpdates').length, { timeout: 3000 }).toBeGreaterThan(polledBefore)
+    expect(seen).toEqual(['first'])
+    expect(sent(r, 'getUpdates')[polledBefore].body.offset).toBeUndefined()
+    // 假服务器还是同一个队列:两条都重新到,都按陌生人算。旧 offset 漏进内存的话,first 会被当成已处理跳过
+    await expect.poll(async () => (await status(r)).dropped.unpaired, { timeout: 3000 }).toBe(2)
+    expect(onDisk(r).pairings).toEqual([])
   })
 })
 

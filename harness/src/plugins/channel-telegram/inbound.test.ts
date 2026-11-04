@@ -42,6 +42,8 @@ describe('classify', () => {
     ['empty text', dm({ text: '' }), 'other'],
     ['edited_message', { update_id: 5, edited_message: dm().message }, 'other'],
     ['channel_post', { update_id: 5, channel_post: { chat: { id: -1, type: 'channel' }, text: 'x', date: 1 } }, 'channel'],
+    ['business_message', { update_id: 5, business_message: dm().message }, 'other'],
+    ['edited_business_message', { update_id: 5, edited_business_message: dm().message }, 'other'],
     ['an unsubscribed kind', { update_id: 5, inline_query: { id: 'q' } }, 'other'],
     ['only an id', { update_id: 5 }, 'other'],
     ['message is a string', { update_id: 5, message: 'x' }, 'malformed'],

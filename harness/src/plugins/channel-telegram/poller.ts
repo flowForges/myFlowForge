@@ -36,19 +36,13 @@ const STOP_BOUND_MS = 500
 const SAVE_FAILED = 'state_save_failed'
 /** 长轮询比这快地回了空:对面没在长等(代理之类),不跟着空转 */
 const EMPTY_REPLY_MIN_MS = 1000
-/** Bot API 的 update_id 是 32 位 */
-const MAX_UPDATE_ID = 2 ** 31 - 1
-/**
- * id 是连续的,离上一个这么远只可能是对面发疯:收下它,offset 就越过了所有真实的 id,之后的更新一条也收不到。
- * 真要是误判,闲置 6 天的重置(§5.2)会让这里放行
- */
-const MAX_UPDATE_ID_JUMP = 2 ** 24
 
 type IdentifiedUpdate = { update_id: number }
 
 const isIdentified = (u: unknown): u is IdentifiedUpdate => {
   const id = (u as IdentifiedUpdate | null | undefined)?.update_id
-  return Number.isSafeInteger(id) && (id as number) >= 0 && (id as number) <= MAX_UPDATE_ID
+  // id + 1 就是 offset,它也要是安全整数:存盘的 schema 只收这种,再大的加一也还是自己
+  return Number.isSafeInteger(id) && (id as number) >= 0 && Number.isSafeInteger((id as number) + 1)
 }
 
 export class Poller {
@@ -151,19 +145,30 @@ export class Poller {
     this.recovering = false
     this.succeeded()
 
+    const botId = state.data.bot?.id
     if (this.omitOffset && !this.idleReset && result.length > 0) {
       state.data.offset = 0
       this.idleReset = true
     }
-    // 落盘的 offset 是 0(新机器人、闲置重置)时没有参照,第一个 id 说了算
-    const identified = result.filter(u => isIdentified(u) && (state.data.offset === 0 || u.update_id - state.data.offset <= MAX_UPDATE_ID_JUMP)) as IdentifiedUpdate[]
-    state.data.dropped.badUpdate += result.length - identified.length
+    const identified = result.filter(isIdentified)
+    const unusable = result.filter(u => !isIdentified(u))
+    if (unusable.length > 0) {
+      state.data.dropped.badUpdate += unusable.length
+      this.o.log?.warn('telegram update id unusable', { count: unusable.length })
+    }
     // 落盘失败时的重投也走这里:内存里已处理过的不再处理
     const fresh = identified.filter(u => u.update_id >= state.data.offset)
     if (fresh.length > 0) {
       await this.deliver(fresh)
+      // 处理期间换了机器人:这批和它的 offset 都是旧机器人的,不算数,也不落盘
+      if (state.data.bot?.id !== botId) {
+        this.omitOffset = false
+        this.idleReset = false
+        return
+      }
       state.data.lastUpdateAt = this.o.now()
     }
+    for (const u of unusable) this.ackPast(u)
 
     const unsaved = state.data.offset !== state.ackOffset
     if (identified.length < result.length || fresh.length > 0 || unsaved) {
@@ -183,6 +188,17 @@ export class Poller {
     }
   }
 
+  /**
+   * 用不了的 id 也要确认过去,否则它每次都回来。比安全整数还大的压到上限:offset 可能因此越过真实的 id,
+   * 闲置 6 天的重置(§5.2)能恢复。没有数字 id 的条目没东西可确认,只能记下来,靠后面的更新带过去
+   */
+  private ackPast(update: unknown): void {
+    const id = (update as IdentifiedUpdate | null | undefined)?.update_id
+    if (typeof id !== 'number' || !(id >= 0)) return
+    const { data } = this.o.state
+    data.offset = Math.max(data.offset, Math.min(Math.floor(id) + 1, Number.MAX_SAFE_INTEGER))
+  }
+
   private isIdle(): boolean {
     const { offset, lastUpdateAt } = this.o.state.data
     return offset > 0 && (lastUpdateAt === undefined || this.o.now() - lastUpdateAt >= ID_RESET_IDLE_MS)
@@ -191,11 +207,14 @@ export class Poller {
   /** onBatch 不该抛。真抛了:卡住的第一条算毒更新跳过,没处理的下次重投,队列不被一条卡死 */
   private async deliver(fresh: IdentifiedUpdate[]): Promise<void> {
     const { state } = this.o
+    const botId = state.data.bot?.id
     try {
       await this.o.onBatch(fresh)
+      if (state.data.bot?.id !== botId) return
       for (const u of fresh) state.advance(u.update_id)
     } catch (err) {
       this.o.log?.warn('telegram batch failed', { code: codeOf(err) })
+      if (state.data.bot?.id !== botId) return
       const stuck = fresh.find(u => u.update_id >= state.data.offset)
       if (stuck) {
         state.advance(stuck.update_id)

@@ -443,47 +443,134 @@ describe('Poller', () => {
 
   describe('离谱的 update_id', () => {
     const MAX_INT32 = 2 ** 31 - 1
+    const reload = () => TelegramState.open(file, log)
 
     it.each([
       ['超过 32 位', MAX_INT32 + 1],
       ['接近 2^53', Number.MAX_SAFE_INTEGER - 1],
-    ])('%s:丢掉、计数,offset 不动', async (_name, huge) => {
+    ])('%s:安全整数都收,offset 跟着走,存盘读得回来', async (_name, big) => {
       const r = rig()
-      fake.fail('getUpdates', 1, { status: 200, body: { ok: true, result: [{ update_id: huge }] } })
-      const real = fake.push({ message: { chat: { id: 1 }, text: 'a' } })
+      const id = fake.push({ update_id: big, message: { chat: { id: 1 }, text: 'a' } })
       r.poller.start()
-      await pollArrived(3)
-      expect((r.batches.flat() as { update_id: number }[]).map(u => u.update_id)).toEqual([real])
-      expect(r.state.data.offset).toBe(real + 1)
-      expect(r.state.data.dropped.badUpdate).toBe(1)
+      await expect.poll(() => r.state.ackOffset).toBe(id + 1)
+      expect((r.batches.flat() as { update_id: number }[]).map(u => u.update_id)).toEqual([id])
+      await pollArrived(2)
+      expect(polls()[1].body.offset).toBe(id + 1)
+      expect(reload().problems).toEqual([])
     })
 
-    it('一次跳太远:offset 推不过真实的 id,之后的更新还收得到', async () => {
+    it('一次跳很远:照收,不卡住,后面更高的 id 接着收', async () => {
       const r = rig({ state: seed({ offset: 100, lastUpdateAt: clock.now() }) })
-      fake.fail('getUpdates', 1, { status: 200, body: { ok: true, result: [{ update_id: MAX_INT32 - 1 }] } })
+      const far = fake.push({ update_id: MAX_INT32 + 5, message: { chat: { id: 1 }, text: 'a' } })
+      r.poller.start()
+      await expect.poll(() => r.state.ackOffset).toBe(far + 1)
+      const next = fake.push({ update_id: far + 1, message: { chat: { id: 1 }, text: 'b' } })
+      await expect.poll(() => (r.batches.flat() as { update_id: number }[]).map(u => u.update_id)).toEqual([far, next])
+    })
+
+    it.each([
+      ['最大的安全整数:再加一就不安全了', Number.MAX_SAFE_INTEGER],
+      ['2^53', 2 ** 53],
+      ['1e300', 1e300],
+    ])('%s:不处理,记日志,计数,确认过去,存盘读得回来', async (_name, huge) => {
+      const r = rig()
+      const real = fake.push({ message: { chat: { id: 1 }, text: 'a' } })
+      fake.fail('getUpdates', 1, { status: 200, body: { ok: true, result: [{ update_id: real, message: { text: 'a' } }, { update_id: huge, message: { text: 'marker-huge' } }] } })
       r.poller.start()
       await pollArrived(2)
-      expect(r.batches).toEqual([])
-      expect(r.state.data.offset).toBe(100)
-      expect(polls()[1].body.offset).toBe(100)
-      const next = fake.push({ update_id: 100, message: { chat: { id: 1 }, text: 'a' } })
-      await expect.poll(() => (r.batches.flat() as { update_id: number }[]).map(u => u.update_id)).toEqual([next])
-      expect(r.sleeps).toHaveLength(1)
+      expect((r.batches.flat() as { update_id: number }[]).map(u => u.update_id)).toEqual([real])
+      expect(r.state.data.dropped.badUpdate).toBe(1)
+      expect(logs.join('\n')).toContain('telegram update id unusable')
+      expect(logs.join('\n')).not.toContain('marker-huge')
+      expect(polls()[1].body.offset).toBe(Number.MAX_SAFE_INTEGER)
+      expect(onDisk().offset).toBe(Number.MAX_SAFE_INTEGER)
+      expect(reload().problems).toEqual([])
     })
 
-    it('还没有 offset(新机器人、闲置重置):第一个 id 不受"跳太远"限制', async () => {
+    it('同一批里排在它前面的真更新先处理,不被跳过', async () => {
       const r = rig()
-      const first = fake.push({ update_id: MAX_INT32 - 5, message: { chat: { id: 1 }, text: 'a' } })
+      fake.fail('getUpdates', 1, { status: 200, body: { ok: true, result: [{ update_id: 2 ** 53 }, { update_id: 7 }] } })
       r.poller.start()
-      await expect.poll(() => r.state.ackOffset).toBe(first + 1)
+      await pollArrived(2)
+      expect(r.batches).toEqual([[{ update_id: 7 }]])
     })
 
-    it('一直收到坏条目:不空转', async () => {
+    it.each([
+      ['小数', { update_id: 5.5 }, 6],
+      ['字符串', { update_id: '99' }, 0],
+      ['没有 id', {}, 0],
+      ['负数', { update_id: -3 }, 0],
+    ])('%s:记日志、计数,确认得了的确认,不空转', async (_name, entry, offset) => {
       const r = rig()
-      fake.fail('getUpdates', 2, { status: 200, body: { ok: true, result: [{ update_id: MAX_INT32 + 1 }] } })
+      fake.fail('getUpdates', 2, { status: 200, body: { ok: true, result: [entry] } })
       r.poller.start()
       await pollArrived(3)
-      expect(r.sleeps).toHaveLength(2)
+      expect(r.batches).toEqual([])
+      expect(r.state.data.dropped.badUpdate).toBe(2)
+      expect(r.state.data.offset).toBe(offset)
+      expect(logs.join('\n')).toContain('telegram update id unusable')
+      expect(r.sleeps.length).toBeGreaterThanOrEqual(1)
+    })
+
+    it('一直收到同一条用不了的:不空转', async () => {
+      const r = rig()
+      fake.fail('getUpdates', 3, { status: 200, body: { ok: true, result: [{ update_id: 2 ** 53 }] } })
+      r.poller.start()
+      await pollArrived(4)
+      expect(r.sleeps.length).toBeGreaterThanOrEqual(2)
+    })
+  })
+
+  describe('批次处理中换了机器人', () => {
+    it('旧批次结束后:offset 不动、不落盘、不记 lastUpdateAt', async () => {
+      let finish = () => {}
+      const gate = new Promise<void>(res => (finish = res))
+      let entered = false
+      const r = rig({
+        realTimers: true,
+        // 不自己推进:看的是 poller 替它推进到批尾的那一步
+        onBatch: async () => {
+          entered = true
+          await gate
+        },
+      })
+      fake.push({ update_id: 500, message: { chat: { id: 1 }, text: 'a' } })
+      r.poller.start()
+      await expect.poll(() => entered).toBe(true)
+      await r.poller.stop()
+      r.state.adoptBot({ id: 777, username: 'other' })
+      r.state.save()
+      const saved = readFileSync(file, 'utf8')
+      finish()
+      await new Promise(res => setTimeout(res, 20))
+      expect(r.state.data.offset).toBe(0)
+      expect(r.state.ackOffset).toBe(0)
+      expect(r.state.data.lastUpdateAt).toBeUndefined()
+      expect(readFileSync(file, 'utf8')).toBe(saved)
+    })
+
+    it('onBatch 抛错也一样:不推进、不计数', async () => {
+      let finish = () => {}
+      const gate = new Promise<void>(res => (finish = res))
+      let entered = false
+      const r = rig({
+        realTimers: true,
+        onBatch: async () => {
+          entered = true
+          await gate
+          throw new Error('boom')
+        },
+      })
+      fake.push({ update_id: 500, message: { chat: { id: 1 }, text: 'a' } })
+      r.poller.start()
+      await expect.poll(() => entered).toBe(true)
+      await r.poller.stop()
+      r.state.adoptBot({ id: 777, username: 'other' })
+      r.state.save()
+      finish()
+      await new Promise(res => setTimeout(res, 20))
+      expect(r.state.data.offset).toBe(0)
+      expect(r.state.data.dropped.badUpdate).toBe(0)
     })
   })
 

@@ -178,6 +178,26 @@ describe('Pairing', () => {
       expect(pairing.attempt('7', pairing.begin().code, seconds())).toBe('locked')
     })
 
+    it('old typos decay: a count older than the lock window starts over', () => {
+      pairing.begin()
+      wrong('7'), wrong('7')
+      clock.advance(HOUR)
+      pairing.begin()
+      expect(wrong('7')).toBe('invalid')
+      expect(state.data.senders['7'].wrong).toBe(1)
+      expect(state.data.senders['7'].lockedUntil).toBeUndefined()
+      expect(pairing.attempt('7', pairing.begin().code, seconds())).toBe('ok')
+    })
+
+    it('inside the window the count holds', () => {
+      pairing.begin()
+      wrong('7'), wrong('7')
+      clock.advance(HOUR - 1)
+      pairing.begin()
+      wrong('7')
+      expect(pairing.attempt('7', pairing.begin().code, seconds())).toBe('locked')
+    })
+
     it('another sender is not locked', () => {
       const { code } = pairing.begin()
       wrong('7'), wrong('7'), wrong('7')

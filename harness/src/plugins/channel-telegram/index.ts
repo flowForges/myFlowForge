@@ -78,10 +78,11 @@ export function proxyKind(env: NodeJS.ProcessEnv): 'none' | 'env' | 'socks' {
 }
 
 function readConfig(section: unknown, ctx: PluginContext, state: TelegramState): TelegramConfig {
+  // 坏了就关:看不懂的配置不能把用户关掉的渠道重新打开。状态里报出来,config.set 一条好的就恢复
   const bad = () => {
-    ctx.log.warn('telegram config invalid, using defaults')
+    ctx.log.warn('telegram config invalid, channel disabled')
     state.problems.push(CONFIG_INVALID)
-    return structuredClone(DEFAULT_CONFIG)
+    return { ...structuredClone(DEFAULT_CONFIG), enabled: false }
   }
   if (section === undefined || section === null) return structuredClone(DEFAULT_CONFIG)
   if (typeof section !== 'object' || Array.isArray(section)) return bad()
@@ -170,11 +171,11 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
       })
       const isPaired = (accountId: string, chatId: string | undefined) => chatId === accountId && state.data.pairings.some(p => p.accountId === accountId)
 
-      /** 先写事件再落盘:崩溃在中间只是多一声铃,反过来就是一次没人看见的配对 */
+      /** 事件最先:写不进去就什么都没发生;崩溃在中间只是多一声铃,反过来就是一次没人看见的配对 */
       const completePairing = (i: DmInbound) => {
         const { pairings } = state.data
-        pairings.push({ accountId: i.accountId, name: i.name, pairedAt: now() })
         ctx.append({ type: 'channel.paired', payload: { channel: 'telegram', accountId: i.accountId, name: i.name } })
+        pairings.push({ accountId: i.accountId, name: i.name, pairedAt: now() })
         try {
           state.save()
           noteSaved()
@@ -286,13 +287,17 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
 
       /** 一条的错不挡下一条(§5.2)。错误的文字里可能有消息内容,只记代码 */
       const onBatch = async (updates: unknown[]) => {
+        // 处理到一半换了机器人:剩下的不处理,offset 不推进。名单和 offset 已经是新机器人的了
+        const botId = state.data.bot?.id
         for (const update of updates) {
+          if (state.data.bot?.id !== botId) return
           try {
             await handleUpdate(update)
           } catch (err) {
             ctx.log.warn('telegram update failed', { code: codeOf(err) })
-            state.data.dropped.badUpdate++
+            if (state.data.bot?.id === botId) state.data.dropped.badUpdate++
           }
+          if (state.data.bot?.id !== botId) return
           state.advance((update as { update_id: number }).update_id)
         }
       }
@@ -489,6 +494,8 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
           const section = { ...others, telegram: next }
           ctx.updateConfig('channels', section)
           channelsSection = section
+          const invalid = state.problems.indexOf(CONFIG_INVALID)
+          if (invalid >= 0) state.problems.splice(invalid, 1)
           const switched = next.enabled !== config.enabled
           config = next
           if (switched) {

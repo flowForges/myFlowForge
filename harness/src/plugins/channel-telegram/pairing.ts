@@ -118,7 +118,10 @@ export class Pairing {
 
   private countWrong(senderId: string, now: number): void {
     const { senders } = this.o.state.data
-    const wrong = (senders[senderId]?.wrong ?? 0) + 1
+    // 三个月前的两次手误不该和今天这次凑成一把锁
+    const prior = senders[senderId]
+    const recent = prior?.at !== undefined && now - prior.at < SENDER_LOCK_MS
+    const wrong = (recent ? prior.wrong : 0) + 1
     senders[senderId] = { wrong, at: now, ...(wrong >= SENDER_WRONG_MAX && { lockedUntil: now + SENDER_LOCK_MS }) }
     const ids = Object.keys(senders)
     if (ids.length <= SENDERS_MAX) return
