@@ -1,5 +1,5 @@
 // 夜间整合(06 spec §14)。记忆跨会话留下来的路就是这条,所以门槛都是确定性的硬条件:
-// USER.md 永远人确认;MEMORY.md 不经确认的只有 fact,而且要几乎逐字:两次相隔 12 小时以上、不同轮的用户原话里都有这句,否定词对得上,
+// USER.md 永远人确认;MEMORY.md 不经确认的只有 fact,而且要逐字:两次相隔 12 小时以上、不同轮的用户原话里都有这一整句,否定词对得上,
 // 这一批没有带标记的消息。别的都进收件箱,不丢。50% 接地只是提议的下限,读了长文档的模型很容易过
 // 除了 run.text 这里都是同步的:任务只卡得住在 text 上,模型回来之后到写完之间也插不进删除
 import { createHash } from 'node:crypto'
@@ -27,13 +27,10 @@ const MAX_OUTPUT = 4000
 const MAX_PROPOSALS_PER_NIGHT = 5
 const MIN_APART_MS = 12 * 3_600_000
 const GROUNDED_RATIO = 0.5
-const VERBATIM_RATIO = 0.8
-/** 比例之外的硬上限:300 字的句子,20% 也够夹带一句完整的指令 */
-const MAX_UNQUOTED = 10
 /** 太短的逐字没有意义:"好"在"好的"里 */
 const MIN_VERBATIM = 8
-/** 否定词落在引用段外面多近还算:够放下 不要、never */
-const NEGATION_MARGIN = 6
+/** 点号后面要跟空白或结尾:10.0.0.5、apply.ts 不是两句 */
+const SENTENCE_END = /[。!?！？]+|\.(?=\s|$)/u
 const NEGATIONS = ['不', '没', '别', '勿', '无', '未', '非', '莫', '禁', 'no', 'never', 'dont', 'doesnt', 'didnt', 'cant', 'wont', 'isnt', 'arent', 'shouldnt', 'mustnt', 'without', 'avoid']
 /** 输出写坏的批:再试也一样。网络和超时多半不是这一批的错,合盖醒来常见,给多几次 */
 const BATCH_RETRIES_BAD = 2
@@ -99,38 +96,17 @@ export function daysSeen(evidenceTs: number[], now: number): number {
   return new Set(evidenceTs.filter(ts => ts <= now).map(localDate)).size
 }
 
-/** 两次一前一后的最长连续重合。O(nm),n ≤ 300 */
-function longestRun(a: string[], b: string[]): { len: number; aEnd: number; bEnd: number } {
-  let prev = new Array<number>(b.length + 1).fill(0)
-  let best = { len: 0, aEnd: 0, bEnd: 0 }
-  for (let i = 1; i <= a.length; i++) {
-    const row = new Array<number>(b.length + 1).fill(0)
-    for (let j = 1; j <= b.length; j++) {
-      if (a[i - 1] !== b[j - 1]) continue
-      row[j] = prev[j - 1] + 1
-      if (row[j] > best.len) best = { len: row[j], aEnd: i, bEnd: j }
-    }
-    prev = row
-  }
-  return best
-}
-
 const negationsIn = (s: string) => NEGATIONS.map(n => s.split(n).length - 1).join(',')
 
 /**
- * 这条消息几乎逐字说了这句话:≥ 80% 的字是一整段连续的,没引到的不超过 MAX_UNQUOTED 个字,
- * 否定词对得上。比较的范围比引用段各多 NEGATION_MARGIN 个字,所以"不要 X"摘成"X"过不了;
- * 紧挨着下一句的否定也会判不过,只是多问一次
+ * 这条消息逐字说了这句话:整句连续出现,一个字都不在外面,这样尾巴夹带不了东西。
+ * 光这样挡不住意思相反:"绝对不要,无论多急,周五部署"里"周五部署"也是连续的。所以它还得独占一句,整条消息的否定词也要对得上。
+ * 冒号和逗号不算句子的结束:前面可能就是"不要"。判错只是多问一次
  */
-export function nearVerbatim(text: string, message: string): boolean {
-  const t = [...normalize(text)]
-  const m = [...normalize(message)]
-  if (t.length < MIN_VERBATIM) return false
-  const { len, aEnd, bEnd } = longestRun(t, m)
-  if (len / t.length < VERBATIM_RATIO || t.length - len > MAX_UNQUOTED) return false
-  const start = bEnd - len - (aEnd - len) - NEGATION_MARGIN
-  const end = bEnd + (t.length - aEnd) + NEGATION_MARGIN
-  return negationsIn(t.join('')) === negationsIn(m.slice(Math.max(0, start), end).join(''))
+export function saidVerbatim(text: string, message: string): boolean {
+  const t = normalize(text)
+  if ([...t].length < MIN_VERBATIM) return false
+  return message.split(SENTENCE_END).some(s => normalize(s) === t) && negationsIn(t) === negationsIn(normalize(message))
 }
 
 /** 真的是两次:不同的本地日期、相隔 12 小时以上、不同的轮。23:59 和 00:01 不算两天,同一轮也不算 */
@@ -397,11 +373,11 @@ class Consolidation {
     }
   }
 
-  /** 两次都说过了:procedure 永远确认;fact 要两次都几乎逐字、没有任何标记、没人正在被问,才自动 */
+  /** 两次都说过了:procedure 永远确认;fact 要两次都逐字、没有任何标记、没人正在被问,才自动 */
   private routeLasting(c: Candidate, rows: RawRow[], flags: string[], s: Summary, propose: (t: 'MEMORY.md', flags: string[]) => boolean): string | undefined {
     const ask = (f: string[]) => (propose('MEMORY.md', f) ? 'MEMORY.md' : undefined)
     if (c.kind === 'procedure' || this.d.proposals.pendingSame(c.text)) return ask(flags)
-    if (!twoOccasions(rows.filter(r => nearVerbatim(c.text, r.text)), this.d.now())) return ask([...flags, PARAPHRASE])
+    if (!twoOccasions(rows.filter(r => saidVerbatim(c.text, r.text)), this.d.now())) return ask([...flags, PARAPHRASE])
     if (flags.length > 0) return ask(flags)
     const id = `n_${c.id.replace(/^c_/, '')}`
     try {
