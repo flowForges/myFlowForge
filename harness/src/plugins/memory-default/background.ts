@@ -104,6 +104,10 @@ export interface BackgroundOpts {
 
 type Job = (run: BackgroundRun) => Promise<void> | void
 type TextReq = Parameters<BackgroundRun['text']>[1]
+/** 任务替哪个会话跑。不给 = 默认账号(夜间) */
+export interface JobScope {
+  sessionRef?: ModelRef
+}
 
 /** 今天的花费和不再试的账号。一天一条,存在 meta */
 interface Ledger {
@@ -176,7 +180,7 @@ interface Slot {
 }
 
 export class Background {
-  private readonly queue: Job[] = []
+  private readonly queue: { job: Job; scope: JobScope | undefined }[] = []
   private active: Slot | undefined
   private closed = false
   /** 这一天的账本写失败过:记不了账就不再花 */
@@ -185,9 +189,9 @@ export class Background {
   constructor(private readonly o: BackgroundOpts) {}
 
   /** 一次一个,队列满了丢新的。不抛错,也不等任务开始 */
-  enqueue(job: Job): boolean {
+  enqueue(job: Job, scope?: JobScope): boolean {
     if (this.closed || this.queue.length >= QUEUE_MAX) return false
-    this.queue.push(job)
+    this.queue.push({ job, scope })
     this.pump()
     return true
   }
@@ -263,15 +267,16 @@ export class Background {
 
   private pump(): void {
     if (this.active || this.closed) return
-    const job = this.queue.shift()
-    if (!job) return
+    const next = this.queue.shift()
+    if (!next) return
+    const { job, scope } = next
     const abort = new AbortController()
     // 下一轮事件循环才开始:noteContext 那边不能被任务的同步部分拖住
-    const done = new Promise<void>(resolve => setImmediate(() => void this.runJob(job, abort).finally(resolve)))
+    const done = new Promise<void>(resolve => setImmediate(() => void this.runJob(job, scope, abort).finally(resolve)))
     this.active = { abort, done }
   }
 
-  private async runJob(job: Job, abort: AbortController): Promise<void> {
+  private async runJob(job: Job, scope: JobScope | undefined, abort: AbortController): Promise<void> {
     let tail: Promise<unknown> = Promise.resolve()
     let failed: BackgroundReason | undefined
     const run: BackgroundRun = {
@@ -281,7 +286,7 @@ export class Background {
           if (abort.signal.aborted) return no('aborted')
           // 一个任务失败一次就放弃:任务里写循环,也只发一个请求、读一次额度
           if (failed) return no(failed)
-          const r = await this.send(ref, req, abort.signal)
+          const r = await this.send(ref, req, scope, abort.signal)
           if (!r.ok) failed = r.reason
           return r
         }).catch(() => no('error'))
@@ -325,13 +330,13 @@ export class Background {
     })
   }
 
-  private async send(ref: ModelRef, req: TextReq, closing: AbortSignal): Promise<BackgroundText> {
+  private async send(ref: ModelRef, req: TextReq, scope: JobScope | undefined, closing: AbortSignal): Promise<BackgroundText> {
     const gate = new CallGate()
     const timer = setTimeout(() => gate.halt('timeout'), this.o.timeoutMs ?? TIMEOUT_MS)
     const onClose = () => gate.halt('aborted')
     closing.addEventListener('abort', onClose, { once: true })
     try {
-      return await this.fencedCall(ref, req, gate)
+      return await this.fencedCall(ref, req, scope, gate)
     } catch (err) {
       this.warn('background call failed', { error: err instanceof Error ? err.name : 'unknown' })
       return no('error')
@@ -341,7 +346,10 @@ export class Background {
     }
   }
 
-  private accountFence(models: ModelsService, ref: ModelRef, cfg: MemoryConfig): Fenced | BackgroundReason {
+  private accountFence(models: ModelsService, ref: ModelRef, scope: JobScope | undefined, cfg: MemoryConfig): Fenced | BackgroundReason {
+    // 和 pickBackground 同一条线:对话不悄悄发给另一家,配了 backgroundModel 才算用户同意
+    const allowed = cfg.backgroundModel?.accountId ?? scope?.sessionRef?.accountId ?? models.catalog().default?.accountId
+    if (ref.accountId !== allowed) return 'restricted'
     const found = accountOf(models, ref.accountId)
     if (!found) return 'account_out'
     const { account, preset, list } = found
@@ -382,11 +390,11 @@ export class Background {
     return true
   }
 
-  private async fencedCall(ref: ModelRef, req: TextReq, gate: CallGate): Promise<BackgroundText> {
+  private async fencedCall(ref: ModelRef, req: TextReq, scope: JobScope | undefined, gate: CallGate): Promise<BackgroundText> {
     const models = this.o.models()
     if (!models) return no('error')
     const cfg = this.o.config()
-    const fence = this.accountFence(models, ref, cfg)
+    const fence = this.accountFence(models, ref, scope, cfg)
     if (typeof fence === 'string') return no(fence)
     const cost = fence.entry?.cost ?? UNPRICED
     const billed = (input: number, output: number) => (fence.metered ? dollars(cost, input, output) : 0)

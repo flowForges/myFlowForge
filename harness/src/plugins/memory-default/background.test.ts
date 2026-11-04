@@ -104,7 +104,7 @@ function rig(o: Partial<FakeModelsOpts> & { config?: Partial<MemoryConfig>; time
     clock,
     one(r = A) {
       return new Promise((resolve, reject) => {
-        const queued = h.bg.enqueue(async run => resolve(await run.text(r, REQ)))
+        const queued = h.bg.enqueue(async run => resolve(await run.text(r, REQ)), { sessionRef: r })
         if (!queued) reject(new Error('dropped'))
       })
     },
@@ -478,6 +478,34 @@ describe('timeout', () => {
     const h = rig({ timeoutMs: 5000, script: async function* () { for (;;) yield { type: 'text', delta: chunk } } })
     expect(await h.one()).toEqual({ ok: false, reason: 'length' })
     expect(h.fake.calls[0].req.signal.aborted).toBe(true)
+  })
+})
+
+describe('one account per job', () => {
+  const two = [{ id: 'acc', models: [{ id: 'm' }] }, { id: 'b', models: [{ id: 'm' }] }]
+  const B2 = ref('b', 'm')
+  const ask = (h: Rig, target: typeof A, scope?: { sessionRef?: typeof A }) =>
+    new Promise(resolve => h.bg.enqueue(async run => resolve(await run.text(target, REQ)), scope))
+
+  it('without a session: only the default account', async () => {
+    const h = rig({ accounts: two })
+    expect(await ask(h, B2)).toEqual({ ok: false, reason: 'restricted' })
+    expect(h.fake.calls).toHaveLength(0)
+    expect(await ask(h, A)).toMatchObject({ ok: true })
+  })
+
+  it('with a session: only that session\'s account, not the default', async () => {
+    const h = rig({ accounts: two })
+    expect(await ask(h, A, { sessionRef: B2 })).toEqual({ ok: false, reason: 'restricted' })
+    expect(h.fake.calls).toHaveLength(0)
+    expect(await ask(h, B2, { sessionRef: B2 })).toMatchObject({ ok: true })
+  })
+
+  it('a configured model is the user\'s consent: its account, whatever the session', async () => {
+    const h = rig({ accounts: two, config: { backgroundModel: B2 } })
+    expect(await ask(h, A, { sessionRef: A })).toEqual({ ok: false, reason: 'restricted' })
+    expect(h.fake.calls).toHaveLength(0)
+    expect(await ask(h, B2, { sessionRef: A })).toMatchObject({ ok: true })
   })
 })
 
