@@ -367,7 +367,6 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<TurnOut
 
     let r = await streamStep(step)
     let overflowRetried = false
-    let thinkingRetried = false
     while (r.kind === 'error' && !r.produced) {
       if (r.error.kind === 'rate_limit' && r.error.retryable && retries < MAX_RETRIES) {
         // 限流且这一步还没吐出文本 / 工具调用:等一会儿重试(每轮最多 2 次,可被取消)
@@ -380,8 +379,8 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<TurnOut
       } else if (r.error.kind === 'bad_request' && THINKING_REFUSED.test(r.error.message)) {
         // 折叠、丢消息、重建或 memory.delete 动过前缀:去掉推理重试一次,新产生的推理绑定新前缀。在 OVERFLOW 之前:这种拒绝不能写标记
         const stripped = withoutReplays(messages)
-        if (thinkingRetried || stripped.every((m, i) => m === messages[i])) break
-        thinkingRetried = true
+        // 没有可去的就停:同一步里不会有新推理,所以最多重试一次
+        if (stripped.every((m, i) => m === messages[i])) break
         deps.log.warn('thinking replay refused, retrying once without it', { step })
         messages = stripped
         r = await streamStep(step)
