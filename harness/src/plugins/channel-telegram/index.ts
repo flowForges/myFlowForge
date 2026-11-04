@@ -12,6 +12,7 @@ import { classify, isExternal, type DmInbound, type Inbound } from './inbound'
 import { manifest } from './manifest'
 import { Pairing, PairingError, parsePairCommand } from './pairing'
 import { codeOf, Poller, type PollerState } from './poller'
+import { Sender } from './sender'
 import { TelegramState, type TelegramBot } from './state'
 
 const API_BASE = 'https://api.telegram.org'
@@ -27,8 +28,8 @@ const STATUS_STABLE_MS = 30_000
 const LEAVE_WINDOW_MS = 3_600_000
 const LEAVES_PER_WINDOW = 30
 const LEFT_CHATS_MAX = 1000
-/** 发送队列的上限;陌生人能触发的都有更小的预算。真正的发送器是 Task 8 */
-const OUTBOX_MAX = 256
+/** 关闭时最多再等这么久(§5.2) */
+const FLUSH_MS = 500
 const SAVE_FAILED = 'state_save_failed'
 const CONFIG_INVALID = 'config_invalid'
 
@@ -140,28 +141,39 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
         if (at >= 0) state.problems.splice(at, 1)
       }
 
-      // —— 发送:不挡轮询,失败只记代码。限速、重试、分块是 Task 8
-      let outboxChain: Promise<void> = Promise.resolve()
-      let outboxSize = 0
-      const enqueue = (method: string, body: object) => {
-        if (outboxSize >= OUTBOX_MAX) {
-          ctx.log.warn('telegram outbox full', { method })
-          return
+      const saveNow = () => {
+        try {
+          state.save()
+          noteSaved()
+        } catch (err) {
+          noteSaveFailure(err)
         }
-        outboxSize++
-        outboxChain = outboxChain
-          .then(async () => {
-            if (lifetime.signal.aborted) return
-            await api.call(method, body, { signal: lifetime.signal })
-          })
-          .catch(err => ctx.log.warn('telegram send failed', { method, code: codeOf(err) }))
-          .finally(() => void outboxSize--)
       }
       const chatRecord = (chatId: string) => state.data.chats[chatId] as { blocked?: boolean } | undefined
-      const reply = (chatId: string, text: string) => {
-        if (chatRecord(chatId)?.blocked) return
-        enqueue('sendMessage', { chat_id: chatId, text, link_preview_options: { is_disabled: true } })
+      const setBlocked = (chatId: string, blocked: boolean) => {
+        const { blocked: _old, ...rest } = chatRecord(chatId) ?? {}
+        const next = blocked ? { ...rest, blocked: true } : rest
+        if (Object.keys(next).length > 0) state.data.chats[chatId] = next
+        else delete state.data.chats[chatId]
       }
+
+      // —— 发送:不挡轮询,不挡轮。blocked 只记配对账号的:陌生人的 403 不能往 chats 里写东西
+      const sender = new Sender({
+        api,
+        now,
+        timers,
+        random: opts.random ?? Math.random,
+        onChange: saveNow,
+        onUndelivered: () => void state.data.undelivered++,
+        isBlocked: chatId => chatRecord(chatId)?.blocked === true,
+        onBlocked: chatId => {
+          if (!isPaired(chatId, chatId)) return
+          setBlocked(chatId, true)
+          saveNow()
+        },
+        log: ctx.log,
+      })
+      const reply = (chatId: string, text: string) => void sender.send(chatId, { text })
 
       // —— 配对
       const pairing = new Pairing({
@@ -188,9 +200,7 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
           return
         }
         // 他刚发了消息,不可能还封着机器人
-        const { blocked: _blocked, ...record } = chatRecord(i.chatId) ?? {}
-        if (Object.keys(record).length > 0) state.data.chats[i.chatId] = record
-        else delete state.data.chats[i.chatId]
+        setBlocked(i.chatId, false)
         reply(i.chatId, PAIRED_LINE)
       }
 
@@ -236,7 +246,7 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
         leaves.push(now())
         leftChats.push(chatId)
         if (leftChats.length > LEFT_CHATS_MAX) leftChats.splice(0, leftChats.length - LEFT_CHATS_MAX)
-        enqueue('leaveChat', { chat_id: chatId })
+        sender.fire('leaveChat', { chat_id: chatId })
       }
 
       const onBlocked = (i: Extract<Inbound, { kind: 'blocked' }>) => {
@@ -244,10 +254,7 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
           state.data.dropped.unpaired++
           return
         }
-        const { blocked: _old, ...rest } = chatRecord(i.chatId) ?? {}
-        const next = i.blocked ? { ...rest, blocked: true } : rest
-        if (Object.keys(next).length > 0) state.data.chats[i.chatId] = next
-        else delete state.data.chats[i.chatId]
+        setBlocked(i.chatId, i.blocked)
       }
 
       const handleUpdate = async (update: unknown): Promise<void> => {
@@ -268,7 +275,7 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
               state.data.dropped.unpaired++
               return
             }
-            enqueue('answerCallbackQuery', { callback_query_id: i.callbackId, text: STALE_BUTTON_LINE })
+            sender.fire('answerCallbackQuery', { callback_query_id: i.callbackId, text: STALE_BUTTON_LINE })
             return
           case 'attachment':
             if (!isPaired(i.accountId, i.chatId)) {
@@ -341,7 +348,10 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
       const adopt = (bot: TelegramBot) => {
         const before = state.data.bot?.id
         if (!state.adoptBot(bot)) return
-        if (before !== undefined && before !== bot.id) pairing.cancel()
+        if (before !== undefined && before !== bot.id) {
+          pairing.cancel()
+          sender.dropAll()
+        }
         try {
           state.save()
           noteSaved()
@@ -461,6 +471,8 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
         const at = pairings.findIndex(p => p.accountId === params.accountId)
         if (at >= 0) {
           pairings.splice(at, 1)
+          // 私聊的 chat id 就是账号 id;还排着的不再发给他
+          sender.drop(params.accountId)
           ctx.append({ type: 'channel.unpaired', payload: { channel: 'telegram', accountId: params.accountId, by: 'app' } })
         } else if (!state.problems.includes(SAVE_FAILED)) {
           return { ok: true }
@@ -512,6 +524,8 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
         timers.clearTimeout(statusTimer)
         statusTimer = undefined
         await poller.stop()
+        await sender.flush(FLUSH_MS)
+        sender.close()
       })
 
       try {

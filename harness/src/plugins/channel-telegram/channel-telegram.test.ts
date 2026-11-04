@@ -19,6 +19,8 @@ const STABLE = 30_000
 const SUCCESS = '配对成功。这里的对话和你的记忆内容会经过 Telegram 的服务器。'
 const INVALID = '配对码无效或已过期'
 const STRANGER = 2001
+/** 发送器的写间隔和全局限速:同一聊天的第二条要等假时间走过这么久 */
+const PACE = 1100
 
 const rigs: TelegramRig[] = []
 afterEach(async () => {
@@ -644,6 +646,7 @@ describe('pairing in the chat', () => {
     await handled(r, r.dm('/pair ZZZZ-ZZZZ', { from: 3001 })) // 没有码
     const a = await begin(r)
     await handled(r, r.dm('/pair ZZZZ-ZZZZ', { from: 3002 })) // 码错
+    await r.settle()
     await jump(r, 5 * 60_000)
     await handled(r, r.dm(`/pair ${a.code}`, { from: 3003 })) // 过期
     await r.settle()
@@ -825,7 +828,7 @@ describe('pairing in the chat', () => {
     const before = sent(r).length
     await handled(r, r.dm('/pair ZZZZ-ZZZZ'))
     await handled(r, r.dm('/start'))
-    await r.settle()
+    await r.settle({ advance: PACE * 3 })
     expect(sent(r).slice(before).map(q => q.body.text)).toEqual(['已配对', '已配对'])
     expect(events(r, 'channel.paired')).toHaveLength(1)
   })
@@ -950,7 +953,7 @@ describe('strangers cost nothing', () => {
     let last = 0
     for (let i = 0; i < 40; i++) last = r.dm('/pair ZZZZ-ZZZZ', { from: 10_000 + i })
     await handled(r, last)
-    await r.settle()
+    await r.settle({ advance: PACE * 2 })
     expect(sent(r)).toHaveLength(30)
     await jump(r, HOUR)
     await handled(r, r.dm('/pair ZZZZ-ZZZZ', { from: 20_000 }))
@@ -963,7 +966,7 @@ describe('the paired account', () => {
   it('reaches the stub, which answers ok', async () => {
     const r = await paired()
     await handled(r, r.dm('hello'))
-    await r.settle()
+    await r.settle({ advance: PACE })
     expect(textsTo(r, r.owner)).toEqual([SUCCESS, 'ok'])
   })
 
@@ -973,6 +976,81 @@ describe('the paired account', () => {
     await r.settle()
     expect(sent(r).length).toBeGreaterThan(0)
     for (const q of sent(r)) expect(q.body.link_preview_options).toEqual({ is_disabled: true })
+  })
+
+  describe('sending does not hold anything up', () => {
+    it('a 429 on a reply: the reply still arrives after retry_after, and the next update is handled meanwhile', async () => {
+      const r = await paired()
+      await r.settle({ advance: PACE })
+      r.fake.fail('sendMessage', 1, { status: 429, body: { ok: false, description: 'Too Many Requests', parameters: { retry_after: 7 } } })
+      await handled(r, r.dm('first'))
+      await r.settle()
+      expect(textsTo(r, r.owner)).toEqual([SUCCESS])
+      const at = sent(r).at(-1)?.at as number
+      await handled(r, r.press('a:nonce:y'))
+      await r.settle()
+      expect(sent(r, 'answerCallbackQuery')).toHaveLength(1)
+      await r.settle({ advance: 6900 })
+      expect(textsTo(r, r.owner)).toEqual([SUCCESS])
+      await r.settle({ advance: 200 })
+      expect(textsTo(r, r.owner)).toEqual([SUCCESS, 'ok'])
+      expect((sent(r).at(-1)?.at as number) - at).toBeGreaterThanOrEqual(7000)
+    })
+
+    it('a hung send does not stop the poller', async () => {
+      const r = await paired()
+      await r.settle({ advance: PACE })
+      r.fake.fail('sendMessage', 1, 'hang')
+      await handled(r, r.dm('first'))
+      await handled(r, r.dm('second'))
+      await handled(r, r.dm('third'))
+      expect(onDisk(r).offset).toBeGreaterThan(0)
+    })
+
+    it('a 403 records blocked on the paired chat and nothing more goes out', async () => {
+      const r = await paired()
+      await r.settle({ advance: PACE })
+      r.fake.fail('sendMessage', 1, { status: 403, body: { ok: false, description: 'Forbidden: bot was blocked by the user' } })
+      await handled(r, r.dm('first'))
+      await r.settle()
+      await expect.poll(() => onDisk(r).chats[String(r.owner)]?.blocked).toBe(true)
+      const n = sent(r).length
+      await handled(r, r.dm('second'))
+      await r.settle({ advance: PACE * 2 })
+      expect(sent(r)).toHaveLength(n)
+    })
+
+    it('a 403 for a stranger writes nothing about that chat', async () => {
+      const r = await withToken()
+      r.fake.fail('sendMessage', 1, { status: 403 })
+      await handled(r, r.dm('/pair ZZZZ-ZZZZ', { from: STRANGER }))
+      await r.settle()
+      expect(onDisk(r).chats).toEqual({})
+    })
+
+    it('unpair: a reply still queued does not go out', async () => {
+      const r = await paired()
+      await r.settle({ advance: PACE })
+      r.fake.fail('sendMessage', 1, { status: 429, body: { ok: false, parameters: { retry_after: 5 } } })
+      await handled(r, r.dm('first'))
+      await r.settle()
+      const n = sent(r).length
+      await r.k.handle('channel.telegram.unpair', { commandId: 'u1', accountId: String(r.owner) })
+      await r.settle({ advance: 6000 })
+      expect(sent(r)).toHaveLength(n)
+    })
+
+    it('close: the flush lets a paced reply go, and returns even if Telegram hangs', async () => {
+      const r = await paired()
+      await handled(r, r.dm('hello'))
+      await r.restart()
+      expect(textsTo(r, r.owner)).toEqual([SUCCESS, 'ok'])
+      await r.settle({ advance: PACE })
+      r.fake.fail('sendMessage', 1, 'hang')
+      await handled(r, r.dm('again'))
+      await r.restart()
+      expect((await status(r)).state).not.toBe('unauthorized')
+    })
   })
 
   it('a stranger does not reach it, and the check is read fresh for every message', async () => {
@@ -1007,7 +1085,7 @@ describe('the paired account', () => {
     const { seen, channel } = recording()
     const r = await paired({ channel })
     await handled(r, r.dm('', { extra: { text: undefined, photo: [{ file_id: 'f' }], caption: '/unpair confirm' } }))
-    await r.settle()
+    await r.settle({ advance: PACE })
     expect(textsTo(r, r.owner).at(-1)).toBe('暂不支持附件,发文字吧')
     expect(sent(r, 'getFile')).toEqual([])
     expect(seen).toEqual([])
@@ -1046,7 +1124,7 @@ describe('the paired account', () => {
     await handled(r, block('member'))
     expect(onDisk(r).chats[String(r.owner)]?.blocked).toBeUndefined()
     await handled(r, r.dm('hello'))
-    await r.settle()
+    await r.settle({ advance: PACE })
     expect(sent(r).length).toBe(before + 1)
   })
 
@@ -1060,7 +1138,7 @@ describe('the paired account', () => {
     await handled(r, member('member')) // 没配对:这一条不记
     const { code } = await begin(r)
     await handled(r, r.dm(`/pair ${code}`))
-    await r.settle()
+    await r.settle({ advance: PACE })
     expect(textsTo(r, r.owner)).toEqual([SUCCESS, SUCCESS])
   })
 
@@ -1258,7 +1336,7 @@ describe('joined_group', () => {
     let last = 0
     for (let i = 0; i < 31; i++) last = joined(r, -100 - i)
     await handled(r, last)
-    await r.settle()
+    await r.settle({ advance: PACE * 2 })
     expect(sent(r, 'leaveChat')).toHaveLength(30)
     expect((await status(r)).dropped.group).toBe(31)
     await jump(r, HOUR)
