@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Message } from '../../lib/models/types'
-import { compact, contextWindow, estimateTokens } from './compact'
+import { compact, contextWindow, dropOldest, estimateTokens } from './compact'
 
 const user = (text: string): Message => ({ role: 'user', parts: [{ type: 'text', text }] })
 const call = (id: string, name: string, args: object): Message => ({ role: 'assistant', parts: [{ type: 'tool_call', id, name, args: JSON.stringify(args) }] })
@@ -150,3 +150,158 @@ describe('compact with notices', () => {
     expect(out.map(m => m.role)).toEqual(msgs.map(m => m.role))
   })
 })
+
+describe('dropOldest (06 spec §12)', () => {
+  const FIRST = user('FIRST')
+  const placeholder = (n: number) => `[已省略较早的 ${n} 条消息,事件日志里还在]`
+  const text = (m: Message) => m.parts.map(p => (p.type === 'text' ? p.text : p.type)).join('|')
+  const say = (t: string): Message => ({ role: 'assistant', parts: [{ type: 'text', text: t }] })
+  const drop = (m: Message[], o: Partial<Parameters<typeof dropOldest>[1]> = {}) => dropOldest(m, { context: 1000, target: 0.6, keepRecent: 0, currentOpening: -1, ...o })
+
+  /** call → result 对,每对约 200 token */
+  const pairs = (n: number) => Array.from({ length: n }, (_, i) => [call(`c${i}`, 'read', { path: `${i}` }), result(`c${i}`, big(`${i % 10}`, 700))]).flat()
+
+  it('under the target: the same messages, a new array', () => {
+    const m = [FIRST, say('a')]
+    const out = drop(m)
+    expect(out).toEqual(m)
+    expect(out).not.toBe(m)
+  })
+
+  it('removes from index 1 until the target, leaving the placeholder, and every tool_call keeps its result', () => {
+    const m = [FIRST, ...pairs(6)]
+    const out = drop(m)
+    expect(text(out[0])).toBe('FIRST')
+    expect(estimateTokens(out)).toBeLessThanOrEqual(600)
+    const kept = (out.length - 2) / 2
+    expect(text(out[1])).toBe(placeholder(12 - kept * 2))
+    expectPaired(out)
+  })
+
+  it('never starts the tail on a tool message', () => {
+    for (let target = 0.05; target < 1; target += 0.05) {
+      const out = drop([FIRST, ...pairs(6)], { target })
+      expectPaired(out)
+      expect(out[2]?.role).not.toBe('tool')
+    }
+  })
+
+  it('keeps at least the last step, however low the target', () => {
+    const out = drop([FIRST, ...pairs(3)], { target: 0.001 })
+    expect(out.map(m => m.role)).toEqual(['user', 'user', 'assistant', 'tool'])
+    expect(text(out[1])).toBe(placeholder(4))
+  })
+
+  it('a tail may start on a user message or on a plain assistant step', () => {
+    const atUser = drop([FIRST, ...pairs(2), user('MID'), result2('x')], { target: 0.1 })
+    expect(atUser.slice(2).map(m => m.role)[0]).toMatch(/user|assistant/)
+    const out = drop([FIRST, ...pairs(3), say('END')], { target: 0.001 })
+    expect(text(out[out.length - 1])).toBe('END')
+  })
+
+  it('keepRecent holds back a drop that would leave too little of the tail', () => {
+    const m = [FIRST, ...pairs(6)]
+    const free = drop(m, { target: 0.01 })
+    const held = drop(m, { target: 0.01, keepRecent: 500 })
+    expect(free.length).toBeLessThan(held.length)
+    expect(estimateTokens(held.slice(2))).toBeGreaterThanOrEqual(500)
+    expectPaired(held)
+  })
+
+  it('index 0: the last text part is clipped to 4000, the environment and session parts stay', () => {
+    const first: Message = { role: 'user', parts: [{ type: 'text', text: 'E'.repeat(5000) }, { type: 'text', text: 'B'.repeat(50_000) }] }
+    const out = dropOldest([first, say('a')], { context: 10_000, target: 0.6, keepRecent: 0, currentOpening: -1 })
+    expect((out[0].parts[0] as { text: string }).text).toBe('E'.repeat(5000))
+    const body = (out[0].parts[1] as { text: string }).text
+    expect(body.length).toBeLessThanOrEqual(4000)
+    expect(body.startsWith('BBB')).toBe(true)
+    expect(first.parts[1]).toEqual({ type: 'text', text: 'B'.repeat(50_000) }) // 不改入参
+  })
+
+  it('clipping alone may be enough: no placeholder then', () => {
+    const first = user('B'.repeat(50_000))
+    const out = dropOldest([first, say('a'), say('b')], { context: 10_000, target: 0.6, keepRecent: 0, currentOpening: -1 })
+    expect(out).toHaveLength(3)
+  })
+
+  it('the current opening stays whole, at index 0 too', () => {
+    const huge = user('C'.repeat(3000))
+    const m = [FIRST, ...pairs(3), huge, ...pairs(3)]
+    const out = drop(m, { currentOpening: 7, target: 0.2 })
+    expect(out.filter(x => x === huge)).toHaveLength(1)
+    expect(text(out[0])).toBe('FIRST')
+    expect(text(out[1])).toMatch(/^\[已省略较早的/)
+    expect(out[2]).toBe(huge)
+    expectPaired(out)
+
+    const opening = user('D'.repeat(5000))
+    const atZero = dropOldest([opening, ...pairs(6)], { context: 1000, target: 0.6, keepRecent: 0, currentOpening: 0 })
+    expect(atZero[0]).toBe(opening)
+    expectPaired(atZero)
+  })
+
+  it('the opening in the tail is not repeated, and the count is right', () => {
+    const opening = user('OPEN')
+    const m = [FIRST, ...pairs(3), opening, ...pairs(1)]
+    const out = drop(m, { currentOpening: 7, target: 0.25 })
+    expect(out.filter(x => x === opening)).toHaveLength(1)
+    const dropped = m.length - (out.length - 1)
+    expect(text(out[1])).toBe(placeholder(dropped))
+  })
+
+  it('a checkpoint right after the first message stays: it is the only record of what it covers', () => {
+    const cp = user('<checkpoint through="9">\nsummary\n</checkpoint>')
+    const out = drop([FIRST, cp, ...pairs(6)], { target: 0.2 })
+    expect(out[1]).toBe(cp)
+    expect(text(out[2])).toMatch(/^\[已省略较早的/)
+    expectPaired(out)
+  })
+
+  it('dropping again adds to the earlier count', () => {
+    const m = [FIRST, ...pairs(8)]
+    const once = drop(m, { target: 0.6 })
+    const onceN = Number(/(\d+) 条/.exec(text(once[1]))![1])
+    const twice = drop(once, { target: 0.3 })
+    const twiceN = Number(/(\d+) 条/.exec(text(twice[1]))![1])
+    expect(twice.filter(x => text(x).startsWith('[已省略'))).toHaveLength(1)
+    expect(twiceN).toBe(m.length - (twice.length - 1))
+    expect(twiceN).toBeGreaterThan(onceN)
+    expectPaired(twice)
+  })
+
+  it('is deterministic and does not change its input', () => {
+    const m = [FIRST, ...pairs(6)]
+    const copy = structuredClone(m)
+    expect(drop(m)).toEqual(drop(m))
+    expect(m).toEqual(copy)
+  })
+
+  it('one message: nothing to remove', () => {
+    expect(drop([user('x'.repeat(100))], { target: 0.0001 })).toHaveLength(1)
+  })
+
+  it('compact never touches the first message of a rebuilt history', () => {
+    const first = user('E'.repeat(10_000))
+    const cp = user('<checkpoint through="1">\ns\n</checkpoint>')
+    const out = compact([first, cp, ...pairs(30)], { context: 1000, keepRecentTokens: 0 })
+    expect(out[0]).toBe(first)
+    expect(out[1]).toBe(cp)
+  })
+})
+
+function result2(t: string): Message {
+  return { role: 'assistant', parts: [{ type: 'text', text: t }] }
+}
+
+function expectPaired(messages: Message[]) {
+  messages.forEach((m, i) => {
+    const calls = m.parts.flatMap(p => (p.type === 'tool_call' ? [p.id] : []))
+    const results = m.parts.flatMap(p => (p.type === 'tool_result' ? [p.callId] : []))
+    if (calls.length) {
+      const next = messages[i + 1]
+      expect(next?.role).toBe('tool')
+      expect(next.parts.map(p => (p.type === 'tool_result' ? p.callId : ''))).toEqual(calls)
+    }
+    if (results.length) expect(messages[i - 1]?.parts.flatMap(p => (p.type === 'tool_call' ? [p.id] : []))).toEqual(results)
+  })
+}

@@ -3,7 +3,10 @@
 // 该步之后的 tool.ended → 一条 role:'tool' 消息。未配对的调用补"已中断";已回滚的轮与当前轮跳过。
 // executor.notice、followUp 的 message.user → 同一轮里按 seq 排的 user 消息(本轮的循环用同样的构造,逐字节相同)
 // memory.injected(06 §7):会话块进第一条,轮块进它那一轮的开场消息。只读事件,不读文件
+// context.rebuilt(06 §12):第一条 + 检查点 + 盖不住的部分。字节只由事件和标记决定,事件一条不删
+import { activeRebuild, clipOpening, isCovered } from '../../lib/memory/checkpoint'
 import { blocksOf } from '../../lib/memory/inject'
+import { checkpointBlock } from '../../lib/memory/wrap'
 import type { Message, Part } from '../../lib/models/types'
 import type { KernelEvent } from '../../protocol/index'
 
@@ -25,13 +28,17 @@ export interface BuildOpts {
   reminder?(ts: number): string
   /** 当前轮的 message.user 不在 events 里时用的时间 */
   now?: number
+  /** 当前轮也按事件还原,currentText 不再追加(日志里没有这一轮时才用它) */
+  includeCurrent?: boolean
+  /** 按这个检查点算,不看日志里的标记:判断一个候选值不值得切换 */
+  rebuild?: { throughSeq: number; text: string }
 }
 
 type Call = Extract<Part, { type: 'tool_call' }>
 type Result = Extract<Part, { type: 'tool_result' }>
 interface AssistantStep { kind: 'assistant'; parts: Part[]; results: (Result | undefined)[] }
 type Step = AssistantStep | { kind: 'notice'; text: string } | { kind: 'followUp'; text: string; ts: number }
-interface Turn { user: string; ts: number; steps: Step[] }
+interface Turn { user: string; ts: number; firstSeq: number; steps: Step[] }
 
 const obj = (v: unknown): Record<string, unknown> | undefined => (v && typeof v === 'object' ? (v as Record<string, unknown>) : undefined)
 const str = (v: unknown): v is string => typeof v === 'string'
@@ -81,7 +88,13 @@ function lastAssistant(steps: Step[]): AssistantStep | undefined {
   return undefined
 }
 
-export function buildMessages(events: KernelEvent[], currentTurnId: string, currentText: string, opts: BuildOpts = {}): Message[] {
+/** 消息,和当前轮开场消息的下标 */
+export interface RebuiltHistory {
+  messages: Message[]
+  opening: number
+}
+
+export function rebuildHistory(events: KernelEvent[], currentTurnId: string, currentText: string, opts: BuildOpts = {}): RebuiltHistory {
   const rolledBack = new Set<string>()
   let currentTs: number | undefined
   for (const e of events) {
@@ -89,22 +102,26 @@ export function buildMessages(events: KernelEvent[], currentTurnId: string, curr
     if (e.type === 'turn.rolledBack' && str(id)) rolledBack.add(id)
     if (e.type === 'message.user' && id === currentTurnId && currentTs === undefined) currentTs = e.ts
   }
+  const rebuild = opts.rebuild ?? activeRebuild(events)
+  // throughSeq 及之前的步和后续消息不进:工具结果跟着它的步走,配对不会断在边界上
+  const through = rebuild?.throughSeq ?? -Infinity
   const turns = new Map<string, Turn>()
   const order: string[] = []
   for (const e of events) {
     const p = obj(e.payload)
     const id = p?.turnId
-    if (!p || !str(id) || id === currentTurnId || rolledBack.has(id)) continue
+    if (!p || !str(id) || (id === currentTurnId && !opts.includeCurrent) || rolledBack.has(id)) continue
     if (e.type === 'message.user') {
       const open = turns.get(id)
       if (open) {
-        if (p.followUp === true) open.steps.push({ kind: 'followUp', text: str(p.text) ? p.text : '', ts: e.ts })
+        if (p.followUp === true && e.seq > through) open.steps.push({ kind: 'followUp', text: str(p.text) ? p.text : '', ts: e.ts })
         continue
       }
-      turns.set(id, { user: str(p.text) ? p.text : '', ts: e.ts, steps: [] })
+      turns.set(id, { user: str(p.text) ? p.text : '', ts: e.ts, firstSeq: e.seq, steps: [] })
       order.push(id)
       continue
     }
+    if (e.seq <= through) continue
     const t = turns.get(id)
     if (!t) continue
     if (e.type === 'message.assistant') {
@@ -123,13 +140,28 @@ export function buildMessages(events: KernelEvent[], currentTurnId: string, curr
     }
   }
 
+  // 第一轮都没盖住 = 这个检查点只总结了回滚掉的内容:没有东西要换
+  const firstTurn = order.length ? turns.get(order[0]) : undefined
+  const checkpoint = rebuild && firstTurn && isCovered(firstTurn.firstSeq, rebuild.throughSeq) ? rebuild : undefined
   const blocks = blocksOf(events)
   const out: Message[] = []
+  let opening = -1
   const user = (text: string, ts: number, turnId?: string): Message =>
     userMessage(text, ts, opts, !out.length, { session: blocks.session, turn: turnId === undefined ? undefined : blocks.turns.get(turnId) })
   for (const id of order) {
     const t = turns.get(id)!
-    out.push(user(t.user, t.ts, id))
+    if (id === currentTurnId) opening = out.length
+    if (checkpoint && !out.length) {
+      // 第一条总在;它的轮块不带,要是更新块,lastSeen 看不见了就会补发
+      out.push(userMessage(clipOpening(t.user), t.ts, opts, true, { session: blocks.session }))
+      out.push(noticeMessage(checkpointBlock(checkpoint.throughSeq, checkpoint.text)))
+    } else if (checkpoint && isCovered(t.firstSeq, checkpoint.throughSeq)) {
+      // 落在中间的那一轮:手上的任务不能只剩摘要。整轮都盖住了就没有它的事,除非它正是当前轮
+      if (!t.steps.length && id !== currentTurnId) continue
+      out.push(userMessage(clipOpening(t.user), t.ts, opts, false))
+    } else {
+      out.push(user(t.user, t.ts, id))
+    }
     for (const s of t.steps) {
       if (s.kind === 'notice') {
         out.push(noticeMessage(s.text))
@@ -148,6 +180,13 @@ export function buildMessages(events: KernelEvent[], currentTurnId: string, curr
       })
     }
   }
-  out.push(user(currentText, currentTs ?? opts.now ?? Date.now(), currentTurnId))
-  return out
+  if (opening < 0) {
+    opening = out.length
+    out.push(user(currentText, currentTs ?? opts.now ?? Date.now(), currentTurnId))
+  }
+  return { messages: out, opening }
+}
+
+export function buildMessages(events: KernelEvent[], currentTurnId: string, currentText: string, opts: BuildOpts = {}): Message[] {
+  return rebuildHistory(events, currentTurnId, currentText, opts).messages
 }

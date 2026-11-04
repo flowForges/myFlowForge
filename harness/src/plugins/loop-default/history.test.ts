@@ -3,7 +3,9 @@ import { buildAnthropicBody } from '../../lib/models/anthropic'
 import { buildChatBody } from '../../lib/models/chat'
 import { buildResponsesBody } from '../../lib/models/responses'
 import type { KernelEvent } from '../../protocol/index'
-import { buildMessages, followUpMessage, INTERRUPTED, noticeMessage, type ReplayOrigin } from './history'
+import { checkpointBlock } from '../../lib/memory/wrap'
+import { estimateTokens } from './compact'
+import { buildMessages, followUpMessage, INTERRUPTED, noticeMessage, rebuildHistory, type ReplayOrigin } from './history'
 
 const ORIGIN: ReplayOrigin = { accountId: 'acc', protocol: 'anthropic', modelId: 'claude-x' }
 
@@ -350,5 +352,183 @@ describe('buildMessages: memory blocks (06 spec §7)', () => {
     const u = ev('message.user', { turnId: 't1', text: 'q' })
     expect(texts(buildMessages([u], 't1', 'q', OPTS)[0])).toEqual(['ENV', `R${u.ts}`, 'q'])
     expect(texts(buildMessages([u], 't1', 'q')[0])).toEqual(['q'])
+  })
+})
+
+describe('buildMessages: rebuild from a checkpoint (06 spec §12)', () => {
+  const OPTS = { environment: 'ENV', reminder: (ts: number) => `R${ts}` }
+  const texts = (m: { parts: unknown[] }) => (m.parts as { text: string }[]).map(p => p.text)
+  const say = (turnId: string, text: string, step = 1) => ev('message.assistant', { turnId, step, text, parts: [{ type: 'text', text }] })
+  const injected = (turnId: string, kind: 'session' | 'turn', text: string) => ev('memory.injected', { turnId, kind, text, items: [] })
+  const cpEvent = (throughSeq: number, text = 'SUMMARY', extra: object = {}) => ev('memory.checkpoint', { throughSeq, asOfSeq: throughSeq, text, model: 'm', tokens: 1, covers: 1, ...extra })
+  const markerOf = (cp: KernelEvent, throughSeq: number) => ev('context.rebuilt', { turnId: 'tm', step: 1, checkpointSeq: cp.seq, throughSeq, before: 100, after: 50 })
+  const block = (throughSeq: number, text = 'SUMMARY') => checkpointBlock(throughSeq, text)
+
+  /** t1 问答、t2 问答(带轮块和工具)、t3 问答 */
+  function log() {
+    const u1 = ev('message.user', { turnId: 't1', text: 'q1' })
+    const s = injected('t1', 'session', 'SESSION')
+    const b1 = injected('t1', 'turn', 'BLOCK1')
+    const a1 = say('t1', 'a1')
+    const e1 = ev('turn.ended', { turnId: 't1' })
+    const u2 = ev('message.user', { turnId: 't2', text: 'q2' })
+    const b2 = injected('t2', 'turn', 'BLOCK2')
+    const a2 = ev('message.assistant', { turnId: 't2', step: 1, text: '', parts: [call('c1')] })
+    const r2 = ended('t2', 'c1', 'body')
+    const a2b = say('t2', 'a2', 2)
+    const e2 = ev('turn.ended', { turnId: 't2' })
+    const u3 = ev('message.user', { turnId: 't3', text: 'q3' })
+    const b3 = injected('t3', 'turn', 'BLOCK3')
+    const a3 = say('t3', 'a3')
+    const e3 = ev('turn.ended', { turnId: 't3' })
+    return { u1, s, b1, a1, e1, u2, b2, a2, r2, a2b, e2, u3, b3, a3, e3, all: [u1, s, b1, a1, e1, u2, b2, a2, r2, a2b, e2, u3, b3, a3, e3] }
+  }
+
+  it('a boundary between turns: first message, checkpoint, then the rest whole; covered turns are gone', () => {
+    const l = log()
+    const cp = cpEvent(l.e2.seq)
+    const out = buildMessages([...l.all, cp, markerOf(cp, l.e2.seq)], 'tn', 'next', OPTS)
+    expect(out.map(texts)).toEqual([
+      ['ENV', 'SESSION', `R${l.u1.ts}`, 'q1'],
+      [block(l.e2.seq)],
+      [`R${l.u3.ts}`, 'BLOCK3', 'q3'],
+      ['a3'],
+      [expect.stringMatching(/^R/), 'next'],
+    ])
+  })
+
+  it('straddling turn: opening with its reminder and no block, then only the steps above throughSeq, every call paired', () => {
+    const l = log()
+    const cp = cpEvent(l.r2.seq)
+    const out = buildMessages([...l.all, cp, markerOf(cp, l.r2.seq)], 'tn', 'next', OPTS)
+    expect(out.map(texts)).toEqual([
+      ['ENV', 'SESSION', `R${l.u1.ts}`, 'q1'],
+      [block(l.r2.seq)],
+      [`R${l.u2.ts}`, 'q2'],
+      ['a2'],
+      [`R${l.u3.ts}`, 'BLOCK3', 'q3'],
+      ['a3'],
+      [expect.stringMatching(/^R/), 'next'],
+    ])
+  })
+
+  it('the first turn straddling: no second opening', () => {
+    const u = ev('message.user', { turnId: 't1', text: 'q1' })
+    const a = say('t1', 'a1')
+    const a2 = say('t1', 'a2', 2)
+    const cp = cpEvent(a.seq)
+    const out = buildMessages([u, a, a2, cp, markerOf(cp, a.seq)], 'tn', 'next', OPTS)
+    expect(out.map(texts)).toEqual([['ENV', `R${u.ts}`, 'q1'], [block(a.seq)], ['a2'], [expect.stringMatching(/^R/), 'next']])
+  })
+
+  it('opts.rebuild overrides with no marker in the log; the output equals a log that has the marker', () => {
+    const l = log()
+    const cp = cpEvent(l.a1.seq, 'OVERRIDE')
+    const viaOpt = buildMessages([...l.all, cp], 'tn', 'next', { ...OPTS, now: 1, rebuild: { throughSeq: l.a1.seq, text: 'OVERRIDE' } })
+    const viaLog = buildMessages([...l.all, cp, markerOf(cp, l.a1.seq)], 'tn', 'next', { ...OPTS, now: 1 })
+    expect(viaOpt).toEqual(viaLog)
+    expect(texts(viaOpt[1])).toEqual([block(l.a1.seq, 'OVERRIDE')])
+  })
+
+  it('a checkpoint with no marker changes nothing', () => {
+    const l = log()
+    const cp = cpEvent(l.e2.seq)
+    expect(buildMessages([...l.all, cp], 'tn', 'next', { ...OPTS, now: 1 })).toEqual(buildMessages(l.all, 'tn', 'next', { ...OPTS, now: 1 }))
+  })
+
+  it('first and straddling openings clip the text to 4000, whatever comes first in them', () => {
+    const u1 = ev('message.user', { turnId: 't1', text: 'A'.repeat(9000) })
+    const e1 = ev('turn.ended', { turnId: 't1' })
+    const u2 = ev('message.user', { turnId: 't2', text: 'B'.repeat(9000) })
+    const a2 = say('t2', 'a2')
+    const a2b = say('t2', 'a2b', 2)
+    const cp = cpEvent(a2.seq)
+    const out = buildMessages([u1, e1, u2, a2, a2b, cp, markerOf(cp, a2.seq)], 'tn', 'next', OPTS)
+    const first = texts(out[0])
+    expect(first.slice(0, 2)).toEqual(['ENV', `R${u1.ts}`])
+    expect(first[2].length).toBeLessThanOrEqual(4000)
+    expect(first[2].length).toBeGreaterThan(3900)
+    const opening = texts(out[2])
+    expect(opening[0]).toBe(`R${u2.ts}`)
+    expect(opening[1].startsWith('BBB')).toBe(true)
+    expect(opening[1].length).toBeLessThanOrEqual(4000)
+  })
+
+  it('the turn blocks of covered turns are reclaimed, which compact never does: ~2k chars a turn', () => {
+    const blockText = 'R'.repeat(2000)
+    const events: KernelEvent[] = []
+    for (let i = 0; i < 30; i++) {
+      events.push(ev('message.user', { turnId: `t${i}`, text: `q${i}` }), injected(`t${i}`, 'turn', `${i}:${blockText}`), say(`t${i}`, `a${i}`), ev('turn.ended', { turnId: `t${i}` }))
+    }
+    const through = events[events.length - 1].seq
+    const last = ev('message.user', { turnId: 'tail', text: 'tail' })
+    events.push(last, injected('tail', 'turn', `tail:${blockText}`), say('tail', 'at'), ev('turn.ended', { turnId: 'tail' }))
+    const before = buildMessages(events, 'tn', 'next', OPTS)
+    const cp = cpEvent(through)
+    const after = buildMessages([...events, cp, markerOf(cp, through)], 'tn', 'next', OPTS)
+    expect(estimateTokens(before) - estimateTokens(after)).toBeGreaterThan((60_000 - 3000) / 3.5)
+    const body = JSON.stringify(after)
+    expect(body.match(/RRRR/g)?.length).toBeGreaterThan(0)
+    expect(body).not.toContain(`0:${blockText}`)
+    expect(body).not.toContain(`29:${blockText}`)
+    expect(body).toContain(`tail:${blockText}`)
+  })
+})
+
+describe('buildMessages: includeCurrent (06 spec §12)', () => {
+  const OPTS = { environment: 'ENV', reminder: (ts: number) => `R${ts}` }
+  const texts = (m: { parts: unknown[] }) => (m.parts as { text?: string; type: string }[]).map(p => p.text ?? p.type)
+  const say = (turnId: string, text: string, step = 1) => ev('message.assistant', { turnId, step, text, parts: [{ type: 'text', text }] })
+
+  it('the current turn is treated like any other, currentText is not appended', () => {
+    const u = ev('message.user', { turnId: 't1', text: 'q1' })
+    const b = ev('memory.injected', { turnId: 't1', kind: 'turn', text: 'BLOCK', items: [] })
+    const a = ev('message.assistant', { turnId: 't1', step: 1, text: '', parts: [call('c1')] })
+    const r = ended('t1', 'c1', 'body')
+    const out = buildMessages([u, b, a, r], 't1', 'IGNORED', { ...OPTS, includeCurrent: true })
+    expect(out.map(m => m.role)).toEqual(['user', 'assistant', 'tool'])
+    expect(texts(out[0])).toEqual(['ENV', `R${u.ts}`, 'BLOCK', 'q1'])
+    expect(JSON.stringify(out)).not.toContain('IGNORED')
+  })
+
+  it('includeCurrent over a finished log equals the next turn minus its own message', () => {
+    const u = ev('message.user', { turnId: 't1', text: 'q1' })
+    const a = say('t1', 'a1')
+    const n = ev('executor.notice', { turnId: 't1', runId: 'r', text: 'N' })
+    const f = ev('message.user', { turnId: 't1', text: 'F', followUp: true })
+    const events = [u, a, n, f]
+    const next = buildMessages(events, 'later', 'x', { ...OPTS, now: 1 })
+    expect(buildMessages(events, 't1', 'q1', { ...OPTS, includeCurrent: true })).toEqual(next.slice(0, -1))
+  })
+
+  it('no message.user for the current turn in the log: the text is still sent', () => {
+    const out = buildMessages([], 't1', 'q1', { ...OPTS, now: 7, includeCurrent: true })
+    expect(out.map(texts)).toEqual([['ENV', 'R7', 'q1']])
+  })
+
+  it('without includeCurrent the current turn never comes from the log (03 rule)', () => {
+    const u = ev('message.user', { turnId: 't1', text: 'q1' })
+    const a = say('t1', 'a1')
+    expect(buildMessages([u, a], 't1', 'q1', OPTS).map(texts)).toEqual([['ENV', `R${u.ts}`, 'q1']])
+  })
+
+  it('the current turn covered mid-way keeps its opening even with nothing above throughSeq', () => {
+    const u1 = ev('message.user', { turnId: 't1', text: 'q1' })
+    const u2 = ev('message.user', { turnId: 't2', text: 'q2' })
+    const a2 = say('t2', 'a2')
+    const out = buildMessages([u1, u2, a2], 't2', 'q2', { ...OPTS, includeCurrent: true, rebuild: { throughSeq: a2.seq, text: 'S' } })
+    expect(out.map(texts)).toEqual([['ENV', `R${u1.ts}`, 'q1'], [checkpointBlock(a2.seq, 'S')], [`R${u2.ts}`, 'q2']])
+  })
+
+  it('rebuildHistory reports where the current opening is', () => {
+    const u1 = ev('message.user', { turnId: 't1', text: 'q1' })
+    const u2 = ev('message.user', { turnId: 't2', text: 'q2' })
+    const a2 = say('t2', 'a2')
+    const a3 = say('t2', 'a3', 2)
+    const rebuilt = rebuildHistory([u1, u2, a2, a3], 't2', 'q2', { ...OPTS, includeCurrent: true, rebuild: { throughSeq: a2.seq, text: 'S' } })
+    expect(rebuilt.opening).toBe(2)
+    expect(texts(rebuilt.messages[2])).toEqual([`R${u2.ts}`, 'q2'])
+    expect(rebuildHistory([u1, u2], 't2', 'q2', OPTS).opening).toBe(1)
+    expect(rebuildHistory([u1], 't1', 'q1', OPTS).opening).toBe(0)
   })
 })

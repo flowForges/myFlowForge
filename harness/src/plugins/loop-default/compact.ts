@@ -1,6 +1,8 @@
 // 上下文压缩(spec §8.4):只改发给模型的消息,不改事件。纯函数、确定性:同样的输入折叠同样的结果,
 // 前缀尽量逐字节不变;只折工具结果,用户消息(含第一条里的 <environment>)永不动
+// dropOldest(06 spec §12)是折叠之后的最后一道:同样只改发送的消息
 import { posix } from 'node:path'
+import { clipOpening } from '../../lib/memory/checkpoint'
 import type { Message, Part } from '../../lib/models/types'
 
 export { contextWindow, DEFAULT_CONTEXT } from '../../lib/models/contextWindow'
@@ -135,4 +137,74 @@ export function compact(messages: Message[], opts: CompactOpts): Message[] {
     if (text.length < s.chars) fold(s, text)
   }
   return out
+}
+
+export interface DropOpts {
+  /** 模型上下文(token) */
+  context: number
+  /** 降到 context × target 以下 */
+  target: number
+  /** 尾部至少留这么多 token:再丢就少于它时停下,哪怕还没到 target */
+  keepRecent: number
+  /** 当前轮开场消息的下标;没有给负数。不截、不丢 */
+  currentOpening: number
+}
+
+const DROPPED = /^\[已省略较早的 (\d+) 条消息,事件日志里还在\]$/
+const droppedNote = (n: number): Message => ({ role: 'user', parts: [{ type: 'text', text: `[已省略较早的 ${n} 条消息,事件日志里还在]` }] })
+const onlyText = (m: Message | undefined): string | undefined => {
+  const p = m?.role === 'user' && m.parts.length === 1 ? m.parts[0] : undefined
+  return p?.type === 'text' ? p.text : undefined
+}
+
+/** 正文是最后一个文本 part;环境块和会话块不动 */
+function clipFirst(m: Message): Message {
+  const i = m.parts.map(p => p.type).lastIndexOf('text')
+  const p = m.parts[i]
+  if (p?.type !== 'text') return m
+  const text = clipOpening(p.text)
+  return text === p.text ? m : { ...m, parts: m.parts.map((x, j) => (j === i ? { ...p, text } : x)) }
+}
+
+/** 尾部从这里开始合法:user,或者一个完整的 assistant 步。工具结果不能打头 */
+function startsTail(messages: Message[], i: number): boolean {
+  const m = messages[i]
+  if (m.role === 'user') return true
+  if (m.role !== 'assistant') return false
+  return !m.parts.some(p => p.type === 'tool_call') || messages[i + 1]?.role === 'tool'
+}
+
+/**
+ * 确定性地丢最旧的消息:留第一条(正文截到 4000 字,否则第一条就是大段粘贴的会话永远卡死)和当前轮的开场消息(不截),
+ * 从第二条往后整段丢,放一条占位。紧跟第一条的检查点也留:它盖住的内容只剩它了。
+ * 最后一个合法的尾部总留下,所以到不了 target 时交给 03 的失败
+ */
+export function dropOldest(messages: Message[], opts: DropOpts): Message[] {
+  const limit = opts.context * opts.target
+  const out = messages.slice()
+  if (estimateTokens(out) <= limit || !out.length) return out
+  if (opts.currentOpening !== 0) out[0] = clipFirst(out[0])
+  if (estimateTokens(out) <= limit) return out
+
+  const pinned = onlyText(out[1])?.startsWith('<checkpoint through=') ? 2 : 1
+  const opening = opts.currentOpening >= pinned ? opts.currentOpening : -1
+  const head = out.slice(0, pinned).reduce((n, m) => n + messageChars(m), 0)
+  const openingChars = opening < 0 ? 0 : messageChars(out[opening])
+  const after: number[] = new Array(out.length + 1).fill(0)
+  for (let i = out.length - 1; i >= 0; i--) after[i] = after[i + 1] + messageChars(out[i])
+
+  let cut = pinned
+  for (let c = pinned + 1; c < out.length; c++) {
+    if (!startsTail(out, c)) continue
+    if (charsToTokens(after[c]) < opts.keepRecent) break
+    cut = c
+    const kept = head + after[c] + (opening >= 0 && opening < c ? openingChars : 0) + droppedNote(0).parts.reduce((n, p) => n + partChars(p), 0)
+    if (charsToTokens(kept) <= limit) break
+  }
+  const keepsOpening = opening >= pinned && opening < cut
+  const removed = cut - pinned - (keepsOpening ? 1 : 0)
+  if (removed <= 0) return out
+  const earlier = out.slice(pinned, cut).reduce((n, m) => n + Number(DROPPED.exec(onlyText(m) ?? '')?.[1] ?? 0), 0)
+  const notes = out.slice(pinned, cut).filter(m => DROPPED.test(onlyText(m) ?? '')).length
+  return [...out.slice(0, pinned), droppedNote(removed - notes + earlier), ...(keepsOpening ? [out[opening]] : []), ...out.slice(cut)]
 }
