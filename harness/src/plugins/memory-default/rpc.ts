@@ -13,7 +13,7 @@ import { coreBlock, dataText, recallBlock, updateBlock } from '../../lib/memory/
 import { clip } from '../../lib/tools/diagnostics'
 import type { KernelEvent } from '../../protocol/events'
 import type { MemoryHealth, MemoryItem, MemoryLayer, WorkerMethodName } from '../../protocol/rpc'
-import { WorkerMethods } from '../../protocol/rpc'
+import { MEMORY_ID, WorkerMethods } from '../../protocol/rpc'
 import type { MemoryFiles } from './files'
 import { lastSeqOf, type Ingest } from './ingest'
 import { scopeOf } from './policy'
@@ -103,6 +103,13 @@ const textField = (e: KernelEvent): string | undefined => {
   const p = e.payload as { text?: unknown; content?: unknown }
   const v = e.type === 'tool.ended' ? p.content : p.text
   return typeof v === 'string' ? v : undefined
+}
+
+/** 点名的这条还有没有文本。assistant 的文本在 parts 里 */
+const namedText = (e: KernelEvent): string | undefined => {
+  if (e.type !== 'message.assistant') return textField(e)
+  const parts = ((e.payload as { parts?: { type?: string; text?: unknown }[] }).parts ?? []).flatMap(p => (p.type === 'text' && typeof p.text === 'string' ? [p.text] : []))
+  return parts.length > 0 ? parts.join('') : undefined
 }
 
 /** 一个会话当前这一轮的索引:工具结果到的时候,要回头找那一步的 message.assistant 和 delta */
@@ -299,7 +306,7 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
     return e?.seq === seq ? e : undefined
   }
 
-  /** 第一次见到这个 id。undefined:什么都不是,也不用记 */
+  /** 第一次见到这个 id。undefined:什么都不是或者已经清过,什么都不用碰 */
   function begin(id: string): PendingPurge | undefined {
     const seq = RAW_ID.exec(id)?.[1]
     if (seq === undefined) {
@@ -309,11 +316,13 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
     const e = eventAt(Number(seq))
     if (!e || !NAMEABLE.has(e.type)) return undefined
     const row = store.getRaw(Number(seq))
-    const body = textField(e)
+    const body = namedText(e)
+    const blank = body === undefined || body === '' || body === REDACTED
+    if (!row && blank) return undefined
     const session = e.sessionId === undefined ? undefined : sessions.get(e.sessionId)
     return {
       id,
-      ...(body !== undefined && body !== REDACTED && { text: row?.text ?? scrub(body).text }),
+      ...(!blank && { text: row?.text ?? scrub(body).text }),
       scope: row?.scope ?? scopeOf(session).read[0] ?? `session:${e.sessionId}`,
       evidence: [],
       removedIds: [id],
@@ -349,9 +358,10 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
     const data = p.text !== undefined ? dataText(p.text) : undefined
     // 正文里是原样(思考、参数),块和结果里是 dataText 转义过的
     const needles = long ? [...new Set([p.text as string, data as string])] : []
-    const ids = [...new Set([...p.removedIds, ...p.rawSeqs.map(s => `r_${s}`)])]
-    const idPattern = new RegExp(`(?<![A-Za-z0-9_-])(?:${ids.map(regexEscape).join('|')})(?![A-Za-z0-9_-])`)
-    const named = (s: string) => idPattern.test(s)
+    // 编辑器能在注释里写任何 id:不是条目形状的不拿来匹配,否则 id=id 会命中每一条搜索结果
+    const ids = [...new Set([...p.removedIds, ...p.rawSeqs.map(s => `r_${s}`)])].filter(i => MEMORY_ID.test(i))
+    const idPattern = ids.length > 0 ? new RegExp(`(?<![A-Za-z0-9_-])(?:${ids.map(regexEscape).join('|')})(?![A-Za-z0-9_-])`) : undefined
+    const named = (s: string) => idPattern?.test(s) ?? false
     const quoted = (s: string) => needles.some(n => s.includes(n))
     // 写下这条的那一步范围够小,短文本也按针换:"短文本不扫"防的是清空所有提到它的记录
     const stepNeedles = p.text ? [...new Set([p.text, data as string])] : []
@@ -364,6 +374,9 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
     const saw = new Set<string>()
     const checkpoints: { seq: number; sessionId?: string; literal: boolean }[] = []
     const turns = new Map<string, TurnIndex>()
+    /** 进度在通知之前到:先记下,点名了哪个 run 最后再换 */
+    const progress = new Map<string, number[]>()
+    const namedRuns = new Set<string>()
     const inScope = (sessionId: string | undefined): boolean => {
       if (sessionId === undefined || p.scope === undefined) return false
       return scopeOf(sessions.get(sessionId)).read.includes(p.scope)
@@ -403,9 +416,16 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
       if (e.seq === ownSeq) {
         add({ seq: e.seq })
         if (e.sessionId !== undefined) saw.add(e.sessionId)
+        const run = (e.payload as { runId?: unknown }).runId
+        if (e.type === 'executor.notice' && typeof run === 'string') namedRuns.add(run)
       }
       const session = e.sessionId
       switch (e.type) {
+        case 'executor.run.progress': {
+          const run = (e.payload as { runId?: unknown }).runId
+          if (typeof run === 'string') progress.set(run, [...(progress.get(run) ?? []), e.seq])
+          return
+        }
         case 'memory.deleted': {
           // 更早的墓碑:那次已经清过它之前的事件。再扫一遍会把按针换过的块整段换掉,前缀再动一次
           const q = e.payload as { id?: unknown }
@@ -507,6 +527,7 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
         alive()
       }
     }
+    for (const run of namedRuns) for (const seq of progress.get(run) ?? []) add({ seq })
     // 摘要可能转述,定位不了:看过的会话整份作废,退回折叠
     for (const c of checkpoints) if (c.literal || (c.sessionId !== undefined && saw.has(c.sessionId))) add({ seq: c.seq })
     return { edits: [...edits.values()], spills: [...spills] }
@@ -517,9 +538,9 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
     await settled()
     alive()
     const resumed = load(id) !== undefined
-    const p = load(id) ?? begin(id) ?? { id, evidence: [], removedIds: [id], rawSeqs: [] }
-    const known = p.text !== undefined || p.rawSeqs.length > 0
-    if (known) save(p) // 第一件事:下面任何一步失败,文本都还在
+    const p = load(id) ?? begin(id)
+    if (!p) throw notFound() // 什么都不碰:不写墓碑、不扫日志、不重写库
+    save(p) // 第一件事:下面任何一步失败,文本都还在
 
     if (p.swept !== true) {
       alive()
@@ -548,8 +569,7 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
       store.deleteRaw(p.rawSeqs)
 
       // 第 3 步:墓碑。从日志重建时删过的不回来
-      const worthATombstone = p.text !== undefined || p.rawSeqs.length > 0
-      if (worthATombstone && p.tombstoneSeq === undefined) tombstone(p)
+      if (p.tombstoneSeq === undefined) tombstone(p)
 
       // 第 4、5 步:召回过的载荷、点名的那条消息
       const { edits, spills } = await sweep(p, resumed)
@@ -557,20 +577,17 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
       p.spills = [...new Set([...(p.spills ?? []), ...spills])]
       if (p.spills.length > 0) save(p)
       step('redact')
-      if (!worthATombstone && edits.length > 0) tombstone(p)
       p.redacted = ctx.events.redact(edits)
       for (const file of p.spills) rmSync(file, { force: true })
       p.sources = sourcesOf(p)
-      if (RAW_ID.test(id) && worthATombstone) ctx.append({ type: 'memory.updated', payload: { id, op: 'delete', source: 'user' } })
+      if (RAW_ID.test(id)) ctx.append({ type: 'memory.updated', payload: { id, op: 'delete', source: 'user' } })
       p.swept = true
-      if (worthATombstone || edits.length > 0) save(p)
+      save(p)
     }
 
     // 文本从进度里拿掉,否则它自己就留在库里
-    if (load(id) !== undefined) {
-      delete p.text
-      save(p)
-    }
+    delete p.text
+    save(p)
     return { redacted: p.redacted ?? 0, sources: p.sources ?? [] }
   }
 
@@ -578,10 +595,7 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
   async function finish(ids: string[]): Promise<void> {
     const touched = ids.filter(id => load(id) !== undefined)
     step('purge')
-    if (touched.length === 0) {
-      store.purge()
-      return
-    }
+    if (touched.length === 0) return
     // optimize 也是同步的,库大了一样会让监管以为卡死:放进同一段要来的时间
     await ctx.events.purge({
       extraBytes: statSync(d.dbFile, { throwIfNoEntry: false })?.size ?? 0,

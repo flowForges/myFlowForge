@@ -657,7 +657,7 @@ describe('memory.delete: Review Focus 7', () => {
     expect(turn).toBeTruthy()
   })
 
-  it('r_<seq> of an executor notice and of a tool row blank that one event; a seq that is no message is -32602 free and does nothing', async () => {
+  it('r_<seq> of an executor notice and of a tool row blank that one event; a seq that is no message is not found and does nothing', async () => {
     const h = await boot()
     const sid = await h.session()
     const notice = h.ctx().append({ type: 'executor.notice', sessionId: sid, payload: { turnId: 't', step: 1, runId: 'run-1', text: 'NOTICE-TEXT 跑完了' } })
@@ -672,10 +672,49 @@ describe('memory.delete: Review Focus 7', () => {
     expect(h.bytes()).not.toContain('NOTICE-TEXT')
     expect(h.bytes()).not.toContain('SHELL-OUTPUT')
     const quiet = h.events().length
-    expect(await del(h, `r_${created.seq}`)).toEqual({ ok: true, redacted: 0, sources: [] })
-    expect(await del(h, 'r_99999999')).toEqual({ ok: true, redacted: 0, sources: [] })
-    expect(await del(h, 'n_never_existed')).toEqual({ ok: true, redacted: 0, sources: [] })
+    expect(await codeOf(del(h, `r_${created.seq}`))).toBe(-32602)
+    expect(await codeOf(del(h, 'r_99999999'))).toBe(-32602)
+    expect(await codeOf(del(h, 'n_never_existed'))).toBe(-32602)
+    // 已经清过的:不再扫、不再写墓碑
+    expect(await codeOf(del(h, `r_${notice.seq}`, 'again'))).toBe(-32602)
     expect(h.events()).toHaveLength(quiet)
+  })
+
+  it.each(['id', '', 'x', 'n_', 'r_0', 'r_12x', 'n_a b', '../n_a'])('a malformed id %j is refused by the schema and blanks nothing', async id => {
+    const steps: string[] = []
+    const h = await boot({ onPurgeStep: step => void steps.push(step) })
+    const sid = await h.session()
+    const result = h.ctx().append({ type: 'tool.ended', sessionId: sid, payload: { turnId: 't', callId: 'c', name: 'memory_search', ok: true, ms: 1, content: '<item id="n_other" layer="memory">别的内容</item>' } })
+    const quiet = h.events().length
+    expect(await codeOf(del(h, id))).toBe(-32602)
+    expect(await codeOf(handle(h, 'memory.get', { id }))).toBe(-32602)
+    expect(await codeOf(handle(h, 'memory.update', { commandId: 'u', id, text: 'x' }))).toBe(-32602)
+    expect(h.events()).toHaveLength(quiet)
+    expect(steps).toEqual([])
+    expect((h.events().find(e => e.seq === result.seq)!.payload as { content: string }).content).toContain('别的内容')
+  })
+
+  it('a well-formed unknown id is not found: no tombstone, no sweep, no purge, even if a result names it', async () => {
+    const steps: string[] = []
+    const h = await boot({ onPurgeStep: step => void steps.push(step) })
+    const sid = await h.session()
+    const result = h.ctx().append({ type: 'tool.ended', sessionId: sid, payload: { turnId: 't', callId: 'c', name: 'memory_get', ok: true, ms: 1, content: '<item id="n_ghost">还在的内容</item>' } })
+    const quiet = h.events().length
+    expect(await codeOf(del(h, 'n_ghost'))).toBe(-32602)
+    expect(h.events()).toHaveLength(quiet)
+    expect(steps).toEqual([])
+    expect(ofType(h, 'memory.deleted')).toEqual([])
+    expect((h.events().find(e => e.seq === result.seq)!.payload as { content: string }).content).toContain('还在的内容')
+    expect(h.memory().inspect().store.getMeta('purge:n_ghost')).toBeUndefined()
+  })
+
+  it('a file line an editor gave a word for an id cannot blank results that merely contain that word', async () => {
+    const h = await boot()
+    const sid = await h.session()
+    const result = h.ctx().append({ type: 'tool.ended', sessionId: sid, payload: { turnId: 't', callId: 'c', name: 'memory_search', ok: true, ms: 1, content: '<item id="n_other">别的内容</item>' } })
+    h.write('MEMORY.md', '- 编辑器写的一行足够长的笔记 <!-- mff id=id src=user ts=5 -->\n')
+    await setFile(h, 'MEMORY.md', '- 留下的这一条足够长不会被动到\n')
+    expect((h.events().find(e => e.seq === result.seq)!.payload as { content: string }).content).toContain('别的内容')
   })
 
   it('r_ ids match whole: deleting r_1 does not hit a result that names r_12', async () => {
@@ -689,14 +728,14 @@ describe('memory.delete: Review Focus 7', () => {
     expect((h.events().find(e => e.seq === result.seq)!.payload as { content: string }).content).toContain('别的内容')
   })
 
-  it('a replay with the same commandId does nothing new; a new commandId on the same id only repeats the answer', async () => {
+  it('a replay with the same commandId does nothing new; a new commandId on a deleted id is not found and touches nothing', async () => {
     const h = await boot()
     await seedFull(h)
     const first = await del(h, 'n_seed', 'one')
     const after = h.events().length
     expect(await del(h, 'n_seed', 'one')).toEqual(first)
     expect(h.events()).toHaveLength(after)
-    expect(await del(h, 'n_seed', 'two')).toEqual({ ok: true, redacted: 0, sources: [] })
+    expect(await codeOf(del(h, 'n_seed', 'two'))).toBe(-32602)
     expect(h.events()).toHaveLength(after)
   })
 
@@ -710,7 +749,7 @@ describe('memory.delete: Review Focus 7', () => {
     const block = () => textOf(h.r.k.events.bySession(a).find(e => e.type === 'memory.injected')!)
     expect(block()).toContain('用户档案里的另一条')
     expect(block()).toContain(REDACTED)
-    await del(h, 'n_seed', 'two')
+    expect(await codeOf(del(h, 'n_seed', 'two'))).toBe(-32602)
     expect(block()).toContain('用户档案里的另一条')
   })
 
@@ -920,18 +959,19 @@ describe('memory.delete: Review Focus 7', () => {
     expect(json(h.r.k.events.bySession(a).filter(e => e.type === 'message.assistant'))).toContain('五千多的端口')
   })
 
-  it('known gap: executor.run.progress keeps the words of a blanked executor notice, it is not on the redact allowlist', async () => {
+  it('r_<seq> of an executor notice also blanks the progress of that run, and only that run', async () => {
     const h = await boot()
     const sid = await h.session()
-    h.ctx().append({ type: 'executor.run.progress', sessionId: sid, payload: { turnId: 't', runId: 'run-1', kind: 'text', text: 'FINAL-WORDS 结果在这里' } })
+    const words = h.ctx().append({ type: 'executor.run.progress', sessionId: sid, payload: { turnId: 't', runId: 'run-1', kind: 'text', text: 'FINAL-WORDS 结果在这里' } })
+    const other = h.ctx().append({ type: 'executor.run.progress', sessionId: sid, payload: { turnId: 't', runId: 'run-2', kind: 'text', text: 'OTHER-RUN 的进度' } })
     const notice = h.ctx().append({ type: 'executor.notice', sessionId: sid, payload: { turnId: 't', step: 1, runId: 'run-1', text: 'FINAL-WORDS 结果在这里' } })
     h.memory().flushNow()
     await del(h, `r_${notice.seq}`)
     expect(textOf(h.events().find(e => e.seq === notice.seq)!)).toBe(REDACTED)
+    expect(h.events().find(e => e.seq === words.seq)!.payload).toMatchObject({ runId: 'run-1', kind: 'text', text: REDACTED })
+    expect(textOf(h.events().find(e => e.seq === other.seq)!)).toContain('OTHER-RUN')
     h.memory().flushNow()
-    expect(h.bytes()).toContain('FINAL-WORDS')
-    const sent = buildMessages(h.r.k.events.bySession(sid), 'not-a-turn', 'next', { environment: 'env', reminder: () => 'r' } as never)
-    expect(json(sent)).not.toContain('FINAL-WORDS')
+    expect(h.bytes()).not.toContain('FINAL-WORDS')
   })
 })
 

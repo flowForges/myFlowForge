@@ -61,6 +61,7 @@ const REDACTABLE = new Map<string, string>([
   ['message.assistant.delta', 'text'],
   ['message.reasoning.delta', 'text'],
   ['executor.notice', 'text'],
+  ['executor.run.progress', 'text'],
 ])
 
 export interface RedactEdit {

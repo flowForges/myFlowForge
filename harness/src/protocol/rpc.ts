@@ -127,6 +127,10 @@ export type MemoryFile = z.infer<typeof MemoryFileSchema>
 export const MemoryLayerSchema = z.enum(['user', 'memory', 'topic', 'diary', 'session', 'raw'])
 export type MemoryLayer = z.infer<typeof MemoryLayerSchema>
 
+/** 能点名的条目:笔记 n_、手写行 h_、原始层 r_<seq>。别的形状进不来,空串和普通单词都不算 */
+export const MEMORY_ID = /^(?:[nh]_[A-Za-z0-9_-]{1,62}|r_[1-9]\d{0,15})$/
+const MemoryIdSchema = z.string().regex(MEMORY_ID)
+
 export const MemoryItemSchema = z.object({
   id: z.string(),
   layer: MemoryLayerSchema,
@@ -297,14 +301,14 @@ export const WorkerMethods = {
   },
   'executor.worktree.discard': { params: z.object({ commandId: z.string(), sessionId: z.string(), runId: z.string() }), result: Ok },
   'memory.list': { params: z.object({ layer: MemoryLayerSchema.optional(), limit: z.number().int().min(1).optional(), before: z.number().optional() }), result: MemoryItems },
-  'memory.get': { params: z.object({ id: z.string() }), result: MemoryItemSchema.extend({ evidence: z.array(z.string()).optional() }) },
+  'memory.get': { params: z.object({ id: MemoryIdSchema }), result: MemoryItemSchema.extend({ evidence: z.array(z.string()).optional() }) },
   'memory.search': {
     params: z.object({ query: z.string().min(1), layer: z.enum(['notes', 'raw', 'all']).optional(), limit: z.number().int().min(1).optional() }),
     result: MemoryItems,
   },
-  'memory.update': { params: z.object({ commandId: z.string(), id: z.string(), text: z.string() }), result: z.object({ ok: z.boolean(), masked: z.number() }) },
+  'memory.update': { params: z.object({ commandId: z.string(), id: MemoryIdSchema, text: z.string() }), result: z.object({ ok: z.boolean(), masked: z.number() }) },
   // sources:用户自己的原话,还留在对话记录里(08 列给用户,逐条删)
-  'memory.delete': { params: z.object({ commandId: z.string(), id: z.string() }), result: z.object({ ok: z.boolean(), redacted: z.number(), sources: z.array(z.string()) }) },
+  'memory.delete': { params: z.object({ commandId: z.string(), id: MemoryIdSchema }), result: z.object({ ok: z.boolean(), redacted: z.number(), sources: z.array(z.string()) }) },
   'memory.file.get': { params: z.object({ file: MemoryFileSchema }), result: z.object({ content: z.string(), hash: z.string(), cap: z.number() }) },
   'memory.file.set': {
     params: z.object({ commandId: z.string(), file: MemoryFileSchema, content: z.string(), expectedHash: z.string() }),
