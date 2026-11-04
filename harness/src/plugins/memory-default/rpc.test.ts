@@ -949,6 +949,96 @@ describe('memory.delete: Review Focus 7', () => {
     expect(existsSync(file)).toBe(false)
   })
 
+  describe('the literal text outside the listed fields', () => {
+    const step = (h: H, sid: string, callId: string, name: string, args: object) => {
+      h.ctx().append({ type: 'message.assistant', sessionId: sid, payload: { turnId: 't', step: 1, parts: [{ type: 'tool_call', id: callId, name, args: JSON.stringify(args) }] } })
+      return h.ctx().append({ type: 'tool.started', sessionId: sid, payload: { turnId: 't', callId, name, argsPreview: JSON.stringify(args) } })
+    }
+    const argsOf = (h: H, callId: string) =>
+      h.events().flatMap(e => (e.type === 'message.assistant' ? (e.payload as { parts: { id?: string; args?: string }[] }).parts : [])).find(p => p.id === callId)?.args
+
+    it('read output keeps its other lines; shell and memory_search args go; an unnamed notice and its progress lose the words; the session checkpoint is void', async () => {
+      const h = await boot()
+      await h.seedNote()
+      const a = await h.session()
+      const cp = h.ctx().append({ type: 'memory.checkpoint', sessionId: a, payload: { throughSeq: 1, asOfSeq: 1, text: '只是转述', model: 'm', tokens: 1, covers: 1 } })
+      const shell = step(h, a, 'c-shell', 'shell', { command: `echo "${NOTE}"` })
+      const search2 = step(h, a, 'c-find', 'memory_search', { query: NOTE })
+      const read = h.ctx().append({ type: 'tool.ended', sessionId: a, payload: { turnId: 't', callId: 'c-read', name: 'read', ok: true, ms: 1, content: `1: ${NOTE}\n2: OTHER-LINE` } })
+      const progress = h.ctx().append({ type: 'executor.run.progress', sessionId: a, payload: { turnId: 't', runId: 'r1', kind: 'text', text: `说到 ${NOTE} 的时候` } })
+      const notice = h.ctx().append({ type: 'executor.notice', sessionId: a, payload: { turnId: 't', step: 1, runId: 'r1', text: `结论 ${NOTE} 其余保留` } })
+      h.memory().flushNow()
+
+      await del(h, 'n_seed')
+      h.memory().flushNow()
+      expect(h.bytes()).not.toContain(NOTE)
+      const at = (seq: number) => h.events().find(e => e.seq === seq)!.payload as Record<string, unknown>
+      expect(at(read.seq).content).toBe(`1: ${REDACTED}\n2: OTHER-LINE`)
+      expect(at(shell.seq).argsPreview).toBe(REDACTED)
+      expect(at(search2.seq).argsPreview).toBe(REDACTED)
+      expect(argsOf(h, 'c-shell')).toBe('{"redacted":true}')
+      expect(argsOf(h, 'c-find')).toBe('{"redacted":true}')
+      expect(at(notice.seq).text).toBe(`结论 ${REDACTED} 其余保留`)
+      expect(at(progress.seq).text).toBe(`说到 ${REDACTED} 的时候`)
+      expect(at(cp.seq)).toMatchObject({ text: REDACTED, redacted: true })
+    })
+
+    it('args written with \\u escapes are found too', async () => {
+      const h = await boot()
+      await h.seedNote()
+      const a = await h.session()
+      const escaped = `{"command":"${[...NOTE].map(c => `\\u${c.codePointAt(0)!.toString(16).padStart(4, '0')}`).join('')}"}`
+      h.ctx().append({ type: 'message.assistant', sessionId: a, payload: { turnId: 't', step: 1, parts: [{ type: 'tool_call', id: 'c-esc', name: 'shell', args: escaped }] } })
+      await del(h, 'n_seed')
+      expect(argsOf(h, 'c-esc')).toBe('{"redacted":true}')
+    })
+
+    it('a spill of any tool that holds the text is cleared; one that does not stays; a group session is out of scope', async () => {
+      const h = await boot()
+      await h.seedNote()
+      const a = await h.session()
+      const spill = join(h.r.dataDir, 'sessions', a, 'spill')
+      mkdirSync(spill, { recursive: true })
+      const holding = join(spill, 'c-a-read.txt')
+      const clean = join(spill, 'c-b-read.txt')
+      writeFileSync(holding, `很长的输出 ${NOTE} 很长的输出`)
+      writeFileSync(clean, '别的很长的输出')
+      for (const [callId, file] of [['c-a', holding], ['c-b', clean]]) h.ctx().append({ type: 'tool.ended', sessionId: a, payload: { turnId: 't', callId, name: 'read', ok: true, ms: 1, content: `头\n…[已截断,完整输出:${file}]…\n尾` } })
+      const group = await h.session({ origin: 'im' })
+      const inGroup = h.ctx().append({ type: 'tool.ended', sessionId: group, payload: { turnId: 'g', callId: 'c-g', name: 'read', ok: true, ms: 1, content: `群里读到 ${NOTE}` } })
+      await del(h, 'n_seed')
+      expect(existsSync(holding)).toBe(false)
+      expect(existsSync(clean)).toBe(true)
+      expect((h.events().find(e => e.seq === inGroup.seq)!.payload as { content: string }).content).toContain(NOTE)
+    })
+
+    it('what it does not blank is named in sources: a verbatim assistant reply in another step, and deleting that r_ clears it', async () => {
+      const h = await boot()
+      const { evidenceSeq } = await h.seedNote()
+      const a = await h.session()
+      const reply = h.ctx().append({ type: 'message.assistant', sessionId: a, payload: { turnId: 't', step: 1, parts: [{ type: 'text', text: `您说过 ${NOTE}` }] } })
+      h.memory().flushNow()
+      const { sources } = await del(h, 'n_seed')
+      expect(sources.sort()).toEqual([`r_${evidenceSeq}`, `r_${reply.seq}`].sort())
+      h.memory().flushNow()
+      expect(h.bytes()).toContain(NOTE)
+      await del(h, `r_${reply.seq}`)
+      h.memory().flushNow()
+      expect(h.bytes()).not.toContain(NOTE)
+    })
+
+    it('a note under 12 code points is not scanned for: other tools and sessions keep the word', async () => {
+      const h = await boot()
+      await h.seedNote('pnpm', 'n_short')
+      const a = await h.session()
+      const read = h.ctx().append({ type: 'tool.ended', sessionId: a, payload: { turnId: 't', callId: 'c', name: 'read', ok: true, ms: 1, content: '用 pnpm 跑' } })
+      const shell = step(h, a, 'c-s', 'shell', { command: 'pnpm test' })
+      await del(h, 'n_short')
+      expect((h.events().find(e => e.seq === read.seq)!.payload as { content: string }).content).toBe('用 pnpm 跑')
+      expect((h.events().find(e => e.seq === shell.seq)!.payload as { argsPreview: string }).argsPreview).toContain('pnpm')
+    })
+  })
+
   it('known gap: an assistant paraphrase stays in message.assistant', async () => {
     const h = await boot()
     await h.seedNote()

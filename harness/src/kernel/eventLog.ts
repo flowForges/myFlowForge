@@ -73,7 +73,7 @@ export interface RedactEdit {
 }
 
 /** args、replay 里的文本是 JSON 转义过的:中文可能写成 \uXXXX,引号带反斜杠,字面比较找不到 */
-function jsonHolds(json: string, needle: string): boolean {
+export function jsonHolds(json: string, needle: string): boolean {
   if (json.includes(needle)) return true
   try {
     return JSON.stringify(JSON.parse(json)).includes(JSON.stringify(needle).slice(1, -1))
