@@ -1,6 +1,6 @@
 // 确认收件箱(06 spec §14):USER.md 只有这一条路,MEMORY.md 过不了门槛的也走这里。
 // memory.proposal 不带 sessionId,也不带文本:收件箱是用户的,不属于哪个会话,所以不进任何会话的历史,不顶 updatedAt
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { RpcError } from '../../kernel/rpcError'
 import { scanInjection } from '../../lib/memory/scan'
 import { cleanText } from '../../lib/tools/diagnostics'
@@ -73,6 +73,9 @@ export function normalize(text: string): string {
   const bare = lowered.replace(/[\s\p{P}]+/gu, '')
   return bare === '' ? lowered.trim() : bare
 }
+
+/** 用户删掉的文本,只留哈希:提取不再把同一句话写回来。meta 里一条,不带文本 */
+export const forgottenKey = (text: string) => `forgotten:${createHash('sha256').update(normalize(text)).digest('hex').slice(0, 32)}`
 
 /** 这条证据现在还算不算用户自己的话。回滚的、删掉的、别的范围的都不算 */
 export function liveEvidence(store: Pick<Store, 'getRaw'>, id: string) {

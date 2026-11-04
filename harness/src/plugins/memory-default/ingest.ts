@@ -41,7 +41,7 @@ export interface IngestTimers {
   clearTimeout(handle: unknown): void
 }
 
-const REAL_TIMERS: IngestTimers = {
+export const REAL_TIMERS: IngestTimers = {
   setTimeout: (fn, ms) => setTimeout(fn, ms).unref(),
   clearTimeout: h => clearTimeout(h as NodeJS.Timeout),
 }

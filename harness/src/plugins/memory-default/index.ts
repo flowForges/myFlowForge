@@ -8,9 +8,10 @@ import type { ModelsService } from '../../lib/models/types'
 import type { ToolsService } from '../../lib/tools/types'
 import { Background } from './background'
 import { CheckpointWriter } from './checkpoints'
+import { Consolidator, type ConsolidateStep } from './consolidate'
 import { createContextFor } from './context'
 import { MemoryFiles } from './files'
-import { Ingest, type IngestTimers } from './ingest'
+import { Ingest, REAL_TIMERS, type IngestTimers } from './ingest'
 import { manifest } from './manifest'
 import { scopeOf } from './policy'
 import { Proposals } from './proposals'
@@ -24,8 +25,12 @@ export interface MemoryDefaultOpts {
   flushMs?: number
   /** 测试用:轮和工具替接入追赶的时间上限 */
   catchUpMs?: number
-  /** false:不跑夜间整合(Task 10 接上) */
+  /** false:不开夜间定时,memory.consolidate 还能手动跑 */
   nightly?: false
+  /** Task 11 接上:整合的最后一步 */
+  habits?(): void
+  /** 测试用:整合走到这一步时调,抛错 = 崩溃 */
+  onConsolidateStep?(step: ConsolidateStep): void
   /** 测试用:memory.delete 每一步之前调,抛错 = 这一步失败 */
   onPurgeStep?(step: PurgeStep): void
 }
@@ -34,7 +39,7 @@ export interface MemoryDefaultPlugin extends Plugin {
   /** 测试用:不等批量定时器,把日志拉进原始层 */
   flushNow(): void
   /** 测试用:最近一次激活打开的库 */
-  inspect(): { store: Store; background: Background; checkpoints: CheckpointWriter; proposals: Proposals }
+  inspect(): { store: Store; background: Background; checkpoints: CheckpointWriter; proposals: Proposals; consolidator: Consolidator }
 }
 
 function openLive(ctx: PluginContext, sessions: Sessions, o: MemoryDefaultOpts, now: () => number, config: MemoryConfig): LiveMemory {
@@ -66,13 +71,13 @@ function openLive(ctx: PluginContext, sessions: Sessions, o: MemoryDefaultOpts, 
 }
 
 export function createMemoryDefault(opts: MemoryDefaultOpts = {}): MemoryDefaultPlugin {
-  let current: (LiveMemory & { checkpoints: CheckpointWriter }) | undefined
+  let current: (LiveMemory & { checkpoints: CheckpointWriter; consolidator: Consolidator }) | undefined
   return {
     manifest,
     flushNow: () => current?.ingest.flush(),
     inspect() {
       if (!current) throw new Error('memory store is not open')
-      return { store: current.store, background: current.background, checkpoints: current.checkpoints, proposals: current.proposals }
+      return { store: current.store, background: current.background, checkpoints: current.checkpoints, proposals: current.proposals, consolidator: current.consolidator }
     },
     activate(ctx) {
       const sessions = ctx.services.get<Sessions>('sessions')
@@ -102,8 +107,26 @@ export function createMemoryDefault(opts: MemoryDefaultOpts = {}): MemoryDefault
           now,
           log: ctx.log,
         })
-      current = opened && checkpoints && { ...opened, checkpoints }
-      if (opened && checkpoints) {
+      const consolidator =
+        opened &&
+        new Consolidator({
+          store: opened.store,
+          files: opened.files,
+          proposals: opened.proposals,
+          background: opened.background,
+          models: () => ctx.services.get<ModelsService>('models'),
+          config: () => config,
+          catchUp: () => opened.ingest.catchUp(opts.catchUpMs),
+          now,
+          append: e => ctx.append(e),
+          log: ctx.log,
+          timers: opts.timers ?? REAL_TIMERS,
+          scheduled: opts.nightly !== false,
+          ...(opts.habits && { habits: opts.habits }),
+          ...(opts.onConsolidateStep && { onStep: opts.onConsolidateStep }),
+        })
+      current = opened && checkpoints && consolidator && { ...opened, checkpoints, consolidator }
+      if (opened && checkpoints && consolidator) {
         const { store, ingest } = opened
         const stillCurrent = current
         // 最先登记、最后释放:工具和 RPC 都撤了才停接入、关库
@@ -117,6 +140,10 @@ export function createMemoryDefault(opts: MemoryDefaultOpts = {}): MemoryDefault
         })
         // 后登记先释放:写手和后台任务停干净了才关库
         ctx.effect(() => checkpoints.close())
+        // 再后登记:定时先停,排着的 RPC 先得到答复,然后才中止跑着的
+        ctx.effect(() => consolidator.close())
+        ctx.events.onAppend(e => consolidator.observe(e))
+        consolidator.start()
       }
 
       const service: MemoryService = {
@@ -126,7 +153,7 @@ export function createMemoryDefault(opts: MemoryDefaultOpts = {}): MemoryDefault
         noteContext: req => checkpoints?.note(req),
       }
       ctx.services.provide<MemoryService>('memory', service)
-      const rpc = registerMemoryRpc({ ctx, sessions, live, problems, dbFile: join(ctx.dataDir, 'memory.sqlite'), ...(opts.onPurgeStep && { onPurgeStep: opts.onPurgeStep }) })
+      const rpc = registerMemoryRpc({ ctx, sessions, live, problems, dbFile: join(ctx.dataDir, 'memory.sqlite'), ...(consolidator && { consolidate: () => consolidator.manual() }), ...(opts.onPurgeStep && { onPurgeStep: opts.onPurgeStep }) })
       // 后登记先释放:库关之前等扫到一半的删除停下
       ctx.effect(() => rpc.stop())
 

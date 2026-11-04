@@ -15,10 +15,11 @@ import type { KernelEvent } from '../../protocol/events'
 import type { MemoryHealth, MemoryItem, MemoryLayer, WorkerMethodName } from '../../protocol/rpc'
 import { MEMORY_ID, WorkerMethods } from '../../protocol/rpc'
 import type { Background } from './background'
+import { consolidateProblems, type Summary } from './consolidate'
 import type { MemoryFiles } from './files'
 import { lastSeqOf, type Ingest } from './ingest'
 import { scopeOf } from './policy'
-import type { Proposals } from './proposals'
+import { forgottenKey, type Proposals } from './proposals'
 import { damaged, type NoteRow, type RawRow, type Store } from './store'
 import { interleave, NOTE_LAYERS, RAW_ID, rawSource } from './tools'
 
@@ -58,6 +59,8 @@ export interface MemoryRpcDeps {
   /** 激活时就有的问题 */
   problems: string[]
   dbFile: string
+  /** 排进后台,等它结束。库打不开时没有 */
+  consolidate?(): Promise<Summary>
   onPurgeStep?(step: PurgeStep): void
 }
 
@@ -229,6 +232,12 @@ export function registerMemoryRpc(d: MemoryRpcDeps): { stop(): Promise<void> } {
 
   register('memory.proposals.list', (m, { status }) => ({ items: m.proposals.list(status) }))
 
+  // 回执和进行中的去重都在内核(pluginCommand):同一个 commandId 不会跑第二次
+  register('memory.consolidate', () => {
+    if (!d.consolidate) throw new RpcError(INTERNAL, 'memory is unavailable')
+    return d.consolidate()
+  })
+
   register('memory.changes', (m, { limit }) => ({
     items: m.store.listChanges(capped(limit)).map(c => ({
       ts: c.ts, id: c.entry_id ?? '', ...(c.file !== null && { file: c.file }), op: c.op, before: c.before, after: c.after, source: c.source,
@@ -269,7 +278,7 @@ export function registerMemoryRpc(d: MemoryRpcDeps): { stop(): Promise<void> } {
       ...(lastConsolidation !== undefined && { lastConsolidation }),
       budget: spend.budget,
       ...(spend.backgroundModel && { backgroundModel: spend.backgroundModel }),
-      problems: [...new Set([...d.problems, ...store.problems, ...pending.map(pendingCode), ...faults, ...(spend.problem ? [spend.problem] : [])])],
+      problems: [...new Set([...d.problems, ...store.problems, ...pending.map(pendingCode), ...guarded<string[]>([], () => consolidateProblems(store)), ...faults, ...(spend.problem ? [spend.problem] : [])])],
     }
   }
 
@@ -657,6 +666,7 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
         p.removedIds = [...new Set([...p.removedIds, ...gone.removedIds])]
         // 连带删掉的 id 和证据只有这一次机会拿到:行已经没了,重试时靠它们找 memory_write 和证据行
         if (p.text !== undefined) save(p)
+        if (p.text !== undefined) store.setMeta(forgottenKey(p.text), '1')
       }
 
       // 第 2 步:原始层。先记下再删,删完就再也扫不出来了
