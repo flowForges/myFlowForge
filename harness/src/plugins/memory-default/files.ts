@@ -201,6 +201,22 @@ function scrubDoc(doc: string): { text: string; masked: number } {
   return { text: text.replace(/\n@@mff:(\d+)@@/g, (m, i: string) => (comments[Number(i)] === undefined ? m : ` ${comments[Number(i)]}`)), masked }
 }
 
+/**
+ * memory.file.set 的调用算用户确认了文本,不算确认来源:这份文件里本来就有的注释原样留下,别的都去掉,
+ * 这一行就成了用户手写的(h_ id、src=user、没有证据)。所以 id 冒不了别的笔记,ev= 牵连不到别的行
+ */
+function keepKnownComments(text: string, before: string): string {
+  const commentOf = (line: string) => {
+    const c = trailingComment(line)
+    return c && line.slice(c.at).trimEnd()
+  }
+  const known = new Set(before.split('\n').map(commentOf))
+  return text.split('\n').map(line => {
+    const comment = commentOf(line)
+    return comment && !known.has(comment) ? stripComment(line) : line
+  }).join('\n')
+}
+
 const withLine = (doc: string, line: string) => `${doc}${doc === '' || doc.endsWith('\n') ? '' : '\n'}${line}\n`
 const withoutLines = (doc: string, gone: Set<number>) => doc.split('\n').filter((_, i) => !gone.has(i)).join('\n')
 
@@ -280,7 +296,7 @@ export class MemoryFiles {
   planWrite(file: string, content: string, expectedHash: string): { removed: { id: string; text: string; evidence: string[] }[] } {
     const name = this.checked(file)
     const raw = this.load(name)
-    const { text } = scrubDoc(content)
+    const text = this.incoming(raw, content)
     if (sha256(raw) !== expectedHash) {
       if (sha256(raw) === sha256(text)) return { removed: [] }
       throw new RpcError(ERR_BUSY, 'file changed')
@@ -289,7 +305,8 @@ export class MemoryFiles {
     const after = parseEntries(text)
     const ids = new Set(after.map(e => e.id))
     const texts = new Set(after.map(e => e.text))
-    const gone = parseEntries(scrubDoc(raw).text).filter(e => !ids.has(e.id) && !texts.has(e.text))
+    const moved = this.textsElsewhere(name)
+    const gone = parseEntries(scrubDoc(raw).text).filter(e => !ids.has(e.id) && !texts.has(e.text) && !moved.has(e.text))
     return { removed: gone.map(e => ({ id: e.id, text: e.text, evidence: e.evidence })) }
   }
 
@@ -297,12 +314,15 @@ export class MemoryFiles {
     const name = this.checked(file)
     const raw = this.load(name)
     const { removed } = this.planWrite(name, content, expectedHash)
-    const { text, masked } = scrubDoc(content)
+    const { masked } = scrubDoc(content)
+    const text = this.incoming(raw, content)
     if (sha256(raw) === sha256(text)) return { hash: sha256(text), masked, removed: [] }
     const before = new Map(parseEntries(scrubDoc(raw).text).map(e => [e.id, e]))
     const after = new Map(parseEntries(text).map(e => [e.id, e.text]))
     this.save(name, text)
-    this.reindex([name], () => {
+    // 同一个 id 还在别的文件里(编辑器复制的):这个文件的索引行没了,那边要重新认领
+    const others = this.list('core').filter(f => f !== name && parseEntries(scrubDoc(this.load(f)).text).some(e => before.has(e.id) && !after.has(e.id)))
+    this.reindex([name, ...others], () => {
       for (const [id, now] of after) {
         const was = before.get(id)
         if (!was) this.change(id, name, 'add', null, now, source)
@@ -312,6 +332,15 @@ export class MemoryFiles {
     })
     this.updated({ file: name, op: 'set', source })
     return { hash: sha256(text), masked, removed }
+  }
+
+  private incoming(raw: string, content: string): string {
+    return keepKnownComments(scrubDoc(content).text, scrubDoc(raw).text)
+  }
+
+  /** 别的核心和主题文件里还有的文本:从这里去掉只是挪走。日记和归档不算,它们是副本,删除时一起清 */
+  private textsElsewhere(name: string): Set<string> {
+    return new Set(this.list('core').filter(f => f !== name).flatMap(f => parseEntries(scrubDoc(this.load(f)).text).map(e => e.text)))
   }
 
   addEntry(file: string, text: string, meta: EntryMeta): { id: string; masked: number } {
@@ -542,13 +571,15 @@ export class MemoryFiles {
     store.db.prepare('DELETE FROM notes WHERE file = ?').run(file)
     const archived = file.startsWith('archive/')
     const seen = new Set<string>()
+    // 每行都查,文件大了每次写都要重建索引:只准备一次
+    const owner = store.db.prepare('SELECT file, text, status FROM notes WHERE id = ?')
     for (const e of parseEntries(scrubbed)) {
       if (seen.has(e.id)) continue
       seen.add(e.id)
-      if (archived) {
-        const current = store.getNote(e.id)
-        if (current?.status === 'active') continue
-      }
+      const current = owner.get(e.id) as { file: string | null; text: string; status: string } | undefined
+      if (archived && current?.status === 'active') continue
+      // 这个 id 已经是别的笔记了(编辑器里写的注释):不能盖掉它。群聊笔记只在 SQLite,盖掉就没了
+      if (current && current.file !== file && (!current.file || current.text !== e.text) && !current.file?.startsWith('archive/')) continue
       store.upsertNote({
         id: e.id,
         layer: layerOf(file),

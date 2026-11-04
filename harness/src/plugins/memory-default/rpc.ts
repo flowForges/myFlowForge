@@ -559,9 +559,11 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
 
       // 第 2 步:原始层。先记下再删,删完就再也扫不出来了
       step('raw')
+      // 证据写在行尾注释里,编辑器能改:只认同范围里用户自己说的话,否则一条笔记能牵连任何一行
       const evidence = p.evidence.flatMap(e => {
         const seq = RAW_ID.exec(e)?.[1]
-        return seq === undefined ? [] : [Number(seq)]
+        const row = seq === undefined ? undefined : store.getRaw(Number(seq))
+        return row && row.scope === p.scope && row.role === 'user' ? [row.seq] : []
       })
       const literal = !RAW_ID.test(id) && p.text !== undefined && p.scope !== undefined && codePoints(p.text) >= LITERAL_MIN ? store.rawSeqsHolding(p.text, p.scope) : []
       p.rawSeqs = [...new Set([...p.rawSeqs, ...evidence, ...literal])]

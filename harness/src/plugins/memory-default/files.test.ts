@@ -161,7 +161,7 @@ describe('entries', () => {
   it('anything else tucked into the comment does not survive a write', () => {
     const line = `- a <!-- mff id=n_1 src=confirmed ts=1 note=${SECRET} -->\n`
     files.write('USER.md', line, hashOf('USER.md'), 'user')
-    expect(disk('USER.md')).toBe('- a <!-- mff id=n_1 src=confirmed ts=1 -->\n')
+    expect(disk('USER.md')).toBe('- a\n') // 新行的注释整个不算数,见 keepKnownComments
   })
 
   it('round-trips with comments: the file carries provenance, coreText does not', () => {
