@@ -153,7 +153,7 @@ export function createMemoryDefault(opts: MemoryDefaultOpts = {}): MemoryDefault
         noteContext: req => checkpoints?.note(req),
       }
       ctx.services.provide<MemoryService>('memory', service)
-      const rpc = registerMemoryRpc({ ctx, sessions, live, problems, dbFile: join(ctx.dataDir, 'memory.sqlite'), ...(consolidator && { consolidate: () => consolidator.manual() }), ...(opts.onPurgeStep && { onPurgeStep: opts.onPurgeStep }) })
+      const rpc = registerMemoryRpc({ ctx, sessions, live, problems, dbFile: join(ctx.dataDir, 'memory.sqlite'), now, ...(consolidator && { consolidate: () => consolidator.manual() }), ...(opts.onPurgeStep && { onPurgeStep: opts.onPurgeStep }) })
       // 后登记先释放:库关之前等扫到一半的删除停下
       ctx.effect(() => rpc.stop())
 

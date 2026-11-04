@@ -3,15 +3,15 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { RpcError } from '../../kernel/rpcError'
 import { scanInjection } from '../../lib/memory/scan'
-import { cleanText } from '../../lib/tools/diagnostics'
 import type { KernelEvent, MemoryProposalPayload } from '../../protocol/events'
 import type { MemoryProposal } from '../../protocol/rpc'
-import { cleanEntry, type MemoryFiles } from './files'
+import { cleanEntry, normalize, type MemoryFiles } from './files'
 import type { Store } from './store'
 
 const INVALID_PARAMS = -32602
 const MAX_PENDING = 50
 const LIST_MAX = 200
+export { normalize }
 export const PROPOSAL_TTL_MS = 30 * 86_400_000
 const RAW_ID = /^r_([1-9]\d{0,15})$/
 
@@ -67,15 +67,54 @@ const toProposal = (r: Row): MemoryProposal => ({
   ...(r.decided_at !== null && { decidedAt: r.decided_at }),
 })
 
-/** 比较用:同一句话换个标点、大小写、空格还是同一句 */
-export function normalize(text: string): string {
-  const lowered = cleanText(text).toLowerCase()
-  const bare = lowered.replace(/[\s\p{P}]+/gu, '')
-  return bare === '' ? lowered.trim() : bare
+/** 3 字窗的集合。不够一个窗的整段算一个 */
+export function windows(text: string): Set<string> {
+  const chars = [...normalize(text)]
+  if (chars.length === 0) return new Set()
+  if (chars.length < 3) return new Set([chars.join('')])
+  const out = new Set<string>()
+  for (let i = 0; i + 3 <= chars.length; i++) out.add(chars.slice(i, i + 3).join(''))
+  return out
 }
 
-/** 用户删掉的文本,只留哈希:提取不再把同一句话写回来。meta 里一条,不带文本 */
-export const forgottenKey = (text: string) => `forgotten:${createHash('sha256').update(normalize(text)).digest('hex').slice(0, 32)}`
+const FORGOTTEN = 'forgotten:'
+const SALT = 'forgottenSalt'
+/** 一个窗只留 12 位:够比较包含关系,又不够拼回原文。Latin 的 3 字窗每个桶里有十来个,中文更多 */
+const BUCKET_HEX = 3
+
+function saltOf(store: Pick<Store, 'getMeta' | 'setMeta'>): string {
+  const known = store.getMeta(SALT)
+  if (known !== undefined) return known
+  const salt = randomBytes(16).toString('hex')
+  store.setMeta(SALT, salt)
+  return salt
+}
+
+const hashed = (salt: string, s: string) => createHash('sha256').update(`${salt}\0${s}`).digest('hex')
+const forgottenKey = (salt: string, text: string) => `${FORGOTTEN}${hashed(salt, normalize(text)).slice(0, 32)}`
+const bucketsOf = (salt: string, text: string) => new Set([...windows(text)].map(w => hashed(salt, w).slice(0, BUCKET_HEX)))
+
+/** 用户删掉或拒绝的文本,不留原文:提取不再把同一句话写回来,相近的只能进收件箱 */
+export function forget(store: Pick<Store, 'getMeta' | 'setMeta'>, text: string): void {
+  const salt = saltOf(store)
+  store.setMeta(forgottenKey(salt, text), JSON.stringify([...bucketsOf(salt, text)].sort()))
+}
+
+export function isForgotten(store: Pick<Store, 'getMeta' | 'setMeta'>, text: string): boolean {
+  return store.getMeta(forgottenKey(saltOf(store), text)) !== undefined
+}
+
+/** 归一化之后互相包含。按窗集合比:窗都在,顺序不一定对,多判只是多问一次 */
+export function nearForgotten(store: Pick<Store, 'getMeta' | 'setMeta' | 'metaWithPrefix'>, text: string): boolean {
+  const salt = saltOf(store)
+  const mine = bucketsOf(salt, text)
+  return store.metaWithPrefix(FORGOTTEN).some(({ value }) => {
+    const parsed = JSON.parse(value) as unknown
+    if (!Array.isArray(parsed) || parsed.length === 0 || mine.size === 0) return false
+    const theirs = new Set(parsed as string[])
+    return [...mine].every(b => theirs.has(b)) || [...theirs].every(b => mine.has(b))
+  })
+}
 
 /** 这条证据现在还算不算用户自己的话。回滚的、删掉的、别的范围的都不算 */
 export function liveEvidence(store: Pick<Store, 'getRaw'>, id: string) {
@@ -110,6 +149,12 @@ export class Proposals {
     return { id }
   }
 
+  /** 同样的话正在等用户回答:这时自动写进去,用户还在被问,批准又多一行 */
+  pendingSame(text: string): boolean {
+    const norm = normalize(text)
+    return (this.d.store.db.prepare("SELECT text FROM proposals WHERE status = 'pending'").all() as { text: string }[]).some(r => normalize(r.text) === norm)
+  }
+
   /** 新的在前 */
   list(status?: Status): MemoryProposal[] {
     const rows = status
@@ -126,6 +171,7 @@ export class Proposals {
     const row = this.d.store.db.prepare('SELECT * FROM proposals WHERE id = ?').get(id) as Row | undefined
     if (!row || row.status !== 'pending') throw new RpcError(INVALID_PARAMS, 'not found')
     if (decision === 'reject') {
+      forget(this.d.store, row.text)
       this.retire(row, 'rejected')
       return
     }

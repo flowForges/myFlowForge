@@ -19,7 +19,7 @@ import { consolidateProblems, type Summary } from './consolidate'
 import type { MemoryFiles } from './files'
 import { lastSeqOf, type Ingest } from './ingest'
 import { scopeOf } from './policy'
-import { forgottenKey, type Proposals } from './proposals'
+import { forget, type Proposals } from './proposals'
 import { damaged, type NoteRow, type RawRow, type Store } from './store'
 import { interleave, NOTE_LAYERS, RAW_ID, rawSource } from './tools'
 
@@ -59,6 +59,7 @@ export interface MemoryRpcDeps {
   /** 激活时就有的问题 */
   problems: string[]
   dbFile: string
+  now(): number
   /** 排进后台,等它结束。库打不开时没有 */
   consolidate?(): Promise<Summary>
   onPurgeStep?(step: PurgeStep): void
@@ -84,6 +85,18 @@ export function deleteInFlight(store: Pick<Store, 'metaWithPrefix'>): boolean {
       return (JSON.parse(r.value) as { swept?: unknown } | null)?.swept !== true
     } catch {
       return true
+    }
+  })
+}
+
+/** 有删除试满了次数还没扫完:deleteInFlight 一直是真,提取就一直停着,要说出来 */
+export function deleteStuck(store: Pick<Store, 'metaWithPrefix'>): boolean {
+  return store.metaWithPrefix(PENDING).some(r => {
+    try {
+      const p = JSON.parse(r.value) as { swept?: unknown; resumes?: number } | null
+      return p?.swept !== true && (p?.resumes ?? 0) >= MAX_RESUMES
+    } catch {
+      return false
     }
   })
 }
@@ -278,7 +291,7 @@ export function registerMemoryRpc(d: MemoryRpcDeps): { stop(): Promise<void> } {
       ...(lastConsolidation !== undefined && { lastConsolidation }),
       budget: spend.budget,
       ...(spend.backgroundModel && { backgroundModel: spend.backgroundModel }),
-      problems: [...new Set([...d.problems, ...store.problems, ...pending.map(pendingCode), ...guarded<string[]>([], () => consolidateProblems(store)), ...faults, ...(spend.problem ? [spend.problem] : [])])],
+      problems: [...new Set([...d.problems, ...store.problems, ...pending.map(pendingCode), ...guarded<string[]>([], () => consolidateProblems(store, d.now())), ...faults, ...(spend.problem ? [spend.problem] : [])])],
     }
   }
 
@@ -666,7 +679,7 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
         p.removedIds = [...new Set([...p.removedIds, ...gone.removedIds])]
         // 连带删掉的 id 和证据只有这一次机会拿到:行已经没了,重试时靠它们找 memory_write 和证据行
         if (p.text !== undefined) save(p)
-        if (p.text !== undefined) store.setMeta(forgottenKey(p.text), '1')
+        if (p.text !== undefined) forget(store, p.text)
       }
 
       // 第 2 步:原始层。先记下再删,删完就再也扫不出来了

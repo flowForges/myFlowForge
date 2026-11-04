@@ -8,6 +8,7 @@ import { RpcError } from '../../kernel/rpcError'
 import { scanInjection } from '../../lib/memory/scan'
 import { scrub } from '../../lib/memory/scrub'
 import { sanitizeLine } from '../../lib/memory/wrap'
+import { cleanText } from '../../lib/tools/diagnostics'
 import type { KernelEvent } from '../../protocol/events'
 import { ERR_BUSY, MemoryFileSchema } from '../../protocol/rpc'
 import type { Store } from './store'
@@ -243,6 +244,13 @@ function assertRoom(file: string, doc: string): void {
   if (cap !== undefined && chars(visible(scrubDoc(doc).text)) > cap) throw full()
 }
 
+/** 比较用:同一句话换个标点、大小写、空格还是同一句 */
+export function normalize(text: string): string {
+  const lowered = cleanText(text).toLowerCase()
+  const bare = lowered.replace(/[\s\p{P}]+/gu, '')
+  return bare === '' ? lowered.trim() : bare
+}
+
 export function localDate(ms: number): string {
   const d = new Date(ms)
   const pad = (n: number) => String(n).padStart(2, '0')
@@ -423,7 +431,7 @@ export class MemoryFiles {
     }
     const { db } = this.store
     const candidates = new Set(named.flatMap(e => (e.candidate ? [e.candidate] : [])))
-    for (const r of db.prepare('SELECT id FROM candidates WHERE text = ? OR replaces = ?').all(text, id) as { id: string }[]) candidates.add(r.id)
+    for (const r of db.prepare('SELECT id FROM candidates WHERE text = ? OR replaces = ? OR norm = ?').all(text, id, normalize(text)) as { id: string }[]) candidates.add(r.id)
     const evidence = new Set(named.flatMap(e => e.evidence))
     const addEvidence = (rows: unknown[]) => {
       for (const r of rows as { evidence: string }[]) for (const e of JSON.parse(r.evidence) as string[]) evidence.add(e)
