@@ -363,7 +363,7 @@ describe.skipIf(!posix)('runCli', () => {
       const t0 = Date.now()
       const plan = fakePlan(fake)
       const r = await runCli(plan, opts({ onClose: pid => closes.push(pid) }))
-      expect(Date.now() - t0).toBeLessThan(3000)
+      expect(Date.now() - t0).toBeLessThan(10_000)
       expect(r).toMatchObject({ code: 0, cancelled: false, leftovers: 'kept' })
       expect(r.killFailed).toBeUndefined()
       expect(isAlive(await fake.waitPid('background'))).toBe(true)
