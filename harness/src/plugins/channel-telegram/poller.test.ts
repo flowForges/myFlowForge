@@ -248,7 +248,8 @@ describe('Poller', () => {
       r.poller.start()
       await pollArrived(expected.length + 1)
       expect(r.sleeps).toEqual(expected)
-      expect(r.states.map(s => s[0])).toEqual(['starting', 'online', 'reconnecting', 'online'])
+      // 请求到了假服务器,回应还在路上:online 要等它回来
+      await expect.poll(() => r.states.map(s => s[0])).toEqual(['starting', 'online', 'reconnecting', 'online'])
       expect(r.states[2][1]).toBe('server')
     })
 
@@ -409,7 +410,8 @@ describe('Poller', () => {
       expect(polls()).toHaveLength(1)
       clock.advance(1)
       await pollArrived(2)
-      expect(r.states.map(s => s[0])).toEqual(['starting', 'online', 'reconnecting', 'online'])
+      // 请求到了假服务器,回应还在路上:online 要等它回来
+      await expect.poll(() => r.states.map(s => s[0])).toEqual(['starting', 'online', 'reconnecting', 'online'])
       expect(r.sleeps).toEqual([1000])
     })
 
