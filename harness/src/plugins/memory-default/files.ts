@@ -1,0 +1,626 @@
+// Markdown 是记忆的准绳(06 spec §5):条目一行,来源放行尾注释;notes 只是它的索引,可重建。
+// 文件里的原文和索引、注入看到的打码版可以不同:用户手写的不改,但不让它往外走
+import { createHash, randomBytes } from 'node:crypto'
+import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeSync } from 'node:fs'
+import { basename, join } from 'node:path'
+import type { Logger } from '../../kernel/log'
+import { RpcError } from '../../kernel/rpcError'
+import { scanInjection } from '../../lib/memory/scan'
+import { scrub } from '../../lib/memory/scrub'
+import { sanitizeLine } from '../../lib/memory/wrap'
+import type { KernelEvent } from '../../protocol/events'
+import { ERR_BUSY, MemoryFileSchema } from '../../protocol/rpc'
+import type { Store } from './store'
+
+export const CAPS = { 'USER.md': 2000, 'MEMORY.md': 6000, topic: 8000 } as const
+
+const INVALID_PARAMS = -32602
+const CORE = ['USER.md', 'MEMORY.md']
+const DIARY_NAME = /^\d{4}-\d{2}-\d{2}\.md$/
+const ARCHIVE_NAME = /^(?:USER|MEMORY|[a-z0-9-]{1,40})\.md$/
+const ID = /^[A-Za-z0-9_-]{1,64}$/
+const SRC = /^[a-z_]{1,32}$/
+const EVIDENCE = /^[A-Za-z0-9_.:-]{1,64}$/
+const HEADING = /^\s{0,3}#{1,6}(?:\s|$)/
+const BULLET = /^\s*[-*+]\s+/
+
+export interface Entry {
+  id: string
+  text: string
+  src: string
+  ts?: number
+  evidence: string[]
+  turn?: string
+  /** 夜间候选:同一候选的日记行跟着一起删 */
+  candidate?: string
+  /** 进了 archive 才有:被谁取代 */
+  by?: string
+  line: number
+}
+
+export interface EntryMeta {
+  id?: string
+  src: string
+  ts?: number
+  evidence?: string[]
+  turnId?: string
+  candidate?: string
+}
+
+type Provenance = Omit<Entry, 'text' | 'line'>
+
+export interface MemoryFilesOpts {
+  now(): number
+  log: Pick<Logger, 'warn'>
+  append(e: Omit<KernelEvent, 'seq' | 'ts'>): unknown
+  /** 测试用:临时文件写好之后、改名之前 */
+  beforeRename?(from: string, to: string): void
+}
+
+const sha256 = (s: string) => createHash('sha256').update(s).digest('hex')
+const chars = (s: string) => [...s].length
+
+function decode(v: string): string | undefined {
+  try {
+    return decodeURIComponent(v)
+  } catch {
+    return undefined
+  }
+}
+
+/** 只认行尾那一个注释,手工切开而不用正则:一行再长也是线性的 */
+function trailingComment(line: string): { at: number; provenance: Provenance } | undefined {
+  const at = line.lastIndexOf('<!--')
+  if (at < 0) return undefined
+  const tail = line.slice(at).trimEnd()
+  if (!tail.endsWith('-->')) return undefined
+  const [tag, ...attrs] = tail.slice(4, -3).trim().split(/\s+/)
+  if (tag !== 'mff') return undefined
+  const kv = new Map(attrs.filter(a => a.includes('=')).map(a => [a.slice(0, a.indexOf('=')), a.slice(a.indexOf('=') + 1)]))
+  const id = kv.get('id')
+  const src = kv.get('src')
+  if (!id || !src || !ID.test(id) || !SRC.test(src)) return undefined
+  const ts = Number(kv.get('ts'))
+  const candidate = kv.get('cand')
+  const by = kv.get('by')
+  const turn = decode(kv.get('turn') ?? '')
+  return {
+    at,
+    provenance: {
+      id,
+      src,
+      ...(Number.isSafeInteger(ts) && ts > 0 && { ts }),
+      evidence: (kv.get('ev') ?? '').split(',').filter(e => EVIDENCE.test(e)),
+      ...(turn && { turn }),
+      ...(candidate && ID.test(candidate) && { candidate }),
+      ...(by && ID.test(by) && { by }),
+    },
+  }
+}
+
+/** 手写行的 id 取打码后文本的哈希:不从密钥派生,打码前后 id 也不变 */
+const handId = (text: string) => `h_${sha256(scrub(text).text).slice(0, 12)}`
+
+export function parseEntries(md: string): Entry[] {
+  const entries: Entry[] = []
+  md.split('\n').forEach((raw, line) => {
+    if (raw.trim() === '' || HEADING.test(raw)) return
+    const comment = trailingComment(raw)
+    const text = (comment ? raw.slice(0, comment.at) : raw).replace(BULLET, '').trim()
+    if (text === '') return
+    entries.push({ ...(comment?.provenance ?? { id: handId(text), src: 'user', evidence: [] }), text, line })
+  })
+  return entries
+}
+
+/** 去掉来源注释的内容:版本和上限都按这个算 */
+function visible(md: string): string {
+  return md
+    .split('\n')
+    .map(line => {
+      const comment = trailingComment(line)
+      return (comment ? line.slice(0, comment.at) : line).trimEnd()
+    })
+    .join('\n')
+    .trim()
+}
+
+/** 整行整行地留;一行就超了就是空 */
+function fitLines(text: string, cap: number): string {
+  if (chars(text) <= cap) return text
+  const kept: string[] = []
+  let used = 0
+  for (const line of text.split('\n')) {
+    used += chars(line) + (kept.length > 0 ? 1 : 0)
+    if (used > cap) break
+    kept.push(line)
+  }
+  return kept.join('\n').trimEnd()
+}
+
+/** 先打码再压成一行:多行的 PEM 压完就认不出了。去掉注释记号可能把密钥拼回来,所以再打一遍 */
+function cleanEntry(text: string): { text: string; masked: number } {
+  const first = scrub(text)
+  const second = scrub(sanitizeLine(first.text))
+  return { text: second.text, masked: first.masked + second.masked }
+}
+
+function formatComment(p: Provenance): string {
+  const attrs = [`id=${p.id}`, `src=${p.src}`]
+  if (p.ts !== undefined) attrs.push(`ts=${p.ts}`)
+  const evidence = p.evidence.filter(e => EVIDENCE.test(e))
+  if (evidence.length > 0) attrs.push(`ev=${evidence.join(',')}`)
+  if (p.turn) attrs.push(`turn=${encodeURIComponent(p.turn)}`)
+  if (p.candidate) attrs.push(`cand=${p.candidate}`)
+  if (p.by) attrs.push(`by=${p.by}`)
+  return `<!-- mff ${attrs.join(' ')} -->`
+}
+
+const formatLine = (text: string, p: Provenance) => `- ${text} ${formatComment(p)}`
+
+/**
+ * 整篇打码(PEM 跨行),但注释不进去:`x password: <!-- mff … -->` 里的注释会被当成值打掉,
+ * 这一行就成了 src=user 的手写行。注释换成独占一行的占位,打码的模式都过不了换行;
+ * 接回去的是重新拼的,行尾注释里夹带的别的内容不留
+ */
+function scrubDoc(doc: string): { text: string; masked: number } {
+  const comments: string[] = []
+  const held = doc
+    .split('\n')
+    .map(line => {
+      const comment = trailingComment(line)
+      if (!comment) return line
+      comments.push(formatComment(comment.provenance))
+      return `${line.slice(0, comment.at).trimEnd()}\n@@mff:${comments.length - 1}@@`
+    })
+    .join('\n')
+  const { text, masked } = scrub(held)
+  return { text: text.replace(/\n@@mff:(\d+)@@/g, (m, i: string) => (comments[Number(i)] === undefined ? m : ` ${comments[Number(i)]}`)), masked }
+}
+
+const withLine = (doc: string, line: string) => `${doc}${doc === '' || doc.endsWith('\n') ? '' : '\n'}${line}\n`
+const withoutLines = (doc: string, gone: Set<number>) => doc.split('\n').filter((_, i) => !gone.has(i)).join('\n')
+
+function capOf(file: string): number | undefined {
+  if (file === 'USER.md' || file === 'MEMORY.md') return CAPS[file]
+  return file.startsWith('topics/') ? CAPS.topic : undefined
+}
+
+function layerOf(file: string): string {
+  if (file.startsWith('diary/')) return 'diary'
+  if (file.startsWith('topics/')) return 'topic'
+  const name = basename(file)
+  return name === 'USER.md' ? 'user' : name === 'MEMORY.md' ? 'memory' : 'topic'
+}
+
+const full = () => new RpcError(INVALID_PARAMS, 'full')
+const notFound = () => new RpcError(INVALID_PARAMS, 'not found')
+
+function assertRoom(file: string, doc: string): void {
+  const cap = capOf(file)
+  if (cap !== undefined && chars(visible(scrubDoc(doc).text)) > cap) throw full()
+}
+
+function localDate(ms: number): string {
+  const d = new Date(ms)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+export class MemoryFiles {
+  private dir: string
+  /** 文件 → 上次索引时的 stat。没文件是 '' */
+  private known = new Map<string, string>()
+  private views = new Map<string, string>()
+
+  constructor(
+    private root: string,
+    private store: Store,
+    private o: MemoryFilesOpts,
+  ) {
+    this.dir = join(root, 'files')
+    for (const dir of [root, this.dir, join(this.dir, 'topics'), join(this.dir, 'diary'), join(this.dir, 'archive')]) {
+      mkdirSync(dir, { recursive: true, mode: 0o700 })
+      this.tighten(dir, 0o700)
+    }
+  }
+
+  /** 只有 stat 变了才碰文件和库:每轮都调,闲着的轮不拿写锁 */
+  reconcile(scope: 'core' | 'all'): void {
+    if (scope === 'all') this.sweepTemps()
+    const names = new Set([...CORE, ...this.list(scope), ...this.known.keys(), ...this.indexedFiles()])
+    const changed = [...names].filter(f => (scope === 'all' || !/^(?:diary|archive)\//.test(f)) && this.stamp(f) !== this.known.get(f))
+    if (changed.length > 0) this.reindex(changed)
+  }
+
+  /**
+   * content 是打码版:带 token 的 RPC 结果里不放密钥;原样读出再 write 也一样会打码,所以用户保存时没有差别。
+   * hash 按磁盘字节算,冲突检测才认得出编辑器里的改动
+   */
+  read(file: string): { content: string; hash: string; cap: number } {
+    const name = this.checked(file)
+    this.reconcile('core')
+    const raw = this.load(name)
+    return { content: scrubDoc(raw).text, hash: sha256(raw), cap: capOf(name) as number }
+  }
+
+  /** removed:给 memory.file.set 按删除处理。证据只在行尾注释里,这之后就没了 */
+  write(file: string, content: string, expectedHash: string, source: string): { hash: string; masked: number; removed: { id: string; text: string; evidence: string[] }[] } {
+    const name = this.checked(file)
+    const raw = this.load(name)
+    if (sha256(raw) !== expectedHash) throw new RpcError(ERR_BUSY, 'file changed')
+    const { text, masked } = scrubDoc(content)
+    assertRoom(name, text)
+    const before = new Map(parseEntries(scrubDoc(raw).text).map(e => [e.id, e]))
+    const after = new Map(parseEntries(text).map(e => [e.id, e.text]))
+    this.save(name, text)
+    this.reindex([name], () => {
+      for (const [id, now] of after) {
+        const was = before.get(id)
+        if (!was) this.change(id, name, 'add', null, now, source)
+        else if (was.text !== now) this.change(id, name, 'update', was.text, now, source)
+      }
+      for (const [id, was] of before) if (!after.has(id)) this.change(id, name, 'remove', was.text, null, source)
+    })
+    this.updated({ file: name, op: 'set', source })
+    const removed = [...before.values()].filter(e => !after.has(e.id)).map(e => ({ id: e.id, text: e.text, evidence: e.evidence }))
+    return { hash: sha256(text), masked, removed }
+  }
+
+  addEntry(file: string, text: string, meta: EntryMeta): { id: string; masked: number } {
+    const name = this.checked(file)
+    this.reconcile('core')
+    return this.addLine(name, text, meta, true)
+  }
+
+  appendDiary(text: string, meta: EntryMeta): { id: string; masked: number } {
+    return this.addLine(`diary/${localDate(meta.ts ?? this.o.now())}.md`, text, meta, false)
+  }
+
+  updateEntry(id: string, text: string, source: string): { id: string; masked: number } {
+    this.reconcile('all')
+    const note = this.store.getNote(id)
+    if (!note || note.status !== 'active') throw notFound()
+    const clean = cleanEntry(text)
+    if (clean.text === '') throw new RpcError(INVALID_PARAMS, 'empty')
+    if (!note.file) {
+      this.store.transaction(() => {
+        this.store.upsertNote({ ...note, text: clean.text, source, flags: scanInjection(clean.text) })
+        this.change(id, null, 'update', note.text, clean.text, source)
+      })
+      this.updated({ id, op: 'update', source })
+      return { id, masked: clean.masked }
+    }
+    const file = note.file
+    const { doc, hits } = this.locate(file, e => e.id === id)
+    if (hits.length === 0) throw notFound()
+    const lines = doc.split('\n')
+    for (const e of hits) lines[e.line] = formatLine(clean.text, { ...e, ts: e.ts ?? this.o.now(), src: source })
+    const next = lines.join('\n')
+    assertRoom(file, next)
+    this.save(file, next)
+    this.reindex([file], () => this.change(id, file, 'update', hits[0].text, clean.text, source))
+    this.updated({ id, file, op: 'update', source })
+    return { id, masked: clean.masked }
+  }
+
+  /**
+   * spec §16 第一步。原始层和事件日志归调用方;这里给它们文本和证据。
+   * 整行相同的文本一起删:同一条记忆的日记、归档副本。短文本也一样,比的是整行。
+   * 行已经不在了(memory.file.set 去掉的、编辑器里删的)时文本从 changes 找;再删一次就什么都没有了
+   */
+  deleteEntry(id: string): { text?: string; evidence: string[] } {
+    this.reconcile('all')
+    const note = this.store.getNote(id)
+    if (note && !note.file) return this.deleteSessionNote(id, note.text)
+    const all = this.list('all')
+    const named = all.flatMap(f => this.locate(f, e => e.id === id).hits)
+    const text = note?.text ?? named[0]?.text ?? this.lastChangeText(id)
+    if (text === undefined) {
+      this.removeBadCopies()
+      return { evidence: [] }
+    }
+    const { db } = this.store
+    const candidates = new Set(named.flatMap(e => (e.candidate ? [e.candidate] : [])))
+    for (const r of db.prepare('SELECT id FROM candidates WHERE text = ? OR replaces = ?').all(text, id) as { id: string }[]) candidates.add(r.id)
+    const evidence = new Set(named.flatMap(e => e.evidence))
+    const addEvidence = (rows: unknown[]) => {
+      for (const r of rows as { evidence: string }[]) for (const e of JSON.parse(r.evidence) as string[]) evidence.add(e)
+    }
+    addEvidence(db.prepare(`SELECT evidence FROM candidates WHERE id IN (${[...candidates].map(() => '?').join(', ') || 'NULL'})`).all(...candidates))
+    addEvidence(db.prepare('SELECT evidence FROM proposals WHERE text = ? OR replaces = ?').all(text, id))
+
+    const gone = new Set([id])
+    const touched: string[] = []
+    for (const file of all) {
+      const { doc, hits } = this.locate(file, e => e.id === id || e.text === text || (e.candidate !== undefined && candidates.has(e.candidate)))
+      if (hits.length === 0) continue
+      for (const e of hits) gone.add(e.id)
+      this.save(file, withoutLines(doc, new Set(hits.map(e => e.line))))
+      touched.push(file)
+    }
+    this.reindex(touched, () => {
+      this.store.deleteNote(id)
+      db.prepare('DELETE FROM proposals WHERE text = ? OR replaces = ?').run(text, id)
+      const del = db.prepare('DELETE FROM candidates WHERE id = ?')
+      for (const c of candidates) del.run(c)
+      this.blankChanges(gone, text)
+      this.change(id, note?.file ?? touched[0] ?? null, 'delete', null, null, 'user')
+    })
+    this.removeBadCopies()
+    this.updated({ id, op: 'delete', source: 'user' })
+    return { text, evidence: [...evidence] }
+  }
+
+  /** 回滚的轮不留记忆(spec §5)。接入会重放,崩溃也可能让文件先于索引,所以只看现状 */
+  removeByTurn(turnId: string): void {
+    const { db } = this.store
+    const rows = db.prepare('SELECT id, file FROM notes WHERE turn_id = ?').all(turnId) as { id: string; file: string | null }[]
+    const files = [...new Set(rows.flatMap(r => (r.file ? [r.file] : [])))]
+    for (const file of files) {
+      const { doc, hits } = this.locate(file, e => e.turn === turnId)
+      if (hits.length > 0) this.save(file, withoutLines(doc, new Set(hits.map(e => e.line))))
+    }
+    let proposals = 0
+    this.reindex(files, () => {
+      for (const r of rows) if (!r.file) this.store.deleteNote(r.id)
+      proposals = Number(db.prepare("DELETE FROM proposals WHERE turn_id = ? AND status = 'pending'").run(turnId).changes)
+    })
+    if (rows.length > 0 || proposals > 0) this.updated({ op: 'rollback', source: 'rollback' })
+  }
+
+  /** 先写归档再去原行:中间崩溃两边都有,重做时认得出 */
+  supersede(id: string, byId: string): void {
+    this.reconcile('all')
+    const note = this.store.getNote(id)
+    if (!note?.file || note.status !== 'active') return
+    const file = note.file
+    const { doc, hits } = this.locate(file, e => e.id === id)
+    if (hits.length === 0) return
+    const archive = `archive/${basename(file)}`
+    const archived = this.load(archive)
+    if (!parseEntries(archived).some(e => e.id === id)) {
+      this.save(archive, withLine(archived, formatLine(hits[0].text, { ...hits[0], ts: hits[0].ts ?? this.o.now(), by: byId })))
+    }
+    this.save(file, withoutLines(doc, new Set(hits.map(e => e.line))))
+    this.reindex([file, archive], () => this.change(id, file, 'supersede', hits[0].text, null, byId))
+    this.updated({ id, file, op: 'supersede', source: byId })
+  }
+
+  coreText(): { user: string; memory: string; topics: string[]; version: string } {
+    this.reconcile('core')
+    const user = fitLines(this.views.get('USER.md') ?? '', CAPS['USER.md'])
+    const memory = fitLines(this.views.get('MEMORY.md') ?? '', CAPS['MEMORY.md'])
+    const topics = this.list('core')
+      .filter(f => f.startsWith('topics/'))
+      .map(f => basename(f, '.md'))
+      .sort()
+    return { user, memory, topics, version: sha256(`${user}\0${memory}`).slice(0, 12) }
+  }
+
+  private addLine(file: string, text: string, meta: EntryMeta, track: boolean): { id: string; masked: number } {
+    const id = meta.id ?? `n_${randomBytes(6).toString('hex')}`
+    if (!ID.test(id) || !SRC.test(meta.src)) throw new RpcError(INVALID_PARAMS, 'bad entry')
+    const raw = this.load(file)
+    // 崩溃重做:可能已经写了文件没进索引,也可能已经被挪进归档
+    if (parseEntries(raw).some(e => e.id === id) || this.store.getNote(id)) return { id, masked: 0 }
+    const clean = cleanEntry(text)
+    if (clean.text === '') throw new RpcError(INVALID_PARAMS, 'empty')
+    const next = withLine(raw, formatLine(clean.text, {
+      id,
+      src: meta.src,
+      ts: meta.ts ?? this.o.now(),
+      evidence: meta.evidence ?? [],
+      ...(meta.turnId !== undefined && { turn: meta.turnId }),
+      ...(meta.candidate !== undefined && { candidate: meta.candidate }),
+    }))
+    assertRoom(file, next)
+    this.save(file, next)
+    this.reindex([file], track ? () => this.change(id, file, 'add', null, clean.text, meta.src) : undefined)
+    this.updated({ id, file, op: 'add', source: meta.src })
+    return { id, masked: clean.masked }
+  }
+
+  private deleteSessionNote(id: string, text: string): { text: string; evidence: string[] } {
+    this.store.transaction(() => {
+      this.store.deleteNote(id)
+      this.blankChanges(new Set([id]))
+      this.change(id, null, 'delete', null, null, 'user')
+    })
+    this.removeBadCopies()
+    this.updated({ id, op: 'delete', source: 'user' })
+    return { text, evidence: [] }
+  }
+
+  /** RPC 的 file 参数:schema 已经挡过一次,这里不信任调用方再挡一次 */
+  private checked(file: string): string {
+    if (!MemoryFileSchema.safeParse(file).success) throw new RpcError(INVALID_PARAMS, 'bad file')
+    return file
+  }
+
+  /**
+   * 和索引看到的是同一份:整篇打码后再分行,e.text 和手写行的 id 才对得上。
+   * 行号对得上就改原文,用户别的行不动;多行的 PEM 打码后并成一行,只能在打码版上改
+   */
+  private locate(file: string, match: (e: Entry) => boolean): { doc: string; hits: Entry[] } {
+    const raw = this.load(file)
+    const scrubbed = scrubDoc(raw).text
+    const aligned = scrubbed.split('\n').length === raw.split('\n').length
+    return { doc: aligned ? raw : scrubbed, hits: parseEntries(scrubbed).filter(match) }
+  }
+
+  /** 这些文件的 notes 换成文件现在的样子。文件读在事务外;事务成功才记 stat,失败下次重来 */
+  private reindex(files: string[], extra?: () => void): void {
+    // 归档放最后:同一个 id 还在原文件里时,在用的那行优先
+    const order = [...files].sort((a, b) => Number(a.startsWith('archive/')) - Number(b.startsWith('archive/')))
+    const plans = order.map(file => {
+      // 改模式会动 ctime,要在记 stat 之前
+      if (existsSync(this.path(file))) this.tighten(this.path(file), 0o600)
+      const stamp = this.stamp(file)
+      const scrubbed = scrubDoc(this.load(file)).text
+      return { file, stamp, scrubbed, mtime: stamp === '' ? this.o.now() : Math.floor(statSync(this.path(file)).mtimeMs) }
+    })
+    this.store.transaction(() => {
+      for (const p of plans) this.indexRows(p.file, p.scrubbed, p.mtime)
+      extra?.()
+    })
+    for (const p of plans) {
+      this.known.set(p.file, p.stamp)
+      this.noteView(p.file, visible(p.scrubbed))
+    }
+  }
+
+  private indexRows(file: string, scrubbed: string, mtime: number): void {
+    const { store } = this
+    store.db.prepare('DELETE FROM notes WHERE file = ?').run(file)
+    const archived = file.startsWith('archive/')
+    const seen = new Set<string>()
+    for (const e of parseEntries(scrubbed)) {
+      if (seen.has(e.id)) continue
+      seen.add(e.id)
+      if (archived) {
+        const current = store.getNote(e.id)
+        if (current?.status === 'active') continue
+      }
+      store.upsertNote({
+        id: e.id,
+        layer: layerOf(file),
+        file,
+        scope: 'owner',
+        source: e.src,
+        text: e.text,
+        ts: e.ts ?? mtime,
+        flags: scanInjection(e.text),
+        status: archived ? 'superseded' : 'active',
+        ...(e.turn !== undefined && { turnId: e.turn }),
+      })
+    }
+  }
+
+  private noteView(file: string, view: string): void {
+    if (CORE.includes(file)) this.views.set(file, view)
+    const cap = capOf(file)
+    if (cap === undefined) return
+    const code = `file_over_cap:${file}`
+    const { problems } = this.store
+    const at = problems.indexOf(code)
+    if (chars(view) > cap) {
+      if (at < 0) problems.push(code)
+    } else if (at >= 0) {
+      problems.splice(at, 1)
+    }
+  }
+
+  private change(id: string, file: string | null, op: string, before: string | null, after: string | null, source: string): void {
+    this.store.db
+      .prepare('INSERT INTO changes(ts, entry_id, file, op, before, after, source) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(this.o.now(), id, file, op, before, after, source)
+  }
+
+  private lastChangeText(id: string): string | undefined {
+    const row = this.store.db.prepare('SELECT COALESCE(before, after) AS text FROM changes WHERE entry_id = ? AND COALESCE(before, after) IS NOT NULL ORDER BY n DESC LIMIT 1').get(id) as { text: string } | undefined
+    return row?.text
+  }
+
+  private blankChanges(ids: Set<string>, text?: string): void {
+    const { db } = this.store
+    const byId = db.prepare('UPDATE changes SET before = NULL, after = NULL WHERE entry_id = ?')
+    for (const id of ids) byId.run(id)
+    if (text !== undefined) db.prepare('UPDATE changes SET before = NULL, after = NULL WHERE before = ? OR after = ?').run(text, text)
+  }
+
+  private updated(payload: { id?: string; file?: string; op: string; source: string }): void {
+    this.o.append({ type: 'memory.updated', payload })
+  }
+
+  private path(file: string): string {
+    return join(this.dir, file)
+  }
+
+  private load(file: string): string {
+    try {
+      return readFileSync(this.path(file), 'utf8')
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return ''
+      throw err
+    }
+  }
+
+  private stamp(file: string): string {
+    try {
+      const s = statSync(this.path(file))
+      return `${s.size}:${s.mtimeMs}:${s.ctimeMs}`
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return ''
+      throw err
+    }
+  }
+
+  private names(sub: string, ok: (name: string) => boolean): string[] {
+    try {
+      return readdirSync(join(this.dir, sub)).filter(ok).map(n => `${sub}/${n}`)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
+      throw err
+    }
+  }
+
+  private list(scope: 'core' | 'all'): string[] {
+    const present = CORE.filter(f => existsSync(this.path(f)))
+    const topics = this.names('topics', n => MemoryFileSchema.safeParse(`topics/${n}`).success)
+    if (scope === 'core') return [...present, ...topics]
+    return [...present, ...topics, ...this.names('diary', n => DIARY_NAME.test(n)), ...this.names('archive', n => ARCHIVE_NAME.test(n))]
+  }
+
+  /** 索引里有、磁盘上没有的文件:关着插件时被删的 */
+  private indexedFiles(): string[] {
+    const rows = this.store.db.prepare('SELECT DISTINCT file FROM notes WHERE file IS NOT NULL').all() as { file: string }[]
+    return rows.map(r => r.file)
+  }
+
+  /** 临时文件 + fsync + 改名。崩溃留下的只会是临时文件,对账时清掉 */
+  private save(file: string, content: string): void {
+    const target = this.path(file)
+    const tmp = join(target, '..', `.${basename(file)}.${randomBytes(4).toString('hex')}.tmp`)
+    try {
+      const fd = openSync(tmp, 'wx', 0o600)
+      try {
+        writeSync(fd, content)
+        fsyncSync(fd)
+      } finally {
+        closeSync(fd)
+      }
+      this.o.beforeRename?.(tmp, target)
+      renameSync(tmp, target)
+    } catch (err) {
+      rmSync(tmp, { force: true })
+      throw err
+    }
+  }
+
+  /** 崩溃留下的临时文件里可能有已删的文本 */
+  private sweepTemps(): void {
+    const walk = (dir: string) => {
+      for (const d of readdirSync(dir, { withFileTypes: true })) {
+        if (d.isDirectory()) walk(join(dir, d.name))
+        else if (d.name.startsWith('.') && d.name.endsWith('.tmp')) rmSync(join(dir, d.name), { force: true })
+      }
+    }
+    walk(this.dir)
+  }
+
+  /** 被挪开的坏库里可能有这段文本 */
+  private removeBadCopies(): void {
+    for (const name of readdirSync(this.root)) {
+      if (name.startsWith('memory.sqlite.bad-')) rmSync(join(this.root, name), { force: true })
+    }
+  }
+
+  private tighten(path: string, mode: number): void {
+    try {
+      if ((statSync(path).mode & 0o777) !== mode) chmodSync(path, mode)
+    } catch (err) {
+      this.o.log.warn('memory files chmod failed', { path: basename(path), error: err instanceof Error ? err.name : 'unknown' })
+    }
+  }
+}
