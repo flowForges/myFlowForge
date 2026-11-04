@@ -63,7 +63,7 @@ beforeEach(async () => {
   const git = createGit({ base: { PATH: env().PATH, HOME: home }, extraEnv: { GIT_CONFIG_GLOBAL: join(home, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1' } })
   const tmp = join(data, 'tmp')
   mkdirSync(tmp)
-  const r = await createImWorktree({ dataDir: data, project: repo, group: 'c1', id: 'wt_1', git, tmpDir: tmp, untrusted: [data], denyReadOf: () => [] })
+  const r = await createImWorktree({ dataDir: data, project: repo, group: 'c1', id: 'wt_1', git, tmpDir: tmp, untrusted: [data], writableRoots: [], denyReadOf: () => [] })
   if (!r.ok) throw new Error(r.error)
   wtCwd = r.cwd
   pins.set('im', await pinRepo(wtCwd, git, { tmpDir: tmp }))

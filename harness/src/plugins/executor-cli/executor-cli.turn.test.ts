@@ -16,7 +16,7 @@ describe('an IM session in its own worktree (07 spec §8)', () => {
   const imWorktree = async () => {
     const tmpDir = join(dataDir, 'tmp')
     mkdirSync(tmpDir, { recursive: true })
-    const r = await createImWorktree({ dataDir, project: cwd, group: 'c1', id: 'wt_1', git: isolatedGit(), tmpDir, untrusted: [dataDir], denyReadOf: () => [] })
+    const r = await createImWorktree({ dataDir, project: cwd, group: 'c1', id: 'wt_1', git: isolatedGit(), tmpDir, untrusted: [dataDir], writableRoots: [], denyReadOf: () => [] })
     if (!r.ok) throw new Error(r.error)
     return r.cwd
   }
@@ -26,6 +26,16 @@ describe('an IM session in its own worktree (07 spec §8)', () => {
     const { k } = await boot(undefined)
     const sid = await create(k, { origin: 'im', dir })
     expect(pay(evs(k, sid).find(e => e.type === 'session.created')).repo).toMatchObject({ kind: 'repo', top: dir, commonDir: join(cwd, '.git') })
+  })
+
+  it('a .git planted in a subdirectory of the worktree is not pinned by the next session there', async () => {
+    const dir = await imWorktree()
+    const sub = join(dir, 'sub')
+    mkdirSync(sub)
+    sh('init', '-q', sub)
+    const { k } = await boot(undefined)
+    const sid = await create(k, { origin: 'im', dir: sub })
+    expect(pay(evs(k, sid).find(e => e.type === 'session.created')).repo?.kind ?? 'none').toBe('none')
   })
 
   it('a delegate write: in place, no -worktrees entry, turn.changes and turn.rollback cover it, the project is untouched', async () => {

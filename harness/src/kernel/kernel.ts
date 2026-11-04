@@ -32,6 +32,7 @@ import { createSandboxService } from './sandbox'
 import { detectSandbox, type DetectResult } from '../lib/sandbox/detect'
 import { upstreamFromEnv, type LookupFn, type Upstream } from '../lib/sandbox/net/proxy'
 import { createGit, NO_REPO, pinRepo, type Git, type RepoPin } from '../lib/git/snapshot'
+import { imWorktreeRootOf } from '../lib/git/imWorktree'
 import { worktreeRootOf } from '../lib/git/worktree'
 import type { BackgroundRuns, FollowUp, SessionCommands, TurnInbox } from '../lib/tools/types'
 import { cleanRecoveredWorktrees, recoverRuns } from './runRecovery'
@@ -427,7 +428,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
             if (dir !== undefined) {
               const tmpDir = join(opts.dataDir, 'tmp')
               mkdirSync(tmpDir, { recursive: true })
-              repo = await pinRepo(dir, kernelGit, { tmpDir, untrusted: [opts.dataDir, join(home, '.qoder')] })
+              repo = await pinRepo(dir, kernelGit, { tmpDir, untrusted: [opts.dataDir, imWorktreeRootOf(opts.dataDir), join(home, '.qoder')] })
             }
           }
           return command(name, p.commandId, () => {

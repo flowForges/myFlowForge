@@ -21,7 +21,7 @@ const worktrees = (cwd = repo) => ug(['worktree', 'list', '--porcelain'], cwd).s
 const imRoot = () => imWorktreeRootOf(dataDir)
 const pathOf = (group = 'c1', id = 'wt_1') => join(imRoot(), group, id)
 const create = (over: Partial<Parameters<typeof createImWorktree>[0]> = {}) =>
-  createImWorktree({ dataDir, project: repo, group: 'c1', id: 'wt_1', git, tmpDir: tmp, untrusted: [dataDir], denyReadOf: () => [], ...over })
+  createImWorktree({ dataDir, project: repo, group: 'c1', id: 'wt_1', git, tmpDir: tmp, untrusted: [dataDir], writableRoots: [], denyReadOf: () => [], ...over })
 const nothingLeft = () => {
   expect(existsSync(imRoot())).toBe(false)
   expect(worktrees()).toEqual([repo])
@@ -143,6 +143,28 @@ describe('createImWorktree', () => {
       nothingLeft()
     })
 
+    describe('a filter program in a place the sandbox can write', () => {
+      const lfsIn = (dir: string) => {
+        mkdirSync(dir, { recursive: true })
+        writeFileSync(join(dir, 'git-lfs'), '#!/bin/sh\ncat\n')
+        chmodSync(join(dir, 'git-lfs'), 0o755)
+        ug(['config', 'filter.f.clean', `${join(dir, 'git-lfs')} clean -- %f`])
+      }
+
+      it('a root the caller names: unsafe_repo; the same program elsewhere passes, the control', async () => {
+        lfsIn(join(base, 'bin'))
+        expect(await create({ writableRoots: [join(base, 'bin')] })).toEqual({ ok: false, error: 'unsafe_repo' })
+        nothingLeft()
+        expect((await create()).ok).toBe(true)
+      })
+
+      it('the data directory always counts', async () => {
+        lfsIn(join(dataDir, 'bin'))
+        expect(await create()).toEqual({ ok: false, error: 'unsafe_repo' })
+        nothingLeft()
+      })
+    })
+
     it('worktree_limit: the 21st is refused and adds nothing', async () => {
       for (let i = 0; i < MAX_WORKTREES; i++) expect(reserveWorktree(imRoot(), `g${i}`, 'wt')).toBeTruthy()
       expect(await create()).toEqual({ ok: false, error: 'worktree_limit' })
@@ -174,6 +196,33 @@ describe('createImWorktree', () => {
       nothingLeft()
     })
 
+    it('nothing is created through a symlink in HEAD: the deeper directory does not appear outside', async () => {
+      const outside = join(base, 'outside')
+      mkdirSync(outside)
+      rmSync(join(repo, 'sub'), { recursive: true })
+      symlinkSync(outside, join(repo, 'sub'))
+      ug(['add', '-A'])
+      ug(['commit', '-qm', 'link'])
+      rmSync(join(repo, 'sub'))
+      mkdirSync(join(repo, 'sub', 'deep'), { recursive: true })
+      expect(await create({ project: join(repo, 'sub', 'deep') })).toEqual({ ok: false, error: 'worktree_failed' })
+      expect(readdirSync(outside)).toEqual([])
+      nothingLeft()
+    })
+
+    it('a dangling symlink in HEAD: refused, its target is not created', async () => {
+      const target = join(base, 'not-yet')
+      rmSync(join(repo, 'sub'), { recursive: true })
+      symlinkSync(target, join(repo, 'sub'))
+      ug(['add', '-A'])
+      ug(['commit', '-qm', 'link'])
+      rmSync(join(repo, 'sub'))
+      mkdirSync(join(repo, 'sub', 'deep'), { recursive: true })
+      expect(await create({ project: join(repo, 'sub', 'deep') })).toEqual({ ok: false, error: 'worktree_failed' })
+      expect(existsSync(target)).toBe(false)
+      nothingLeft()
+    })
+
     it.each([['../escape', 'wt_1'], ['c1', '../../escape'], ['c1/x', 'wt_1'], ['', 'wt_1'], ['c1', '']])('worktree_failed: group %j id %j is not a path segment', async (group, id) => {
       expect(await create({ group, id })).toEqual({ ok: false, error: 'worktree_failed' })
       expect(worktrees()).toEqual([repo])
@@ -201,6 +250,17 @@ describe('createImWorktree', () => {
       reserveWorktree(imRoot(), 'c1', 'wt_1')
       expect(await create()).toMatchObject({ ok: true, path: pathOf() })
       expect(worktrees()).toEqual([repo, pathOf()])
+    })
+
+    it('a symlink the model swapped in before the redelivery: nothing is created through it', async () => {
+      await create({ project: join(repo, 'sub') })
+      const outside = join(base, 'outside')
+      mkdirSync(outside)
+      rmSync(join(pathOf(), 'sub'), { recursive: true })
+      symlinkSync(outside, join(pathOf(), 'sub'))
+      mkdirSync(join(repo, 'sub', 'deep'))
+      expect(await create({ project: join(repo, 'sub', 'deep') })).toEqual({ ok: false, error: 'worktree_failed' })
+      expect(readdirSync(outside)).toEqual([])
     })
 
     it('the denied copies are removed again: the crash may have come before they were', async () => {

@@ -3418,7 +3418,7 @@ describe('an IM session whose cwd is already a worktree (07 spec §8.2)', () => 
   const imWorktree = async () => {
     const tmp = join(root, 'gtmp')
     mkdirSync(tmp, { recursive: true })
-    const r = await createImWorktree({ dataDir: dataDir(), project: repo, group: 'c1', id: 'wt_1', git: createGit({ base: gitBase }), tmpDir: tmp, untrusted: [], denyReadOf: () => [] })
+    const r = await createImWorktree({ dataDir: dataDir(), project: repo, group: 'c1', id: 'wt_1', git: createGit({ base: gitBase }), tmpDir: tmp, untrusted: [], writableRoots: [], denyReadOf: () => [] })
     if (!r.ok) throw new Error(r.error)
     return r.cwd
   }

@@ -139,6 +139,7 @@ interface BootOpts {
   /** 写进 config.json 的 permissions 段 */
   permissions?: Record<string, unknown>
   plugins?: Plugin[]
+  origin?: 'im'
 }
 
 async function boot(sessionCwd = cwd, approvalMode: 'ask' | 'auto' = 'ask', o: BootOpts = {}) {
@@ -147,7 +148,7 @@ async function boot(sessionCwd = cwd, approvalMode: 'ask' | 'auto' = 'ask', o: B
   const sandbox = o.detect ? { detect: () => o.detect!, upstream: null } : NO_SANDBOX
   const k = await createKernel({ sandbox, dataDir, home, plugins: [toolsRegistry, fakeTools(probe), ...(o.plugins ?? [])], secrets: { osBackend: false } })
   kernels.push(k)
-  const { sessionId } = (await k.handle('session.create', { commandId: `c${Math.random()}`, cwd: sessionCwd, approvalMode })) as { sessionId: string }
+  const { sessionId } = (await k.handle('session.create', { commandId: `c${Math.random()}`, cwd: sessionCwd, approvalMode, ...(o.origin && { origin: o.origin }) })) as { sessionId: string }
   let n = 0
   const ctxOf = (signal = new AbortController().signal): ToolContext => ({
     sessionId, turnId: 't1', callId: `call${++n}`, cwd: probe.sessions!.get(sessionId)!.cwd!, spillDir: probe.sessions!.spillDir(sessionId), signal,
@@ -745,6 +746,88 @@ describe('tools-registry', () => {
         expect(cards()[1].payload.unsandboxed).toBe(true)
         approvals.respond(cards()[1].payload.approvalId as string, 'deny')
         expect((await second).isError).toBe(true)
+      })
+
+      describe('a session grant in an IM session only counts at full (07 spec §8.3, R19)', () => {
+        const rig = (origin: 'im' | 'app', start: SandboxStatus['level']) => {
+          const level = { now: start }
+          const events: { type: string; payload: Record<string, unknown> }[] = []
+          const approvals = new Approvals({ append: e => { events.push(e as (typeof events)[number]) }, timeoutMs: 60_000 })
+          const reg = new ToolsRegistry({ gate: { check: () => 'ask' }, approvals, sandbox: { status: () => ({ level: level.now, missing: [], autoDegraded: false }) }, sessions: { get: () => ({ origin }) }, append: () => {}, log: nullLogger })
+          reg.register(plain({ resource: 'npm test' }))
+          const of = (type: string) => events.filter(e => e.type === type)
+          const answer = async (decision: 'allow_session' | 'deny') => {
+            const n = of('approval.requested').length
+            const running = reg.call('plain', '{}', ctxFor())
+            await waitFor(() => of('approval.requested').length === n + 1)
+            approvals.respond(of('approval.requested')[n].payload.approvalId as string, decision)
+            return running
+          }
+          /** 这条命令有没有再弹卡;弹了就拒掉,不留等待 */
+          const nextGetsACard = async () => {
+            const n = of('approval.requested').length
+            const running = reg.call('plain', '{}', ctxFor())
+            await new Promise(r => setTimeout(r, 0))
+            await waitFor(() => of('approval.requested').length === n + 1 || of('approval.resolved').at(-1)?.payload.by === 'session')
+            const card = of('approval.requested').length === n + 1
+            if (card) approvals.respond(of('approval.requested')[n].payload.approvalId as string, 'deny')
+            const r = await running
+            return { card, ran: r.content === 'ran', shownKey: card ? of('approval.requested')[n].payload.key : undefined }
+          }
+          return { level, answer, nextGetsACard, of }
+        }
+
+        it.each([
+          ['full, then partial', 'full', 'partial'],
+          ['full, then none', 'full', 'none'],
+          ['partial, still partial', 'partial', 'partial'],
+          ['none, still none', 'none', 'none'],
+        ] as const)('granted at %s: the command gets a card and does not run', async (_n, at, later) => {
+          const r = rig('im', at)
+          expect((await r.answer('allow_session')).content).toBe('ran')
+          r.level.now = later
+          expect(await r.nextGetsACard()).toEqual({ card: true, ran: false, shownKey: undefined })
+          expect(r.of('approval.resolved').filter(e => e.payload.by === 'session')).toEqual([])
+        })
+
+        it('below full the card offers no session grant at all', async () => {
+          const r = rig('im', 'partial')
+          const first = r.answer('allow_session')
+          await first
+          expect(r.of('approval.requested')[0].payload).not.toHaveProperty('key')
+        })
+
+        it('granted at full and still full: no card, the control', async () => {
+          const r = rig('im', 'full')
+          await r.answer('allow_session')
+          expect(await r.nextGetsACard()).toMatchObject({ card: false, ran: true })
+        })
+
+        it('the level coming back to full: the grant counts again, the gate reads the level each time', async () => {
+          const r = rig('im', 'full')
+          await r.answer('allow_session')
+          r.level.now = 'partial'
+          expect((await r.nextGetsACard()).card).toBe(true)
+          r.level.now = 'full'
+          expect(await r.nextGetsACard()).toMatchObject({ card: false, ran: true })
+        })
+
+        it('an app session keeps the grant at partial, no regression', async () => {
+          const r = rig('app', 'partial')
+          await r.answer('allow_session')
+          expect(r.of('approval.requested')[0].payload.key).toBe('npm test')
+          expect(await r.nextGetsACard()).toMatchObject({ card: false, ran: true })
+        })
+
+        it('wired through the real kernel: an IM session below full gets a card without a key', async () => {
+          const b = await boot(cwd, 'ask', { detect: { level: 'partial', missing: ['netns'] }, origin: 'im' })
+          const p = b.call('fexec', { command: 'npm test' })
+          await waitFor(() => requested(b.k).length === 1)
+          const ev = requested(b.k)[0].payload as { approvalId: string }
+          expect(ev).not.toHaveProperty('key')
+          await b.k.handle('approval.respond', { approvalId: ev.approvalId, decision: 'deny' })
+          await p
+        })
       })
 
       it('a non-delegate tool cannot pick a key: it falls back to sessionKey', async () => {

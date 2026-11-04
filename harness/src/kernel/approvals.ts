@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { redact } from '../lib/tools/redact'
 import type { KernelEvent } from '../protocol/index'
+import { APPROVAL_VIA_MAX } from '../protocol/tools'
 import { nullLogger, type Logger } from './log'
 
 /**
@@ -99,7 +100,7 @@ export class Approvals {
       keys.set(p.req.key, keys.get(p.req.key) === true || p.req.unsandboxed === true)
       this.allowed.set(p.req.sessionId, keys)
     }
-    p.settle(decision === 'deny' ? 'deny' : 'allow', 'user', via)
+    p.settle(decision === 'deny' ? 'deny' : 'allow', 'user', via?.slice(0, APPROVAL_VIA_MAX))
     return true
   }
 

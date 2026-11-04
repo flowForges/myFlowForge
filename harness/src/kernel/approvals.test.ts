@@ -1,3 +1,4 @@
+import { ApprovalResolvedPayloadSchema } from '../protocol/tools'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { KernelEvent } from '../protocol/index'
 import { Approvals } from './approvals'
@@ -57,6 +58,14 @@ describe('Approvals', () => {
     await b
     expect(Object.hasOwn(resolved()[1], 'via')).toBe(false)
     expect(Object.keys(resolved()[1]).sort()).toEqual(['approvalId', 'by', 'callId', 'decision', 'turnId'])
+  })
+
+  it('via is clipped to 128 where it is written: nothing validates a payload on append', async () => {
+    const a = ask('x')
+    approvals.respond(lastId(), 'allow', `telegram:${'9'.repeat(5000)}`)
+    await a
+    expect(resolved()[0].via).toBe(`telegram:${'9'.repeat(119)}`)
+    expect(ApprovalResolvedPayloadSchema.safeParse(resolved()[0]).success).toBe(true)
   })
 
   it('via is not written on what the user did not answer: timeout, cancel, session', async () => {

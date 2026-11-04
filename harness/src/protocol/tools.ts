@@ -51,12 +51,15 @@ export const ApprovalRequestedPayloadSchema = z.object({
 })
 export type ApprovalRequestedPayload = z.infer<typeof ApprovalRequestedPayloadSchema>
 
+/** 追加事件时不校验载荷,Approvals.respond 按它截断 */
+export const APPROVAL_VIA_MAX = 128
+
 export const ApprovalResolvedPayloadSchema = z.object({
   approvalId: z.string(),
   decision: z.enum(['allow', 'deny']),
   by: z.enum(['user', 'session', 'timeout', 'cancel']),
   /** 07:从哪个渠道答的,如 telegram:<账号>。没有 = app。只有服务路径写得了,approval.respond 不收这个参数 */
-  via: z.string().max(128).optional(),
+  via: z.string().max(APPROVAL_VIA_MAX).optional(),
 })
 export type ApprovalResolvedPayload = z.infer<typeof ApprovalResolvedPayloadSchema>
 

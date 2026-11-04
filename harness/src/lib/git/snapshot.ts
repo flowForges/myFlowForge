@@ -188,10 +188,10 @@ export function pinIntact(pin: PinnedRepo): boolean {
   }
 }
 
-/** 这个 git 的每条命令都只认钉住的仓库。commondir 文件也不看 */
 /** 一个会话的全部快照引用都在这下面:回滚用,丢弃 worktree 时也要整个删(内容留在用户的对象库里) */
 export const refBase = (sessionId: string) => `refs/mffai/snapshots/${sessionId}`
 
+/** 这个 git 的每条命令都只认钉住的仓库。commondir 文件也不看 */
 export const pinnedGit = (git: Git, pin: PinnedRepo): Git => (args, o) =>
   git(args, { ...o, env: { GIT_DIR: pin.gitDir, GIT_WORK_TREE: pin.top, GIT_COMMON_DIR: pin.commonDir, ...o.env } })
 

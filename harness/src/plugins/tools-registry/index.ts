@@ -32,6 +32,8 @@ interface Deps {
   approvals: Pick<Approvals, 'request'>
   /** 内核 sandbox 服务:exec 审批据它标 unsandboxed;不在 / 出错 = 没有沙箱 */
   sandbox?: Pick<SandboxService, 'status'>
+  /** 会话的来源:IM 的本会话放行只在完整沙箱算数 */
+  sessions?: { get(id: string): { origin: string } | undefined }
   append(e: Omit<KernelEvent, 'seq' | 'ts'>): unknown
   log: Logger
 }
@@ -221,6 +223,8 @@ export class ToolsRegistry implements ToolsService {
   /** 用户放行 → true;拒绝、取消、超时、写不了 requested(reject)→ false */
   private async approve(r: PermissionRequest, tool: string, ctx: ToolContext, unsandboxed: boolean): Promise<boolean> {
     try {
+      // 权限门说 ask 之后,存着的键会直接放行,门就白判了。远程消息 + 不是完整沙箱:每条都要人(07 spec §8.3、R19),不用也不留
+      const remoteBelowFull = this.deps.sessions?.get(ctx.sessionId)?.origin === 'im' && this.levelNow(ctx.sessionId) !== 'full'
       const d = await this.deps.approvals.request({
         sessionId: ctx.sessionId,
         turnId: ctx.turnId,
@@ -228,7 +232,7 @@ export class ToolsRegistry implements ToolsService {
         tool,
         summary: clip(redact(r.summary ?? r.resource ?? tool), SHORT),
         // 有规则落实不了、或这次运行明说没有隔离:每次都问,不留也不用本会话放行
-        key: r.mustAsk || r.unsandboxed ? undefined : r.key ?? (r.action === 'exec' && r.resource !== undefined ? sessionKey(r.resource) : undefined),
+        key: r.mustAsk || r.unsandboxed || remoteBelowFull ? undefined : r.key ?? (r.action === 'exec' && r.resource !== undefined ? sessionKey(r.resource) : undefined),
         ...(unsandboxed && { unsandboxed: true }),
         signal: ctx.signal,
       })
@@ -274,7 +278,7 @@ const toolsRegistry: Plugin = {
     if (!gate || !approvals) throw new Error('permissionGate / approvals service missing')
     // 内核在插件激活前提供;不在 → exec 审批一律标 unsandboxed
     const sandbox = ctx.services.get<SandboxService>('sandbox')
-    ctx.services.provide<ToolsService>('tools', new ToolsRegistry({ gate, approvals, sandbox, append: e => ctx.append(e), log: ctx.log }))
+    ctx.services.provide<ToolsService>('tools', new ToolsRegistry({ gate, approvals, sandbox, sessions: ctx.services.get<{ get(id: string): { origin: string } | undefined }>('sessions'), append: e => ctx.append(e), log: ctx.log }))
   },
 }
 

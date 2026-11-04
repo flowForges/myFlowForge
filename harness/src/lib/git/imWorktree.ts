@@ -1,8 +1,9 @@
 // IM 会话的 worktree(07 spec §8.1):一条 IM 消息是一条远程提示,会话的 cwd 本身就得是 worktree。
 // 基于 HEAD,不基于快照:没提交的改动和未跟踪的文件不进远程会话。建不了就失败,绝不退回在地。渠道中立,给 1b 复用
 import { lstatSync, mkdirSync, readdirSync, realpathSync, rmdirSync } from 'node:fs'
-import { join, relative, sep } from 'node:path'
+import { dirname, join, relative, sep } from 'node:path'
 import { isInside, OUTSIDE, resolveToolPath } from '../fs/paths'
+import { lexists } from '../fs/safeFs'
 import { guarded, hasUnsafeFilter, pinnedGit, pinRepo, repoPrefix, type Git, type PinnedRepo, type RepoPin } from './snapshot'
 import { addWorktree, MAX_WORKTREES, removeInWorktree, removeWorktree, reserveWorktree, rootConflict, worktreePin, worktreeRootOf } from './worktree'
 
@@ -27,6 +28,10 @@ const SEGMENT = /^[A-Za-z0-9_-]+$/
 /** cwd 在 worktree 里的位置;HEAD 里没有就建,落到树外面(HEAD 里那一段是链接)就抛 */
 function enter(pin: PinnedRepo, path: string, project: string): string {
   const cwd = join(path, repoPrefix(pin, realpathSync.native(project)))
+  // 在沙箱外建目录:先看最深的已有祖先,HEAD 里的链接或模型换进来的链接不能让目录建到树外面。悬空链接算已有,realpath 抛错
+  let existing = cwd
+  while (!lexists(existing)) existing = dirname(existing)
+  if (!isInside(realpathSync.native(existing), path, process.platform)) throw new Error('worktree cwd left the worktree')
   mkdirSync(cwd, { recursive: true })
   const real = realpathSync.native(cwd)
   if (!isInside(real, path, process.platform)) throw new Error('worktree cwd left the worktree')
@@ -44,6 +49,8 @@ export interface CreateImWorktreeOpts {
   git: Git
   tmpDir: string
   untrusted: string[]
+  /** 沙箱写得到的其他根(系统临时目录、~/.qoder,见 loop-default 的 writableRootsFor):过滤器落在里面就不跑。数据目录和两个 worktree 根这里自己算 */
+  writableRoots: string[]
   /** 这棵 worktree 里 `deny read` 根的副本。worktree 路径要预留之后才有,所以是回调 */
   denyReadOf(path: string, top: string): string[]
 }
@@ -66,7 +73,7 @@ export async function createImWorktree(o: CreateImWorktreeOpts): Promise<ImWorkt
     if (!sha) return fail('no_commits')
     if (rootConflict(root, pin, project)) return fail('root_conflict')
     // 基于 HEAD 跳过了快照那道检查;检出时 smudge 在沙箱外跑,由一条远程消息触发
-    if (await inPin(g => hasUnsafeFilter(g, pin, [root, otherRoot, tmpDir]))) return fail('unsafe_repo')
+    if (await inPin(g => hasUnsafeFilter(g, pin, [dataDir, root, otherRoot, tmpDir, ...o.writableRoots]))) return fail('unsafe_repo')
 
     const existing = held(root, group, id, pin)
     if (existing === 'foreign') return fail('worktree_failed')
