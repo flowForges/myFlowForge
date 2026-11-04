@@ -74,7 +74,7 @@ export function createModelsRegistry(opts: RegistryOpts = {}): Plugin {
       const presets = new Map(PRESETS.map(p => [p.id, p]))
       const adapters = new Map<ModelProtocol, ModelAdapter>()
       const removeHooks = new Map<ModelProtocol, (a: Account) => void | Promise<void>>()
-      const quotaCache = new Map<string, { at: number; value: Quota | null }>()
+      const quotaCache = new Map<string, { at: number; value: Quota | null; failed: boolean }>()
       const store = new AccountStore(ctx.config.models as ModelsConfig | undefined, cfg => ctx.updateConfig('models', cfg))
 
       // 目录:预设 > 运行时缓存 > 入库快照
@@ -345,9 +345,13 @@ export function createModelsRegistry(opts: RegistryOpts = {}): Plugin {
         },
 
         async quota(id) {
+          return (await service.quotaRead(id)).quota
+        },
+
+        async quotaRead(id) {
           const a = mustGet(id)
           const hit = quotaCache.get(id)
-          if (hit && now() - hit.at < QUOTA_TTL_MS) return hit.value
+          if (hit && now() - hit.at < QUOTA_TTL_MS) return { quota: hit.value, failed: hit.failed }
           const p = presets.get(a.presetId)
           let value: Quota | null = null
           if (p?.quotaProbe === 'link') value = { link: CHATGPT_USAGE }
@@ -365,8 +369,10 @@ export function createModelsRegistry(opts: RegistryOpts = {}): Plugin {
               value = r.quota
             }
           }
-          quotaCache.set(id, { at: now(), value })
-          return value
+          // 有用量接口却没读出来:网络、被拒、没 key、回来的东西不认识
+          const failed = value === null && !!p?.quotaProbe
+          quotaCache.set(id, { at: now(), value, failed })
+          return { quota: value, failed }
         },
       }
 

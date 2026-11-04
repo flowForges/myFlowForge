@@ -212,7 +212,9 @@ export class Background {
       if (models && pick) {
         if ('ref' in pick) {
           backgroundModel = pick.ref
-          if ((await this.quotaBriefly(models, pick.ref.accountId)) === 'blind') tokensLimit = Math.min(tokensLimit, BLIND_TOKENS)
+          const quota = await this.quotaBriefly(models, pick.ref.accountId)
+          if (quota === 'blind') tokensLimit = Math.min(tokensLimit, BLIND_TOKENS)
+          if (quota === 'failed') problem = 'quota_probe_failed'
         } else if (cfg.backgroundModel) {
           problem = `background_model:${pick.none}`
         }
@@ -236,14 +238,15 @@ export class Background {
     }
   }
 
-  private async quotaBriefly(models: ModelsService, accountId: string): Promise<'low' | 'blind' | 'seen'> {
+  private async quotaBriefly(models: ModelsService, accountId: string): Promise<'low' | 'blind' | 'seen' | 'failed'> {
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
       const late = new Promise<'late'>(r => (timer = setTimeout(() => r('late'), Math.min(STATUS_QUOTA_MS, this.o.timeoutMs ?? STATUS_QUOTA_MS))))
-      const quota = await Promise.race([models.quota(accountId), late])
-      return quota === 'late' ? 'blind' : assessQuota(quota)
+      const read = await Promise.race([models.quotaRead(accountId), late])
+      if (read === 'late') return 'blind'
+      return read.failed ? 'failed' : assessQuota(read.quota)
     } catch {
-      return 'blind'
+      return 'failed'
     } finally {
       clearTimeout(timer)
     }
@@ -405,14 +408,16 @@ export class Background {
     const early = refusal(this.readLedger(dateKey(this.o.now())), cfg.tokensPerDay)
     if (early) return no(early)
 
-    let quota: Quota | null | undefined
+    let read: { quota: Quota | null; failed: boolean } | undefined
     try {
-      quota = await Promise.race([models.quota(ref.accountId), gate.stopped])
+      read = await Promise.race([models.quotaRead(ref.accountId), gate.stopped])
     } catch {
       return no('quota_low')
     }
     if (gate.stop) return no(gate.stop)
-    const seen = assessQuota(quota ?? null)
+    // 读失败和读不到是两回事:没用量接口才算只靠预算
+    if (!read || read.failed) return no('quota_low')
+    const seen = assessQuota(read.quota)
     if (seen === 'low') return no('quota_low')
     const tokensLimit = seen === 'blind' ? Math.min(cfg.tokensPerDay, BLIND_TOKENS) : cfg.tokensPerDay
 

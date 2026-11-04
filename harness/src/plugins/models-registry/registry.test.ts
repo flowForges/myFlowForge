@@ -353,6 +353,20 @@ describe('models.quota', () => {
     expect(f.calls).toHaveLength(2)
   })
 
+  it('quotaRead 分得清探测失败和本来就没有:失败也缓存,不反复探测', async () => {
+    const f = spyFetch(() => new Response('oops', { status: 500 }))
+    const { k, svc } = await boot({ fetch: f.fn })
+    const kimi = await svc.addAccount({ presetId: 'kimi-global', apiKey: 'kk' })
+    expect(await svc.quotaRead(kimi.id)).toEqual({ quota: null, failed: true })
+    expect(await svc.quotaRead(kimi.id)).toEqual({ quota: null, failed: true })
+    expect(f.calls).toHaveLength(1)
+    expect(await k.handle('models.quota', { accountId: kimi.id })).toBeNull() // RPC 的形状不变
+    const ds = await svc.addAccount({ presetId: 'deepseek', apiKey: 'dk' })
+    expect(await svc.quotaRead(ds.id)).toEqual({ quota: null, failed: false })
+    const gpt = await svc.addAccount({ presetId: 'chatgpt' })
+    expect((await svc.quotaRead(gpt.id)).failed).toBe(false)
+  })
+
   it('MiniMax base_resp 报错(HTTP 200)→ null + 账号 error + account.updated', async () => {
     const f = spyFetch(() => new Response(JSON.stringify({ base_resp: { status_code: 1004, status_msg: 'invalid api key' } })))
     const { k, svc } = await boot({ fetch: f.fn })

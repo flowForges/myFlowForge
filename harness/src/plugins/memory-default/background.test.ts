@@ -157,6 +157,7 @@ describe('fences before the call', () => {
     ['one window of several at 90%', { quota: () => ({ windows: [{ label: 'a', usedPercent: 1 }, { label: 'b', usedPercent: 90 }] }) }, 'quota_low'],
     ['quota percent is not a number', { quota: () => ({ windows: [{ label: 'a', usedPercent: Number.NaN }] }) }, 'quota_low'],
     ['quota read throws', { quota: () => { throw new Error('probe down') } }, 'quota_low'],
+    ['a quota probe that failed, though quota says null', { quotaFailed: () => true }, 'quota_low'],
   ]
   it.each(noCall)('%s: no call', async (_name, opts, reason) => {
     const h = rig(opts)
@@ -654,6 +655,11 @@ describe('status', () => {
     expect(s.backgroundModel).toBeUndefined()
     expect(s.problem).toBe('background_model:restricted')
     expect(s.budget.tokens).toBe(0)
+  })
+
+  it('a failed quota probe is named, a clean null is not', async () => {
+    expect((await rig({ quotaFailed: () => true }).bg.status()).problem).toBe('quota_probe_failed')
+    expect((await rig().bg.status()).problem).toBeUndefined()
   })
 
   it('without config the default account model shows, and no model is no problem', async () => {

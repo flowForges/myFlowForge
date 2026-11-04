@@ -43,6 +43,8 @@ export interface FakeModelsOpts {
   script?: Script
   onRequest?(call: ModelCall): void
   quota?(accountId: string): Quota | null | Promise<Quota | null>
+  /** 这个账号有用量接口,但这次探测失败了 */
+  quotaFailed?(accountId: string): boolean
 }
 
 export interface FakeModels {
@@ -83,6 +85,7 @@ export function fakeModels(opts: FakeModelsOpts = {}): FakeModels {
       return script(calls.length, req, resolved)
     },
     quota: async (accountId: string) => (await opts.quota?.(accountId)) ?? null,
+    quotaRead: async (accountId: string) => ({ quota: (await opts.quota?.(accountId)) ?? null, failed: opts.quotaFailed?.(accountId) ?? false }),
   } as unknown as ModelsService
   return {
     plugin: { manifest: { id: 'fake-models', version: '0', kernel: '^0.1.0', provides: ['models'] }, activate: ctx => ctx.services.provide('models', service) },

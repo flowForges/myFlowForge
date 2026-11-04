@@ -96,4 +96,6 @@ export interface ModelsService {
   refreshModels(id: string): Promise<void>
   stream(ref: ModelRef | 'default', req: Omit<ModelRequest, 'model'>): AsyncIterable<ModelEvent>
   quota(accountId: string): Promise<Quota | null>
+  /** 同一份缓存。failed:这个账号有用量接口,但没读出来;quota() 的 null 分不清这个和"本来就没有" */
+  quotaRead(accountId: string): Promise<{ quota: Quota | null; failed: boolean }>
 }
