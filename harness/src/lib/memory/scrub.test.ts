@@ -40,6 +40,8 @@ describe('scrub: spec §11 pattern table', () => {
     ['stripe restricted live', 'rk_live_' + X(24), '***'],
     ['stripe test', 'sk_test_' + X(24), '***'],
     ['telegram bot token', 'bot ' + '123456789:' + X(35), 'bot ***'],
+    ['telegram bot token, 6-digit id, 30-char secret', 'bot ' + '123456:' + X(30), 'bot ***'],
+    ['telegram bot token, 13-digit id', '1234567890123:' + X(35), '***'],
     // JWT
     ['JWT', 'cookie ' + jwt() + ' end', 'cookie *** end'],
     // 请求头

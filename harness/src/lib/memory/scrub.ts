@@ -17,7 +17,7 @@ const PREFIXED = new RegExp(
       'AIza[0-9A-Za-z_-]{35,}',
       String.raw`ya29\.[0-9A-Za-z_-]{20,}`,
       'ASIA[0-9A-Z]{16}',
-      String.raw`\d{8,10}:[A-Za-z0-9_-]{35,}`, // Telegram 机器人令牌
+      String.raw`\d{6,16}:[A-Za-z0-9_-]{30,}`, // Telegram 机器人令牌:id 可到 52 位,密文部分文档写 35 位,放宽到 30
     ].join('|') +
     ')',
   'g',
