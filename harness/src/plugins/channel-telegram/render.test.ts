@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { scrub } from '../../lib/memory/scrub'
 import type { KernelEvent } from '../../protocol/index'
-import { renderTurn, type Chunk } from './render'
+import { renderTurn, SEGMENT_CHUNKS, TRUNCATED, type Chunk } from './render'
 
 const T = 'turn-1'
 let seq = 0
@@ -137,7 +137,7 @@ describe('renderTurn: text path', () => {
   })
   it('1 MB of deltas renders under 200 ms', () => {
     const evs: KernelEvent[] = []
-    for (let i = 0; i < 1_000_000 / 10; i++) evs.push(delta('0123456789'))
+    for (let i = 0; i < 1_000_000 / 10; i++) evs.push(delta('012345678 '))
     const t = performance.now()
     const out = render(evs, { mask: idMask })
     expect(performance.now() - t).toBeLessThan(200)
@@ -152,6 +152,59 @@ describe('renderTurn: chunking', () => {
     expect(out[0]!.notify).toBe(true)
     expect(out.slice(1).every(c => !c.notify)).toBe(true)
   })
+  it('a secret straddling the 50 000 mark is masked whole, even when masking shrinks the text below the cap', () => {
+    const token = 'ghp_' + 'aZ3kQ9mB7xLp2WnR5tYc'.repeat(2).slice(0, 36)
+    let body = ''
+    for (let i = 0; i < 200; i++) body += `sk-${'x'.repeat(24)}\n`
+    body += 'filler '.repeat(Math.ceil((49_980 - body.length) / 7))
+    body = body.slice(0, 49_980) + token + ' tail'
+    const out = render([ev('message.assistant', { text: body })], { final: true })
+    const all = out.map(c => c.text).join('')
+    for (let i = 0; i + 6 <= token.length; i++) expect(all).not.toContain(token.slice(i, i + 6))
+    expect(all).not.toContain('sk-xxx')
+  })
+
+  it('clipped text shows the notice even when markers shrink it under 12 chunks', () => {
+    const out = render([ev('message.assistant', { text: '**a** '.repeat(12_000) })], { final: true })
+    expect(out.length).toBeLessThanOrEqual(SEGMENT_CHUNKS)
+    expect(out.at(-1)?.text.endsWith(TRUNCATED)).toBe(true)
+    expect(out.map(c => c.text).join('').split(TRUNCATED)).toHaveLength(2)
+  })
+
+  it('mid-stream, a run of ASCII past the clip stays held back: clipping cannot end it early', () => {
+    expect(render([delta('x'.repeat(60_000))])).toEqual([])
+  })
+
+  it('1 MB through the real scrub stays bounded', () => {
+    const started = performance.now()
+    const out = render([delta('word '.repeat(200_000))], { final: true })
+    expect(out.at(-1)?.text.endsWith(TRUNCATED)).toBe(true)
+    expect(performance.now() - started).toBeLessThan(2000)
+  })
+
+  it('text under the clip has no notice', () => {
+    expect(render([ev('message.assistant', { text: 'short' })], { final: true }).at(-1)?.text).toBe('short')
+  })
+
+  it.each([
+    ['bold', `sk-${'a'.repeat(14)}**${'b'.repeat(14)}**${'c'.repeat(14)}`],
+    ['code', `sk-${'a'.repeat(14)}\`${'b'.repeat(14)}\`${'c'.repeat(14)}`],
+  ])('%s markers inside a secret cannot reassemble it after stripping', (_name, secret) => {
+    const out = render([ev('message.assistant', { text: `**keep** ${secret} end` })], { final: true })
+    const all = out.map(c => c.text).join('')
+    expect(all).not.toContain('a'.repeat(14) + 'b'.repeat(6))
+    expect(all).not.toContain('b'.repeat(14) + 'c'.repeat(6))
+    expect(all).toContain('keep')
+    expect(all).toContain('keep *** end')
+    expect(out[0].entities).toEqual([])
+  })
+
+  it('masked text keeps its entities when stripping reveals nothing', () => {
+    const out = render([ev('message.assistant', { text: `**keep** sk-${'x'.repeat(24)} end` })], { final: true })
+    expect(out[0].entities).toEqual([{ type: 'bold', offset: 0, length: 4 }])
+    expect(out[0].text).not.toContain('xxxxxx')
+  })
+
   it('50 000 chars → 12 chunks and the notice on the last', () => {
     const out = render([ev('message.assistant', { text: 'a'.repeat(50_000) })], { final: true })
     expect(out.length).toBe(12)

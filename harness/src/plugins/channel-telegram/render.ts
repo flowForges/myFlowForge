@@ -25,7 +25,8 @@ export interface RenderOptions {
 export const CHUNK_MAX = 3900
 export const SEGMENT_CHUNKS = 12
 export const TRUNCATED = '已截断,完整内容在 app 里'
-const TEXT_CLIP = 50_000 // 比 12 块(46 800)多,被截时一定超限;被截的尾巴不会露出去
+/** 只为限住后面的解析和切块;在打码之后截,切不开密钥。截过的一定带截断提示 */
+const TEXT_CLIP = 50_000
 const TOOL_LINES = 5
 const ARG_CLIP = 80
 const PROGRESS_CLIP = 60
@@ -236,6 +237,7 @@ export function renderTurn(events: readonly KernelEvent[], o: RenderOptions): Ch
     let text = ''
     let entities: Entity[] = []
     let prev: Block['k'] | undefined
+    let clipped = false
     const flush = () => {
       if (text !== '') for (const part of splitChunks(text, entities, CHUNK_MAX)) chunks.push({ text: part.text, entities: capEntities(part.entities) })
       text = ''
@@ -255,14 +257,18 @@ export function renderTurn(events: readonly KernelEvent[], o: RenderOptions): Ch
           flush()
           break
         case 'text': {
-          let raw = b.full ?? b.parts.join('')
-          if (raw.length > TEXT_CLIP) raw = clip(raw, TEXT_CLIP)
+          const raw = b.full ?? b.parts.join('')
           // 还在写的最后一块只发稳定的部分;后面已经有别的内容,或步骤、轮结束了,就是完整的
           const complete = b.full !== undefined || o.final || i < blocks.length - 1
-          const md = o.mask(complete ? raw : stableText(raw, false)).trim()
+          const masked = o.mask(complete ? raw : stableText(raw, false))
+          if (masked.length > TEXT_CLIP) clipped = true
+          const md = clip(masked, TEXT_CLIP).trim()
           if (md === '') break
           const r = toEntities(md)
-          add(r.text, r.entities, 'text')
+          // 去掉记号后可能拼出整个密钥(`sk-ab**cd**ef`):再打一次码,变了就只发纯文字,偏移对不上了
+          const remasked = o.mask(r.text)
+          if (remasked === r.text) add(r.text, r.entities, 'text')
+          else add(remasked, [], 'text')
           break
         }
         case 'tools': {
@@ -288,8 +294,9 @@ export function renderTurn(events: readonly KernelEvent[], o: RenderOptions): Ch
     flush()
     if (chunks.length > SEGMENT_CHUNKS) {
       chunks.length = SEGMENT_CHUNKS
-      chunks[SEGMENT_CHUNKS - 1]!.text += `\n${TRUNCATED}`
+      clipped = true
     }
+    if (clipped && chunks.length > 0) chunks[chunks.length - 1]!.text += `\n${TRUNCATED}`
     if (chunks.length > 0) chunks[0]!.notify = true
     out.push(...chunks)
   }

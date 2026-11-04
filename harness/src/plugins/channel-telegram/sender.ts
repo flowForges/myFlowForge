@@ -55,6 +55,10 @@ const MAX_TIMER_MS = 3_600_000
 const RETRY_AFTER_FALLBACK_S = 5
 /** send、edit、fire 的总数;sync 不受限:一轮一条,且最终内容不能丢 */
 const QUEUE_MAX = 256
+/** 总数满了每条队列也还能排这么多:别的聊天刷屏不能饿死配对账号的审批卡片 */
+const LANE_RESERVED = 8
+/** Telegram 说得再久也最多等这么久,到点再问一次:这个聊天排着的都在等它 */
+const RETRY_AFTER_MAX_MS = 3_600_000
 const EDIT_TIMES_MAX = 32
 const LANES_SWEEP_AT = 1000
 
@@ -87,7 +91,8 @@ interface Lane {
   /** 写操作之间的间隔;不属于聊天的调用(answerCallbackQuery、leaveChat)没有 */
   paced: boolean
   ops: Op[]
-  busy: boolean
+  /** 手上的请求。被 drop 之后它不在 ops 里了,结果还是要等 */
+  inFlight?: Op
   timer?: unknown
   pausedUntil: number
   lastWriteAt: number
@@ -162,13 +167,13 @@ export class Sender {
   /** 卡片、命令回复。给 retryWhile 的重试到它为假,不给的最多 1 小时。结果只有 message_id 或 undefined,永不 reject */
   send(chatId: string, msg: OutgoingMessage, o: { retryWhile?: () => boolean } = {}): Promise<number | undefined> {
     if (!this.accepting(chatId)) return Promise.resolve(undefined)
-    if (this.queued >= QUEUE_MAX) {
+    const lane = this.laneOf(chatId, true)
+    if (!this.hasRoom(lane)) {
       this.o.log.warn('telegram send queue full', { method: 'sendMessage' })
       return Promise.resolve(undefined)
     }
     return new Promise(resolve => {
       this.queued++
-      const lane = this.laneOf(chatId, true)
       lane.ops.push({ ...FRESH, kind: 'send', msg, plain: false, ...(o.retryWhile && { retryWhile: o.retryWhile }), resolve })
       this.pump(lane)
     })
@@ -184,7 +189,7 @@ export class Sender {
       same.plain = false
       same.rev++
     } else {
-      if (this.queued >= QUEUE_MAX) {
+      if (!this.hasRoom(lane)) {
         this.o.log.warn('telegram send queue full', { method: 'editMessageText' })
         return
       }
@@ -197,12 +202,12 @@ export class Sender {
   /** 不属于聊天内容的一次性调用(answerCallbackQuery、leaveChat):占全局额度,429 等一次,其余失败只记代码 */
   fire(method: string, body: object): void {
     if (this.closed) return
-    if (this.queued >= QUEUE_MAX) {
+    const lane = this.laneOf(`~${method}`, false)
+    if (!this.hasRoom(lane)) {
       this.o.log.warn('telegram send queue full', { method })
       return
     }
     this.queued++
-    const lane = this.laneOf(`~${method}`, false)
     lane.ops.push({ ...FRESH, kind: 'call', method, body, limited: false })
     this.pump(lane)
   }
@@ -258,6 +263,10 @@ export class Sender {
     for (const finish of [...this.drainWaiters]) finish()
   }
 
+  private hasRoom(lane: Lane): boolean {
+    return this.queued < QUEUE_MAX || lane.ops.length < LANE_RESERVED
+  }
+
   private accepting(chatId: string): boolean {
     return !this.closed && !this.isBlocked(chatId)
   }
@@ -283,7 +292,7 @@ export class Sender {
     let lane = this.lanes.get(chatId)
     if (lane) return lane
     if (this.lanes.size >= LANES_SWEEP_AT) this.sweep()
-    lane = { chatId, paced, ops: [], busy: false, pausedUntil: 0, lastWriteAt: -Infinity, editedAt: new Map(), typedAt: -Infinity }
+    lane = { chatId, paced, ops: [], pausedUntil: 0, lastWriteAt: -Infinity, editedAt: new Map(), typedAt: -Infinity }
     this.lanes.set(chatId, lane)
     return lane
   }
@@ -292,7 +301,7 @@ export class Sender {
   private sweep(): void {
     const now = this.o.now()
     for (const [id, lane] of this.lanes) {
-      if (lane.ops.length === 0 && !lane.busy && lane.pausedUntil <= now && now - lane.lastWriteAt > EDIT_INTERVAL_MS) this.lanes.delete(id)
+      if (lane.ops.length === 0 && !lane.inFlight && lane.pausedUntil <= now && now - lane.lastWriteAt > EDIT_INTERVAL_MS) this.lanes.delete(id)
     }
   }
 
@@ -308,7 +317,7 @@ export class Sender {
 
   /** 队头能走就走,不能走就排定时器。手上有请求时什么都不做,回来时会再进这里 */
   private pump(lane: Lane): void {
-    if (this.closed || lane.busy) return
+    if (this.closed || lane.inFlight) return
     this.o.timers.clearTimeout(lane.timer)
     lane.timer = undefined
     if (lane.paced && lane.ops.length > 0 && this.isBlocked(lane.chatId)) {
@@ -416,7 +425,7 @@ export class Sender {
   }
 
   private dispatch(lane: Lane, op: Op, step: Step, now: number): void {
-    lane.busy = true
+    lane.inFlight = op
     this.recent.push(now)
     if (lane.paced) lane.lastWriteAt = now
     if (step.messageId !== undefined) this.noteEdit(lane, step.messageId, now)
@@ -431,7 +440,7 @@ export class Sender {
         if (lane.ops[0] === op) this.abandon(lane, op)
       })
       .finally(() => {
-        lane.busy = false
+        delete lane.inFlight
         this.pump(lane)
         this.checkDrained()
       })
@@ -447,8 +456,11 @@ export class Sender {
   }
 
   private onSuccess(lane: Lane, op: Op, step: Step, result: unknown): void {
-    if (lane.ops[0] !== op) return
     const id = step.method === 'sendMessage' ? (result as { message_id?: unknown } | null)?.message_id : undefined
+    if (lane.ops[0] !== op) {
+      this.onDetachedSuccess(lane, op, step, id)
+      return
+    }
     if (step.method === 'sendMessage' && (op.kind === 'sync' || op.kind === 'send') && (typeof id !== 'number' || !Number.isSafeInteger(id))) {
       this.onFailure(lane, op, step, new TelegramError('server'))
       return
@@ -468,6 +480,18 @@ export class Sender {
     this.queued--
   }
 
+  /** 请求途中被 drop 了,但消息真的发出去了:调用方要知道,Delivery 要记,否则重放时再发一遍 */
+  private onDetachedSuccess(lane: Lane, op: Op, step: Step, id: unknown): void {
+    const valid = typeof id === 'number' && Number.isSafeInteger(id)
+    if (op.kind === 'send') {
+      op.resolve(valid ? id : undefined)
+      return
+    }
+    if (op.kind !== 'sync' || this.closed) return
+    if (valid) this.placeMessage(lane, op, step, id)
+    else if (step.method !== 'sendMessage') this.recordHash(lane, op, step)
+  }
+
   private placeMessage(lane: Lane, op: Op & SyncOp, step: Step, id: number): void {
     const index = step.index as number
     op.delivery.messageIds[index] = id
@@ -484,7 +508,11 @@ export class Sender {
   }
 
   private onFailure(lane: Lane, op: Op, step: Step, err: unknown): void {
-    if (this.closed || lane.ops[0] !== op) return
+    if (lane.ops[0] !== op) {
+      if (op.kind === 'send') op.resolve(undefined)
+      return
+    }
+    if (this.closed) return
     if (!(err instanceof TelegramError)) {
       // api.ts 只抛 TelegramError;别的都是 bug,重试没有意义
       this.giveUp(lane, op, codeOf(err))
@@ -537,7 +565,7 @@ export class Sender {
   }
 
   private pauseFor(lane: Lane, err: TelegramError): number {
-    const wait = (err.retryAfter ?? RETRY_AFTER_FALLBACK_S) * 1000
+    const wait = Math.min((err.retryAfter ?? RETRY_AFTER_FALLBACK_S) * 1000, RETRY_AFTER_MAX_MS)
     lane.pausedUntil = Math.max(lane.pausedUntil, this.o.now() + wait)
     return wait
   }
@@ -636,17 +664,16 @@ export class Sender {
     this.o.timers.clearTimeout(lane.timer)
     lane.timer = undefined
     for (const op of lane.ops.splice(0)) {
-      if (op.kind === 'send') {
-        this.queued--
-        op.resolve(undefined)
-      } else if (op.kind !== 'sync') this.queued--
+      if (op.kind !== 'sync') this.queued--
+      // 手上这条的结果还没出来,onSuccess、onFailure 会回它
+      if (op.kind === 'send' && op !== lane.inFlight) op.resolve(undefined)
     }
     this.checkDrained()
   }
 
   private checkDrained(): void {
     if (this.drainWaiters.size === 0 || !this.isDrained()) return
-    for (const lane of this.lanes.values()) if (lane.busy) return
+    for (const lane of this.lanes.values()) if (lane.inFlight) return
     for (const finish of [...this.drainWaiters]) finish()
   }
 }

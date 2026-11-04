@@ -304,8 +304,18 @@ describe('Sender', () => {
     it('a retry_after too large for a timer does not turn into a tight loop', async () => {
       fake.fail('sendMessage', 1, limited(60 * 24 * 3600))
       sender.sync(CHAT, 't1', [chunk('final')], { final: true, delivery: delivery() })
-      await run(HOUR, 60_000)
+      await run(HOUR - 60_000, 60_000)
       expect(writes()).toHaveLength(1)
+    })
+
+    it('retry_after is capped at an hour', async () => {
+      fake.fail('sendMessage', 1, limited(60 * 24 * 3600))
+      const d = delivery()
+      sender.sync(CHAT, 't1', [chunk('final')], { final: true, delivery: d })
+      await run(HOUR, 60_000)
+      expect(texts()).toEqual(['final'])
+      expect(d.done).toBe(true)
+      expect(writes()[1].at - writes()[0].at).toBe(HOUR)
     })
   })
 
@@ -754,6 +764,72 @@ describe('Sender', () => {
       expect(undelivered).toEqual([])
     })
 
+    it('drop during a send: the caller still learns the message id when it went out', async () => {
+      let answer: (v: unknown) => void = () => {}
+      const held = build({ call: <T,>() => new Promise<T>(r => (answer = r as (v: unknown) => void)) })
+      const p = held.send(CHAT, { text: 'card' })
+      await new Promise(r => setImmediate(r))
+      held.drop(CHAT)
+      answer({ message_id: 77 })
+      expect(await p).toBe(77)
+      held.close()
+    })
+
+    it('drop during a send that then fails resolves undefined, with no retry', async () => {
+      let refuse: (e: unknown) => void = () => {}
+      let calls = 0
+      const held = build({
+        call: <T,>() => {
+          calls++
+          return new Promise<T>((_, reject) => (refuse = reject))
+        },
+      })
+      const p = held.send(CHAT, { text: 'card' })
+      await new Promise(r => setImmediate(r))
+      held.drop(CHAT)
+      refuse(new TelegramError('server'))
+      expect(await p).toBeUndefined()
+      await run(5000)
+      expect(calls).toBe(1)
+      held.close()
+    })
+
+    it('drop during a sync send: the message id is still recorded, so a replay does not send it twice', async () => {
+      let answer: (v: unknown) => void = () => {}
+      const held = build({ call: <T,>() => new Promise<T>(r => (answer = r as (v: unknown) => void)) })
+      const d = delivery()
+      held.sync(CHAT, 't1', [chunk('a')], { final: false, delivery: d })
+      await new Promise(r => setImmediate(r))
+      held.drop(CHAT)
+      answer({ message_id: 78 })
+      await idle()
+      expect(d.messageIds).toEqual([78])
+      expect(changes).toEqual([CHAT])
+      held.close()
+    })
+
+    it('a second drop does not treat a newer queued send as the one in flight', async () => {
+      let answer: (v: unknown) => void = () => {}
+      const held = build({ call: <T,>() => new Promise<T>(r => (answer = r as (v: unknown) => void)) })
+      const first = held.send(CHAT, { text: 'one' })
+      await new Promise(r => setImmediate(r))
+      held.drop(CHAT)
+      const second = held.send(CHAT, { text: 'two' })
+      held.drop(CHAT)
+      expect(await second).toBeUndefined()
+      answer({ message_id: 79 })
+      expect(await first).toBe(79)
+      held.close()
+    })
+
+    it('close during a send resolves it undefined', async () => {
+      fake.fail('sendMessage', 1, 'hang')
+      const p = sender.send(CHAT, { text: 'x' })
+      await expect.poll(() => writes().length).toBe(1)
+      sender.close()
+      expect(await p).toBeUndefined()
+    })
+
     it('drop clears one chat only', async () => {
       fake.fail('sendMessage', 1, limited(5))
       fake.fail('sendMessage', 1, limited(5))
@@ -817,6 +893,31 @@ describe('Sender', () => {
       sender.typing(CHAT)
       await run(100)
       expect(fake.requests.filter(q => q.method === 'sendChatAction')).toHaveLength(before)
+    })
+
+    it('a full queue leaves each chat room: a flood from one chat cannot starve another chat\'s card', async () => {
+      fake.fail('sendMessage', 1, limited(5))
+      void sender.send('1', { text: 'first' })
+      await run(100)
+      for (let i = 0; i < 300; i++) void sender.send('1', { text: `n${i}` })
+      const card = sender.send('2', { text: 'card' }, { retryWhile: () => true })
+      await run(100)
+      expect(typeof (await card)).toBe('number')
+      sender.edit('2', (await card) as number, { text: 'done' })
+      sender.fire('answerCallbackQuery', { callback_query_id: 'q' })
+      await run(2000)
+      expect(texts('2')).toEqual(['done'])
+      expect(fake.requests.filter(q => q.method === 'answerCallbackQuery')).toHaveLength(1)
+      sender.drop('1')
+    })
+
+    it('many chats each past their room still hit the global cap', async () => {
+      fake.fail('sendMessage', 1_000_000, limited(3600))
+      const results: Promise<number | undefined>[] = []
+      for (let c = 0; c < 40; c++) for (let i = 0; i < 20; i++) results.push(sender.send(String(c + 1), { text: 'x' }))
+      expect(logs.join('\n')).toContain('queue full')
+      for (let c = 0; c < 40; c++) sender.drop(String(c + 1))
+      await Promise.all(results)
     })
 
     it('queue is bounded: past the cap a send resolves undefined, a final still goes', async () => {
