@@ -2,7 +2,7 @@ import { inspect } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { fakeClock } from '../../../test/memoryRig'
 import { startFakeTelegram, type FakeReply, type FakeTelegram } from '../../../test/fakeTelegram'
-import { createApi, TelegramError } from './api'
+import { createApi, MAX_BODY_BYTES, TelegramError } from './api'
 
 const TOKEN = '123456789:' + 'A'.repeat(35)
 
@@ -152,11 +152,13 @@ describe('api', () => {
 
   it('读正文时断了,错里带 URL:同样', async () => {
     const res = (url: unknown) => {
-      const r = new Response('{}')
-      r.text = async () => {
-        throw new TypeError(`terminated ${String(url)}`)
-      }
-      return r
+      return new Response(
+        new ReadableStream({
+          pull(c) {
+            c.error(new TypeError(`terminated ${String(url)}`))
+          },
+        }),
+      )
     }
     const e = await failure(createApi({ base: 'http://t.invalid', token: () => TOKEN, fetch: (async (u: unknown) => res(u)) as typeof fetch }).call('getMe', {}))
     expect(e.code).toBe('network')
@@ -299,6 +301,55 @@ describe('api', () => {
     await failure(client.call('getMe', {}, { signal: ctl.signal }))
     expect(pendingTimers.size).toBe(0)
     expect(listeners).toBe(0)
+  })
+
+  describe('正文上限', () => {
+    /** 要多少给多少,记下实际读走了多少、有没有被取消 */
+    const endless = () => {
+      const seen = { bytes: 0, cancelled: false }
+      const chunk = new Uint8Array(1024 * 1024).fill(0x20)
+      const body = new ReadableStream<Uint8Array>({
+        pull(c) {
+          seen.bytes += chunk.byteLength
+          c.enqueue(chunk)
+        },
+        cancel() {
+          seen.cancelled = true
+        },
+      })
+      return { seen, fetchStub: (async () => new Response(body)) as typeof fetch }
+    }
+
+    it('没完没了的正文:读到上限就停,取消读取,network', async () => {
+      const { seen, fetchStub } = endless()
+      const e = await failure(createApi({ base: 'http://t.invalid', token: () => TOKEN, fetch: fetchStub }).call('getMe', {}))
+      expect(e.code).toBe('network')
+      expectClean(e)
+      expect(seen.bytes).toBeLessThanOrEqual(MAX_BODY_BYTES + 2 * 1024 * 1024)
+      expect(seen.cancelled).toBe(true)
+    })
+
+    it('上限以内的大正文照常,多字节字符跨块也不坏', async () => {
+      const text = '中'.repeat(1000)
+      const bytes = Buffer.from(JSON.stringify({ ok: true, result: text }))
+      const body = new ReadableStream<Uint8Array>({
+        start(c) {
+          // 从一个字符中间切开
+          c.enqueue(bytes.subarray(0, 20))
+          c.enqueue(bytes.subarray(20))
+          c.close()
+        },
+      })
+      const fetchStub = (async () => new Response(body)) as typeof fetch
+      await expect(createApi({ base: 'http://t.invalid', token: () => TOKEN, fetch: fetchStub }).call('getMe', {})).resolves.toBe(text)
+    })
+  })
+
+  it('很小的 retry_after 抬到 1 s:0.001 不能变成 1 ms 的空转', async () => {
+    fake.fail('getMe', 1, { status: 429, body: { parameters: { retry_after: 0.001 } } })
+    expect((await failure(api().call('getMe', {}))).retryAfter).toBe(1)
+    fake.fail('getMe', 1, { status: 429, body: { parameters: { retry_after: 7 } } })
+    expect((await failure(api().call('getMe', {}))).retryAfter).toBe(7)
   })
 
   it('TelegramError 只有 code 和 retryAfter', () => {

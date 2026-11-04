@@ -398,6 +398,149 @@ describe('Poller', () => {
     })
   })
 
+  describe('空转保护', () => {
+    it('长轮询立刻回空数组:歇一下再问,不空转', async () => {
+      const r = rig()
+      fake.fail('getUpdates', 3, { status: 200, body: { ok: true, result: [] } })
+      r.poller.start()
+      await pollArrived(4)
+      expect(r.sleeps).toEqual([1000, 1000, 1000])
+    })
+
+    it('长轮询等够了才回空:不歇', async () => {
+      let polls = 0
+      const slowEmpty = (async (url: unknown, init?: RequestInit) => {
+        if (String(url).endsWith('/getUpdates') && polls++ === 0) {
+          clock.advance(50_000)
+          return new Response('{"ok":true,"result":[]}')
+        }
+        return fetch(url as string, init)
+      }) as typeof fetch
+      const r = rig({ fetch: slowEmpty })
+      r.poller.start()
+      await pollArrived(1)
+      expect(polls).toBeGreaterThanOrEqual(2)
+      expect(r.sleeps).toEqual([])
+    })
+
+    it('恢复时 timeout:0 的空回复是预期的:不歇', async () => {
+      const r = rig()
+      fake.fail('getUpdates', 1, { status: 500 })
+      r.poller.start()
+      await pollArrived(3)
+      expect(polls()[1].body.timeout).toBe(0)
+      expect(r.sleeps).toHaveLength(1)
+    })
+
+    it('很小的 retry_after:至少歇 1 s', async () => {
+      const r = rig()
+      fake.fail('getUpdates', 1, { status: 429, body: { parameters: { retry_after: 0.001 } } })
+      r.poller.start()
+      await pollArrived(2)
+      expect(r.sleeps).toEqual([1000])
+    })
+  })
+
+  describe('离谱的 update_id', () => {
+    const MAX_INT32 = 2 ** 31 - 1
+
+    it.each([
+      ['超过 32 位', MAX_INT32 + 1],
+      ['接近 2^53', Number.MAX_SAFE_INTEGER - 1],
+    ])('%s:丢掉、计数,offset 不动', async (_name, huge) => {
+      const r = rig()
+      fake.fail('getUpdates', 1, { status: 200, body: { ok: true, result: [{ update_id: huge }] } })
+      const real = fake.push({ message: { chat: { id: 1 }, text: 'a' } })
+      r.poller.start()
+      await pollArrived(3)
+      expect((r.batches.flat() as { update_id: number }[]).map(u => u.update_id)).toEqual([real])
+      expect(r.state.data.offset).toBe(real + 1)
+      expect(r.state.data.dropped.badUpdate).toBe(1)
+    })
+
+    it('一次跳太远:offset 推不过真实的 id,之后的更新还收得到', async () => {
+      const r = rig({ state: seed({ offset: 100, lastUpdateAt: clock.now() }) })
+      fake.fail('getUpdates', 1, { status: 200, body: { ok: true, result: [{ update_id: MAX_INT32 - 1 }] } })
+      r.poller.start()
+      await pollArrived(2)
+      expect(r.batches).toEqual([])
+      expect(r.state.data.offset).toBe(100)
+      expect(polls()[1].body.offset).toBe(100)
+      const next = fake.push({ update_id: 100, message: { chat: { id: 1 }, text: 'a' } })
+      await expect.poll(() => (r.batches.flat() as { update_id: number }[]).map(u => u.update_id)).toEqual([next])
+      expect(r.sleeps).toHaveLength(1)
+    })
+
+    it('还没有 offset(新机器人、闲置重置):第一个 id 不受"跳太远"限制', async () => {
+      const r = rig()
+      const first = fake.push({ update_id: MAX_INT32 - 5, message: { chat: { id: 1 }, text: 'a' } })
+      r.poller.start()
+      await expect.poll(() => r.state.ackOffset).toBe(first + 1)
+    })
+
+    it('一直收到坏条目:不空转', async () => {
+      const r = rig()
+      fake.fail('getUpdates', 2, { status: 200, body: { ok: true, result: [{ update_id: MAX_INT32 + 1 }] } })
+      r.poller.start()
+      await pollArrived(3)
+      expect(r.sleeps).toHaveLength(2)
+    })
+  })
+
+  describe('超时的 stop 之后 start', () => {
+    it('旧循环的批次还卡着:新循环等它结束,同一时间只有一个循环', async () => {
+      let finish = () => {}
+      const gate = new Promise<void>(res => (finish = res))
+      let inBatch = 0
+      let most = 0
+      const r = rig({
+        realTimers: true,
+        onBatch: async (updates, state) => {
+          most = Math.max(most, ++inBatch)
+          if (r.batches.length === 1) await gate
+          for (const u of updates as { update_id: number }[]) state.advance(u.update_id)
+          inBatch--
+        },
+      })
+      const a = fake.push({ message: { chat: { id: 1 }, text: 'a' } })
+      r.poller.start()
+      await expect.poll(() => r.batches.length).toBe(1)
+      const before = fake.requests.length
+      await r.poller.stop()
+      r.poller.start()
+      await new Promise(res => setTimeout(res, 30))
+      // 旧批次没完:一个请求都不发,也不重投同一批
+      expect(fake.requests.length).toBe(before)
+      expect(r.batches).toHaveLength(1)
+      finish()
+      await expect.poll(() => polls().at(-1)?.body.offset).toBe(a + 1)
+      expect(most).toBe(1)
+      expect(r.batches).toHaveLength(1)
+    })
+
+    it('start 之后马上又 stop:排着队的循环不再开始', async () => {
+      let finish = () => {}
+      const gate = new Promise<void>(res => (finish = res))
+      const r = rig({
+        realTimers: true,
+        onBatch: async (updates, state) => {
+          await gate
+          for (const u of updates as { update_id: number }[]) state.advance(u.update_id)
+        },
+      })
+      fake.push({ message: { chat: { id: 1 }, text: 'a' } })
+      r.poller.start()
+      await expect.poll(() => r.batches.length).toBe(1)
+      await r.poller.stop()
+      r.poller.start()
+      await r.poller.stop()
+      const before = fake.requests.length
+      finish()
+      await new Promise(res => setTimeout(res, 30))
+      expect(fake.requests.length).toBe(before)
+    })
+  })
+
   describe('挂死', () => {
     it('getUpdates 挂死:注入的时钟走到 65 s 才中止,转 reconnecting', async () => {
       const r = rig()

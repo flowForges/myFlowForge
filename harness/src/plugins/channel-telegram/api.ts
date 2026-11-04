@@ -51,6 +51,10 @@ export interface CreateApiOpts {
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000
+/** 100 条更新也到不了这么大;对面发个没完,内存不能跟着涨 */
+export const MAX_BODY_BYTES = 16 * 1024 * 1024
+/** 再小的 retry_after 也不能变成毫秒级的重试 */
+const MIN_RETRY_AFTER_S = 1
 
 const REAL_TIMERS: ApiTimers = {
   setTimeout: (fn, ms) => setTimeout(fn, ms).unref(),
@@ -78,7 +82,7 @@ function parseReply(text: string): Reply {
     ok: o.ok,
     result: o.result,
     description: typeof o.description === 'string' ? o.description : '',
-    ...(typeof retryAfter === 'number' && Number.isFinite(retryAfter) && retryAfter > 0 && { retryAfter }),
+    ...(typeof retryAfter === 'number' && Number.isFinite(retryAfter) && retryAfter > 0 && { retryAfter: Math.max(retryAfter, MIN_RETRY_AFTER_S) }),
   }
 }
 
@@ -95,6 +99,24 @@ function errorFor(status: number, reply: Reply): TelegramError {
   }
   if (status >= 400 && status < 500) return new TelegramError('bad_request')
   return new TelegramError('server')
+}
+
+/** 到上限就取消:连接断开,后面的不再读 */
+async function readBody(res: Response): Promise<string> {
+  if (!res.body) return ''
+  const reader = res.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) return Buffer.concat(chunks).toString('utf8')
+    total += value.byteLength
+    if (total > MAX_BODY_BYTES) {
+      void reader.cancel().catch(() => {})
+      throw new TelegramError('network')
+    }
+    chunks.push(value)
+  }
 }
 
 export function createApi(o: CreateApiOpts): TelegramApi {
@@ -127,7 +149,7 @@ export function createApi(o: CreateApiOpts): TelegramApi {
     try {
       const res = await doFetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: payload, redirect: 'error', signal })
       status = res.status
-      text = await res.text()
+      text = await readBody(res)
     } catch {
       throw new TelegramError('network')
     }

@@ -34,12 +34,21 @@ const RETRY_AFTER_MAX_MS = 3_600_000
 const ID_RESET_IDLE_MS = 6 * 86_400_000
 const STOP_BOUND_MS = 500
 const SAVE_FAILED = 'state_save_failed'
+/** 长轮询比这快地回了空:对面没在长等(代理之类),不跟着空转 */
+const EMPTY_REPLY_MIN_MS = 1000
+/** Bot API 的 update_id 是 32 位 */
+const MAX_UPDATE_ID = 2 ** 31 - 1
+/**
+ * id 是连续的,离上一个这么远只可能是对面发疯:收下它,offset 就越过了所有真实的 id,之后的更新一条也收不到。
+ * 真要是误判,闲置 6 天的重置(§5.2)会让这里放行
+ */
+const MAX_UPDATE_ID_JUMP = 2 ** 24
 
 type IdentifiedUpdate = { update_id: number }
 
 const isIdentified = (u: unknown): u is IdentifiedUpdate => {
   const id = (u as IdentifiedUpdate | null | undefined)?.update_id
-  return Number.isSafeInteger(id) && (id as number) >= 0
+  return Number.isSafeInteger(id) && (id as number) >= 0 && (id as number) <= MAX_UPDATE_ID
 }
 
 export class Poller {
@@ -48,6 +57,8 @@ export class Poller {
   private readonly pollTimeoutS: number
   private ctl: AbortController | undefined
   private done: Promise<void> | undefined
+  /** stop 等超时了的旧循环:它结束之前不开新的,同一时间只有一个循环碰 state */
+  private draining: Promise<void> | undefined
   private reported: string | undefined
   private failures = 0
   private identified = false
@@ -72,7 +83,9 @@ export class Poller {
     this.identified = false
     this.recovering = false
     this.report('starting')
-    this.done = this.run(ctl.signal).finally(() => {
+    const previous = this.draining
+    const running = previous ? previous.then(() => this.run(ctl.signal)) : this.run(ctl.signal)
+    this.done = running.finally(() => {
       if (this.ctl !== ctl) return
       this.ctl = undefined
       this.done = undefined
@@ -86,8 +99,12 @@ export class Poller {
     this.done = undefined
     ctl?.abort()
     if (!done) return
+    const finished = done.catch(() => {}).finally(() => {
+      if (this.draining === finished) this.draining = undefined
+    })
+    this.draining = finished
     let timer: NodeJS.Timeout | undefined
-    await Promise.race([done, new Promise<void>(resolve => (timer = setTimeout(resolve, STOP_BOUND_MS).unref()))])
+    await Promise.race([finished, new Promise<void>(resolve => (timer = setTimeout(resolve, STOP_BOUND_MS).unref()))])
     clearTimeout(timer)
   }
 
@@ -118,10 +135,12 @@ export class Poller {
     const { state, api } = this.o
     if (this.isIdle()) this.omitOffset = true
     const ack = state.ackOffset
+    const timeout = this.recovering ? 0 : this.pollTimeoutS
+    const askedAt = this.o.now()
     const result = await api.call<unknown>(
       'getUpdates',
       {
-        timeout: this.recovering ? 0 : this.pollTimeoutS,
+        timeout,
         limit: BATCH_LIMIT,
         allowed_updates: ALLOWED_UPDATES,
         ...(!this.omitOffset && ack > 0 && { offset: ack }),
@@ -136,7 +155,8 @@ export class Poller {
       state.data.offset = 0
       this.idleReset = true
     }
-    const identified = result.filter(isIdentified)
+    // 落盘的 offset 是 0(新机器人、闲置重置)时没有参照,第一个 id 说了算
+    const identified = result.filter(u => isIdentified(u) && (state.data.offset === 0 || u.update_id - state.data.offset <= MAX_UPDATE_ID_JUMP)) as IdentifiedUpdate[]
     state.data.dropped.badUpdate += result.length - identified.length
     // 落盘失败时的重投也走这里:内存里已处理过的不再处理
     const fresh = identified.filter(u => u.update_id >= state.data.offset)
@@ -145,15 +165,20 @@ export class Poller {
       state.data.lastUpdateAt = this.o.now()
     }
 
-    if (identified.length < result.length || fresh.length > 0 || state.data.offset !== state.ackOffset) {
+    const unsaved = state.data.offset !== state.ackOffset
+    if (identified.length < result.length || fresh.length > 0 || unsaved) {
       if (this.persist()) {
         this.omitOffset = false
         this.idleReset = false
       } else {
         await this.pause(this.nextBackoff(), signal)
+        return
       }
-    } else if (result.length > 0) {
-      // 没有任何进展却立刻回来了:服务器在重发已确认的,不空转
+    }
+    if (result.length === 0) {
+      if (timeout > 0 && this.o.now() - askedAt < EMPTY_REPLY_MIN_MS) await this.pause(EMPTY_REPLY_MIN_MS, signal)
+    } else if (fresh.length === 0 && !unsaved) {
+      // 没有任何进展却立刻回来了:服务器在重发已确认的或丢掉的,不空转
       await this.pause(this.nextBackoff(), signal)
     }
   }
