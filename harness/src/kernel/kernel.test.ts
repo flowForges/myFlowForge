@@ -938,6 +938,7 @@ describe('plugin event tap (06)', () => {
     const created = r.k.events.bySession(sessionId)[0]
     const e = r.k.events.append({ type: 'message.user', sessionId, payload: { turnId: 't', text: 'SECRET' } })
     expect(() => other.events.redact([{ seq: e.seq }])).toThrow()
+    expect(() => other.events.purge()).toThrow()
     expect((r.k.events.after(e.seq - 1, 1)[0].payload as { text: string }).text).toBe('SECRET')
     expect(() => owner.events.redact([{ seq: created.seq }])).toThrow()
     expect(owner.events.redact([{ seq: e.seq }])).toBe(1)
@@ -957,6 +958,7 @@ describe('plugin event tap (06)', () => {
     expect(ctx.events.after(0, 10)).toEqual([])
     expect(ctx.events.onAppend(() => {})).toBeTypeOf('function')
     expect(() => ctx.events.redact([{ seq: 1 }])).toThrow()
+    expect(() => ctx.events.purge()).toThrow()
     await host.deactivateAll()
     db.close()
     rmSync(root, { recursive: true, force: true })

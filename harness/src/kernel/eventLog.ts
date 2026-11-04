@@ -233,6 +233,17 @@ export class EventLog {
     return seqs.size
   }
 
+  /**
+   * 删除的最后一步:重写整个库文件。secure_delete 只管还算数的格子;日常追加时页分裂留在空隙里的旧副本不归它管(实测 60 个库 38 个有残留)。
+   * 同步跑,约 10 ms/MB,只在用户点删除时才有。seq、自增计数、receipts 都不变。做不到就抛错,调用方不留回执、可重试
+   */
+  purge(): void {
+    if (pending.has(this.db)) throw new Error('purge: inside a transaction')
+    this.db.exec('VACUUM')
+    const r = this.db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get() as { busy?: number } | undefined
+    if (r?.busy) throw new Error('purge: wal checkpoint busy')
+  }
+
   /** 旧文本还在 WAL 里;尽力而为。外层事务提交之前做不了,由调用方重试 */
   private checkpoint(): void {
     if (pending.has(this.db)) return

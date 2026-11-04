@@ -438,6 +438,39 @@ describe('EventLog.redact (06 spec §16)', () => {
     expect(existsSync(`${file}-wal`) ? readFileSync(`${file}-wal`).length : 0).toBe(0)
   })
 
+  it('purge clears the copies page splits left in dead space: secure_delete alone cannot reach them', () => {
+    const { file, db, log } = setup()
+    const marker = 'STALE-COPY-MARKER'
+    const sizes = [40, 300, 1200, 3500, 9000]
+    let state = 1
+    const next = (n: number) => (state = (state * 1103515245 + 12345) & 0x7fffffff) % n
+    const hits: number[] = []
+    for (let i = 0; i < 400; i++) {
+      const hit = next(6) === 0
+      const e = log.append({ type: 'message.user', sessionId: 's', payload: { turnId: 't', text: `${hit ? marker : 'other'} ${'x'.repeat(sizes[next(5)])}` } })
+      if (hit) hits.push(e.seq)
+    }
+    db.prepare('INSERT INTO receipts(command_id, method, result, ts) VALUES (?, ?, ?, ?)').run('c1', 'm', '{}', 1)
+    const before = log.after(0)
+    log.redact(hits.map(seq => ({ seq })), 'p')
+    expect(log.after(0).some(e => JSON.stringify(e.payload).includes(marker))).toBe(false)
+    const raw = () => readdirSync(dir).filter(f => !f.endsWith('-shm')).map(f => readFileSync(join(dir, f)).toString('latin1')).join('')
+    expect(raw()).toContain(marker) // 不做 purge 确实还在:这个用例才有意义
+
+    log.purge()
+    expect(raw()).not.toContain(marker)
+    expect(readFileSync(`${file}-wal`).length).toBe(0)
+    const after = log.after(0)
+    expect(after.slice(0, before.length).map(e => [e.seq, e.ts, e.type])).toEqual(before.map(e => [e.seq, e.ts, e.type]))
+    expect(db.prepare('SELECT command_id FROM receipts').all()).toEqual([{ command_id: 'c1' }])
+    expect(log.append({ type: 'turn.started', sessionId: 's', payload: { turnId: 'n' } }).seq).toBe(after.at(-1)!.seq + 1)
+  })
+
+  it('purge inside an open transaction throws: it could not have cleaned anything', () => {
+    const { db, log } = setup()
+    expect(() => transaction(db, () => log.purge())).toThrow(/transaction/)
+  })
+
   it('inside an open transaction the checkpoint failure stays quiet, and the batch joins that transaction', () => {
     const { db, log } = setup()
     const a = log.append({ type: 'message.user', payload: { turnId: 't', text: 'x' } })

@@ -29,6 +29,8 @@ export interface PluginContext {
     onAppend(cb: (e: KernelEvent) => void): () => void
     /** 用户删除记忆时就地换掉文本(见 EventLog.redact);只有 EVENT_REDACTORS 能调,否则抛错。返回改了几个事件 */
     redact(edits: RedactEdit[]): number
+    /** redact 之后把文本从库文件的空隙里也清掉(见 EventLog.purge);权限同 redact。做不到就抛错 */
+    purge(): void
   }
   effect(dispose: () => void | Promise<void>): void
   /** 注册工作进程 RPC 方法:参数先由内核按 WorkerMethods 校验;随插件停用自动注销 */
@@ -75,7 +77,7 @@ export interface PluginHostDeps {
   rpc: RpcRegistry
   append(e: Omit<KernelEvent, 'seq' | 'ts'>): KernelEvent
   history?(sessionId: string): KernelEvent[]
-  eventLog?: Pick<EventLog, 'after' | 'onAppend' | 'redact'>
+  eventLog?: Pick<EventLog, 'after' | 'onAppend' | 'redact' | 'purge'>
   log: Logger
   dataDir: string
   injectTimeoutMs?: number
@@ -158,6 +160,11 @@ export class PluginHost {
             const log = this.deps.eventLog
             if (!log || !EVENT_REDACTORS.includes(id)) throw new Error(`plugin ${id} may not redact events`)
             return log.redact(edits, id)
+          },
+          purge: () => {
+            const log = this.deps.eventLog
+            if (!log || !EVENT_REDACTORS.includes(id)) throw new Error(`plugin ${id} may not redact events`)
+            log.purge()
           },
         },
         effect: d => scope.add(d),
