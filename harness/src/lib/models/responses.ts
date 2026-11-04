@@ -66,7 +66,7 @@ export function mapResponsesError(code: string | undefined, message: string): Mo
   const c = code ?? ''
   if (c === 'rate_limit_exceeded') return { kind: 'rate_limit', message, retryable: true }
   if (c === 'insufficient_quota' || c.includes('usage_limit')) return { kind: 'quota', message, retryable: false }
-  if (c === 'invalid_request_error' || c === 'invalid_prompt') return { kind: 'bad_request', message, retryable: false }
+  if (c === 'invalid_request_error' || c === 'invalid_prompt' || c.includes('context_length') || c === 'string_above_max_length') return { kind: 'bad_request', message, retryable: false }
   if (c === 'server_error') return { kind: 'unavailable', message, retryable: true }
   return { kind: 'unavailable', message, retryable: false }
 }

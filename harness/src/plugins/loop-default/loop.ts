@@ -47,8 +47,13 @@ export function loggedArgs(raw: string): string {
 const MAX_RETRIES = 2
 const RETRY_DEFAULT_MS = 5_000
 const RETRY_MAX_MS = 60_000
-/** 模型厂商说上下文爆了(06 §12);认不出来的就是 03 的失败 */
-const OVERFLOW = /context|too long|too large|maximum.*token|reduce the length/i
+/**
+ * 模型厂商说上下文爆了(06 §12);认不出来的就是 03 的失败。不认裸的 context、maximum、too long:
+ * 输出上限、图片过大这些 400 不能写一个永久的标记
+ */
+const OVERFLOW = /context[ _-]?(length|window|limit)|too many (input )?tokens|reduce the length|request_too_large|string too long|\b(prompt|input|request|messages?)\b[^.]*\b(too long|too large|exceeds?)\b/i
+/** 推理回放对不上前缀(Anthropic preserved thinking 的 400);被篡改的签名开头相同,恢复办法也相同 */
+const THINKING_REFUSED = /invalid .signature. in .thinking. block|bound to a different conversation/i
 
 /**
  * 尾部是带推理的工具步:正在工具循环里。这时动前缀两头都可能被拒:留着推理,签名对不上新前缀;
@@ -62,7 +67,7 @@ function inThinkingRound(messages: Message[]): boolean {
   return false
 }
 
-/** 前缀被 dropOldest 改了:留下的推理全都对不上了。这之后新产生的绑定新前缀 */
+/** 前缀变了:留下的推理全都对不上。这之后新产生的绑定新前缀 */
 const withoutReplays = (messages: Message[]): Message[] =>
   messages.map(m => (m.parts.some(p => p.type === 'reasoning') ? { ...m, parts: m.parts.filter(p => p.type !== 'reasoning') } : m))
 
@@ -357,6 +362,7 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<TurnOut
 
     let r = await streamStep(step)
     let overflowRetried = false
+    let thinkingRetried = false
     while (r.kind === 'error' && !r.produced) {
       if (r.error.kind === 'rate_limit' && r.error.retryable && retries < MAX_RETRIES) {
         // 限流且这一步还没吐出文本 / 工具调用:等一会儿重试(每轮最多 2 次,可被取消)
@@ -365,6 +371,14 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<TurnOut
         deps.log.info('rate limited, retrying', { step, wait })
         await sleep(wait, signal)
         if (signal.aborted) return fail('cancelled')
+        r = await streamStep(step)
+      } else if (r.error.kind === 'bad_request' && THINKING_REFUSED.test(r.error.message)) {
+        // 折叠、丢消息、重建或 memory.delete 动过前缀:去掉推理重试一次,新产生的推理绑定新前缀。在 OVERFLOW 之前:这种拒绝不能写标记
+        const stripped = withoutReplays(messages)
+        if (thinkingRetried || stripped.every((m, i) => m === messages[i])) break
+        thinkingRetried = true
+        deps.log.warn('thinking replay refused, retrying once without it', { step })
+        messages = stripped
         r = await streamStep(step)
       } else if (deps.memory && r.error.kind === 'bad_request' && OVERFLOW.test(r.error.message) && !overflowRetried) {
         // 上下文真的爆了:这一步强制重建或丢旧消息,只重试一次,不占限流的次数。再失败走 03 的失败

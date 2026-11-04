@@ -89,6 +89,7 @@ export function mapAnthropicError(type: string | undefined, message: string): Mo
     case 'permission_error':
       return { kind: 'auth', message, retryable: false }
     case 'invalid_request_error':
+    case 'request_too_large':
       return { kind: 'bad_request', message, retryable: false }
     default:
       return { kind: 'unavailable', message, retryable: false }

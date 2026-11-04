@@ -71,7 +71,7 @@ export function mapChatError(code: string | undefined, type: string | undefined,
   if (n >= 500 && n < 600) return { kind: 'unavailable', message, retryable: true }
   if (c.includes('rate_limit')) return { kind: 'rate_limit', message, retryable: true }
   if (c.includes('insufficient_quota') || c.includes('quota') || c.includes('billing')) return { kind: 'quota', message, retryable: false }
-  if (c.includes('invalid_request') || c.includes('context_length')) return { kind: 'bad_request', message, retryable: false }
+  if (c.includes('invalid_request') || c.includes('context_length') || c.includes('too_large') || c.includes('string_above_max_length') || c.includes('tokens_limit')) return { kind: 'bad_request', message, retryable: false }
   if (c.includes('server_error') || c.includes('overloaded')) return { kind: 'unavailable', message, retryable: true }
   return { kind: 'unavailable', message, retryable: false }
 }

@@ -4,9 +4,9 @@ import { describe, expect, it } from 'vitest'
 import { activeRebuild, safeBoundaries } from '../../lib/memory/checkpoint'
 import type { MemoryService } from '../../lib/memory/types'
 import { checkpointBlock } from '../../lib/memory/wrap'
-import { buildAnthropicBody } from '../../lib/models/anthropic'
-import { buildChatBody } from '../../lib/models/chat'
-import { buildResponsesBody } from '../../lib/models/responses'
+import { buildAnthropicBody, mapAnthropicError } from '../../lib/models/anthropic'
+import { buildChatBody, mapChatError } from '../../lib/models/chat'
+import { buildResponsesBody, mapResponsesError } from '../../lib/models/responses'
 import type { Message, ModelEvent, ModelRequest, ModelsService } from '../../lib/models/types'
 import type { BackgroundRuns, FollowUp, RunNotice, ToolsService, TurnInbox } from '../../lib/tools/types'
 import type { KernelEvent } from '../../protocol/index'
@@ -604,7 +604,7 @@ describe('the provider says the context overflowed', () => {
     expect(textsOf(h.requests[1].messages[1])).toEqual([checkpointBlock(through, 'SUMMARY')])
   })
 
-  it.each(['context_length_exceeded', 'request too large', 'maximum of 8192 tokens', 'please reduce the length of the messages', 'CONTEXT window'])('the text %s counts', async text => {
+  it.each(['context_length_exceeded', 'request too large', 'maximum context length is 8192', 'please reduce the length of the messages', 'exceeds the CONTEXT window'])('the text %s counts', async text => {
     const h = harness()
     h.past('t1', 'q1', 100)
     await h.run('t2', 'q2', n => (n === 1 ? refuse(text) : say('ok')))
@@ -814,6 +814,176 @@ describe('thinking blocks across a rebuild', () => {
     await h.run('t2', 'q2')
     expect(allText(h.requests[0].messages)).not.toContain('<checkpoint')
     expect(hasThinking(h.requests[0].messages)).toBe(false)
+  })
+})
+
+// 文本逐字来自 shared/model-migration.md(preserved thinking);假模型按它拒绝,真实厂商在实测清单
+const BOUND = 'messages.5.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation. Remove the block, or set `thinking.block_binding.prefix_mismatch_behavior` to "drop_block". That setting requires the `thinking-binding-controls-2026-08-01` value in the `anthropic-beta` header.'
+
+describe('the provider refuses a stale thinking replay: one retry with reasoning stripped', () => {
+  const REPLAY = { type: 'thinking', thinking: 'T', signature: 'S' }
+  const thinkingCall = (id: string) => of({ type: 'reasoning', replay: REPLAY }, { type: 'tool_call', id, name: 'read', argsDelta: `{"path":"${id}"}` }, { type: 'done', reason: 'tool_calls' })
+  const hasThinking = (m: Message[]) => allText(m).includes('"thinking":"T"')
+  /** 执行式的假模型:只要带旧推理就拒;新产生的在 fresh 里放行 */
+  const enforcing = (next: (n: number) => AsyncIterable<ModelEvent>, stale: (req: Req) => boolean = req => hasThinking(req.messages)) => (n: number, req: Req) => (stale(req) ? refuse(BOUND) : next(n))
+  const pastThinking = (h: ReturnType<typeof harness>, turnId: string) => {
+    h.ev('message.user', { turnId, text: `q ${turnId}` })
+    h.ev('message.assistant', { turnId, step: 1, text: 'a', parts: [{ type: 'reasoning', replay: REPLAY, accountId: REF.accountId, modelId: REF.modelId }, { type: 'text', text: `a ${turnId}` }] })
+    h.ev('turn.ended', { turnId })
+  }
+
+  it('after a fold inside a thinking round: the turn completes, and the next request carries no reasoning', async () => {
+    const h = harness()
+    for (let i = 0; i < 6; i++) h.past(`t${i}`, `q${i}`, CHARS(0.15))
+    let refused = 0
+    const outcome = await h.run('last', 'q', (n, req) => {
+      if (n === 1) return thinkingCall('c1')
+      if (hasThinking(req.messages) && allText(req.messages).includes('[已折叠')) {
+        refused++
+        return refuse(BOUND)
+      }
+      return say('ok')
+    })
+    expect(outcome.type).toBe('turn.ended')
+    expect(refused).toBe(1)
+    expect(hasThinking(lastOf(h.requests).messages)).toBe(false)
+    expect(h.markers()).toEqual([])
+  })
+
+  it('the next turn after a drop: history replays from events, the refusal strips it', async () => {
+    const h = harness()
+    pastThinking(h, 't1')
+    const outcome = await h.run('t2', 'q2', enforcing(() => say('ok')))
+    expect(outcome.type).toBe('turn.ended')
+    expect(h.requests).toHaveLength(2)
+    expect(hasThinking(h.requests[0].messages)).toBe(true)
+    expect(hasThinking(h.requests[1].messages)).toBe(false)
+    expect(allText(h.requests[1].messages)).toContain('a t1') // 文本留着
+  })
+
+  it('after a memory.delete redact changed the prefix', async () => {
+    const h = harness()
+    pastThinking(h, 't1')
+    const user = h.events.find(e => e.type === 'message.user')!
+    ;(user.payload as { text: string }).text = '[已删除]'
+    const outcome = await h.run('t2', 'q2', enforcing(() => say('ok')))
+    expect(outcome.type).toBe('turn.ended')
+    expect(allText(h.requests[1].messages)).toContain('[已删除]')
+    expect(hasThinking(h.requests[1].messages)).toBe(false)
+  })
+
+  it('thinking produced after the strip is kept: it belongs to the new prefix', async () => {
+    const h = harness()
+    pastThinking(h, 't1')
+    let seen = 0
+    const outcome = await h.run('t2', 'q2', n => {
+      if (n === 1) return refuse(BOUND)
+      seen = n
+      return n === 2 ? thinkingCall('c1') : say('ok')
+    })
+    expect(outcome.type).toBe('turn.ended')
+    expect(seen).toBe(3)
+    expect(hasThinking(h.requests[1].messages)).toBe(false)
+    expect(hasThinking(h.requests[2].messages)).toBe(true)
+  })
+
+  it('refused again: the 03 failure, with no third attempt', async () => {
+    const h = harness()
+    pastThinking(h, 't1')
+    const outcome = await h.run('t2', 'q2', () => refuse(BOUND))
+    expect(outcome).toMatchObject({ type: 'turn.failed', payload: { reason: 'bad_request', message: BOUND } })
+    expect(h.requests).toHaveLength(2)
+  })
+
+  it('nothing to strip: no pointless retry', async () => {
+    const h = harness()
+    h.past('t1', 'q1')
+    const outcome = await h.run('t2', 'q2', () => refuse(BOUND))
+    expect(outcome.type).toBe('turn.failed')
+    expect(h.requests).toHaveLength(1)
+  })
+
+  it('works with no memory service: the 03 fold has the same problem', async () => {
+    const h = harness({ memory: false })
+    pastThinking(h, 't1')
+    const outcome = await h.run('t2', 'q2', enforcing(() => say('ok')))
+    expect(outcome.type).toBe('turn.ended')
+    expect(h.requests).toHaveLength(2)
+  })
+
+  it('is checked before overflow: a refusal that also says context writes no marker and does not drop', async () => {
+    const h = harness()
+    const through = h.past('t1', 'q1', 3000).seq
+    h.checkpoint(through)
+    pastThinking(h, 't2')
+    const text = `${BOUND} The context window is fine, the prompt is too long is not the issue.`
+    const outcome = await h.run('t3', 'q3', n => (n === 1 ? refuse(text) : say('ok')))
+    expect(outcome.type).toBe('turn.ended')
+    expect(h.markers()).toEqual([])
+    expect(allText(h.requests[1].messages)).not.toContain('[已省略')
+  })
+
+  it('a tampered signature has the same leading clause and the same recovery', async () => {
+    const h = harness()
+    pastThinking(h, 't1')
+    await h.run('t2', 'q2', n => (n === 1 ? refuse('messages.1.content.0: Invalid `signature` in `thinking` block') : say('ok')))
+    expect(h.requests).toHaveLength(2)
+  })
+
+  it('does not use up the rate-limit or overflow retries', async () => {
+    const h = harness()
+    pastThinking(h, 't1')
+    h.past('t2', 'q2', 500)
+    const outcome = await h.run('t3', 'q3', n => {
+      if (n === 1) return refuse(BOUND)
+      if (n === 2 || n === 3) return refuse('slow', 'rate_limit')
+      if (n === 4) return refuse('prompt is too long')
+      return say('ok')
+    })
+    expect(outcome.type).toBe('turn.ended')
+    expect(h.requests).toHaveLength(5)
+  })
+})
+
+describe('overflow errors, from the wire to one forced retry', () => {
+  const stream = (error: { kind: string; message: string; retryable: boolean }) => of({ type: 'done', reason: 'error', error } as ModelEvent)
+  it.each<[string, () => { kind: string; message: string; retryable: boolean }]>([
+    ['Responses context_length_exceeded', () => mapResponsesError('context_length_exceeded', 'Your input exceeds the context window of this model.')],
+    ['Responses invalid_request_error', () => mapResponsesError('invalid_request_error', 'Your input exceeds the context window of this model.')],
+    ['Anthropic request_too_large', () => mapAnthropicError('request_too_large', 'Request exceeds the maximum size')],
+    ['Anthropic invalid_request_error', () => mapAnthropicError('invalid_request_error', 'prompt is too long: 210000 tokens > 200000 maximum')],
+    ['Anthropic input and output over the limit', () => mapAnthropicError('invalid_request_error', 'input length and `max_tokens` exceed context limit: 190000 + 20000 > 200000')],
+    ['Chat context_length_exceeded', () => mapChatError('context_length_exceeded', 'invalid_request_error', "This model's maximum context length is 8192 tokens. However, your messages resulted in 9000 tokens.")],
+    ['Chat with only a code', () => mapChatError('context_length_exceeded', undefined, 'context_length_exceeded')],
+    ['Chat string_above_max_length', () => mapChatError('string_above_max_length', undefined, "Invalid 'messages[1].content': string too long. Expected a string with maximum length 1048576")],
+    ['Chat tokens_limit_reached', () => mapChatError('tokens_limit_reached', undefined, 'Request body too large for gpt-4 model. Max size: 8000 tokens.')],
+    ['Chat HTTP 400', () => mapChatError('400', undefined, 'Please reduce the length of the messages.')],
+  ])('%s', async (_name, error) => {
+    expect(error().kind).toBe('bad_request')
+    const h = harness()
+    h.past('t1', 'q1', 500)
+    const outcome = await h.run('t2', 'q2', n => (n === 1 ? stream(error()) : say('ok')))
+    expect(outcome.type).toBe('turn.ended')
+    expect(h.requests).toHaveLength(2)
+    expect(allText(h.requests[1].messages)).toContain('[已省略')
+  })
+
+  it.each([
+    'max_tokens: 64000 > 8192, which is the maximum allowed number of output tokens for this model',
+    'maximum of 8192 tokens',
+    'context_management: Extra inputs are not permitted',
+    'Invalid model context',
+    'image too large',
+    'tool description too long',
+    'invalid tool schema',
+  ])('not an overflow: %s writes no marker and sends one request', async text => {
+    const h = harness()
+    const through = h.past('t1', 'q1', 3000).seq
+    h.checkpoint(through)
+    const outcome = await h.run('t2', 'q2', () => refuse(text))
+    expect(outcome).toMatchObject({ type: 'turn.failed', payload: { reason: 'bad_request' } })
+    expect(h.requests).toHaveLength(1)
+    expect(h.markers()).toEqual([])
   })
 })
 
