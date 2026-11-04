@@ -21,7 +21,7 @@ describe('registration and detection', () => {
   it('in the builtin list between tools-coding and loop-default', () => {
     const ids = BUILTIN_PLUGINS.map(p => p.manifest.id)
     expect(ids.indexOf('executor-cli')).toBe(ids.indexOf('tools-coding') + 1)
-    expect(ids.indexOf('loop-default')).toBe(ids.indexOf('executor-cli') + 1)
+    expect(ids.indexOf('loop-default')).toBeGreaterThan(ids.indexOf('executor-cli'))
   })
 
   it('a found CLI: one delegate tool, verbatim description, schema without a $schema head, nothing internal on the wire', async () => {

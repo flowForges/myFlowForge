@@ -76,6 +76,16 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true })
 })
 
+describe('a file that is not there yet', () => {
+  it('reconcile does not warn about chmod on USER.md and MEMORY.md, which simply do not exist', () => {
+    const warnings: string[] = []
+    const quiet = new MemoryFiles(root, store, { now: () => clock, log: { warn: m => warnings.push(m) }, append: e => events.push(e) })
+    quiet.reconcile('all')
+    quiet.coreText()
+    expect(warnings).toEqual([])
+  })
+})
+
 describe('parseEntries', () => {
   it('reads the trailing comment and keeps the visible part clean', () => {
     const [e] = parseEntries('- 包管理器用 pnpm,不用 npm <!-- mff id=n_ab12 src=confirmed ts=1793000000000 ev=r_1,r_2 turn=t%201 cand=c_1 by=n_zz -->')

@@ -162,7 +162,7 @@ function describeCut(cut: string[]): string {
 }
 
 /** 先打码再压成一行:多行的 PEM 压完就认不出了。去掉注释记号可能把密钥拼回来,所以再打一遍 */
-function cleanEntry(text: string): { text: string; masked: number } {
+export function cleanEntry(text: string): { text: string; masked: number } {
   const first = scrub(text)
   const second = scrub(sanitizeLine(first.text))
   return { text: second.text, masked: first.masked + second.masked }
@@ -225,7 +225,7 @@ function assertRoom(file: string, doc: string): void {
   if (cap !== undefined && chars(visible(scrubDoc(doc).text)) > cap) throw full()
 }
 
-function localDate(ms: number): string {
+export function localDate(ms: number): string {
   const d = new Date(ms)
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
@@ -701,8 +701,8 @@ export class MemoryFiles {
 
   private tighten(path: string, mode: number): void {
     try {
-      const s = lstatSync(path)
-      if (!s.isSymbolicLink() && (s.mode & 0o777) !== mode) chmodSync(path, mode)
+      const s = this.lstat(path) // 还没有这个文件不是失败:新数据目录每次启动都会走到
+      if (s && !s.isSymbolicLink() && (s.mode & 0o777) !== mode) chmodSync(path, mode)
     } catch (err) {
       this.o.log.warn('memory files chmod failed', { path: basename(path), error: err instanceof Error ? err.name : 'unknown' })
     }
