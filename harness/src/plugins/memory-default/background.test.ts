@@ -319,6 +319,29 @@ describe('budget', () => {
     expect(h.store.metaWithPrefix('budget:')).toHaveLength(1)
   })
 
+  it('a clock moving back does not delete the later day, so moving forward again gives no new budget', async () => {
+    const h = rig({ script: () => usage(600, 400), config: { tokensPerDay: 1500 }, quota: () => ({ windows: [{ label: 'w', usedPercent: 1 }] }) })
+    expect((await h.one()).ok).toBe(true)
+    expect((await h.one()).ok).toBe(true)
+    h.clock.advance(-24 * 3600_000)
+    expect((await h.one()).ok).toBe(true)
+    expect(h.store.metaWithPrefix('budget:')).toHaveLength(2)
+    h.clock.advance(24 * 3600_000)
+    expect((await h.bg.status()).budget.tokens).toBe(2000)
+    expect(await h.one()).toEqual({ ok: false, reason: 'budget' })
+  })
+
+  it('a failed cleanup of an old day neither refuses the call nor blocks the day', async () => {
+    const h = rig({ script: () => usage(1, 1) })
+    expect((await h.one()).ok).toBe(true)
+    h.clock.advance(24 * 3600_000)
+    h.store.deleteMeta = () => { throw new Error('locked') }
+    expect((await h.one()).ok).toBe(true)
+    expect((await h.one()).ok).toBe(true)
+    expect(h.fake.calls).toHaveLength(3)
+    expect((await h.bg.status()).problem).toBeUndefined()
+  })
+
   it('a damaged ledger decides nothing: no call, today only', async () => {
     for (const bad of ['not json', '{"tokens":"NaN"}', '{"tokens":null,"usd":0,"out":[]}', '{"tokens":-5,"usd":0,"out":[]}']) {
       const h = rig()

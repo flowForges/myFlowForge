@@ -362,16 +362,21 @@ export class Background {
     }
   }
 
-  /** 写入并丢掉别的日子。写不进去就是 false */
+  /** 写不进去就是 false。旧日子清不掉不要紧:账本本身是对的,下次再清 */
   private writeLedger(day: string, ledger: Ledger): boolean {
     try {
       this.o.store.setMeta(BUDGET + day, JSON.stringify(ledger))
-      for (const { key } of this.o.store.metaWithPrefix(BUDGET)) if (key !== BUDGET + day) this.o.store.deleteMeta(key)
-      return true
     } catch (err) {
       this.warn('background budget ledger is unwritable', { error: err instanceof Error ? err.name : 'unknown' })
       return false
     }
+    try {
+      // 只清更早的:时钟往回拨时,真正的那一天的账不能丢。日期按字典序就是时间序
+      for (const { key } of this.o.store.metaWithPrefix(BUDGET)) if (key < BUDGET + day) this.o.store.deleteMeta(key)
+    } catch (err) {
+      this.warn('background budget cleanup failed', { error: err instanceof Error ? err.name : 'unknown' })
+    }
+    return true
   }
 
   private async fencedCall(ref: ModelRef, req: TextReq, gate: CallGate): Promise<BackgroundText> {
