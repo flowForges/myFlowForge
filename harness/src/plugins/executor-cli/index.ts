@@ -200,6 +200,7 @@ export function createExecutorCli(opts: ExecutorCliOpts = {}): Plugin {
         history: sid => ctx.events.history(sid),
         // ctx.dataDir 是 <数据目录>/plugins/<id>:数据目录在凭据黑名单里,worktree 要放在它外面
         worktreeRoot: opts.worktreeRoot ?? worktreeRootOf(dirname(dirname(ctx.dataDir))),
+        dataDir: dirname(dirname(ctx.dataDir)),
         redetect: id => detect(byId.get(id)!),
         tmpDir,
         home,
@@ -212,7 +213,8 @@ export function createExecutorCli(opts: ExecutorCliOpts = {}): Plugin {
       /** 同步。批准和运行必须看同一份 */
       const execRequest = (a: Adapter, args: z.infer<typeof Args>, raw: object, ctx: ToolContext) => {
         const info = infos.get(a.id)!
-        const view = manager.preview(a.id, info, { sessionId: ctx.sessionId, cwd: ctx.cwd, spillDir: ctx.spillDir }, loginNow)
+        // 不认识的来源不能当 app,和 submit 同样的兜底
+        const view = manager.preview(a.id, info, { sessionId: ctx.sessionId, cwd: ctx.cwd, spillDir: ctx.spillDir, origin: sessions.get(ctx.sessionId)?.origin ?? 'schedule' }, loginNow)
         const must = mustAsk(view.policy, view.isolation)
         const unsandboxed = view.isolation === 'none'
         const exec: PermissionRequest = {

@@ -748,3 +748,94 @@ describe('kernel env snapshot', () => {
     expect(lines.filter(m => m.includes('covers home or root'))).toEqual([])
   })
 })
+
+describe('decide: an IM message is a remote prompt (07 spec §8.3)', () => {
+  const home = '/h'
+  const dataDir = '/h/.myFlowForge/mff-ai'
+  const ALLOW: RuleSpec = { effect: 'allow', rule: 'shell(x*)' }
+  const level = (l: SandboxStatus['level']): SandboxStatus => ({ level: l, missing: [], autoDegraded: false })
+  const env = (l: SandboxStatus['level'], over: Partial<DecideEnv> = {}): DecideEnv => ({ roots: credentialRoots(home, 'linux', {}), persistence: persistenceRoots(home, 'linux'), dataDir, platform: 'linux', home, rules: [], sandbox: level(l), allowUnsandboxedAuto: false, ...over })
+  const session = (mode: 'ask' | 'auto', origin: SessionInfo['origin'] = 'im'): SessionInfo => ({ sessionId: 's1', cwd: '/h/wt', approvalMode: mode, origin, audience: 'owner' })
+  const exec = (over: Partial<PermissionRequest> = {}): PermissionRequest => ({ actor: 'tools', action: 'exec', resource: 'xyz', sessionId: 's1', ...over })
+
+  it.each([
+    // auto 只在 full
+    ['full', 'auto', {}, {}, 'allow'],
+    ['partial', 'auto', {}, {}, 'ask'],
+    ['none', 'auto', {}, {}, 'ask'],
+    // allowUnsandboxedAuto 对远程不算数
+    ['none', 'auto', { allowUnsandboxedAuto: true }, {}, 'ask'],
+    ['partial', 'auto', { allowUnsandboxedAuto: true }, {}, 'ask'],
+    ['full', 'auto', { allowUnsandboxedAuto: true }, {}, 'allow'],
+    // allow 规则只在 full
+    ['none', 'ask', { rules: rules(ALLOW) }, {}, 'ask'],
+    ['partial', 'ask', { rules: rules(ALLOW) }, {}, 'ask'],
+    ['full', 'ask', { rules: rules(ALLOW) }, {}, 'allow'],
+    ['none', 'auto', { rules: rules(ALLOW) }, {}, 'ask'],
+    ['partial', 'auto', { rules: rules(ALLOW) }, {}, 'ask'],
+    // ask 一直问
+    ['full', 'ask', {}, {}, 'ask'],
+    ['partial', 'ask', {}, {}, 'ask'],
+    ['none', 'ask', {}, {}, 'ask'],
+    ['none', 'ask', { allowUnsandboxedAuto: true }, {}, 'ask'],
+    // 这次运行本身没隔离、有规则落实不了:都要人
+    ['full', 'auto', {}, { unsandboxed: true }, 'ask'],
+    ['full', 'auto', { rules: rules(ALLOW) }, { unsandboxed: true }, 'ask'],
+    ['none', 'auto', { allowUnsandboxedAuto: true }, { unsandboxed: true }, 'ask'],
+    ['none', 'auto', { rules: rules(ALLOW) }, { unsandboxed: true }, 'ask'],
+    ['full', 'auto', {}, { mustAsk: true }, 'ask'],
+    ['full', 'auto', { rules: rules(ALLOW) }, { mustAsk: true }, 'ask'],
+    // 硬的规则不变
+    ['full', 'auto', { rules: rules({ effect: 'deny', rule: 'shell(x*)' }) }, {}, 'deny'],
+    ['full', 'auto', { rules: rules({ effect: 'ask', rule: 'shell(x*)' }) }, {}, 'ask'],
+  ] as const)('%s %s env=%j req=%j → %s', (l, mode, over, req, want) => {
+    expect(decide(exec(req), session(mode), env(l, over as Partial<DecideEnv>))).toBe(want)
+  })
+
+  it('other origins keep the 05 table', () => {
+    for (const origin of ['app', 'acp', 'schedule'] as const) {
+      expect(decide(exec(), session('auto', origin), env('partial'))).toBe('allow')
+      expect(decide(exec(), session('auto', origin), env('none', { allowUnsandboxedAuto: true }))).toBe('allow')
+      expect(decide(exec(), session('ask', origin), env('none', { rules: rules(ALLOW) }))).toBe('allow')
+      expect(decide(exec(), session('ask', origin), env('partial', { rules: rules(ALLOW) }))).toBe('allow')
+    }
+  })
+
+  it('reads and writes do not change: inside cwd allowed in ask mode at any level, outside denied', () => {
+    for (const l of ['full', 'partial', 'none'] as const) {
+      expect(decide({ actor: 'tools', action: 'write', resource: '/h/wt/a.txt', sessionId: 's1' }, session('ask'), env(l))).toBe('allow')
+      expect(decide({ actor: 'tools', action: 'read', resource: '/h/wt/a.txt', sessionId: 's1' }, session('ask'), env(l))).toBe('allow')
+      expect(decide({ actor: 'tools', action: 'write', resource: '/h/repo/a.txt', sessionId: 's1' }, session('auto'), env(l))).toBe('deny')
+      expect(decide({ actor: 'tools', action: 'read', resource: '/h/repo/a.txt', sessionId: 's1' }, session('auto'), env(l))).toBe('deny')
+    }
+  })
+
+  it('defaultRules shows what decide does', () => {
+    const shown = (mode: 'ask' | 'auto', l: SandboxStatus['level'], flag = false) => defaultRules(session(mode), level(l), flag, 'linux').at(-1)
+    expect(shown('auto', 'full')).toBe('allow shell(*)')
+    expect(shown('auto', 'partial')).toBe('ask shell(*)')
+    expect(shown('auto', 'none')).toBe('ask shell(*)')
+    expect(shown('auto', 'none', true)).toBe('ask shell(*)')
+    expect(shown('ask', 'full')).toBe('ask shell(*)')
+    expect(defaultRules(session('auto', 'app'), level('partial'), false, 'linux').at(-1)).toBe('allow shell(*)')
+  })
+
+  it('a session created while full is asked again once its level drops: the gate reads the level per check', () => {
+    let current: SandboxStatus['level'] = 'full'
+    const info = session('auto')
+    const gate = new PermissionGate({
+      sessions: { get: () => info, spillDir: () => '/nonexistent/spill' },
+      home,
+      dataDir,
+      platform: 'linux',
+      env: {},
+      permissions: () => ({ rules: [], config: { allowUnsandboxedAuto: true } }),
+      sandbox: () => level(current),
+    })
+    expect(gate.check(exec())).toBe('allow')
+    current = 'partial'
+    expect(gate.check(exec())).toBe('ask')
+    current = 'none'
+    expect(gate.check(exec())).toBe('ask')
+  })
+})

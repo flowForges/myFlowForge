@@ -225,6 +225,21 @@ describe('validateCwd', () => {
   it('returns the realpath of an existing absolute directory', () => {
     expect(validateCwd(work, opts())).toBe(realpathSync.native(work))
   })
+  it('rejects the IM worktree root and a group under it, a worktree in it is legal', () => {
+    const wt = `${dir}-im-worktrees`
+    try {
+      mkdirSync(join(wt, 'c1', 'wt_1', 'sub'), { recursive: true })
+      expect(() => validateCwd(wt, opts())).toThrow('invalid cwd')
+      expect(() => validateCwd(join(wt, 'c1'), opts())).toThrow('invalid cwd')
+      expect(validateCwd(join(wt, 'c1', 'wt_1'), opts())).toBe(realpathSync.native(join(wt, 'c1', 'wt_1')))
+      expect(validateCwd(join(wt, 'c1', 'wt_1', 'sub'), opts())).toBe(realpathSync.native(join(wt, 'c1', 'wt_1', 'sub')))
+      // 经链接到根也一样
+      symlinkSync(wt, join(work, 'to-im-root'))
+      expect(() => validateCwd(join(work, 'to-im-root', 'c1'), opts())).toThrow('invalid cwd')
+    } finally {
+      rmSync(wt, { recursive: true, force: true })
+    }
+  })
   it('rejects the worktree root and a session dir under it, a retained worktree stays legal', () => {
     const wt = `${dir}-worktrees`
     try {

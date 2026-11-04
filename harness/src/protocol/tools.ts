@@ -56,7 +56,7 @@ export const ApprovalResolvedPayloadSchema = z.object({
   decision: z.enum(['allow', 'deny']),
   by: z.enum(['user', 'session', 'timeout', 'cancel']),
   /** 07:从哪个渠道答的,如 telegram:<账号>。没有 = app。只有服务路径写得了,approval.respond 不收这个参数 */
-  via: z.string().optional(),
+  via: z.string().max(128).optional(),
 })
 export type ApprovalResolvedPayload = z.infer<typeof ApprovalResolvedPayloadSchema>
 

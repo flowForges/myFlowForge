@@ -11,6 +11,7 @@ import { RpcError } from '../../kernel/rpcError'
 import { isInside, resolveToolPath } from '../../lib/fs/paths'
 import { validateNetworkEntry } from '../../lib/sandbox/net/domains'
 import { changes as gitChanges, NO_REPO, pruneRefs, refExists, repoPrefix, takeSnapshot, type Git, type RepoPin } from '../../lib/git/snapshot'
+import { imWorktreeRootOf, isImCwd } from '../../lib/git/imWorktree'
 import { addWorktree, removeInWorktree, removeWorktree, reserveWorktree, rootConflict, userGitState, worktreePin } from '../../lib/git/worktree'
 import type { PgidRegistry } from '../../lib/proc/pgids'
 import { runCli as realRunCli, type CliPlan, type CliResult } from '../../lib/proc/runCli'
@@ -124,6 +125,8 @@ export interface RunManagerDeps {
   history(sessionId: string): KernelEvent[]
   /** app 以外的会话,写运行放在 <root>/<sid>/<runId>。不给 = 这样的运行一律 worktree_unavailable,绝不退回在地 */
   worktreeRoot?: string
+  /** 内核数据目录,算 IM 的根用。不给 = 没有 IM 在地运行,快照的可写根也不含它 */
+  dataDir?: string
   /**
    * 程序变了、不见了或不可信:重新探测,要等它。Task 10 接到 detectExecutor,先更新 info(id) 再 resolve。
    * 不给 = 不能重新探测,这样的运行一律失败
@@ -181,8 +184,11 @@ const lastMatch = (re: RegExp, s: string): number => {
  * PEM 状态按流分开:stdout 和 stderr 交错时,一边的 BEGIN 不该影响另一边。
  * 判定用清过控制字符的文本;没有东西要盖时原样返回
  */
-/** app 和 acp 都是有人在本机开的会话:写运行在地跑,排队优先。别的来源进 worktree */
-export const runsInPlace = (origin: string) => origin === 'app' || origin === 'acp'
+/** IM 会话的 cwd 已经是它自己的 worktree:再嵌一层改动就拿不回来,turn.rollback 也覆盖不到(07 spec §8.2)。不知道数据目录就算不是 */
+const imInPlace = (origin: string, cwd: string, dataDir: string | undefined) => origin === 'im' && dataDir !== undefined && isImCwd(dataDir, cwd)
+
+/** app 和 acp 都是有人在本机开的会话,再加上面那种:写运行在地跑,排队优先。别的来源进 worktree */
+export const runsInPlace = (origin: string, cwd: string, dataDir: string | undefined) => origin === 'app' || origin === 'acp' || imInPlace(origin, cwd, dataDir)
 
 export class RunRedactor {
   private literals: string[]
@@ -433,6 +439,8 @@ interface Run {
   startedAt?: number
   /** CLI 跑的地方;s.cwd 始终是会话的目录 */
   cwd: string
+  /** 提交时算好的排队优先级:排序里不做文件系统调用 */
+  inPlace: boolean
   /** 进了 worktree。有它不代表 CLI 跑过:没跑的在 finish 里删掉,字段也清掉 */
   worktree?: { path: string; sessionTop: string; userState: string[]; denyRead: string[] }
   writer: boolean
@@ -560,7 +568,7 @@ export class RunManager implements BackgroundRuns {
 
     const runId = this.deps.newId?.() ?? `run_${randomBytes(8).toString('hex')}`
     const run: Run = {
-      runId, adapter, s, seq: this.seq++, phase: 'queued', abort: new AbortController(), stopping: false,
+      runId, adapter, s, inPlace: runsInPlace(s.origin, s.cwd, this.deps.dataDir), seq: this.seq++, phase: 'queued', abort: new AbortController(), stopping: false,
       isolation: s.isolation, redactor: new RunRedactor(), cwd: s.cwd, writer: false, concurrent: false, spawned: false,
       state: { code: null, signal: null, completed: false, sawResult: false, errors: [], timedOut: false, stalled: false, cancelled: false },
       files: new Set(), stderrTail: '', droppedLines: 0,
@@ -569,7 +577,7 @@ export class RunManager implements BackgroundRuns {
     t.active++
     this.live.set(runId, run)
     this.queue.push(run)
-    this.queue.sort((a, b) => Number(runsInPlace(b.s.origin)) - Number(runsInPlace(a.s.origin)) || a.seq - b.seq)
+    this.queue.sort((a, b) => Number(b.inPlace) - Number(a.inPlace) || a.seq - b.seq)
     const position = this.queue.indexOf(run)
     this.write('executor.run.queued', s.sessionId, {
       runId, turnId: s.turnId, callId: s.callId, executor: adapter.id,
@@ -678,21 +686,21 @@ export class RunManager implements BackgroundRuns {
    * 工具的 permission() 用:与出队时同一套算法、同样的路径(同步)。否则批准时算成 own,出队才发现变宽,
    * 报的是 sandbox_unavailable 而不是问人
    */
-  preview(adapterId: string, info: ExecutorInfo, s: { sessionId: string; cwd: string; spillDir: string }, loginPath: string): Assessment {
+  preview(adapterId: string, info: ExecutorInfo, s: { sessionId: string; cwd: string; spillDir: string; origin: string }, loginPath: string): Assessment {
     const { deps, platform, home } = this
     const adapter = deps.adapters.get(adapterId)!
     const pathDirs = (shellEnv(deps.env, { platform, home, loginPath }).PATH ?? '').split(':').filter(Boolean)
-    return this.assessTree({ adapter, sessionId: s.sessionId, sessionCwd: s.cwd, cwd: s.cwd, spillDir: s.spillDir }, info, pathDirs, adapter.allowWrite(home, deps.env))
+    return this.assessTree({ adapter, sessionId: s.sessionId, origin: s.origin, sessionCwd: s.cwd, cwd: s.cwd, spillDir: s.spillDir }, info, pathDirs, adapter.allowWrite(home, deps.env))
   }
 
   /** 这次运行在这份 info 下的策略和隔离 */
   private assess(run: Run, info: ExecutorInfo, pathDirs: string[], allowWrite: string[]): Assessment {
     const { s, adapter, cwd, worktree } = run
-    return this.assessTree({ adapter, sessionId: s.sessionId, sessionCwd: s.cwd, cwd, spillDir: s.spillDir, worktree }, info, pathDirs, allowWrite)
+    return this.assessTree({ adapter, sessionId: s.sessionId, origin: s.origin, sessionCwd: s.cwd, cwd, spillDir: s.spillDir, worktree }, info, pathDirs, allowWrite)
   }
 
   private assessTree(
-    r: { adapter: Adapter; sessionId: string; sessionCwd: string; cwd: string; spillDir: string; worktree?: Run['worktree'] },
+    r: { adapter: Adapter; sessionId: string; origin: string; sessionCwd: string; cwd: string; spillDir: string; worktree?: Run['worktree'] },
     info: ExecutorInfo,
     pathDirs: string[],
     allowWrite: string[],
@@ -706,6 +714,9 @@ export class RunManager implements BackgroundRuns {
     // worktree 的 .git 文件决定沙箱外的 git 认哪个仓库。共用的 git 目录在沙箱里是可写根,要盖成只读:
     // Codex 的 :root 本来只读,写上去只会多一条可能让权限档不可信的路径
     const guard = wt ? [join(wt.path, '.git'), ...(adapter.isolationKind === 'wrap' ? wt.userState : [])] : []
+    // 在地的 IM 运行:worktree 就是会话钉住的那棵树,同样的 .git 文件。共用的 git 目录由沙箱按会话来源盖(wrap),Codex 的 :root 本来只读
+    const pin = this.pinOf(r.sessionId)
+    if (!wt && pin.kind === 'repo' && imInPlace(r.origin, r.cwd, deps.dataDir)) guard.push(join(pin.top, '.git'))
     const t = translate(policy, [...protect, ...guard])
     const level = deps.sandbox.status(r.sessionId).level
     const { isolation, missing } = isolationOf(adapter, info, level, deps.config(), { cwd: r.cwd, denyRead: t.denyRead, readOnlyPaths: t.readOnlyPaths })
@@ -781,7 +792,7 @@ export class RunManager implements BackgroundRuns {
     // 先按会话那棵树判一次:不该跑的不白建 worktree,程序在会话 cwd 里(shell 写得到)也在这里挡下
     const refused = settle(view)
     if (refused) return refused
-    if (!runsInPlace(s.origin) && !s.readOnly) {
+    if (!runsInPlace(s.origin, s.cwd, deps.dataDir) && !s.readOnly) {
       const failure = await this.enterWorktree(run)
       if (failure) return failure
       // 规则、隔离都要按真正跑的那棵树再算一遍;worktree 的路径也可能让隔离变宽
@@ -974,9 +985,10 @@ export class RunManager implements BackgroundRuns {
 
   /** 沙箱写得到的根(仓库之外):过滤器落在这些地方就不跑。重启后也能算,所以不看运行 */
   private gitOpts(pin: RepoPin): { pin: RepoPin; tmpDir?: string; writableRoots: string[] } {
-    const { adapters, env, tmpDir, worktreeRoot } = this.deps
+    const { adapters, env, tmpDir, worktreeRoot, dataDir } = this.deps
     const writableRoots = [...adapters.values()].flatMap(a => a.allowWrite(this.home, env))
     if (worktreeRoot) writableRoots.push(worktreeRoot)
+    if (dataDir !== undefined) writableRoots.push(imWorktreeRootOf(dataDir))
     try {
       writableRoots.push(realpathSync(tmpdir()))
     } catch {

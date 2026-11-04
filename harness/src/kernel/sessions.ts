@@ -4,6 +4,7 @@ import type { ApprovalMode, KernelEvent, ModelRef, SessionAudience, SessionOrigi
 import { RpcError } from './rpcError'
 import { isCredentialPath, isInside, isRootLike, type EnvSnapshot } from '../lib/fs/paths'
 import { parsePin, type RepoPin } from '../lib/git/snapshot'
+import { imWorktreeRootOf } from '../lib/git/imWorktree'
 import { worktreeRootOf } from '../lib/git/worktree'
 import { blacklist } from './permissionGate'
 
@@ -106,16 +107,17 @@ export function validateCwd(raw: string, env: CwdEnv): string {
   if (path.dirname(real) === real || isRootLike(real, env.platform)) throw invalid() // 文件系统根(含盘符根、折叠后为根的 /System/Volumes/Data)
   const roots = blacklist({ home: env.home, dataDir: env.dataDir, platform: env.platform, env: env.env ?? {} })
   if (isCredentialPath(real, roots, env.platform)) throw invalid() // 也拒 realpath 后变成 UNC / 带 `:` 的
-  // worktree 根和 <根>/<会话>:开在这里的会话写得到别的运行留下的 worktree。单个保留的 worktree 可以当 cwd
-  const wtRoot = worktreeRootOf(env.dataDir)
-  let wtReal = wtRoot
-  try {
-    wtReal = fs.realpath(wtRoot)
-  } catch {
-    // 还没建
-  }
-  for (const r of new Set([wtRoot, wtReal])) {
-    if (isInside(real, r, env.platform) && path.relative(r, real).split(path.sep).filter(Boolean).length < 2) throw invalid()
+  // worktree 根和 <根>/<会话>:开在这里的会话写得到别的运行留下的 worktree。单个保留的 worktree 可以当 cwd。IM 的根同样
+  for (const wtRoot of [worktreeRootOf(env.dataDir), imWorktreeRootOf(env.dataDir)]) {
+    let wtReal = wtRoot
+    try {
+      wtReal = fs.realpath(wtRoot)
+    } catch {
+      // 还没建
+    }
+    for (const r of new Set([wtRoot, wtReal])) {
+      if (isInside(real, r, env.platform) && path.relative(r, real).split(path.sep).filter(Boolean).length < 2) throw invalid()
+    }
   }
   return real
 }

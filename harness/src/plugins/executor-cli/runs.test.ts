@@ -9,6 +9,7 @@ import { cleanupFakes, disposeReusableFakes, installFake as freshFake, isAlive, 
 import { PermissionGate } from '../../kernel/permissionGate'
 import { createSandboxService } from '../../kernel/sandbox'
 import { syncPin } from '../../../test/syncPin'
+import { createImWorktree, imWorktreeRootOf } from '../../lib/git/imWorktree'
 import { createGit, NO_REPO, type Git, type RepoPin } from '../../lib/git/snapshot'
 import { parseRule, type Rule } from '../../lib/permissions/rules'
 import type { CliResult } from '../../lib/proc/runCli'
@@ -18,7 +19,7 @@ import { ExecutorRunEndedPayloadSchema, ExecutorRunStartedPayloadSchema, type Ex
 import { codexAdapter } from './adapters/codex'
 import { qoderAdapter } from './adapters/qoder'
 import { binaryKey, type ExecutorInfo } from './detect'
-import { authSecrets, DEFAULT_EXECUTORS_CONFIG, ProgressThrottle, RunManager, RunRedactor, type ExecutorsConfig, type RunManagerDeps, type SubmitInput } from './runs'
+import { authSecrets, DEFAULT_EXECUTORS_CONFIG, ProgressThrottle, RunManager, RunRedactor, runsInPlace, type ExecutorsConfig, type RunManagerDeps, type SubmitInput } from './runs'
 
 const FIXTURES = join(__dirname, '../../../test/fixtures/executors')
 const fixture = (name: string) => readFileSync(join(FIXTURES, name), 'utf8').split('\n').filter(Boolean)
@@ -3406,5 +3407,141 @@ describe('worktrees', () => {
         await sandbox.close()
       }
     }, 60_000)
+  })
+})
+
+describe('an IM session whose cwd is already a worktree (07 spec §8.2)', () => {
+  usesGit()
+  const dataDir = () => join(root, 'data')
+  const wtRoot = () => join(root, 'wt')
+  const ug = (args: string[], cwd = repo) => execFileSync('git', args, { cwd, env: gitBase, stdio: ['ignore', 'pipe', 'ignore'] }).toString()
+  const imWorktree = async () => {
+    const tmp = join(root, 'gtmp')
+    mkdirSync(tmp, { recursive: true })
+    const r = await createImWorktree({ dataDir: dataDir(), project: repo, group: 'c1', id: 'wt_1', git: createGit({ base: gitBase }), tmpDir: tmp, untrusted: [], denyReadOf: () => [] })
+    if (!r.ok) throw new Error(r.error)
+    return r.cwd
+  }
+  const inIm = async (o: Options = {}, fake = installFake({ writeFiles: { 'n.txt': 'n\n' }, lines: CODEX_OK })) => {
+    const cwd = await imWorktree()
+    const rig = setup([fake], { sessionCwd: { [SID]: cwd }, ...o, deps: { worktreeRoot: wtRoot(), dataDir: dataDir(), ...o.deps } })
+    return { cwd, fake, rig }
+  }
+  const profileOf = (fake: FakeCli) => fake.calls()[0].argv.find(a => a.startsWith('permissions.mffai.filesystem='))!
+
+  it('runsInPlace: app, acp, or im with a cwd in the IM root', async () => {
+    const cwd = await imWorktree()
+    expect(runsInPlace('app', repo, dataDir())).toBe(true)
+    expect(runsInPlace('acp', repo, dataDir())).toBe(true)
+    expect(runsInPlace('im', cwd, dataDir())).toBe(true)
+    expect(runsInPlace('im', repo, dataDir())).toBe(false)
+    expect(runsInPlace('im', imWorktreeRootOf(dataDir()), dataDir())).toBe(false)
+    expect(runsInPlace('schedule', cwd, dataDir())).toBe(false)
+    expect(runsInPlace('schedule', repo, dataDir())).toBe(false)
+    // 不知道数据目录:算不出 IM 根,不在地
+    expect(runsInPlace('im', cwd, undefined)).toBe(false)
+  })
+
+  it('a write run stays in the worktree: no -worktrees entry, the change is there and in the diff, the project is untouched', async () => {
+    const { cwd, fake, rig } = await inIm()
+    const before = [ug(['status', '--porcelain']), ug(['rev-parse', 'HEAD'])]
+    const { end } = await one(rig, { origin: 'im', cwd })
+    expect(end).toMatchObject({ status: 'ok' })
+    expect(end.worktree).toBeUndefined()
+    expect(end.changed).toMatchObject({ source: 'git', files: ['n.txt'] })
+    expect(fake.calls()[0].cwd).toBe(cwd)
+    expect(existsSync(wtRoot())).toBe(false)
+    expect(readFileSync(join(cwd, 'n.txt'), 'utf8')).toBe('n\n')
+    expect(existsSync(join(repo, 'n.txt'))).toBe(false)
+    expect([ug(['status', '--porcelain']), ug(['rev-parse', 'HEAD'])]).toEqual(before)
+  })
+
+  it('Codex in place: the worktree\'s .git file is in the read-only paths, the user\'s git directory is left to :root', async () => {
+    const { cwd, fake, rig } = await inIm()
+    await one(rig, { origin: 'im', cwd })
+    const profile = profileOf(fake)
+    expect(profile).toContain(`"${join(cwd, '.git')}"="read"`)
+    expect(profile).not.toContain(`"${join(repo, '.git')}"`)
+  })
+
+  it('a subdirectory cwd guards the .git file at the worktree top', async () => {
+    const top = await imWorktree()
+    const cwd = join(top, 'sub')
+    mkdirSync(cwd)
+    const fake = installFake({ lines: CODEX_OK })
+    const rig = setup([fake], { sessionCwd: { [SID]: cwd }, deps: { worktreeRoot: wtRoot(), dataDir: dataDir() } })
+    await one(rig, { origin: 'im', cwd })
+    expect(profileOf(fake)).toContain(`"${join(top, '.git')}"="read"`)
+  })
+
+  it('the approval sees what the run gets: preview lists the guard and the isolation stays own', async () => {
+    const { cwd, rig, fake } = await inIm()
+    const info = { id: 'codex', installed: true, auth: 'ok', isolation: 'own', missing: [], path: fake.file, binaryKey: binaryKey(fake.file) } as ExecutorInfo
+    const session = { sessionId: SID, cwd, spillDir: spill }
+    const view = rig.manager.preview('codex', info, { ...session, origin: 'im' }, '')
+    expect(view.isolation).toBe('own')
+    expect(view.t.readOnlyPaths).toContain(join(cwd, '.git'))
+    expect(rig.manager.preview('codex', info, { ...session, origin: 'app' }, '').t.readOnlyPaths).not.toContain(join(cwd, '.git'))
+  })
+
+  it('an app session in that directory runs in place too, without the guard', async () => {
+    const { cwd, fake, rig } = await inIm()
+    const { end } = await one(rig, { origin: 'app', cwd })
+    expect(end.worktree).toBeUndefined()
+    expect(profileOf(fake)).not.toContain(`"${join(cwd, '.git')}"`)
+  })
+
+  it('a schedule session in that directory is not in place: only IM gets this', async () => {
+    const { cwd, fake, rig } = await inIm()
+    const { end } = await one(rig, { origin: 'schedule', cwd })
+    expect(end.worktree).toBeTruthy()
+    expect(fake.calls()[0].cwd).toBe(end.worktree)
+  })
+
+  it('origin im with a normal cwd behaves as in 04: its own worktree, never the project', async () => {
+    const fake = installFake({ writeFiles: { 'n.txt': 'n\n' }, lines: CODEX_OK })
+    const rig = setup([fake], { deps: { worktreeRoot: wtRoot(), dataDir: dataDir() } })
+    const { end } = await one(rig, { origin: 'im' })
+    expect(end.worktree).toBeTruthy()
+    expect(fake.calls()[0].cwd).toBe(end.worktree)
+    expect(existsSync(join(repo, 'n.txt'))).toBe(false)
+  })
+
+  it('dataDir reached through a symlink: still in place, no nested worktree', async () => {
+    symlinkSync(root, join(home, 'via'))
+    const { cwd, fake, rig } = await inIm({ deps: { worktreeRoot: wtRoot(), dataDir: join(home, 'via', 'data') } })
+    const { end } = await one(rig, { origin: 'im', cwd })
+    expect(end.worktree).toBeUndefined()
+    expect(fake.calls()[0].cwd).toBe(cwd)
+    expect(existsSync(wtRoot())).toBe(false)
+  })
+
+  it('no data dir given: not in place, and with no worktree root the run refuses', async () => {
+    const cwd = await imWorktree()
+    const fake = installFake({ lines: CODEX_OK })
+    const rig = setup([fake], { sessionCwd: { [SID]: cwd } })
+    const { end } = await one(rig, { origin: 'im', cwd })
+    expect(end).toMatchObject({ status: 'failed', reason: 'worktree_unavailable' })
+    expect(fake.calls()).toEqual([])
+  })
+
+  it('in-place IM runs are queued with the other in-place runs, ahead of worktree runs', async () => {
+    const cwd = await imWorktree()
+    const fake = installFake({ run: 'sleep 30' })
+    const rig = setup([fake], { sessionCwd: { [SID]: cwd }, config: { maxGlobal: 1 }, deps: { worktreeRoot: wtRoot(), dataDir: dataDir() } })
+    submit(rig, { readOnly: true })
+    expect(rig.manager.submit(input({ origin: 'schedule', readOnly: true, cwd: repo }))).toMatchObject({ position: 0 })
+    expect(rig.manager.submit(input({ origin: 'im', readOnly: true, cwd }))).toMatchObject({ position: 0 })
+    expect(rig.manager.submit(input({ origin: 'im', readOnly: true, cwd: repo }))).toMatchObject({ position: 2 })
+    await rig.manager.abandon('t1')
+  }, 20_000)
+
+  it('a filter living in the IM root counts as writable: the snapshot refuses it', async () => {
+    const fake = installFake({ lines: CODEX_OK })
+    const rig = setup([fake], { deps: { worktreeRoot: wtRoot(), dataDir: dataDir() } })
+    ug(['config', 'filter.f.clean', join(imWorktreeRootOf(dataDir()), 'c1', 'wt_1', 'tool.sh')])
+    const { end } = await one(rig, { origin: 'schedule' })
+    expect(end.reason).toBe('worktree_unavailable')
+    expect(fake.calls()).toEqual([])
   })
 })

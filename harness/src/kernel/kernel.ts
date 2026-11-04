@@ -218,6 +218,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
     lookup: so.lookup,
     idleMs: so.idleMs,
     repoPin: sid => sessions.get(sid)?.repo,
+    originOf: sid => sessions.get(sid)?.origin,
     log,
   })
   /** 沙箱外的 git:定会话的仓库、恢复时删 worktree */

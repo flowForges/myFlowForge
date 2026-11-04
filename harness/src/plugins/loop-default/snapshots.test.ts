@@ -15,7 +15,8 @@ import type { ModelRef } from '../../protocol/models'
 import { createToolsCoding } from '../tools-coding'
 import toolsRegistry from '../tools-registry'
 import { createLoopDefault } from './index'
-import { endSnapshot, hasOpenTurn, rollbackRefs, snapshotRef, startSnapshot, turnChanges, writableRootsFor, type SnapshotDeps } from './snapshots'
+import { refBase as libRefBase } from '../../lib/git/snapshot'
+import { endSnapshot, hasOpenTurn, refBase, rollbackRefs, snapshotRef, startSnapshot, turnChanges, writableRootsFor, type SnapshotDeps } from './snapshots'
 import { NO_SANDBOX, seedUnsandboxedAuto } from '../../../test/sandboxStub'
 
 const posix = process.platform !== 'win32'
@@ -725,7 +726,12 @@ describe('unsafe_filter: rollback is unavailable for that turn (Task 9 review C3
 
   it('what counts as writable: the whole data dir and the worktrees beside it, worked out from the plugin dir', () => {
     // 不走真内核:测试的数据目录都在系统临时目录里,临时目录本来就在名单上,看不出区别
-    expect(writableRootsFor('/d/data/plugins/loop-default', '/tmp/x', '/h')).toEqual(['/d/data', '/d/data-worktrees', '/tmp/x', '/h/.qoder'])
+    expect(writableRootsFor('/d/data/plugins/loop-default', '/tmp/x', '/h')).toEqual(['/d/data', '/d/data-worktrees', '/d/data-im-worktrees', '/tmp/x', '/h/.qoder'])
+  })
+
+  it('refBase is the one in lib, so a channel can prune on discard without importing this plugin', () => {
+    expect(refBase).toBe(libRefBase)
+    expect(snapshotRef('s1', 't1', 'start')).toBe(`${libRefBase('s1')}/t1-start`)
   })
 
   it('both snapshots report the reason, no ref, no marker, not rollbackable', async () => {

@@ -1294,3 +1294,137 @@ describe('kernel wiring', () => {
     for (const sk of socks) expect(existsSync(dirname(sk))).toBe(false)
   })
 })
+
+describe('sessions that are not on this machine: the shared git state is read-only (07 spec §8.2)', () => {
+  const PLAN: ExecPlanOpts = { allowRead: [], allowWrite: [], allowHosts: [], proxyScope: 'run_1', readOnly: false, denyRead: [], denyWrite: [] }
+  const commonDir = () => join(repo, '.git')
+  const LINUX: Partial<SandboxOpts> = { platform: 'linux', detected: { level: 'partial', missing: ['netns'], bwrap: '/usr/bin/bwrap' } }
+  /** 一个链接 worktree 的钉子:top 是 worktree,git 目录在用户仓库里 */
+  const linked = () => {
+    const top = join(root, 'wt')
+    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@e.invalid', 'commit', '-q', '--allow-empty', '-m', 'i'], { cwd: repo, env: gitTestEnv() })
+    execFileSync('git', ['worktree', 'add', '-q', '--detach', top, 'HEAD'], { cwd: repo, env: gitTestEnv() })
+    return { top, pin: pinFromPaths(top, join(repo, '.git', 'worktrees', 'wt'), commonDir()) }
+  }
+  /** Seatbelt 配置里 a 段放行、最后一段拒绝的路径 */
+  const q = (s: string) => JSON.stringify(s)
+  const finalDeny = (profile: string, path: string) => profile.split('\n').some(l => l.startsWith('(deny file-write') && l.includes(`(subpath ${q(path)})`))
+  const writable = (profile: string, path: string) => profile.split('\n').some(l => l.startsWith('(allow file-write') && l.includes(`(subpath ${q(path)})`))
+
+  it.each(['im', 'schedule'] as const)('%s, darwin: the shell plan denies writes to the common dir and it is not a writable root', async origin => {
+    const { svc } = service({ originOf: () => origin })
+    const plan = await svc.plan('true', session(), baseEnv)
+    plan.release()
+    const profile = profileOf(plan.args)
+    expect(finalDeny(profile, commonDir())).toBe(true)
+    expect(writable(profile, commonDir())).toBe(false)
+    expect(writable(profile, join(repo, 'sub'))).toBe(true)
+  })
+
+  it.each(['app', 'acp'] as const)('%s, darwin: unchanged, the common dir stays a writable root', async origin => {
+    const { svc } = service({ originOf: () => origin })
+    const plan = await svc.plan('true', session(), baseEnv)
+    plan.release()
+    const profile = profileOf(plan.args)
+    expect(writable(profile, commonDir())).toBe(true)
+    expect(finalDeny(profile, commonDir())).toBe(false)
+  })
+
+  it('no originOf dep: nothing added', async () => {
+    const plan = await service().svc.plan('true', session(), baseEnv)
+    plan.release()
+    expect(writable(profileOf(plan.args), commonDir())).toBe(true)
+    expect(finalDeny(profileOf(plan.args), commonDir())).toBe(false)
+  })
+
+  it('a dep that does not know the session: read-only, failing closed', async () => {
+    const plan = await service({ originOf: () => undefined }).svc.plan('true', session(), baseEnv)
+    plan.release()
+    expect(finalDeny(profileOf(plan.args), commonDir())).toBe(true)
+    expect(writable(profileOf(plan.args), commonDir())).toBe(false)
+  })
+
+  it('the origin is read on each plan, not captured at construction', async () => {
+    let origin: 'app' | 'im' = 'app'
+    const { svc } = service({ originOf: () => origin })
+    const a = await svc.plan('true', session(), baseEnv)
+    a.release()
+    expect(finalDeny(profileOf(a.args), commonDir())).toBe(false)
+    origin = 'im'
+    const b = await svc.plan('true', session(), baseEnv)
+    b.release()
+    expect(finalDeny(profileOf(b.args), commonDir())).toBe(true)
+  })
+
+  it('the constant shell options are not mutated: an app plan after an IM plan is clean', async () => {
+    const origins: Record<string, 'app' | 'im'> = { im1: 'im', app1: 'app' }
+    const { svc } = service({ originOf: sid => origins[sid] })
+    const im = await svc.plan('true', session('im1'), baseEnv)
+    im.release()
+    const app = await svc.plan('true', session('app1'), baseEnv)
+    app.release()
+    expect(finalDeny(profileOf(im.args), commonDir())).toBe(true)
+    expect(finalDeny(profileOf(app.args), commonDir())).toBe(false)
+  })
+
+  it('no repo: nothing to add, and the plan still works', async () => {
+    const plan = await service({ originOf: () => 'im', repoPin: () => NO_REPO }).svc.plan('true', session(), baseEnv)
+    plan.release()
+    expect(finalDeny(profileOf(plan.args), commonDir())).toBe(false)
+  })
+
+  it('a linked worktree: both the common dir and its own git dir are denied, the worktree stays writable, its .git file protected', async () => {
+    const { top, pin } = linked()
+    const { svc } = service({ originOf: () => 'im', repoPin: () => pin })
+    const plan = await svc.plan('true', session('s1', top), baseEnv)
+    plan.release()
+    const profile = profileOf(plan.args)
+    expect(finalDeny(profile, commonDir())).toBe(true)
+    expect(finalDeny(profile, pin.gitDir)).toBe(true)
+    expect(writable(profile, top)).toBe(true)
+    expect(writable(profile, commonDir())).toBe(false)
+    expect(profile).toContain(q(join(top, '.git')))
+  })
+
+  it('a wrapped run (planExec): the common dir is in denyWrite, on top of what the run asked for', async () => {
+    const { top, pin } = linked()
+    const { svc } = service({ originOf: () => 'im', repoPin: () => pin })
+    const asked = join(top, 'gen')
+    const plan = await svc.planExec('/usr/bin/true', [], session('s1', top), baseEnv, { ...PLAN, denyWrite: [asked] })
+    plan.release()
+    const profile = profileOf(plan.args)
+    expect(finalDeny(profile, commonDir())).toBe(true)
+    expect(finalDeny(profile, pin.gitDir)).toBe(true)
+    expect(finalDeny(profile, asked)).toBe(true)
+    expect(writable(profile, commonDir())).toBe(false)
+  })
+
+  it('planExec with an app session: unchanged', async () => {
+    const { svc } = service({ originOf: () => 'app' })
+    const plan = await svc.planExec('/usr/bin/true', [], session(), baseEnv, PLAN)
+    plan.release()
+    expect(finalDeny(profileOf(plan.args), commonDir())).toBe(false)
+    expect(writable(profileOf(plan.args), commonDir())).toBe(true)
+  })
+
+  it('linux: the common dir is mounted read-only after its writable mount', async () => {
+    const { svc } = service({ ...LINUX, originOf: () => 'im' })
+    const plan = await svc.plan('true', session(), baseEnv)
+    plan.release()
+    const lastMount = (flag: string) => plan.args.reduce((at, a, i) => (a === flag && plan.args[i + 1] === commonDir() ? i : at), -1)
+    expect(lastMount('--ro-bind')).toBeGreaterThan(lastMount('--bind'))
+  })
+
+  it('linux, app session: no read-only mount of it', async () => {
+    const { svc } = service({ ...LINUX, originOf: () => 'app' })
+    const plan = await svc.plan('true', session(), baseEnv)
+    plan.release()
+    const roots = plan.args.flatMap((a, i) => (a === '--ro-bind' ? [plan.args[i + 1]] : []))
+    expect(roots).not.toContain(commonDir())
+  })
+
+  it('level none: no plan to put it in. The gate asks for every command instead', async () => {
+    const { svc } = service({ originOf: () => 'im', detected: { level: 'none', missing: ['sandbox-exec'] } })
+    expect((await svc.plan('true', session(), baseEnv)).sandboxed).toBe(false)
+  })
+})

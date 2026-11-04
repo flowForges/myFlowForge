@@ -189,6 +189,9 @@ export function pinIntact(pin: PinnedRepo): boolean {
 }
 
 /** 这个 git 的每条命令都只认钉住的仓库。commondir 文件也不看 */
+/** 一个会话的全部快照引用都在这下面:回滚用,丢弃 worktree 时也要整个删(内容留在用户的对象库里) */
+export const refBase = (sessionId: string) => `refs/mffai/snapshots/${sessionId}`
+
 export const pinnedGit = (git: Git, pin: PinnedRepo): Git => (args, o) =>
   git(args, { ...o, env: { GIT_DIR: pin.gitDir, GIT_WORK_TREE: pin.top, GIT_COMMON_DIR: pin.commonDir, ...o.env } })
 
@@ -296,7 +299,7 @@ export function unsafeFilterCommand(command: string, o: FilterContext): boolean 
 const FILTER_KEY = /^filter\..+\.(clean|smudge|process)$/i
 
 /** 现读 `filter.*`:用户配置、全局配置都算;属性文件 CLI 改得了,所以不看这个过滤器现在用没用上。读不了 = 不安全 */
-async function hasUnsafeFilter(g: Git, pin: PinnedRepo, writableRoots: string[] = []): Promise<boolean> {
+export async function hasUnsafeFilter(g: Git, pin: PinnedRepo, writableRoots: string[] = []): Promise<boolean> {
   const { top, gitDir, commonDir } = pin
   const config = await g(['config', '-z', '--get-regexp', '^filter\\.'], { cwd: top })
   if (config.code === 1) return false

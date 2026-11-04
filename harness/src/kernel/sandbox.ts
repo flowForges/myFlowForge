@@ -8,10 +8,10 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync, type Dirent } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, posix } from 'node:path'
-import type { KernelEvent, PermissionsConfig, SandboxStatus } from '../protocol/index'
+import type { KernelEvent, PermissionsConfig, SandboxStatus, SessionOrigin } from '../protocol/index'
 import { canonicalRoots, credentialRoots, persistenceRoots, PROJECT_CONFIG_DIRS, type EnvSnapshot } from '../lib/fs/paths'
 import type { RepoPin } from '../lib/git/snapshot'
-import { worktreeRootOf } from '../lib/git/worktree'
+import { userGitState, worktreeRootOf } from '../lib/git/worktree'
 import { literalRoots, matches, type MatchCtx, type Rule } from '../lib/permissions/rules'
 import { bwrapArgs, ensureGitHooksDir, execRootFor } from '../lib/sandbox/bwrap'
 import type { DetectResult } from '../lib/sandbox/detect'
@@ -97,6 +97,11 @@ export interface SandboxOpts {
   idleMs?: number
   /** 会话建立时定下的仓库;没有 = 没有仓库。这里不跑 git,也不从 cwd 往上找:cwd 是模型写得到的 */
   repoPin?: (sessionId: string) => RepoPin | undefined
+  /**
+   * 会话的来源,每次计划现问。不是 app、acp 的会话,用户的 git 状态只读(07 spec §8.2):否则链接 worktree 里的 shell 能 `git branch -f main`。
+   * 没给 = 不加;给了而答不上来 = 加,失败方向是关
+   */
+  originOf?: (sessionId: string) => SessionOrigin | undefined
   /** 代理 Unix socket 的父目录(不能在沙箱可写范围内);默认 os.tmpdir() */
   proxyParent?: string
   uid?: number
@@ -473,9 +478,13 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
     const tmp = sessionTmpDir(o.dataDir, s.sessionId)
     ensureTmp(tmp)
     const repo = repoFor(s.sessionId, s.cwd)
+    const pin = o.repoPin?.(s.sessionId)
+    const origin = o.originOf?.(s.sessionId)
+    const gitReadOnly = o.originOf !== undefined && origin !== 'app' && origin !== 'acp' && pin?.kind === 'repo'
+    if (gitReadOnly) x.denyWrite = [...x.denyWrite, ...cleaned(userGitState(pin))]
     // 只读运行:连同"cwd 就在它里面"的额外可写项一起去掉
     const grantWrite = () => plainDirs(x.allowWrite).filter(a => !x.readOnly || !(within(s.cwd, a) || within(realSpelling(s.cwd), realSpelling(a))))
-    const writableWith = (extra: string[]) => [...(x.readOnly ? [] : [s.cwd, ...repo.gitDirs]), tmp, ...extra]
+    const writableWith = (extra: string[]) => [...(x.readOnly ? [] : [s.cwd, ...(gitReadOnly ? [] : repo.gitDirs)]), tmp, ...extra]
     const key = x.proxyScope === undefined ? s.sessionId : `${s.sessionId}\0${x.proxyScope}`
     // 同一 tick 里查和占,并发的两个计划只有一个过:第二个的主机名单不会悄悄变成第一个的
     if (x.proxyScope !== undefined && proxies.get(key)?.holds) throw new Error('sandbox: proxy scope is in use')

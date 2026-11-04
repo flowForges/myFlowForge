@@ -35,6 +35,10 @@ function execDefault(mode: ApprovalMode, sandbox: SandboxStatus, allowUnsandboxe
   return sandbox.level === 'none' && !allowUnsandboxedAuto ? 'ask' : 'allow'
 }
 
+/** IM 的消息是远程的(07 spec §8.3):auto 只在完整沙箱放行,不看 allowUnsandboxedAuto;partial 下命令能直接上网 */
+const remoteExec = (mode: ApprovalMode, sandbox: SandboxStatus, unsandboxed = false): 'allow' | 'ask' =>
+  mode === 'auto' && !unsandboxed && sandbox.level === 'full' ? 'allow' : 'ask'
+
 /** 这次运行本身没有隔离:默认判定按无沙箱算,不看会话级别 */
 const NONE_LEVEL: SandboxStatus = { level: 'none', missing: [], autoDegraded: false }
 
@@ -47,7 +51,8 @@ export function defaultRules(s: SessionInfo | undefined, sandbox: SandboxStatus,
   // 没有 cwd 或 cwd 是根:读写被硬拒绝,不列默认的 allow
   const listed = cwd !== undefined && (!s || !isRootLike(cwd, platform))
   const out = listed ? [`allow read(${cwd}/**)`, `allow write(${cwd}/**)`] : []
-  out.push(`${s ? execDefault(s.approvalMode, sandbox, allowUnsandboxedAuto) : '<mode>'} shell(*)`)
+  const shell = !s ? '<mode>' : s.origin === 'im' ? remoteExec(s.approvalMode, sandbox) : execDefault(s.approvalMode, sandbox, allowUnsandboxedAuto)
+  out.push(`${shell} shell(*)`)
   return out
 }
 
@@ -79,7 +84,10 @@ export function decide(req: PermissionRequest, s: SessionInfo | undefined, env: 
     if (user === 'deny' || user === 'ask') return user
     // 比会话宽的运行、有规则落实不了的运行:只有人能放行,allow 规则和 allowUnsandboxedAuto 都不算(04 spec §6、C2、C3)
     if (req.mustAsk || (req.unsandboxed && env.sandbox.level !== 'none')) return 'ask'
-    if (user === 'allow') return 'allow'
+    const remote = s.origin === 'im'
+    // 规则是对当面操作写的
+    if (user === 'allow' && (!remote || env.sandbox.level === 'full')) return 'allow'
+    if (remote) return remoteExec(s.approvalMode, env.sandbox, req.unsandboxed)
     return execDefault(s.approvalMode, req.unsandboxed ? NONE_LEVEL : env.sandbox, env.allowUnsandboxedAuto)
   }
   // 06 spec §8:不进规则语言,不走审批;能看到什么、写到哪由 memory-default 的 policy 按会话定

@@ -1,13 +1,86 @@
 import { describe, expect, it } from 'vitest'
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { createImWorktree } from '../../lib/git/imWorktree'
 import type { Tool } from '../../lib/tools/types'
 import { ERR_BUSY, ERR_DRAINING } from '../../protocol/index'
 import { installFake, isAlive, waitDead } from '../../../test/fakeCli'
-import { CODEX_OK, FINISH, boot, create, cwd, dataDir, delegate, detected, done, evs, execCalls, fake, home, infoOf, isolatedGit, kernels, lastText, list, ofType, pay, prompt, root, say, sh, sleep, terminal, turn, untilGo, waitFor, type Info, useRig } from '../../../test/executorRig'
+import { CODEX_OK, FINISH, boot, calling, create, cwd, dataDir, delegate, detected, done, evs, execCalls, fake, home, infoOf, isolatedGit, kernels, lastText, list, ofType, pay, prompt, root, say, sh, sleep, terminal, turn, untilGo, waitFor, type Info, useRig } from '../../../test/executorRig'
 import { createExecutorCli } from './index'
 
 useRig()
+
+describe('an IM session in its own worktree (07 spec §8)', () => {
+  /** 用户的工作区、索引、HEAD、分支和别的引用;refs/mffai 是我们自己的 */
+  const userState = () => [sh('status', '--porcelain'), sh('rev-parse', 'HEAD'), sh('for-each-ref', '--format=%(refname) %(objectname)').split('\n').filter(l => !l.startsWith('refs/mffai/')).join('\n'), readFileSync(join(cwd, '.git', 'index')).toString('hex')]
+  const imWorktree = async () => {
+    const tmpDir = join(dataDir, 'tmp')
+    mkdirSync(tmpDir, { recursive: true })
+    const r = await createImWorktree({ dataDir, project: cwd, group: 'c1', id: 'wt_1', git: isolatedGit(), tmpDir, untrusted: [dataDir], denyReadOf: () => [] })
+    if (!r.ok) throw new Error(r.error)
+    return r.cwd
+  }
+
+  it('the session pins the linked worktree', async () => {
+    const dir = await imWorktree()
+    const { k } = await boot(undefined)
+    const sid = await create(k, { origin: 'im', dir })
+    expect(pay(evs(k, sid).find(e => e.type === 'session.created')).repo).toMatchObject({ kind: 'repo', top: dir, commonDir: join(cwd, '.git') })
+  })
+
+  it('a delegate write: in place, no -worktrees entry, turn.changes and turn.rollback cover it, the project is untouched', async () => {
+    const dir = await imWorktree()
+    const before = userState()
+    const f = fake({ lines: CODEX_OK, writeFiles: { 'a.txt': 'changed\n', 'new.txt': 'new\n' } })
+    const { k } = await boot(f, { script: n => (n === 1 ? delegate() : n === 2 ? say('started it') : say('summary')) })
+    await detected(k)
+    const sid = await create(k, { origin: 'im', dir })
+    const turnId = await turn(k, sid)
+    const end = pay(ofType(k, sid, 'executor.run.ended')[0])
+    expect(end).toMatchObject({ status: 'ok' })
+    expect(pay(ofType(k, sid, 'executor.run.queued')[0]).isolation).toBe('own')
+    expect(end.worktree).toBeUndefined()
+    expect(execCalls(f)[0].cwd).toBe(dir)
+    expect(existsSync(`${dataDir}-worktrees`)).toBe(false)
+    expect(readFileSync(join(dir, 'a.txt'), 'utf8')).toBe('changed\n')
+    expect(userState()).toEqual(before)
+    const changes = (await k.handle('turn.changes', { sessionId: sid, turnId })) as { files: { path: string }[] }
+    expect(changes.files.map(x => x.path).sort()).toEqual(['a.txt', 'new.txt'])
+    expect(await k.handle('turn.rollback', { commandId: 'rb', sessionId: sid, turnId })).toMatchObject({ ok: true })
+    expect(readFileSync(join(dir, 'a.txt'), 'utf8')).toBe('a\n')
+    expect(existsSync(join(dir, 'new.txt'))).toBe(false)
+    expect(userState()).toEqual(before)
+  })
+
+  it('the session\'s own write tool: a turn and a rollback work in the worktree, the project is untouched', async () => {
+    const dir = await imWorktree()
+    const before = userState()
+    const { k } = await boot(undefined, { script: n => (n === 1 ? calling('c1', 'write', { path: 'n.txt', content: 'n\n' }) : say('done')) })
+    const sid = await create(k, { origin: 'im', dir, approvalMode: 'ask' })
+    const turnId = await turn(k, sid)
+    expect(terminal(k, sid)[0].type).toBe('turn.ended')
+    expect(readFileSync(join(dir, 'n.txt'), 'utf8')).toBe('n\n')
+    expect(existsSync(join(cwd, 'n.txt'))).toBe(false)
+    expect(await k.handle('turn.rollback', { commandId: 'rb', sessionId: sid, turnId })).toMatchObject({ ok: true })
+    expect(existsSync(join(dir, 'n.txt'))).toBe(false)
+    expect(userState()).toEqual(before)
+  })
+
+  it.each([
+    ['partial', { detect: () => ({ level: 'partial', missing: ['netns'] }), upstream: null }, false],
+    ['none', { detect: () => ({ level: 'none', missing: ['sandbox-exec'] }), upstream: null }, true],
+  ] as const)('auto at %s: a delegate waits for a person, even with allowUnsandboxedAuto', async (_level, sandbox, flag) => {
+    const dir = await imWorktree()
+    const f = fake()
+    const { k } = await boot(f, { sandbox: sandbox as never, allowUnsandboxedAuto: flag, script: () => delegate() })
+    await detected(k)
+    const sid = await create(k, { origin: 'im', dir })
+    await prompt(k, sid)
+    await waitFor(() => ofType(k, sid, 'approval.requested').length === 1)
+    expect(execCalls(f)).toEqual([])
+    await k.handle('session.cancel', { commandId: 'x', sessionId: sid })
+  })
+})
 
 describe('turn end to end', () => {
   it('start → notice → summary → turn.ended; turn.changes and turn.rollback cover what the fake wrote', async () => {

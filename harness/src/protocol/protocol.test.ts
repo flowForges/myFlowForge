@@ -534,5 +534,7 @@ describe('channels (07)', () => {
     expect(WorkerMethods['approval.respond'].params.parse({ approvalId: 'a', decision: 'allow', via: 'telegram:1' })).toEqual({ approvalId: 'a', decision: 'allow' })
     expect(ApprovalResolvedPayloadSchema.parse({ approvalId: 'a', decision: 'allow', by: 'user', via: 'telegram:1' }).via).toBe('telegram:1')
     expect(ApprovalResolvedPayloadSchema.parse({ approvalId: 'a', decision: 'allow', by: 'user' }).via).toBeUndefined()
+    expect(ApprovalResolvedPayloadSchema.parse({ approvalId: 'a', decision: 'allow', by: 'user', via: 'x'.repeat(128) }).via).toHaveLength(128)
+    expect(ApprovalResolvedPayloadSchema.safeParse({ approvalId: 'a', decision: 'allow', by: 'user', via: 'x'.repeat(129) }).success).toBe(false)
   })
 })

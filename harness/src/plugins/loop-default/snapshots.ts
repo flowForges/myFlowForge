@@ -2,7 +2,8 @@
 import { dirname, join } from 'node:path'
 import type { Logger } from '../../kernel/log'
 import { RpcError } from '../../kernel/rpcError'
-import { changes, pruneRefs, restore, submodulePaths, takeSnapshot, type Git, type RepoPin, type SnapshotResult } from '../../lib/git/snapshot'
+import { imWorktreeRootOf } from '../../lib/git/imWorktree'
+import { changes, pruneRefs, refBase, restore, submodulePaths, takeSnapshot, type Git, type RepoPin, type SnapshotResult } from '../../lib/git/snapshot'
 import { worktreeRootOf } from '../../lib/git/worktree'
 import type { FileChange, KernelEvent } from '../../protocol/index'
 
@@ -27,7 +28,7 @@ export interface SnapshotDeps {
 export interface SnapshotTarget { sessionId: string; cwd: string; pin: RepoPin }
 
 type Phase = 'start' | 'end' | 'pre-rollback'
-export const refBase = (sessionId: string) => `refs/mffai/snapshots/${sessionId}`
+export { refBase }
 export const snapshotRef = (sessionId: string, turnId: string, phase: Phase) => `${refBase(sessionId)}/${turnId}-${phase}`
 
 async function timed<T>(deps: SnapshotDeps, what: string, fn: () => Promise<T>): Promise<T> {
@@ -48,12 +49,12 @@ const take = (deps: SnapshotDeps, t: SnapshotTarget, turnId: string, phase: Phas
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err))
 
 /**
- * 过滤器落在这些地方就不跑。pluginDir 是 <数据目录>/plugins/<id>:会话 tmp 在数据目录里,运行的 TMPDIR 在系统临时目录,其他 worktree 在 -worktrees;
+ * 过滤器落在这些地方就不跑。pluginDir 是 <数据目录>/plugins/<id>:会话 tmp 在数据目录里,运行的 TMPDIR 在系统临时目录,其他 worktree 在 -worktrees 和 -im-worktrees;
  * 包起来的 Qoder 写得到 ~/.qoder 下面几个目录,这里按整个算(插件之间不能 import,也不必列得那么细)
  */
 export const writableRootsFor = (pluginDir: string, systemTmp: string, home: string): string[] => {
   const dataDir = dirname(dirname(pluginDir))
-  return [dataDir, worktreeRootOf(dataDir), systemTmp, join(home, '.qoder')]
+  return [dataDir, worktreeRootOf(dataDir), imWorktreeRootOf(dataDir), systemTmp, join(home, '.qoder')]
 }
 
 /** 资格已查过之后的 git 失败:是服务端的问题(−32603),记日志 */
