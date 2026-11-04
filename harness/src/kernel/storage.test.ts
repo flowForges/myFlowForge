@@ -89,6 +89,26 @@ describe('event log', () => {
     expect(errs).toHaveLength(2)
   })
 
+  it('sessionSummaries reads titles from session.created only, and no other payload', () => {
+    const db = openDb(join(mk(), 'k.db'))
+    const log = new EventLog(db)
+    const put = (ts: number, type: string, sid: string | null, payload: string) => db.prepare('INSERT INTO events(ts, type, session_id, payload) VALUES (?, ?, ?, ?)').run(ts, type, sid, payload)
+    put(1, 'session.created', 'a', JSON.stringify({ title: '第一个' }))
+    put(2, 'session.created', 'b', JSON.stringify({}))
+    put(3, 'message.user', 'a', 'not json at all')
+    put(4, 'memory.checkpoint', 'a', 'not json either')
+    put(5, 'turn.started', null, 'nor this')
+    put(6, 'message.user', 'ghost', '{}')
+    expect(log.sessionSummaries()).toEqual([{ id: 'a', title: '第一个', updatedAt: 3 }, { id: 'b', title: '新会话', updatedAt: 2 }])
+  })
+
+  it('scan yields the whole log in order across pages, and sees nothing appended after it finishes', () => {
+    const log = new EventLog(openDb(join(mk(), 'k.db')))
+    for (let i = 0; i < 25; i++) log.append({ type: 'turn.started', payload: i })
+    expect([...log.scan(10)].map(e => e.seq)).toEqual(Array.from({ length: 25 }, (_, i) => i + 1))
+    expect([...log.scan(25)]).toHaveLength(25)
+  })
+
   it('unsubscribe stops notifications', () => {
     const log = new EventLog(openDb(join(mk(), 'k.db')))
     let n = 0

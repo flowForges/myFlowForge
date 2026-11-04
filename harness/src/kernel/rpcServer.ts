@@ -40,8 +40,16 @@ const ERR_METHOD_NOT_FOUND = -32601
 const ERR_INTERNAL = -32603
 const STALE_RECHECK_MS = 50
 const AUTH_DEADLINE_MS = 5000
+const REPLAY_PAGE = 500
 // 传输层认证方法;认证完成后再出现也算顺序错
 const AUTH_METHODS = new Set(['auth', 'auth.challenge', 'auth.verify'])
+
+const drained = (sock: net.Socket) =>
+  new Promise<void>((resolve) => {
+    const done = () => { sock.off('drain', done); sock.off('close', done); resolve() }
+    sock.once('drain', done)
+    sock.once('close', done)
+  })
 
 // 每个连接:fresh → challenged → authed,只能按这个顺序走一遍
 type AuthState =
@@ -106,15 +114,30 @@ export async function startRpcServer(opts: RpcServerOpts): Promise<{ close(): Pr
       if (after > last) return reply(id, { reset: true, lastSeq: last })
       unsubscribe?.()
       reply(id, { ok: true })
-      // 以下同步完成:补齐与挂监听之间不会插入新事件
       let sent = after
+      let live = false
+      let cancelled = false
       const push = (e: KernelEvent) => {
         if (e.seq <= sent) return
         sent = e.seq
         send({ jsonrpc: '2.0', method: 'event', params: toWire(e) })
       }
-      for (const e of events.after(after)) push(e)
-      unsubscribe = events.onAppend(push)
+      // 补齐期间到的事件已经在日志里,翻到那一页就读到了:这里不发,否则它们插到老事件前面
+      const stopListening = events.onAppend(e => { if (live) push(e) })
+      unsubscribe = () => { cancelled = true; stopListening() }
+      // 一页一页补:整个日志同步读完回不了 ping,大日志上进程会被当成卡死杀掉。对方读得慢就等它,积压不进内存
+      const replay = async () => {
+        for (;;) {
+          if (cancelled || sock.destroyed) return
+          const page = events.after(sent, REPLAY_PAGE)
+          for (const e of page) push(e)
+          // 读完最后一页到打开直播之间没有 await,不会漏事件。事务都是同步的,读不到没提交的
+          if (page.length < REPLAY_PAGE) { live = true; return }
+          await (sock.writableNeedDrain ? drained(sock) : new Promise(resolve => setImmediate(resolve)))
+        }
+      }
+      // 读日志失败:断开让对方重连补齐,不留一个缺事件的订阅
+      void replay().catch(() => sock.destroy())
     }
 
     const dispatch = async (m: Record<string, any>) => {

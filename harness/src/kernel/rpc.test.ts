@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import net from 'node:net'
 import { spawn } from 'node:child_process'
@@ -299,6 +299,86 @@ describe('rpc server + client', () => {
     const all = kernel.events.after(0)
     await wait(() => got.length === all.length)
     expect(got.map(e => e.seq)).toEqual(all.map(e => e.seq))
+  })
+
+  describe('replay of a long log', () => {
+    const seed = (n: number, text = 'x') => {
+      for (let i = 0; i < n; i++) kernel.events.append({ type: 'message.assistant.delta', sessionId: 's', payload: { turnId: 't', text } })
+    }
+
+    it('comes in pages: other calls are answered on the way, and every event arrives once, in order', async () => {
+      seed(6000)
+      await serve()
+      const c = await client()
+      const got: number[] = []
+      c.onEvent(e => got.push(e.seq))
+      await c.call('events.subscribe', { after: 0 })
+      const total = kernel.events.lastSeq()
+      await c.call('hello', { clientVersion: '0', protocolVersion: PROTOCOL_VERSION })
+      expect(got.length).toBeLessThan(total) // 同步读完的话,回复之前全到了
+      await wait(() => got.length === total)
+      expect(got).toEqual(Array.from({ length: total }, (_, i) => i + 1))
+    })
+
+    it('live events during the replay keep their place: no gap, no duplicate', async () => {
+      seed(6000)
+      await serve()
+      const c = await client()
+      const got: number[] = []
+      c.onEvent(e => got.push(e.seq))
+      await c.call('events.subscribe', { after: 0 })
+      let live = 0
+      await new Promise<void>(resolve => {
+        const tick = () => {
+          kernel.events.append({ type: 'message.assistant.delta', sessionId: 's', payload: { turnId: 't', text: 'live' } })
+          if (++live === 50) resolve()
+          else setImmediate(tick)
+        }
+        tick()
+      })
+      kernel.events.append({ type: 'turn.ended', sessionId: 's', payload: { turnId: 't' } })
+      const total = kernel.events.lastSeq()
+      await wait(() => got.length >= total)
+      kernel.events.append({ type: 'turn.ended', sessionId: 's', payload: { turnId: 'after' } })
+      await wait(() => got.length === total + 1)
+      expect(got).toEqual(Array.from({ length: total + 1 }, (_, i) => i + 1))
+    })
+
+    it('a client that stops reading stops the reads: the backlog does not pile up in memory', async () => {
+      seed(1600, 'y'.repeat(50_000)) // 4 页,每页 25 MB:一页就超过管道放得下的
+      await serve()
+      const r = await raw()
+      await handshake(r)
+      const after = vi.spyOn(kernel.events, 'after')
+      r.sock.pause()
+      r.send({ id: 's', method: 'events.subscribe', params: { after: 0 } })
+      await new Promise(res => setTimeout(res, 300))
+      expect(after.mock.calls).toEqual([[0, 500]])
+      r.sock.resume()
+      await until(() => r.got.some(g => g.params?.seq === kernel.events.lastSeq()), 20_000)
+      expect(after.mock.calls.length).toBeGreaterThanOrEqual(4)
+      expect(r.got.filter(g => g.method === 'event').map(g => g.params.seq)).toEqual(Array.from({ length: kernel.events.lastSeq() }, (_, i) => i + 1))
+      after.mockRestore()
+    }, 30_000)
+
+    it('a connection that closes mid-replay stops it, and a second subscribe replaces the first', async () => {
+      seed(3000)
+      await serve()
+      const c = await client()
+      const got: number[] = []
+      c.onEvent(e => got.push(e.seq))
+      await c.call('events.subscribe', { after: 0 })
+      await c.call('events.subscribe', { after: kernel.events.lastSeq() - 1 })
+      kernel.events.append({ type: 'turn.ended', sessionId: 's', payload: { turnId: 't' } })
+      const total = kernel.events.lastSeq()
+      await wait(() => got.at(-1) === total)
+      expect(got.filter(seq => seq === total)).toHaveLength(1)
+      const gone = await client()
+      await gone.call('events.subscribe', { after: 0 })
+      gone.close()
+      await new Promise(res => setTimeout(res, 50))
+      await c.call('hello', { clientVersion: '0', protocolVersion: PROTOCOL_VERSION })
+    })
   })
 
   it('subscribe with after > lastSeq -> reset', async () => {

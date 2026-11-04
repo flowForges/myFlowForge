@@ -124,6 +124,8 @@ function redactPayload(type: string, p: Record<string, unknown>, edit: RedactEdi
   return changed
 }
 
+const SCAN_PAGE = 500
+
 export class EventLog {
   private listeners = new Set<(e: KernelEvent) => void>()
   private outbox: KernelEvent[] = []
@@ -135,6 +137,8 @@ export class EventLog {
   private sessionStmt
   private seqStmt
   private updateStmt
+  private createdStmt
+  private latestStmt
 
   constructor(
     private db: DatabaseSync,
@@ -147,6 +151,9 @@ export class EventLog {
     this.lastStmt = db.prepare('SELECT COALESCE(MAX(seq), 0) AS s FROM events')
     this.seqStmt = db.prepare('SELECT type, payload FROM events WHERE seq = ?')
     this.updateStmt = db.prepare('UPDATE events SET payload = ? WHERE seq = ?')
+    this.createdStmt = db.prepare("SELECT session_id AS id, ts, json_extract(payload, '$.title') AS title FROM events WHERE type = 'session.created' AND session_id IS NOT NULL ORDER BY seq")
+    // SQLite 保证:只有一个 MAX 时,裸列取自那一行
+    this.latestStmt = db.prepare("SELECT session_id AS id, MAX(seq) AS seq, ts FROM events WHERE session_id IS NOT NULL AND type != 'memory.checkpoint' GROUP BY session_id")
   }
 
   append(e: Omit<KernelEvent, 'seq' | 'ts'>): KernelEvent {
@@ -188,6 +195,25 @@ export class EventLog {
 
   after(seq: number, limit = -1): KernelEvent[] {
     return (this.afterStmt.all(seq, limit) as Row[]).map(toEvent)
+  }
+
+  /** 读一遍整个日志,一页一页地取:内存不随日志涨。途中不让出事件循环,要让的自己分段(rpcServer) */
+  *scan(pageSize = SCAN_PAGE): Generator<KernelEvent> {
+    for (let cursor = 0; ; ) {
+      const page = this.after(cursor, pageSize)
+      if (page.length === 0) return
+      yield* page
+      cursor = page[page.length - 1].seq
+    }
+  }
+
+  /** snapshot 用:不读别的载荷。标题只在 session.created 里;后台写的检查点不算会话有动静 */
+  sessionSummaries(): { id: string; title: string; updatedAt: number }[] {
+    const created = this.createdStmt.all() as { id: string; ts: number; title: unknown }[]
+    const latest = new Map((this.latestStmt.all() as { id: string; ts: number }[]).map(r => [r.id, r.ts]))
+    const out = new Map<string, { id: string; title: string; updatedAt: number }>()
+    for (const c of created) out.set(c.id, { id: c.id, title: typeof c.title === 'string' && c.title !== '' ? c.title : '新会话', updatedAt: latest.get(c.id) ?? c.ts })
+    return [...out.values()]
   }
 
   /** 某会话的全部事件(seq 升序) */

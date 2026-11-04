@@ -154,7 +154,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   const broad = overbroadRelocations(envSnapshot, home, process.platform)
   if (broad.length) log.warn('credential env var covers home or root', { vars: broad.map(b => `${b.name}:${b.covers}`).join(',') })
   const sessions = new Sessions(opts.dataDir)
-  sessions.load(eventLog.after(0))
+  sessions.load(eventLog.scan())
   eventLog.onAppend(e => sessions.observe(e)) // 事务提交后才通知:回滚的 session.created 不会进来
   const turns = new Map<string, Turn>() // turnId -> 进行中的 turn
   const activeBySession = new Map<string, string>() // sessionId -> turnId(每会话最多一个)
@@ -240,7 +240,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   }
 
   // 运行的崩溃恢复(04 §7.5)在 turn 之前:ended、notice 要排在 turn.failed interrupted 前面
-  const recovered = recoverRuns(eventLog.after(0), append, { log })
+  const recovered = recoverRuns(eventLog.scan(), append, { log })
   if (recovered.length > 0) {
     const tmpDir = join(opts.dataDir, 'tmp')
     mkdirSync(tmpDir, { recursive: true })
@@ -260,7 +260,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
 
   // 崩溃恢复:有开始痕迹却无终态的 turn 标记 interrupted,不重放(副作用不确定)
   const open = new Map<string, string | undefined>()
-  for (const e of eventLog.after(0)) {
+  for (const e of eventLog.scan()) {
     const id = (e.payload as { turnId?: string } | null)?.turnId
     if (!id) continue
     if (e.type === 'turn.started' || e.type === 'message.user') open.set(id, e.sessionId)
@@ -389,18 +389,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   }
 
   function snapshot(): SnapshotResult {
-    const sessions = new Map<string, { id: string; title: string; updatedAt: number }>()
-    for (const e of eventLog.after(0)) {
-      if (!e.sessionId) continue
-      if (e.type === 'session.created') {
-        const title = (e.payload as { title?: string } | null)?.title
-        sessions.set(e.sessionId, { id: e.sessionId, title: title || '新会话', updatedAt: e.ts })
-      } else if (e.type !== 'memory.checkpoint') { // 后台写一条不算会话有动静
-        const s = sessions.get(e.sessionId)
-        if (s) s.updatedAt = e.ts
-      }
-    }
-    return { status: status(), sessions: [...sessions.values()], lastSeq: eventLog.lastSeq() }
+    return { status: status(), sessions: eventLog.sessionSummaries(), lastSeq: eventLog.lastSeq() }
   }
 
   const kernel: Kernel = {

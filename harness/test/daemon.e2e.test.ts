@@ -564,14 +564,13 @@ describe.skipIf(!E2E)('built daemon e2e', () => {
     type Daemon = Awaited<ReturnType<typeof startDaemon>>
     type Client = Awaited<ReturnType<typeof connectClient>>
 
-    async function attach(d: Daemon, fromEnd = false) {
+    async function attach(d: Daemon) {
       // 删除时事件库要整个重写:调用的超时要盖得住
       const w = await connectClient({ addr: d.paths.workerAddr, token: d.tokenOf(), timeoutMs: 120_000 })
       expect((await w.call('hello', { clientVersion: '0.0.0', protocolVersion: PROTOCOL_VERSION })).compatible).toBe(true)
       const events: KernelEvent[] = []
       w.onEvent(e => events.push(e))
-      // fromEnd:大日志从 0 订阅会同步读完整个日志,超过漏 ping 的上限就被杀(见计划的 Verification results)
-      await w.call('events.subscribe', { after: fromEnd ? ((await w.call('events.tail', { limit: 1 })).events.at(-1)?.seq ?? 0) : 0 })
+      await w.call('events.subscribe', { after: 0 })
       return { w, events }
     }
     type Conn = Awaited<ReturnType<typeof attach>>
@@ -588,7 +587,7 @@ describe.skipIf(!E2E)('built daemon e2e', () => {
     }
 
     /** 杀掉工作进程,等监管起新的,重新连上 */
-    async function killWorker(d: Daemon, conn: Conn, waitMs = 30_000, fromEnd = false): Promise<Conn> {
+    async function killWorker<C extends Conn>(d: Daemon, conn: Conn, waitMs = 30_000, connect: (d: Daemon) => Promise<C> = attach as never): Promise<C> {
       const { workerPid } = await d.ctl().then(async c => { try { return await c.call('status') } finally { c.close() } })
       conn.w.close()
       process.kill(workerPid!, 'SIGKILL')
@@ -600,7 +599,25 @@ describe.skipIf(!E2E)('built daemon e2e', () => {
         } catch { return false }
       }, waitMs, 'supervisor started a new worker')
       pids.push(worker)
-      return attach(d, fromEnd)
+      return connect(d)
+    }
+
+    /** 真的第一次连接:和 app、ACP 一样先 snapshot,再从 0 订阅。灌进去的 delta 只数不留,否则测试进程自己先撑爆 */
+    async function firstConnect(d: Daemon) {
+      const w = await connectClient({ addr: d.paths.workerAddr, token: d.tokenOf(), timeoutMs: 120_000 })
+      expect((await w.call('hello', { clientVersion: '0.0.0', protocolVersion: PROTOCOL_VERSION })).compatible).toBe(true)
+      const at = Date.now()
+      const snapshot = await w.call('snapshot')
+      const snapshotMs = Date.now() - at
+      const events: KernelEvent[] = []
+      const seen = { last: 0, gaps: 0 }
+      w.onEvent(e => {
+        if (e.seq !== seen.last + 1) seen.gaps++
+        seen.last = e.seq
+        if (e.type !== 'message.assistant.delta') events.push(e)
+      })
+      await w.call('events.subscribe', { after: 0 })
+      return { w, events, snapshot, snapshotMs, seen }
     }
 
     let commands = 0
@@ -684,7 +701,7 @@ describe.skipIf(!E2E)('built daemon e2e', () => {
       await d.shutdown()
     }, 180_000)
 
-    it('delete on a large log: the VACUUM outlasts the ping limit, the supervisor holds off, the same worker answers afterwards', async () => {
+    it('a large log: a real first connect survives, then the VACUUM outlasts the ping limit, the supervisor holds off, the same worker answers afterwards', async () => {
       const fake = await startFakeOpenai({ script: [] })
       closers.push(() => fake.close())
       const { d, conn: first, cwd } = await boot(fake)
@@ -700,7 +717,9 @@ describe.skipIf(!E2E)('built daemon e2e', () => {
       const insert = db.prepare('INSERT INTO events(ts, type, session_id, payload) VALUES (?, ?, ?, ?)')
       db.exec('PRAGMA busy_timeout = 5000')
       db.exec('BEGIN')
-      for (let n = 0; n < 65_000; n++) {
+      // MFFAI_MEASURE=1:约 1.1 GB,看启动的内存
+      const rows = process.env.MFFAI_MEASURE === '1' ? 130_000 : 65_000
+      for (let n = 0; n < rows; n++) {
         insert.run(Date.now(), 'message.assistant.delta', a, JSON.stringify({ turnId: `seeded-${Math.floor(n / 100)}`, text: `${n} ${text}` }))
         if (n % 5000 === 4999) { db.exec('COMMIT'); db.exec('BEGIN') }
       }
@@ -712,10 +731,34 @@ describe.skipIf(!E2E)('built daemon e2e', () => {
 
       const bootAt = Date.now()
       // 启动要读整个日志:读的这段时间回不了 ping,靠启动时要的 hold 才不被当成卡死
-      conn = await killWorker(d, conn, 90_000, true)
+      const big = await killWorker(d, conn, 180_000, firstConnect)
+      conn = big
       const bootMs = Date.now() - bootAt
       const status = () => d.ctl().then(async c => { try { return await c.call('status') } finally { c.close() } })
       const { workerPid } = await status()
+      expect(big.snapshot.sessions.map(x => x.id)).toContain(a)
+      // 补齐途中还回得了话,写进来的新事件排在后面:没有缺口也没有重复
+      const replayAt = Date.now()
+      let slowest = 0
+      const ask = async () => {
+        const t = Date.now()
+        const rss = (await big.w.call('status')).rssMb
+        slowest = Math.max(slowest, Date.now() - t)
+        return rss
+      }
+      const rssAtStart = await ask()
+      expect(big.seen.last).toBeLessThan(big.snapshot.lastSeq)
+      const during = await newSession(big.w, cwd)
+      let peakRss = rssAtStart
+      await waitFor(async () => {
+        peakRss = Math.max(peakRss, await ask())
+        return big.events.some(e => e.type === 'session.created' && e.sessionId === during)
+      }, 240_000, 'replay reached the session made during it')
+      const replayMs = Date.now() - replayAt
+      expect(big.seen.gaps).toBe(0)
+      expect(big.events.find(e => e.sessionId === during)!.seq).toBeGreaterThan(big.snapshot.lastSeq)
+      expect(await status()).toMatchObject({ state: 'running', workerPid })
+      process.stderr.write(`MFFAI_E2E_CONNECT logMb=${mb} snapshotMs=${big.snapshotMs} replayMs=${replayMs} slowestCallMs=${slowest} rssAfterBootMb=${rssAtStart} peakRssMb=${peakRss} events=${big.seen.last}\n`)
       const notes = (await conn.w.call('memory.search', { query: '包管理器' })).items
       const at = Date.now()
       try {
@@ -735,7 +778,7 @@ describe.skipIf(!E2E)('built daemon e2e', () => {
       const stopAt = Date.now()
       await d.shutdown()
       process.stderr.write(`MFFAI_E2E_SHUTDOWN logMb=${mb} ms=${Date.now() - stopAt}\n`)
-    }, 300_000)
+    }, 520_000)
 
     it('compaction round: a small context gets a checkpoint from the route past 45%, a rebuild past 70%, and old text stays searchable', async () => {
       const CHECKPOINT = ['## 目标', '修 bug', '## 用户的要求与决定', '无', '## 关键事实', '端口 5173', '## 进展与待办', '继续'].join('\n')

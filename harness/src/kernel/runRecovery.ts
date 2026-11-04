@@ -51,7 +51,7 @@ function sweepDoomedTmp(root: string, log?: Logger): void {
  * 有 ended 没 notice:只补通知(通知结束时只在内存里,要等循环取走才进日志)。
  * 返回第一种,它们的 worktree 由 cleanRecoveredWorktrees 收拾
  */
-export function recoverRuns(events: KernelEvent[], append: (e: Omit<KernelEvent, 'seq' | 'ts'>) => unknown, o: { tmpRoot?: string; log?: Logger } = {}): RecoveredRun[] {
+export function recoverRuns(events: Iterable<KernelEvent>, append: (e: Omit<KernelEvent, 'seq' | 'ts'>) => unknown, o: { tmpRoot?: string; log?: Logger } = {}): RecoveredRun[] {
   const runs = new Map<string, RunLog>()
   for (const e of events) {
     if (!e.type.startsWith('executor.')) continue
