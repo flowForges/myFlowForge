@@ -181,6 +181,9 @@ const lastMatch = (re: RegExp, s: string): number => {
  * PEM 状态按流分开:stdout 和 stderr 交错时,一边的 BEGIN 不该影响另一边。
  * 判定用清过控制字符的文本;没有东西要盖时原样返回
  */
+/** app 和 acp 都是有人在本机开的会话:写运行在地跑,排队优先。别的来源进 worktree */
+export const runsInPlace = (origin: string) => origin === 'app' || origin === 'acp'
+
 export class RunRedactor {
   private literals: string[]
   private open = new Set<string>()
@@ -566,7 +569,7 @@ export class RunManager implements BackgroundRuns {
     t.active++
     this.live.set(runId, run)
     this.queue.push(run)
-    this.queue.sort((a, b) => Number(b.s.origin === 'app') - Number(a.s.origin === 'app') || a.seq - b.seq)
+    this.queue.sort((a, b) => Number(runsInPlace(b.s.origin)) - Number(runsInPlace(a.s.origin)) || a.seq - b.seq)
     const position = this.queue.indexOf(run)
     this.write('executor.run.queued', s.sessionId, {
       runId, turnId: s.turnId, callId: s.callId, executor: adapter.id,
@@ -778,7 +781,7 @@ export class RunManager implements BackgroundRuns {
     // 先按会话那棵树判一次:不该跑的不白建 worktree,程序在会话 cwd 里(shell 写得到)也在这里挡下
     const refused = settle(view)
     if (refused) return refused
-    if (s.origin !== 'app' && !s.readOnly) {
+    if (!runsInPlace(s.origin) && !s.readOnly) {
       const failure = await this.enterWorktree(run)
       if (failure) return failure
       // 规则、隔离都要按真正跑的那棵树再算一遍;worktree 的路径也可能让隔离变宽

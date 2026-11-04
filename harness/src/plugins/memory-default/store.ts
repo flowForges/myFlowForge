@@ -275,7 +275,7 @@ export class Store {
     return this.recallRows(
       RAW,
       o.q,
-      { sql: "scope = 'owner' AND role = 'user' AND origin != 'schedule' AND rolled_back = 0 AND session_id != ?", params: [o.excludeSession] },
+      { sql: "scope = 'owner' AND role = 'user' AND origin IN ('app', 'im') AND rolled_back = 0 AND session_id != ?", params: [o.excludeSession] },
       o.limit,
       toRaw,
     )

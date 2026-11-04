@@ -60,7 +60,7 @@ const refused = (content: string): ToolResult => ({ content, isError: true })
 export function rawSource(r: RawRow): string {
   if (r.role !== 'user') return r.role
   if (r.scope.startsWith('session:')) return 'group'
-  return r.origin === 'schedule' ? 'schedule' : 'user'
+  return r.origin === 'app' || r.origin === 'im' ? 'user' : r.origin === 'acp' ? 'acp' : 'schedule'
 }
 
 const rawItem = (r: RawRow, text: string): ResultItem => ({ id: `r_${r.seq}`, layer: 'raw', source: rawSource(r), date: localDate(r.ts), text, flags: scanInjection(r.text) })

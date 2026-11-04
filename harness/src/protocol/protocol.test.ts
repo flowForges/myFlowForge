@@ -302,10 +302,10 @@ describe('04 schemas', () => {
     expect(TurnResumedPayloadSchema.safeParse({ turnId: 't', step: 1, cause: 'timer' }).success).toBe(false)
   })
   it('session.create origin is optional and enumerated', () => {
-    for (const origin of ['app', 'im', 'schedule']) expect(ok('session.create', { commandId: 'c', origin })).toBe(true)
+    for (const origin of ['app', 'im', 'schedule', 'acp']) expect(ok('session.create', { commandId: 'c', origin })).toBe(true)
     expect(ok('session.create', { commandId: 'c' })).toBe(true)
     expect(ok('session.create', { commandId: 'c', origin: 'cron' })).toBe(false)
-    expect(SessionOriginSchema.options).toEqual(['app', 'im', 'schedule'])
+    expect(SessionOriginSchema.options).toEqual(['app', 'im', 'schedule', 'acp'])
   })
   it('session.prompt result: followUp is optional', () => {
     expect(result('session.prompt', { accepted: true, turnId: 't' })).toBe(true)

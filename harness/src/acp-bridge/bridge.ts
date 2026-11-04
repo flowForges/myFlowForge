@@ -198,7 +198,7 @@ export async function runBridge(opts: { stream: Stream; connect: () => Promise<M
     })
     .onRequest('session/new', async (ctx) => {
       const { sessionId } = await need()
-        .call('session.create', { commandId: randomUUID(), cwd: ctx.params.cwd })
+        .call('session.create', { commandId: randomUUID(), cwd: ctx.params.cwd, origin: 'acp' })
         .catch((e: Error & { code?: number }) => {
           throw new RequestError(e.code === -32602 ? -32602 : -32603, e.message)
         })

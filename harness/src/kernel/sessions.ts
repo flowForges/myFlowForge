@@ -27,7 +27,7 @@ const SAFE_ID = /^[A-Za-z0-9_-]+$/
 /** 没写 = app(只有不是 app 时才写进事件);不认识的值不当 app:app 是唯一在地写的来源 */
 function originOf(raw: unknown): SessionOrigin {
   if (raw === undefined || raw === 'app') return 'app'
-  return raw === 'im' ? 'im' : 'schedule'
+  return raw === 'im' || raw === 'acp' ? raw : 'schedule'
 }
 
 /**
@@ -37,7 +37,7 @@ function originOf(raw: unknown): SessionOrigin {
 function audienceOf(raw: unknown, rawOrigin: unknown): SessionAudience {
   if (raw === 'owner' || raw === 'group') return raw
   if (raw !== undefined) return 'group'
-  return rawOrigin === undefined || rawOrigin === 'app' || rawOrigin === 'schedule' ? 'owner' : 'group'
+  return rawOrigin === undefined || rawOrigin === 'app' || rawOrigin === 'schedule' || rawOrigin === 'acp' ? 'owner' : 'group'
 }
 
 export class Sessions {

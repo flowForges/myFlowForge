@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Tool } from '../../lib/tools/types'
 import { ERR_BUSY, ERR_DRAINING } from '../../protocol/index'
@@ -94,6 +94,18 @@ describe('turn end to end', () => {
     expect(await k.handle('executor.worktree.discard', { commandId: 'd', sessionId: sid, runId: end.runId })).toEqual({ ok: true })
     expect(existsSync(end.worktree)).toBe(false)
     expect(sh('worktree', 'list')).not.toContain(end.worktree)
+  })
+
+  it('an acp session writes in place like app: its new origin changes memory, not delegation', async () => {
+    const f = fake({ lines: CODEX_OK, writeFiles: { 'a.txt': 'changed\n' } })
+    const { k } = await boot(f, { script: n => (n === 1 ? delegate() : say('done')) })
+    await detected(k)
+    const sid = await create(k, { origin: 'acp' })
+    await turn(k, sid)
+    const end = pay<{ status: string; worktree?: string }>(ofType(k, sid, 'executor.run.ended')[0])
+    expect(end.status).toBe('ok')
+    expect(end.worktree).toBeUndefined()
+    expect(execCalls(f)[0].cwd).toBe(realpathSync.native(cwd))
   })
 
   it('a non-git session with origin im → worktree_unavailable, the fake never ran', async () => {

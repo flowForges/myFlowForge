@@ -22,6 +22,8 @@ describe('scopeOf: spec §9', () => {
     ['paired private chat: im + owner', { origin: 'im', audience: 'owner' }, OWNER],
     ['schedule', { origin: 'schedule' }, SCHEDULE],
     ['schedule + owner', { origin: 'schedule', audience: 'owner' }, SCHEDULE],
+    ['acp: reads like before, but is not the user', { origin: 'acp' }, { ...SCHEDULE, source: 'acp' }],
+    ['old log: acp session with no origin stays app', {}, OWNER],
     ['im, no audience', { origin: 'im' }, GROUP],
     ['im + group', { origin: 'im', audience: 'group' }, GROUP],
     ['old log: im with an unknown audience', { origin: 'im', audience: 'everyone' }, GROUP],

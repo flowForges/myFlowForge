@@ -8,8 +8,9 @@ export type ApprovalMode = z.infer<typeof ApprovalModeSchema>
 export const ToolsetSchema = z.enum(['patch', 'edit'])
 export type Toolset = z.infer<typeof ToolsetSchema>
 
-// 04:会话来源;不是 app 的会话,写模式委派一律进 worktree
-export const SessionOriginSchema = z.enum(['app', 'im', 'schedule'])
+// 04:会话来源;不是 app 的会话,写模式委派一律进 worktree(acp 除外:编辑器里开的,和 app 一样在地跑)
+// 06:acp 是客户端代发,可能是脚本,不算用户本人说的话
+export const SessionOriginSchema = z.enum(['app', 'im', 'schedule', 'acp'])
 export type SessionOrigin = z.infer<typeof SessionOriginSchema>
 
 // 06:谁在会话里。group 看不到主人的记忆,也留不下记忆;建会话时定下,之后不能改

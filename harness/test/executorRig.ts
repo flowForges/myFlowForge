@@ -163,7 +163,7 @@ export async function detected(k: Kernel) {
   }
   throw new Error('detection never finished')
 }
-export const create = async (k: Kernel, o: { approvalMode?: 'ask' | 'auto'; origin?: 'app' | 'im' | 'schedule'; dir?: string } = {}) =>
+export const create = async (k: Kernel, o: { approvalMode?: 'ask' | 'auto'; origin?: 'app' | 'im' | 'schedule' | 'acp'; dir?: string } = {}) =>
   ((await k.handle('session.create', { commandId: `c${Math.random()}`, cwd: o.dir ?? cwd, model: REF, approvalMode: o.approvalMode ?? 'auto', ...(o.origin && { origin: o.origin }) })) as { sessionId: string }).sessionId
 export const prompt = async (k: Kernel, sid: string, text = 'go') => (await k.handle('session.prompt', { commandId: `p${Math.random()}`, sessionId: sid, text })) as { accepted: boolean; turnId: string; followUp?: boolean }
 export const evs = (k: Kernel, sid: string) => k.events.bySession(sid)

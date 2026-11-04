@@ -151,6 +151,7 @@ describe('ACP bridge', () => {
       const { sessionId } = await cx.request('session/new', { cwd: work, mcpServers: [] })
       const created = kernel.events.after(0).find(e => e.type === 'session.created' && e.sessionId === sessionId)
       expect((created?.payload as { cwd?: string }).cwd).toBe(realpathSync.native(work))
+      expect((created?.payload as { origin?: string }).origin).toBe('acp')
       await expect(cx.request('session/new', { cwd: join(work, 'missing'), mcpServers: [] })).rejects.toMatchObject({ code: -32602 })
     })
   })
