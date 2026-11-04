@@ -153,7 +153,7 @@ describe('compact with notices', () => {
 
 describe('dropOldest (06 spec §12)', () => {
   const FIRST = user('FIRST')
-  const placeholder = (n: number) => `[已省略较早的 ${n} 条消息,事件日志里还在]`
+  const placeholder = (n: number) => `[已省略较早的 ${n} 条消息,可以用 memory_search 搜回来]`
   const text = (m: Message) => m.parts.map(p => (p.type === 'text' ? p.text : p.type)).join('|')
   const say = (t: string): Message => ({ role: 'assistant', parts: [{ type: 'text', text: t }] })
   const drop = (m: Message[], o: Partial<Parameters<typeof dropOldest>[1]> = {}) => dropOldest(m, { context: 1000, target: 0.6, keepRecent: 0, currentOpening: -1, ...o })
@@ -230,7 +230,7 @@ describe('dropOldest (06 spec §12)', () => {
     const out = drop(m, { currentOpening: 7, target: 0.2 })
     expect(out.filter(x => x === huge)).toHaveLength(1)
     expect(text(out[0])).toBe('FIRST')
-    expect(text(out[1])).toMatch(/^\[已省略较早的/)
+    expect(text(out[1])).toBe(placeholder(6))
     expect(out[2]).toBe(huge)
     expectPaired(out)
 
@@ -240,13 +240,62 @@ describe('dropOldest (06 spec §12)', () => {
     expectPaired(atZero)
   })
 
-  it('the opening in the tail is not repeated, and the count is right', () => {
-    const opening = user('OPEN')
-    const m = [FIRST, ...pairs(3), opening, ...pairs(1)]
-    const out = drop(m, { currentOpening: 7, target: 0.25 })
-    expect(out.filter(x => x === opening)).toHaveLength(1)
-    const dropped = m.length - (out.length - 1)
-    expect(text(out[1])).toBe(placeholder(dropped))
+  describe('the current turn is never cut (review I2)', () => {
+    const say2 = (t: string): Message => ({ role: 'assistant', parts: [{ type: 'text', text: t }] })
+    const OPENING = user('OPENING')
+    const FOLLOW = user('FOLLOW-UP stop and do X instead')
+    const turn = () => [OPENING, call('a', 'read', { path: 'a' }), result('a', 'A'.repeat(9000)), FOLLOW, say2('STEP-TEXT'), call('b', 'read', { path: 'b' }), result('b', 'B'.repeat(9000)), call('c', 'read', { path: 'c' }), result('c', 'small')]
+    const earlier = () => [user('older'), call('o', 'read', { path: 'o' }), result('o', 'O'.repeat(700))]
+    const opts = (n: number) => ({ context: 1000, keepRecent: 0, currentOpening: n })
+
+    it('only earlier turns go; follow-ups, steps and results of this turn all stay, and the note sits at the gap', () => {
+      const m = [FIRST, ...earlier(), ...turn()]
+      const out = dropOldest(m, { ...opts(4), target: 5.3 })
+      expect(out.map(text)).toEqual(['FIRST', placeholder(3), ...turn().map(text)])
+      expect(out[2]).toBe(m[4])
+      expectPaired(out)
+    })
+
+    it('still over: the oldest large results are clipped in place, marked, oldest first, and stop when it fits', () => {
+      const m = [FIRST, ...earlier(), ...turn()]
+      const out = dropOldest(m, { ...opts(4), target: 3.9 })
+      const results = out.flatMap(x => x.parts).flatMap(p => (p.type === 'tool_result' ? [p] : []))
+      expect(results.map(r => r.callId)).toEqual(['a', 'b', 'c'])
+      expect(results[0].content.length).toBeLessThan(3000)
+      expect(results[0].content.startsWith('AAA')).toBe(true)
+      expect(results[0].content).toMatch(/\[结果太长,已截断:原文 9000 字,需要时重新读取或用 memory_search 搜\]$/)
+      expect(results[1].content).toBe('B'.repeat(9000))
+      expect(results[2].content).toBe('small')
+      expect(estimateTokens(out)).toBeLessThanOrEqual(3900)
+      expect(out.some(x => x === FOLLOW)).toBe(true)
+      expectPaired(out)
+    })
+
+    it('all of them clipped and still over: nothing is dropped, and clipping again changes nothing', () => {
+      const m = [FIRST, ...turn()]
+      const out = dropOldest(m, { ...opts(1), target: 0.01 })
+      expect(out.map(x => x.role)).toEqual(m.map(x => x.role))
+      expect(text(out[1])).toBe('OPENING')
+      expect(out.some(x => x === FOLLOW)).toBe(true)
+      expect(out.flatMap(x => x.parts).flatMap(p => (p.type === 'tool_result' ? [p.content.length] : [])).every(n => n < 3000)).toBe(true)
+      expect(dropOldest(out, { ...opts(1), target: 0.01 })).toEqual(out)
+      expectPaired(out)
+    })
+
+    it('an error flag and a surrogate pair survive the clip', () => {
+      const big: Message = { role: 'tool', parts: [{ type: 'tool_result', callId: 'a', content: '😀'.repeat(5000), isError: true }] }
+      const m = [OPENING, call('a', 'read', {}), big]
+      const out = dropOldest(m, { ...opts(0), target: 0.01 })
+      const r = out[2].parts[0] as { content: string; isError?: boolean }
+      expect(r.isError).toBe(true)
+      expect(r.content).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/)
+    })
+
+    it('with no current turn given, nothing is clipped', () => {
+      const m = [FIRST, ...turn()]
+      const out = dropOldest(m, { context: 1000, keepRecent: 0, currentOpening: -1, target: 0.01 })
+      expect(out.flatMap(x => x.parts).flatMap(p => (p.type === 'tool_result' ? [p.content] : [])).join()).not.toContain('已截断')
+    })
   })
 
   it('a checkpoint right after the first message stays: it is the only record of what it covers', () => {

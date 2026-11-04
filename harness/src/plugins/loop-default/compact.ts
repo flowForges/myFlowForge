@@ -2,7 +2,7 @@
 // 前缀尽量逐字节不变;只折工具结果,用户消息(含第一条里的 <environment>)永不动
 // dropOldest(06 spec §12)是折叠之后的最后一道:同样只改发送的消息
 import { posix } from 'node:path'
-import { clipOpening } from '../../lib/memory/checkpoint'
+import { clipOpening, headOf } from '../../lib/memory/checkpoint'
 import type { Message, Part } from '../../lib/models/types'
 
 export { contextWindow, DEFAULT_CONTEXT } from '../../lib/models/contextWindow'
@@ -146,12 +146,12 @@ export interface DropOpts {
   target: number
   /** 尾部至少留这么多 token:再丢就少于它时停下,哪怕还没到 target */
   keepRecent: number
-  /** 当前轮开场消息的下标;没有给负数。不截、不丢 */
+  /** 当前轮开场消息的下标;没有给负数。从它开始都是当前轮:不丢,只截大的工具结果 */
   currentOpening: number
 }
 
-const DROPPED = /^\[已省略较早的 (\d+) 条消息,事件日志里还在\]$/
-const droppedNote = (n: number): Message => ({ role: 'user', parts: [{ type: 'text', text: `[已省略较早的 ${n} 条消息,事件日志里还在]` }] })
+const DROPPED = /^\[已省略较早的 (\d+) 条消息,可以用 memory_search 搜回来\]$/
+const droppedNote = (n: number): Message => ({ role: 'user', parts: [{ type: 'text', text: `[已省略较早的 ${n} 条消息,可以用 memory_search 搜回来]` }] })
 const onlyText = (m: Message | undefined): string | undefined => {
   const p = m?.role === 'user' && m.parts.length === 1 ? m.parts[0] : undefined
   return p?.type === 'text' ? p.text : undefined
@@ -174,10 +174,31 @@ function startsTail(messages: Message[], i: number): boolean {
   return !m.parts.some(p => p.type === 'tool_call') || messages[i + 1]?.role === 'tool'
 }
 
+const RESULT_KEEP = 2_000
+/** 比留下的部分加说明都长才截,截过的不会再截 */
+const RESULT_LARGE = 2_500
+
+/** 当前轮最旧的大工具结果就地截短,配对不变,结果里写明。够了就停 */
+function clipResults(messages: Message[], from: number, limit: number): Message[] {
+  const out = messages.slice()
+  for (let i = from; i < out.length && estimateTokens(out) > limit; i++) {
+    if (out[i].role !== 'tool') continue
+    const parts = out[i].parts.slice()
+    for (let j = 0; j < parts.length && estimateTokens(out) > limit; j++) {
+      const p = parts[j]
+      if (p.type !== 'tool_result' || p.content.length <= RESULT_LARGE) continue
+      parts[j] = { ...p, content: `${headOf(p.content, RESULT_KEEP)}\n[结果太长,已截断:原文 ${p.content.length} 字,需要时重新读取或用 memory_search 搜]` }
+      out[i] = { ...out[i], parts }
+    }
+  }
+  return out
+}
+
 /**
- * 确定性地丢最旧的消息:留第一条(正文截到 4000 字,否则第一条就是大段粘贴的会话永远卡死)和当前轮的开场消息(不截),
- * 从第二条往后整段丢,放一条占位。紧跟第一条的检查点也留:它盖住的内容只剩它了。
- * 最后一个合法的尾部总留下,所以到不了 target 时交给 03 的失败
+ * 确定性地腾地方:第一条的正文截到 4000 字(否则第一条就是大段粘贴的会话永远卡死),从第二条往后丢更早的轮,放一条占位。
+ * 紧跟第一条的检查点也留:它盖住的内容只剩它了。
+ * 当前轮一条都不丢,用户的后续消息、助手的步、工具结果都在,否则模型会照着旧任务走或重做做过的事;
+ * 还不够就就地截它最旧的大工具结果。再不够交给调用方,这里不再缩
  */
 export function dropOldest(messages: Message[], opts: DropOpts): Message[] {
   const limit = opts.context * opts.target
@@ -187,24 +208,22 @@ export function dropOldest(messages: Message[], opts: DropOpts): Message[] {
   if (estimateTokens(out) <= limit) return out
 
   const pinned = onlyText(out[1])?.startsWith('<checkpoint through=') ? 2 : 1
-  const opening = opts.currentOpening >= pinned ? opts.currentOpening : -1
+  const opening = opts.currentOpening
+  const lastCut = opening < 0 ? out.length - 1 : opening
   const head = out.slice(0, pinned).reduce((n, m) => n + messageChars(m), 0)
-  const openingChars = opening < 0 ? 0 : messageChars(out[opening])
   const after: number[] = new Array(out.length + 1).fill(0)
   for (let i = out.length - 1; i >= 0; i--) after[i] = after[i + 1] + messageChars(out[i])
 
   let cut = pinned
-  for (let c = pinned + 1; c < out.length; c++) {
+  for (let c = pinned + 1; c <= lastCut; c++) {
     if (!startsTail(out, c)) continue
     if (charsToTokens(after[c]) < opts.keepRecent) break
     cut = c
-    const kept = head + after[c] + (opening >= 0 && opening < c ? openingChars : 0) + messageChars(droppedNote(0))
-    if (charsToTokens(kept) <= limit) break
+    if (charsToTokens(head + after[c] + messageChars(droppedNote(0))) <= limit) break
   }
-  const keepsOpening = opening >= pinned && opening < cut
-  const removed = cut - pinned - (keepsOpening ? 1 : 0)
-  if (removed <= 0) return out
-  const earlier = out.slice(pinned, cut).reduce((n, m) => n + Number(DROPPED.exec(onlyText(m) ?? '')?.[1] ?? 0), 0)
-  const notes = out.slice(pinned, cut).filter(m => DROPPED.test(onlyText(m) ?? '')).length
-  return [...out.slice(0, pinned), droppedNote(removed - notes + earlier), ...(keepsOpening ? [out[opening]] : []), ...out.slice(cut)]
+  const dropped = out.slice(pinned, cut)
+  const earlier = dropped.reduce((n, m) => n + Number(DROPPED.exec(onlyText(m) ?? '')?.[1] ?? 0), 0)
+  const notes = dropped.filter(m => DROPPED.test(onlyText(m) ?? '')).length
+  const kept = dropped.length ? [...out.slice(0, pinned), droppedNote(dropped.length - notes + earlier), ...out.slice(cut)] : out
+  return opening < 0 ? kept : clipResults(kept, kept.indexOf(out[opening]), limit)
 }

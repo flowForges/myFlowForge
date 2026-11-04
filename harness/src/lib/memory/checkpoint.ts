@@ -96,13 +96,15 @@ export function activeRebuild(events: KernelEvent[]): ActiveRebuild | undefined 
 }
 
 const CLIP_MAX = 4000
-const CLIP_NOTE = '\n[后面的内容已省略,事件日志里还在]'
+const CLIP_NOTE = '\n[后面的内容已省略,可以用 memory_search 搜回来]'
 
-/** 重建和兜底留下的用户正文:连说明不超过 4000。不切开代理对,孤立的代理对会让请求的 JSON 被拒 */
-export function clipOpening(text: string): string {
-  if (text.length <= CLIP_MAX) return text
-  let end = CLIP_MAX - CLIP_NOTE.length
+/** 前 end 个 UTF-16 单元,不切开代理对:孤立的代理对会让请求的 JSON 被拒 */
+export function headOf(text: string, end: number): string {
   const code = text.charCodeAt(end - 1)
-  if (code >= 0xd800 && code <= 0xdbff) end--
-  return text.slice(0, end) + CLIP_NOTE
+  return text.slice(0, code >= 0xd800 && code <= 0xdbff ? end - 1 : end)
+}
+
+/** 重建和兜底留下的用户正文:连说明不超过 4000 */
+export function clipOpening(text: string): string {
+  return text.length <= CLIP_MAX ? text : headOf(text, CLIP_MAX - CLIP_NOTE.length) + CLIP_NOTE
 }

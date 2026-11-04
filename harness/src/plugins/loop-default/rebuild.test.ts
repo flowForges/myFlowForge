@@ -419,7 +419,7 @@ describe('with no usable checkpoint the turn still works', () => {
     expect(estimateTokens(sent)).toBeLessThanOrEqual(CONTEXT * 0.6)
     expect(lastOf(textsOf(sent[0])).startsWith('q0')).toBe(true)
     expect(lastOf(textsOf(sent[0])).length).toBeLessThanOrEqual(4000)
-    expect(textsOf(sent[1])[0]).toMatch(/^\[已省略较早的 \d+ 条消息,事件日志里还在\]$/)
+    expect(textsOf(sent[1])[0]).toMatch(/^\[已省略较早的 \d+ 条消息,可以用 memory_search 搜回来\]$/)
     expect(lastOf(textsOf(lastOf(sent)))).toBe('the current question')
     // 只改发送的消息,没有事件
     expect(h.events.filter(e => e.type === 'context.rebuilt')).toEqual([])
@@ -587,8 +587,41 @@ describe('the provider says the context overflowed', () => {
     const h = harness()
     h.past('t1', 'q1', CHARS(0.1))
     const outcome = await h.run('t2', 'q2', () => refuse(TOO_LONG))
-    expect(outcome).toMatchObject({ type: 'turn.failed', payload: { reason: 'bad_request', message: TOO_LONG } })
+    expect(outcome).toMatchObject({ type: 'turn.failed', payload: { reason: 'context_too_large', message: TOO_LONG } })
     expect(h.requests).toHaveLength(2)
+  })
+
+  it('nothing left to shrink: context_too_large at once, the same request is not sent twice', async () => {
+    const h = harness()
+    const outcome = await h.run('t1', 'q1', () => refuse(TOO_LONG))
+    expect(outcome).toMatchObject({ type: 'turn.failed', payload: { reason: 'context_too_large' } })
+    expect(h.requests).toHaveLength(1)
+  })
+
+  it('the current turn: earlier turns go, results are clipped in place, follow-ups and steps stay', async () => {
+    const big = 'R'.repeat(CHARS(0.5))
+    const h = harness({
+      onTool() {},
+    })
+    h.past('t1', 'q1', 500)
+    const outcome = await h.run('t2', 'the task', n => (n === 1 ? calling('c1') : n === 2 ? refuse(TOO_LONG) : say('ok')), {
+      tools: {
+        list: () => [],
+        call: async (name: string, _a: string, ctx: { callId: string }) => {
+          h.ev('tool.ended', { turnId: 't2', callId: ctx.callId, name, ok: true, ms: 1, content: big })
+          return { content: big }
+        },
+      } as unknown as ToolsService,
+    })
+    expect(outcome.type).toBe('turn.ended')
+    const retry = h.requests[2].messages
+    expect(allText(retry)).toContain('[已省略')
+    expect(allText(retry)).toContain('the task')
+    expect(allText(retry)).toContain('已截断')
+    const results = retry.flatMap(m => m.parts).filter(p => p.type === 'tool_result') as { callId: string }[]
+    expect(results.map(r => r.callId)).toEqual(['c1'])
+    // 事件里的原文不动
+    expect(allText(h.events.filter(e => e.type === 'tool.ended').map(e => e.payload) as never)).toContain(big)
   })
 
   it('a checkpoint is forced first, whatever it saves; the marker is written', async () => {
@@ -634,6 +667,7 @@ describe('the provider says the context overflowed', () => {
 
   it('does not use up the rate-limit retries, either order', async () => {
     const h = harness()
+    h.past('t0', 'q0', 500)
     const outcome = await h.run('t1', 'q1', n => {
       if (n === 1 || n === 2) return refuse('slow', 'rate_limit')
       if (n === 3) return refuse(TOO_LONG)
@@ -643,6 +677,7 @@ describe('the provider says the context overflowed', () => {
     expect(h.requests).toHaveLength(4)
 
     const j = harness()
+    j.past('t0', 'q0', 500)
     const again = await j.run('t1', 'q1', n => {
       if (n === 1) return refuse(TOO_LONG)
       if (n === 2 || n === 3) return refuse('slow', 'rate_limit')
@@ -654,6 +689,8 @@ describe('the provider says the context overflowed', () => {
 
   it('the retry is per step: a later step can overflow and recover too', async () => {
     const h = harness()
+    h.past('t0', 'q0', 500)
+    h.past('t00', 'q00', 500)
     const outcome = await h.run('t1', 'q1', n => {
       if (n === 1) return refuse(TOO_LONG)
       if (n === 2) return calling('c1')

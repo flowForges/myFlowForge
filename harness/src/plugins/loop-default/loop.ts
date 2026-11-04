@@ -53,6 +53,7 @@ const RETRY_MAX_MS = 60_000
  */
 const OVERFLOW = /context[ _-]?(length|window|limit)|too many (input )?tokens|reduce the length|request_too_large|string too long|\b(prompt|input|request|messages?)\b[^.]*\b(too long|too large|exceeds?)\b/i
 /** 推理回放对不上前缀(Anthropic preserved thinking 的 400);被篡改的签名开头相同,恢复办法也相同 */
+const TOO_LARGE = 'context_too_large'
 const THINKING_REFUSED = /invalid .signature. in .thinking. block|bound to a different conversation/i
 
 /**
@@ -107,6 +108,8 @@ type StepResult =
   | { kind: 'ok'; text: string; replays: unknown[]; calls: Call[]; reason: string }
   | { kind: 'cancelled' }
   | { kind: 'error'; error: ModelError; produced: boolean }
+  /** 厂商说爆了,而这边已经缩不动:同样的请求不再发 */
+  | { kind: 'too_large' }
 
 const defaultSleep = (ms: number, signal: AbortSignal) =>
   new Promise<void>(resolve => {
@@ -202,9 +205,10 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<TurnOut
     return true
   }
 
-  /** 每步请求前(06 §12):先看重建,再折叠,再兜底。没有记忆服务时只有 03 的折叠 */
-  function fitContext(step: number, force: boolean): void {
+  /** 每步请求前(06 §12):先看重建,再折叠,再兜底。没有记忆服务时只有 03 的折叠。返回 true = 强制也缩不动了 */
+  function fitContext(step: number, force: boolean): boolean {
     const memory = deps.memory
+    const initial = estimateTokens(messages)
     const switched = !!memory && (force || estimateTokens(messages) > context * 0.7) && trySwitch(step, force)
     // 折叠结果留在本轮的消息里:之后几步的前缀不变,直到再次越过高水位
     messages = compact(messages, { context, cwd: info.cwd })
@@ -225,11 +229,12 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<TurnOut
         deps.log.warn('noteContext failed', { error: err instanceof Error ? err.name : 'unknown' })
       }
     }
+    return force && estimateTokens(messages) >= initial
   }
 
   /** 一次模型请求:转发 delta / 用量,收齐文本、推理 replay 与工具调用 */
   async function streamStep(step: number, force = false): Promise<StepResult> {
-    fitContext(step, force)
+    if (fitContext(step, force)) return { kind: 'too_large' }
     const request: Omit<ModelRequest, 'model'> = {
       system,
       messages: messages.slice(),
@@ -390,8 +395,15 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<TurnOut
       }
     }
     if (r.kind === 'cancelled') return fail('cancelled')
+    if (r.kind === 'too_large') {
+      const s = await settle(step, fail(TOO_LARGE, { message: 'the current turn does not fit the model context, even with earlier turns dropped and large tool results clipped' }))
+      if (s === 'resume') continue
+      return s
+    }
     if (r.kind === 'error') {
-      const s = await settle(step, fail(r.error.kind, { message: r.error.message }))
+      // 重试过还是爆:当前轮放不下,不再往里砍。没有记忆服务时是 03 的失败
+      const overflowed = !!deps.memory && r.error.kind === 'bad_request' && !THINKING_REFUSED.test(r.error.message) && OVERFLOW.test(r.error.message)
+      const s = await settle(step, fail(overflowed ? TOO_LARGE : r.error.kind, { message: r.error.message }))
       if (s === 'resume') continue
       return s
     }

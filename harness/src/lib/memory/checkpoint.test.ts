@@ -187,7 +187,7 @@ describe('clipOpening', () => {
     const clipped = clipOpening('x'.repeat(4001))
     expect(clipped.length).toBeLessThanOrEqual(4000)
     expect(clipped.startsWith('xxx')).toBe(true)
-    expect(clipped).toContain('事件日志里还在')
+    expect(clipped).toContain('memory_search')
   })
 
   it('does not cut a surrogate pair, wherever the cut lands', () => {
