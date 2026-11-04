@@ -7,7 +7,7 @@ import type { ModelEvent } from '../../lib/models/types'
 import { ERR_BUSY, ERR_DRAINING, type KernelEvent } from '../../protocol/index'
 import { untilGo } from '../../../test/executorRig'
 import { cleanupFakes, installFake } from '../../../test/fakeCli'
-import { fakeClock, say, calling, type Script } from '../../../test/memoryRig'
+import { fakeClock, say, calling, type Req, type Script } from '../../../test/memoryRig'
 import { adoptSession, asOneBatch, chatOf, events, flow, FLOW, gatedScript, gatedStream, handled, HOUR, online, onDisk, pairedRig, sends, stateFile, texts, users, type ChatRigOpts } from '../../../test/telegramChats'
 import type { TelegramRig } from '../../../test/telegramRig'
 import { createExecutorCli } from '../executor-cli/index'
@@ -133,7 +133,7 @@ describe('a DM becomes an owner session', () => {
     expect(texts(r).at(-1)).toBe('ok')
   })
 
-  it('a garbled record keeps blocked and starts over', async () => {
+  it('a garbled record starts over: the next message still runs', async () => {
     const r = await rig()
     await handled(r, r.dm('one'))
     await flow(r)
@@ -198,8 +198,7 @@ describe('streaming', () => {
   })
 
   it('typing goes out before the first chunk, at most every 5 s, for at most a minute', async () => {
-    const gated = gatedStream('', 'x')
-    const silent = async function* (req: Parameters<typeof gated.stream>[0]): AsyncIterable<ModelEvent> {
+    const silent = async function* (req: Req): AsyncIterable<ModelEvent> {
       await new Promise<void>(res => req.signal?.addEventListener('abort', () => res(), { once: true }))
       yield { type: 'done', reason: 'cancelled' }
     }
@@ -694,15 +693,17 @@ describe('Chats with fake services', () => {
   }
 
   it('onDm queues and saves; it starts nothing synchronously', () => {
-    const u = unit()
+    const save = vi.fn(() => true)
+    const u = unit({ save })
     u.dm(1)
     expect(u.calls).toEqual([])
-    expect(u.state.save).not.toHaveBeenCalled() // 注入的 save
+    expect(save).toHaveBeenCalledTimes(1)
+    expect(u.state.advance).toHaveBeenCalledWith(1)
     expect(u.record().queue).toHaveLength(1)
+    u.chats.dispose()
   })
 
   it('onEvent makes no API call and no save, even on a terminal event', async () => {
-    const u = unit()
     const save = vi.fn(() => true)
     const v = unit({ save })
     v.dm(1)
@@ -727,7 +728,6 @@ describe('Chats with fake services', () => {
     }
     await v.run(0)
     expect(v.sender.sync).toHaveBeenCalled()
-    u.chats.dispose()
     v.chats.dispose()
   })
 
