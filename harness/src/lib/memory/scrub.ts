@@ -11,6 +11,7 @@ const PREFIXED = new RegExp(
     '(?:' +
     [
       'glpat-[A-Za-z0-9_-]{20,}',
+      '[sr]k_(?:live|test)_[A-Za-z0-9]{16,}', // Stripe
       'npm_[A-Za-z0-9]{30,}',
       'hf_[A-Za-z0-9]{30,}',
       'AIza[0-9A-Za-z_-]{35,}',
@@ -28,16 +29,18 @@ const JWT = new RegExp(String.raw`(?:(?<![A-Za-z0-9_-])|(?<=\\[nrtbf]))eyJ[A-Za-
 /** 把小写字母写成不分大小写的字符类:驼峰的左边界要分大小写,不能用 i 标志 */
 const anyCase = (source: string) => source.replace(/[a-z]/g, c => `[${c}${c.toUpperCase()}]`)
 
-const AUTHORIZATION = new RegExp(String.raw`(?<![A-Za-z0-9])(${anyCase('authorization')}(?:\\?["'])?[ \t]*[:=：＝][ \t]*(?:\\?["'])?)([^\n"'\\]+)`, 'g')
+// 整个头的值都是秘密,一直到行尾。Set-Cookie 里的 `-` 过得了左边界
+const SECRET_HEADER = new RegExp(String.raw`(?<![A-Za-z0-9])((?:${anyCase('authorization|cookie')})(?:\\?["'])?[ \t]*[:=：＝](?![=>])[ \t]*(?:\\?["'])?)([^\n"'\\]+)`, 'g')
 const BEARER = new RegExp(String.raw`(?<![A-Za-z0-9])(${anyCase('bearer')}[ \t]+)([A-Za-z0-9._~+/=-]+)`, 'g')
 
 // 主机和端口要逐字留下(spec §11);长度有界,`a:a:a:…` 这种才不会回溯到平方
 const URL_ACCOUNT = /:\/\/([^\s/?#]{1,512})@/g
 
-const LABEL = String.raw`(?:(?<![A-Za-z0-9])(?:${anyCase('password|passwd|pwd|secret[_-]?key|secret|access[_-]?key|api[ _-]?key|token')})|(?<=[a-z0-9])(?:Password|Passwd|Pwd|SecretKey|Secret|AccessKey|ApiKey|Token))`
+// 左边界和 redact 一样:`\npassword=`、`%26password%3D` 前一个字符是字母或数字
+const LABEL = String.raw`(?:${SECRET_BOUNDARY}(?:${anyCase('password|passwd|passphrase|pwd|secret[_-]?key[_-]?base|secret[_-]?key|secret|private[_-]?key|access[_-]?key|api[ _-]?key|credentials?|token')})|(?<=[a-z0-9])(?:Password|Passwd|Passphrase|Pwd|SecretKeyBase|SecretKey|Secret|PrivateKey|AccessKey|ApiKey|Credentials?|Token))`
 const LABELLED = new RegExp(
   // 分隔符之后不能是 `=`、`>`:`token === x`、`token => x` 是代码
-  String.raw`(${LABEL}(?:\\?["'])?[ \t]*(?:[:：=＝]|:=)(?![=>])[ \t]*)(?:(\\?["'])([^\n]{0,4096}?)\2|(\\?["']?)([^\s"'\`\\]+))`,
+  String.raw`(${LABEL}(?:\\?["']|%22)?[ \t]*(?:[:：=＝]|:=|%3[DdAa])(?![=>])[ \t]*)(?:(\\?["'])([^\n]{0,4096}?)\2|(\\?["']?)([^\s"'\`\\]+))`,
   'g',
 )
 // 英文句子:"password is incorrect" 是常见报错,要有数字或符号才算值
@@ -50,6 +53,8 @@ const NOT_A_VALUE = new Set([MASK, 'string', 'number', 'boolean', 'null', 'undef
 const LONG_TOKEN = /(?<![A-Za-z0-9+/_-])[A-Za-z0-9+/_-]{32,}={0,2}/g
 const WORDS = /[A-Z]?[a-z]{2,}|[A-Z]{3,}/g
 const HEX = /^[0-9A-Fa-f-]+$/
+// 子资源完整性和 lockfile 里的哈希:算法和 base64 长度都要对得上,不是秘密
+const INTEGRITY_HASH = /^sha(?:256-[A-Za-z0-9+/]{43}=|384-[A-Za-z0-9+/]{64}|512-[A-Za-z0-9+/]{86}==)$/
 const SECTION_MAX = 24
 
 /** 只用于 LONG_TOKEN 里的 ASCII 串;一个 1 MB 的 base64 也只走一遍 */
@@ -76,10 +81,10 @@ function looksLikeWords(s: string): boolean {
   return inWords >= s.replace(/[^A-Za-z0-9]/g, '').length * 0.85
 }
 
-/** spec §11 高熵串的判定:同时有大小写和数字、熵 ≥ 4.0;十六进制、UUID、标识符、路径不算 */
+/** spec §11 高熵串的判定:同时有大小写和数字、熵 ≥ 4.0;十六进制、UUID、完整性哈希、标识符、路径不算 */
 export function isRandomToken(s: string): boolean {
   if (!/[a-z]/.test(s) || !/[A-Z]/.test(s) || !/\d/.test(s)) return false
-  if (HEX.test(s) || looksLikePath(s) || looksLikeWords(s)) return false
+  if (HEX.test(s) || INTEGRITY_HASH.test(s) || looksLikePath(s) || looksLikeWords(s)) return false
   return shannon(s) >= 4
 }
 
@@ -93,7 +98,7 @@ export function scrub(s: string): { text: string; masked: number } {
   const text = redacted.text
     .replace(PREFIXED, () => hit(MASK))
     .replace(JWT, () => hit(MASK))
-    .replace(AUTHORIZATION, (m, head: string, value: string) => (NOT_A_VALUE.has(value.trim()) ? m : hit(head + MASK)))
+    .replace(SECRET_HEADER, (m, head: string, value: string) => (NOT_A_VALUE.has(value.trim()) ? m : hit(head + MASK)))
     .replace(BEARER, (m, head: string, value: string) => (value.length >= 20 || (value.length >= 6 && /[^a-zA-Z]/.test(value)) ? hit(head + MASK) : m))
     .replace(URL_ACCOUNT, (m, account: string) => (account.includes(':') ? hit(`://${MASK}@`) : m))
     .replace(LABELLED, (m, head: string, quote: string | undefined, quoted: string | undefined, open: string | undefined, bare: string | undefined) => {

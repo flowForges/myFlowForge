@@ -99,9 +99,9 @@ describe('scanInjection', () => {
   it('stays fast on 1 MB of repeated heads', () => {
     for (const unit of ['curl ', 'ignore ', 'base64 -d ', '<', 'a', '忽略']) {
       const s = unit.repeat(Math.ceil((1024 * 1024) / unit.length))
-      // 取三次里最快的:测试机可能正忙
+      // 最多试三次:测试机可能正忙。过了就停
       let best = Infinity
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < 3 && best >= 1000; i++) {
         const t = performance.now()
         scanInjection(s)
         best = Math.min(best, performance.now() - t)

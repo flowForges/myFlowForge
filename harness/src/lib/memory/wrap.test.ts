@@ -81,9 +81,9 @@ describe('sanitizeLine', () => {
 
   it('stays fast on deeply nested markers', () => {
     const s = '<!'.repeat(200_000) + '--'.repeat(200_000)
-    // 取三次里最快的:测试机可能正忙
+    // 最多试三次:测试机可能正忙。过了就停
     let best = Infinity
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 3 && best >= 500; i++) {
       const t = performance.now()
       expect(sanitizeLine(s)).not.toContain('<!--')
       best = Math.min(best, performance.now() - t)
