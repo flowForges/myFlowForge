@@ -28,11 +28,11 @@ interface H {
   append: PluginContext['append']
 }
 
-async function boot(config?: Record<string, unknown>): Promise<H> {
+async function boot(config?: Record<string, unknown>, opts: { catchUpMs?: number } = {}): Promise<H> {
   const clock = fakeClock()
   let ctx!: PluginContext
   const probe: Plugin = { manifest: { id: 'probe', version: '0', kernel: '^0.1.0' }, activate: c => { ctx = c } }
-  const plugin = createMemoryDefault({ now: clock.now, timers: clock.timers, nightly: false })
+  const plugin = createMemoryDefault({ now: clock.now, timers: clock.timers, nightly: false, ...opts })
   rig = await memoryKernel({ plugins: [plugin, probe], ...(config && { config }) })
   const r = rig
   const files = join(r.dataDir, 'plugins', 'memory-default', 'files')
@@ -281,6 +281,91 @@ describe('contextFor: <memory-update>', () => {
     const again = h.turn(s, 'fourth', { assistant: 'ok' })
     expect(again.blocks[0].text).toContain('u2')
     expect(h.turn(s, 'fifth', { assistant: 'ok' }).blocks).toEqual([])
+  })
+
+  it('a block blanked by a delete is no longer shown: the update comes back, once', async () => {
+    const h = await boot()
+    h.file('USER.md', '- u1\n')
+    const s = await h.session()
+    h.turn(s, 'first')
+    h.file('USER.md', '- u2\n')
+    h.turn(s, 'second')
+    const updateSeq = h.ctx.events.history(s).filter(e => e.type === 'memory.injected').pop()!.seq
+    h.r.k.events.redact([{ seq: updateSeq }], 'memory-default')
+    const { blocks } = h.turn(s, 'third')
+    expect(blocks[0].text).toContain('u2')
+    expect(blocks[0].coreVersion).toBeDefined()
+    expect(h.turn(s, 'fourth').blocks).toEqual([])
+  })
+
+  it('a blanked session block counts as not shown; it stays the session block', async () => {
+    const h = await boot()
+    h.file('USER.md', '- u1\n')
+    const s = await h.session()
+    h.turn(s, 'first')
+    h.r.k.events.redact([{ seq: h.ctx.events.history(s).find(e => e.type === 'memory.injected')!.seq }], 'memory-default')
+    const { blocks } = h.turn(s, 'second')
+    expect(blocks.map(b => b.kind)).toEqual(['turn'])
+    expect(blocks[0].text).toContain('u1')
+    expect(h.turn(s, 'third').blocks).toEqual([])
+  })
+
+  it('a part of a block blanked by needle leaves the update counted', async () => {
+    const h = await boot()
+    h.file('USER.md', '- u1\n')
+    h.file('topics/deploy.md', '- 发布流程要先跑冒烟测试\n')
+    const s = await h.session()
+    h.turn(s, 'first')
+    h.file('USER.md', '- u2\n')
+    h.turn(s, '发布流程怎么跑冒烟测试')
+    const seq = h.ctx.events.history(s).filter(e => e.type === 'memory.injected').pop()!.seq
+    h.r.k.events.redact([{ seq, needle: '发布流程要先跑冒烟测试' }], 'memory-default')
+    expect(h.turn(s, 'nothing related').blocks).toEqual([])
+  })
+
+  it('with too little room for MEMORY.md: not marked seen, USER.md not repeated, and it follows when there is room', async () => {
+    const h = await boot()
+    h.file('USER.md', '- u1\n')
+    const s = await h.session()
+    h.turn(s, 'first')
+    const profile = `- ${'资料'.repeat(900)}\n`
+    h.file('USER.md', profile)
+    h.file('MEMORY.md', '- NOTES-MARK\n')
+    const tiny = h.turn(s, 'second', { contextTokens: 1 }).blocks[0]
+    expect(tiny.text).toContain('资料')
+    expect(tiny.text).not.toContain('NOTES-MARK')
+    expect(tiny.coreVersion).toBeUndefined()
+    expect(h.turn(s, 'still tiny', { contextTokens: 1 }).blocks).toEqual([])
+    const roomy = h.turn(s, 'third', { contextTokens: 100_000 }).blocks[0]
+    expect(roomy.text).toContain('NOTES-MARK')
+    expect(roomy.text).not.toContain('资料')
+    expect(roomy.coreVersion).toBeDefined()
+    expect(h.turn(s, 'fourth').blocks).toEqual([])
+  })
+
+  it('a session block with no room for MEMORY.md carries no version, and the notes follow', async () => {
+    const h = await boot()
+    h.file('USER.md', `- ${'资料'.repeat(900)}\n`)
+    h.file('MEMORY.md', '- NOTES-MARK\n')
+    const s = await h.session()
+    const first = only(h.turn(s, 'first', { contextTokens: 1 }).blocks, 'session')!
+    expect(first.text).not.toContain('NOTES-MARK')
+    expect(first.coreVersion).toBeUndefined()
+    const next = h.turn(s, 'second').blocks[0]
+    expect(next.kind).toBe('turn')
+    expect(next.text).toContain('NOTES-MARK')
+    expect(next.text).not.toContain('资料')
+    expect(h.turn(s, 'third').blocks).toEqual([])
+  })
+
+  it('cut with a "not loaded" line is still seen: the model was told', async () => {
+    const h = await boot()
+    h.file('USER.md', '- u1\n')
+    const s = await h.session()
+    h.turn(s, 'first')
+    h.file('MEMORY.md', `${Array.from({ length: 200 }, (_, i) => `- memory line number ${i} padded out for room`).join('\n')}\n`)
+    expect(h.turn(s, 'second', { contextTokens: 3000 }).blocks[0].coreVersion).toBeDefined()
+    expect(h.turn(s, 'third').blocks).toEqual([])
   })
 
   it('with a cwd a failed turn stays in history, so its update counts', async () => {
@@ -560,5 +645,93 @@ describe('Review Focus 2 and 4: what the rendered blocks hold', () => {
     expect(all).not.toContain('sk-xxxx')
     expect(all).not.toContain('pppppp')
     expect(h.read('USER.md')).toContain(secret)
+  })
+})
+
+describe('catching up is bounded (review I2)', () => {
+  const QUESTION = '发布流程怎么跑冒烟测试'
+  const MATCH = '部署之前发布流程要先跑冒烟测试才行'
+  const fill = (h: H, s: string, n: number, size = 20) => {
+    for (let i = 0; i < n; i++) h.append({ type: 'tool.ended', sessionId: s, payload: { turnId: 'fill', callId: `f${i}`, name: 'read', ok: true, ms: 1, content: `filler ${i} ${'填'.repeat(size)}` } })
+  }
+
+  it('a large backlog: contextFor returns near its cap, the core goes out, the kernel keeps turning, and the rest arrives in batches', async () => {
+    const h = await boot()
+    h.file('USER.md', '- u1\n')
+    const other = await h.session()
+    const { store } = h.plugin.inspect()
+    const before = store.cursor()
+    fill(h, other, 1500, 4400) // 一次全追要好几秒;上限是 200 ms,这里留足负载下的余量
+    const s = await h.session()
+    h.ctx.append({ type: 'message.user', sessionId: s, payload: { turnId: 'now', text: QUESTION } })
+    const started = performance.now()
+    const blocks = h.memory.contextFor({ sessionId: s, turnId: 'now', text: QUESTION, events: h.ctx.events.history(s), contextTokens: 100_000 })
+    const took = performance.now() - started
+    expect(took).toBeLessThan(2000)
+    expect(h.ctx.events.after(store.cursor(), 1)).toHaveLength(1) // 确实没追完
+    expect(only(blocks, 'session')?.text).toContain('u1')
+
+    // 没人再调,剩下的也在走;一批一批之间事件循环转得动
+    const at = store.cursor()
+    let worst = 0
+    let last = performance.now()
+    for (let i = 0; i < 40; i++) {
+      await new Promise<void>(r => setImmediate(r))
+      worst = Math.max(worst, performance.now() - last)
+      last = performance.now()
+    }
+    expect(store.cursor()).toBeGreaterThan(at)
+    expect(at).toBeGreaterThan(before)
+    expect(worst).toBeLessThan(1000)
+  })
+
+  it('behind: no raw recall, because a rollback or delete for those rows may be further on; topics still come, and raw returns once caught up', async () => {
+    const h = await boot(undefined, { catchUpMs: 0 })
+    h.file('topics/deploy.md', `- ${MATCH} 主题\n`)
+    const other = await h.session()
+    h.say(other, `${MATCH} 原话`)
+    fill(h, other, 50)
+    const b = only(h.turn(await h.session(), QUESTION).blocks, 'turn')!
+    expect(b.text).toContain('主题')
+    expect(b.text).not.toContain('原话')
+    h.plugin.flushNow()
+    expect(only(h.turn(await h.session(), QUESTION).blocks, 'turn')!.text).toContain('原话')
+  })
+
+  it('a rollback in another session past the cap: its row is not recalled before or after catching up', async () => {
+    const h = await boot(undefined, { catchUpMs: 0 })
+    const asker = await h.session()
+    const other = await h.session()
+    h.say(other, MATCH, { turnId: 'undone' })
+    fill(h, other, 50)
+    h.append({ type: 'turn.rolledBack', sessionId: other, payload: { turnId: 'undone', files: 0 } })
+    const recalled = () => h.turn(asker, QUESTION).blocks.map(b => b.text).join('')
+    expect(recalled()).not.toContain('才行')
+    h.plugin.flushNow()
+    expect(recalled()).not.toContain('才行')
+  })
+
+  it('a tombstone past the cap: the deleted row is not recalled before or after catching up', async () => {
+    const h = await boot(undefined, { catchUpMs: 0 })
+    const asker = await h.session()
+    const other = await h.session()
+    const seq = h.say(other, MATCH)
+    fill(h, other, 50)
+    h.append({ type: 'memory.deleted', sessionId: other, payload: { id: `r_${seq}`, rawSeqs: [seq] } })
+    const recalled = () => h.turn(asker, QUESTION).blocks.map(b => b.text).join('')
+    expect(recalled()).not.toContain('才行')
+    h.plugin.flushNow()
+    expect(recalled()).not.toContain('才行')
+  })
+
+  it('a group’s own rollback counts from req.events even with ingest behind', async () => {
+    const h = await boot(undefined, { catchUpMs: 0 })
+    const group = await h.session({ origin: 'im' })
+    const { store } = h.plugin.inspect()
+    store.upsertNote({ id: 'n_keep', layer: 'session', scope: `session:${group}`, source: 'group', text: '留下的发布流程跑冒烟测试', ts: 1, turnId: 'kept' })
+    store.upsertNote({ id: 'n_undone', layer: 'session', scope: `session:${group}`, source: 'group', text: '撤销的发布流程跑冒烟测试', ts: 1, turnId: 'undone' })
+    fill(h, group, 50)
+    h.append({ type: 'turn.rolledBack', sessionId: group, payload: { turnId: 'undone', files: 0 } })
+    expect(h.turn(group, QUESTION).blocks[0].items).toEqual(['n_keep'])
   })
 })

@@ -19,6 +19,8 @@ export interface MemoryDefaultOpts {
   now?: () => number
   timers?: IngestTimers
   flushMs?: number
+  /** 测试用:轮和工具替接入追赶的时间上限 */
+  catchUpMs?: number
   /** false:不跑夜间整合(Task 10 接上) */
   nightly?: false
 }
@@ -123,7 +125,7 @@ export function createMemoryDefault(opts: MemoryDefaultOpts = {}): MemoryDefault
       const opened = live
       const service: MemoryService = {
         contextFor: opened
-          ? createContextFor({ store: opened.store, files: opened.files, sessions, flush: () => opened.ingest.flush(), recall: () => config.recall, log: ctx.log })
+          ? createContextFor({ store: opened.store, files: opened.files, sessions, catchUp: () => opened.ingest.catchUp(opts.catchUpMs), recall: () => config.recall, log: ctx.log })
           : () => [],
         noteContext() {},
       }
@@ -143,7 +145,7 @@ export function createMemoryDefault(opts: MemoryDefaultOpts = {}): MemoryDefault
         proposals: storeProposals(live.store, now, e => ctx.append(e)),
         now,
         append: (e: Parameters<PluginContext['append']>[0]) => ctx.append(e),
-        flush: () => live.ingest.flush(),
+        catchUp: () => live.ingest.catchUp(opts.catchUpMs),
         log: ctx.log,
       }
       for (const tool of createMemoryTools(deps)) ctx.effect(tools.register(tool))

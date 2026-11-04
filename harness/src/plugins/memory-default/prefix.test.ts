@@ -300,6 +300,32 @@ describe('Review Focus 1: the prefix never moves, with recall on', () => {
     expect(textsOf(lastOf(lastOf(h.sent())))).toHaveLength(2)
   })
 
+  it('a delete blanks a block holding an update and a recall: the next turn has the update again, and the prefix moves once', async () => {
+    const h = await boot()
+    h.write('USER.md', '- u1\n')
+    const sid = await h.session()
+    await h.prompt(sid, 'first question here')
+    const donor = await h.session()
+    h.ctx().append({ type: 'message.user', sessionId: donor, payload: { turnId: 'donor', text: `${'远'.repeat(400)}${MATCH}${'尾'.repeat(400)}` } })
+    h.write('USER.md', '- YARN-MARK\n')
+    await h.prompt(sid, QUESTION)
+    const block = h.r.k.events.bySession(sid).filter(e => e.type === 'memory.injected').pop()!
+    expect((block.payload as ContextBlock).coreVersion).toBeDefined()
+    expect((block.payload as ContextBlock).text).toContain('<memory-recall>')
+
+    // 摘录里找不到针时 spec §16 换整段:版本没变,不补发就再也见不到
+    h.r.k.events.redact([{ seq: block.seq }], 'memory-default')
+    await h.prompt(sid, 'third question here')
+    const r3 = lastOf(h.sent())
+    expect(json(r3.slice(0, -1))).not.toContain('YARN-MARK')
+    expect(textsOf(lastOf(r3))[1]).toContain('YARN-MARK')
+
+    await h.prompt(sid, 'fourth question here')
+    const r4 = lastOf(h.sent())
+    expectPrefix([...r3, assistant('ok')], r4)
+    expect(textsOf(lastOf(r4))).toHaveLength(2)
+  })
+
   it('follow-ups and parks: a follow-up gets no recall; the rebuild, the next turn and a restart all see the live bytes', async () => {
     const h = await boot()
     h.write('USER.md', '- 用 pnpm\n')

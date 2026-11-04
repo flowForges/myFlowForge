@@ -15,6 +15,7 @@ import type { NoteRow, RawRow, Store } from './store'
 
 const NOT_FOUND = '未找到'
 const UNAVAILABLE = 'Memory is unavailable right now, so nothing was read or saved.'
+const INDEXING = 'Past conversations are still being indexed and were not searched. Try again shortly.'
 const GET_MAX = 12_000
 const DEFAULT_LIMIT = 10
 const WRITES_PER_TURN = 5
@@ -67,8 +68,8 @@ export interface MemoryToolDeps {
   proposals: ProposalInbox
   now(): number
   append(e: Omit<KernelEvent, 'seq' | 'ts'>): unknown
-  /** 追上事件日志:刚发生的回滚和删除,这一次读就要算数 */
-  flush(): void
+  /** 有上限地追事件日志,返回追上了没有。追上了,刚发生的回滚和删除这一次读就算数 */
+  catchUp(): boolean
   log: Pick<Logger, 'error'>
 }
 
@@ -104,34 +105,39 @@ function createHandlers(d: MemoryToolDeps) {
     }
     return counts
   }
-  /** 读之前对账:手改的文件和刚写进日志的回滚都要算。对账失败不挡读,用上次的索引 */
-  const refresh = () => {
-    d.flush()
+  /**
+   * 读之前对账:手改的文件和刚写进日志的回滚都要算。对账失败不挡读,用上次的索引。
+   * 返回原始层能不能读:没追上时这些行的回滚和删除墓碑可能还在后面
+   */
+  const refresh = (): boolean => {
+    const caughtUp = d.catchUp()
     try {
       d.files.reconcile('core')
     } catch (err) {
       d.log.error('memory reconcile failed', { error: err instanceof Error ? err.name : 'unknown' })
     }
+    return caughtUp
   }
   const readScopes = (ctx: ToolContext) => scopeOf(d.sessions.get(ctx.sessionId)).read
 
   return {
     search(raw: unknown, ctx: ToolContext): ToolResult {
       const { query, layer = 'all', limit = DEFAULT_LIMIT } = argsOf(SearchArgs, raw)
-      refresh()
+      const rawReady = refresh()
       const scopes = readScopes(ctx)
       const notes = layer === 'raw' ? [] : d.store.searchNotes({ q: query, scopes, layers: NOTE_LAYERS, limit }).map(n => noteItem(n, n.excerpt))
-      const rows = layer === 'notes' ? [] : d.store.searchRaw({ q: query, scopes, limit }).map(r => rawItem(r, r.excerpt))
-      return { content: resultsBlock(interleave(notes, rows, limit)) }
+      const rows = layer === 'notes' || !rawReady ? [] : d.store.searchRaw({ q: query, scopes, limit }).map(r => rawItem(r, r.excerpt))
+      const block = resultsBlock(interleave(notes, rows, limit))
+      return { content: layer !== 'notes' && !rawReady ? `${block}\n${INDEXING}` : block }
     },
 
     get(raw: unknown, ctx: ToolContext): ToolResult {
       const { id } = argsOf(GetArgs, raw)
-      refresh()
+      const rawReady = refresh()
       const scopes = readScopes(ctx)
       const seq = RAW_ID.exec(id)?.[1]
       if (seq !== undefined) {
-        const row = d.store.getRaw(Number(seq))
+        const row = rawReady ? d.store.getRaw(Number(seq)) : undefined
         if (row && scopes.includes(row.scope) && !row.rolledBack) return { content: resultsBlock([rawItem(row, clip(row.text, GET_MAX))]) }
         return { content: NOT_FOUND }
       }

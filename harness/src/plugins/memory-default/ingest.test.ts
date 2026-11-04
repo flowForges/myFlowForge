@@ -436,6 +436,30 @@ describe('restart', () => {
     expect(expected).toHaveLength(1602)
   })
 
+  it('catchUp stops at its budget, says it is behind, and leaves the rest to batches off the stack', async () => {
+    const h = await harness()
+    for (let n = 0; n < 200; n++) h.ctx().append({ type: 'message.user', sessionId: 's', payload: { turnId: 't', text: `m${n}` } })
+    let t = 0
+    const i = h.ingest({ clock: () => (t += 30) })
+    expect(i.catchUp(100)).toBe(false)
+    const first = rowCount(h.store)
+    expect(first).toBeGreaterThan(0)
+    expect(first).toBeLessThan(60)
+    await vi.waitFor(() => expect(rowCount(h.store)).toBe(200), { timeout: 15_000, interval: 5 })
+    expect(i.catchUp(100)).toBe(true)
+    i.stop()
+    expect(i.catchUp(100)).toBe(false)
+  })
+
+  it('catchUp on a small backlog finishes and says so', async () => {
+    const h = await harness()
+    for (let n = 0; n < 25; n++) h.ctx().append({ type: 'message.user', sessionId: 's', payload: { turnId: 't', text: `m${n}` } })
+    const i = h.ingest()
+    expect(i.catchUp()).toBe(true)
+    expect(rowCount(h.store)).toBe(25)
+    i.stop()
+  })
+
   it('a catch-up of 5000 events yields to the event loop', async () => {
     const h = await harness()
     session(h, 's')

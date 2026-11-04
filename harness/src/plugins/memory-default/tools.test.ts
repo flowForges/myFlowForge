@@ -31,11 +31,11 @@ interface H {
   fileTree(): Record<string, string>
 }
 
-async function boot(): Promise<H> {
+async function boot(opts: { catchUpMs?: number } = {}): Promise<H> {
   const clock = fakeClock()
   let ctx!: PluginContext
   const probe: Plugin = { manifest: { id: 'probe', version: '0', kernel: '^0.1.0' }, activate: c => { ctx = c } }
-  const memory = createMemoryDefault({ now: clock.now, timers: clock.timers, nightly: false })
+  const memory = createMemoryDefault({ now: clock.now, timers: clock.timers, nightly: false, ...opts })
   rig = await memoryKernel({ plugins: [toolsRegistry, memory, probe] })
   const r = rig
   const tools = ctx.services.get<ToolsService>('tools')!
@@ -330,6 +330,24 @@ describe('memory_search and memory_get', () => {
     expect(await labelled({ origin: 'schedule' }, 'schedword')).toEqual(same('schedule'))
     expect(await labelled({ origin: 'im' }, 'groupword')).toEqual(same('group'))
     expect(await labelled({ origin: 'schedule', audience: 'group' }, 'schedgroup')).toEqual(same('group'))
+  })
+
+  it('behind a large backlog: raw rows are neither searched nor read, and the result says so; notes still answer', async () => {
+    const h = await boot({ catchUpMs: 0 })
+    const s = await h.session()
+    writeFileSync(join(h.filesDir, 'MEMORY.md'), '- zebra-quartz note\n')
+    const seq = h.user(s, 'zebra-quartz raw', 'turn-x')
+    for (let i = 0; i < 50; i++) h.user(s, `filler ${i}`, 'turn-y')
+    const behind = (await h.call('memory_search', { query: 'zebra-quartz' }, s)).content
+    expect(behind).toContain('zebra-quartz note')
+    expect(behind).not.toContain('zebra-quartz raw')
+    expect(behind).toContain('still being indexed')
+    expect((await h.call('memory_get', { id: `r_${seq}` }, s)).content).toBe('未找到')
+    h.memory.flushNow()
+    const caught = (await h.call('memory_search', { query: 'zebra-quartz' }, s)).content
+    expect(caught).toContain('zebra-quartz raw')
+    expect(caught).not.toContain('still being indexed')
+    expect((await h.call('memory_get', { id: `r_${seq}` }, s)).content).toContain('zebra-quartz raw')
   })
 
   it('sees what happened just now without waiting for the batch timer, including a rollback', async () => {

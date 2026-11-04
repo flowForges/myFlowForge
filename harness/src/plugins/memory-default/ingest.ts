@@ -8,6 +8,11 @@ import type { KernelEvent } from '../../protocol/events'
 import { CONSOLIDATION_CURSOR, type RawRole, type Store } from './store'
 
 const BATCH = 500
+/** 带时间上限的追赶一次拉这么多:一条大的工具结果要几毫秒,500 条一个事务就是几秒,整个内核都在等 */
+const SLICE = 10
+/** 轮的开头和工具调用最多替接入干这么久;剩下的不在它们的栈上 */
+const CATCH_UP_MS = 200
+const TICK_MS = 25
 const WAKE_AFTER = 200
 const FLUSH_MS = 250
 const CLIP_MESSAGE = 16_000
@@ -50,6 +55,8 @@ export interface IngestDeps {
   timers?: IngestTimers
   flushMs?: number
   log: Pick<Logger, 'error'>
+  /** 单调时钟,毫秒;测试注入 */
+  clock?(): number
 }
 
 /** after(x, 1) 有结果 ⇔ x 小于最后一个 seq。倍增加二分,不用把整个日志读一遍 */
@@ -101,6 +108,17 @@ export class Ingest {
     while (!this.stopped && this.pull() === BATCH);
   }
 
+  /**
+   * 有上限地追,返回追上了没有。没追上时剩下的走后台批次,不占调用方的栈。
+   * 追不上的时候原始层不可信:后面可能有这些行的回滚或删除墓碑,所以调用方这时不读 raw
+   */
+  catchUp(budgetMs = CATCH_UP_MS): boolean {
+    if (this.stopped) return false
+    this.cancel()
+    if (this.runFor(budgetMs)) this.schedule()
+    return this.deps.events.after(this.deps.store.cursor(), 1).length === 0
+  }
+
   /** 拉最后一批,剩下的下次启动追 */
   stop(): void {
     if (this.stopped) return
@@ -132,14 +150,27 @@ export class Ingest {
 
   private tick = (): void => {
     this.cancel()
-    if (!this.stopped && this.pull() === BATCH) this.schedule()
+    if (!this.stopped && this.runFor(TICK_MS)) this.schedule()
+  }
+
+  /** 一小批一小批地拉,下一批估计放不下就停。返回是不是还有没拉的;失败算没有,不空转 */
+  private runFor(budgetMs: number): boolean {
+    const clock = this.deps.clock ?? (() => performance.now())
+    const start = clock()
+    let last = start
+    for (;;) {
+      if (this.pull(SLICE) < SLICE) return false
+      const now = clock()
+      if (now - start + (now - last) >= budgetMs) return true
+      last = now
+    }
   }
 
   /** 一批和游标同一个事务。失败不重排:下一条新事件或 flush 再试,坏盘上不空转 */
-  private pull(): number {
+  private pull(limit = BATCH): number {
     const { store, events, log } = this.deps
     try {
-      const batch = events.after(store.cursor(), BATCH)
+      const batch = events.after(store.cursor(), limit)
       if (batch.length === 0) return 0
       try {
         store.transaction(() => {
