@@ -7,7 +7,7 @@ import type { Plugin } from '../../kernel/pluginHost'
 import type { Message, ModelEvent, ModelRequest, ModelsService } from '../../lib/models/types'
 import type { ModelRef } from '../../protocol/models'
 import { ERR_BUSY, type KernelEvent } from '../../protocol/index'
-import loopDirect, { buildHistory } from './index'
+import loopDirect, { buildHistory, trimHistory, turnTokens } from './index'
 import loopEcho from '../loop-echo'
 import { createLoopDefault } from '../loop-default'
 import toolsRegistry from '../tools-registry'
@@ -31,7 +31,8 @@ interface Fake { calls: { ref: ModelRef | 'default'; req: Omit<ModelRequest, 'mo
 /** 假 models 服务:script 决定每次 stream 产出的事件 */
 function fakeModels(fake: Fake, script: (req: Omit<ModelRequest, 'model'>) => AsyncIterable<ModelEvent>, def?: ModelRef): Plugin {
   const service = {
-    catalog: () => ({ default: def }),
+    catalog: () => ({ default: def, models: {} }),
+    accounts: () => [],
     stream(ref: ModelRef | 'default', req: Omit<ModelRequest, 'model'>) {
       fake.calls.push({ ref, req })
       return script(req)
@@ -365,5 +366,87 @@ describe('loop-direct with memory (06 spec §7)', () => {
     await prompt(r0.k, sid, 'hi')
     await waitFor(() => terminal(r0.k, sid).length === 1)
     expect(r0.k.events.bySession(sid).filter(e => e.type === 'memory.injected')).toEqual([])
+  })
+})
+
+describe('trimHistory (07 spec R12)', () => {
+  const T = (n: number, tokens: number) => Array.from({ length: n }, (_, i) => ({ id: `t${i}`, tokens }))
+  it('at or under 70% of the window nothing is dropped', () => {
+    expect(trimHistory(T(7, 100), 1000)).toEqual({ dropFrom: 0 })
+    expect(trimHistory([], 1000)).toEqual({ dropFrom: 0 })
+  })
+  it('drops whole 25% blocks from the start', () => {
+    // total 900, limit 700, chunk 250: k=1, accumulated 300 >= 250 before index 3
+    expect(trimHistory(T(9, 100), 1000)).toEqual({ dropFrom: 3 })
+  })
+  it('k is monotonic: the cut point never moves back as turns grow', () => {
+    let last = 0
+    for (let n = 1; n < 200; n++) {
+      const { dropFrom } = trimHistory(T(n, 37), 1000)
+      expect(dropFrom).toBeGreaterThanOrEqual(last)
+      last = dropFrom
+    }
+  })
+  it('token estimate: ASCII / 3.5, one per other character', () => {
+    expect(turnTokens('a'.repeat(35))).toBeCloseTo(10)
+    expect(turnTokens('你好吗')).toBe(3)
+  })
+})
+
+describe('buildHistory with a context window', () => {
+  let seq = 0
+  const ev = (type: KernelEvent['type'], payload: object): KernelEvent => ({ seq: ++seq, ts: seq, type, sessionId: 's', payload })
+  const partsOf = (m: Message) => m.parts.map(p => (p as { text: string }).text)
+  const chat = (n: number, size: number, ch = 'x'): KernelEvent[] => Array.from({ length: n }, (_, i) => [
+    ev('message.user', { turnId: `t${i}`, text: `q${i}${ch.repeat(size)}` }),
+    ev('message.assistant', { turnId: `t${i}`, text: `a${i}${ch.repeat(size)}` }),
+    ev('turn.ended', { turnId: `t${i}` }),
+  ]).flat()
+  const win = (events: KernelEvent[], cur: string, ctx?: number) => buildHistory(events, 'cur', cur, ctx)
+  const real = (ms: Message[]) => ms.reduce((a, m) => a + m.parts.reduce((b, p) => b + [...(p as { text: string }).text].reduce((c, x) => c + (x.charCodeAt(0) < 128 ? 1 / 3.5 : 1), 0), 0), 0)
+
+  it('without a context it is the old behaviour', () => {
+    const e = chat(50, 500)
+    expect(win(e, 'now')).toHaveLength(101)
+    expect(win(e, 'now', undefined)).toEqual(win(e, 'now'))
+  })
+  it('under the threshold the output is identical with and without a context', () => {
+    const e = chat(3, 10)
+    expect(win(e, 'now', 100000)).toEqual(win(e, 'now'))
+  })
+  it('200 long turns never exceed 80% of the window; the marker and session block lead the first kept message', () => {
+    const ctx = 20000
+    const events: KernelEvent[] = [ev('memory.injected', { turnId: 't0', kind: 'session', text: 'S', items: [] })]
+    let prev: Message[] | undefined
+    for (let i = 0; i < 200; i++) {
+      events.push(ev('message.user', { turnId: `t${i}`, text: `q${i}` + 'y'.repeat(300) }), ev('message.assistant', { turnId: `t${i}`, text: `a${i}` + 'y'.repeat(300) }), ev('turn.ended', { turnId: `t${i}` }))
+      const out = buildHistory(events.slice(), `t${i + 1}`, 'next', ctx)
+      expect(real(out)).toBeLessThanOrEqual(0.8 * ctx)
+      const first = partsOf(out[0])
+      if (i > 120) { expect(first[0]).toBe('S'); expect(first[1]).toMatch(/^\[已省略较早的 \d+ 轮,事件日志里还在\]$/) }
+      if (prev && partsOf(prev[0])[1] === first[1]) {
+        // between cut points: byte-exact prefix continuation (no secrets, no loop reminder in this data)
+        expect(JSON.stringify(out.slice(0, prev.length - 1))).toBe(JSON.stringify(prev.slice(0, -1)))
+      }
+      prev = out
+    }
+  })
+  it('a Chinese-only chat stays within 80% by a CJK-aware count', () => {
+    const ctx = 8000
+    const events = chat(150, 120, '字')
+    const out = buildHistory(events, 'cur', '问', ctx)
+    expect(real(out)).toBeLessThanOrEqual(0.8 * ctx)
+    expect(out.length).toBeLessThan(300)
+  })
+  it('the current message is never dropped, even when bigger than the window', () => {
+    const out = buildHistory(chat(3, 50), 'cur', 'z'.repeat(100000), 1000)
+    expect(partsOf(out[out.length - 1]).at(-1)).toBe('z'.repeat(100000))
+    expect(out.length).toBe(1)
+  })
+  it('a dropped turn takes its turn block with it', () => {
+    const e = [ev('message.user', { turnId: 't0', text: 'q0' + 'x'.repeat(4000) }), ev('memory.injected', { turnId: 't0', kind: 'turn', text: 'TURNBLOCK', items: [] }),
+      ev('message.assistant', { turnId: 't0', text: 'a0' }), ev('turn.ended', { turnId: 't0' }), ...chat(1, 10).map(x => ({ ...x, payload: { ...(x.payload as object), turnId: 't1' } })) as KernelEvent[]]
+    const out = buildHistory(e, 'cur', 'now', 1000)
+    expect(JSON.stringify(out)).not.toContain('TURNBLOCK')
   })
 })

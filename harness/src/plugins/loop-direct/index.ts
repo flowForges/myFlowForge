@@ -12,11 +12,38 @@ interface Req { sessionId: string; turnId: string; text: string; signal: AbortSi
 const turnOf = (e: KernelEvent) => (e.payload as { turnId?: string } | null)?.turnId
 const textOf = (e: KernelEvent) => (e.payload as { text?: string } | null)?.text ?? ''
 
+/** 一轮的 token 估算:ASCII 字符 / 3.5,其余每字符 1(中文按 3.5 字符一个会低估 2–3 倍) */
+export function turnTokens(text: string): number {
+  let ascii = 0
+  let other = 0
+  for (const ch of text) (ch.charCodeAt(0) < 128 ? ascii++ : other++)
+  return ascii / 3.5 + other
+}
+
+/**
+ * 总量 ≤ 70% 窗口不裁;否则按窗口 25% 的整块从最早的轮往后丢:
+ * k = ceil((总量 − 70%) / 块),丢到累计 ≥ k 块的第一个轮为止。k 随总量单调,切点不会往回退,
+ * 两次切点之间发出的请求是上一次的逐字节前缀延续。dropFrom = 第一个保留的轮的下标
+ */
+export function trimHistory(turns: { id: string; tokens: number }[], context: number): { dropFrom: number } {
+  const total = turns.reduce((a, t) => a + t.tokens, 0)
+  const limit = 0.7 * context
+  if (total <= limit) return { dropFrom: 0 }
+  const chunk = 0.25 * context
+  const target = Math.ceil((total - limit) / chunk) * chunk
+  let acc = 0
+  for (let i = 0; i < turns.length; i++) {
+    acc += turns[i].tokens
+    if (acc >= target) return { dropFrom: i + 1 }
+  }
+  return { dropFrom: turns.length }
+}
+
 /**
  * 已完成的 turn 的问答按序入历史;失败 / 未完成的 turn 整个跳过;当前提问放最后。
  * 记忆块只从事件来:会话块进第一条消息,不管它原来那一轮还在不在;轮块进它那一轮
  */
-export function buildHistory(events: KernelEvent[], currentTurnId: string, currentText: string): Message[] {
+export function buildHistory(events: KernelEvent[], currentTurnId: string, currentText: string, context?: number): Message[] {
   const users = new Map<string, string>()
   const order: string[] = []
   const answers = new Map<string, string>()
@@ -34,12 +61,26 @@ export function buildHistory(events: KernelEvent[], currentTurnId: string, curre
   }
   const blocks = blocksOf(events)
   const out: Message[] = []
+  const done = order.filter(id => id !== currentTurnId && ended.has(id) && answers.has(id))
+  let dropped = 0
+  if (context !== undefined) {
+    // 当前这一轮也计入总量但永不丢:再大也交给服务商报错,不在这里循环
+    const turns = [...done, currentTurnId].map(id => ({
+      id, tokens: turnTokens((blocks.turns.get(id) ?? '') + (users.get(id) ?? currentText) + (answers.get(id) ?? '')),
+    }))
+    dropped = Math.min(trimHistory(turns, context).dropFrom, done.length)
+  }
   const user = (id: string, text: string): Message => {
-    const texts = [...(out.length === 0 && blocks.session ? [blocks.session] : []), ...(blocks.turns.has(id) ? [blocks.turns.get(id)!] : []), text]
+    const first = out.length === 0
+    const texts = [
+      ...(first && blocks.session ? [blocks.session] : []),
+      ...(first && dropped > 0 ? [`[已省略较早的 ${dropped} 轮,事件日志里还在]`] : []),
+      ...(blocks.turns.has(id) ? [blocks.turns.get(id)!] : []),
+      text,
+    ]
     return { role: 'user', parts: texts.map(t => ({ type: 'text' as const, text: t })) }
   }
-  for (const id of order) {
-    if (id === currentTurnId || !ended.has(id) || !answers.has(id)) continue
+  for (const id of done.slice(dropped)) {
     out.push(user(id, users.get(id)!))
     out.push({ role: 'assistant', parts: [{ type: 'text', text: answers.get(id)! }] })
   }
@@ -68,7 +109,7 @@ const loopDirect: Plugin = {
       }
       let acc = ''
       const stream = models.stream(ref, {
-        interactive: true, signal, messages: buildHistory(ctx.events.history(sessionId), turnId, text), reasoning: 'medium',
+        interactive: true, signal, messages: buildHistory(ctx.events.history(sessionId), turnId, text, contextWindow(models, ref)), reasoning: 'medium',
       })
       for await (const e of stream) {
         if (e.type === 'text') {
