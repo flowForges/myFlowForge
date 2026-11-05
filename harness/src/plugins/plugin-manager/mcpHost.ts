@@ -802,8 +802,10 @@ export class McpHost {
   }
 
   /** 关 stdin、走短梯,并行。记录已经先改了:杀进程期间起不来新的。失败的记账到此为止(到插件重启或授权变化) */
-  async killPlugin(id: string): Promise<void> {
-    const targets = [...this.entries.values()].filter(e => e.plugin === id)
+  async killPlugin(id: string, only?: readonly string[]): Promise<void> {
+    if (only?.length === 0) return
+    const hit = (server: string) => only === undefined || only.includes(server)
+    const targets = [...this.entries.values()].filter(e => e.plugin === id && hit(e.server))
     for (const e of targets) e.aborted = true
     await Promise.all(
       targets.map(e =>
@@ -812,7 +814,11 @@ export class McpHost {
       ),
     )
     const prefix = `\0${id}/`
-    for (const map of [this.failures, this.sticky, this.notes]) for (const key of [...map.keys()]) if (key.includes(prefix)) map.delete(key)
+    for (const map of [this.failures, this.sticky, this.notes])
+      for (const key of [...map.keys()]) {
+        const at = key.indexOf(prefix)
+        if (at >= 0 && hit(key.slice(at + prefix.length))) map.delete(key)
+      }
   }
 
   /** 内核关闭的兜底:killLive 已经收过一遍,这里同步收漏网的。之后不再起,也不再写事件 */

@@ -1099,7 +1099,7 @@ describe('grants, enable and uninstall', () => {
   it('a record changed under a start in flight with no kill (a setting): the env read before it is not used', async () => {
     const f = fake()
     const m = await rigOnly()
-    await m.r.install(buildPlugin(dirFor(), { format: 'claude', id: 'x', mcp: { y: f.entry({ env: { A: '${user_config.mode}' } }) }, manifest: { userConfig: { mode: { title: 'm', sensitive: false, required: true } } } }))
+    await m.r.install(buildPlugin(dirFor(), { format: 'claude', id: 'x', mcp: { y: f.entry({ env: { A: '${user_config.mode}' } }) }, manifest: { userConfig: { mode: { title: 'm', sensitive: false, required: true }, unrelated: { title: 'u', sensitive: false, required: false } } } }))
     await call(m.r, 'plugins.settings.set', { commandId: 'c1', id: 'x', key: 'mode', value: 'first' })
     const sid = await m.r.session({ approvalMode: 'auto' })
     await m.r.turn(sid, 'pin')
@@ -1113,11 +1113,77 @@ describe('grants, enable and uninstall', () => {
     }
     const run = m.mcp(sid, { action: 'tools', server: 'x/y' })
     await until(() => m.sandbox!.plans.length === 1)
-    await call(m.r, 'plugins.settings.set', { commandId: 'c2', id: 'x', key: 'mode', value: 'second' })
+    await call(m.r, 'plugins.settings.set', { commandId: 'c2', id: 'x', key: 'unrelated', value: 'second' })
     open()
     expect((await run).text).toBe('grants_changed')
     expect(m.spawns).toEqual([])
     expect(m.sandbox!.released).toBe(1)
+  })
+
+  describe('I5: a changed setting does not stay live in a running server', () => {
+    const CONFIG = { userConfig: { tok: { title: 't', sensitive: true, required: true }, mode: { title: 'm', sensitive: false, required: false }, unused: { title: 'u', sensitive: false, required: false } } }
+    const start = async () => {
+      const a = fake({}, 'a')
+      const b = fake({}, 'b')
+      const m = await rigOnly()
+      await m.r.install(buildPlugin(dirFor(), { format: 'claude', id: 'x', manifest: CONFIG, mcp: { uses: a.entry({ env: { T: '${user_config.tok}', M: '${user_config.mode}' } }), other: b.entry() } }))
+      await call(m.r, 'plugins.settings.set', { commandId: 'c0', id: 'x', key: 'tok', value: 'first-value' })
+      const sid = await m.r.session({ approvalMode: 'auto' })
+      await m.r.turn(sid, 'pin')
+      await m.mcp(sid, { action: 'tools', server: 'x/uses' })
+      const usesPid = m.pids[0]
+      await m.mcp(sid, { action: 'tools', server: 'x/other' })
+      const otherPid = m.pids[1]
+      return { m, sid, usesPid, otherPid }
+    }
+
+    it('rotating a secret kills the server that references it, not the other; the next start has the new value', async () => {
+      const { m, sid, usesPid, otherPid } = await start()
+      await call(m.r, 'plugins.settings.set', { commandId: 'c1', id: 'x', key: 'tok', value: 'second-value' })
+      expect(alive(usesPid)).toBe(false)
+      expect(alive(otherPid)).toBe(true)
+      await m.mcp(sid, { action: 'tools', server: 'x/uses' })
+      expect(planOf(m).env.T).toBe('second-value')
+    })
+
+    it('clearing a secret kills it, and the server now needs config', async () => {
+      const { m, sid, usesPid, otherPid } = await start()
+      await call(m.r, 'plugins.settings.clear', { commandId: 'c1', id: 'x', key: 'tok' })
+      expect(alive(usesPid)).toBe(false)
+      expect(alive(otherPid)).toBe(true)
+      expect((await m.mcp(sid, { action: 'tools', server: 'x/uses' })).text).toBe('needs_config')
+    })
+
+    it('a plain setting too, set and cleared', async () => {
+      const { m, sid, usesPid } = await start()
+      await call(m.r, 'plugins.settings.set', { commandId: 'c1', id: 'x', key: 'mode', value: 'fast' })
+      expect(alive(usesPid)).toBe(false)
+      await m.mcp(sid, { action: 'tools', server: 'x/uses' })
+      expect(planOf(m).env.M).toBe('fast')
+      const next = m.pids.at(-1)!
+      await call(m.r, 'plugins.settings.clear', { commandId: 'c2', id: 'x', key: 'mode' })
+      expect(alive(next)).toBe(false)
+    })
+
+    it('a key no server references kills nothing', async () => {
+      const { m, usesPid, otherPid } = await start()
+      await call(m.r, 'plugins.settings.set', { commandId: 'c1', id: 'x', key: 'unused', value: 'v' })
+      await call(m.r, 'plugins.settings.clear', { commandId: 'c2', id: 'x', key: 'unused' })
+      expect(alive(usesPid)).toBe(true)
+      expect(alive(otherPid)).toBe(true)
+    })
+
+    it('a secret write that fails leaves the server alone', async () => {
+      const f = fake()
+      const m = await rigOnly()
+      await m.r.install(buildPlugin(dirFor(), { format: 'claude', id: 'x', manifest: CONFIG, mcp: { uses: f.entry({ env: { T: '${user_config.tok}' } }) } }))
+      await call(m.r, 'plugins.settings.set', { commandId: 'c0', id: 'x', key: 'tok', value: 'first-value' })
+      const sid = await m.r.session({ approvalMode: 'auto' })
+      await m.r.turn(sid, 'pin')
+      await m.mcp(sid, { action: 'tools', server: 'x/uses' })
+      expect(await refused(call(m.r, 'plugins.settings.set', { commandId: 'c1', id: 'x', key: 'tok', value: 'bad\0value' }))).toBe('bad_value')
+      expect(m.live().length).toBe(1)
+    })
   })
 
   it('killPlugin alone stops a start in flight: the record has not moved, the mark has', async () => {

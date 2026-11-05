@@ -188,6 +188,16 @@ export function createPluginManager(o: PluginManagerOpts = {}): Plugin {
           ctx.log.warn('killing plugin processes failed', { code: (err as NodeJS.ErrnoException).code ?? 'unknown' })
         }
       }
+      /** 改了配置:跑着的进程环境里还是旧值,引用这个键的服务都停。记录里每个服务的引用都在 */
+      const killUsers = async (rec: InstalledRecord, key: string) => {
+        const known = rec.servers.length === rec.consent.mcp.length
+        const users = rec.servers.filter(s => s.configRefs.includes(key)).map(s => s.name)
+        try {
+          await host.killPlugin(rec.id, known ? users : undefined)
+        } catch (err) {
+          ctx.log.warn('killing plugin processes failed', { code: (err as NodeJS.ErrnoException).code ?? 'unknown' })
+        }
+      }
       const secretsLocked = () => LOCKED_BACKENDS.has(ctx.secretsBackend)
       /** 后端的错误里可能有路径:不外传,也不进日志 */
       const guarded = async <T,>(fn: () => Promise<T>): Promise<T> => {
@@ -333,6 +343,7 @@ export function createPluginManager(o: PluginManagerOpts = {}): Plugin {
           if (!secret) {
             if (rec.secretKeys.includes(p.key)) await guarded(() => ctx.secrets.delete(secretKey(rec.id, p.key)))
             persist({ ...rec, settings: { ...rec.settings, [p.key]: p.value }, secretKeys: without(rec.secretKeys, p.key) }, rec)
+            await killUsers(rec, p.key)
             return { ok: true }
           }
           if (secretsLocked()) throw fail('secrets_unavailable')
@@ -347,6 +358,7 @@ export function createPluginManager(o: PluginManagerOpts = {}): Plugin {
             if (!wasKnown) persist(rec)
             throw err
           }
+          await killUsers(rec, p.key)
           return { ok: true }
         }),
       )
@@ -357,6 +369,7 @@ export function createPluginManager(o: PluginManagerOpts = {}): Plugin {
           if (rec.secretKeys.includes(p.key)) await guarded(() => ctx.secrets.delete(secretKey(rec.id, p.key)))
           const { [p.key]: _dropped, ...settings } = rec.settings
           persist({ ...rec, settings, secretKeys: without(rec.secretKeys, p.key) }, rec)
+          await killUsers(rec, p.key)
           return { ok: true }
         }),
       )
