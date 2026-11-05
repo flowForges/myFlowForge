@@ -108,7 +108,8 @@ const SETTLE_TIMEOUT_MS = 5_000
 const MAX_ADVANCE_STEPS = 50
 /** 被测插件的停止步骤可能在等注入的定时器:关内核时让假时间也走,最多这么多 */
 const CLOSE_TICK_MS = 20
-const CLOSE_ADVANCE_LIMIT_MS = 2_000
+/** 真 git 的会话关得慢,假时间的预算在定时器登记前就用完了:限真实时间,不限假时间 */
+const CLOSE_REAL_LIMIT_MS = 15_000
 
 const CREDENTIAL_FILES = new Set(['credentials.json', 'credentials.enc'])
 
@@ -177,12 +178,11 @@ export async function telegramKernel(opts: TelegramKernelOpts = {}): Promise<Tel
     const closing = k.close().finally(() => {
       done = true
     })
-    let advanced = 0
-    while (!done && advanced < CLOSE_ADVANCE_LIMIT_MS) {
+    const started = Date.now()
+    while (!done && Date.now() - started < CLOSE_REAL_LIMIT_MS) {
       await pause()
       if (done) break
       clock.advance(CLOSE_TICK_MS)
-      advanced += CLOSE_TICK_MS
     }
     await closing
   }

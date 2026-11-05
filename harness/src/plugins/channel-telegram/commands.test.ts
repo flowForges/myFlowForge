@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { calling, say } from '../../../test/memoryRig'
-import { adoptSession, chatOf, events, flow, gatedScript, gatedStream, handled, onDisk, online, pairedRig, sends, stateFile, texts, users, type ChatRigOpts } from '../../../test/telegramChats'
+import { enterProject, chatOf, events, flow, gatedScript, gatedStream, handled, onDisk, online, pairedRig, sends, stateFile, texts, users, type ChatRigOpts } from '../../../test/telegramChats'
 import type { TelegramRig } from '../../../test/telegramRig'
 import { createLoopDefault } from '../loop-default'
 import { createToolsCoding } from '../tools-coding'
@@ -490,11 +490,11 @@ describe('/unpair', () => {
 
   it('/unpair confirm during a turn: cancels it, denies the pending card, whose edit still arrives', async () => {
     const r = await rig({
+      project: true,
       models: { script: n => (n === 1 ? calling('c1', 'shell', { command: 'echo hi' }) : say('done')) },
       plugins: () => [toolsRegistry, createToolsCoding({ shellEnv: { PATH: '/usr/bin:/bin' }, loginPath: async () => '', git: async () => { throw new Error('no git') } }), createLoopDefault({})],
     })
-    const { sessionId } = (await r.k.handle('session.create', { commandId: 'p1', origin: 'im', audience: 'owner', approvalMode: 'ask', cwd: r.cwd })) as { sessionId: string }
-    await adoptSession(r, sessionId, { project: 'api' })
+    await enterProject(r)
     await send(r, 'run it')
     await expect.poll(() => events(r, 'approval.requested').length, { timeout: 5000, interval: 5 }).toBe(1)
     await flow(r)

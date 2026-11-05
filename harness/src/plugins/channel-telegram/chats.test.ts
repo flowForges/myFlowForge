@@ -8,7 +8,7 @@ import { ERR_BUSY, ERR_DRAINING, type KernelEvent } from '../../protocol/index'
 import { untilGo } from '../../../test/executorRig'
 import { cleanupFakes, installFake } from '../../../test/fakeCli'
 import { fakeClock, say, calling, type Req, type Script } from '../../../test/memoryRig'
-import { adoptSession, asOneBatch, chatOf, events, flow, FLOW, gatedScript, gatedStream, handled, HOUR, online, onDisk, pairedRig, sends, stateFile, texts, users, type ChatRigOpts } from '../../../test/telegramChats'
+import { enterProject, asOneBatch, chatOf, events, flow, FLOW, gatedScript, gatedStream, handled, HOUR, online, onDisk, pairedRig, projectKit, sends, stateFile, texts, users, type ChatRigOpts } from '../../../test/telegramChats'
 import type { TelegramRig } from '../../../test/telegramRig'
 import { createExecutorCli } from '../executor-cli/index'
 import { createLoopDefault } from '../loop-default'
@@ -35,6 +35,9 @@ async function rig(o: ChatRigOpts = {}): Promise<TelegramRig> {
   rigs.push(r)
   return r
 }
+
+/** 项目会话的轮开头要做真 git:模型请求比假时间慢,等到它发出 */
+const untilRequests = (r: TelegramRig, n: number) => expect.poll(async () => { await flow(r, 1200); return r.models.foreground().length }, { timeout: 15_000, interval: 5 }).toBeGreaterThanOrEqual(n)
 
 const created = (r: TelegramRig) => events(r, 'session.created').map(e => e.payload as Record<string, unknown>)
 
@@ -66,18 +69,18 @@ describe('a DM becomes an owner session', () => {
 
   it('with USER.md seeded the first request has core memory, in chat mode and project mode', async () => {
     const memory = () => createMemoryDefault({ nightly: false })
-    const r = await rig({ plugins: env => [memory(), toolsRegistry, createToolsCoding({ shellEnv: { PATH: '/usr/bin:/bin' }, loginPath: async () => '', git: async () => { throw new Error('no git') } }), createLoopDefault({})] })
+    const kit = projectKit()
+    const r = await rig({ project: kit, plugins: env => [memory(), toolsRegistry, createToolsCoding({ shellEnv: { PATH: '/usr/bin:/bin' }, loginPath: async () => '', git: async () => { throw new Error('no git') } }), createLoopDefault({ git: kit.git })] })
     mkdirSync(join(r.dataDir, 'plugins', 'memory-default', 'files'), { recursive: true })
     writeFileSync(join(r.dataDir, 'plugins', 'memory-default', 'files', 'USER.md'), '- 喜欢简短回复\n')
     await handled(r, r.dm('hello'))
     await flow(r)
     expect(JSON.stringify(r.models.foreground()[0].req.messages)).toContain('<memory kind=\\"core\\">')
 
-    const { sessionId } = (await r.k.handle('session.create', { commandId: 'p1', origin: 'im', audience: 'owner', approvalMode: 'ask', cwd: r.cwd })) as { sessionId: string }
-    await adoptSession(r, sessionId, { project: 'api' })
+    await enterProject(r)
     const before = r.models.foreground().length
     await handled(r, r.dm('hello project'))
-    await flow(r)
+    await untilRequests(r, before + 1)
     expect(JSON.stringify(r.models.foreground()[before].req.messages)).toContain('<memory kind=\\"core\\">')
   })
 
@@ -103,11 +106,11 @@ describe('a DM becomes an owner session', () => {
   })
 
   it('a coding-tools-only account in a project session runs', async () => {
-    const r = await rig({ models: CODING, plugins: () => [toolsRegistry, createLoopDefault({})] })
-    const { sessionId } = (await r.k.handle('session.create', { commandId: 'p1', origin: 'im', audience: 'owner', approvalMode: 'ask', cwd: r.cwd })) as { sessionId: string }
-    await adoptSession(r, sessionId, { project: 'api' })
+    const kit = projectKit()
+    const r = await rig({ project: kit, models: CODING, plugins: () => [toolsRegistry, createLoopDefault({ git: kit.git })] })
+    await enterProject(r)
     await handled(r, r.dm('hello'))
-    await flow(r)
+    await untilRequests(r, 1)
     expect(r.models.foreground()).toHaveLength(1)
   })
 
@@ -500,6 +503,7 @@ describe('a parked turn (fake CLI)', () => {
     const f = installFake(untilGo(go), 'codex')
     const env = { PATH: `${f.dir}:/usr/bin:/bin`, HOME: tmpdir() }
     const r = await rig({
+      project: true,
       config: { executors: { disabled: ['qoder'] } },
       models: { script },
       plugins: e => {
@@ -513,8 +517,7 @@ describe('a parked turn (fake CLI)', () => {
       },
     })
     await expect.poll(async () => ((await r.k.handle('executor.list', {})) as { executors: { id: string; missing: string[] }[] }).executors.some(x => x.missing.includes('detecting')), { timeout: 15_000, interval: 10 }).toBe(false)
-    const { sessionId } = (await r.k.handle('session.create', { commandId: 'p1', origin: 'im', audience: 'owner', approvalMode: 'ask', cwd: r.cwd })) as { sessionId: string }
-    await adoptSession(r, sessionId, { project: 'api' })
+    await enterProject(r)
     await expect.poll(async () => ((await r.k.handle('executor.list', {})) as { executors: { id: string; missing: string[] }[] }).executors.some(x => x.missing.includes('detecting')), { timeout: 15_000, interval: 10 }).toBe(false)
     return { r, go }
   }
@@ -616,13 +619,13 @@ describe('approvals', () => {
   it('an approval times out in a turn: the turn continues and the model reports the failure', async () => {
     let home = ''
     const r = await rig({
+      project: true,
       plugins: () => tools(() => home),
       kernel: { approvalTimeoutMs: 30 },
       models: { script: n => (n === 1 ? calling('c1', 'shell', { command: 'echo hi' }) : say('could not run it')) },
     })
     home = r.home
-    const { sessionId } = (await r.k.handle('session.create', { commandId: 'p1', origin: 'im', audience: 'owner', approvalMode: 'ask', cwd: r.cwd })) as { sessionId: string }
-    await adoptSession(r, sessionId, { project: 'api' })
+    await enterProject(r)
     await handled(r, r.dm('run it'))
     await flow(r)
     await expect.poll(() => events(r, 'turn.ended').length, { timeout: 3000 }).toBe(1)
@@ -658,11 +661,11 @@ describe('revocation', () => {
 
   it('unpair denies a pending approval', async () => {
     const r = await rig({
+      project: true,
       plugins: () => [toolsRegistry, createToolsCoding({ shellEnv: { PATH: '/usr/bin:/bin' }, loginPath: async () => '', git: async () => { throw new Error('no git') } }), createLoopDefault({})],
       models: { script: n => (n === 1 ? calling('c1', 'shell', { command: 'echo hi' }) : say('never')) },
     })
-    const { sessionId } = (await r.k.handle('session.create', { commandId: 'p1', origin: 'im', audience: 'owner', approvalMode: 'ask', cwd: r.cwd })) as { sessionId: string }
-    await adoptSession(r, sessionId, { project: 'api' })
+    await enterProject(r)
     await handled(r, r.dm('run it'))
     await flow(r)
     await expect.poll(() => events(r, 'approval.requested').length, { timeout: 3000 }).toBe(1)

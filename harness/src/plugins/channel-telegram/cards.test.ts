@@ -8,7 +8,7 @@ import { scrub } from '../../lib/memory/scrub'
 import type { KernelEvent, SandboxStatus } from '../../protocol/index'
 import { calling, fakeClock, say, type Script } from '../../../test/memoryRig'
 import type { FakeMessage } from '../../../test/fakeTelegram'
-import { adoptSession, events, flow, handled, onDisk, online, pairedRig, sends, type ChatRigOpts } from '../../../test/telegramChats'
+import { enterProject, events, flow, handled, onDisk, online, pairedRig, projectKit, sends, type ChatRigOpts } from '../../../test/telegramChats'
 import type { TelegramRig } from '../../../test/telegramRig'
 import { cleanupFakes, installFake } from '../../../test/fakeCli'
 import { createExecutorCli } from '../executor-cli/index'
@@ -691,21 +691,22 @@ const shellThen = (command: string): Script => n => (n === 1 ? calling('c1', 'sh
 async function projectRig(o: ChatRigOpts & { script: Script; runs?: string[] }): Promise<TelegramRig> {
   const { script, runs, ...rest } = o
   let home = ''
+  const kit = projectKit()
   const r = await pairedRig({
     ...rest,
+    project: kit,
     models: { script },
     plugins: () => [
       toolsRegistry,
       ...(runs
         ? [probeTool(runs)]
         : [createToolsCoding({ shellEnv: { PATH: '/usr/bin:/bin', HOME: home }, loginPath: async () => '', git: async () => { throw new Error('no git') } })]),
-      createLoopDefault({}),
+      createLoopDefault({ git: kit.git }),
     ],
   })
   home = r.home
   rigs.push(r)
-  const { sessionId } = (await r.k.handle('session.create', { commandId: 'p1', origin: 'im', audience: 'owner', approvalMode: 'ask', cwd: r.cwd })) as { sessionId: string }
-  await adoptSession(r, sessionId, { project: 'api' })
+  await enterProject(r)
   return r
 }
 
@@ -1036,7 +1037,9 @@ describe('a button approves exactly one thing', () => {
     await online(r)
     await flow(r)
     await flow(r)
-    expect(byId(r, c.id).text).toBe('已失效')
+    // 干净关闭会取消这一轮,卡片在关闭前就改成了取消(原先种记录的会话在这里读到 已失效;换成真 /project 后关闭更慢,取消的编辑发得出去)
+    expect(byId(r, c.id).text).toBe('已取消 · shell\necho pending')
+    expect(keyboard(byId(r, c.id))).toEqual([])
     await handled(r, r.press(dataOf(c, 'y'), { messageId: c.id }))
     await r.settle()
     expect(answersOf(r).at(-1)).toBe('已失效')
@@ -1115,16 +1118,17 @@ describe('a delegate card (fake CLI)', () => {
   async function delegateRig(args: object, level: SandboxStatus['level'] = 'none') {
     const f = installFake({}, 'codex')
     const env = { PATH: `${f.dir}:/usr/bin:/bin`, HOME: tmpdir() }
+    const kit = projectKit()
     const r = await pairedRig({
       level,
+      project: kit,
       config: { executors: { disabled: ['qoder'] } },
       models: { script: n => (n === 1 ? calling('c1', 'delegate_codex', args) : say('done')) },
-      plugins: () => [toolsRegistry, createToolsCoding({ shellEnv: env, loginPath: async () => '', git: async () => { throw new Error('no git') } }), createExecutorCli({ env, loginPath: async () => '' }), createLoopDefault({})],
+      plugins: () => [toolsRegistry, createToolsCoding({ shellEnv: env, loginPath: async () => '', git: async () => { throw new Error('no git') } }), createExecutorCli({ env, loginPath: async () => '' }), createLoopDefault({ git: kit.git })],
     })
     rigs.push(r)
     const detecting = async () => ((await r.k.handle('executor.list', {})) as { executors: { missing: string[] }[] }).executors.some(x => x.missing.includes('detecting'))
-    const { sessionId } = (await r.k.handle('session.create', { commandId: 'p1', origin: 'im', audience: 'owner', approvalMode: 'ask', cwd: r.cwd })) as { sessionId: string }
-    await adoptSession(r, sessionId, { project: 'api' })
+    await enterProject(r)
     await expect.poll(detecting, { timeout: 15_000, interval: 10 }).toBe(false)
     return { r, c: await untilCard(r) }
   }
