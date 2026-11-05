@@ -3,12 +3,13 @@
 // 停进程走 killLadder,登记走 pgids:kernel.close 的 killLive 和崩溃后的 reapOrphans 都认得
 import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { accessSync, constants as fsConstants, lstatSync, mkdirSync, realpathSync, rmSync, statSync } from 'node:fs'
+import { accessSync, constants as fsConstants, lstatSync, mkdirSync, realpathSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import type { Logger } from '../../kernel/log'
 import { HARNESS_VERSION } from '../../kernel/version'
 import { pluginStoreRootOf } from '../../lib/fs/paths'
+import { removeTree } from '../../lib/fs/removeTree'
 import { DEFAULT_CALL_MS, DEFAULT_INIT_MS, McpClient, McpError, type McpTimers, type McpTool } from '../../lib/mcp/client'
 import { LineTransport, MAX_LINE, type LineStreams } from '../../lib/mcp/stdio'
 import { scrub } from '../../lib/memory/scrub'
@@ -147,6 +148,16 @@ export function heldTop(kept: string, tops: string[], dataDir: string): boolean 
   const real = realSpelling(kept)
   const data = realSpelling(dataDir)
   return within(real, data) || within(data, real) || tops.some(t => within(realSpelling(t), real))
+}
+
+const PER_USER_TEMP = /^(?:\/private)?\/var\/folders\/[^/]+\/[^/]+\/T$/
+
+/**
+ * 系统临时目录都隐藏(M16)。macOS 上 TMPDIR 的上一级还装着 DARWIN_USER_CACHE_DIR(m1),只有这个形状才连上一级一起:
+ * 别处的 TMPDIR 的上一级是系统或用户自己的目录,/private 这样的盖了什么都跑不起来
+ */
+export function tempTops(tmpReal: string): string[] {
+  return [...new Set([tmpReal, ...(PER_USER_TEMP.test(tmpReal) ? [dirname(tmpReal)] : []), '/tmp', '/var/tmp'])]
 }
 
 const sha = (s: string) => createHash('sha256').update(s).digest('hex')
@@ -426,6 +437,7 @@ export class McpHost {
     const e: Entry = { key, sessionId, plugin, server, state: 'starting', busy: 0, lastUsed: this.o.now(), aborted: false, writes: false, ready: Promise.resolve(), exited: false, exit, onExit, gone, onGone }
     this.entries.set(key, e)
     e.ready = this.launch(e).catch(async err => {
+      if (err instanceof McpHostError && err.code === 'data_dir_unsafe') this.noteEarlyFailure(e, err.code)
       await this.abandon(e)
       throw err
     })
@@ -505,7 +517,11 @@ export class McpHost {
       try {
         st = lstatSync(level)
       } catch {
-        mkdirSync(level, { mode: 0o700 })
+        try {
+          mkdirSync(level, { mode: 0o700 })
+        } catch {
+          throw refuse('data_dir_unsafe')
+        }
         continue
       }
       if (!st.isDirectory()) throw refuse('data_dir_unsafe')
@@ -550,7 +566,7 @@ export class McpHost {
 
     const store = pluginStoreRootOf(o.dataDir)
     const tmpReal = realSpelling(tmpdir())
-    const baseTops = [...new Set([o.home, store, tmpReal, '/tmp'])]
+    const baseTops = [...new Set([o.home, store, ...tempTops(tmpReal)])]
     const realCwd = realSpelling(cwd)
     if (heldTop(cwd, baseTops, o.dataDir) || within(realCwd, realSpelling(store))) throw refuse('cwd_too_broad')
 
@@ -577,14 +593,17 @@ export class McpHost {
 
     const data = this.plainDataDir(plugin, server)
     const spill = join(data, '.spill')
-    // 这个目录服务写得到:上次可能留了个链接。删链接不跟随;沙箱规则按它的两种拼写放开,所以每次都是新的空目录
-    rmSync(spill, { recursive: true, force: true })
-    mkdirSync(spill, { mode: 0o700 })
     const hash = sha(`${plugin}/${server}`).slice(0, 12)
     e.tmpRoot = join(o.dataDir, 'sessions', sessionId, 'mcp', hash)
-    rmSync(e.tmpRoot, { recursive: true, force: true })
     const tmp = join(e.tmpRoot, 'tmp')
-    mkdirSync(tmp, { recursive: true, mode: 0o700 })
+    try {
+      // 这两个目录服务写得到:上次可能留了链接、标志、000。不穿过链接;沙箱规则按它的两种拼写放开,所以每次都是新的空目录
+      if (!removeTree(spill) || !removeTree(e.tmpRoot)) throw refuse('data_dir_unsafe')
+      mkdirSync(spill, { mode: 0o700 })
+      mkdirSync(tmp, { recursive: true, mode: 0o700 })
+    } catch {
+      throw refuse('data_dir_unsafe') // fs 的错误带路径,不外传
+    }
 
     const paths = { PLUGIN_ROOT: root, PLUGIN_DATA: data, PROJECT_DIR: g.cwd === 'none' ? data : cwd }
     const args = this.expandArgs(rec, srv, paths)
@@ -629,7 +648,7 @@ export class McpHost {
       child = this.spawn(plan.file, plan.args, { cwd: g.cwd === 'none' ? data : cwd, env: plan.env, detached: true, stdio: ['pipe', 'pipe', 'pipe'] })
     } catch {
       plan.release()
-      this.noteSpawnFailure(e)
+      this.noteEarlyFailure(e, 'spawn_failed')
       throw refuse('spawn_failed')
     }
     e.child = child
@@ -638,7 +657,7 @@ export class McpHost {
     })
     if (child.pid === undefined) {
       plan.release()
-      this.noteSpawnFailure(e)
+      this.noteEarlyFailure(e, 'spawn_failed')
       throw refuse('spawn_failed')
     }
     const pid = child.pid
@@ -670,9 +689,10 @@ export class McpHost {
     this.emit(sessionId, plugin, server, 'running')
   }
 
-  private noteSpawnFailure(e: Entry): void {
-    this.countFailure(e, 'spawn_failed')
-    if (this.sticky.has(e.key)) this.emit(e.sessionId, e.plugin, e.server, 'server_failed', 'spawn_failed')
+  /** 没有进程可收尾的失败:算一次,到顶了这里就要报 */
+  private noteEarlyFailure(e: Entry, code: string): void {
+    this.countFailure(e, code)
+    if (this.sticky.has(e.key)) this.emit(e.sessionId, e.plugin, e.server, 'server_failed', code)
   }
 
   private armIdle(e: Entry, ms: number): void {
@@ -735,11 +755,7 @@ export class McpHost {
     e.plan?.release()
     if (e.pid !== undefined) this.o.pgids?.settle(e.pid)
     if (e.tmpRoot) {
-      try {
-        rmSync(e.tmpRoot, { recursive: true, force: true })
-      } catch (err) {
-        this.o.log.warn('mcp temp dir not removed', { code: (err as NodeJS.ErrnoException).code ?? 'unknown' })
-      }
+      if (!removeTree(e.tmpRoot)) this.o.log.warn('mcp temp dir not removed')
     }
     const failed = this.sticky.get(e.key)
     if (e.pid !== undefined) {

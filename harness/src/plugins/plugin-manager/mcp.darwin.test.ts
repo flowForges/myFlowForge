@@ -293,6 +293,25 @@ describe.skipIf(!usable)('an MCP server under real Seatbelt', () => {
     }, 60_000)
   })
 
+  it('m1: the per-user cache dir and /var/tmp are unreadable, and node still runs', async () => {
+    const m = await rig()
+    const s = await started(m)
+    const cacheDir = execFileSync('/usr/bin/getconf', ['DARWIN_USER_CACHE_DIR'], { encoding: 'utf8' }).trim().replace(/\/$/, '')
+    const inCache = join(realpathSync(cacheDir), `mffai-mcpd-probe-${process.pid}-${++n}`)
+    const inVarTmp = `/var/tmp/mffai-mcpd-probe-${process.pid}-${++n}`
+    writeFileSync(inCache, 'cache file')
+    writeFileSync(inVarTmp, 'var tmp file')
+    try {
+      denied(await s.probe('x/y', 'probe_read', { path: inCache }))
+      denied(await s.probe('x/y', 'probe_read', { path: inVarTmp }))
+      denied(await s.probe('x/y', 'probe_write', { path: `${inVarTmp}-w`, text: 'x' }))
+    } finally {
+      rmSync(inCache, { force: true })
+      rmSync(inVarTmp, { force: true })
+      rmSync(`${inVarTmp}-w`, { force: true })
+    }
+  }, 60_000)
+
   it('a runtime root under a hidden root outside home still runs; a credential dir there is hidden', async () => {
     const m = await rig()
     const bin = join(m.r.root, 'rt', 'bin')

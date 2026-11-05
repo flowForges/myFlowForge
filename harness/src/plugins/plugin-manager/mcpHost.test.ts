@@ -14,7 +14,7 @@ import { DEFAULT_CALL_MS, DEFAULT_INIT_MS } from '../../lib/mcp/client'
 import { MAX_LINE } from '../../lib/mcp/stdio'
 import { pgidFile, reapOrphans } from '../../lib/proc/pgids'
 import toolsRegistry from '../tools-registry'
-import { heldTop, IDLE_MS, MAX_PER_SESSION, MAX_SERVERS, resolveProgram, runtimeRoots } from './mcpHost'
+import { heldTop, IDLE_MS, tempTops, MAX_PER_SESSION, MAX_SERVERS, resolveProgram, runtimeRoots } from './mcpHost'
 
 let tmp: string
 const rigs: McpRig[] = []
@@ -90,7 +90,7 @@ describe('the plan each server gets', () => {
     expect(p.x.exactHosts).toBe(true)
     expect(p.x.denyRead).toEqual([])
     expect(p.x.denyWrite).toEqual([])
-    expect(new Set(p.x.hide!.tops)).toEqual(new Set([m.r.home, storeOf(m.r), realpathSync(tmpdir()), '/tmp']))
+    expect(new Set(p.x.hide!.tops)).toEqual(new Set([m.r.home, storeOf(m.r), realpathSync(tmpdir()), ...tempTops(realpathSync(tmpdir()))]))
     expect(new Set(p.x.hide!.keep)).toEqual(new Set([m.r.cwd, version]))
     expect(p.x.tmpDir).toMatch(new RegExp(`^${m.r.dataDir}/sessions/${m.sid}/mcp/[0-9a-f]{12}/tmp$`))
     expect(p.x.proxyScope).toMatch(/^mcp_[0-9a-f]{12}$/)
@@ -189,6 +189,20 @@ describe('refused before any spawn', () => {
     const m = await setup({ y: fake().entry() }, { sessionCwd: x => dirname(x.r.home), grants: { y: { network: [], cwd: 'none' } } })
     expect((await m.mcp(m.sid, { action: 'tools', server: 'x/y' })).text).toBe('cwd_too_broad')
     expect(m.spawns).toEqual([])
+  })
+
+  it.each([
+    ['/private/var/folders/aa/bb/T', ['/private/var/folders/aa/bb/T', '/private/var/folders/aa/bb', '/tmp', '/var/tmp']],
+    ['/var/folders/aa/bb/T', ['/var/folders/aa/bb/T', '/var/folders/aa/bb', '/tmp', '/var/tmp']],
+    // 别的位置的上一级是系统的、用户的,不是这次的临时区:不隐藏
+    ['/tmp', ['/tmp', '/var/tmp']],
+    ['/private/tmp', ['/private/tmp', '/tmp', '/var/tmp']],
+    ['/home/tmp', ['/home/tmp', '/tmp', '/var/tmp']],
+    ['/Users/me/x/tmp', ['/Users/me/x/tmp', '/tmp', '/var/tmp']],
+    ['/private/var/tmp', ['/private/var/tmp', '/tmp', '/var/tmp']],
+    ['/var/folders/aa/T', ['/var/folders/aa/T', '/tmp', '/var/tmp']],
+  ])('m1: temp roots for %s', (tmpReal, want) => {
+    expect(tempTops(tmpReal).sort()).toEqual([...want].sort())
   })
 
   it('heldTop: a kept path holding any hidden root or the data dir, in either spelling', () => {
@@ -730,6 +744,41 @@ describe('only the record that was consented to', () => {
     expect((await m.mcp(m.sid, { action: 'tools', server: 'x/y' })).text).toBe('data_dir_unsafe')
     expect(m.spawns).toEqual([])
     expect(readdirSync(target)).toEqual([])
+  })
+
+  it('m2: what a server locked inside .spill does not stop the next start; the dir is empty and real', async () => {
+    const f = fake()
+    const m = await setup({ y: f.entry() })
+    await m.mcp(m.sid, { action: 'tools', server: 'x/y' })
+    const spill = planOf(m).s.spillDir
+    mkdirSync(join(spill, 'k'))
+    writeFileSync(join(spill, 'k', 'f'), 'x')
+    if (process.platform === 'darwin') execFileSync('/usr/bin/chflags', ['uchg', join(spill, 'k', 'f')])
+    chmodSync(join(spill, 'k'), 0)
+    await call(m.r, 'plugins.setEnabled', { commandId: 'off', id: 'x', enabled: false })
+    await call(m.r, 'plugins.setEnabled', { commandId: 'on', id: 'x', enabled: true })
+    expect((await m.mcp(m.sid, { action: 'tools', server: 'x/y' })).text).toContain('echo')
+    expect(readdirSync(spill)).toEqual([])
+  })
+
+  it('m2: a data dir that cannot be prepared is one stable code with no path, and uses the failure budget', async () => {
+    const f = fake()
+    const m = await setup({ y: f.entry() })
+    const data = join(m.r.dataDir, 'plugin-data', 'x', 'y')
+    mkdirSync(data, { recursive: true })
+    chmodSync(data, 0o555)
+    try {
+      for (let i = 1; i <= 3; i++) {
+        expect((await m.mcp(m.sid, { action: 'tools', server: 'x/y' })).text).toBe('data_dir_unsafe')
+        expect(m.host().failureCount(m.sid, 'x', 'y')).toBe(i)
+      }
+      expect((await m.mcp(m.sid, { action: 'tools', server: 'x/y' })).text).toBe('server_failed: data_dir_unsafe')
+      expect(statusEvents(m.r, m.sid)).toContainEqual({ plugin: 'x', server: 'y', state: 'server_failed', reason: 'data_dir_unsafe' })
+      expect(m.spawns).toEqual([])
+      expect(m.sandbox!.plans).toEqual([])
+    } finally {
+      chmodSync(data, 0o755)
+    }
   })
 
   it('a link at plugin-data/<id>/<server>: refused', async () => {
