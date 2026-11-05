@@ -529,6 +529,35 @@ export class PgidRegistry {
     return out
   }
 
+  /** 这些组和它们的后代(自成一组的组信号碰不到)。组长一死 ppid 链就断,所以要在发信号之前读 */
+  tree(pgids: number[]): Member[] {
+    if (!pgids.length) return []
+    try {
+      const rows = this.r.procTable()
+      return treeMembers(rows, [...pgids, ...rows.filter(x => pgids.includes(x.pgid)).map(x => x.pid)])
+    } catch (err) {
+      this.r.log.warn('process tree snapshot failed', { error: String(err) })
+      return []
+    }
+  }
+
+  /** 快照里的单个进程:启动时间对得上才发 */
+  signalTree(members: Member[], sig: NodeJS.Signals): void {
+    signalMembers(members, sig, this.r)
+  }
+
+  /** 快照里还有进程活着(只看 pid,最后的 SIGKILL 才比启动时间) */
+  treeAlive(members: Member[]): boolean {
+    return members.some(m => {
+      try {
+        this.r.kill(m.pid, 0)
+        return true
+      } catch (e) {
+        return (e as NodeJS.ErrnoException).code === 'EPERM'
+      }
+    })
+  }
+
   /** 只给登记过的组发信号 */
   signal(pgid: number, sig: NodeJS.Signals): boolean {
     return this.entries.has(pgid) && signalGroup(pgid, sig, this.r)
@@ -665,12 +694,17 @@ export function reapOrphans(file: string, opts: ProcDeps & { platform?: NodeJS.P
 export async function killLive(registry: PgidRegistry, graceMs = 1000): Promise<void> {
   registry.dispose()
   await registry.idle() // 组长刚退时的组员记录要先写完,否则认不出组
-  const sent = registry.live().filter(g => registry.signal(g, 'SIGTERM'))
+  const live = registry.live()
+  // 后代自成一组时组信号碰不到它们(09 I2);和 reapOrphans 一样,快照在第一个信号之前
+  const tree = registry.tree(live)
+  const sent = live.filter(g => registry.signal(g, 'SIGTERM'))
   if (sent.length) {
+    registry.signalTree(tree, 'SIGTERM')
     const end = Date.now() + graceMs
-    while (Date.now() < end && sent.some(g => registry.exists(g))) await new Promise(res => setTimeout(res, 25))
+    while (Date.now() < end && (sent.some(g => registry.exists(g)) || registry.treeAlive(tree))) await new Promise(res => setTimeout(res, 25))
     // SIGTERM 时已认过组;宽限期内组退净又被别人重建需要 pid 绕一圈,不再重认(组长可能正是被 SIGTERM 杀掉的)
     for (const g of sent) if (registry.exists(g)) registry.signal(g, 'SIGKILL')
+    if (registry.treeAlive(tree)) registry.signalTree(tree, 'SIGKILL')
   }
   registry.clear()
 }

@@ -1261,6 +1261,19 @@ describe('shutting down', () => {
     expect(existsSync(join(m.r.dataDir, 'sessions', m.sid, 'mcp'))).toBe(false)
   }, 20_000)
 
+  it('I2: a child in its own session does not outlive kernel.close, and nothing is left on record', async () => {
+    const f = fake()
+    const m = await setup({ y: f.entry() })
+    const { spawned } = jsonOf((await m.mcp(m.sid, { action: 'call', server: 'x/y', tool: 'probe_children', arguments: { spawn: true } })).text)
+    stray.push(spawned)
+    expect(alive(spawned)).toBe(true)
+    const t0 = Date.now()
+    await m.r.kernel.close()
+    await until(() => !alive(spawned), 1000)
+    expect(Date.now() - t0).toBeLessThan(5000)
+    expect(existsSync(pgidFile(m.r.dataDir)) ? readFileSync(pgidFile(m.r.dataDir), 'utf8') : '').not.toContain(String(m.pids[0]))
+  }, 20_000)
+
   it('a child that started its own session is walked and taken when the server is stopped', async () => {
     const f = fake()
     const m = await setup({ y: f.entry() })

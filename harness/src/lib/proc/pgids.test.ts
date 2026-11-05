@@ -268,6 +268,21 @@ describe('PgidRegistry', () => {
     expect(await waitFor(() => !alive(pid) && exited(c), 2000)).toBe(true)
   })
 
+  it.skipIf(!posix)('killLive takes a descendant in its own session, even one that ignores SIGTERM; the tree is read before the leader dies', async () => {
+    const reg = newReg(file)
+    const script = `const { spawn } = require('node:child_process'); const c = spawn('/bin/sh', ['-c', "trap '' TERM; while :; do sleep 1; done"], { detached: true, stdio: 'ignore' }); require('node:fs').writeFileSync('pid', String(c.pid)); c.unref(); setInterval(() => {}, 1000)`
+    const c = spawn(process.execPath, ['-e', script], { cwd: root, detached: true, stdio: 'ignore' })
+    children.push({ c, detached: true })
+    reg.add(c.pid!)
+    const pid = await grandkid()
+    grandkids.push({ pid, start: startTime(pid)! })
+    const t0 = Date.now()
+    await killLive(reg, 300)
+    expect(Date.now() - t0).toBeLessThan(2000)
+    expect(await waitFor(() => !alive(pid), 1000)).toBe(true)
+    expect(readFileSync(file, 'utf8')).toBe('')
+  })
+
   it('signal() refuses groups it never recorded', () => {
     const sent: unknown[] = []
     const reg = newReg(file, 'linux', { kill: (...a) => sent.push(a), startTime: () => 'S', ownPgid: () => 4242 })

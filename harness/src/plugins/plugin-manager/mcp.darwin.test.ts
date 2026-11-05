@@ -499,6 +499,19 @@ describe.skipIf(!usable)('an MCP server under real Seatbelt', () => {
     denied(await s.probe('x/y', 'probe_read', { path: join(m.r.cwd, 'private', 'x.txt') }))
   }, 60_000)
 
+  it('I2: a detached child under the sandbox does not outlive kernel.close', async () => {
+    const m = await rig()
+    const s = await started(m)
+    const { spawned } = await s.probe('x/y', 'probe_children', { spawn: true })
+    expect(alive(spawned)).toBe(true)
+    await m.r.kernel.close()
+    try {
+      await until(() => !alive(spawned), 1000)
+    } finally {
+      if (alive(spawned)) process.kill(spawned, 'SIGKILL')
+    }
+  }, 60_000)
+
   it('kernel.close leaves no pid', async () => {
     const m = await rig()
     const s = await started(m)
