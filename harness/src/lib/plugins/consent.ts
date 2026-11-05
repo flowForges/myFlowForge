@@ -8,7 +8,7 @@ import type { Grants, PluginConsent, PluginConsentError, PluginDiff, PluginSourc
 import { scrub } from '../memory/scrub'
 import { normalizeHost, validateNetworkEntry } from '../sandbox/net/domains'
 import { isInternalHost } from './hosts'
-import { clip, PROTO_NAMES, type ParsedPlugin } from './types'
+import { clip, PROTO_NAMES, type ParsedPlugin, type ParsedServer } from './types'
 
 export type Declared = { network: string[]; cwd: 'none' | 'read' | 'write' }
 export type Effective = Grants
@@ -24,11 +24,20 @@ type Hook = PluginConsent['notRun']['hooks'][number]
 const UNSAFE_SRC = String.raw`\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Default_Ignorable_Code_Point}\p{Zl}\p{Zp}\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000\u2800\u3164\u115f\u1160\uffa0\u{1bca0}-\u{1bca3}\u{e0000}-\u{e0fff}`
 const ESCAPE_RE = new RegExp(String.raw`[\\${UNSAFE_SRC}]`, 'gu')
 const STRIP_RE = new RegExp(`[${UNSAFE_SRC}]`, 'gu')
+const INVISIBLE_RE = new RegExp(`[${UNSAFE_SRC}]`, 'gu')
 
 /** 写成可见的 \uXXXX(基本平面之外 \u{XXXXX});反斜杠自己翻倍,真字符和字面的 `‮` 不会显示成一样 */
 export function escapeDisplay(s: string): string {
   return s.replace(ESCAPE_RE, ch => {
     if (ch === '\\') return '\\\\'
+    const cp = ch.codePointAt(0)!
+    return cp > 0xffff ? `\\u{${cp.toString(16)}}` : `\\u${cp.toString(16).padStart(4, '0')}`
+  })
+}
+
+/** 同上,但反斜杠不翻倍:给已经是 JSON 的文字用(审批卡),转义本身要原样看得懂 */
+export function escapeInvisible(s: string): string {
+  return s.replace(INVISIBLE_RE, ch => {
     const cp = ch.codePointAt(0)!
     return cp > 0xffff ? `\\u{${cp.toString(16)}}` : `\\u${cp.toString(16).padStart(4, '0')}`
   })
@@ -86,6 +95,33 @@ const SCALES = [1, 0.5, 0.25, 0.1, 0]
 const CAP = { skills: 500, commands: 500, config: 100, names: 500, flags: 16, ignored: 20 }
 const LIMIT = { desc: 200, ignored: 100, source: 1024 }
 
+/** 服务在同意页上的样子:同意页和启动前的比对共用 */
+function consentServer(sv: ParsedServer): PluginConsent['mcp'][number] {
+  const esc = escapeDisplay
+  const args = sv.args.map(a => shown(a))
+  return {
+    name: esc(sv.name),
+    command: shown(sv.command).text,
+    args: args.map(a => a.text),
+    argsMasked: args.flatMap((a, i) => (a.masked ? [i] : [])),
+    fetchesAtRuntime: sv.fetchesAtRuntime,
+    env: [...sv.env].sort(by(e => e.name)).map(e => ({
+      name: esc(e.name),
+      source: e.source,
+      required: e.required,
+      ...(e.source === 'literal' && e.value !== undefined ? { value: shownEnvValue(e.name, e.value) } : {}),
+    })),
+    declared: sv.declared ? { network: sv.declared.network.map(esc), cwd: sv.declared.cwd } : null,
+    suggestedHosts: sv.suggestedHosts.map(esc),
+    problems: [...sv.problems].sort(cmp),
+  }
+}
+
+/** 启动前比对:磁盘上读出来的服务,就是用户同意的那一条(规范化比较,键序不算) */
+export function sameConsentedServer(sv: ParsedServer, entry: PluginConsent['mcp'][number]): boolean {
+  return canon(consentServer(sv)) === canon(entry)
+}
+
 export function buildConsent(
   p: ParsedPlugin,
   s: { source: PluginSource; integrity: string; files: number; bytes: number; commit?: string },
@@ -106,25 +142,7 @@ export function buildConsent(
   const names = (xs: string[]) => uniqueSorted(xs.map(esc))
 
   // ----- 有执行效果的部分:不剪、不丢 -----
-  const mcp: PluginConsent['mcp'] = [...p.servers].sort(by(x => x.name)).map(sv => {
-    const args = sv.args.map(a => shown(a))
-    return {
-      name: esc(sv.name),
-      command: shown(sv.command).text,
-      args: args.map(a => a.text),
-      argsMasked: args.flatMap((a, i) => (a.masked ? [i] : [])),
-      fetchesAtRuntime: sv.fetchesAtRuntime,
-      env: [...sv.env].sort(by(e => e.name)).map(e => ({
-        name: esc(e.name),
-        source: e.source,
-        required: e.required,
-        ...(e.source === 'literal' && e.value !== undefined ? { value: shownEnvValue(e.name, e.value) } : {}),
-      })),
-      declared: sv.declared ? { network: sv.declared.network.map(esc), cwd: sv.declared.cwd } : null,
-      suggestedHosts: sv.suggestedHosts.map(esc),
-      problems: [...sv.problems].sort(cmp),
-    }
-  })
+  const mcp: PluginConsent['mcp'] = [...p.servers].sort(by(x => x.name)).map(consentServer)
   const hooks: Hook[] = [...p.notRun.hooks].sort((a, b) => cmp(a.event, b.event) || cmp(a.command, b.command)).map(h => {
     const c = shown(h.command)
     return { event: esc(h.event), command: c.text, ...(c.masked ? { masked: true } : {}) }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { commandBlock, imIndexLine, INDEX_PREFACE, mcpResultBlock, MCP_RESULT_PREFACE, oneLine, pluginIndex, PLUGIN_SAFETY, SERVERS_PREFACE, SKILL_PREFACE, skillBlock, COMMAND_PREFACE } from './wrap'
+import { commandBlock, imIndexLine, INDEX_PREFACE, mcpResultBlock, MCP_RESULT_MAX, MCP_RESULT_PREFACE, oneLine, pluginIndex, PLUGIN_SAFETY, SERVERS_PREFACE, SKILL_PREFACE, skillBlock, COMMAND_PREFACE } from './wrap'
 import { expandSealed, type ExpandVars } from './expand'
 
 const HOSTILE = [
@@ -267,5 +267,33 @@ describe('a mask landing on a sentinel', () => {
     if (!r.ok) throw new Error(r.error)
     const out = skillBlock({ plugin: 'p', skill: 's', text: r.text, seal: r.seal })
     expect(out).not.toMatch(/mffroot|[0-9a-f]{32}/)
+  })
+})
+
+describe('mcpResultBlock is bounded', () => {
+  const frame = (text: string) => mcpResultBlock({ plugin: 'p', server: 's', tool: 't', text })
+  const overhead = frame('').length
+
+  it('a result past the cap is cut inside the block, says so, and closes', () => {
+    const out = frame('a'.repeat(MCP_RESULT_MAX + 1000))
+    expect(out.length).toBeLessThanOrEqual(overhead + MCP_RESULT_MAX + 200)
+    expect(out).toContain('[output truncated]')
+    expect(out.endsWith('\n</mcp-result>')).toBe(true)
+  })
+
+  it('exactly at the cap: nothing is cut', () => {
+    const out = frame('a'.repeat(MCP_RESULT_MAX))
+    expect(out).not.toContain('[output truncated]')
+    expect(out.length).toBe(overhead + MCP_RESULT_MAX)
+  })
+
+  it('growth from escaping counts: all tag openers stay inside the bound, and none survives', () => {
+    const out = frame('<a'.repeat(MCP_RESULT_MAX / 2))
+    expect(out.length).toBeLessThanOrEqual(overhead + MCP_RESULT_MAX + 200)
+    expect(out.slice(out.indexOf('\n') + 1, out.lastIndexOf('\n'))).not.toContain('<a')
+  })
+
+  it('a 3 MB result still reaches the registry whole, which spills it', () => {
+    expect(frame('b'.repeat(3 * 1024 * 1024))).not.toContain('[output truncated]')
   })
 })

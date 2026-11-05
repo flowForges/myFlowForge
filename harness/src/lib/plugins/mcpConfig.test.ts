@@ -106,3 +106,16 @@ describe('parseServer problems', () => {
     expect(dangerousEnvName('LD_PRELOAD')).toBe(true)
   })
 })
+
+describe('the template of a non-literal env value', () => {
+  it('is kept for the host, symbolic, only where there is no literal value', () => {
+    const s = p({ command: 'node', env: { A: 'Bearer ${user_config.tok}', B: '${CLAUDE_PLUGIN_ROOT}/x', C: '${TOKEN}', D: '${user_config.mode}-${MFF_PLUGIN_DATA}' } })
+    const by = Object.fromEntries(s.env.map(e => [e.name, e]))
+    expect(by.A).toMatchObject({ source: 'secret', template: 'Bearer ${user_config.tok}' })
+    expect(by.A.value).toBeUndefined()
+    expect(by.B).toMatchObject({ source: 'literal', value: '${PLUGIN_ROOT}/x' })
+    expect(by.B.template).toBeUndefined()
+    expect(by.C).toMatchObject({ source: 'secret', template: '${TOKEN}' })
+    expect(by.D).toMatchObject({ source: 'config', template: '${user_config.mode}-${PLUGIN_DATA}' })
+  })
+})

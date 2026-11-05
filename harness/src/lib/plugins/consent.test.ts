@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildConsent, consentHash, diffConsent, effectiveGrants, escapeDisplay, intersectOnUpgrade, type Declared } from './consent'
+import { buildConsent, consentHash, diffConsent, effectiveGrants, escapeDisplay, escapeInvisible, intersectOnUpgrade, sameConsentedServer, type Declared } from './consent'
 import type { ParsedPlugin, ParsedServer, ParsedSkill, ParsedCommand } from './types'
 import type { PluginConsent } from '../../protocol'
 
@@ -669,5 +669,32 @@ describe('escapeDisplay', () => {
   it('claimed strips the same set', () => {
     const c = build(plugin({ claimed: { name: 'a\u3164b\u2800c\u00a0d\u{1bca0}e\ud800f\u200bg', description: 'x' } }))
     expect(c.claimed.name).toBe('abcdefg')
+  })
+})
+
+describe('what the host compares with the record', () => {
+  const srv = (over: Partial<ParsedServer> = {}) => server('x', { command: 'node', args: ['a'], env: [{ name: 'A', source: 'secret', required: true, template: 'Bearer ${TOK}' }], configRefs: ['TOK'], ...over })
+
+  it('the template of an env value reaches neither the consent nor its hash', () => {
+    const a = build(plugin({ servers: [srv()] }))
+    const b = build(plugin({ servers: [srv({ env: [{ name: 'A', source: 'secret', required: true, template: 'Basic ${TOK}' }] })] }))
+    expect(JSON.stringify(a)).not.toContain('Bearer')
+    expect(consentHash(a)).toBe(consentHash(b))
+    expect(sameConsentedServer(srv(), a.mcp[0])).toBe(true)
+  })
+
+  it.each([
+    ['command', { command: 'python3' }],
+    ['args', { args: ['b'] }],
+    ['env name', { env: [{ name: 'B', source: 'secret' as const, required: true }] }],
+    ['declared', { declared: { network: ['a.com'], cwd: 'read' as const } }],
+    ['problems', { problems: ['bad_command' as const] }],
+  ])('another %s is not the consented server', (_n, changed) => {
+    expect(sameConsentedServer(srv(changed), build(plugin({ servers: [srv()] })).mcp[0])).toBe(false)
+  })
+
+  it('escapeInvisible: control, bidi and zero-width become visible, backslashes stay single', () => {
+    expect(escapeInvisible('a\u202Eb\u200Bc\\d')).toBe('a\\u202eb\\u200bc\\d')
+    expect(escapeInvisible('\u{E0041}')).toBe('\\u{e0041}')
   })
 })

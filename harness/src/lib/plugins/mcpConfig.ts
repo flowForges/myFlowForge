@@ -198,7 +198,7 @@ export function parseServer(name: string, raw: unknown, ctx: ServerCtx): ParsedS
             required = required || decl?.required === true
           }
         }
-        env.push(source === 'literal' ? { name: k, source, required, value } : { name: k, source, required })
+        env.push(source === 'literal' ? { name: k, source, required, value } : { name: k, source, required, template: value })
       }
   }
   env.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))

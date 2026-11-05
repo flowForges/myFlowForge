@@ -61,7 +61,7 @@ interface Pending {
   detach(): void
 }
 
-const validName = (n: unknown): n is string => typeof n === 'string' && TOOL_NAME.test(n) && !RESERVED_NAMES.has(n)
+export const isValidToolName = (n: unknown): n is string => typeof n === 'string' && TOOL_NAME.test(n) && !RESERVED_NAMES.has(n)
 
 function clip(s: string, max: number): string {
   if (s.length <= max) return s
@@ -92,7 +92,7 @@ function shallowEnough(root: unknown, max: number): boolean {
 }
 
 function toolOf(raw: unknown): McpTool | undefined {
-  if (!isObj(raw) || !validName(raw.name) || !isObj(raw.inputSchema)) return undefined
+  if (!isObj(raw) || !isValidToolName(raw.name) || !isObj(raw.inputSchema)) return undefined
   if (!shallowEnough(raw.inputSchema, MAX_DEPTH)) return undefined
   if (Buffer.byteLength(JSON.stringify(raw.inputSchema)) > MAX_SCHEMA_BYTES) return undefined
   return { name: raw.name, description: typeof raw.description === 'string' ? clip(raw.description, MAX_DESCRIPTION) : '', inputSchema: raw.inputSchema }
@@ -224,7 +224,7 @@ export class McpClient {
 
   async callTool(name: string, args: unknown, signal: AbortSignal): Promise<{ text: string; isError: boolean }> {
     this.requireReady()
-    if (!validName(name)) throw new McpError('protocol_error')
+    if (!isValidToolName(name)) throw new McpError('protocol_error')
     if (signal.aborted) throw new McpError('cancelled')
     const res = await this.request('tools/call', { name, arguments: args }, this.o.callMs, signal)
     if (res.error !== undefined) {

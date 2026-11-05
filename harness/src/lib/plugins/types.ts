@@ -38,6 +38,8 @@ export interface EnvEntry {
   required: boolean
   /** 只有 literal,原文。打码是同意页的事 */
   value?: string
+  /** 不是 literal 时的原文(符号形式),只有宿主展开时用:不进同意页,也不进哈希 */
+  template?: string
 }
 
 export interface ParsedServer {

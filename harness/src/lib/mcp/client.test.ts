@@ -8,7 +8,7 @@ import { getEventListeners } from 'node:events'
 import { inspect } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { installFakeMcp } from '../../../test/pluginRig'
-import { DEFAULT_CALL_MS, DEFAULT_INIT_MS, McpClient, McpError, UNSOLICITED_BUDGET } from './client'
+import { DEFAULT_CALL_MS, DEFAULT_INIT_MS, isValidToolName, McpClient, McpError, UNSOLICITED_BUDGET } from './client'
 import { LineTransport, MAX_LINE } from './stdio'
 
 class FakeTimers {
@@ -1060,5 +1060,11 @@ describe('McpError', () => {
     expect(e).toBeInstanceOf(Error)
     expect(e.code).toBe('call_timeout')
     expect(e.name).toBe('McpError')
+  })
+})
+
+describe('isValidToolName', () => {
+  it.each([['echo', true], ['a.b-c_d', true], ['x'.repeat(64), true], ['x'.repeat(65), false], ['', false], ['a;rm -rf', false], ['../x', false], ['has space', false], ['__proto__', false], ['constructor', false], ['prototype', false], [7, false], ['toString', true]])('%s → %s', (name, ok) => {
+    expect(isValidToolName(name)).toBe(ok)
   })
 })
