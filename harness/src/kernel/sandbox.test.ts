@@ -1612,7 +1612,7 @@ describe('planExec with hide, tmpDir, exactHosts (09 Task 1, M1, M4, M5, M13)', 
       const final = lines(profile, '(deny file-read* ')[1]
       expect(final).toContain(subpath(join(home, '.ssh')))
       expect(profile.indexOf(final)).toBeGreaterThan(profile.indexOf(lines(profile, '(allow file-read* ')[0]))
-      const nestedData = await darwin({ hide: { tops: [root], keep: [root] } })
+      const nestedData = await darwin({ hide: { tops: ['/opt/mff-unrelated-top'], keep: [root] } })
       expect(lines(nestedData.profile, '(deny file-read* ')[1]).toContain(subpath(dataDir))
     })
 
@@ -1623,6 +1623,47 @@ describe('planExec with hide, tmpDir, exactHosts (09 Task 1, M1, M4, M5, M13)', 
       expect(opened).not.toContain(join(home, '.ssh', 'k'))
       expect(opened).not.toContain(join(dataDir, 'x'))
       expect(opened).not.toContain(join(home, 'nice'))
+    })
+
+    describe('a kept path that holds a top is refused: re-allow comes after the deny, so the top would be open', () => {
+      const kept = () => join(home, '.nvm', 'v1')
+      const refused: [string, () => { tops: string[]; keep: string[] }, () => string][] = [
+        ['the cwd is the parent of the store', () => ({ tops: [home, join(home, '.mff-plugins')], keep: [home] }), () => repo],
+        ["cwd:'none' with the cwd inside the runtime root", () => ({ tops: [home, join(kept(), 'lib', 'proj')], keep: [kept()] }), () => join(kept(), 'lib', 'proj')],
+        ['the same path on both sides', () => ({ tops: [home], keep: [home] }), () => repo],
+        ['a program in /bin: the runtime root would be /', () => ({ tops: [home], keep: ['/'] }), () => repo],
+      ]
+      it.each(refused)('%s', async (_n, hide, cwd) => {
+        const started: ProxyOptions[] = []
+        const tmpDir = join(dataDir, 'sessions', 's1', 'mcp', 'h', 'tmp')
+        for (const platform of [{}, linux()]) {
+          const { svc } = service({ ...platform, startProxy: async o => { started.push(o); return startProxy(o) } })
+          await expect(svc.planExec('/opt/m/server', [], { ...session('s1', repo), cwd: cwd() }, baseEnv, base({ tmpDir, hide: hide() }))).rejects.toThrow(/holds a hidden root/)
+        }
+        expect(started).toEqual([])
+        expect(existsSync(tmpDir)).toBe(false)
+      })
+
+      it('spelled through a link too', async () => {
+        const real = join(root, 'real')
+        mkdirSync(join(real, 'store'), { recursive: true })
+        symlinkSync(real, join(home, 'link'))
+        await expect(darwin({ hide: { tops: [join(real, 'store')], keep: [join(home, 'link')] } })).rejects.toThrow(/holds a hidden root/)
+        await expect(darwin({ hide: { tops: [join(home, 'link', 'store')], keep: [real] } })).rejects.toThrow(/holds a hidden root/)
+      })
+
+      it('a scope that is released again: the next plan of that scope still runs', async () => {
+        const { svc } = service()
+        await expect(svc.planExec('/opt/m/server', [], session('s1', repo), baseEnv, base({ hide: { tops: [home], keep: [home] } }))).rejects.toThrow(/holds a hidden root/)
+        const plan = await svc.planExec('/opt/m/server', [], session('s1', repo), baseEnv, base({ hide: { tops: [home], keep: [repo] } }))
+        plan.release()
+        expect(plan.sandboxed).toBe(true)
+      })
+
+      it('a kept path under a top, or a sibling with the same prefix: fine', async () => {
+        const { plan } = await darwin({ hide: { tops: [join(home, 'store'), home], keep: [repo, join(home, 'store', 'p'), join(home, 'store-not')] } }, {})
+        expect(plan.sandboxed).toBe(true)
+      })
     })
 
     it('without hide an allowRead stays what it was: no extra traverse', async () => {
@@ -1722,6 +1763,9 @@ describe('planExec with hide, tmpDir, exactHosts (09 Task 1, M1, M4, M5, M13)', 
       expect(on.profile).not.toContain('localhost:*')
       const off = await darwin({ proxyScope: 'run_2' }, { config: DEFAULTS })
       expect(off.profile).toContain('localhost:*')
+      expect(on.plan.env.NO_PROXY).toBe('')
+      expect(on.plan.env.no_proxy).toBe('')
+      expect(off.plan.env.NO_PROXY).toContain('127.0.0.1')
     })
   })
 

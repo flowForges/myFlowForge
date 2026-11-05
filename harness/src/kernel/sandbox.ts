@@ -514,6 +514,14 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
       hide: raw.hide && { tops: cleaned(raw.hide.tops), keep: cleaned(raw.hide.keep) },
       tmpDir: raw.tmpDir === undefined ? undefined : cleanPath(raw.tmpDir, 'sandbox'),
     }
+    // 放回排在拒读之后:keep 含着一个根,这个根就白隐藏了(存储根在 cwd 里、cwd:'none' 的 cwd 在运行时根里)。不跑,调用方报 sandbox_unavailable
+    if (x.hide) {
+      const hiddenRoots = [...x.hide.tops, ...imHidden(s.sessionId, s.cwd).tops]
+      for (const k of x.hide.keep) {
+        const top = hiddenRoots.find(t => within(t, k) || within(realSpelling(t), realSpelling(k)))
+        if (top !== undefined) throw new Error(`sandbox: kept path ${JSON.stringify(k)} holds a hidden root ${JSON.stringify(top)}`)
+      }
+    }
     const tmp = x.tmpDir ?? sessionTmpDir(o.dataDir, s.sessionId)
     ensureTmp(tmp)
     const repo = repoFor(s.sessionId, s.cwd)
@@ -542,7 +550,8 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
       const persistence = persistenceList()
       const hidden = exemptFrom(creds, x.allowRead)
       // keep 只放普通路径:落在凭据或数据目录里的不算,不然 keep 就能点名放开它们(两种拼写都比,和 imHidden 一样)
-      const closedRoots = [...hidden, o.dataDir]
+      // hidden 两种拼写都有,数据目录也要:它在链接后面时,真身可能就在 keep 或 allowRead 里
+      const closedRoots = [...new Set([...hidden, o.dataDir, realSpelling(o.dataDir)])]
       const hideKeep = (x.hide?.keep ?? []).filter(k => !closedRoots.some(c => within(k, c) || within(realSpelling(k), realSpelling(c))))
       // 豁免目录里嵌套的凭据不跟着放出来;keep 也是豁免(09 M4)
       const exempted = [...x.allowRead, ...hideKeep]

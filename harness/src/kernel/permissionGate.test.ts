@@ -782,6 +782,7 @@ describe('decide: plugin requests (09 §10.4, M13, M19)', () => {
     ['allow shell(mcp *)', { effect: 'allow', rule: 'shell(mcp *)' }, true, 'ask', 'allow'],
     ['a broad allow, no hosts', { effect: 'allow', rule: 'shell(mc*)' }, false, 'ask', 'allow'],
     ['a broad allow, hosts: still asks', { effect: 'allow', rule: 'shell(mc*)' }, true, 'auto', 'ask'],
+    ['allow shell(mcp*), hosts: no space, not a name', { effect: 'allow', rule: 'shell(mcp*)' }, true, 'auto', 'ask'],
     ['allow for another tool, hosts', { effect: 'allow', rule: 'shell(mcp x/y other)' }, true, 'ask', 'ask'],
     ['deny on a shell command: nothing to do with it', { effect: 'deny', rule: 'shell(git push*)' }, false, 'auto', 'allow'],
   ]

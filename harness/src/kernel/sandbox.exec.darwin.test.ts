@@ -2,7 +2,7 @@
 // 只读 / 只写的断言都带一条能成功的对照:否则"什么都干不了"也会通过。
 // 测试进程自己在沙箱里时不能嵌套 → 整个文件跳过(探测只跑一次)
 import { spawn, spawnSync } from 'node:child_process'
-import { chmodSync, constants as fsConstants, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, constants as fsConstants, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -695,7 +695,7 @@ describe.skipIf(!usable)('planExec with hide, real sandbox-exec (09 Task 1, M1, 
     expect(await cat(join(h, '.config', 'gh', 'hosts.yml'), o)).toMatchObject({ out: '', code: 1 })
   })
 
-  it('a kept dir holding the data dir: it stays closed apart from what the plan opened', async () => {
+  it('a kept dir holding the data dir: a file in the data dir stays unreadable', async () => {
     writeFileSync(join(dataDir, 'token'), 'TOKEN')
     const o = { hide: { tops: [h], keep: [cwd, join(h, '.myFlowForge')] } }
     expect(await cat(join(dataDir, 'token'), o)).toMatchObject({ out: '', code: 1 })
@@ -703,6 +703,75 @@ describe.skipIf(!usable)('planExec with hide, real sandbox-exec (09 Task 1, M1, 
 
   /** 这台机器的 node 拷出来跑不了(依赖找不到)时跳过:和隐藏无关 */
   const copiedNodeRuns = () => spawnSync(nodeBin, ['-e', '0'], { stdio: 'ignore' }).status === 0
+
+  describe('the data dir under the kept cwd', () => {
+    /** 数据目录在 home/.mff/data。linked:.mff 是链接,真身在 cwd 里;plain:.mff 就是 cwd */
+    async function layout(linked: boolean) {
+      const base = mkdtempSync(join(box, 'layout-'))
+      const lh = join(base, 'home')
+      const ext = linked ? join(base, 'ext') : join(lh, '.mff')
+      const realData = join(ext, linked ? 'mff' : '', 'data')
+      mkdirSync(realData, { recursive: true })
+      mkdirSync(lh, { recursive: true })
+      if (linked) symlinkSync(join(ext, 'mff'), join(lh, '.mff'))
+      writeFileSync(join(realData, 'token'), 'DATA-TOKEN')
+      writeFileSync(join(ext, 'a.txt'), 'CWD-FILE')
+      const data2 = join(lh, '.mff', 'data')
+      const s2 = createSandboxService({
+        platform: 'darwin', dataDir: data2, home: lh, env: { HOME: lh }, detected: { level: 'full', missing: [] },
+        permissions: () => ({ rules: [], network: { allow: [] }, sandbox: { enabled: true, allowLoopback: false }, allowUnsandboxedAuto: false }),
+        rules: () => [], append: () => {},
+      })
+      const go = async (path: string, tops = [lh]) => {
+        const plan = await s2.planExec('/bin/cat', [path], { sessionId: 's1', cwd: ext, spillDir: join(data2, 'sessions', 's1', 'spill') }, { PATH: '/usr/bin:/bin', LC_ALL: 'C' }, {
+          allowRead: [], allowWrite: [], allowHosts: [], exactHosts: true, proxyScope: `mcp_${++n}`, readOnly: true, denyRead: [], denyWrite: [], hide: { tops, keep: [ext] },
+        })
+        try {
+          return await spawnPlan(plan, ext)
+        } finally {
+          plan.release()
+        }
+      }
+      return { go, s2, ext, lh, realData, literal: data2 }
+    }
+
+    it('the data dir reached through a link: closed in its real spelling and the literal one; the cwd still reads', async () => {
+      const l = await layout(true)
+      try {
+        expect((await l.go(join(l.ext, 'a.txt'))).out).toBe('CWD-FILE')
+        expect(await l.go(join(l.realData, 'token'))).toMatchObject({ out: '', code: 1 })
+        expect(await l.go(join(l.literal, 'token'))).toMatchObject({ out: '', code: 1 })
+      } finally {
+        await l.s2.close()
+      }
+    })
+
+    it('control, no link: the same rows', async () => {
+      const l = await layout(false)
+      try {
+        expect((await l.go(join(l.ext, 'a.txt'))).out).toBe('CWD-FILE')
+        expect(await l.go(join(l.realData, 'token'))).toMatchObject({ out: '', code: 1 })
+      } finally {
+        await l.s2.close()
+      }
+    })
+
+    it('with the store as a top, the kept cwd holds it through the link: refused, nothing ran', async () => {
+      const l = await layout(true)
+      try {
+        await expect(l.go(join(l.ext, 'a.txt'), [l.lh, `${l.literal}-plugins`])).rejects.toThrow(/holds a hidden root/)
+      } finally {
+        await l.s2.close()
+      }
+    })
+  })
+
+  it("cwd:'none' with the cwd inside the runtime root: refused, the file stays unread", async () => {
+    const inside = join(runtime, 'lib', 'proj')
+    mkdirSync(inside, { recursive: true })
+    writeFileSync(join(inside, 'secret'), 'INSIDE')
+    await expect(serve('/bin/cat', [join(inside, 'secret')], { hide: { tops: [h, inside], keep: [code, runtime] } }, sbx, inside)).rejects.toThrow(/holds a hidden root/)
+  })
 
   it('node runs from a kept runtime root under the hidden home, and loads a script from kept code', async ctx => {
     if (!copiedNodeRuns()) ctx.skip()
