@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getEventListeners } from 'node:events'
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createKernel, type Kernel } from './kernel'
 import { EventLog, openDb, REDACTED } from './eventLog'
@@ -569,6 +569,10 @@ describe('kernel: session commands for plugins (07)', () => {
       expect(cmd.validateCwd(work)).toEqual(expect.stringContaining('work'))
       expect(() => cmd.validateCwd(join(outside, 'missing'))).toThrow('invalid cwd')
       expect(() => cmd.validateCwd(dir)).toThrow('invalid cwd') // 数据目录本身
+      // 09:来源包住了黑名单的根(被环境变量挪走的、数据目录);家目录是内核的,不是 os.homedir()
+      expect(cmd.holdsCredentialRoot(outside)).toBe(true)
+      expect(cmd.holdsCredentialRoot(work)).toBe(false)
+      expect(cmd.home).not.toBe(homedir())
     } finally {
       rmSync(outside, { recursive: true, force: true })
     }

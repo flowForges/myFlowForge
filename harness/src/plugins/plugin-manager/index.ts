@@ -1,8 +1,6 @@
 // plugin-manager:唯一的插件管理者(09 spec §4)。这一步只有存储、安装、启用、卸载、授权和配置;
 // 技能工具、命令、MCP 进程后面接进来,杀进程走 killPluginProcesses 这个缝
 import type { spawn as nodeSpawn } from 'node:child_process'
-import { rmSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { resolve } from 'node:path'
 import type { Plugin, PluginContext } from '../../kernel/pluginHost'
 import { RpcError } from '../../kernel/rpcError'
@@ -28,8 +26,6 @@ export interface PluginManagerOpts {
   reservedIds?: () => Set<string>
   /** git 的基础环境,fetchGit 只从里面取 PATH、语言和代理。默认 process.env */
   env?: NodeJS.ProcessEnv
-  /** 默认 os.homedir(),和内核一样 */
-  home?: string
   /** 杀这个插件的全部进程。服务进程接进来之前没有东西可杀 */
   killPluginProcesses?: (id: string) => Promise<void>
 }
@@ -79,13 +75,14 @@ export function createPluginManager(o: PluginManagerOpts = {}): Plugin {
       const dataDir = resolve(ctx.dataDir, '..', '..')
       const store = PluginStore.open({ dataDir }, ctx.log)
 
+      const secretKey = (id: string, key: string) => `${id}/${key}`
       const installer = new Installer({
         store,
         commands,
+        deleteSecret: (id, key) => ctx.secrets.delete(secretKey(id, key)),
         append: e => ctx.append(e),
         log: ctx.log,
         dataDir,
-        home: o.home ?? homedir(),
         env: o.env ?? process.env,
         now,
         timers,
@@ -148,7 +145,6 @@ export function createPluginManager(o: PluginManagerOpts = {}): Plugin {
         }
       }
       const secretsLocked = () => LOCKED_BACKENDS.has(ctx.secretsBackend)
-      const secretKey = (id: string, key: string) => `${id}/${key}`
       /** 后端的错误里可能有路径:不外传,也不进日志 */
       const guarded = async <T,>(fn: () => Promise<T>): Promise<T> => {
         try {
@@ -186,7 +182,8 @@ export function createPluginManager(o: PluginManagerOpts = {}): Plugin {
           settings: rec.config.map(c => {
             const secret = c.sensitive || rec.secretKeys.includes(c.key)
             const value = !secret && Object.hasOwn(rec.settings, c.key) ? rec.settings[c.key] : undefined
-            return { key: escapeDisplay(c.key), set: isSet(rec, c.key), sensitive: secret, ...(value !== undefined && { value }) }
+            // 落盘时查过,但打码规则可能是后来才加的
+            return { key: escapeDisplay(c.key), set: isSet(rec, c.key), sensitive: secret, ...(value !== undefined && { value: scrub(value).text }) }
           }),
           servers: serverRows(rec),
         }
@@ -204,6 +201,7 @@ export function createPluginManager(o: PluginManagerOpts = {}): Plugin {
           if (p.enabled) {
             if (!store.verify(rec)) {
               failIntegrity(rec)
+              await kill(rec.id)
               throw fail('integrity_failed')
             }
             persist({ ...rec, enabled: true, state: 'ok' }, rec)
@@ -237,15 +235,24 @@ export function createPluginManager(o: PluginManagerOpts = {}): Plugin {
             throw fail('store_error')
           }
           // 记录已经没了:这里删不掉的,下次打开时对账收拾
-          for (const dir of [store.codeDir(rec.id), store.pluginDataRoot(rec.id)]) {
-            try {
-              rmSync(dir, { recursive: true, force: true })
-            } catch (err) {
-              ctx.log.warn('plugin files not removed', { code: (err as NodeJS.ErrnoException).code ?? 'unknown' })
-            }
-          }
+          store.removeFiles(rec.id)
           store.tidy()
           ctx.append({ type: 'plugins.uninstalled', payload: { id: rec.id } })
+          return { ok: true }
+        }),
+      )
+
+      // 记录丢了以后留下的东西,只有用户说不要才删
+      on('plugins.store.discard', () =>
+        serial(async () => {
+          if (store.unreadable) throw fail('store_unreadable')
+          const orphans = store.badSecrets()
+          if (orphans.length > 0 && secretsLocked()) throw fail('secrets_unavailable')
+          await guarded(async () => {
+            for (const { id, key } of orphans) await ctx.secrets.delete(secretKey(id, key))
+          })
+          store.discardUnknown()
+          ctx.append({ type: 'plugins.store.discarded', payload: {} })
           return { ok: true }
         }),
       )

@@ -204,6 +204,10 @@ export interface SessionCommands {
   hasReceipt(commandId: string): boolean
   /** 内核的环境快照,插件没有(07 §8.1)。不合法 → 抛错 */
   validateCwd(path: string): string
+  /** path 等于或包住黑名单的某个根(凭据、数据目录,含环境变量挪走的)。path 要先过 validateCwd */
+  holdsCredentialRoot(path: string): boolean
+  /** 内核用的家目录 */
+  readonly home: string
   /** IM 会话的 auto 收回成 ask,写进事件,重启后也算(07 §8.3)。只认 origin:'im';不是 auto 的什么都不做 */
   narrowApproval(sessionId: string): void
 }

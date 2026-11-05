@@ -59,6 +59,7 @@ export const EVENT_TYPES = [
   'plugins.mcp.status',
   'plugins.dev.trusted',
   'plugins.dev.loaded',
+  'plugins.store.discarded',
 ] as const
 
 export const EventTypeSchema = z.enum(EVENT_TYPES)

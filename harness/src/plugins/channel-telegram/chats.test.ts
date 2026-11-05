@@ -927,6 +927,8 @@ describe('Chats with fake services', () => {
         }) as never,
         hasReceipt: () => false,
         validateCwd: p => p,
+        holdsCredentialRoot: () => false,
+        home: '/nonexistent-home',
         narrowApproval: () => {},
       },
       sessions: { get: (id: string) => (known.has(id) ? { sessionId: id, approvalMode: 'ask', origin: 'im', audience: 'owner' } : undefined) } as never,

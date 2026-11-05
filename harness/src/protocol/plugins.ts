@@ -36,7 +36,7 @@ export const PluginSourceSchema = z.discriminatedUnion('kind', [
 ])
 export type PluginSource = z.infer<typeof PluginSourceSchema>
 
-export const PluginWarningSchema = z.enum(['no_manifest', 'unpinned_source', 'source_changed', 'runtime_fetch', 'shell_in_text', 'hidden_chars', 'submodules_skipped', 'hooks_not_run', 'truncated', 'path_dropped', 'name_dropped', 'file_unreadable'])
+export const PluginWarningSchema = z.enum(['no_manifest', 'unpinned_source', 'source_changed', 'runtime_fetch', 'shell_in_text', 'hidden_chars', 'submodules_skipped', 'hooks_not_run', 'truncated', 'path_dropped', 'name_dropped', 'file_unreadable', 'credentials_in_source'])
 export type PluginWarning = z.infer<typeof PluginWarningSchema>
 
 const HookEntrySchema = z.object({ event: z.string(), command: z.string(), /** 命令里有打码的内容:显示的和运行的不一样 */ masked: z.boolean().optional() })

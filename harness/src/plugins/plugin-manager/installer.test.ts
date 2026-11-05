@@ -158,6 +158,42 @@ describe('sources refused with nothing fetched', () => {
     expect(existsSync(storeOf(r))).toBe(false)
   })
 
+  it('m10: a url whose path looks like a token is refused, so it can never sit in installed.json', async () => {
+    const spawned: string[][] = []
+    const r = await rig({ spawn: spySpawn(spawned) })
+    const url = `https://host.example.com/sk-${'x'.repeat(24)}/repo.git`
+    expect(await refused(call(r, 'plugins.install.prepare', { source: { kind: 'git', url } }))).toBe('bad_url')
+    expect(spawned).toEqual([])
+    expect(r.rawBytes().includes(url)).toBe(false)
+  })
+
+  it('a too-broad source is refused before any walk: no staging, no event, nothing copied, and the probe is fake', async () => {
+    const r = await rig()
+    writeFileSync(join(r.home, 'private.txt'), 'x')
+    expect(await refused(call(r, 'plugins.install.prepare', { source: { kind: 'path', path: r.root } }))).toBe('path_refused')
+    expect(eventsOf(r, 'plugins.install.state')).toEqual([])
+    expect(existsSync(storeOf(r))).toBe(false)
+  })
+
+  it('m3: a source holding a credential root moved by env is refused; one beside it is not', async () => {
+    const proj = join(tmp, 'proj')
+    const gnupg = join(proj, 'gnupg')
+    mkdirSync(gnupg, { recursive: true })
+    buildPlugin(proj, { format: 'claude', id: 'plain', skills: { s: 'x' } })
+    const r = await pluginKernel({ ...withManager(), kernel: { env: { PATH: '/usr/bin:/bin', HOME: tmp, USERPROFILE: tmp, GNUPGHOME: gnupg } } })
+    rigs.push(r)
+    expect(await refused(call(r, 'plugins.install.prepare', { source: { kind: 'path', path: proj } }))).toBe('path_refused')
+    expect((await prepare(r, { kind: 'path', path: join(proj, 'plain') })).state).toBe('ready')
+  })
+
+  it('m3: a nested .ssh inside a source is allowed, and consent says so', async () => {
+    const root = simple({ extra: { 'keys/.ssh/id_x': 'x' } })
+    const st = await prepare(await rig(), { kind: 'path', path: root })
+    expect(st.consent!.warnings).toContain('credentials_in_source')
+    const clean = await prepare(await rig(), { kind: 'path', path: simple({ id: 'clean' }) })
+    expect(clean.consent!.warnings).not.toContain('credentials_in_source')
+  })
+
   it('local paths: a credential root, the data dir, the store, and anything holding the home or data dir', async () => {
     const r = await rig()
     const ssh = join(r.home, '.ssh')
@@ -304,11 +340,11 @@ describe('prepare runs in the background', () => {
       let spawned = 0
       const installer: Installer = new Installer({
         store: PluginStore.open({ dataDir }, nullLogger),
-        commands: { validateCwd: p => p },
+        commands: { validateCwd: p => p, holdsCredentialRoot: () => false, home: join(tmp, 'home') },
+        deleteSecret: async () => {},
         append: () => {},
         log: nullLogger,
         dataDir,
-        home: join(tmp, 'home'),
         env: { PATH: '/usr/bin:/bin' },
         now: Date.now,
         timers: { setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: h => clearTimeout(h as NodeJS.Timeout) },
@@ -429,6 +465,14 @@ describe('consent binds what lands', () => {
     const b = await prepare(r, { kind: 'path', path: simple({ id: 'demo2' }) })
     chmodSync(join(storeOf(r), '.staging', stagingEntries(r)[0], 'tree', 'skills', 's', 'SKILL.md'), 0o755)
     expect(await refused(confirm(r, b))).toBe('consent_stale')
+  })
+
+  it('m1: a .git added to the staged tree after ready is consent_stale, though the walk skips it', async () => {
+    const r = await rig()
+    const st = await prepare(r, { kind: 'path', path: simple() })
+    mkdirSync(join(storeOf(r), '.staging', stagingEntries(r)[0], 'tree', 'skills', '.git'))
+    expect(await refused(confirm(r, st))).toBe('consent_stale')
+    expect(await list(r)).toEqual([])
   })
 
   it('two stagings of one id: confirming the second after the first is consent_stale', async () => {
@@ -704,6 +748,126 @@ describe('consent binds what lands', () => {
       expect((await call(r, 'plugins.get', { id: 'nat' })).grants.servers.srv.network).toEqual(['c.example.com'])
     })
 
+    it('I4: a staged file changed during an identical-content reinstall does not land, and the old dir survives', async () => {
+      const holder: { edit?: () => void } = {}
+      const r = await rig({ killPluginProcesses: async () => holder.edit?.() })
+      const root = simple()
+      await installed(r, root)
+      const before = snapshot(join(storeOf(r), 'demo'))
+      const up = await prepare(r, { kind: 'path', path: root })
+      const staged = join(storeOf(r), '.staging', stagingEntries(r)[0], 'tree', 'skills', 's', 'SKILL.md')
+      holder.edit = () => writeFileSync(staged, 'swapped after the re-hash')
+      expect(await refused(confirm(r, up))).toBe('consent_stale')
+      holder.edit = undefined
+      expect(snapshot(join(storeOf(r), 'demo'))).toEqual(before)
+      expect(eventsOf(r, 'plugins.upgraded')).toEqual([])
+      await r.restart()
+      expect((await list(r))[0]).toMatchObject({ enabled: true, state: 'ok' })
+    })
+
+    it('I4: a failed record write during an identical-content reinstall leaves the record pointing at a real dir', async () => {
+      const r = await rig()
+      const root = simple()
+      await installed(r, root)
+      const before = snapshot(join(storeOf(r), 'demo'))
+      const up = await prepare(r, { kind: 'path', path: root })
+      mkdirSync(join(r.dataDir, 'plugins', 'plugin-manager', 'installed.json.tmp'))
+      expect(await refused(confirm(r, up))).toBe('store_error')
+      expect(snapshot(join(storeOf(r), 'demo'))).toEqual(before)
+      await r.restart()
+      expect((await list(r))[0]).toMatchObject({ enabled: true, state: 'ok' })
+    })
+
+    it('I3: the store root swapped for a link during an upgrade: nothing in its target is deleted or written', async () => {
+      const holder: { swap?: () => void } = {}
+      const r = await rig({ killPluginProcesses: async () => holder.swap?.() })
+      const root = simple()
+      await installed(r, root)
+      const oldDir = readdirSync(join(storeOf(r), 'demo'))[0]
+      const victim = join(tmp, 'victim')
+      mkdirSync(join(victim, 'demo', oldDir), { recursive: true })
+      writeFileSync(join(victim, 'demo', oldDir, 'canary'), 'alive')
+      writeFileSync(join(root, 'v2'), '')
+      const up = await prepare(r, { kind: 'path', path: root })
+      holder.swap = () => {
+        renameSync(storeOf(r), join(tmp, 'moved'))
+        symlinkSync(victim, storeOf(r))
+      }
+      await confirm(r, up)
+      holder.swap = undefined
+      expect(readFileSync(join(victim, 'demo', oldDir, 'canary'), 'utf8')).toBe('alive')
+      expect(readdirSync(victim)).toEqual(['demo'])
+    })
+
+    it('I3: the store root swapped for a link before an in-place swap: refused, target untouched', async () => {
+      const holder: { swap?: () => void } = {}
+      const r = await rig({ killPluginProcesses: async () => holder.swap?.() })
+      const root = simple()
+      await installed(r, root)
+      const dir = readdirSync(join(storeOf(r), 'demo'))[0]
+      const up = await prepare(r, { kind: 'path', path: root })
+      const victim = join(tmp, 'victim')
+      mkdirSync(join(victim, 'demo', dir), { recursive: true })
+      writeFileSync(join(victim, 'demo', dir, 'canary'), 'alive')
+      holder.swap = () => {
+        renameSync(storeOf(r), join(tmp, 'moved'))
+        symlinkSync(victim, storeOf(r))
+      }
+      expect(await refused(confirm(r, up))).toBe('store_error')
+      expect(readFileSync(join(victim, 'demo', dir, 'canary'), 'utf8')).toBe('alive')
+    })
+
+    it('I5: an old dir that cannot be removed does not fail the upgrade; a later start clears it', async () => {
+      const r = await rig()
+      const root = simple({ extra: { 'locked/sub/f': 'x' } })
+      await installed(r, root)
+      const old = readdirSync(join(storeOf(r), 'demo'))[0]
+      const locked = join(storeOf(r), 'demo', old, 'locked')
+      writeFileSync(join(root, 'v2'), '')
+      const up = await prepare(r, { kind: 'path', path: root })
+      chmodSync(locked, 0o555)
+      try {
+        expect(await confirm(r, up)).toEqual({ ok: true, id: 'demo' })
+        expect(eventsOf(r, 'plugins.upgraded')).toHaveLength(1)
+        expect(readdirSync(join(storeOf(r), 'demo'))).toHaveLength(2)
+      } finally {
+        chmodSync(locked, 0o755)
+      }
+      await r.restart()
+      expect(readdirSync(join(storeOf(r), 'demo'))).toHaveLength(1)
+      expect((await list(r))[0].state).toBe('ok')
+    })
+
+    it('I5: a landing job past its expiry neither expires nor spins the timer', async () => {
+      let t = 1_000_000
+      const armed: { fn: () => void; ms: number }[] = []
+      const holder: { during?: () => void } = {}
+      const r = await rig({ now: () => t, timers: { setTimeout: (fn, ms) => armed.push({ fn, ms }), clearTimeout: () => {} }, killPluginProcesses: async () => holder.during?.() })
+      const root = simple()
+      await installed(r, root)
+      const up = await prepare(r, { kind: 'path', path: root })
+      let spun = 0
+      holder.during = () => {
+        t += 2 * 60 * 60 * 1000
+        const n = armed.length
+        armed.at(-1)!.fn()
+        spun = armed.slice(n).filter(a => a.ms <= 0).length
+      }
+      expect(await confirm(r, up)).toEqual({ ok: true, id: 'demo' })
+      expect(spun).toBe(0)
+    })
+
+    it('m7: a plain setting that becomes sensitive on upgrade is dropped, and shows as not set', async () => {
+      const r = await rig()
+      const spec = (sensitive: boolean) => simple({ mcp: { srv: { command: 'node', env: { R: '${user_config.region}' } } }, manifest: { userConfig: { region: { title: 'R', sensitive } } } })
+      await installed(r, spec(false))
+      await call(r, 'plugins.settings.set', { id: 'demo', key: 'region', value: 'eu-plain-value' })
+      await installed(r, spec(true))
+      const row = (await call(r, 'plugins.get', { id: 'demo' })).settings.find((x: { key: string }) => x.key === 'region')
+      expect(row).toEqual({ key: 'region', set: false, sensitive: true })
+      expect(readFileSync(join(r.dataDir, 'plugins', 'plugin-manager', 'installed.json'), 'utf8')).not.toContain('eu-plain-value')
+    })
+
     it('upgrade of a plugin not installed: plugin_not_installed; a ref on a local source: bad_ref', async () => {
       const r = await rig()
       expect(await refused(call(r, 'plugins.upgrade.prepare', { id: 'nope' }))).toBe('plugin_not_installed')
@@ -767,7 +931,7 @@ describe('consent binds what lands', () => {
       expect((await list(r))[0].state).toBe('integrity_failed')
     })
 
-    it('after a corrupt record: a reinstall inherits no old data, and another plugin\'s dirs wait for the next clean start', async () => {
+    it('after a corrupt record: a reinstall replaces its own code and data, and another plugin\'s dirs stay', async () => {
       const r = await rig()
       const demo = simple()
       await installed(r, demo)
@@ -780,14 +944,15 @@ describe('consent binds what lands', () => {
       writeFileSync(join(r.dataDir, 'plugins', 'plugin-manager', 'installed.json'), '{oops')
       await r.restart()
       expect(await list(r)).toEqual([])
-      expect(existsSync(join(storeOf(r), 'other'))).toBe(true)
       await installed(r, demo)
       expect(existsSync(data('demo'))).toBe(false)
-      expect(existsSync(data('other'))).toBe(true)
       expect((await list(r))[0]).toMatchObject({ id: 'demo', state: 'ok', enabled: true })
-      await r.restart()
-      expect(readdirSync(storeOf(r))).toEqual(['demo'])
-      expect(existsSync(data('other'))).toBe(false)
+      for (let i = 0; i < 2; i++) {
+        await r.restart()
+        expect(readdirSync(storeOf(r)).sort()).toEqual(['demo', 'other'])
+        expect(existsSync(data('other'))).toBe(true)
+        expect((await call(r, 'plugins.list')).problems).toEqual(['store_recovered'])
+      }
     })
 
     it('a crash leaves stale staging and an unknown dir: the restart cleans them', async () => {
@@ -839,15 +1004,17 @@ describe('stores planted by a session (bwrap: <data>-plugins does not exist yet)
     expect(await list(r)).toEqual([])
   })
 
-  it('a directory planted before the first install is gone by the time it lands', async () => {
+  it('a directory planted at the id being installed is gone by the time it lands; a plant at another id stays inert', async () => {
     const r = await rig()
     const code = storeOf(r)
     mkdirSync(join(code, 'demo', 'a'.repeat(12)), { recursive: true })
     writeFileSync(join(code, 'demo', 'a'.repeat(12), 'evil'), 'x')
-    mkdirSync(join(code, '.staging'))
+    mkdirSync(join(code, 'ghost', 'a'.repeat(12)), { recursive: true })
     await installed(r, simple())
-    expect(Object.keys(snapshot(code)).some(p => p.includes('evil'))).toBe(false)
+    expect(Object.keys(snapshot(join(code, 'demo'))).some(p => p.includes('evil'))).toBe(false)
     expect(readdirSync(join(code, 'demo'))).toHaveLength(1)
+    expect((await list(r)).map((p: { id: string }) => p.id)).toEqual(['demo'])
+    expect((await call(r, 'plugins.list')).problems).toEqual(['store_recovered'])
   })
 
   it('a symlink planted at the store root: nothing lands in its target', async () => {

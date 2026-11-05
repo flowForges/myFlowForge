@@ -2,12 +2,12 @@
 // 本地来源是普通拷贝,不调 git;git 来源只跑 fetchGit。readPlugin 只读文本和 JSON
 import type { spawn as nodeSpawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, realpathSync, renameSync, rmSync } from 'node:fs'
+import { mkdirSync, renameSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import type { Logger } from '../../kernel/log'
+import { scrub } from '../../lib/memory/scrub'
 import { RpcError } from '../../kernel/rpcError'
 import { HARNESS_VERSION } from '../../kernel/version'
-import { isInside, pluginStoreRootOf } from '../../lib/fs/paths'
 import type { PgidRegistry } from '../../lib/proc/pgids'
 import { buildConsent, consentHash, effectiveGrants, intersectOnUpgrade, type Declared, type Effective } from '../../lib/plugins/consent'
 import { checkGitUrl, checkRef, fetchGit, normalizeSubpath, type FetchTimers } from '../../lib/plugins/fetchGit'
@@ -16,7 +16,7 @@ import { integrityOf, TreeError, walkTree, copyTree } from '../../lib/plugins/tr
 import type { ParsedPlugin, Warning } from '../../lib/plugins/types'
 import type { SessionCommands } from '../../lib/tools/types'
 import type { Grants, KernelEvent, PluginConsent, PluginSource, PluginSourceParam, WorkerResult } from '../../protocol/index'
-import { versionDirName, type InstalledRecord, type PluginStore } from './store'
+import { treeMatches, versionDirName, type InstalledRecord, type PluginStore } from './store'
 
 const INVALID_PARAMS = -32602
 const STAGING_TTL_MS = 60 * 60 * 1000
@@ -66,11 +66,12 @@ interface Job {
 
 export interface InstallerDeps {
   store: PluginStore
-  commands: Pick<SessionCommands, 'validateCwd'>
+  commands: Pick<SessionCommands, 'validateCwd' | 'holdsCredentialRoot' | 'home'>
+  /** 钥匙串后端的错误不外传。锁着时抛 */
+  deleteSecret(id: string, key: string): Promise<void>
   append(e: Omit<KernelEvent, 'seq' | 'ts'>): unknown
   log: Logger
   dataDir: string
-  home: string
   env: NodeJS.ProcessEnv
   now(): number
   timers: FetchTimers
@@ -82,6 +83,9 @@ export interface InstallerDeps {
   allowFileProtocol?: boolean
 }
 
+/** 来源里的凭据形状的目录:不拦(仓库里可能就是示例),同意页说一声 */
+const CREDENTIAL_LIKE = /(?:^|\/)\.(?:ssh|aws|gnupg|kube|docker|azure|netrc|npmrc|pypirc|git-credentials)(?:\/|$)/
+
 const sourceKey = (s: PluginSource) => JSON.stringify(s.kind === 'path' ? ['path', s.path] : ['git', s.url, s.subpath ?? null])
 
 const killGroup = (pgid: number) => {
@@ -90,14 +94,6 @@ const killGroup = (pgid: number) => {
     process.kill(-pgid, 'SIGKILL')
   } catch {
     /* 已经没了 */
-  }
-}
-
-const realOr = (p: string) => {
-  try {
-    return realpathSync.native(p)
-  } catch {
-    return p
   }
 }
 
@@ -112,6 +108,8 @@ function nameHintOf(s: Resolved): string {
   }
   return last.replace(/\.git$/i, '') || 'plugin'
 }
+
+class StaleLanding extends Error {}
 
 export class Installer {
   private readonly jobs = new Map<string, Job>()
@@ -129,11 +127,7 @@ export class Installer {
   }
 
   private clean(job: Job): void {
-    try {
-      rmSync(this.d.store.stagingDir(job.id), { recursive: true, force: true })
-    } catch (err) {
-      this.d.log.warn('staging cleanup failed', { code: (err as NodeJS.ErrnoException).code })
-    }
+    this.d.store.removeStaging(job.id)
     this.d.store.tidy()
   }
 
@@ -164,7 +158,7 @@ export class Installer {
   private arm(): void {
     this.d.timers.clearTimeout(this.expiry)
     this.expiry = undefined
-    const live = [...this.jobs.values()].filter(j => j.state !== 'failed')
+    const live = [...this.jobs.values()].filter(j => j.state !== 'failed' && !j.landing) // 落盘中的不会到期:算进来就是立刻到期、立刻再排
     if (live.length === 0 || this.closed) return
     const next = Math.min(...live.map(j => j.createdAt + STAGING_TTL_MS))
     this.expiry = this.d.timers.setTimeout(() => this.sweep(), Math.max(0, next - this.d.now()))
@@ -174,6 +168,8 @@ export class Installer {
   private resolve(source: PluginSourceParam): Resolved {
     if (source.kind === 'git') {
       if (!checkGitUrl(source.url, { allowFileProtocol: this.d.allowFileProtocol === true }).ok) throw fail('bad_url')
+      // 地址要存进 installed.json:长得像令牌的路径段不收。file:// 只有测试走,临时目录的路径本来就像
+      if (source.url.startsWith('https:') && scrub(source.url).text !== source.url) throw fail('bad_url')
       if (source.ref !== undefined && !checkRef(source.ref)) throw fail('bad_ref')
       const subpath = source.subpath === undefined ? undefined : normalizeSubpath(source.subpath)
       if (source.subpath !== undefined && subpath === undefined) throw fail('bad_path')
@@ -185,9 +181,9 @@ export class Installer {
     } catch {
       throw fail('path_refused')
     }
-    // validateCwd 只拒黑名单和它们里面。包住家目录或数据目录的来源,拷进来的就是凭据,自己的存储也在里面
-    const tops = [this.d.home, this.d.dataDir, pluginStoreRootOf(this.d.dataDir)]
-    for (const top of tops) for (const t of new Set([top, realOr(top)])) if (isInside(t, real, process.platform)) throw fail('path_refused')
+    // validateCwd 只拒黑名单和它们里面。包住黑名单某个根的来源(家目录、数据目录和存储的上级都算),拷进来的就是凭据。
+    // 这一步在起后台之前:拒绝的来源一个目录项都不读
+    if (this.d.commands.holdsCredentialRoot(real)) throw fail('path_refused')
     return { kind: 'path', path: real }
   }
 
@@ -275,14 +271,15 @@ export class Installer {
       if (!r.ok) return this.toFailed(job, r.error, r.path)
       commit = r.commit
       extra.push(...r.warnings)
-      rmSync(join(dir, 'home'), { recursive: true, force: true })
+      store.removeStaging(job.id, 'home')
     }
 
     const walked = walkTree(tree)
     if (!walked.ok) return this.toFailed(job, walked.error, walked.path)
+    if (walked.files.some(f => CREDENTIAL_LIKE.test(f.path))) extra.push('credentials_in_source')
     // 只哈希暂存的这一份。之后落盘的也是这一份,confirm 时再算一遍
     const integrity = integrityOf(tree, walked.files)
-    const read = readPlugin(tree, { nameHint: nameHintOf(job.source), reservedIds: this.d.reservedIds(), kernelVersion: HARNESS_VERSION, home: this.d.home })
+    const read = readPlugin(tree, { nameHint: nameHintOf(job.source), reservedIds: this.d.reservedIds(), kernelVersion: HARNESS_VERSION, home: this.d.commands.home })
     if (!read.ok) return this.toFailed(job, read.error)
     const plugin = read.plugin
     plugin.warnings = [...new Set([...plugin.warnings, ...extra])]
@@ -365,15 +362,8 @@ export class Installer {
     if (p.consentHash !== ready.hash) throw refuse('consent_stale')
     store.ensure() // 根或 .staging 被换成链接:这里删掉链接,下面就走不到别处的那棵树
     const tree = join(store.stagingDir(job.id), 'tree')
-    // consentHash 里取不出完整性(M11):比内存里的哈希,再比重算的完整性
-    let integrity: string | undefined
-    try {
-      const walked = walkTree(tree)
-      if (walked.ok) integrity = integrityOf(tree, walked.files)
-    } catch {
-      /* 换进了链接之类:和不一样同样处理 */
-    }
-    if (integrity !== ready.integrity) throw refuse('consent_stale')
+    // consentHash 里取不出完整性(M11):比内存里的哈希,再比重算的完整性。这次之后到改名之前还有等待,落地后再比一次
+    if (!treeMatches(tree, ready.integrity)) throw refuse('consent_stale')
     if (job.upgradeOf !== undefined && job.upgradeOf !== ready.id) throw refuse('id_changed')
     const prev = store.get(ready.id)
     if ((prev?.integrity ?? null) !== ready.against) throw refuse('consent_stale')
@@ -392,7 +382,8 @@ export class Installer {
       ...(ready.commit !== undefined && { commit: ready.commit }),
       installedAt: this.d.now(),
       grants,
-      settings: prev?.settings ?? {},
+      // 这版说它敏感的键,明文值不能留在记录里;要用户再填一次
+      settings: Object.fromEntries(Object.entries(prev?.settings ?? {}).filter(([k]) => !ready.config.some(c => c.key === k && c.sensitive))),
       secretKeys: prev?.secretKeys ?? [],
       state: 'ok',
       dir: `${ready.id}/${versionDirName(ready.integrity)}`,
@@ -402,6 +393,14 @@ export class Installer {
       servers: ready.servers,
     }
     job.landing = true
+    // 记录丢过的话,这些键下面可能有上一个主人的值:声明了就读得到,所以落地前清掉。自己一直拿着的不动
+    try {
+      for (const { key } of ready.config) if (!prev?.secretKeys.includes(key)) await this.d.deleteSecret(ready.id, key)
+    } catch {
+      job.landing = false
+      this.arm()
+      throw fail('secrets_unavailable')
+    }
     await this.land(job, tree, record, prev)
 
     const sourceKind = ready.source.kind
@@ -416,31 +415,47 @@ export class Installer {
     return { ok: true, id: record.id }
   }
 
-  /** 新目录 → 记录 → 杀旧进程 → 删旧目录(§6.4)。崩在中间的由打开时对账收拾 */
+  /**
+   * 新目录 → 记录 → 杀旧进程 → 删旧目录(§6.4)。崩在中间的由打开时对账收拾。
+   * 记录写好以后升级就算成了:旧目录删不掉不改变结果,下次对账再来
+   */
   private async land(job: Job, tree: string, record: InstalledRecord, prev: InstalledRecord | undefined): Promise<void> {
     const { store } = this.d
     const target = store.versionDir(record)
     const inPlace = prev !== undefined && versionDirName(prev.integrity) === versionDirName(record.integrity)
     if (inPlace) await this.kill(record.id) // 同一个目录要换掉:先停
+    let aside: string | undefined
+    let landed = false
     try {
+      store.claim()
+      if (!prev) store.removeCode(record.id) // 别人放的,或记录丢过时留下的:新装的不继承
       store.ensureCodeDir(record.id)
-      rmSync(target, { recursive: true, force: true }) // 别人放的,或完全相同的旧版
-      if (!prev) rmSync(store.pluginDataRoot(record.id), { recursive: true, force: true }) // 记录坏过时留下的:新装的不继承
+      if (inPlace) aside = store.moveAside(record)
+      else store.removeVersion(record)
       renameSync(tree, target)
+      landed = true
+      // 上面的等待里暂存还能被改:同意的是落地的这一份
+      if (!treeMatches(target, record.integrity)) throw new StaleLanding()
+      if (!prev) store.removeData(record.id)
       store.put(record)
       store.save()
     } catch (err) {
-      this.d.log.warn('plugin install failed', { code: (err as NodeJS.ErrnoException).code ?? 'unknown' })
+      const stale = err instanceof StaleLanding
+      if (!stale) this.d.log.warn('plugin install failed', { code: (err as NodeJS.ErrnoException).code ?? 'unknown' })
       if (prev) store.put(prev)
       else store.remove(record.id)
-      if (!inPlace) rmSync(target, { recursive: true, force: true })
-      if (!prev) rmSync(store.codeDir(record.id), { recursive: true, force: true })
-      this.toFailed(job, 'store_error')
-      throw fail('store_error')
+      if (landed) store.removeVersion(record)
+      if (aside) store.restoreAside(record, aside)
+      if (!prev) store.removeCode(record.id)
+      const code = stale ? 'consent_stale' : 'store_error'
+      this.toFailed(job, code)
+      this.arm()
+      throw fail(code)
     }
+    if (aside) store.removeAside(record.id, aside)
     if (prev && !inPlace) {
       await this.kill(record.id)
-      rmSync(store.versionDir(prev), { recursive: true, force: true })
+      store.removeVersion(prev)
     }
   }
 

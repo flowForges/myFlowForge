@@ -1,5 +1,5 @@
 // RPC、启用、禁用、卸载、配置与凭据:Review Focus 6 的卸载快照(还没有服务,Task 9 再加)
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -70,6 +70,8 @@ describe('with no plugins', () => {
     try {
       expect(k.status().plugins.find(p => p.id === 'plugin-manager')?.state).toBe('active')
       expect(existsSync(`${dataDir}-plugins`)).toBe(false)
+      // m5:家目录是内核的那个,不是 os.homedir()
+      expect(await k.handle('plugins.install.prepare', { source: { kind: 'path', path: home } }).then(() => 'ok', e => (e as Error).message)).toBe('path_refused')
       // reservedIds 是真的内置列表:懒求值,不是空集合
       const dir = buildPluginFor('telegram-like', 'channel-telegram')
       const { stagingId } = (await k.handle('plugins.install.prepare', { source: { kind: 'path', path: dir } })) as { stagingId: string }
@@ -313,7 +315,7 @@ describe('plugins.settings', () => {
   })
 
   const lockedManager = (o: PluginManagerOpts, locked: { value: boolean }): ((e: { env: NodeJS.ProcessEnv; home: string }) => Plugin) => e => {
-    const inner = createPluginManager({ allowFileProtocol: true, env: e.env, home: e.home, ...o })
+    const inner = createPluginManager({ allowFileProtocol: true, env: e.env, ...o })
     return {
       manifest: inner.manifest,
       activate(ctx: PluginContext) {
@@ -335,10 +337,11 @@ describe('plugins.settings', () => {
   }
 
   it('secrets unavailable: secrets_unavailable, not an internal error, and no record of a key that was never stored', async () => {
-    const locked = { value: true }
+    const locked = { value: false }
     const r = await pluginKernel({ manager: lockedManager({}, locked) })
     rigs.push(r)
     await install(r, configured())
+    locked.value = true
     const before = readFileSync(installedFile(r))
     expect(await refused(call(r, 'plugins.settings.set', { id: 'demo', key: 'token', value: 'v' }))).toBe('secrets_unavailable')
     expect(readFileSync(installedFile(r))).toEqual(before)
@@ -369,7 +372,7 @@ describe('plugins.settings', () => {
   it('a backend that fails only when writing still answers secrets_unavailable, and forgets the key', async () => {
     const r = await pluginKernel({
       manager: e => {
-        const inner = createPluginManager({ allowFileProtocol: true, env: e.env, home: e.home })
+        const inner = createPluginManager({ allowFileProtocol: true, env: e.env })
         return {
           manifest: inner.manifest,
           activate(ctx) {
@@ -392,7 +395,7 @@ describe('plugins.settings', () => {
     const stored: string[] = []
     const r = await pluginKernel({
       manager: e => {
-        const inner = createPluginManager({ allowFileProtocol: true, env: e.env, home: e.home })
+        const inner = createPluginManager({ allowFileProtocol: true, env: e.env })
         return {
           manifest: inner.manifest,
           activate(ctx) {
@@ -459,6 +462,19 @@ describe('plugins.uninstall leaves nothing', () => {
     expect((await call(r, 'plugins.list')).plugins[0]).toMatchObject({ id: 'keep', enabled: true, state: 'ok' })
   })
 
+  it('I3: the store root swapped for a link while running: uninstall removes the link, not what it points at', async () => {
+    const r = await rig()
+    await install(r, plugin())
+    const victim = join(tmp, 'victim')
+    mkdirSync(join(victim, 'demo'), { recursive: true })
+    writeFileSync(join(victim, 'demo', 'canary'), 'alive')
+    renameSync(storeOf(r), join(tmp, 'moved'))
+    symlinkSync(victim, storeOf(r))
+    await call(r, 'plugins.uninstall', { commandId: 'u', id: 'demo' })
+    expect(readFileSync(join(victim, 'demo', 'canary'), 'utf8')).toBe('alive')
+    expect((await call(r, 'plugins.list')).plugins).toEqual([])
+  })
+
   it('a second install of the same id sees no old setting, secret, grant or data', async () => {
     const r = await rig()
     const path = configured()
@@ -499,15 +515,197 @@ describe('plugins.uninstall leaves nothing', () => {
     expect(r.logs.join('\n')).not.toContain('details')
   })
 
-  it('a crash after the record is gone: the restart removes the files', async () => {
+  it('a crash after the record is gone: the empty record file says the store is ours, and the restart removes the files', async () => {
     const r = await rig()
     await install(r, plugin())
     const data = join(r.dataDir, 'plugin-data', 'demo', 'srv')
     mkdirSync(data, { recursive: true })
-    rmSync(installedFile(r))
+    writeFileSync(installedFile(r), JSON.stringify({ version: 1, plugins: [] }))
     await r.restart({ kill: true })
+    expect((await call(r, 'plugins.list')).problems).toEqual([])
+    expect(existsSync(installedFile(r))).toBe(false)
     expect(existsSync(storeOf(r))).toBe(false)
     expect(existsSync(join(r.dataDir, 'plugin-data'))).toBe(false)
+  })
+})
+
+describe('I1, I2: a lost record costs nothing silently', () => {
+  const lose = async (r: PluginRig) => {
+    const rec = JSON.parse(readFileSync(installedFile(r), 'utf8'))
+    writeFileSync(installedFile(r), JSON.stringify({ ...rec, version: 99 })) // 坏了,但还读得出密钥键
+    await r.restart()
+  }
+
+  it('I2: orphaned secrets do not reach a later plugin with the same id', async () => {
+    const r = await rig()
+    const path = configured()
+    await install(r, path)
+    await install(r, plugin({ id: 'other', mcp: { srv: { command: 'node', env: { K: '${OTHER_KEY}' } } } }))
+    await call(r, 'plugins.settings.set', { id: 'demo', key: 'token', value: 'old-owner' })
+    await call(r, 'plugins.settings.set', { id: 'other', key: 'OTHER_KEY', value: 'theirs' })
+    await lose(r)
+    expect(secretKeys(r)).toContain('plugin-manager/demo/token')
+    await install(r, path)
+    expect(secretKeys(r)).toEqual(['plugin-manager/other/OTHER_KEY'])
+    expect((await call(r, 'plugins.get', { id: 'demo' })).settings.every((s: { set: boolean }) => !s.set)).toBe(true)
+  })
+
+  it('I2: a locked backend refuses the landing, keeps the staging, and it can be confirmed once unlocked', async () => {
+    const locked = { value: true }
+    const r = await pluginKernel({
+      manager: e => {
+        const inner = createPluginManager({ allowFileProtocol: true, env: e.env })
+        return {
+          manifest: inner.manifest,
+          activate(ctx) {
+            const wrapped = Object.create(ctx) as PluginContext
+            Object.defineProperty(wrapped, 'secrets', { value: { ...ctx.secrets, delete: (k: string) => (locked.value ? Promise.reject(new Error(`at ${e.home}`)) : ctx.secrets.delete(k)) } })
+            return inner.activate(wrapped)
+          },
+        }
+      },
+    })
+    rigs.push(r)
+    const st = await prepare(r, { kind: 'path', path: configured() })
+    expect(await refused(confirm(r, st))).toBe('secrets_unavailable')
+    expect((await call(r, 'plugins.list')).plugins).toEqual([])
+    locked.value = false
+    expect(await confirm(r, st)).toEqual({ ok: true, id: 'demo' })
+  })
+
+  it('an upgrade that newly declares a key clears an orphan under it, and keeps the keys it already held', async () => {
+    const r = await rig()
+    const spec = (keys: string[]) => plugin({ mcp: { srv: { command: 'node', env: Object.fromEntries(keys.map(k => [k, `\${${k}}`])) } } })
+    await install(r, spec(['HELD']))
+    await call(r, 'plugins.settings.set', { id: 'demo', key: 'HELD', value: 'v' })
+    await install(r, spec(['HELD', 'FRESH']))
+    expect(secretKeys(r)).toEqual(['plugin-manager/demo/HELD'])
+  })
+
+  it('plugins.store.discard: secrets listed in .bad, unknown dirs and .bad go; replay is one; the problem clears', async () => {
+    const r = await rig()
+    await install(r, configured())
+    await call(r, 'plugins.settings.set', { id: 'demo', key: 'token', value: 'v' })
+    const data = join(r.dataDir, 'plugin-data', 'demo', 'srv')
+    mkdirSync(data, { recursive: true })
+    await lose(r)
+    await r.restart()
+    expect((await call(r, 'plugins.list')).problems).toEqual(['store_recovered'])
+    expect(existsSync(data)).toBe(true)
+    const params = { commandId: 'disc' }
+    expect(await call(r, 'plugins.store.discard', params)).toEqual({ ok: true })
+    expect(await call(r, 'plugins.store.discard', params)).toEqual({ ok: true })
+    expect(eventsOf(r, 'plugins.store.discarded')).toHaveLength(1)
+    expect(secretKeys(r)).toEqual([])
+    expect(existsSync(storeOf(r))).toBe(false)
+    expect(existsSync(join(r.dataDir, 'plugin-data'))).toBe(false)
+    expect(readdirSync(join(r.dataDir, 'plugins', 'plugin-manager'))).toEqual([])
+    expect((await call(r, 'plugins.list')).problems).toEqual([])
+    await r.restart()
+    expect((await call(r, 'plugins.list')).problems).toEqual([])
+  })
+
+  it('plugins.store.discard leaves a plugin reinstalled meanwhile: its code, data and secret', async () => {
+    const r = await rig()
+    const path = configured()
+    await install(r, path)
+    await call(r, 'plugins.settings.set', { id: 'demo', key: 'token', value: 'old' })
+    await lose(r)
+    await install(r, path)
+    await call(r, 'plugins.settings.set', { id: 'demo', key: 'token', value: 'new' })
+    await call(r, 'plugins.store.discard', { commandId: 'disc' })
+    expect(secretKeys(r)).toEqual(['plugin-manager/demo/token'])
+    expect((await call(r, 'plugins.list')).plugins[0]).toMatchObject({ id: 'demo', state: 'ok' })
+    expect(readdirSync(storeOf(r))).toEqual(['demo'])
+  })
+
+  it('plugins.store.discard with a file it cannot read: store_unreadable, nothing deleted', async () => {
+    const r = await rig()
+    await install(r, plugin())
+    chmodSync(installedFile(r), 0o000)
+    try {
+      await r.restart()
+      expect((await call(r, 'plugins.list')).problems).toEqual(['store_recovered'])
+      expect(await refused(call(r, 'plugins.store.discard', { commandId: 'd' }))).toBe('store_unreadable')
+      expect(existsSync(join(storeOf(r), 'demo'))).toBe(true)
+      // 也写不进去:装新的不能盖掉读不了的记录
+      const st = await prepare(r, { kind: 'path', path: plugin({ id: 'second' }) })
+      expect(await refused(confirm(r, st))).toBe('store_error')
+    } finally {
+      chmodSync(installedFile(r), 0o600)
+    }
+    await r.restart()
+    expect((await call(r, 'plugins.list')).plugins).toMatchObject([{ id: 'demo', enabled: true, state: 'ok' }])
+  })
+
+  it('plugins.store.discard with secrets locked: secrets_unavailable, nothing deleted, retry works', async () => {
+    const locked = { value: false }
+    const r = await pluginKernel({
+      manager: e => {
+        const inner = createPluginManager({ allowFileProtocol: true, env: e.env })
+        return {
+          manifest: inner.manifest,
+          activate(ctx) {
+            const wrapped = Object.create(ctx) as PluginContext
+            Object.defineProperty(wrapped, 'secrets', { value: { ...ctx.secrets, delete: (k: string) => (locked.value ? Promise.reject(new Error('locked')) : ctx.secrets.delete(k)) } })
+            return inner.activate(wrapped)
+          },
+        }
+      },
+    })
+    rigs.push(r)
+    await install(r, configured())
+    await call(r, 'plugins.settings.set', { id: 'demo', key: 'token', value: 'v' })
+    await lose(r)
+    locked.value = true
+    expect(await refused(call(r, 'plugins.store.discard', { commandId: 'd' }))).toBe('secrets_unavailable')
+    expect(existsSync(join(storeOf(r), 'demo'))).toBe(true)
+    expect((await call(r, 'plugins.list')).problems).toEqual(['store_recovered'])
+    locked.value = false
+    expect(await call(r, 'plugins.store.discard', { commandId: 'd' })).toEqual({ ok: true })
+    expect(secretKeys(r)).toEqual([])
+  })
+
+  it('plugins.store.discard with nothing to discard changes nothing', async () => {
+    const r = await rig()
+    await install(r, plugin())
+    expect(await call(r, 'plugins.store.discard', { commandId: 'd' })).toEqual({ ok: true })
+    expect((await call(r, 'plugins.list')).plugins).toHaveLength(1)
+  })
+})
+
+describe('small corrections from review', () => {
+  it('m6: a plain value that looks secret when read back is masked in plugins.get', async () => {
+    const secret = `sk-${'x'.repeat(24)}`
+    const r = await rig()
+    await install(r, configured())
+    const rec = JSON.parse(readFileSync(installedFile(r), 'utf8'))
+    rec.plugins[0].settings.region = secret // 旧记录、或打码规则后来才加的
+    writeFileSync(installedFile(r), JSON.stringify(rec))
+    await r.restart()
+    const row = (await call(r, 'plugins.get', { id: 'demo' })).settings.find((s: { key: string }) => s.key === 'region')
+    expect(JSON.stringify(row)).not.toContain(secret)
+    expect(row.set).toBe(true)
+  })
+
+  it('m8: a refused enable has already killed the processes when it returns', async () => {
+    const kills: string[] = []
+    let finished = false
+    const r = await rig({
+      killPluginProcesses: async id => {
+        await new Promise(res => setTimeout(res, 20))
+        kills.push(id)
+        finished = true
+      },
+    })
+    await install(r, plugin())
+    kills.length = 0
+    finished = false
+    const dir = join(storeOf(r), 'demo')
+    writeFileSync(join(dir, readdirSync(dir)[0], 'tampered'), '')
+    expect(await refused(call(r, 'plugins.setEnabled', { commandId: 'e', id: 'demo', enabled: true }))).toBe('integrity_failed')
+    expect(finished).toBe(true)
+    expect(kills).toEqual(['demo'])
   })
 })
 

@@ -555,6 +555,7 @@ describe('plugins protocol (09 §14)', () => {
     ['plugins.install.cancel', { stagingId: 's' }],
     ['plugins.setEnabled', { commandId: 'c', id: 'a', enabled: false }],
     ['plugins.uninstall', { commandId: 'c', id: 'a' }],
+    ['plugins.store.discard', { commandId: 'c' }],
     ['plugins.grants.set', { commandId: 'c', id: 'a', grants: GRANTS }],
     ['plugins.settings.set', { id: 'a', key: 'API_KEY', value: 'v' }],
     ['plugins.settings.clear', { id: 'a', key: 'api-key' }],
@@ -588,6 +589,7 @@ describe('plugins protocol (09 §14)', () => {
     ['plugins.setEnabled', { commandId: 'c', id: 'a' }],
     ['plugins.setEnabled', { id: 'a', enabled: true }],
     ['plugins.uninstall', { id: 'a' }],
+    ['plugins.store.discard', {}],
     ['plugins.grants.set', { commandId: 'c', id: 'a' }],
     ['plugins.settings.set', { id: 'a', key: 'k' }],
     ['plugins.settings.set', { id: 'a', key: 'b/KEY', value: 'v' }],
@@ -635,7 +637,7 @@ describe('plugins protocol (09 §14)', () => {
   })
 
   it('new events are known and their payloads parse', () => {
-    for (const t of ['plugins.install.state', 'plugins.installed', 'plugins.upgraded', 'plugins.enabled', 'plugins.disabled', 'plugins.uninstalled', 'plugins.grants.updated', 'plugins.integrity.failed', 'plugins.injected', 'plugins.mcp.status', 'plugins.dev.trusted', 'plugins.dev.loaded'] as const) {
+    for (const t of ['plugins.install.state', 'plugins.installed', 'plugins.upgraded', 'plugins.enabled', 'plugins.disabled', 'plugins.uninstalled', 'plugins.grants.updated', 'plugins.integrity.failed', 'plugins.injected', 'plugins.mcp.status', 'plugins.dev.trusted', 'plugins.dev.loaded', 'plugins.store.discarded'] as const) {
       expect(EVENT_TYPES).toContain(t)
     }
     expect(PluginsInstallStatePayloadSchema.parse({ stagingId: 's', state: 'failed', error: 'symlink' })).toMatchObject({ error: 'symlink' })

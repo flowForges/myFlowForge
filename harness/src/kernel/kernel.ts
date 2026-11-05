@@ -16,7 +16,7 @@ import { EventBus } from './events'
 import { EventLog, openDb, transaction } from './eventLog'
 import { Approvals } from './approvals'
 import { nullLogger, type Logger } from './log'
-import { PermissionGate } from './permissionGate'
+import { blacklist, PermissionGate } from './permissionGate'
 import { PermissionsStore } from './permissions'
 import { PluginHost, type Plugin } from './pluginHost'
 import { Receipts } from './receipts'
@@ -26,7 +26,7 @@ import { openSecretStore, type OpenSecretStoreOpts } from './secrets/secretStore
 import { ServiceRegistry } from './services'
 import { Sessions, validateCwd } from './sessions'
 import { CLOSE_GRACE_MS, KILL_LIVE_GRACE_MS } from './shutdown'
-import { overbroadRelocations, snapshotEnv } from '../lib/fs/paths'
+import { isInside, overbroadRelocations, snapshotEnv } from '../lib/fs/paths'
 import { killLive, pgidFile, PgidRegistry, type PgidEntry } from '../lib/proc/pgids'
 import { createSandboxService } from './sandbox'
 import { detectSandbox, type DetectResult } from '../lib/sandbox/detect'
@@ -545,6 +545,8 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
     },
     hasReceipt: commandId => receipts.get(commandId) !== undefined,
     validateCwd: path => validateCwd(path, { home, dataDir: opts.dataDir, platform: process.platform, env: envSnapshot }),
+    holdsCredentialRoot: path => blacklist({ home, dataDir: opts.dataDir, platform: process.platform, env: envSnapshot }).some(r => isInside(r, path, process.platform)),
+    home,
     narrowApproval: sessionId => {
       const s = sessions.get(sessionId)
       if (s?.origin === 'im' && s.approvalMode === 'auto') append({ type: 'session.approvalNarrowed', sessionId, payload: { approvalMode: 'ask' } })

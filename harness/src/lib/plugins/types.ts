@@ -15,6 +15,8 @@ export type Warning =
   | 'path_dropped'
   | 'name_dropped'
   | 'file_unreadable'
+  // 安装时加的:来源里有 .ssh 这类目录
+  | 'credentials_in_source'
 
 export type ServerProblem = 'arg_env_ref' | 'dangerous_env' | 'runtime_unsupported' | 'bad_command' | 'command_outside_root' | 'name_invalid'
 

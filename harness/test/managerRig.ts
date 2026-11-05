@@ -12,7 +12,7 @@ export const RESERVED = () => new Set(['memory-default', 'tools-registry', 'plug
 
 /** 测试用的 manager:git 只能走 file://,环境是注入的 */
 export const withManager = (o: PluginManagerOpts = {}): Pick<PluginKernelOpts, 'manager'> => ({
-  manager: (e: PluginEnvInjected) => createPluginManager({ allowFileProtocol: true, env: e.env, home: e.home, reservedIds: RESERVED, ...o }),
+  manager: (e: PluginEnvInjected) => createPluginManager({ allowFileProtocol: true, env: e.env, reservedIds: RESERVED, ...o }),
 })
 
 export const call = (rig: PluginRig, method: string, params: unknown = {}): Promise<any> => rig.kernel.handle(method as never, params as never) as Promise<any>

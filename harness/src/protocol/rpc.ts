@@ -434,6 +434,8 @@ export const WorkerMethods = {
   'plugins.install.cancel': { params: z.object({ stagingId: z.string().max(128) }), result: Ok },
   'plugins.setEnabled': { params: z.object({ commandId: z.string(), id: PluginIdSchema, enabled: z.boolean() }), result: Ok },
   'plugins.uninstall': { params: z.object({ commandId: z.string(), id: PluginIdSchema }), result: Ok },
+  // 记录丢了之后留下的代码、数据和列在坏记录里的凭据:只有这里能删
+  'plugins.store.discard': { params: z.object({ commandId: z.string() }), result: Ok },
   'plugins.grants.set': { params: z.object({ commandId: z.string(), id: PluginIdSchema, grants: GrantsSchema }), result: Ok },
   'plugins.settings.set': { params: z.object({ id: PluginIdSchema, key: PluginSettingKeySchema, value: z.string().max(8192) }), result: Ok },
   'plugins.settings.clear': { params: z.object({ id: PluginIdSchema, key: PluginSettingKeySchema }), result: Ok },
