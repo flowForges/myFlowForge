@@ -1,11 +1,14 @@
 // channel-telegram 插件(07 spec §4):装配、RPC、生命周期,以及所有更新的路由。
 // 通往会话的路只有 handleUpdate 里的一条,每条消息现查 isPaired。令牌只在这里的闭包和 api.ts 里,日志和错误只有稳定代码
-import { join } from 'node:path'
+import { realpathSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import { z } from 'zod'
 import type { Approvals } from '../../kernel/approvals'
 import type { Plugin, PluginContext } from '../../kernel/pluginHost'
 import { RpcError } from '../../kernel/rpcError'
 import type { Sessions } from '../../kernel/sessions'
+import { createGit, type Git } from '../../lib/git/snapshot'
 import { scrub } from '../../lib/memory/scrub'
 import type { ModelsService } from '../../lib/models/types'
 import type { SandboxService, SessionCommands } from '../../lib/tools/types'
@@ -14,10 +17,12 @@ import type { TelegramConfig, TelegramStatus } from '../../protocol/rpc'
 import { createApi, REAL_TIMERS, TelegramError, type ApiTimers } from './api'
 import { Cards } from './cards'
 import { Chats } from './chats'
+import { isCommandShaped, parseCommand, runCommand, type CommandDeps } from './commands'
 import { classify, isExternal, type DmInbound, type Inbound } from './inbound'
 import { manifest } from './manifest'
 import { Pairing, PairingError, parsePairCommand } from './pairing'
 import { codeOf, Poller, type PollerState } from './poller'
+import { Projects } from './projects'
 import { Sender } from './sender'
 import { TelegramState, type TelegramBot } from './state'
 
@@ -42,7 +47,8 @@ const ConfigSchema = z.object({
   enabled: z.boolean().default(true),
   staleMinutes: z.number().int().min(1).max(1440).default(10),
   projects: z
-    .array(z.object({ name: z.string().regex(/^[A-Za-z0-9_-]{1,32}$/), path: z.string().min(1), auto: z.boolean().default(false) }))
+    // off 是 /project off,叫这个名字的项目永远进不去
+    .array(z.object({ name: z.string().regex(/^[A-Za-z0-9_-]{1,32}$/).refine(name => name !== 'off'), path: z.string().min(1), auto: z.boolean().default(false) }))
     .refine(list => new Set(list.map(p => p.name)).size === list.length)
     .default(() => []),
 })
@@ -62,6 +68,12 @@ export interface ChannelTelegramOpts {
   debounceMs?: number
   /** 只给测试:一条配对私聊进队列之前。慢的一批、抛错的一条都靠它造出来 */
   beforePairedDm?(dm: DmInbound): void | Promise<void>
+  /** worktree 和快照引用用的 git;测试注入隔离的环境 */
+  git?: Git
+  /** 只算沙箱写得到的根(~/.qoder),不读;默认真的 home */
+  home?: string
+  /** 系统临时目录,默认 os.tmpdir() 的 realpath */
+  systemTmp?: string
 }
 
 const ERR_INVALID_PARAMS = -32602
@@ -208,6 +220,28 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
         save: saveNow,
       })
       ctx.events.onAppend(e => chats.onEvent(e))
+      const projects = new Projects({
+        // ctx.dataDir 是 <数据目录>/plugins/<id>
+        dataDir: dirname(dirname(ctx.dataDir)),
+        tmpDir: join(ctx.dataDir, 'tmp'),
+        home: opts.home ?? process.env.HOME ?? homedir(),
+        systemTmp: opts.systemTmp ?? realpathSync(tmpdir()),
+        git: opts.git ?? createGit(),
+        state,
+        chats,
+        commands,
+        sandbox,
+        sessions,
+        config: () => config,
+        history: sessionId => ctx.events.history(sessionId),
+        eventsAfter: (seq, limit) => ctx.events.after(seq, limit),
+        save: saveNow,
+        notify: (chatId, text) => {
+          if (isPaired(chatId, chatId)) reply(chatId, text)
+        },
+        now,
+        log: ctx.log,
+      })
 
       // —— 配对
       const pairing = new Pairing({
@@ -254,6 +288,38 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
         if (result === 'invalid' && pairing.replyAllowed(i.accountId)) reply(i.chatId, INVALID_LINE)
       }
 
+      /** 撤销:名单先改、事件在后,上面的一切都到不了他。发送器清空在卡片之前,卡片最后那次改动不能被它清掉 */
+      const revokeAccount = (accountId: string, by: 'app' | 'im') => {
+        const at = state.data.pairings.findIndex(p => p.accountId === accountId)
+        if (at < 0) return false
+        state.data.pairings.splice(at, 1)
+        // 私聊的 chat id 就是账号 id
+        chats.revoke(accountId)
+        sender.drop(accountId)
+        cards.expireAll()
+        ctx.append({ type: 'channel.unpaired', payload: { channel: 'telegram', accountId, by } })
+        return true
+      }
+
+      const commandDeps: CommandDeps = {
+        chats,
+        projects,
+        commands,
+        sessions,
+        sandbox,
+        models: () => ctx.services.get<ModelsService>('models'),
+        history: sessionId => ctx.events.history(sessionId),
+        channelState: () => current.state,
+        unpair: accountId => void revokeAccount(accountId, 'im'),
+        botId: () => {
+          const id = state.data.bot?.id
+          if (id === undefined) throw new Error('no bot')
+          return id
+        },
+        mask,
+        reply,
+      }
+
       const onPairedDm = async (i: DmInbound) => {
         const external = isExternal(i)
         if (!external && parsePairCommand(i.text)) {
@@ -267,6 +333,13 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
           await opts.beforePairedDm(i)
           // 等的时候可能撤销、换机器人了
           if (state.data.bot?.id !== botId || !isPaired(i.accountId, i.chatId)) return
+        }
+        // 转发的永远不是命令(R15)。命令的效果和 offset 同一次落盘,和排队的消息一样
+        if (!external && isCommandShaped(i.text)) {
+          if (chats.admit(i)) await runCommand(parseCommand(i.text, state.data.bot?.username), i, commandDeps, ctx.log)
+          state.advance(i.updateId)
+          saveNow()
+          return
         }
         chats.onDm(i)
       }
@@ -518,19 +591,7 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
 
       /** 名单先改、事件先写:撤销不等落盘。没存上要让调用方知道,重试时再存 */
       register('channel.telegram.unpair', async (params: { accountId: string }) => {
-        const { pairings } = state.data
-        const at = pairings.findIndex(p => p.accountId === params.accountId)
-        if (at >= 0) {
-          pairings.splice(at, 1)
-          // 私聊的 chat id 就是账号 id;这一轮取消,排着的不再发给他。名单已经改了:上面的事件一条都到不了他。
-          // 发送器清空在前:卡片最后那次改动不能被它清掉
-          chats.revoke(params.accountId)
-          sender.drop(params.accountId)
-          cards.expireAll()
-          ctx.append({ type: 'channel.unpaired', payload: { channel: 'telegram', accountId: params.accountId, by: 'app' } })
-        } else if (!state.problems.includes(SAVE_FAILED)) {
-          return { ok: true }
-        }
+        if (!revokeAccount(params.accountId, 'app') && !state.problems.includes(SAVE_FAILED)) return { ok: true }
         try {
           state.save()
           noteSaved()
@@ -541,7 +602,12 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
         return { ok: true }
       })
 
-      register('channel.telegram.chats', async () => ({ chats: chats.list(), worktrees: [] }))
+      register('channel.telegram.chats', async () => ({ chats: chats.list(), worktrees: projects.list() }))
+
+      register('channel.telegram.worktree.discard', async (params: { worktreeId: string }) => {
+        await projects.discard(params.worktreeId)
+        return { ok: true }
+      })
 
       register('channel.telegram.config.get', async () => structuredClone(config))
 
@@ -587,6 +653,13 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
         sender.close()
         saveNow()
       })
+
+      try {
+        projects.reconcile()
+      } catch (err) {
+        // 根读不了不挡激活:名额的问题,建新的时候会说
+        ctx.log.warn('telegram worktree reconcile failed', { code: codeOf(err) })
+      }
 
       try {
         token = await ctx.secrets.get(TOKEN_KEY)

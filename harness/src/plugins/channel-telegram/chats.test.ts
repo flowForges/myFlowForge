@@ -1237,6 +1237,40 @@ describe('Chats with fake services', () => {
     u.chats.dispose()
   })
 
+  it('newSession is refused with a frozen batch: its reply would go to a session nobody watches', async () => {
+    const u = unit()
+    u.dm(1)
+    await u.run(700)
+    u.chats.onEvent(u.ev('turn.ended', { turnId: 't0' }))
+    u.record().batch = { commandId: 'tg:5:2-2', sessionId: 's1', text: 'x', external: false, date: 1, updateIds: [2] }
+    const before = u.calls.length
+    expect(await u.chats.newSession(OWNER, 9)).toEqual({ ok: false, reason: 'busy' })
+    expect(u.calls).toHaveLength(before)
+    expect(u.record().sessionId).toBe('s1')
+    u.chats.dispose()
+  })
+
+  it('newSession is refused with a message still queued', async () => {
+    const u = unit()
+    u.dm(1)
+    const before = u.calls.length
+    expect(await u.chats.newSession(OWNER, 9)).toEqual({ ok: false, reason: 'busy' })
+    expect(u.calls).toHaveLength(before)
+    u.chats.dispose()
+  })
+
+  it('newSession into a project sets the record; without a target it clears it', async () => {
+    const u = unit({ call: async (method: string, params: { commandId: string }) => (method === 'session.create' ? { sessionId: params.commandId } : { accepted: true, turnId: 't1' }) })
+    expect(await u.chats.newSession(OWNER, 9, { project: 'api', worktreeId: 'wt_9', cwd: '/w', approvalMode: 'auto' }, 'project')).toMatchObject({ ok: true })
+    expect(u.calls.at(-1)?.params).toEqual({ commandId: 'tg:5:9:project', title: 'Telegram · api', origin: 'im', audience: 'owner', approvalMode: 'auto', cwd: '/w' })
+    expect(u.record()).toMatchObject({ project: 'api', worktreeId: 'wt_9' })
+    expect(await u.chats.newSession(OWNER, 10)).toMatchObject({ ok: true })
+    expect(u.calls.at(-1)?.params).toEqual({ commandId: 'tg:5:10:new', title: 'Telegram', origin: 'im', audience: 'owner', approvalMode: 'ask' })
+    expect(u.record().project).toBeUndefined()
+    expect(u.record().worktreeId).toBeUndefined()
+    u.chats.dispose()
+  })
+
   it('status says what is going on', async () => {
     const u = unit()
     u.dm(1)

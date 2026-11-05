@@ -93,8 +93,8 @@ const QUEUE_FULL_LINE = '排队已满,这条没收下'
 const tooManyLine = (minutes: number) => `这一小时发得太多了,这条没执行,约 ${minutes} 分钟后恢复`
 const PASTE_TOO_LONG_LINE = '这段粘贴太长,超过约 2 万字,整段没收下,没有执行'
 const BUSY_LINE = '上一轮还在收尾,这条排着'
-const NO_MODEL_LINE = '还没有可用的模型,先在 app 里配一个'
-const CODING_ONLY_LINE = '这个账号只能用于编程工具。发 /project 进项目,或用 /model 换模型'
+export const NO_MODEL_LINE = '还没有可用的模型,先在 app 里配一个'
+export const CODING_ONLY_LINE = '这个账号只能用于编程工具。发 /project 进项目,或用 /model 换模型'
 const failedLine = (n: number, preview: string) => `${n > 1 ? `这 ${n} 条` : '这条'}没发出去,重发一次:${preview}`
 const waitedLine = (n: number) => `等得太久的 ${n} 条没有执行,要的话重发。`
 const DONE_LINE = '完成'
@@ -190,6 +190,14 @@ export interface ChatsOpts {
 
 export type NewSessionResult = { ok: true; sessionId: string } | { ok: false; reason: 'busy' | 'no_model' | 'coding_only' }
 
+/** 新会话开在哪个项目里。cwd 只能来自 projects.ts,那里只收 app 配的别名(§7.1) */
+export interface SessionTarget {
+  project: string
+  worktreeId: string
+  cwd: string
+  approvalMode: ApprovalMode
+}
+
 export interface ChatStatus {
   sessionId?: string
   project?: string
@@ -218,17 +226,8 @@ export class Chats {
 
   /** 过期 → 排队 → 写盘。消息和 offset 同一次落盘:确认过的一定在队列里,没落盘的下次重投。不起轮 */
   onDm(i: DmInbound): void {
+    if (!this.admit(i)) return
     const rec = this.ensure(i.chatId)
-    // 发得来就是没封着:解封事件可能在离线时过期了,留着这个标记就永远不回话
-    if (rec.blocked) {
-      delete rec.blocked
-      if (this.running) this.replayOpen(i.chatId, rec)
-    }
-    if (i.date * 1000 < this.o.now() - this.o.staleMs()) {
-      this.o.state.data.dropped.stale++
-      this.staleCounts.set(i.chatId, (this.staleCounts.get(i.chatId) ?? 0) + 1)
-      return
-    }
     if (rec.queue.some(q => q.updateId === i.updateId) || rec.batch?.updateIds.includes(i.updateId)) return
     const run = this.runnerOf(i.chatId)
     const long = i.text.length >= LONG_MESSAGE
@@ -261,6 +260,20 @@ export class Chats {
     if (this.disposed) return
     this.armDebounce(i.chatId, run, long)
     if (run.live) this.markDirty(i.chatId, run, run.live)
+  }
+
+  /** 每条私聊先过这里,命令也一样。false = 过期了,不执行,这一批末尾回一句(§7.3) */
+  admit(i: DmInbound): boolean {
+    const rec = this.ensure(i.chatId)
+    // 发得来就是没封着:解封事件可能在离线时过期了,留着这个标记就永远不回话
+    if (rec.blocked) {
+      delete rec.blocked
+      if (this.running) this.replayOpen(i.chatId, rec)
+    }
+    if (i.date * 1000 >= this.o.now() - this.o.staleMs()) return true
+    this.o.state.data.dropped.stale++
+    this.staleCounts.set(i.chatId, (this.staleCounts.get(i.chatId) ?? 0) + 1)
+    return false
   }
 
   private armDebounce(chatId: string, run: Runner, long: boolean): void {
@@ -588,12 +601,17 @@ export class Chats {
 
   /** 没有默认模型:两种模式都回一句,不让 loop-echo 把话回显回去。coding-tools-only 只在纯对话拒绝(§7.1) */
   private refusal(rec: ChatRecord): string | undefined {
-    const models = this.o.models()
     const info = rec.sessionId !== undefined ? this.o.sessions.get(rec.sessionId) : undefined
+    return this.refusalFor(info?.model ?? (info ? undefined : rec.model), info?.cwd !== undefined)
+  }
+
+  /** ref 不给 = 默认模型 */
+  private refusalFor(chosen: ModelRef | undefined, inProject: boolean): string | undefined {
+    const models = this.o.models()
     const catalog = models?.catalog()
-    const ref = info?.model ?? (info ? undefined : rec.model) ?? catalog?.default
+    const ref = chosen ?? catalog?.default
     if (!models || !catalog || !ref) return NO_MODEL_LINE
-    if (info?.cwd !== undefined) return undefined
+    if (inProject) return undefined
     const presetId = models.accounts().find(a => a.id === ref.accountId)?.presetId
     return catalog.presets.find(p => p.id === presetId)?.restriction === 'coding-tools-only' ? CODING_ONLY_LINE : undefined
   }
@@ -814,26 +832,64 @@ export class Chats {
   }
 
   /**
-   * /new:新会话,同一模式。cwd 跟着当前会话走,worktree 不变。有开着的轮不行(R1):`chats` 只映射当前会话,切走后旧轮的输出没有去处
+   * 轮开着,或者有写给当前会话、还没进内核的消息。这时不能换会话(R1):`chats` 只映射当前会话,切走后旧轮的输出和审批没有去处,
+   * 冻结的批次发到旧会话也没人看;还没发的消息是冲着这个模式写的,纯对话里说的话不能落到有工具的项目里
    */
-  async newSession(chatId: string, updateId: number): Promise<NewSessionResult> {
+  isOpen(chatId: string): boolean {
+    const run = this.runners.get(chatId)
+    const rec = this.peek(chatId)
+    return run?.live !== undefined || run?.pumping === true || rec?.batch !== undefined || (rec?.queue.length ?? 0) > 0
+  }
+
+  /** 新会话的模式由 target 定:给了就在这个项目里,没给就是纯对话。模型用聊天上记的那个,按要开的这个会话判能不能开 */
+  async newSession(chatId: string, updateId: number, target?: SessionTarget, name: 'new' | 'project' = 'new'): Promise<NewSessionResult> {
     const rec = this.ensure(chatId)
-    const run = this.runnerOf(chatId)
-    if (run.live) return { ok: false, reason: 'busy' }
-    const line = this.refusal(rec)
+    if (this.isOpen(chatId)) return { ok: false, reason: 'busy' }
+    const line = this.refusalFor(rec.model, target !== undefined)
     if (line) return { ok: false, reason: line === NO_MODEL_LINE ? 'no_model' : 'coding_only' }
-    const current = rec.sessionId !== undefined ? this.o.sessions.get(rec.sessionId) : undefined
     const { sessionId } = await createImSession(this.o.commands, {
-      commandId: `tg:${this.botId()}:${updateId}:new`,
-      title: rec.project !== undefined ? `Telegram · ${rec.project}` : 'Telegram',
+      commandId: `tg:${this.botId()}:${updateId}:${name}`,
+      title: target ? `Telegram · ${target.project}` : 'Telegram',
       ...(rec.model && { model: rec.model }),
-      ...(current?.cwd !== undefined && { cwd: current.cwd }),
-      ...(current && { approvalMode: current.approvalMode }),
+      ...(target && { cwd: target.cwd, approvalMode: target.approvalMode }),
     })
     rec.sessionId = sessionId
+    if (target) {
+      rec.project = target.project
+      rec.worktreeId = target.worktreeId
+    } else {
+      delete rec.project
+      delete rec.worktreeId
+    }
     this.routes.set(sessionId, chatId)
     this.o.save()
     return { ok: true, sessionId }
+  }
+
+  /** 要开的项目会话现在开得成吗:建 worktree 之前问,开不成就不必建 */
+  projectRefusal(chatId: string): 'no_model' | undefined {
+    return this.refusalFor(this.ensure(chatId).model, true) ? 'no_model' : undefined
+  }
+
+  /** 回纯对话:下一条消息新建会话(§7.1) */
+  leave(chatId: string): void {
+    const rec = this.peek(chatId)
+    if (!rec) return
+    delete rec.sessionId
+    delete rec.project
+    delete rec.worktreeId
+    this.o.save()
+  }
+
+  /** 下次 /new 或 /project 起用(§7.1):session.created.model 不可变 */
+  setModel(chatId: string, model: ModelRef): void {
+    this.ensure(chatId).model = model
+    this.o.save()
+  }
+
+  /** 正用着这个 worktree 的聊天 */
+  chatUsing(worktreeId: string): string | undefined {
+    return Object.keys(this.o.state.data.chats).find(chatId => this.peek(chatId)?.worktreeId === worktreeId)
   }
 
   status(chatId: string): ChatStatus {
