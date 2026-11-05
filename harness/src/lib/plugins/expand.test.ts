@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { expandBody, splitArgs, type ExpandVars } from './expand'
+import { expandBody as expandRaw, splitArgs, type ExpandVars } from './expand'
+
+function expandBody(t: string, v: ExpandVars): string {
+  const r = expandRaw(t, v)
+  if (!r.ok) throw new Error(r.error)
+  return r.text
+}
 
 const v = (o: Partial<ExpandVars> = {}): ExpandVars => ({ root: '/store/p/abc', settings: new Map(), sensitive: new Set(), ...o })
 

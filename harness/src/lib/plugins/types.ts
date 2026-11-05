@@ -1,9 +1,6 @@
 // 插件格式读取的数据形状(09 spec §5、§7.1)。纯数据,不带行为
 import type { Flag } from '../memory/scan'
 
-/** 清单 `kernel` 字段对照的内核版本。lib 不 import 内核,所以常量放这里,调用方可以覆盖 */
-export const KERNEL_VERSION = '0.1.0'
-
 export type Warning =
   | 'no_manifest'
   | 'unpinned_source'
@@ -67,6 +64,7 @@ export interface ParsedSkill {
   modelInvocable: boolean
   userInvocable: boolean
   argumentHint?: string
+  argNames: string[]
   files: number
   flags: Flag[]
   ignored: string[]
@@ -133,15 +131,16 @@ export const SKILL_MAX = 256 * 1024
 export const COMMAND_MAX = 64 * 1024
 
 /** 属性和索引里的名字:不合规的不进去 */
-export const NAME_RE = /^[A-Za-z0-9_.:-]{1,64}$/
+export const NAME_RE = /^(?!\.{1,2}$)[A-Za-z0-9_.:-]{1,64}$/
 export const SERVER_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/
 /** 这几个名字落在普通对象上会碰到原型;查表一律用 Map,名字也不收 */
 export const PROTO_NAMES = new Set(['__proto__', 'constructor', 'prototype'])
 
-/** 按码点截断,不劈开代理对 */
+/** 按字符数截断,不劈开代理对。只切片,不展开成数组:超长输入也是常数内存 */
 export function clip(s: string, max: number): string {
   if (s.length <= max) return s
-  return [...s].slice(0, max).join('')
+  const c = max > 0 ? s.charCodeAt(max - 1) : 0
+  return s.slice(0, c >= 0xd800 && c <= 0xdbff ? max - 1 : max)
 }
 
 export const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)

@@ -1,19 +1,21 @@
 // 服务配置检查(09 spec §8.2 修订后):只读数据,有 problems 就不启动。
 // 环境变量里的 `${VAR}` 不从宿主取:列出来等用户填(source:'secret')
+import { posix } from 'node:path'
 import { isObject, PROTO_NAMES, SERVER_NAME_RE, clip, type ConfigKey, type Cwd, type EnvEntry, type ParsedServer, type ServerProblem } from './types'
 
 export interface ServerCtx {
   format: 'native' | 'claude'
   /** 清单声明的配置键;没声明的 `${user_config.K}` 按敏感算 */
   config: Map<string, ConfigKey>
-  /** 家目录:家目录内的绝对路径 command → bad_command */
-  home?: string
+  /** 家目录:家目录内的绝对路径 command → bad_command。必填:没给就一律拒绝绝对路径 */
+  home: string
 }
 
 const DANGEROUS_EXACT = new Set([
   'PATH', 'HOME', 'SHELL', 'ENV', 'ZDOTDIR', 'NODE_OPTIONS', 'NODE_PATH', 'NODE_EXTRA_CA_CERTS', 'NODE_TLS_REJECT_UNAUTHORIZED',
   'GCONV_PATH', 'GLIBC_TUNABLES', 'JAVA_TOOL_OPTIONS', 'BASH_ENV', 'TMPDIR', 'TMP', 'TEMP', 'IFS', 'PROMPT_COMMAND', 'PS4',
-  'OPENSSL_CONF', 'CURL_CA_BUNDLE', 'REQUESTS_CA_BUNDLE', '__PROTO__', 'CONSTRUCTOR', 'PROTOTYPE',
+  'OPENSSL_CONF', 'CURL_CA_BUNDLE', 'REQUESTS_CA_BUNDLE', '_JAVA_OPTIONS', 'JDK_JAVA_OPTIONS', 'CLASSPATH', 'LUA_INIT', 'DOTNET_STARTUP_HOOKS',
+  'LOCPATH', 'NLSPATH', 'HOSTALIASES', '__PROTO__', 'CONSTRUCTOR', 'PROTOTYPE',
 ])
 const DANGEROUS_PREFIX = ['SSL_CERT_', 'LD_', 'DYLD_', 'PYTHON', 'PERL', 'RUBY', 'GIT_', 'MFFAI_', 'ELECTRON_', 'BASH_FUNC_']
 
@@ -42,45 +44,69 @@ type Ref = { kind: 'path'; name: string } | { kind: 'config'; key: string } | { 
 
 function refsOf(s: string): Ref[] {
   const out: Ref[] = []
-  for (const m of s.matchAll(/\$\{([^}]{0,200})\}/g)) {
-    const inner = m[1]
+  let at = 0
+  for (;;) {
+    const open = s.indexOf('${', at)
+    if (open === -1) return out
+    const close = s.indexOf('}', open + 2)
+    // 没闭合或超长的 `${…}` 也算一个变量引用:看不清的一律按取宿主变量算
+    if (close === -1) {
+      out.push({ kind: 'var', key: '?' })
+      return out
+    }
+    const inner = s.slice(open + 2, close)
     const cfg = /^user_config\.([A-Za-z_][A-Za-z0-9_]{0,63})$/.exec(inner)
     if (cfg) out.push({ kind: 'config', key: cfg[1] })
     else if (KNOWN.has(inner)) out.push({ kind: 'path', name: inner })
-    else out.push({ kind: 'var', key: /^([A-Za-z_][A-Za-z0-9_]{0,63})(?::?[-=?+].*)?$/.exec(inner)?.[1] ?? inner })
+    else out.push({ kind: 'var', key: /^([A-Za-z_][A-Za-z0-9_]{0,63})(?::?[-=?+].*)?$/s.exec(inner)?.[1] ?? '?' })
+    at = close + 1
   }
-  return out
 }
 
-const RUNTIMES = new Set(['docker', 'podman'])
+const RUNTIMES = new Set(['docker', 'docker-compose', 'podman', 'podman-remote', 'nerdctl'])
 
-const base = (p: string) => p.slice(p.lastIndexOf('/') + 1)
+const base = (p: string) => p.slice(p.lastIndexOf('/') + 1).toLowerCase()
 
+/** 运行时才下代码的启动方式。标志(`-s`、`--bun`)跳过,大小写不敏感 */
 function fetchKind(command: string, args: string[]): 'npm' | 'pypi' | null {
   const b = base(command)
-  if (b === 'npx' || b === 'bunx') return 'npm'
-  if (b === 'uvx') return 'pypi'
-  if (b === 'pnpm' && args[0] === 'dlx') return 'npm'
-  if (b === 'bun' && args[0] === 'x') return 'npm'
+  const rest = args.filter(a => !a.startsWith('-')).map(a => a.toLowerCase())
+  if (b === 'npx' || b === 'bunx' || b === 'pnpx' || b === 'uvx') return b === 'uvx' ? 'pypi' : 'npm'
+  if ((b === 'pnpm' || b === 'yarn') && rest[0] === 'dlx') return 'npm'
+  if (b === 'npm' && (rest[0] === 'exec' || rest[0] === 'x')) return 'npm'
+  if (b === 'bun' && rest[0] === 'x') return 'npm'
+  if (b === 'uv' && rest[0] === 'tool' && rest[1] === 'run') return 'pypi'
+  if (b === 'pipx' && rest[0] === 'run') return 'pypi'
   return null
 }
 
 const SUGGESTED = { npm: ['registry.npmjs.org'], pypi: ['pypi.org', 'files.pythonhosted.org'] }
 
+const SYSTEM_DATA = '/system/volumes/data'
+
+/** 比较用的写法:合并斜杠、去 `.`、小写(大小写不敏感的文件系统)、去掉 macOS 的数据卷前缀 */
+function canon(p: string): string {
+  let s = posix.normalize(p.replace(/\/+/g, '/')).toLowerCase().replace(/\/+$/, '')
+  if (s === SYSTEM_DATA || s.startsWith(SYSTEM_DATA + '/')) s = s.slice(SYSTEM_DATA.length)
+  return s
+}
+
 /** 命令检查。返回 problem 或 null */
-function commandProblem(command: string, home: string | undefined): ServerProblem | null {
+function commandProblem(command: string, home: string): ServerProblem | null {
   if (command === '' || command.length > 1024 || /[\u0000-\u001f\u007f]/.test(command)) return 'bad_command'
   if (/\s/.test(command) || command.includes('\\')) return 'bad_command'
   let rel = command
-  if (command.startsWith('${PLUGIN_ROOT}/')) rel = command.slice('${PLUGIN_ROOT}/'.length)
-  else if (command.includes('${') || command.includes('$')) return 'bad_command'
+  if (command.startsWith('${PLUGIN_ROOT}/')) {
+    rel = command.slice('${PLUGIN_ROOT}/'.length)
+    if (rel.includes('$')) return 'bad_command'
+  } else if (command.includes('$')) return 'bad_command'
   else if (command.startsWith('~')) return 'bad_command'
   else if (command.startsWith('/')) {
-    const parts = command.split('/')
-    if (parts.includes('..') || parts.includes('.')) return 'bad_command'
-    const h = home?.replace(/\/+$/, '')
-    if (h && (command === h || command.startsWith(h + '/'))) return 'bad_command'
-    return null
+    if (command.split('/').some(s => s === '..' || s === '.')) return 'bad_command'
+    const h = typeof home === 'string' && home !== '' ? canon(home) : ''
+    if (h === '') return 'bad_command'
+    const c = canon(command)
+    return c === h || c.startsWith(h + '/') ? 'bad_command' : null
   }
   if (!rel.includes('/') && rel === command) return /^[A-Za-z0-9_.+-]+$/.test(command) && command !== '.' && command !== '..' ? null : 'bad_command'
   // 根内相对路径
@@ -131,16 +157,16 @@ export function parseServer(name: string, raw: unknown, ctx: ServerCtx): ParsedS
 
   let args: string[] = []
   if (raw.args !== undefined) {
-    if (Array.isArray(raw.args) && raw.args.length <= 256 && raw.args.every(a => typeof a === 'string' && a.length <= 4096)) args = raw.args.map(a => symbolize(a as string))
+    if (Array.isArray(raw.args) && raw.args.length <= 256 && raw.args.every(a => typeof a === 'string' && a.length <= 4096 && !a.includes('\0'))) args = raw.args.map(a => symbolize(a as string))
     else problems.add('bad_command')
   }
   for (const a of args)
     for (const r of refsOf(a)) {
       if (r.kind === 'var') {
         problems.add('arg_env_ref')
-        configRefs.add(r.key)
+        if (r.key !== '?') configRefs.add(r.key)
       } else if (r.kind === 'config') {
-        configRefs.add(r.key)
+        if (r.key !== '?') configRefs.add(r.key)
         if (ctx.config.get(r.key)?.sensitive !== false) problems.add('arg_env_ref')
       }
     }
@@ -161,7 +187,7 @@ export function parseServer(name: string, raw: unknown, ctx: ServerCtx): ParsedS
         let required = false
         for (const r of refs) {
           if (r.kind === 'path') continue
-          configRefs.add(r.key)
+          if (r.key !== '?') configRefs.add(r.key)
           if (r.kind === 'var') {
             source = 'secret'
             required = true

@@ -22,7 +22,7 @@ function make(files: Record<string, string | { text: string; mode: number }>): s
   return root
 }
 
-const opts = { nameHint: 'hint-name', reservedIds: new Set(['memory-default', 'tools-registry']), home: '/Users/me' }
+const opts = { nameHint: 'hint-name', reservedIds: new Set(['memory-default', 'tools-registry']), home: '/Users/me', kernelVersion: '0.1.0' }
 const ok = (root: string, o = opts): ParsedPlugin => {
   const r = readPlugin(root, o)
   if (!r.ok) throw new Error(r.error)

@@ -100,6 +100,8 @@ export interface Manifest {
   /** agents、monitors、workflows、lspServers、outputStyles、themes、settings、dependencies、channels、bin 的原值 */
   other: Map<string, unknown>
   main?: string
+  /** 列表超过上限被截了 */
+  truncated?: boolean
 }
 
 export type NativeManifest = Manifest & { id: string; version: string }

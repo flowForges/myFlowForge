@@ -34,13 +34,30 @@ export function splitArgs(s: string): string[] {
 
 const TOKEN = /\$\{([^}\s]{1,200})\}|\$([A-Za-z_][A-Za-z0-9_]*)|\$([0-9]+)/g
 
-export function expandBody(text: string, v: ExpandVars): string {
+/** 展开后的字数上限:技能 256 KB、命令 64 KB 的正文展开后也不会失控 */
+export const EXPAND_MAX = 512 * 1024
+
+export type Expanded = { ok: true; text: string } | { ok: false; error: 'too_large' }
+const TOO_LARGE: Expanded = { ok: false, error: 'too_large' }
+
+/** 每段输出在拼接前先记账:超了就停,不会先分配一个巨大的字符串 */
+export function expandBody(text: string, v: ExpandVars, max = EXPAND_MAX): Expanded {
+  if (text.length > max) return TOO_LARGE
+  const given = v.args !== undefined
   const args = v.args ?? ''
-  const parts = splitArgs(args)
+  const parts = given ? splitArgs(args) : []
   const names = v.argNames ?? []
   let placeholder = false
+  const out: string[] = []
+  let used = 0
+  const push = (s: string): boolean => {
+    used += s.length
+    if (used > max) return false
+    out.push(s)
+    return true
+  }
 
-  const out = text.replace(TOKEN, (whole, braced?: string, word?: string, digits?: string) => {
+  const replacement = (whole: string, braced?: string, word?: string, digits?: string): string => {
     if (braced !== undefined) {
       if (braced === 'CLAUDE_PLUGIN_ROOT' || braced === 'MFF_PLUGIN_ROOT') return v.root
       if (braced === 'CLAUDE_PLUGIN_DATA' || braced === 'MFF_PLUGIN_DATA') return '[plugin data]'
@@ -52,6 +69,8 @@ export function expandBody(text: string, v: ExpandVars): string {
       }
       return whole
     }
+    // 没给参数(技能的 read):`$1`、`$ARGUMENTS` 原样留着,脚本里的 awk '{print $1}' 不能被吃掉
+    if (!given) return whole
     if (word !== undefined) {
       if (word === 'ARGUMENTS') {
         placeholder = true
@@ -69,8 +88,15 @@ export function expandBody(text: string, v: ExpandVars): string {
       return parts[Number(digits) - 1] ?? ''
     }
     return whole
-  })
+  }
 
-  if (!placeholder && args.trim() !== '') return `${out}\n\nARGUMENTS: ${args}`
-  return out
+  let last = 0
+  for (const m of text.matchAll(TOKEN)) {
+    if (!push(text.slice(last, m.index))) return TOO_LARGE
+    if (!push(replacement(m[0], m[1], m[2], m[3]))) return TOO_LARGE
+    last = m.index + m[0].length
+  }
+  if (!push(text.slice(last))) return TOO_LARGE
+  if (given && !placeholder && args.trim() !== '' && !push(`\n\nARGUMENTS: ${args}`)) return TOO_LARGE
+  return { ok: true, text: out.join('') }
 }

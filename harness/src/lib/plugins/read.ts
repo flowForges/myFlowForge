@@ -5,6 +5,7 @@ import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, read
 import { join } from 'node:path'
 import { scanInjection } from '../memory/scan'
 import { cleanText } from '../tools/diagnostics'
+import { scrub } from '../memory/scrub'
 import { sanitizeLine } from '../memory/wrap'
 import { deriveId, parseClaudeManifest, unwrapServers } from './claudeFormat'
 import { parseFrontmatter } from './frontmatter'
@@ -12,7 +13,6 @@ import { configKeysOf, parseNative, satisfiesKernel, type Manifest } from './man
 import { parseServer } from './mcpConfig'
 import {
   COMMAND_MAX,
-  KERNEL_VERSION,
   NAME_RE,
   SKILL_MAX,
   clip,
@@ -36,10 +36,22 @@ const MAX_LIST = 200
 const HOOK_MAX = 16384
 const IGNORED_KEYS = ['allowed-tools', 'model', 'hooks', 'context', 'agent']
 const O_NOFOLLOW = constants.O_NOFOLLOW ?? 0
+const O_NONBLOCK = constants.O_NONBLOCK ?? 0
+const MAX_PATHS = 50
+const MAX_SERVERS = 100
+/** 一个插件读文件的总字节数:整个读取过程共用,清单里重复或很多的路径也只能花这么多 */
+const READ_BUDGET = 64 * 1024 * 1024
+
+interface Budget {
+  left: number
+  exhausted: boolean
+}
 
 interface Inv {
   files: { rel: string; exec: boolean }[]
   truncated: boolean
+  /** 符号链接、FIFO、设备这类被跳过的条目 */
+  odd: boolean
 }
 
 /** 遍历一次:lstat,符号链接不算、不进;`.git` 和 node_modules 不进 */
@@ -47,6 +59,7 @@ function inventory(root: string): Inv {
   const files: Inv['files'] = []
   let seen = 0
   let truncated = false
+  let odd = false
   const walk = (rel: string, depth: number) => {
     let names: string[]
     try {
@@ -67,7 +80,10 @@ function inventory(root: string): Inv {
       } catch {
         continue
       }
-      if (st.isSymbolicLink()) continue
+      if (!st.isFile() && !st.isDirectory()) {
+        odd = true
+        continue
+      }
       if (st.isDirectory()) {
         if (n !== 'node_modules' && depth < MAX_DEPTH) walk(r, depth + 1)
         else if (depth >= MAX_DEPTH) truncated = true
@@ -76,7 +92,7 @@ function inventory(root: string): Inv {
     }
   }
   walk('', 0)
-  return { files, truncated }
+  return { files, truncated, odd }
 }
 
 /** 相对路径:不是绝对、不含 `..` 和控制字符。`./` 前缀去掉。不合规是 null */
@@ -87,7 +103,7 @@ function safeRel(p: unknown): string | null {
   const out: string[] = []
   for (const seg of p.split('/')) {
     if (seg === '' || seg === '.') continue
-    if (seg === '..') return null
+    if (seg === '..' || seg === '.git') return null
     out.push(seg)
   }
   return out.length === 0 ? '' : out.join('/')
@@ -118,13 +134,21 @@ interface Read {
 }
 
 /** 读到 cap 字节,整个文件的哈希分块算,所以超大文件也不进内存 */
-function readCapped(root: string, rel: string, cap: number): Read | null {
+function readCapped(root: string, rel: string, cap: number, budget: Budget): Read | null {
   const abs = plainFile(root, rel)
   if (abs === null) return null
   let fd: number | undefined
   try {
-    fd = openSync(abs, constants.O_RDONLY | O_NOFOLLOW)
-    const size = fstatSync(fd).size
+    // O_NONBLOCK:lstat 之后被换成 FIFO 也不会卡在 open 上;再 fstat 确认是普通文件
+    fd = openSync(abs, constants.O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+    const st = fstatSync(fd)
+    if (!st.isFile()) return null
+    const size = st.size
+    if (size > budget.left) {
+      budget.exhausted = true
+      return null
+    }
+    budget.left -= size
     const h = createHash('sha256')
     const keep: Buffer[] = []
     let kept = 0
@@ -147,7 +171,7 @@ function readCapped(root: string, rel: string, cap: number): Read | null {
   }
 }
 
-function readJson(root: string, rel: string): { state: 'missing' } | { state: 'bad' } | { state: 'ok'; value: unknown } {
+function readJson(root: string, rel: string, budget: Budget): { state: 'missing' } | { state: 'bad' } | { state: 'ok'; value: unknown } {
   const abs = plainFile(root, rel)
   if (abs === null) {
     try {
@@ -157,7 +181,7 @@ function readJson(root: string, rel: string): { state: 'missing' } | { state: 'b
     }
     return { state: 'bad' }
   }
-  const r = readCapped(root, rel, JSON_MAX)
+  const r = readCapped(root, rel, JSON_MAX, budget)
   if (r === null || r.over) return { state: 'bad' }
   try {
     return { state: 'ok', value: JSON.parse(r.text.charCodeAt(0) === 0xfeff ? r.text.slice(1) : r.text) as unknown }
@@ -168,7 +192,8 @@ function readJson(root: string, rel: string): { state: 'missing' } | { state: 'b
 
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
 
-const line = (s: string, max: number) => clip(sanitizeLine(s), max)
+/** 先打码再截断:跨过截断点的密钥截半了就认不出 */
+const line = (s: string, max: number) => clip(scrub(sanitizeLine(s)).text, max)
 
 function boolField(v: string | string[] | undefined): boolean | undefined {
   if (typeof v !== 'string') return undefined
@@ -230,6 +255,11 @@ function metaOf(text: string, warn: Set<Warning>): Meta {
 }
 
 const listOf = (names: Iterable<string>): string[] => [...new Set(names)].sort(cmp)
+const uniq = (list: string[], warn: Set<Warning>): string[] => {
+  const u = [...new Set(list)]
+  if (u.length > MAX_PATHS) warn.add('truncated')
+  return u.slice(0, MAX_PATHS)
+}
 const cap = (list: string[], warn: Set<Warning>) => {
   if (list.length > MAX_LIST) warn.add('truncated')
   return list.slice(0, MAX_LIST)
@@ -246,7 +276,7 @@ function dedupeName(name: string, seen: Set<string>, warn: Set<Warning>): boolea
 
 export function readPlugin(
   root: string,
-  o: { nameHint: string; reservedIds: Set<string>; kernelVersion?: string; home?: string },
+  o: { nameHint: string; reservedIds: Set<string>; kernelVersion: string; home: string; readBudget?: number },
 ): { ok: true; plugin: ParsedPlugin } | { ok: false; error: ReadError } {
   try {
     return read(root, o)
@@ -255,19 +285,22 @@ export function readPlugin(
   }
 }
 
-function read(root: string, o: { nameHint: string; reservedIds: Set<string>; kernelVersion?: string; home?: string }) {
+function read(root: string, o: { nameHint: string; reservedIds: Set<string>; kernelVersion: string; home: string; readBudget?: number }) {
   const warn = new Set<Warning>()
+  const budget: Budget = { left: o.readBudget ?? READ_BUDGET, exhausted: false }
   const inv = inventory(root)
   if (inv.truncated) warn.add('truncated')
-  const has = (rel: string) => inv.files.some(f => f.rel === rel)
+  if (inv.odd) warn.add('file_unreadable')
+  const names = new Set(inv.files.map(f => f.rel))
+  const has = (rel: string) => names.has(rel)
   const under = (dir: string) => inv.files.filter(f => f.rel.startsWith(dir + '/')).map(f => f.rel.slice(dir.length + 1))
 
   // 清单:原生 > Claude Code > 没有
   let format: 'native' | 'claude' = 'claude'
   let manifest: Manifest
   let id: string | null
-  const native = readJson(root, 'mff-plugin.json')
-  const claude = native.state === 'missing' ? readJson(root, '.claude-plugin/plugin.json') : ({ state: 'missing' } as const)
+  const native = readJson(root, 'mff-plugin.json', budget)
+  const claude = native.state === 'missing' ? readJson(root, '.claude-plugin/plugin.json', budget) : ({ state: 'missing' } as const)
   if (native.state === 'bad' || claude.state === 'bad') return { ok: false, error: 'bad_manifest' } as const
   if (native.state === 'ok') {
     const r = parseNative(native.value)
@@ -275,11 +308,12 @@ function read(root: string, o: { nameHint: string; reservedIds: Set<string>; ker
     format = 'native'
     manifest = r.manifest
     id = r.manifest.id
-    if (r.manifest.kernel !== undefined && !satisfiesKernel(r.manifest.kernel, o.kernelVersion ?? KERNEL_VERSION)) return { ok: false, error: 'kernel_incompatible' } as const
+    if (r.manifest.kernel !== undefined && !satisfiesKernel(r.manifest.kernel, o.kernelVersion)) return { ok: false, error: 'kernel_incompatible' } as const
   } else if (claude.state === 'ok') {
     const r = parseClaudeManifest(claude.value)
     if (!r.ok) return { ok: false, error: 'bad_manifest' } as const
     manifest = r.manifest
+    if (manifest.truncated) warn.add('truncated')
     id = deriveId(manifest.name ?? '') ?? deriveId(o.nameHint)
   } else {
     const components = ['skills', 'commands', 'agents', 'hooks', 'bin', 'monitors', 'workflows']
@@ -301,18 +335,22 @@ function read(root: string, o: { nameHint: string; reservedIds: Set<string>; ker
   // 技能:默认 skills/ 追加 manifest 的路径,没有 skills/ 时根上的 SKILL.md 算一个
   const skills: ParsedSkill[] = []
   const skillNames = new Set<string>()
+  const skillDirs = new Set<string>()
   const addSkill = (dir: string, fallbackName: string) => {
+    if (skillDirs.has(dir)) return
+    skillDirs.add(dir)
     if (skills.length >= MAX_ITEMS) {
       warn.add('truncated')
       return
     }
     const file = dir === '' ? 'SKILL.md' : `${dir}/SKILL.md`
-    const r = readCapped(root, file, SKILL_MAX)
+    const r = readCapped(root, file, SKILL_MAX, budget)
     if (r === null) {
       warn.add('file_unreadable')
       return
     }
     const meta = metaOf(r.text, warn)
+    if (meta.fmName !== undefined && !NAME_RE.test(meta.fmName)) warn.add('name_dropped')
     const name = meta.fmName && NAME_RE.test(meta.fmName) ? meta.fmName : fallbackName
     if (!dedupeName(name, skillNames, warn)) return
     if (r.over) warn.add('truncated')
@@ -324,6 +362,7 @@ function read(root: string, o: { nameHint: string; reservedIds: Set<string>; ker
       modelInvocable: meta.modelInvocable,
       userInvocable: meta.userInvocable,
       argumentHint: meta.argumentHint,
+      argNames: meta.argNames,
       files: dir === '' ? 1 : inv.files.filter(f => f.rel.startsWith(dir + '/')).length,
       flags: meta.flags,
       ignored: meta.ignored,
@@ -332,12 +371,12 @@ function read(root: string, o: { nameHint: string; reservedIds: Set<string>; ker
       bodyHash: r.hash,
     })
   }
-  const skillRoots = ['skills']
+  const givenSkills: string[] = []
   for (const p of manifest.skills) {
     const r = dropPath(p)
-    if (r !== null && r !== '') skillRoots.push(r)
+    if (r !== null && r !== '') givenSkills.push(r)
   }
-  for (const dir of skillRoots) {
+  for (const dir of ['skills', ...uniq(givenSkills, warn)]) {
     if (has(`${dir}/SKILL.md`)) addSkill(dir, dir.slice(dir.lastIndexOf('/') + 1))
     const names = new Set<string>()
     for (const rel of under(dir)) {
@@ -373,15 +412,18 @@ function read(root: string, o: { nameHint: string; reservedIds: Set<string>; ker
       bodyHash: hash,
     })
   }
+  const commandFiles = new Set<string>()
   const addCommandFile = (rel: string, name: string) => {
-    const r = readCapped(root, rel, COMMAND_MAX)
+    if (commandFiles.has(rel)) return
+    commandFiles.add(rel)
+    const r = readCapped(root, rel, COMMAND_MAX, budget)
     if (r === null) warn.add('file_unreadable')
     else addCommand(name, rel, r.text, r.hash, r.over)
   }
   const isMd = (p: string) => /\.md$/i.test(p)
   const stem = (p: string) => p.replace(/\.md$/i, '')
   const cmdPaths = manifest.commands === undefined ? ['commands'] : manifest.commands.paths.map(dropPath).filter((p): p is string => p !== null && p !== '')
-  for (const p of cmdPaths) {
+  for (const p of uniq(cmdPaths, warn)) {
     if (has(p) && isMd(p)) addCommandFile(p, stem(p.slice(p.lastIndexOf('/') + 1)))
     else for (const rel of under(p).filter(isMd)) addCommandFile(`${p}/${rel}`, stem(rel).split('/').join(':'))
   }
@@ -402,18 +444,20 @@ function read(root: string, o: { nameHint: string; reservedIds: Set<string>; ker
     for (const [k, v] of servers) rawServers.set(k, v)
   }
   if (format === 'claude' && has('.mcp.json')) {
-    const j = readJson(root, '.mcp.json')
+    const j = readJson(root, '.mcp.json', budget)
     if (j.state === 'ok') addDecl(unwrapServers(j.value))
     else warn.add('file_unreadable')
   }
+  const mcpPaths = new Set<string>()
   for (const d of manifest.mcp) {
     if (d.kind === 'inline') addDecl(d.servers)
     else {
       const p = dropPath(d.path)
-      if (p === null || p === '') continue
+      if (p === null || p === '' || mcpPaths.has(p)) continue
+      mcpPaths.add(p)
       if (/\.mcpb$/i.test(p)) remote.push({ name: clip(p, 200), type: 'mcpb', url: clip(p, 2000) })
       else {
-        const j = readJson(root, p)
+        const j = readJson(root, p, budget)
         if (j.state === 'ok') addDecl(unwrapServers(j.value))
         else warn.add('file_unreadable')
       }
@@ -421,7 +465,8 @@ function read(root: string, o: { nameHint: string; reservedIds: Set<string>; ker
   }
   const config = new Map<string, ConfigKey>(configKeysOf(manifest.userConfig).map(k => [k.key, k]))
   const servers: ParsedServer[] = []
-  for (const [name, raw] of [...rawServers].sort((a, b) => cmp(a[0], b[0])).slice(0, 100)) {
+  if (rawServers.size > MAX_SERVERS) warn.add('truncated')
+  for (const [name, raw] of [...rawServers].sort((a, b) => cmp(a[0], b[0])).slice(0, MAX_SERVERS)) {
     const s = parseServer(name, raw, { format, config, home: o.home })
     if (s.remote) remote.push({ name: clip(name, 200), type: clip(s.remote.type, 40), url: s.remote.url })
     else servers.push(s)
@@ -437,42 +482,62 @@ function read(root: string, o: { nameHint: string; reservedIds: Set<string>; ker
   const hooks: NotRun['hooks'] = []
   const addHooks = (v: unknown) => {
     const top = isObject(v) && isObject(v.hooks) ? v.hooks : v
-    if (!isObject(top)) return
+    if (!isObject(top)) {
+      warn.add('file_unreadable')
+      return
+    }
     for (const [event, groups] of Object.entries(top)) {
-      for (const g of Array.isArray(groups) ? groups : []) {
+      if (!Array.isArray(groups)) {
+        warn.add('file_unreadable')
+        continue
+      }
+      for (const g of groups) {
         const list = isObject(g) && Array.isArray(g.hooks) ? g.hooks : [g]
         for (const h of list) {
-          if (!isObject(h) || hooks.length >= MAX_LIST) continue
-          const c = typeof h.command === 'string' ? h.command : typeof h.prompt === 'string' ? h.prompt : typeof h.url === 'string' ? h.url : null
-          if (c === null) continue
+          const c = isObject(h) ? (typeof h.command === 'string' ? h.command : typeof h.prompt === 'string' ? h.prompt : typeof h.url === 'string' ? h.url : null) : null
+          if (c === null) {
+            warn.add('file_unreadable')
+            continue
+          }
+          if (hooks.length >= MAX_LIST) {
+            warn.add('truncated')
+            continue
+          }
           if (c.length > HOOK_MAX) warn.add('truncated')
           hooks.push({ event: clip(event, 100), command: clip(c, HOOK_MAX) })
         }
       }
     }
   }
-  if (has('hooks/hooks.json')) {
-    const j = readJson(root, 'hooks/hooks.json')
+  const hookFiles = new Set<string>()
+  const addHookFile = (rel: string) => {
+    if (hookFiles.has(rel)) return
+    hookFiles.add(rel)
+    const j = readJson(root, rel, budget)
     if (j.state === 'ok') addHooks(j.value)
     else warn.add('file_unreadable')
   }
-  for (const h of manifest.hooks) {
+  if (has('hooks/hooks.json')) addHookFile('hooks/hooks.json')
+  const walkHook = (h: unknown, depth: number) => {
     if (typeof h === 'string') {
       const p = dropPath(h)
-      const j = p ? readJson(root, p) : null
-      if (j?.state === 'ok') addHooks(j.value)
-      else if (p) warn.add('file_unreadable')
-    } else if (Array.isArray(h)) h.forEach(x => (isObject(x) ? addHooks(x) : undefined))
-    else addHooks(h)
+      if (p) addHookFile(p)
+    } else if (Array.isArray(h)) {
+      if (depth >= 2) warn.add('file_unreadable')
+      else {
+        if (h.length > MAX_PATHS) warn.add('truncated')
+        for (const x of h.slice(0, MAX_PATHS)) walkHook(x, depth + 1)
+      }
+    } else addHooks(h)
   }
+  for (const h of manifest.hooks) walkHook(h, 0)
   if (hooks.length > 0) warn.add('hooks_not_run')
 
   const listing = (key: string, dirs: string[]): string[] => {
     const names = new Set<string>()
     const v = manifest.other.get(key)
-    const paths = typeof v === 'string' ? [v] : Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
-    for (const d of dirs) paths.push(d)
-    for (const p of paths) {
+    const given = typeof v === 'string' ? [v] : Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+    for (const p of uniq([...given, ...dirs], warn)) {
       const r = safeRel(p)
       if (r === null) {
         warn.add('path_dropped')
@@ -491,7 +556,7 @@ function read(root: string, o: { nameHint: string; reservedIds: Set<string>; ker
 
   const scripts: string[] = []
   for (const f of inv.files) if (f.exec && !f.rel.startsWith('bin/')) scripts.push(f.rel)
-  const pkg = has('package.json') ? readJson(root, 'package.json') : null
+  const pkg = has('package.json') ? readJson(root, 'package.json', budget) : null
   if (pkg?.state === 'ok' && isObject(pkg.value) && isObject(pkg.value.scripts))
     for (const k of Object.keys(pkg.value.scripts)) scripts.push(`package.json#scripts.${k}`)
 
@@ -506,6 +571,8 @@ function read(root: string, o: { nameHint: string; reservedIds: Set<string>; ker
     remoteMcp: remote.sort((a, b) => cmp(a.name, b.name)).slice(0, MAX_LIST),
     scripts: cap(listOf(scripts), warn),
   }
+  if (remote.length > MAX_LIST) warn.add('truncated')
+  if (budget.exhausted) warn.add('truncated')
   if (manifest.main !== undefined) notRun.main = clip(manifest.main, 1024)
 
   const claimed: Claimed = { name: line(manifest.name ?? id, 300), description: line(manifest.description ?? '', 300) }
