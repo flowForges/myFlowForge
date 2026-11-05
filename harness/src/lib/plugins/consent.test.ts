@@ -388,7 +388,7 @@ describe('effectiveGrants', () => {
   it('a wildcard grant needs a wildcard declaration of the same suffix', () => {
     expect(ok(effectiveGrants({ a: decl(['*.y.com']) }, { servers: { a: { network: ['*.x.com'], cwd: 'read' } } }))).toBe('grants_exceed_declared')
     expect(ok(effectiveGrants({ a: decl(['*.y.com']) }, { servers: { a: { network: ['x.com'], cwd: 'read' } } }))).toBe('grants_exceed_declared')
-    expect(ok(effectiveGrants({ a: decl(['*.com']) }, { servers: { a: { network: ['*.x.com'], cwd: 'read' } } }))).toMatchObject({ servers: { a: { network: ['*.x.com'] } } })
+    expect(ok(effectiveGrants({ a: decl(['*.example.com']) }, { servers: { a: { network: ['*.x.example.com'], cwd: 'read' } } }))).toMatchObject({ servers: { a: { network: ['*.x.example.com'] } } })
   })
 
   it('claude format (no declaration): the user may fill hosts, still no bad hosts', () => {
