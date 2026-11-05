@@ -647,6 +647,16 @@ describe('SkillCatalog', () => {
     expect(catalog.of({ ...rec, integrity: 'sha256:b' })).not.toBe(once)
   })
 
+  it('a tree with a link in it is no plugin: the walk is what the file list comes from', async () => {
+    const { r } = await setup()
+    await r.install(plugin())
+    symlinkSync(join(tmp, 'nowhere'), join(versionDir(r), 'planted'))
+    const log = { warn: vi.fn() }
+    const catalog = new SkillCatalog({ list: () => [], plainVersionDir: () => versionDir(r) }, { home: r.home }, log)
+    expect(catalog.of({ id: 'demo', integrity: 'sha256:a' } as InstalledRecord)).toBeUndefined()
+    expect(log.warn).toHaveBeenCalledWith('plugin not readable', { id: 'demo' })
+  })
+
   it('a directory it cannot read is no plugin, logged by id', () => {
     const log = { warn: vi.fn() }
     const catalog = new SkillCatalog({ list: () => [], plainVersionDir: () => undefined }, { home: tmp }, log)
