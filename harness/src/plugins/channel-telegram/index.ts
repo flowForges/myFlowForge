@@ -7,6 +7,7 @@ import { z } from 'zod'
 import type { Approvals } from '../../kernel/approvals'
 import type { Plugin, PluginContext } from '../../kernel/pluginHost'
 import { RpcError } from '../../kernel/rpcError'
+import { CHANNEL_CLOSE_MS } from '../../kernel/shutdown'
 import type { Sessions } from '../../kernel/sessions'
 import { createGit, type Git } from '../../lib/git/snapshot'
 import { scrub } from '../../lib/memory/scrub'
@@ -21,7 +22,7 @@ import { isCommandShaped, parseCommand, runCommand, type CommandDeps } from './c
 import { classify, isExternal, type DmInbound, type Inbound } from './inbound'
 import { manifest } from './manifest'
 import { Pairing, PairingError, parsePairCommand } from './pairing'
-import { codeOf, Poller, type PollerState } from './poller'
+import { codeOf, Poller, STOP_BOUND_MS, type PollerState } from './poller'
 import { Projects } from './projects'
 import { Sender } from './sender'
 import { TelegramState, type TelegramBot } from './state'
@@ -39,9 +40,9 @@ const LEAVE_WINDOW_MS = 3_600_000
 const LEAVES_PER_WINDOW = 30
 const LEFT_CHATS_MAX = 1000
 /** 关闭时最多再等这么久(§5.2) */
-const FLUSH_MS = 500
-/** 关闭时等手上的命令(git 打断不了);等不到它也不会再动内核 */
-const COMMAND_STOP_MS = 2000
+export const FLUSH_MS = 500
+/** 关闭时等手上的命令(git 打断不了);等不到它也不会再动内核。停机预算里这个渠道的份额减去另外两步 */
+export const COMMAND_STOP_MS = CHANNEL_CLOSE_MS - STOP_BOUND_MS - FLUSH_MS
 const SAVE_FAILED = 'state_save_failed'
 const CONFIG_INVALID = 'config_invalid'
 
@@ -185,7 +186,10 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
         },
         log: ctx.log,
       })
-      const reply = (chatId: string, text: string) => void sender.send(chatId, { text })
+      /** 所有固定回复走这里。关着或没令牌:一个请求都不发(§5.2);正在被关掉的那次 config.set 也算,config 已经是新的 */
+      const reply = (chatId: string, text: string) => {
+        if (config.enabled && chats.isRunning()) void sender.send(chatId, { text })
+      }
 
       /** 出站文本:scrub 再加令牌字面值(§9.4)。令牌在这个闭包里 */
       const mask = (text: string) => {
@@ -535,7 +539,10 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
           await poller.stop()
           adopt({ id: me.id, ...(username && { username }) })
           token = candidate
+          // 令牌失效时放弃的最终内容(§12.2):开着的渠道 settle 不会再补,关着的 resume 会
+          const wasRunning = chats.isRunning()
           settle()
+          if (wasRunning) chats.redeliver()
           return { ok: true, bot: { id: me.id, username } }
         }),
       )

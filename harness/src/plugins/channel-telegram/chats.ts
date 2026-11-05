@@ -812,6 +812,18 @@ export class Chats {
     this.o.save()
   }
 
+  /** 同一个机器人换了新令牌,渠道一直开着:旧令牌下放弃的内容现在补。比哈希,已发的不重发;还在跑的轮下一次渲染补 */
+  redeliver(): void {
+    if (!this.running || this.disposed) return
+    for (const chatId of Object.keys(this.o.state.data.chats)) {
+      if (!this.o.isPaired(chatId)) continue
+      const rec = this.ensure(chatId)
+      const run = this.runnerOf(chatId)
+      this.replayOpen(chatId, rec)
+      if (run.live) this.markDirty(chatId, run, run.live)
+    }
+  }
+
   /** 队尾是长消息:可能是粘贴的前半段,后半段正在重投。开一个窗口,算作同一段,不能先按半段发 */
   private holdForPaste(chatId: string, rec: ChatRecord, run: Runner): void {
     const parts: Queued[] = []

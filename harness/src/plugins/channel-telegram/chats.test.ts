@@ -714,6 +714,27 @@ describe('revocation', () => {
     expect(texts(r).at(-1)).toBe('reply 2')
   })
 
+  it('the same bot under a new token: a final that gave up on the old one arrives now, not at the next start', async () => {
+    const g = gatedStream('x ', 'the final')
+    const r = await rig({ models: { script: gatedScript(g) } })
+    await handled(r, r.dm('start'))
+    await flow(r)
+    // the token dies while the turn runs: the final gives up at once
+    r.fake.fail('editMessageText', 50, { status: 401 })
+    r.fake.fail('sendMessage', 50, { status: 401 })
+    g.open()
+    await flow(r)
+    const status = () => r.k.handle('channel.telegram.status', {}) as Promise<{ undelivered: number }>
+    await expect.poll(status, { timeout: 3000 }).toMatchObject({ undelivered: 1 })
+    expect(texts(r).at(-1)).toBe('x')
+    r.fake.clearFailures()
+    await r.k.handle('channel.telegram.setToken', { token: '123456789:' + 'A'.repeat(35) })
+    await flow(r)
+    await expect.poll(status, { timeout: 3000 }).toMatchObject({ undelivered: 0 })
+    expect(texts(r).at(-1)).toBe('x the final')
+    expect(chatOf(r).delivery.done).toBe(true)
+  })
+
   it('a changed bot cancels the running turn', async () => {
     const g = gatedStream('x ', 'y')
     const r = await rig({ models: { script: gatedScript(g) } })
@@ -730,6 +751,31 @@ describe('revocation', () => {
 describe('the channel switched off', () => {
   const set = (r: TelegramRig, enabled: boolean, commandId: string) => r.k.handle('channel.telegram.config.set', { commandId, config: { enabled } })
   const telegramWrites = (r: TelegramRig) => r.fake.requests.filter(q => q.method !== 'getUpdates' && q.method !== 'getMe').length
+
+  it('disabled: a line from the projects side sends nothing, whichever way it got there', async () => {
+    const kit = projectKit()
+    const project = { name: 'api', path: kit.repo, auto: true }
+    const r = await rig({ project: kit, level: 'full', config: { channels: { telegram: { projects: [project] } } } })
+    await enterProject(r)
+    const worktreeId = chatOf(r).worktreeId as string
+    // disabling and narrowing in one set: the narrowed line must not get out first
+    await r.k.handle('channel.telegram.config.set', { commandId: 'c1', config: { enabled: false, projects: [{ ...project, auto: false }] } })
+    await flow(r)
+    const writes = telegramWrites(r)
+    await r.k.handle('channel.telegram.worktree.discard', { commandId: 'c2', worktreeId })
+    await flow(r)
+    expect(telegramWrites(r)).toBe(writes)
+    expect(texts(r).join('\n')).not.toContain('自动放行')
+    expect(texts(r).join('\n')).not.toContain('丢弃')
+  })
+
+  it('still enabled: the same line does get out, the control for the row above', async () => {
+    const r = await rig({ project: true })
+    await enterProject(r)
+    await r.k.handle('channel.telegram.worktree.discard', { commandId: 'c2', worktreeId: chatOf(r).worktreeId as string })
+    await flow(r)
+    expect(texts(r).at(-1)).toContain('丢弃')
+  })
 
   it('enabled:false: a queued message does not run, nothing goes out; enabled:true: it runs and the held final arrives', async () => {
     const g = gatedStream('working ', 'done')

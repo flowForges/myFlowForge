@@ -12,7 +12,9 @@ import { telegramKernel, TEST_TOKEN, type DmOpts, type TelegramEnv, type Telegra
 import { BUILTIN_PLUGINS } from '../index'
 import loopDirect from '../loop-direct'
 import type { DmInbound } from './inbound'
-import { createChannelTelegram, proxyKind, type ChannelTelegramOpts } from './index'
+import { COMMAND_STOP_MS, createChannelTelegram, FLUSH_MS, proxyKind, type ChannelTelegramOpts } from './index'
+import { STOP_BOUND_MS } from './poller'
+import { CHANNEL_CLOSE_MS } from '../../kernel/shutdown'
 import { TelegramState } from './state'
 
 const HOUR = 3_600_000
@@ -1483,5 +1485,12 @@ describe('status', () => {
     expect(s.paired).toEqual([])
     expect(s.problems).toContain('state_recovered')
     await r.settle()
+  })
+})
+
+describe('its share of the shutdown budget', () => {
+  it('poller stop, waiting for a command and the flush fit in CHANNEL_CLOSE_MS, with time left to wait for a command', () => {
+    expect(COMMAND_STOP_MS).toBeGreaterThan(0)
+    expect(STOP_BOUND_MS + COMMAND_STOP_MS + FLUSH_MS).toBeLessThanOrEqual(CHANNEL_CLOSE_MS)
   })
 })

@@ -32,7 +32,7 @@ const CONFLICT_RETRY_MS = 60_000
 const RETRY_AFTER_MAX_MS = 3_600_000
 /** 文档:没有新更新满一周后,下一个 update_id 随机。提前一天 */
 const ID_RESET_IDLE_MS = 6 * 86_400_000
-const STOP_BOUND_MS = 500
+export const STOP_BOUND_MS = 500
 const SAVE_FAILED = 'state_save_failed'
 /** 长轮询比这快地回了空:对面没在长等(代理之类),不跟着空转 */
 const EMPTY_REPLY_MIN_MS = 1000
