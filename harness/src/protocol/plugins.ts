@@ -36,7 +36,7 @@ export const PluginSourceSchema = z.discriminatedUnion('kind', [
 ])
 export type PluginSource = z.infer<typeof PluginSourceSchema>
 
-export const PluginWarningSchema = z.enum(['no_manifest', 'unpinned_source', 'source_changed', 'runtime_fetch', 'shell_in_text', 'hidden_chars', 'submodules_skipped', 'hooks_not_run', 'truncated'])
+export const PluginWarningSchema = z.enum(['no_manifest', 'unpinned_source', 'source_changed', 'runtime_fetch', 'shell_in_text', 'hidden_chars', 'submodules_skipped', 'hooks_not_run', 'truncated', 'path_dropped', 'name_dropped', 'file_unreadable'])
 export type PluginWarning = z.infer<typeof PluginWarningSchema>
 
 const HookEntrySchema = z.object({ event: z.string(), command: z.string() })
@@ -90,6 +90,7 @@ export const PluginConsentSchema = z.object({
     monitors: Names,
     workflows: Names,
     lsp: Names,
+    other: Names,
     remoteMcp: z.array(z.object({ name: z.string(), type: z.string(), url: z.string() })),
     main: z.string().optional(),
     scripts: Names,

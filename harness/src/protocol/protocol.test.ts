@@ -666,7 +666,7 @@ describe('plugins protocol (09 §14)', () => {
     commands: [{ name: 'c', description: 'd', flags: [], ignored: [] }],
     mcp: [{ name: 'srv', command: 'node', args: ['${PLUGIN_ROOT}/s.js'], fetchesAtRuntime: false, env: [{ name: 'K', source: 'secret', required: true }], declared: null, suggestedHosts: [], problems: [] }],
     config: [{ key: 'k', title: 'K', sensitive: true, required: true, type: 'string' }],
-    notRun: { hooks: [{ event: 'SessionStart', command: 'x' }], agents: [], bin: [], monitors: [], workflows: [], lsp: [], remoteMcp: [{ name: 'r', type: 'http', url: 'https://r' }], main: './m.mjs', scripts: [] },
+    notRun: { hooks: [{ event: 'SessionStart', command: 'x' }], agents: [], bin: [], monitors: [], workflows: [], lsp: [], other: [], remoteMcp: [{ name: 'r', type: 'http', url: 'https://r' }], main: './m.mjs', scripts: [] },
     warnings: ['no_manifest', 'truncated', 'hooks_not_run'],
   }
   const DIFF = {
