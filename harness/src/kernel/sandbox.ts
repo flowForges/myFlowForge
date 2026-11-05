@@ -587,6 +587,7 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
           moveBlock: withAncestors([...writable, ...x.allowWrite, ...creds, o.dataDir, ...persistence, ...x.denyRead, ...x.denyWrite, ...repo.gitDirs.flatMap(g => [g, `${g}/hooks`, `${g}/config`, `${g}/modules`, `${g}/worktrees`]), ...moduleDirs, ...moduleGuard, ...modules.flatMap(m => m.between), ...(repo.cwdGitFile ? [repo.cwdGitFile] : [])], writable),
           proxyPort: proxy?.port,
           allowLoopback,
+          ...(x.hide && { noNamedIpc: true }),
         })
         const { file, args } = sandboxExecArgs(profile, command)
         return { file, args, env: sandboxEnv(env, { tmp, proxyPort: proxy?.port, level, allowLoopback }), sandboxed: true, level, release, ...(e?.failed && { networkLost: true as const }) }

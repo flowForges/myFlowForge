@@ -1581,6 +1581,17 @@ describe('planExec with hide, tmpDir, exactHosts (09 Task 1, M1, M4, M5, M13)', 
   }
 
   describe('hide on Seatbelt', () => {
+    it('I4: hidden runs get only the notification page of named IPC; plans without hide keep the python allowances', async () => {
+      const { profile } = await darwin({ hide: { tops: [home], keep: [repo] } })
+      expect(profile).not.toContain('/psm_')
+      expect(profile).not.toContain('/mp-')
+      expect(lines(profile, '(allow ipc-posix-shm')).toEqual(['(allow ipc-posix-shm (ipc-posix-name "apple.shm.notification_center"))'])
+      expect(lines(profile, '(allow ipc-posix-sem')).toEqual([])
+      const plain = (await darwin({})).profile
+      expect(plain).toContain('/psm_')
+      expect(plain).toContain('/mp-')
+    })
+
     it('tops are denied for reading, keep comes back after them, ancestors get metadata only', async () => {
       const code = join(home, 'store', 'p', 'abc')
       const { profile } = await darwin({ hide: { tops: [home], keep: [repo, code] } })

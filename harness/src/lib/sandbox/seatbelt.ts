@@ -43,6 +43,8 @@ export interface SeatbeltParams {
   proxyPort?: number
   /** R6:放行本机回环的出站 / 监听 / 入站 */
   allowLoopback?: boolean
+  /** 隐藏运行(09 I4):不放 python 的命名 IPC。名字是全局的,没网的服务写、有网的读,就绕过了逐服务的授权 */
+  noNamedIpc?: boolean
 }
 
 // sysctl 只读名单(R1 修订,实测 macOS 26.6):hw.* 缺了 node 启动即 abort(LowLevelAlloc arithmetic overflow);
@@ -153,8 +155,8 @@ export function seatbeltProfile(p: SeatbeltParams): string {
     // 系统
     `(allow sysctl-read ${SYSCTL_PREFIXES.map(n => `(sysctl-name-prefix ${str(n)})`).join(' ')} ${SYSCTL_NAMES.map(n => `(sysctl-name ${str(n)})`).join(' ')})`,
     `(allow mach-lookup ${MACH_SERVICES.map(n => `(global-name ${str(n)})`).join(' ')})`,
-    `(allow ipc-posix-shm ${SHM_PREFIXES.map(n => `(ipc-posix-name-prefix ${str(n)})`).join(' ')} ${SHM_NAMES.map(n => `(ipc-posix-name ${str(n)})`).join(' ')})`,
-    `(allow ipc-posix-sem ${SEM_PREFIXES.map(n => `(ipc-posix-name-prefix ${str(n)})`).join(' ')})`,
+    `(allow ipc-posix-shm ${[...(p.noNamedIpc ? [] : SHM_PREFIXES.map(n => `(ipc-posix-name-prefix ${str(n)})`)), ...SHM_NAMES.map(n => `(ipc-posix-name ${str(n)})`)].join(' ')})`,
+    ...(p.noNamedIpc ? [] : [`(allow ipc-posix-sem ${SEM_PREFIXES.map(n => `(ipc-posix-name-prefix ${str(n)})`).join(' ')})`]),
     `(allow file-ioctl ${filters('literal', IOCTL_DEVICES)})`,
 
     // 读

@@ -512,6 +512,51 @@ describe.skipIf(!usable)('an MCP server under real Seatbelt', () => {
     }
   }, 60_000)
 
+  describe('I4: POSIX shared memory does not launder data between servers', () => {
+    const PY = `
+import ctypes, mmap, os, sys
+libc = ctypes.CDLL(None, use_errno=True)
+libc.shm_open.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_int]
+libc.shm_unlink.argtypes = [ctypes.c_char_p]
+op, name, text = sys.argv[1], sys.argv[2].encode(), sys.argv[3] if len(sys.argv) > 3 else ''
+if op == 'unlink':
+    libc.shm_unlink(name); print('unlinked'); sys.exit(0)
+flags = os.O_RDWR | os.O_CREAT if op == 'write' else os.O_RDONLY
+fd = libc.shm_open(name, flags, 0o600)
+if fd < 0:
+    print('refused', ctypes.get_errno()); sys.exit(0)
+if op == 'write':
+    os.ftruncate(fd, 4096)
+    m = mmap.mmap(fd, 4096); m[:len(text)] = text.encode(); m.close(); print('wrote')
+else:
+    m = mmap.mmap(fd, 4096, prot=mmap.PROT_READ); print('read', m[:64].rstrip(bytes(1)).decode())
+`
+    const py = (...a: string[]) => ['/usr/bin/python3', '-c', PY, ...a]
+    const outside = (...a: string[]) => execFileSync(py(...a)[0], py(...a).slice(1), { encoding: 'utf8', env: { PATH: '/usr/bin:/bin', HOME: tmp } }).trim()
+    const inside = async (s: Started, server: string, ...a: string[]) => {
+      const { exec } = await s.probe(server, 'probe_children', { exec: py(...a), timeoutMs: 45_000 })
+      expect(exec.status).toBe(0) // python 真的跑起来了:失败不是因为根本没跑
+      return String(exec.stdout).trim()
+    }
+
+    it.each([['/psm_mff_', 'psm'], ['/mp-mff_', 'mp'], ['/mffother_', 'other']])('%s: a no-network server cannot pass data to a networked one', async prefix => {
+      const name = `${prefix}${process.pid}_${++n}`
+      const m = await rig()
+      const s = await started(m, 'x', { quiet: SERVER, net: SERVER }, { net: { network: ['granted.example'], cwd: 'read' } })
+      try {
+        // 对照:沙箱外同一段内存读写都行,所以下面的拒绝是沙箱给的
+        expect(outside('write', name, 'from-outside')).toBe('wrote')
+        expect(outside('read', name)).toBe('read from-outside')
+        expect(await inside(s, 'x/quiet', 'read', name)).toMatch(/^refused/)
+        expect(await inside(s, 'x/quiet', 'write', name, 'stolen-cwd-data')).toMatch(/^refused/)
+        expect(await inside(s, 'x/net', 'read', name)).toMatch(/^refused/)
+        expect(outside('read', name)).toBe('read from-outside')
+      } finally {
+        outside('unlink', name)
+      }
+    }, 120_000)
+  })
+
   it('kernel.close leaves no pid', async () => {
     const m = await rig()
     const s = await started(m)

@@ -128,6 +128,11 @@ function probeChildren(a) {
     c.unref()
     out.spawned = c.pid
   }
+  if (a.exec) {
+    const x = spawnSync(a.exec[0], a.exec.slice(1), { encoding: 'utf8', timeout: a.timeoutMs ?? 30_000 })
+    out.exec = { status: x.status, stdout: x.stdout ?? '', stderr: (x.stderr ?? '').slice(0, 2000), error: x.error ? errCode(x.error) : undefined }
+    return out
+  }
   const r = spawnSync('/bin/ps', ['-axo', 'pid=,ppid=,args='], { encoding: 'utf8' })
   if (r.status !== 0) out.ps = `failed: ${r.status ?? errCode(r.error)}`
   for (const line of (r.stdout ?? '').split('\n')) {
