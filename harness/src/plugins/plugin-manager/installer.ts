@@ -109,6 +109,7 @@ function nameHintOf(s: Resolved): string {
   return last.replace(/\.git$/i, '') || 'plugin'
 }
 
+class DataLeft extends Error {}
 class StaleLanding extends Error {}
 
 export class Installer {
@@ -436,18 +437,20 @@ export class Installer {
       landed = true
       // 上面的等待里暂存还能被改:同意的是落地的这一份
       if (!treeMatches(target, record.integrity)) throw new StaleLanding()
-      if (!prev) store.removeData(record.id)
+      // 新主人看不到上一个留下的东西:删不掉就不装(09 I3)
+      if (!prev && !store.removeData(record.id)) throw new DataLeft()
       store.put(record)
       store.save()
     } catch (err) {
       const stale = err instanceof StaleLanding
-      if (!stale) this.d.log.warn('plugin install failed', { code: (err as NodeJS.ErrnoException).code ?? 'unknown' })
+      const left = err instanceof DataLeft
+      if (!stale && !left) this.d.log.warn('plugin install failed', { code: (err as NodeJS.ErrnoException).code ?? 'unknown' })
       if (prev) store.put(prev)
       else store.remove(record.id)
       if (landed) store.removeVersion(record)
       if (aside) store.restoreAside(record, aside)
       if (!prev) store.removeCode(record.id)
-      const code = stale ? 'consent_stale' : 'store_error'
+      const code = stale ? 'consent_stale' : left ? 'plugin_data_exists' : 'store_error'
       this.toFailed(job, code)
       this.arm()
       throw fail(code)

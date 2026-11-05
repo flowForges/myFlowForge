@@ -8,6 +8,7 @@ import { basename, dirname, join } from 'node:path'
 import { z } from 'zod'
 import type { Logger } from '../../kernel/log'
 import { pluginStoreRootOf } from '../../lib/fs/paths'
+import { removeTree } from '../../lib/fs/removeTree'
 import { USER_CONFIG_KEY_RE } from '../../lib/plugins/manifest'
 import { integrityOf, walkTree } from '../../lib/plugins/tree'
 import { GrantsSchema, MCP_SERVER_NAME, PLUGIN_ID, PluginConsentSchema, PluginFormatSchema, PluginSourceSchema } from '../../protocol/index'
@@ -202,12 +203,10 @@ export class PluginStore {
     }
   }
 
-  private drop(path: string): void {
-    try {
-      rmSync(path, { recursive: true, force: true }) // 链接删的是链接
-    } catch (err) {
-      this.log.warn('plugin store cleanup failed', { code: (err as NodeJS.ErrnoException).code })
-    }
+  private drop(path: string): boolean {
+    const gone = removeTree(path) // 链接删的是链接
+    if (!gone) this.log.warn('plugin store cleanup failed')
+    return gone
   }
 
   private isDir(path: string): boolean {
@@ -306,36 +305,35 @@ export class PluginStore {
    * top/<segs...> 删掉,从不穿过链接:rmSync 不跟随最后一段,但会跟随路径中间的。
    * 路上哪一层不是真目录,就只摘掉那一层。不抛错:删不掉的,对账下次再来
    */
-  private removeUnder(top: string, ...segs: string[]): void {
+  private removeUnder(top: string, ...segs: string[]): boolean {
     let cur = top
     for (const seg of segs) {
       const st = lstatOf(cur)
-      if (!st) return
-      if (!st.isDirectory()) {
-        this.drop(cur)
-        return
-      }
+      if (!st) return true
+      if (!st.isDirectory()) return this.drop(cur)
       cur = join(cur, seg)
     }
-    this.drop(cur)
+    return this.drop(cur)
   }
 
   /** 这个插件的代码和数据 */
-  removeFiles(id: string): void {
-    this.removeCode(id)
-    this.removeData(id)
+  removeFiles(id: string): boolean {
+    const code = this.removeCode(id)
+    const data = this.removeData(id)
+    return code && data
   }
 
-  removeCode(id: string): void {
-    if (PLUGIN_ID.test(id)) this.removeUnder(this.root, id)
+  removeCode(id: string): boolean {
+    return !PLUGIN_ID.test(id) || this.removeUnder(this.root, id)
   }
 
-  removeData(id: string): void {
-    if (PLUGIN_ID.test(id)) this.removeUnder(this.dataRoot, id)
+  removeData(id: string): boolean {
+    return !PLUGIN_ID.test(id) || this.removeUnder(this.dataRoot, id)
   }
 
-  removeVersion(rec: Pick<InstalledRecord, 'id' | 'integrity'>): void {
-    this.removeUnder(this.root, rec.id, versionDirName(rec.integrity))
+
+  removeVersion(rec: Pick<InstalledRecord, 'id' | 'integrity'>): boolean {
+    return this.removeUnder(this.root, rec.id, versionDirName(rec.integrity))
   }
 
   removeStaging(stagingId: string, sub?: string): void {

@@ -284,9 +284,10 @@ export function createPluginManager(o: PluginManagerOpts = {}): Plugin {
             throw fail('store_error')
           }
           // 记录已经没了:这里删不掉的,下次打开时对账收拾
-          store.removeFiles(rec.id)
+          const clean = store.removeFiles(rec.id)
           store.tidy()
           ctx.append({ type: 'plugins.uninstalled', payload: { id: rec.id } })
+          if (!clean) throw fail('uninstall_incomplete')
           return { ok: true }
         }),
       )

@@ -451,16 +451,19 @@ describe('PluginStore', () => {
       expect(readdirSync(code)).toEqual(['b'])
       expect(existsSync(join(dataDir, 'plugin-data', 'a'))).toBe(false)
     })
-    it('a removal that fails logs a code and does not throw', () => {
+    it('a read-only directory inside is no obstacle; a removal that really fails answers false and does not throw', () => {
       seed(record('a'))
       const dir = join(code, 'a', hex.slice(0, 12), 'locked')
       mkdirSync(join(dir, 'sub'), { recursive: true })
       chmodSync(dir, 0o555)
       const s = open()
+      expect(s.removeVersion(record('a'))).toBe(true)
+      mkdirSync(join(code, 'a', hex.slice(0, 12)), { recursive: true })
+      chmodSync(code, 0o555)
       try {
-        expect(() => s.removeFiles('a')).not.toThrow()
+        expect(s.removeFiles('a')).toBe(false)
       } finally {
-        chmodSync(dir, 0o755)
+        chmodSync(code, 0o755)
       }
     })
   })

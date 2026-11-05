@@ -818,20 +818,21 @@ describe('consent binds what lands', () => {
     })
 
     it('I5: an old dir that cannot be removed does not fail the upgrade; a later start clears it', async () => {
-      const r = await rig()
+      // 只读的子目录现在删得掉(I3);锁住它上面那层才真的删不掉。新版本要落进这一层,所以在杀进程那一步才锁
+      const holder: { during?: () => void } = {}
+      const r = await rig({ killPluginProcesses: async () => holder.during?.() })
       const root = simple({ extra: { 'locked/sub/f': 'x' } })
       await installed(r, root)
-      const old = readdirSync(join(storeOf(r), 'demo'))[0]
-      const locked = join(storeOf(r), 'demo', old, 'locked')
+      const parent = join(storeOf(r), 'demo')
       writeFileSync(join(root, 'v2'), '')
       const up = await prepare(r, { kind: 'path', path: root })
-      chmodSync(locked, 0o555)
+      holder.during = () => chmodSync(parent, 0o555)
       try {
         expect(await confirm(r, up)).toEqual({ ok: true, id: 'demo' })
         expect(eventsOf(r, 'plugins.upgraded')).toHaveLength(1)
-        expect(readdirSync(join(storeOf(r), 'demo'))).toHaveLength(2)
+        expect(readdirSync(parent)).toHaveLength(2)
       } finally {
-        chmodSync(locked, 0o755)
+        chmodSync(parent, 0o755)
       }
       await r.restart()
       expect(readdirSync(join(storeOf(r), 'demo'))).toHaveLength(1)

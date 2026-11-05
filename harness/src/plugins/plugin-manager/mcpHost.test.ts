@@ -1,10 +1,11 @@
 // MCP 宿主(09 spec §10.3、Review Focus 4、6)。沙箱是记录选项的 stub,进程是真的假服务;
 // 真 Seatbelt 的行在 mcp.darwin.test.ts,卡片和门在 mcpTool.test.ts。每个用例结束都证明 pid 没了
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { alive, call, eventsOf, installedFile, snapshot, storeOf, stubPlugin, until } from '../../../test/managerRig'
+import { alive, call, confirm, eventsOf, installedFile, prepare, refused, snapshot, storeOf, stubPlugin, until } from '../../../test/managerRig'
 import { fakeClock } from '../../../test/memoryRig'
 import { fakeOutside, mcpRig, statusEvents, statusOf, type McpRig, type McpRigOpts } from '../../../test/mcpRig'
 import { buildPlugin, type PluginSpec } from '../../../test/pluginRig'
@@ -1182,6 +1183,82 @@ describe('grants, enable and uninstall', () => {
     // 同 id 再装,看不到旧设置
     await m.r.install(buildPlugin(dirFor(), { format: 'claude', id: 'x', mcp: { y: f.entry({ env: { A: '${user_config.tok}' } }) }, manifest: { userConfig: { tok: { title: 't', sensitive: true, required: true } } } }))
     expect((await m.mcp(sid, { action: 'tools', server: 'x/y' })).text).toBe('needs_config')
+  })
+
+  describe('I3: a server cannot make uninstall leave data behind', () => {
+    const lockedInstall = async (lock: (dir: string) => void) => {
+      const f = fake()
+      const m = await rigOnly({ layout: 'production' })
+      const src = buildPlugin(dirFor(), { format: 'claude', id: 'x', mcp: { y: f.entry() } })
+      await m.r.install(src)
+      const sid = await m.r.session({ approvalMode: 'auto' })
+      await m.r.turn(sid, 'pin')
+      await m.mcp(sid, { action: 'tools', server: 'x/y' })
+      const data = join(m.r.dataDir, 'plugin-data', 'x', 'y')
+      mkdirSync(join(data, 'k'))
+      writeFileSync(join(data, 'k', 'f'), 'old state')
+      lock(data)
+      return { m, sid, src, data }
+    }
+
+    it.skipIf(process.platform !== 'darwin')('uchg on a file', async () => {
+      const { m, src, data } = await lockedInstall(d => execFileSync('/usr/bin/chflags', ['uchg', join(d, 'k', 'f')]))
+      expect(await call(m.r, 'plugins.uninstall', { commandId: 'u', id: 'x' })).toEqual({ ok: true })
+      expect(existsSync(join(m.r.dataDir, 'plugin-data', 'x'))).toBe(false)
+      await m.r.install(src)
+      expect(existsSync(data)).toBe(false)
+    })
+
+    it('chmod 000 on a directory', async () => {
+      const { m, src, data } = await lockedInstall(d => chmodSync(join(d, 'k'), 0))
+      expect(await call(m.r, 'plugins.uninstall', { commandId: 'u', id: 'x' })).toEqual({ ok: true })
+      expect(existsSync(join(m.r.dataDir, 'plugin-data', 'x'))).toBe(false)
+      await m.r.install(src)
+      expect(existsSync(join(data, 'k'))).toBe(false)
+    })
+
+    it('a link in the data dir: its target untouched', async () => {
+      const outside = join(tmp, 'outside')
+      mkdirSync(outside)
+      writeFileSync(join(outside, 'keep'), 'x')
+      chmodSync(outside, 0o555)
+      const { m } = await lockedInstall(d => {
+        symlinkSync(outside, join(d, 'k', 'link'))
+        chmodSync(join(d, 'k'), 0)
+      })
+      expect(await call(m.r, 'plugins.uninstall', { commandId: 'u', id: 'x' })).toEqual({ ok: true })
+      expect(statSync(outside).mode & 0o777).toBe(0o555)
+      expect(readdirSync(outside)).toEqual(['keep'])
+      chmodSync(outside, 0o755)
+    })
+
+    it('removal failing: not a plain ok; confirm for that id is refused until it is gone; a restart clears it', async () => {
+      const { m, src } = await lockedInstall(() => {})
+      const dataRoot = join(m.r.dataDir, 'plugin-data')
+      chmodSync(dataRoot, 0o555)
+      try {
+        expect(await refused(call(m.r, 'plugins.uninstall', { commandId: 'u', id: 'x' }))).toBe('uninstall_incomplete')
+        expect(existsSync(join(dataRoot, 'x'))).toBe(true)
+        expect(eventsOf(m.r, 'plugins.uninstalled').length).toBe(1)
+        const st = await prepare(m.r, { kind: 'path', path: src })
+        expect(st.state).toBe('ready')
+        expect(await refused(confirm(m.r, st))).toBe('plugin_data_exists')
+        expect((await call(m.r, 'plugins.list')).plugins).toEqual([])
+      } finally {
+        chmodSync(dataRoot, 0o755)
+      }
+      await m.r.restart()
+      expect(existsSync(join(dataRoot, 'x'))).toBe(false)
+      await m.r.install(src)
+      expect((await call(m.r, 'plugins.list')).plugins[0].id).toBe('x')
+    })
+
+    it('an upgrade of an installed plugin is not refused: the data dir is its own', async () => {
+      const { m, src, data } = await lockedInstall(() => {})
+      writeFileSync(join(src, 'added.txt'), 'second')
+      await m.r.install(src)
+      expect(readFileSync(join(data, 'k', 'f'), 'utf8')).toBe('old state')
+    })
   })
 
   it('upgrade: confirm kills the old version, data stays', async () => {
