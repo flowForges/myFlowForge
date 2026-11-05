@@ -19,7 +19,8 @@ import { Chats, createImSession, type ChatsOpts } from './chats'
 import { TelegramState } from './state'
 
 const QUEUE_FULL = '排队已满,这条没收下'
-const TOO_MANY = '这一小时发得太多了,这条没执行'
+const TOO_MANY = '这一小时发得太多了,这条没执行,约 60 分钟后恢复'
+const PASTE_REFUSED = '这段粘贴太长,超过约 2 万字,整段没收下,没有执行'
 
 const rigs: TelegramRig[] = []
 const goDirs: string[] = []
@@ -360,11 +361,133 @@ describe('messages during a turn', () => {
     await flow(r)
     expect(chatOf(r).batch?.text).toBe('two')
     const commandId = chatOf(r).batch.commandId
-    release()
+    expect(texts(r)).not.toContain('上一轮还在收尾,这条排着')
+    // 处理者一直不返回:说一次,批次留着,顺序不变
+    await flow(r, 31_000)
+    await flow(r, 31_000)
+    expect(texts(r).filter(t => t === '上一轮还在收尾,这条排着')).toHaveLength(1)
+    await online(r)
+    await handled(r, r.dm('three'))
     await flow(r)
-    expect(users(r).map(u => u.text)).toEqual(['one', 'two'])
+    expect(chatOf(r).batch?.commandId).toBe(commandId)
+    expect(users(r).map(u => u.text)).toEqual(['one'])
+    release()
+    await flow(r, 6000)
     expect(chatOf(r).batch).toBeUndefined()
     expect(commandId).toMatch(/^tg:\d+:\d+-\d+$/)
+    await flow(r, 6000)
+    expect(users(r).map(u => u.text).slice(0, 2)).toEqual(['one', 'two'])
+  })
+
+  it('a turn with no text at all gets a fixed line, not silence', async () => {
+    const r = await rig({
+      models: {
+        script: () =>
+          (async function* (): AsyncIterable<ModelEvent> {
+            yield { type: 'reasoning', delta: 'hmm' }
+            yield { type: 'done', reason: 'stop' }
+          })(),
+      },
+    })
+    await handled(r, r.dm('hello'))
+    await flow(r)
+    expect(texts(r).at(-1)).toBe('这轮没有输出')
+    expect(chatOf(r).delivery.done).toBe(true)
+    await r.restart({ kill: true })
+    await online(r)
+    await flow(r)
+    expect(texts(r).filter(t => t === '这轮没有输出')).toHaveLength(1)
+  })
+
+  describe('a long paste', () => {
+    const part = (c: string, n = 4000) => c.repeat(n)
+    const send = async (r: TelegramRig, parts: string[]) => {
+      for (const p of parts) {
+        await handled(r, r.dm(p))
+        await r.settle({ advance: 1000 })
+      }
+    }
+
+    it('over 20 KB is refused whole with one line; nothing runs; the next message does', async () => {
+      const r = await rig()
+      await send(r, ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map(c => part(c)))
+      await flow(r)
+      expect(users(r)).toEqual([])
+      expect(r.models.calls).toEqual([])
+      expect(texts(r).filter(t => t === PASTE_REFUSED)).toHaveLength(1)
+      expect(texts(r)).not.toContain(QUEUE_FULL)
+      expect(chatOf(r).queue).toEqual([])
+      await handled(r, r.dm('short one'))
+      await flow(r)
+      expect(users(r).map(u => u.text)).toEqual(['short one'])
+    })
+
+    it('all in one getUpdates batch: the same', async () => {
+      const r = await rig()
+      await asOneBatch(r, () => {
+        for (const c of ['a', 'b', 'c', 'd', 'e', 'f']) r.dm(part(c))
+        return r.dm(part('g'))
+      })
+      await flow(r)
+      expect(users(r)).toEqual([])
+      expect(texts(r).filter(t => t === PASTE_REFUSED)).toHaveLength(1)
+    })
+
+    it('just under 20 KB still runs as one prompt', async () => {
+      const r = await rig()
+      await send(r, ['a', 'b', 'c', 'd', 'e'].map(c => part(c, 3900)))
+      await flow(r)
+      expect(users(r)).toHaveLength(1)
+      expect(users(r)[0].text.length).toBe(3900 * 5 + 4)
+    })
+
+    it('six parts of 3800: too many for the queue, and over the cap only with the sixth: still whole, never five', async () => {
+      const r = await rig()
+      await send(r, ['a', 'b', 'c', 'd', 'e', 'f'].map(c => part(c, 3800)))
+      await flow(r)
+      expect(users(r)).toEqual([])
+      expect(texts(r).filter(t => t === PASTE_REFUSED)).toHaveLength(1)
+    })
+
+    it('what was queued before the paste stays and runs', async () => {
+      const g = gatedStream('working ', 'done')
+      const r = await rig({ models: { script: gatedScript(g) } })
+      await handled(r, r.dm('start'))
+      await flow(r)
+      await handled(r, r.dm('before the paste'))
+      await flow(r)
+      await send(r, ['a', 'b', 'c', 'd', 'e', 'f'].map(c => part(c)))
+      await flow(r)
+      expect(chatOf(r).queue.map((q: { text: string }) => q.text)).toEqual(['before the paste'])
+      g.open()
+      await flow(r)
+      expect(users(r).map(u => u.text)).toEqual(['start', 'before the paste'])
+    })
+
+    it('a paste that does not fit behind a full queue: none of it is left in the queue', async () => {
+      const g = gatedStream('working ', 'done')
+      const r = await rig({ models: { script: gatedScript(g) } })
+      await handled(r, r.dm('start'))
+      await flow(r)
+      for (const t of ['1', '2', '3', '4']) await handled(r, r.dm(t))
+      await flow(r)
+      await send(r, [part('a'), part('b'), part('c')])
+      await flow(r)
+      expect(chatOf(r).queue.map((q: { text: string }) => q.text)).toEqual(['1', '2', '3', '4'])
+      expect(texts(r).filter(t => t === QUEUE_FULL)).toHaveLength(1)
+    })
+
+    it('a kill in the middle of a paste: the rest comes back and it is still one paste', async () => {
+      const r = await rig()
+      const a = r.dm(part('a'))
+      await handled(r, a)
+      await r.restart({ kill: true })
+      await online(r)
+      expect(users(r)).toEqual([])
+      await handled(r, r.dm(part('b')))
+      await flow(r)
+      expect(users(r).map(u => u.text)).toEqual([`${part('a')}\n${part('b')}`])
+    })
   })
 })
 
@@ -579,6 +702,73 @@ describe('revocation', () => {
   })
 })
 
+describe('the channel switched off', () => {
+  const set = (r: TelegramRig, enabled: boolean, commandId: string) => r.k.handle('channel.telegram.config.set', { commandId, config: { enabled } })
+  const telegramWrites = (r: TelegramRig) => r.fake.requests.filter(q => q.method !== 'getUpdates' && q.method !== 'getMe').length
+
+  it('enabled:false: a queued message does not run, nothing goes out; enabled:true: it runs and the held final arrives', async () => {
+    const g = gatedStream('working ', 'done')
+    const r = await rig({ models: { script: gatedScript(g) } })
+    await handled(r, r.dm('start'))
+    await flow(r)
+    await handled(r, r.dm('queued'))
+    await flow(r)
+    await set(r, false, 'c1')
+    await r.settle()
+    const writes = telegramWrites(r)
+    g.open()
+    await flow(r)
+    await flow(r)
+    expect(users(r).map(u => u.text)).toEqual(['start'])
+    expect(chatOf(r).queue.map((q: { text: string }) => q.text)).toEqual(['queued'])
+    expect(telegramWrites(r)).toBe(writes)
+    await set(r, true, 'c2')
+    await online(r)
+    await flow(r)
+    expect(users(r).map(u => u.text)).toEqual(['start', 'queued'])
+    expect(texts(r).filter(t => t === 'working done')).toHaveLength(1)
+    expect(texts(r).at(-1)).toBe('reply 2')
+  })
+
+  it('switched back on too late: the stale check runs again and the user is told', async () => {
+    const g = gatedStream('working ', 'done')
+    const r = await rig({ models: { script: gatedScript(g) } })
+    await handled(r, r.dm('start'))
+    await flow(r)
+    await handled(r, r.dm('queued'))
+    await flow(r)
+    await set(r, false, 'c1')
+    g.open()
+    await flow(r)
+    r.clock.advance(11 * 60_000)
+    await set(r, true, 'c2')
+    await online(r)
+    await flow(r)
+    expect(users(r).map(u => u.text)).toEqual(['start'])
+    expect(texts(r)).toContain('离线期间的 1 条没有执行,要的话重发。')
+  })
+
+  it('clearToken: the same; a new token brings it back', async () => {
+    const g = gatedStream('working ', 'done')
+    const r = await rig({ models: { script: gatedScript(g) } })
+    await handled(r, r.dm('start'))
+    await flow(r)
+    await handled(r, r.dm('queued'))
+    await flow(r)
+    await r.k.handle('channel.telegram.clearToken', {})
+    await r.settle()
+    const writes = telegramWrites(r)
+    g.open()
+    await flow(r)
+    expect(users(r).map(u => u.text)).toEqual(['start'])
+    expect(telegramWrites(r)).toBe(writes)
+    await r.k.handle('channel.telegram.setToken', { token: '123456789:' + 'A'.repeat(35) })
+    await online(r)
+    await flow(r)
+    expect(users(r).map(u => u.text)).toEqual(['start', 'queued'])
+  })
+})
+
 describe('draining', () => {
   it('ERR_DRAINING leaves the batch frozen, and the next start runs it once', async () => {
     const r = await rig()
@@ -653,8 +843,9 @@ describe('Chats with fake services', () => {
     const state = { data: { bot: { id: 5 }, chats: {}, dropped: { stale: 0 }, undelivered: 0, offset: 0 }, advance: vi.fn(), save: vi.fn(), problems: [] } as unknown as TelegramState
     const calls: { method: string; params: any }[] = []
     const call = o.call ?? (async (method: string) => (method === 'session.create' ? { sessionId: 's1' } : { accepted: true, turnId: 't1' }))
-    const sender = { sync: vi.fn(), send: vi.fn(async () => 1), typing: vi.fn(), drop: vi.fn() }
+    const sender = { sync: vi.fn(), send: vi.fn(async () => 1), typing: vi.fn(), drop: vi.fn(), dropAll: vi.fn() }
     const known = new Set<string>()
+    let slept = 0
     const chats = new Chats({
       state,
       commands: {
@@ -670,7 +861,7 @@ describe('Chats with fake services', () => {
       models: () => ({ catalog: () => ({ presets: [], models: {}, default: { accountId: 'a', modelId: 'm' } }), accounts: () => [] }) as never,
       sender,
       history: () => [],
-      now: clock.now,
+      now: () => clock.now() + slept,
       timers: clock.timers,
       log: { info() {}, warn() {}, error() {} },
       isPaired: () => true,
@@ -679,7 +870,8 @@ describe('Chats with fake services', () => {
       save: () => true,
       ...o,
     })
-    const dm = (updateId: number, text = `m${updateId}`) => chats.onDm({ kind: 'dm', updateId, chatId: OWNER, accountId: OWNER, name: 'o', text, date: Math.floor(clock.now() / 1000) })
+    chats.resume()
+    const dm = (updateId: number, text = `m${updateId}`) => chats.onDm({ kind: 'dm', updateId, chatId: OWNER, accountId: OWNER, name: 'o', text, date: Math.floor((clock.now() + slept) / 1000) })
     const flushAsync = async () => {
       for (let i = 0; i < 10; i++) await Promise.resolve()
     }
@@ -689,12 +881,17 @@ describe('Chats with fake services', () => {
     }
     const record = () => (state.data.chats as Record<string, any>)[OWNER]
     const ev = (type: string, payload: object): KernelEvent => ({ seq: 1, ts: 1, type: type as KernelEvent['type'], sessionId: 's1', payload })
-    return { chats, state, calls, sender, clock, dm, run, record, ev, known, flushAsync }
+    /** 合盖:定时器没跑,醒来时墙上的钟已经过了这么久 */
+    const sleep = (ms: number) => {
+      slept += ms
+    }
+    return { chats, state, calls, sender, clock, dm, run, record, ev, known, flushAsync, sleep }
   }
 
   it('onDm queues and saves; it starts nothing synchronously', () => {
     const save = vi.fn(() => true)
     const u = unit({ save })
+    save.mockClear()
     u.dm(1)
     expect(u.calls).toEqual([])
     expect(save).toHaveBeenCalledTimes(1)
@@ -792,7 +989,7 @@ describe('Chats with fake services', () => {
     u.chats.dispose()
   })
 
-  it('any other failure: retried, then dropped with one line, and the chat keeps working', async () => {
+  it('any other failure: retried, then only the failing batch goes, with a line naming it; what was never tried still runs', async () => {
     let failing = true
     const u = unit({
       call: async (method: string) => {
@@ -801,17 +998,169 @@ describe('Chats with fake services', () => {
         return { accepted: true, turnId: 't1' }
       },
     })
-    u.dm(1)
+    u.dm(1, '部署到 staging')
+    await u.run(700)
+    u.dm(2, 'never tried')
+    await u.run(700)
+    await u.run(5000)
+    failing = false
+    await u.run(5000)
+    await u.run(1)
+    expect(u.sender.send.mock.calls.map(c => (c as unknown[])[1])).toEqual([{ text: '这条没发出去,重发一次:「部署到 staging」' }])
+    expect(u.record().batch).toBeUndefined()
+    expect(u.calls.at(-1)?.params.text).toBe('never tried')
+    u.chats.dispose()
+  })
+
+  it('a failure before anything froze: only the oldest message goes, the others are tried after it', async () => {
+    let creates = 0
+    const u = unit({
+      call: async (method: string) => {
+        if (method === 'session.create' && creates++ < 3) throw new Error('boom')
+        return method === 'session.create' ? { sessionId: 's1' } : { accepted: true, turnId: 't1' }
+      },
+    })
+    u.dm(1, 'first')
+    u.dm(2, 'second')
     await u.run(700)
     await u.run(5000)
     await u.run(5000)
-    await u.run(60_000)
-    expect(u.record().batch).toBeUndefined()
-    expect(u.sender.send.mock.calls.map(c => (c as unknown[])[1])).toEqual([{ text: '这条没发出去,重发一次' }])
-    failing = false
+    await u.run(1)
+    expect(u.sender.send.mock.calls.map(c => (c as unknown[])[1])).toEqual([{ text: '这条没发出去,重发一次:「first」' }])
+    expect(u.calls.at(-1)?.params.text).toBe('second')
+    u.chats.dispose()
+  })
+
+  it('a batch of several says how many, and a forwarded one is not quoted', async () => {
+    const u = unit({
+      call: async (method: string) => {
+        if (method === 'session.create') return { sessionId: 's1' }
+        throw new Error('boom')
+      },
+    })
+    u.chats.onDm({ kind: 'dm', updateId: 1, chatId: OWNER, accountId: OWNER, name: 'o', text: 'x', forwardedFrom: 'Eve', date: Math.floor(u.clock.now() / 1000) })
     u.dm(2)
     await u.run(700)
-    expect(u.calls.at(-1)?.params.text).toBe('m2')
+    await u.run(5000)
+    await u.run(5000)
+    expect(u.sender.send.mock.calls.map(c => (c as unknown[])[1])).toEqual([{ text: '这 2 条没发出去,重发一次:转发的消息' }])
+    u.chats.dispose()
+  })
+
+  it('ERR_BUSY with no open turn: fast for about 30 s, one line, then every 5 s; nothing is dropped', async () => {
+    const u = unit({
+      call: async (method: string) => {
+        if (method === 'session.create') return { sessionId: 's1' }
+        throw new RpcError(ERR_BUSY, 'turn in progress')
+      },
+    })
+    u.dm(1)
+    await u.run(700)
+    const prompts = () => u.calls.filter(c => c.method === 'session.prompt').length
+    for (let i = 0; i < 110; i++) await u.run(250)
+    expect(u.sender.send).not.toHaveBeenCalled()
+    for (let i = 0; i < 12; i++) await u.run(250)
+    expect(prompts()).toBeLessThanOrEqual(123)
+    expect(u.sender.send).toHaveBeenCalledTimes(1)
+    const at = prompts()
+    for (let i = 0; i < 12; i++) await u.run(5000)
+    expect(prompts() - at).toBeLessThanOrEqual(13)
+    expect(prompts() - at).toBeGreaterThanOrEqual(11)
+    expect(u.sender.send).toHaveBeenCalledTimes(1)
+    expect(u.record().batch?.commandId).toBe('tg:5:1-1')
+    u.chats.dispose()
+  })
+
+  describe('a final that cannot be rendered', () => {
+    const closing = (u: ReturnType<typeof unit>) => {
+      u.chats.onEvent(u.ev('message.user', { turnId: 't1', text: 'm' }))
+      u.chats.onEvent(u.ev('message.assistant', { turnId: 't1', text: 'the answer' }))
+      u.chats.onEvent(u.ev('turn.ended', { turnId: 't1' }))
+    }
+    const started = async (u: ReturnType<typeof unit>) => {
+      u.dm(1)
+      await u.run(700)
+    }
+
+    it('falls back to plain text: the reply is not lost', async () => {
+      let throws = 1
+      const u = unit({
+        mask: s => {
+          if (throws-- > 0) throw new Error('bad render')
+          return s
+        },
+      })
+      await started(u)
+      closing(u)
+      await u.run(0)
+      const finals = u.sender.sync.mock.calls.map(c => c as unknown[]).filter(c => (c[3] as { final: boolean }).final)
+      expect((finals.at(-1)![2] as { text: string }[]).map(x => x.text)).toEqual(['the answer'])
+      u.chats.dispose()
+    })
+
+    it('a mask that keeps failing sends a fixed line, never unmasked text', async () => {
+      const u = unit({
+        mask: () => {
+          throw new Error('bad mask')
+        },
+      })
+      await started(u)
+      closing(u)
+      await u.run(0)
+      const finals = u.sender.sync.mock.calls.map(c => c as unknown[]).filter(c => (c[3] as { final: boolean }).final)
+      expect((finals.at(-1)![2] as { text: string }[]).map(x => x.text)).toEqual(['这轮的内容显示不了,完整内容在 app 里'])
+      u.chats.dispose()
+    })
+
+    it('a sync that throws keeps the final and hands it over again', async () => {
+      const u = unit()
+      await started(u)
+      u.sender.sync.mockClear()
+      u.sender.sync.mockImplementationOnce(() => {
+        throw new Error('boom')
+      })
+      closing(u)
+      await u.run(0)
+      expect(u.sender.sync).toHaveBeenCalledTimes(1)
+      await u.run(5000)
+      expect(u.sender.sync).toHaveBeenCalledTimes(2)
+      u.chats.dispose()
+    })
+  })
+
+  it('a queued message past the limit when it is about to run: skipped, told, and a newer one still runs', async () => {
+    const u = unit()
+    u.dm(1, 'old')
+    u.sleep(601_000)
+    u.dm(2, 'new')
+    await u.run(700)
+    expect(u.sender.send.mock.calls.map(c => (c as unknown[])[1])).toEqual([{ text: '等得太久的 1 条没有执行,要的话重发。' }])
+    expect(u.calls.at(-1)?.params.text).toBe('new')
+    expect(u.state.data.dropped.stale).toBe(1)
+    u.chats.dispose()
+  })
+
+  it('a machine asleep through the debounce: the message does not run on wake', async () => {
+    const u = unit()
+    u.dm(1, 'before the lid closed')
+    u.sleep(8 * HOUR)
+    await u.run(700)
+    expect(u.calls).toEqual([])
+    expect(u.sender.send.mock.calls.map(c => (c as unknown[])[1])).toEqual([{ text: '等得太久的 1 条没有执行,要的话重发。' }])
+    u.chats.dispose()
+  })
+
+  it('paused: no prompt, no render, no line; resumed: it goes', async () => {
+    const u = unit()
+    u.dm(1)
+    u.chats.pause()
+    expect(u.sender.dropAll).toHaveBeenCalledTimes(1)
+    await u.run(700)
+    expect(u.calls).toEqual([])
+    expect(u.record().queue).toHaveLength(1)
+    u.chats.resume()
+    await u.flushAsync()
+    expect(u.calls.some(c => c.method === 'session.prompt')).toBe(true)
     u.chats.dispose()
   })
 

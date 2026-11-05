@@ -237,18 +237,33 @@ describe('a backlog', () => {
     expect((await status(r)).dropped.stale).toBe(3)
   })
 
-  it('a message queued for a long turn is not stale while the daemon runs', async () => {
+  it('a message queued behind a turn: under the limit it runs when the turn ends', async () => {
     const g = gatedStream('working ', 'x')
     const r = await rig({ models: { script: gatedScript(g) } })
     await handled(r, r.dm('start'))
     await flow(r)
     await handled(r, r.dm('wait for me'))
     await r.settle()
-    await r.settle({ advance: 20 * MINUTE })
+    await r.settle({ advance: 9 * MINUTE })
     g.open()
     await flow(r)
     expect(users(r).map(u => u.text)).toEqual(['start', 'wait for me'])
     expect(staleLines(r)).toEqual([])
+  })
+
+  it('past the limit by its receive time it is skipped when its turn comes, and the user is told', async () => {
+    const g = gatedStream('working ', 'x')
+    const r = await rig({ models: { script: gatedScript(g) } })
+    await handled(r, r.dm('start'))
+    await flow(r)
+    await handled(r, r.dm('too old now'))
+    await r.settle()
+    await r.settle({ advance: 11 * MINUTE })
+    g.open()
+    await flow(r)
+    expect(users(r).map(u => u.text)).toEqual(['start'])
+    expect(texts(r)).toContain('等得太久的 1 条没有执行,要的话重发。')
+    expect((await status(r)).dropped.stale).toBe(1)
   })
 
   it('staleMinutes comes from the config', async () => {

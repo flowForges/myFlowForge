@@ -13,11 +13,19 @@ import { ERR_BUSY, ERR_DRAINING, ModelRefSchema, type ApprovalMode, type KernelE
 import type { ApiTimers } from './api'
 import type { DmInbound } from './inbound'
 import { codeOf } from './poller'
-import { failureLine, renderTurn } from './render'
+import { failureLine, renderPlain, renderTurn, type Chunk } from './render'
 import type { Delivery, Sender } from './sender'
 import type { TelegramState } from './state'
 
-const QueuedSchema = z.object({ updateId: z.number(), text: z.string(), /** 转发或经内联机器人来的:写的是谁 */ from: z.string().optional(), date: z.number() })
+const QueuedSchema = z.object({
+  updateId: z.number(),
+  text: z.string(),
+  /** 转发或经内联机器人来的:写的是谁 */
+  from: z.string().optional(),
+  date: z.number(),
+  /** 本机收到的时刻:要发的时候按它判过期。旧记录没有,按 date */
+  receivedAt: z.number().optional(),
+})
 const BatchSchema = z.object({
   commandId: z.string(),
   sessionId: z.string(),
@@ -73,13 +81,21 @@ const BUSY_RETRY_MS = 250
 const BUSY_SLOW_RETRY_MS = 5000
 const FAIL_RETRY_MS = 5000
 const FAIL_MAX = 3
+/** ERR_BUSY 而没有开着的轮:这么久还没好就说一声,之后慢慢试。批次一直留着 */
+const BUSY_LINE_AFTER_MS = 30_000
+/** Telegram 把长粘贴拆成几条。超过这个长度的一段整段不收:模型不能照着半段干活 */
+const PASTE_MAX = 20_000
 const UNDONE_MAX = 8
+const PREVIEW_CHARS = 30
 
 const QUEUE_FULL_LINE = '排队已满,这条没收下'
-const TOO_MANY_LINE = '这一小时发得太多了,这条没执行'
+const tooManyLine = (minutes: number) => `这一小时发得太多了,这条没执行,约 ${minutes} 分钟后恢复`
+const PASTE_TOO_LONG_LINE = '这段粘贴太长,超过约 2 万字,整段没收下,没有执行'
+const BUSY_LINE = '上一轮还在收尾,这条排着'
 const NO_MODEL_LINE = '还没有可用的模型,先在 app 里配一个'
 const CODING_ONLY_LINE = '这个账号只能用于编程工具。发 /project 进项目,或用 /model 换模型'
-const FAILED_LINE = '这条没发出去,重发一次'
+const failedLine = (n: number, preview: string) => `${n > 1 ? `这 ${n} 条` : '这条'}没发出去,重发一次:${preview}`
+const waitedLine = (n: number) => `等得太久的 ${n} 条没有执行,要的话重发。`
 const DONE_LINE = '完成'
 const staleLine = (n: number) => `离线期间的 ${n} 条没有执行,要的话重发。`
 
@@ -104,6 +120,8 @@ function wrapForwarded(from: string, text: string): string {
   return `<forwarded from="${name}">\n${FORWARD_PREFACE}\n${dataText(text)}\n</forwarded>`
 }
 
+const receivedAtOf = (q: Queued) => q.receivedAt ?? q.date * 1000
+
 const merge = (queue: readonly Queued[]) => queue.map(q => (q.from === undefined ? q.text : wrapForwarded(q.from, q.text))).join('\n')
 
 /** renderTurn 用得到的事件。其余(思考、用量……)不留:长轮的缓冲只有这么大 */
@@ -122,6 +140,12 @@ interface LiveTurn {
   failure?: unknown
 }
 
+interface PasteGroup {
+  ids: number[]
+  size: number
+  refused: boolean
+}
+
 interface Runner {
   live?: LiveTurn
   /** 终态已到,最终内容还没交给发送器 */
@@ -130,6 +154,11 @@ interface Runner {
   tickAt: number
   debounce?: unknown
   retry?: unknown
+  /** 这个防抖窗口里到的几条:长粘贴按一条算 */
+  paste?: PasteGroup
+  /** 第一次 ERR_BUSY 而没有开着的轮的时刻 */
+  busySince?: number
+  busySaid?: boolean
   pumping: boolean
   again: boolean
   fails: number
@@ -141,7 +170,7 @@ export interface ChatsOpts {
   sessions: Pick<Sessions, 'get'>
   /** 用时现取 */
   models(): ModelsService | undefined
-  sender: Pick<Sender, 'sync' | 'send' | 'typing' | 'drop'>
+  sender: Pick<Sender, 'sync' | 'send' | 'typing' | 'drop' | 'dropAll'>
   history(sessionId: string): KernelEvent[]
   now(): number
   timers: ApiTimers
@@ -176,7 +205,8 @@ export class Chats {
   private readonly parsed = new WeakSet<object>()
   private readonly staleCounts = new Map<string, number>()
   private readonly refused = new Set<string>()
-  private resumed = false
+  /** 渠道开着、有令牌。关着时队列留着,不发提示、不画、不回话 */
+  private running = false
   private disposed = false
 
   constructor(private readonly o: ChatsOpts) {}
@@ -189,7 +219,7 @@ export class Chats {
     // 发得来就是没封着:解封事件可能在离线时过期了,留着这个标记就永远不回话
     if (rec.blocked) {
       delete rec.blocked
-      if (this.resumed) this.replayOpen(i.chatId, rec)
+      if (this.running) this.replayOpen(i.chatId, rec)
     }
     if (i.date * 1000 < this.o.now() - this.o.staleMs()) {
       this.o.state.data.dropped.stale++
@@ -197,28 +227,59 @@ export class Chats {
       return
     }
     if (rec.queue.some(q => q.updateId === i.updateId) || rec.batch?.updateIds.includes(i.updateId)) return
+    const run = this.runnerOf(i.chatId)
+    const long = i.text.length >= LONG_MESSAGE
+    const group = run.debounce !== undefined && run.paste ? run.paste : (run.paste = { ids: [], size: 0, refused: false })
+    if (group.refused) {
+      // 同一段的后面几条:说过了,不再说。窗口跟着延长
+      this.armDebounce(i.chatId, run, long)
+      return
+    }
+    if (group.size + i.text.length > PASTE_MAX) {
+      this.refuseGroup(i.chatId, rec, run, group, long)
+      this.reply(i.chatId, PASTE_TOO_LONG_LINE)
+      return
+    }
     if (rec.queue.length >= QUEUE_MAX) {
+      // 长粘贴的中间一段放不下:前面收下的也不留,否则模型照着半段干活
+      if (long) this.refuseGroup(i.chatId, rec, run, group, long)
       if (!this.refused.has(i.chatId)) {
         this.refused.add(i.chatId)
         this.reply(i.chatId, QUEUE_FULL_LINE)
       }
       return
     }
-    rec.queue.push({ updateId: i.updateId, text: i.text, ...(i.forwardedFrom !== undefined && { from: i.forwardedFrom }), date: i.date })
+    rec.queue.push({ updateId: i.updateId, text: i.text, ...(i.forwardedFrom !== undefined && { from: i.forwardedFrom }), date: i.date, receivedAt: this.o.now() })
+    group.ids.push(i.updateId)
+    group.size += i.text.length
     this.o.state.advance(i.updateId)
     this.o.save()
     // 关到一半还在处理的一批:记下来就够了,下次启动接着发
     if (this.disposed) return
-    const run = this.runnerOf(i.chatId)
+    this.armDebounce(i.chatId, run, long)
+    if (run.live) this.markDirty(i.chatId, run, run.live)
+  }
+
+  private armDebounce(chatId: string, run: Runner, long: boolean): void {
+    if (this.disposed) return
     this.o.timers.clearTimeout(run.debounce)
+    const short = this.o.debounceMs ?? DEBOUNCE_MS
     run.debounce = this.o.timers.setTimeout(
       () => {
         run.debounce = undefined
-        this.pump(i.chatId)
+        delete run.paste
+        this.pump(chatId)
       },
-      i.text.length >= LONG_MESSAGE ? Math.max(LONG_DEBOUNCE_MS, this.o.debounceMs ?? DEBOUNCE_MS) : (this.o.debounceMs ?? DEBOUNCE_MS),
+      long ? Math.max(LONG_DEBOUNCE_MS, short) : short,
     )
-    if (run.live) this.markDirty(i.chatId, run, run.live)
+  }
+
+  private refuseGroup(chatId: string, rec: ChatRecord, run: Runner, group: PasteGroup, long: boolean): void {
+    group.refused = true
+    rec.queue = rec.queue.filter(q => !group.ids.includes(q.updateId))
+    this.o.save()
+    this.armDebounce(chatId, run, long)
+    if (run.live) this.markDirty(chatId, run, run.live)
   }
 
   /** 一批更新处理完了:过期的回一句,排队满的这一批回过了 */
@@ -307,6 +368,8 @@ export class Chats {
       this.render(chatId, run)
     } catch (err) {
       this.o.log.warn('telegram render failed', { code: codeOf(err) })
+      // 最终内容还在 closing 里:过一会儿再交一次
+      if (run.closing.length > 0) this.schedule(chatId, run, FAIL_RETRY_MS)
     }
     this.pump(chatId)
   }
@@ -316,12 +379,25 @@ export class Chats {
     return renderTurn(live.events, { turnId: live.turnId, final, queued, mask: this.o.mask, ...(cwd !== undefined && { cwd }) })
   }
 
+  /** 最终内容:渲染抛错也不能丢,退到纯文本 */
+  private finalChunks(events: readonly KernelEvent[], turnId: string, sessionId: string): Chunk[] {
+    const cwd = this.o.sessions.get(sessionId)?.cwd
+    try {
+      return renderTurn(events, { turnId, final: true, queued: 0, mask: this.o.mask, ...(cwd !== undefined && { cwd }) })
+    } catch (err) {
+      this.o.log.warn('telegram render failed, sending plain text', { code: codeOf(err) })
+      return renderPlain(events, { turnId, mask: this.o.mask })
+    }
+  }
+
   /** 交给发送器。interim 最新的算数,发送器按编辑间隔压 */
   private render(chatId: string, run: Runner): void {
-    if (!this.o.isPaired(chatId)) return
+    if (!this.running || !this.o.isPaired(chatId)) return
     const now = this.o.now()
-    for (const c of run.closing.splice(0)) {
-      this.o.sender.sync(chatId, c.turnId, this.renderOf(c, true, 0), { final: true, delivery: c.delivery })
+    while (run.closing.length > 0) {
+      const c = run.closing[0]!
+      this.o.sender.sync(chatId, c.turnId, this.finalChunks(c.events, c.turnId, c.sessionId), { final: true, delivery: c.delivery })
+      run.closing.shift()
       // 编辑不提醒:跑了很久的结果要有一声。这条排在最终内容后面
       if (now - c.startedAt >= LONG_TURN_MS) this.reply(chatId, c.failure === undefined ? DONE_LINE : failureLine(c.failure))
     }
@@ -361,7 +437,7 @@ export class Chats {
 
   private async pumpOnce(chatId: string, run: Runner): Promise<void> {
     const rec = this.peek(chatId)
-    if (!rec || !this.o.isPaired(chatId) || run.debounce !== undefined) return
+    if (!this.running || !rec || !this.o.isPaired(chatId) || run.debounce !== undefined) return
     if (!rec.batch && rec.queue.length === 0) return
     if (run.live && !run.live.parked) {
       // 轮在跑:等它挂起或结束。已冻结的等同样的事件,这个定时器只是兜底
@@ -374,11 +450,13 @@ export class Chats {
 
   /** 合并 → 写 batch → 落盘。之后的一切都按这个 commandId,重启后多来几条也不会变成另一批 */
   private async freeze(chatId: string, rec: ChatRecord, run: Runner): Promise<boolean> {
+    this.skipWaited(chatId, rec)
+    if (rec.queue.length === 0) return false
     if (this.refuse(chatId, rec)) return false
     if (!this.allowPrompt(chatId, rec)) return false
     const sessionId = await this.ensureSession(chatId, rec, rec.queue[0]!.updateId)
     // 等的时候可能撤销了、取消了
-    if (this.peek(chatId) !== rec || !this.o.isPaired(chatId) || rec.queue.length === 0 || rec.batch) return rec.batch !== undefined
+    if (!this.running || this.peek(chatId) !== rec || !this.o.isPaired(chatId) || rec.queue.length === 0 || rec.batch) return this.running && rec.batch !== undefined
     const taken = rec.queue
     const first = taken[0]!.updateId
     const last = taken[taken.length - 1]!.updateId
@@ -415,12 +493,13 @@ export class Chats {
     } catch (err) {
       const code = err instanceof RpcError ? err.code : undefined
       // 留着,commandId 不变:ERR_BUSY 回滚不留回执
-      if (code === ERR_BUSY) this.retryLater(chatId, run, run.live ? BUSY_SLOW_RETRY_MS : BUSY_RETRY_MS)
+      if (code === ERR_BUSY) this.onBusy(chatId, run)
       else if (code !== ERR_DRAINING) this.onFailed(chatId, run, err)
       return
     }
     run.fails = 0
     this.clearRetry(run)
+    this.clearBusy(run)
     if (rec.batch === batch) delete rec.batch
     if (this.peek(chatId) !== rec || !this.o.isPaired(chatId)) return
     this.adoptReplayed(chatId, rec, batch.sessionId, result.turnId)
@@ -428,6 +507,45 @@ export class Chats {
     if (run.live) this.markDirty(chatId, run, run.live)
     // 后面还排着的:新的轮或挂起都有事件叫醒,回放出来的那一轮早结束了,没有事件
     if (rec.queue.length > 0 && !run.live) run.again = true
+  }
+
+  /**
+   * 批次留着,commandId 不变,顺序也不变。开着轮:事件会叫醒,定时器只是兜底。
+   * 没开着的轮:终态写了而处理者还没返回,之后不会再有事件,只能自己试;一直不好就说一声,慢下来
+   */
+  private onBusy(chatId: string, run: Runner): void {
+    if (run.live) {
+      this.clearBusy(run)
+      this.retryLater(chatId, run, BUSY_SLOW_RETRY_MS)
+      return
+    }
+    run.busySince ??= this.o.now()
+    if (this.o.now() - run.busySince < BUSY_LINE_AFTER_MS) {
+      this.retryLater(chatId, run, BUSY_RETRY_MS)
+      return
+    }
+    if (!run.busySaid) {
+      run.busySaid = true
+      this.reply(chatId, BUSY_LINE)
+    }
+    this.retryLater(chatId, run, BUSY_SLOW_RETRY_MS)
+  }
+
+  private clearBusy(run: Runner): void {
+    delete run.busySince
+    delete run.busySaid
+  }
+
+  /** 排队等到现在已经过期的不发,告诉他:合盖睡一夜醒来,昨晚的消息不该跑。批次是另一回事,见 onBusy */
+  private skipWaited(chatId: string, rec: ChatRecord): void {
+    const cutoff = this.o.now() - this.o.staleMs()
+    const fresh = rec.queue.filter(q => receivedAtOf(q) >= cutoff)
+    const n = rec.queue.length - fresh.length
+    if (n === 0) return
+    rec.queue = fresh
+    this.o.state.data.dropped.stale += n
+    this.o.save()
+    this.reply(chatId, waitedLine(n))
   }
 
   /** 回执重放回来的轮这次启动没见过事件:补一份投递 */
@@ -471,7 +589,7 @@ export class Chats {
     const say = rec.limitedAt === undefined || rec.limitedAt <= since
     if (say) rec.limitedAt = now
     this.o.save()
-    if (say) this.reply(chatId, TOO_MANY_LINE)
+    if (say) this.reply(chatId, tooManyLine(Math.max(1, Math.ceil((Math.min(...rec.prompts) + HOUR_MS - now) / 60_000))))
     return false
   }
 
@@ -518,21 +636,32 @@ export class Chats {
     run.fails = 0
     const rec = this.peek(chatId)
     if (!rec) return
-    rec.queue = []
-    delete rec.batch
+    // 只丢试过的:冻结的批次,或者没冻结时排在最前面的那条。后面的还没试过,接着发
+    const failed = rec.batch ? { text: rec.batch.text, n: rec.batch.updateIds.length } : rec.queue[0] && { text: rec.queue[0].text, n: 1 }
+    if (rec.batch) delete rec.batch
+    else rec.queue.shift()
     this.o.save()
-    this.reply(chatId, FAILED_LINE)
+    if (failed) this.reply(chatId, failedLine(failed.n, this.preview(failed.text)))
+    if (rec.queue.length > 0) run.again = true
+  }
+
+  /** 让他认得出是哪条。他自己发的字,照样打码;转发的不复述 */
+  private preview(text: string): string {
+    if (text.startsWith('<forwarded ')) return '转发的消息'
+    const clipped = [...this.o.mask(sanitizeLine(text))].slice(0, PREVIEW_CHARS).join('')
+    return `「${clipped}」`
   }
 
   // —— 重启
 
-  /** 激活时,有令牌之后一次:先说过期的,再处理冻结的批次,再补没发完的轮(§9.5) */
+  /** 激活时,以及渠道重新开着时(§5.2):先说过期的,再处理冻结的批次,再补没发完的轮(§9.5) */
   resume(): void {
-    if (this.resumed || this.disposed) return
-    this.resumed = true
+    if (this.running || this.disposed) return
+    this.running = true
     for (const chatId of Object.keys(this.o.state.data.chats)) {
       const rec = this.ensure(chatId)
       if (rec.sessionId !== undefined) this.routes.set(rec.sessionId, chatId)
+      const run = this.runnerOf(chatId)
       if (!this.o.isPaired(chatId)) {
         rec.queue = []
         delete rec.batch
@@ -541,15 +670,36 @@ export class Chats {
         continue
       }
       this.dropStale(chatId, rec)
+      this.holdForPaste(chatId, rec, run)
       this.pump(chatId)
+      // 关着的时候结束的轮:它们的 delivery 还开着,下面从事件补,不再走 closing
+      run.closing.length = 0
       this.replayOpen(chatId, rec)
+      if (run.live) this.markDirty(chatId, run, run.live)
     }
+    this.o.save()
+  }
+
+  /** 队尾是长消息:可能是粘贴的前半段,后半段正在重投。开一个窗口,算作同一段,不能先按半段发 */
+  private holdForPaste(chatId: string, rec: ChatRecord, run: Runner): void {
+    const parts: Queued[] = []
+    for (let i = rec.queue.length - 1; i >= 0 && rec.queue[i]!.text.length >= LONG_MESSAGE; i--) parts.push(rec.queue[i]!)
+    if (parts.length === 0 || run.debounce !== undefined) return
+    run.paste = { ids: parts.map(q => q.updateId), size: parts.reduce((n, q) => n + q.text.length, 0), refused: false }
+    this.armDebounce(chatId, run, true)
+  }
+
+  /** 渠道关了或令牌没了:队列留着,什么都不发。发送器里排着的也不要了,delivery 开着,重新开的时候补 */
+  pause(): void {
+    if (!this.running) return
+    this.running = false
+    this.o.sender.dropAll()
     this.o.save()
   }
 
   private dropStale(chatId: string, rec: ChatRecord): void {
     const cutoff = this.o.now() - this.o.staleMs()
-    const fresh = rec.queue.filter(q => q.date * 1000 >= cutoff)
+    const fresh = rec.queue.filter(q => receivedAtOf(q) >= cutoff)
     let dropped = rec.queue.length - fresh.length
     rec.queue = fresh
     // 回执里有的已经执行过了,留给 sendBatch 回放:那不算发第二次
@@ -573,9 +723,7 @@ export class Chats {
     for (const d of deliveries) {
       let events = histories.get(d.sessionId)
       if (!events) histories.set(d.sessionId, (events = this.o.history(d.sessionId)))
-      const cwd = this.o.sessions.get(d.sessionId)?.cwd
-      const chunks = renderTurn(events, { turnId: d.turnId, final: true, queued: 0, mask: this.o.mask, ...(cwd !== undefined && { cwd }) })
-      this.o.sender.sync(chatId, d.turnId, chunks, { final: true, delivery: d })
+      this.o.sender.sync(chatId, d.turnId, this.finalChunks(events, d.turnId, d.sessionId), { final: true, delivery: d })
     }
   }
 
@@ -635,7 +783,9 @@ export class Chats {
     delete rec.batch
     this.o.timers.clearTimeout(run.debounce)
     run.debounce = undefined
+    delete run.paste
     this.clearRetry(run)
+    this.clearBusy(run)
     run.fails = 0
   }
 
@@ -741,7 +891,7 @@ export class Chats {
       return
     }
     // 封着的时候最终内容发不出去:解封了补上
-    if (was && this.resumed) this.replayOpen(chatId, rec)
+    if (was && this.running) this.replayOpen(chatId, rec)
   }
 
   /** 关闭前:最后的内容交给发送器(之后它还会冲刷一下),定时器全停 */
@@ -764,6 +914,7 @@ export class Chats {
   // —— 小工具
 
   private reply(chatId: string, text: string): void {
+    if (!this.running) return
     void this.o.sender.send(chatId, { text })
   }
 

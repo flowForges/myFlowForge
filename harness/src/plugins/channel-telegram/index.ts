@@ -357,10 +357,11 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
 
       /** 该不该轮询只在这里定。没令牌、没启用:不发任何请求 */
       const settle = () => {
-        if (!config.enabled) setState('disabled')
-        else if (secretsLocked()) setState('secrets_unavailable')
-        else if (!token) setState('no_token')
-        else {
+        const off = !config.enabled ? 'disabled' : secretsLocked() ? 'secrets_unavailable' : !token ? 'no_token' : undefined
+        if (off) {
+          chats.pause()
+          setState(off)
+        } else {
           chats.resume()
           poller.start()
         }

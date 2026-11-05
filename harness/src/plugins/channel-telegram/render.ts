@@ -25,6 +25,10 @@ export interface RenderOptions {
 export const CHUNK_MAX = 3900
 export const SEGMENT_CHUNKS = 12
 export const TRUNCATED = '已截断,完整内容在 app 里'
+/** 成功结束却什么都没说(空回复、被过滤、只有思考):不能让他干等 */
+export const NO_OUTPUT = '这轮没有输出'
+/** 连打码都做不了:不打码的字不能出门 */
+export const RENDER_FAILED = '这轮的内容显示不了,完整内容在 app 里'
 /** 只为限住后面的解析和切块;在打码之后截,切不开密钥。截过的一定带截断提示 */
 const TEXT_CLIP = 50_000
 const TOOL_LINES = 5
@@ -293,6 +297,8 @@ export function renderTurn(events: readonly KernelEvent[], o: RenderOptions): Ch
       }
     })
     flush()
+    // 最后一段没有东西:没有输出的那一轮,或者后续消息之后什么都没说
+    if (chunks.length === 0 && o.final && ended && blocks === last) chunks.push({ text: NO_OUTPUT, entities: [] })
     if (chunks.length > SEGMENT_CHUNKS) {
       chunks.length = SEGMENT_CHUNKS
       clipped = true
@@ -302,4 +308,38 @@ export function renderTurn(events: readonly KernelEvent[], o: RenderOptions): Ch
     out.push(...chunks)
   }
   return out
+}
+
+/**
+ * renderTurn 抛错时的退路:最终回复不能因此丢。只取正文和失败那一行,纯文本,不解析 Markdown。
+ * 还是先打码再切;打码本身也抛错就只发固定的一句
+ */
+export function renderPlain(events: readonly KernelEvent[], o: Pick<RenderOptions, 'turnId' | 'mask'>): Chunk[] {
+  const parts: string[] = []
+  let streaming = ''
+  let failure: string | undefined
+  for (const e of events) {
+    const p = obj(e.payload)
+    if (p.turnId !== o.turnId) continue
+    if (e.type === 'message.assistant.delta') streaming += str(p.text) ?? ''
+    else if (e.type === 'message.assistant') {
+      parts.push(str(p.text) ?? streaming)
+      streaming = ''
+    } else if (e.type === 'turn.failed') failure = failureLine(p.reason)
+  }
+  if (streaming) parts.push(streaming)
+  if (failure) parts.push(failure)
+  let text: string
+  try {
+    text = o.mask(parts.filter(Boolean).join('\n\n')).trim() || NO_OUTPUT
+  } catch {
+    text = RENDER_FAILED
+  }
+  const chunks: Chunk[] = splitChunks(text, [], CHUNK_MAX).map(c => ({ text: c.text, entities: [] }))
+  if (chunks.length > SEGMENT_CHUNKS) {
+    chunks.length = SEGMENT_CHUNKS
+    chunks[chunks.length - 1]!.text += `\n${TRUNCATED}`
+  }
+  if (chunks[0]) chunks[0].notify = true
+  return chunks
 }
