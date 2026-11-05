@@ -121,6 +121,14 @@ export function createLoopDefault(opts: LoopDefaultOpts = {}): Plugin {
               ctx.log.warn('leftover notices not recorded', { error: err instanceof Error ? err.message : String(err) })
             }
           }
+          // 能写 cwd 的 MCP 服务也在快照之前停:留到轮外,它写的就不属于任何一轮
+          if (plugins?.turnEnding) {
+            try {
+              await plugins.turnEnding({ sessionId, turnId })
+            } catch (err) {
+              ctx.log.warn('stopping writers failed', { error: err instanceof Error ? err.name : 'unknown' })
+            }
+          }
           // 不论怎样结束(含取消、出错)都先拍结束快照,再写终态:客户端看到终态时快照已在。
           // runTurn 抛错 → 没有 outcome,由内核补 turn.failed error;内核已关库等写入失败只记日志
           try {

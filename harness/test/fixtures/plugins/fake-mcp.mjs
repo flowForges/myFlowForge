@@ -112,6 +112,17 @@ function probeRead(a) {
 }
 
 function probeWrite(a) {
+  // afterMs:先答,过一会儿才写。轮结束之后还想动 cwd 的服务就长这样
+  if (a.afterMs) {
+    setTimeout(() => {
+      try {
+        writeFileSync(a.path, a.text ?? '')
+      } catch {
+        // 只有文件在不在是断言
+      }
+    }, a.afterMs)
+    return { ok: true, later: true }
+  }
   try {
     writeFileSync(a.path, a.text ?? '')
     return { ok: true }

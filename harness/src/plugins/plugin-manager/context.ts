@@ -72,6 +72,8 @@ export interface ContextDeps {
   sandbox: Pick<SandboxService, 'status'>
   append(e: Omit<KernelEvent, 'seq' | 'ts'>): unknown
   log: Pick<Logger, 'warn'>
+  /** 这个会话里能写 cwd 的服务都停下 */
+  stopWriters?(sessionId: string): Promise<void>
 }
 
 const isLaterTurn = (events: KernelEvent[], turnId: string) =>
@@ -79,6 +81,7 @@ const isLaterTurn = (events: KernelEvent[], turnId: string) =>
 
 export function createPluginsService(d: ContextDeps): PluginsService {
   return {
+    turnEnding: async ({ sessionId }) => d.stopWriters?.(sessionId),
     injectFirst({ sessionId, turnId, events }) {
       try {
         const pinned = pluginViewOf(events)

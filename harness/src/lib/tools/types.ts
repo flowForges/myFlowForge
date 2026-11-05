@@ -189,6 +189,8 @@ export interface SandboxService {
 export interface PluginsService {
   /** 只在第一轮、日志里没有 plugins.injected 时被循环调用:可能写事件,返回写下的标记。出错 = 不写,这一轮照常 */
   injectFirst(r: { sessionId: string; turnId: string; events: KernelEvent[] }): { skill: boolean; mcp: boolean }
+  /** 轮要结束了,结束快照之前调:能写 cwd 的第三方进程在这里停,之后的改动才不会逃出快照(09 §10.3) */
+  turnEnding?(r: { sessionId: string; turnId: string }): Promise<void>
 }
 
 export type SessionCommandName = 'session.create' | 'session.prompt' | 'session.cancel' | 'turn.rollback' | 'turn.changes'

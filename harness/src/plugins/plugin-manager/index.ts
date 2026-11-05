@@ -152,7 +152,7 @@ export function createPluginManager(o: PluginManagerOpts = {}): Plugin {
       }
 
       // 第三方文字给模型的路只有这两条:第一轮钉住的索引,和模型自己调的 skill
-      ctx.services.provide('plugins', createPluginsService({ store, catalog, sessions, sandbox, append: e => ctx.append(e), log: ctx.log }))
+      ctx.services.provide('plugins', createPluginsService({ store, catalog, sessions, sandbox, append: e => ctx.append(e), log: ctx.log, stopWriters: sid => host.stopWriters(sid) }))
       ctx.effect(tools.register(createSkillTool({ store, catalog, commands, sessions, history: sid => ctx.events.history(sid), log: ctx.log })))
       const gate = ctx.services.get<McpToolDeps['gate']>('permissionGate')
       if (!gate) throw new Error('permissionGate service missing')

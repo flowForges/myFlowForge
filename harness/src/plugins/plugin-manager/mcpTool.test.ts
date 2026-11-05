@@ -1,5 +1,5 @@
 // mcp 工具(09 spec §10.4、Review Focus 3、4、6):门、卡片、说明变化。沙箱是 stub,服务是真的假服务
-import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { call, lastResult, storeOf, until } from '../../../test/managerRig'
@@ -748,6 +748,88 @@ describe('a full turn with a fake model', () => {
     const turnId = (m.r.events(sid).filter(e => e.type === 'turn.started').at(-1)!.payload as { turnId: string }).turnId
     await call(m.r, 'turn.rollback', { commandId: 'rb', sessionId: sid, turnId })
     expect(readdirSync(repo)).not.toContain('written-by-server.txt')
+  })
+
+  describe('I6: a cwd:write server does not outlive its turn', () => {
+    const writeGrant = { y: { network: [], cwd: 'write' as const } }
+    const repoRig = async (f: { entry(): object }, grants: SetupOpts['grants'] = writeGrant, mode: 'ask' | 'auto' = 'auto') => {
+      const m = await setup({ y: f.entry() }, { mode, grants })
+      const repo = await gitCwd(m)
+      const sid = await m.r.session({ approvalMode: mode, cwd: repo })
+      await m.r.turn(sid, 'pin')
+      return { m, repo, sid }
+    }
+    const lastTurn = (m: McpRig, sid: string) => (m.r.events(sid).filter(e => e.type === 'turn.started').at(-1)!.payload as { turnId: string }).turnId
+
+    it('a timer writing after the turn ended writes nothing: the process is gone first', async () => {
+      const f = fake()
+      const { m, repo, sid } = await repoRig(f)
+      const late = join(repo, 'late.txt')
+      const { text } = await m.mcp(sid, { action: 'call', server: 'x/y', tool: 'probe_write', arguments: { path: late, text: 'after the turn', afterMs: 400 } })
+      expect(text).toContain('"later":true')
+      expect(m.live()).toEqual([])
+      await new Promise(res => setTimeout(res, 700))
+      expect(readdirSync(repo)).not.toContain('late.txt')
+      expect(m.host().failureCount(sid, 'x', 'y')).toBe(0)
+    })
+
+    it('the same after a cancelled turn', async () => {
+      const f = fake({ callDelayMs: 30_000 })
+      const { m, sid } = await repoRig(f)
+      const run = m.mcp(sid, { action: 'call', server: 'x/y', tool: 'echo', arguments: {} })
+      await until(() => f.calls('tools/call').length === 1)
+      await call(m.r, 'session.cancel', { commandId: 'stop', sessionId: sid })
+      await run.catch(() => {})
+      await until(() => m.live().length === 0, 6000)
+    })
+
+    it('a read-only server stays up between turns', async () => {
+      const f = fake()
+      const { m, sid } = await repoRig(f, { y: { network: [], cwd: 'read' } })
+      await m.mcp(sid, { action: 'tools', server: 'x/y' })
+      await m.mcp(sid, { action: 'tools', server: 'x/y' })
+      expect(m.pids.length).toBe(1)
+      expect(m.live().length).toBe(1)
+    })
+
+    it('stop comes before the final snapshot: what it writes as it leaves is in this turn, and rolled back', async () => {
+      const dir = dirFor()
+      mkdirSync(dir)
+      const script = join(dir, 'leaver.mjs')
+      writeFileSync(script, `import { writeFileSync } from 'node:fs'\nprocess.stdin.on('data', d => { for (const l of String(d).split('\\n').filter(Boolean)) { const q = JSON.parse(l); if (q.method === 'initialize') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: q.id, result: { protocolVersion: '2025-06-18' } }) + '\\n'); if (q.method === 'tools/list') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: q.id, result: { tools: [] } }) + '\\n') } })\nprocess.on('SIGINT', () => {})\nprocess.stdin.on('end', () => { writeFileSync('at-stop.txt', 'written while stopping'); process.exit(0) })\n`)
+      const { m, repo, sid } = await repoRig({ entry: () => ({ command: process.execPath, args: [script] }) })
+      await m.mcp(sid, { action: 'tools', server: 'x/y' })
+      expect(readdirSync(repo)).toContain('at-stop.txt')
+      const turnId = lastTurn(m, sid)
+      const { files } = await call(m.r, 'turn.changes', { sessionId: sid, turnId })
+      expect(JSON.stringify(files)).toContain('at-stop.txt')
+      await call(m.r, 'turn.rollback', { commandId: 'rb', sessionId: sid, turnId })
+      expect(readdirSync(repo)).not.toContain('at-stop.txt')
+    })
+
+    it("a server's in-turn write is rolled back, and the next turn restarts it without a new card when already allowed", async () => {
+      const f = fake()
+      const { m, repo, sid } = await repoRig(f, { y: { network: ['a.example'], cwd: 'write' } }, 'ask')
+      const target = join(repo, 'in-turn.txt')
+      const write = { action: 'call', server: 'x/y', tool: 'probe_write', arguments: { path: target, text: 'in the turn' } }
+      expect((await m.mcp(sid, write, { decide: 'allow_session' })).cards.length).toBe(1)
+      expect(readFileSync(target, 'utf8')).toBe('in the turn')
+      expect(m.live()).toEqual([])
+      await call(m.r, 'turn.rollback', { commandId: 'rb', sessionId: sid, turnId: lastTurn(m, sid) })
+      expect(readdirSync(repo)).not.toContain('in-turn.txt')
+      expect((await m.mcp(sid, write)).cards).toEqual([])
+      expect(m.pids.length).toBe(2)
+      expect(readFileSync(target, 'utf8')).toBe('in the turn')
+      expect(m.host().failureCount(sid, 'x', 'y')).toBe(0)
+    })
+
+    it('the first-seen description hashes outlive the stop', async () => {
+      const f = fake()
+      const { m, sid } = await repoRig(f)
+      expect((await m.mcp(sid, { action: 'tools', server: 'x/y' })).text).not.toContain('[description changed')
+      writeFileSync(join(f.dir, 'fake-mcp.mjs'), readFileSync(join(f.dir, 'fake-mcp.mjs'), 'utf8').replace("echo: 'Returns its arguments.'", "echo: 'Something else now.'"))
+      expect((await m.mcp(sid, { action: 'tools', server: 'x/y' })).text).toContain('[description changed')
+    })
   })
 
   it('an mcp tool.ended is a tool row for memory: stored, not evidence (Review Focus 3)', async () => {

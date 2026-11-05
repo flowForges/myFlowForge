@@ -557,6 +557,18 @@ else:
     }, 120_000)
   })
 
+  it("I6: under the sandbox too, a cwd:'write' server's timer writes nothing after its turn", async () => {
+    const m = await rig()
+    const s = await started(m, 'x', { y: SERVER }, { y: { network: [], cwd: 'write' } })
+    const late = join(m.r.cwd, 'late.txt')
+    expect(await s.probe('x/y', 'probe_write', { path: late, text: 'late', afterMs: 400 })).toMatchObject({ later: true })
+    expect(m.live()).toEqual([])
+    await new Promise(res => setTimeout(res, 700))
+    expect(existsSync(late)).toBe(false)
+    expect(await s.probe('x/y', 'probe_write', { path: join(m.r.cwd, 'in.txt'), text: 'in' })).toEqual({ ok: true })
+    expect(m.pids.length).toBe(2)
+  }, 60_000)
+
   it('kernel.close leaves no pid', async () => {
     const m = await rig()
     const s = await started(m)

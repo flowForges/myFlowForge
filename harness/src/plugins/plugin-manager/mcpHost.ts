@@ -181,6 +181,8 @@ interface Entry {
   lastUsed: number
   /** 已授权变化、禁用、卸载、关内核:起到一半的不能再 spawn */
   aborted: boolean
+  /** cwd:'write':轮结束就停,改动才都在每轮的快照里 */
+  writes: boolean
   ready: Promise<void>
   pid?: number
   child?: ChildProcess
@@ -421,7 +423,7 @@ export class McpHost {
     let onGone = () => {}
     const exit = new Promise<void>(res => (onExit = res))
     const gone = new Promise<void>(res => (onGone = res))
-    const e: Entry = { key, sessionId, plugin, server, state: 'starting', busy: 0, lastUsed: this.o.now(), aborted: false, ready: Promise.resolve(), exited: false, exit, onExit, gone, onGone }
+    const e: Entry = { key, sessionId, plugin, server, state: 'starting', busy: 0, lastUsed: this.o.now(), aborted: false, writes: false, ready: Promise.resolve(), exited: false, exit, onExit, gone, onGone }
     this.entries.set(key, e)
     e.ready = this.launch(e).catch(async err => {
       await this.abandon(e)
@@ -527,6 +529,7 @@ export class McpHost {
     // 自己再查一次级别:不靠 permission(),级别可能刚变
     if (this.sandboxBlocked(sessionId)) throw refuse('needs_sandbox')
     const g = this.grantOf(rec, server)
+    e.writes = g.cwd === 'write'
 
     // M13:存储里的字节每次起之前重算;不符就这个插件关掉
     if (!o.store.verify(rec)) {
@@ -819,6 +822,16 @@ export class McpHost {
         const at = key.indexOf(prefix)
         if (at >= 0 && hit(key.slice(at + prefix.length))) map.delete(key)
       }
+  }
+
+  /**
+   * 轮结束、结束快照之前:这个会话能写 cwd 的服务都停(I6)。不算失败。下一轮用到再起,本会话放行的键还在,不会再问。
+   * 脱离进程树的孙进程(两次 fork)不归这里:macOS 上 ppid 和进程组都认不出,§16
+   */
+  async stopWriters(sessionId: string): Promise<void> {
+    const targets = [...this.entries.values()].filter(e => e.sessionId === sessionId && e.writes)
+    for (const e of targets) e.aborted = true
+    await Promise.all(targets.map(e => (e.pid === undefined && e.state === 'starting' ? Promise.race([e.gone, delay(STALL_MS)]) : this.stop(e))))
   }
 
   /** 内核关闭的兜底:killLive 已经收过一遍,这里同步收漏网的。之后不再起,也不再写事件 */
