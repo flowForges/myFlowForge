@@ -1,20 +1,24 @@
 // 命令(07 spec §11),从一条私聊走到底。这里没有真 git:项目那一半在 projects.test.ts
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { calling, say } from '../../../test/memoryRig'
 import { adoptSession, chatOf, events, flow, gatedScript, gatedStream, handled, onDisk, online, pairedRig, sends, stateFile, texts, users, type ChatRigOpts } from '../../../test/telegramChats'
 import type { TelegramRig } from '../../../test/telegramRig'
 import { createLoopDefault } from '../loop-default'
 import { createToolsCoding } from '../tools-coding'
 import toolsRegistry from '../tools-registry'
+import { Cards } from './cards'
+import { Chats } from './chats'
 import { COMMANDS, parseCommand } from './commands'
+import { Sender } from './sender'
 
 const BUSY = '这轮还在跑,先 /cancel'
 const ALL = ['/help', '/status', '/new', '/project', '/project api', '/project off', '/model', '/model 1', '/cancel', '/rollback', '/unpair', '/unpair confirm']
 
 const rigs: TelegramRig[] = []
 afterEach(async () => {
+  vi.restoreAllMocks()
   await Promise.all(rigs.splice(0).map(r => r.close()))
 })
 
@@ -421,6 +425,21 @@ describe('/unpair', () => {
     expect(sends(r)).toHaveLength(before)
     expect(r.models.foreground()).toHaveLength(1)
     expect(users(r).map(u => u.text)).toEqual(['hello'])
+  })
+
+  it('/unpair confirm: revoke, then drop, then expire. Dropping after the expiry would throw away the 已失效 edits', async () => {
+    const revoke = vi.spyOn(Chats.prototype, 'revoke')
+    const drop = vi.spyOn(Sender.prototype, 'drop')
+    const expire = vi.spyOn(Cards.prototype, 'expireAll')
+    const r = await rig()
+    await send(r, '/unpair confirm')
+    const owner = String(r.owner)
+    expect(revoke).toHaveBeenCalledExactlyOnceWith(owner)
+    expect(drop).toHaveBeenCalledExactlyOnceWith(owner)
+    expect(expire).toHaveBeenCalledOnce()
+    const [a, b, c] = [revoke, drop, expire].map(f => f.mock.invocationCallOrder[0]!)
+    expect(a).toBeLessThan(b)
+    expect(b).toBeLessThan(c)
   })
 
   it('/unpair confirm during a turn: cancels it, denies the pending card, whose edit still arrives', async () => {

@@ -289,11 +289,12 @@ describe('createImWorktree gets what it needs', () => {
     sh(['commit', '-qm', 'attrs'])
   }
 
+  // 只有叫 git-lfs、git-crypt 的程序才可能算安全,所以这个名字才考得到"在不在可写根里"
   it.each([
-    ['the system tmp', () => join(systemTmp, 'evil.sh')],
+    ['the system tmp', () => join(systemTmp, 'git-lfs')],
     ['~/.qoder', () => {
       mkdirSync(join(home, '.qoder'))
-      return join(home, '.qoder', 'evil.sh')
+      return join(home, '.qoder', 'git-lfs')
     }],
   ])('a filter from the global config in %s: refused, never ran', async (_n, where) => {
     const program = where()
@@ -304,6 +305,16 @@ describe('createImWorktree gets what it needs', () => {
     expect(created(r)).toEqual([])
     expect(onDiskWorktrees(r)).toEqual([])
     expect(existsSync(`${program}.ran`)).toBe(false)
+  })
+
+  it('the same filter somewhere the sandbox cannot write opens, and ran: the global config really reached git', async () => {
+    mkdirSync(join(base, 'safe'))
+    const program = join(base, 'safe', 'git-lfs')
+    smudge(program)
+    const r = await rig()
+    await send(r, '/project api')
+    expect(created(r)).toHaveLength(1)
+    expect(existsSync(`${program}.ran`)).toBe(true)
   })
 
   it('a `deny read` root in the project has no copy in the worktree', async () => {
