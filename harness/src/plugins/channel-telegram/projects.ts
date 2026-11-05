@@ -281,11 +281,10 @@ export class Projects {
       const sessionIds = record ? record.sessionIds : this.sessionsIn(path)
       const usedBy = this.o.chats.chatUsing(worktreeId)
       if (sessionIds.some(s => hasOpenTurn(this.o.history(s))) || (usedBy !== undefined && this.o.chats.isOpen(usedBy))) throw new RpcError(ERR_BUSY, 'turn in progress')
+      // 先离开:删的时候到的消息不能再发进这个会话。删失败了记录还在,可以再丢弃一次
+      if (usedBy !== undefined) this.o.chats.leave(usedBy)
       await this.remove(worktreeId, path, sessionIds, record?.projectPath)
-      if (usedBy !== undefined) {
-        this.o.chats.leave(usedBy)
-        this.o.notify(usedBy, FALLBACK_LINE)
-      }
+      if (usedBy !== undefined) this.o.notify(usedBy, FALLBACK_LINE)
     })
   }
 

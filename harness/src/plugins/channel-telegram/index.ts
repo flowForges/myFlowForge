@@ -337,6 +337,8 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
         // 转发的永远不是命令(R15)。命令的效果和 offset 同一次落盘,和排队的消息一样
         if (!external && isCommandShaped(i.text)) {
           if (chats.admit(i)) await runCommand(parseCommand(i.text, state.data.bot?.username), i, commandDeps, ctx.log)
+          // /project 要等 git:等的时候可能换了机器人,offset 已经是新机器人的了
+          if (state.data.bot?.id !== botId) return
           state.advance(i.updateId)
           saveNow()
           return

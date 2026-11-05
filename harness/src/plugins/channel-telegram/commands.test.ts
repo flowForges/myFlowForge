@@ -308,6 +308,47 @@ describe('/new', () => {
   })
 })
 
+describe('redelivered after a crash', () => {
+  const rewind = async (r: TelegramRig, text: string) => {
+    const saved = readFileSync(stateFile(r))
+    const id = r.dm(text)
+    await handled(r, id)
+    await flow(r)
+    writeFileSync(stateFile(r), saved)
+    await r.restart({ kill: true })
+    r.fake.push({ update_id: id, message: { chat: { id: r.owner, type: 'private' }, from: { id: r.owner, is_bot: false, first_name: 'Owner' }, text } })
+    await online(r)
+    await handled(r, id)
+    await flow(r)
+  }
+
+  it.each(['/help', '/status', '/project', '/project off', '/model', '/cancel', '/rollback', '/unpair', '/x'])('%s: no session, no turn, no model request', async text => {
+    const r = await rig()
+    await send(r, 'hello')
+    const sessionId = chatOf(r).sessionId
+    await rewind(r, text)
+    expect(created(r)).toHaveLength(1)
+    expect(chatOf(r).sessionId).toBe(sessionId)
+    expect(users(r)).toHaveLength(1)
+    expect(r.models.foreground()).toHaveLength(1)
+    expect(onDisk(r).pairings).toHaveLength(1)
+  })
+
+  it('/model 2: the same choice', async () => {
+    const r = await rig({ models: TWO_MODELS })
+    await rewind(r, '/model 2')
+    expect(chatOf(r).model).toEqual({ accountId: 'acct', modelId: 'second' })
+    expect(r.models.calls).toEqual([])
+  })
+
+  it('/unpair confirm: unpaired either way. A crash in that window writes the event twice; the end state is the same', async () => {
+    const r = await rig()
+    await rewind(r, '/unpair confirm')
+    expect(onDisk(r).pairings).toEqual([])
+    expect(events(r, 'channel.unpaired').length).toBeGreaterThan(0)
+  })
+})
+
 describe('/cancel', () => {
   it('cancels the turn and clears the queue', async () => {
     const gated = gatedStream('thinking', ' done')

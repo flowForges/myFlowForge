@@ -465,6 +465,27 @@ describe('moving between sessions', () => {
     expect((await listed(r)).worktrees[0].usedByChat).toBeUndefined()
   })
 
+  it('a directory gone while running: /new goes to chat mode plus a line', async () => {
+    const r = await rig()
+    await send(r, '/project api')
+    rmSync(created(r)[0].cwd!, { recursive: true })
+    await send(r, '/new')
+    expect(created(r)[1].cwd).toBeUndefined()
+    expect(texts(r).at(-1)).toContain('纯对话')
+  })
+
+  it('a coding-tools-only account opens a project, and keeps it across /new', async () => {
+    const r = await rig({ models: { accounts: [{ id: 'sub', restriction: 'coding-tools-only', models: [{ id: 'm' }] }] } })
+    await send(r, '/project api')
+    expect(created(r)).toHaveLength(1)
+    await send(r, '/new')
+    expect(created(r)[1].cwd).toBe(created(r)[0].cwd)
+    await send(r, '/project off')
+    await send(r, '/new')
+    expect(texts(r).at(-1)).toContain('/project')
+    expect(created(r)).toHaveLength(2)
+  })
+
   it('/project off: chat mode; the next message has no cwd', async () => {
     const r = await rig()
     await send(r, '/project api')
@@ -637,6 +658,24 @@ describe('/rollback', () => {
   })
 })
 
+describe('/rollback redelivered, the only turn', () => {
+  it('nothing is left to find, and the receipt still answers', async () => {
+    const r = await rig({ models: { script: n => (n === 1 ? calling('c1', 'write', { path: 'one.txt', content: '1\n' }) : say('done')) } })
+    await send(r, '/project api')
+    await send(r, 'one')
+    await turnEnds(r, 1)
+    const saved = readFileSync(stateFile(r))
+    const id = await send(r, '/rollback')
+    writeFileSync(stateFile(r), saved)
+    await r.restart({ kill: true })
+    r.fake.push({ update_id: id, message: { chat: { id: r.owner, type: 'private' }, from: { id: r.owner, is_bot: false, first_name: 'Owner' }, text: '/rollback' } })
+    await online(r)
+    await done(r, id)
+    expect(events(r, 'turn.rolledBack')).toHaveLength(1)
+    expect(texts(r).at(-1)).toBe('已回滚 1 个文件')
+  })
+})
+
 describe('redelivery', () => {
   it('a redelivered /project makes one worktree and one session', async () => {
     const r = await rig()
@@ -720,6 +759,36 @@ describe('reconciliation at activation', () => {
     await r.k.handle('channel.telegram.worktree.discard', { commandId: 'd1', worktreeId: worktrees[0].id })
     expect(existsSync(cwd!)).toBe(false)
     expect(gitWorktrees()).toEqual([repo])
+  })
+
+  it('twenty orphans fill the quota: /project says so, a discard makes room', async () => {
+    const r = await rig()
+    for (let i = 0; i < 20; i++) plant(r, 'c9', `wt_o${i}`, 'x')
+    await r.restart()
+    await online(r)
+    await send(r, '/project api')
+    expect(texts(r).at(-1)).toContain('worktree 满了')
+    expect(created(r)).toEqual([])
+    await r.k.handle('channel.telegram.worktree.discard', { commandId: 'd1', worktreeId: 'wt_o0' })
+    await send(r, '/project api')
+    expect(created(r)).toHaveLength(1)
+  })
+
+  it('a worktree whose directory is gone: the chat is back in chat mode, the record stays discardable', async () => {
+    const r = await rig()
+    await send(r, '/project api')
+    await send(r, 'hello')
+    await turnEnds(r, 1)
+    const { cwd, sessionId } = created(r)[0]
+    rmSync(cwd!, { recursive: true })
+    await r.restart()
+    await online(r)
+    expect(chatOf(r).project).toBeUndefined()
+    const { worktrees } = await listed(r)
+    expect(worktrees.map(w => w.path)).toEqual([cwd])
+    await r.k.handle('channel.telegram.worktree.discard', { commandId: 'd1', worktreeId: worktrees[0].id })
+    expect(sh(['for-each-ref', `refs/mffai/snapshots/${sessionId}/`])).toBe('')
+    expect((await listed(r)).worktrees).toEqual([])
   })
 
   it('symlinks and files in the IM root are left alone', async () => {
@@ -822,7 +891,7 @@ describe('worktree.discard', () => {
     expect(readFileSync(join(repo, 'a.txt'), 'utf8')).toBe('a\n')
   })
 
-  it('users are listed without the project state changing', async () => {
+  it('channel.telegram.chats names the project of the chat', async () => {
     const r = await rig()
     await send(r, '/project api')
     const { chats } = await listed(r)
