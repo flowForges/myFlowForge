@@ -52,21 +52,26 @@ describe.skipIf(!E2E)('built daemon e2e', () => {
   const electron = () => process.env.ELECTRON_BIN ?? (createRequire(import.meta.url)('electron') as string)
 
   /** 起构建产物的监管进程(临时 HOME / 数据目录 / 全局 git 配置,去掉代理变量),等到 worker running。`extraEnv` 在去掉代理变量之后再加;`config` 换掉默认种子 */
-  async function startDaemon(o: { extraEnv?: NodeJS.ProcessEnv; config?: object } = {}) {
+  async function startDaemon(o: { extraEnv?: NodeJS.ProcessEnv; config?: object; reuse?: { home: string; data: string } } = {}) {
     expect(existsSync(DAEMON) && existsSync(ACP)).toBe(true)
-    const home = mkdtempSync(join(tmpdir(), 'mffai-e2e-home-'))
-    const data = mkdtempSync(join(tmpdir(), 'mffai-e2e-data-'))
-    temps.push(home, data, `${data}-worktrees`)
-    // PATH 是真的:探测不能跑到机器上真的 codex、qodercli
-    writeFileSync(join(data, 'config.json'), JSON.stringify(o.config ?? { executors: { disabled: ['codex', 'qoder'] } }))
+    // reuse:同一份数据目录再起一次(登录项那一轮);目录已登记过清理,配置和全局 git 配置也已写好
+    const home = o.reuse?.home ?? mkdtempSync(join(tmpdir(), 'mffai-e2e-home-'))
+    const data = o.reuse?.data ?? mkdtempSync(join(tmpdir(), 'mffai-e2e-data-'))
     const gitConfig = join(home, 'gitconfig')
-    writeFileSync(gitConfig, '')
+    if (!o.reuse) {
+      temps.push(home, data, `${data}-worktrees`)
+      // PATH 是真的:探测不能跑到机器上真的 codex、qodercli
+      writeFileSync(join(data, 'config.json'), JSON.stringify(o.config ?? { executors: { disabled: ['codex', 'qoder'] } }))
+      writeFileSync(gitConfig, '')
+    }
     const env: NodeJS.ProcessEnv = {
       ...process.env, ELECTRON_RUN_AS_NODE: '1', HOME: home, USERPROFILE: home,
       XDG_CONFIG_HOME: join(home, '.config'), MFFAI_DATA_DIR: data, MFFAI_AUTOSTART_DRY_RUN: '1', MFFAI_SECRETS_PLAINTEXT: '1',
       MFFAI_CATALOG_OFFLINE: '1', GIT_CONFIG_GLOBAL: gitConfig, GIT_CONFIG_NOSYSTEM: '1',
     }
     for (const k of Object.keys(env)) if (/^(https?|all|no)_proxy$/i.test(k)) delete env[k]
+    delete env.NODE_USE_ENV_PROXY
+    delete env.MFFAI_SPAWNED_BY_APP
     Object.assign(env, o.extraEnv)
     const paths = runtimePaths(data)
     const sup = spawn(electron(), [DAEMON], { env, stdio: 'ignore', detached: true })
@@ -537,6 +542,101 @@ describe.skipIf(!E2E)('built daemon e2e', () => {
   })
 
   // 06 记忆:构建产物、Electron 的 Node、真 FTS5、真监管。模型是假的,后台请求按 SYSTEM 文本认,和前台的先后无关
+  // 07 Telegram:api.telegram.org 在构建产物里改不了(没有 apiBase),所以只验到隧道:假上游收到 CONNECT,里面不是真 TLS
+  describe('telegram (stops at the tunnel)', () => {
+    const TOKEN = '123456789:' + 'A'.repeat(35)
+    /** 八个变量都显式给:大小写都有,小写优先 */
+    const proxyEnv = (port: number): NodeJS.ProcessEnv => {
+      const url = `http://127.0.0.1:${port}`
+      return {
+        HTTP_PROXY: url, http_proxy: url, HTTPS_PROXY: url, https_proxy: url, ALL_PROXY: url, all_proxy: url,
+        NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost', NODE_USE_ENV_PROXY: '1',
+      }
+    }
+    const filesUnder = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap(d => {
+      const p = join(dir, d.name)
+      return d.isDirectory() ? filesUnder(p) : d.isFile() ? [p] : []
+    })
+    const holding = (dir: string, text: string) => filesUnder(dir).filter(f => readFileSync(f).includes(Buffer.from(text)))
+    type Daemon = Awaited<ReturnType<typeof startDaemon>>
+    async function worker(d: Daemon) {
+      const w = await connectClient({ addr: d.paths.workerAddr, token: d.tokenOf(), timeoutMs: 20_000 })
+      expect((await w.call('hello', { clientVersion: '0.0.0', protocolVersion: PROTOCOL_VERSION })).compatible).toBe(true)
+      const events: KernelEvent[] = []
+      w.onEvent(e => events.push(e))
+      await w.call('events.subscribe', { after: 0 })
+      return { w, events }
+    }
+    const setToken = (w: Awaited<ReturnType<typeof worker>>['w']) =>
+      (w.call as (m: string, p: object) => Promise<unknown>)('channel.telegram.setToken', { token: TOKEN }).then(() => 'ok', (err: unknown) => String((err as Error)?.message ?? err))
+    const status = (w: Awaited<ReturnType<typeof worker>>['w']) =>
+      (w.call as (m: string, p: object) => Promise<{ state: string; tokenSet: boolean; proxy: string }>)('channel.telegram.status', {})
+
+    it('proxy round: setToken goes out as CONNECT api.telegram.org:443, the token is nowhere, tokenSet stays false', async () => {
+      const up = await startFakeUpstream()
+      closers.push(() => up.close())
+      const d = await startDaemon({ extraEnv: proxyEnv(up.port) })
+      const { w } = await worker(d)
+      try {
+        const result = await setToken(w)
+        expect(result).toContain('network')
+        expect(up.connects.length).toBeGreaterThan(0)
+        expect(up.connects[0].line).toBe('CONNECT api.telegram.org:443 HTTP/1.1')
+        expect(JSON.stringify(up.connects)).not.toContain(TOKEN)
+        expect(JSON.stringify(up.connects)).not.toContain(TOKEN.split(':')[1])
+        expect(JSON.stringify(up.inner)).not.toContain(TOKEN.split(':')[1])
+        expect(await status(w)).toMatchObject({ tokenSet: false, proxy: 'env' })
+        expect(result).not.toContain(TOKEN)
+      } finally { w.close() }
+      await d.shutdown()
+      // 退出之后看盘:库、WAL、配置、日志都在数据目录里
+      expect(holding(d.data, TOKEN.split(':')[1])).toEqual([])
+      expect(holding(d.home, TOKEN.split(':')[1])).toEqual([])
+    }, 120_000)
+
+    it('login-item round: the proxy saved by the app comes back when launchd starts it with none; an app start with no proxy removes the file', async () => {
+      const up = await startFakeUpstream()
+      closers.push(() => up.close())
+      const first = await startDaemon({ extraEnv: { ...proxyEnv(up.port), MFFAI_SPAWNED_BY_APP: '1' } })
+      expect(existsSync(first.paths.proxy)).toBe(true)
+      expect(JSON.parse(readFileSync(first.paths.proxy, 'utf8'))).toEqual({ url: `http://127.0.0.1:${up.port}` })
+      await first.shutdown()
+      const reuse = { home: first.home, data: first.data }
+
+      // 登录项:没有代理变量,也没有 app 的标记
+      const login = await startDaemon({ reuse })
+      const { w } = await worker(login)
+      try {
+        expect(await setToken(w)).toContain('network')
+        expect(up.connects.length).toBeGreaterThan(0)
+        expect(up.connects[0].line).toBe('CONNECT api.telegram.org:443 HTTP/1.1')
+        expect(await status(w)).toMatchObject({ tokenSet: false, proxy: 'env' })
+      } finally { w.close() }
+      await login.shutdown()
+      expect(existsSync(login.paths.proxy)).toBe(true)
+
+      // app 启动、用户清掉了代理:文件没了
+      const cleared = await startDaemon({ reuse, extraEnv: { MFFAI_SPAWNED_BY_APP: '1' } })
+      expect(existsSync(cleared.paths.proxy)).toBe(false)
+      await cleared.shutdown()
+      expect(holding(first.data, TOKEN.split(':')[1])).toEqual([])
+    }, 180_000)
+
+    it('idle round: no token, no_token, the plugin made no connection, plugin.activated is there', async () => {
+      const up = await startFakeUpstream()
+      closers.push(() => up.close())
+      const d = await startDaemon({ extraEnv: proxyEnv(up.port) })
+      const { w, events } = await worker(d)
+      try {
+        await waitFor(() => events.some(e => e.type === 'plugin.activated' && (e.payload as { id?: string }).id === 'channel-telegram'), 10_000, 'plugin.activated')
+        await sleep(1500)
+        expect(await status(w)).toMatchObject({ state: 'no_token', tokenSet: false })
+        expect(up.connects).toEqual([])
+      } finally { w.close() }
+      await d.shutdown()
+    }, 120_000)
+  })
+
   describe('memory', () => {
     const NOTE = '包管理器用 pnpm'
     type Body = { messages: unknown[]; tools?: unknown }
