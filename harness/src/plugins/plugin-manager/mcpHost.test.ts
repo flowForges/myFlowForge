@@ -406,6 +406,20 @@ describe('programs', () => {
     expect(m.spawns).toEqual([])
   })
 
+  it('a name that PATH finds in the plugin store or the data dir: bad_command, another plugin is not a runtime', async () => {
+    const m = await rigOnly()
+    await m.r.install(buildPlugin(dirFor(), { format: 'claude', id: 'other', extra: { 'bin/othertool': { mode: 0o755, text: '#!/bin/sh\n' } } }))
+    const code = join(storeOf(m.r), 'other', readdirSync(join(storeOf(m.r), 'other'))[0], 'bin')
+    const inData = exe(join(m.r.dataDir, 'plugin-data', 'other', 'z', 'datatool'))
+    m.r.env.PATH = `${code}:${dirname(inData)}:/usr/bin:/bin`
+    await m.r.install(buildPlugin(dirFor(), { format: 'claude', id: 'x', mcp: { y: { command: 'othertool' }, z: { command: 'datatool' } } }))
+    const sid = await m.r.session({ approvalMode: 'auto' })
+    await m.r.turn(sid, 'pin')
+    expect((await m.mcp(sid, { action: 'tools', server: 'x/y' })).text).toBe('bad_command')
+    expect((await m.mcp(sid, { action: 'tools', server: 'x/z' })).text).toBe('bad_command')
+    expect(m.spawns).toEqual([])
+  })
+
   it('a program missing: server_failed with program_not_found, in status too', async () => {
     const m = await setup({ y: { command: 'surely-no-such-program-here' } })
     const { text } = await m.mcp(m.sid, { action: 'tools', server: 'x/y' })
@@ -521,6 +535,30 @@ describe('env: exactly the whitelist plus what was declared', () => {
     const { env, argv } = jsonOf((await m.mcp(sid, { action: 'call', server: 'x/y', tool: 'probe_env', arguments: {} })).text)
     expect(env.M).toBe('${PLUGIN_ROOT}')
     expect(argv.at(-1)).toBe('--m=${PLUGIN_ROOT}')
+  })
+
+  it('a setting referenced in args whose value turned out secret-shaped never reaches argv', async () => {
+    const f = fake()
+    const m = await rigOnly()
+    const shaped = 'sk-' + 'z'.repeat(30)
+    await m.r.install(buildPlugin(dirFor(), { format: 'claude', id: 'x', mcp: { y: f.entry({ args: [join(f.dir, 'fake-mcp.mjs'), '--m=${user_config.mode}'] }) }, manifest: { userConfig: { mode: { title: 'm', sensitive: false, required: true } } } }))
+    await call(m.r, 'plugins.settings.set', { commandId: 'c', id: 'x', key: 'mode', value: shaped })
+    const sid = await m.r.session({ approvalMode: 'auto' })
+    await m.r.turn(sid, 'pin')
+    expect((await m.mcp(sid, { action: 'tools', server: 'x/y' })).text).toBe('server_problem: arg_env_ref')
+    expect(m.spawns).toEqual([])
+    expect(m.sandbox!.plans).toEqual([])
+  })
+
+  it('${CLAUDE_PROJECT_DIR} is the cwd, except that cwd:none gets nothing of it', async () => {
+    const f = fake()
+    const m = await setup({ r: f.entry({ args: [join(f.dir, 'fake-mcp.mjs'), '${CLAUDE_PROJECT_DIR}'] }), n: f.entry({ args: [join(f.dir, 'fake-mcp.mjs'), '${CLAUDE_PROJECT_DIR}'], env: { P: '${MFF_PROJECT_DIR}' } }) }, { grants: { n: { network: [], cwd: 'none' } } })
+    await m.mcp(m.sid, { action: 'tools', server: 'x/r' })
+    expect(planOf(m).args.at(-1)).toBe(m.r.cwd)
+    await m.mcp(m.sid, { action: 'tools', server: 'x/n' })
+    expect(planOf(m).args.at(-1)).toBe(join(m.r.dataDir, 'plugin-data', 'x', 'n'))
+    expect(planOf(m).env.P).toBe(join(m.r.dataDir, 'plugin-data', 'x', 'n'))
+    expect(JSON.stringify(planOf(m).args)).not.toContain(m.r.cwd)
   })
 
   it('secrets locked: a stable code, not an internal error', async () => {
@@ -751,6 +789,8 @@ describe('lifecycle', () => {
     clock.advance(IDLE_MS - 1000)
     await m.mcp(m.sid, { action: 'call', server: 'x/y', tool: 'echo', arguments: {} })
     clock.advance(IDLE_MS - 1000)
+    // 杀是异步的:等一下才证明第一个定时器没有动手
+    await new Promise(res => setTimeout(res, 100))
     expect(m.live().length).toBe(1)
     clock.advance(1000)
     await until(() => m.host().status(m.sid)[0].state === 'stopped', 6000)
@@ -866,7 +906,7 @@ describe('lifecycle', () => {
     expect(m.pids.length).toBe(4)
   })
 
-  it('three consecutive call timeouts: killed, one failure counted; an answer in between resets', async () => {
+  it('three consecutive call timeouts: killed, one failure counted', async () => {
     const clock = fakeClock()
     const f = fake({ callDelayMs: 60_000 })
     const m = await setup({ y: f.entry() }, { clock })
@@ -939,6 +979,19 @@ describe('grants, enable and uninstall', () => {
     expect(m.sandbox!.plans[0].x.proxyScope).not.toBe(planOf(m).x.proxyScope)
   })
 
+  it('a stop closes stdin first: a server that reacts to it finishes cleanly', async () => {
+    const dir = dirFor()
+    mkdirSync(dir)
+    const eof = join(dir, 'eof')
+    const script = join(dir, 'graceful.mjs')
+    writeFileSync(script, `import { writeFileSync } from 'node:fs'\nprocess.on('SIGINT', () => {})\nprocess.stdin.on('data', d => { for (const l of String(d).split('\\n').filter(Boolean)) { const q = JSON.parse(l); if (q.method === 'initialize') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: q.id, result: { protocolVersion: '2025-06-18' } }) + '\\n'); if (q.method === 'tools/list') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: q.id, result: { tools: [] } }) + '\\n') } })\nprocess.stdin.on('end', () => { writeFileSync(${JSON.stringify(eof)}, 'x'); process.exit(0) })\n`)
+    const m = await setup({ y: { command: process.execPath, args: [script] } })
+    await m.mcp(m.sid, { action: 'tools', server: 'x/y' })
+    await call(m.r, 'plugins.setEnabled', { commandId: 'off', id: 'x', enabled: false })
+    expect(m.live()).toEqual([])
+    expect(existsSync(eof)).toBe(true)
+  }, 20_000)
+
   it('a stubborn server is still gone when the RPC answers, within the fast ladder', async () => {
     const m = await setup({ y: fake({ stubborn: true }).entry() })
     await m.mcp(m.sid, { action: 'tools', server: 'x/y' })
@@ -967,6 +1020,50 @@ describe('grants, enable and uninstall', () => {
     await change
     const { text } = await run
     expect(text === 'server_stopped' || text === 'grants_changed').toBe(true)
+    expect(m.spawns).toEqual([])
+    expect(m.sandbox!.released).toBe(1)
+  })
+
+  it('a record changed under a start in flight with no kill (a setting): the env read before it is not used', async () => {
+    const f = fake()
+    const m = await rigOnly()
+    await m.r.install(buildPlugin(dirFor(), { format: 'claude', id: 'x', mcp: { y: f.entry({ env: { A: '${user_config.mode}' } }) }, manifest: { userConfig: { mode: { title: 'm', sensitive: false, required: true } } } }))
+    await call(m.r, 'plugins.settings.set', { commandId: 'c1', id: 'x', key: 'mode', value: 'first' })
+    const sid = await m.r.session({ approvalMode: 'auto' })
+    await m.r.turn(sid, 'pin')
+    const real = m.sandbox!.planExec
+    let open!: () => void
+    const gate = new Promise<void>(res => (open = res))
+    m.sandbox!.planExec = async (...a) => {
+      const p = await real(...a)
+      await gate
+      return p
+    }
+    const run = m.mcp(sid, { action: 'tools', server: 'x/y' })
+    await until(() => m.sandbox!.plans.length === 1)
+    await call(m.r, 'plugins.settings.set', { commandId: 'c2', id: 'x', key: 'mode', value: 'second' })
+    open()
+    expect((await run).text).toBe('grants_changed')
+    expect(m.spawns).toEqual([])
+    expect(m.sandbox!.released).toBe(1)
+  })
+
+  it('killPlugin alone stops a start in flight: the record has not moved, the mark has', async () => {
+    const m = await setup({ y: fake().entry() })
+    const real = m.sandbox!.planExec
+    let open!: () => void
+    const gate = new Promise<void>(res => (open = res))
+    m.sandbox!.planExec = async (...a) => {
+      const p = await real(...a)
+      await gate
+      return p
+    }
+    const run = m.mcp(m.sid, { action: 'tools', server: 'x/y' })
+    await until(() => m.sandbox!.plans.length === 1)
+    const killing = m.host().killPlugin('x')
+    open()
+    await killing
+    expect((await run).text).toBe('server_stopped')
     expect(m.spawns).toEqual([])
     expect(m.sandbox!.released).toBe(1)
   })
@@ -1114,6 +1211,22 @@ describe('shutting down', () => {
     const child = Number(readFileSync(pidFile, 'utf8'))
     stray.push(child)
     await until(() => !alive(child), 6000)
+  }, 20_000)
+
+  it('a leader that exits while its child holds stdout: exit is what counts, the call fails, the child goes too', async () => {
+    const dir = dirFor()
+    mkdirSync(dir)
+    const pidFile = join(dir, 'pid')
+    const s = join(dir, 'holder.mjs')
+    writeFileSync(s, `import { spawn } from 'node:child_process'\nimport { writeFileSync } from 'node:fs'\nprocess.stdin.on('data', d => { for (const l of String(d).split('\\n').filter(Boolean)) { const q = JSON.parse(l); if (q.method === 'initialize') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: q.id, result: { protocolVersion: '2025-06-18' } }) + '\\n'); if (q.method === 'tools/call') { const c = spawn('/bin/sleep', ['300'], { stdio: 'inherit' }); c.unref(); writeFileSync(${JSON.stringify(pidFile)}, String(c.pid)); process.exit(3) } } })\n`)
+    const m = await setup({ y: { command: process.execPath, args: [s] } })
+    const t0 = Date.now()
+    expect((await m.mcp(m.sid, { action: 'call', server: 'x/y', tool: 'any', arguments: {} })).text).toBe('server_exited')
+    expect(Date.now() - t0).toBeLessThan(3000)
+    const child = Number(readFileSync(pidFile, 'utf8'))
+    stray.push(child)
+    await until(() => !alive(child), 6000)
+    await until(() => m.host().status(m.sid)[0].state === 'stopped', 6000)
   }, 20_000)
 })
 

@@ -189,6 +189,9 @@ describe.skipIf(!usable)('an MCP server under real Seatbelt', () => {
     expect(await s.probe('x/a', 'probe_write', { path: join(s.data('a'), 'state'), text: 'of a' })).toEqual({ ok: true })
     denied(await s.probe('x/b', 'probe_read', { path: join(s.data('a'), 'state') }))
     denied(await s.probe('x/b', 'probe_write', { path: join(s.data('a'), 'more'), text: 'x' }))
+    const tmpOf = (server: string) => join(m.r.dataDir, 'sessions', s.sid, 'mcp', createHash('sha256').update(`x/${server}`).digest('hex').slice(0, 12), 'tmp')
+    expect(await s.probe('x/a', 'probe_write', { path: join(tmpOf('a'), 't'), text: 'of a' })).toEqual({ ok: true })
+    denied(await s.probe('x/b', 'probe_read', { path: join(tmpOf('a'), 't') }))
   }, 60_000)
 
   it('$TMPDIR of the worker and /tmp are unreadable', async () => {
