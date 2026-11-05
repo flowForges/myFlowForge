@@ -47,7 +47,8 @@ export const MAX_PAGES = 10
 export const MAX_DESCRIPTION = 2000
 export const MAX_SCHEMA_BYTES = 64 * 1024
 export const MAX_ERROR_TEXT = 4000
-const TOOL_NAME = /^[A-Za-z0-9_.-]{1,64}$/
+/** 不以 - 开头:名字进 `mcp x/y <工具>`,不能长得像我们自己的 `--start` */
+const TOOL_NAME = /^(?!-)[A-Za-z0-9_.-]{1,64}$/
 const RESERVED_NAMES = new Set(['__proto__', 'constructor', 'prototype'])
 const VERSION_SHAPE = /^\d{4}-\d{2}-\d{2}$/
 

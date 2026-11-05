@@ -152,6 +152,13 @@ export class PermissionGate {
     return this.checkMany([req])[0]
   }
 
+  /** 这条 exec 命中的用户规则,不算模式和默认:ask 模式下 check 的 ask 分不出是规则还是默认(09 §10.4) */
+  userRule(req: Pick<PermissionRequest, 'resource' | 'sessionId'>): 'allow' | 'ask' | 'deny' | undefined {
+    const s = req.sessionId === undefined ? undefined : this.deps.sessions.get(req.sessionId)
+    if (!s) return undefined
+    return evaluate(this.deps.permissions().rules, { action: 'exec', resource: req.resource ?? '' }, { cwd: s.cwd ?? '', home: this.deps.home, platform: this.deps.platform, realpath: realpathSync.native }) ?? undefined
+  }
+
   /** 批量判断(grep / glob 逐个文件过门):黑名单与各会话 spillDir 只算一次 */
   checkMany(reqs: PermissionRequest[]): Decision[] {
     const { sessions, dataDir, platform } = this.deps

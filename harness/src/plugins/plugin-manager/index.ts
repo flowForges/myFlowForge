@@ -10,7 +10,7 @@ import type { FetchTimers } from '../../lib/plugins/fetchGit'
 import { USER_CONFIG_KEY_RE } from '../../lib/plugins/manifest'
 import type { PgidRegistry } from '../../lib/proc/pgids'
 import { loginShellPath } from '../../lib/tools/shellEnv'
-import type { PermissionRequest, SandboxService, SessionCommands, ToolsService } from '../../lib/tools/types'
+import type { SandboxService, SessionCommands, ToolsService } from '../../lib/tools/types'
 import { MCP_SERVER_NAME, type Grants, type WorkerParams } from '../../protocol/index'
 import type { Sessions } from '../../kernel/sessions'
 import { createPluginsService, SkillCatalog } from './context'
@@ -18,7 +18,7 @@ import { fail, Installer } from './installer'
 import { manifest } from './manifest'
 import { listCommands, runCommand } from './commands'
 import { declaredOf, McpHost } from './mcpHost'
-import { createMcpTool } from './mcpTool'
+import { createMcpTool, type McpToolDeps } from './mcpTool'
 import { createSkillTool } from './skillTool'
 import { PluginStore, type InstalledRecord } from './store'
 
@@ -154,7 +154,7 @@ export function createPluginManager(o: PluginManagerOpts = {}): Plugin {
       // 第三方文字给模型的路只有这两条:第一轮钉住的索引,和模型自己调的 skill
       ctx.services.provide('plugins', createPluginsService({ store, catalog, sessions, sandbox, append: e => ctx.append(e), log: ctx.log }))
       ctx.effect(tools.register(createSkillTool({ store, catalog, commands, sessions, history: sid => ctx.events.history(sid), log: ctx.log })))
-      const gate = ctx.services.get<{ check(req: PermissionRequest): string }>('permissionGate')
+      const gate = ctx.services.get<McpToolDeps['gate']>('permissionGate')
       if (!gate) throw new Error('permissionGate service missing')
       ctx.effect(tools.register(createMcpTool({ host, gate, history: sid => ctx.events.history(sid), log: ctx.log })))
 

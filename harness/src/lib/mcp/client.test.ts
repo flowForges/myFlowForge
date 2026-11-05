@@ -1064,7 +1064,7 @@ describe('McpError', () => {
 })
 
 describe('isValidToolName', () => {
-  it.each([['echo', true], ['a.b-c_d', true], ['x'.repeat(64), true], ['x'.repeat(65), false], ['', false], ['a;rm -rf', false], ['../x', false], ['has space', false], ['__proto__', false], ['constructor', false], ['prototype', false], [7, false], ['toString', true]])('%s → %s', (name, ok) => {
+  it.each([['echo', true], ['a.b-c_d', true], ['x'.repeat(64), true], ['x'.repeat(65), false], ['', false], ['a;rm -rf', false], ['../x', false], ['has space', false], ['__proto__', false], ['constructor', false], ['prototype', false], [7, false], ['toString', true], ['--start', false], ['-x', false], ['a-b', true], ['a--b', true]])('%s → %s', (name, ok) => {
     expect(isValidToolName(name)).toBe(ok)
   })
 })

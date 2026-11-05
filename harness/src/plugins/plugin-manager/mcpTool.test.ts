@@ -14,6 +14,8 @@ import { MCP_RESULT_PREFACE } from '../../lib/plugins/wrap'
 import { redact } from '../../lib/tools/redact'
 import type { Tool, ToolContext } from '../../lib/tools/types'
 import type { KernelEvent } from '../../protocol/index'
+import { McpError } from '../../lib/mcp/client'
+import { McpHostError } from './mcpHost'
 import { createMcpTool, MCP_DESCRIPTION } from './mcpTool'
 
 let tmp: string
@@ -330,7 +332,7 @@ describe('--start (M18)', () => {
     expect(m.spawns).toEqual([])
     expect(cards.length).toBe(1)
     expect(cards[0].summary).toBe('x/y --start | network: a.example,b.example | cwd: read')
-    expect(cards[0].key).toMatch(/^mcp x\/y --start#[0-9a-f]{8}$/)
+    expect(cards[0].key).toMatch(/^mcp-start x\/y#[0-9a-f]{8}$/)
   })
 
   it('approved: starts; running: no second card', async () => {
@@ -350,6 +352,44 @@ describe('--start (M18)', () => {
     const other = await setup({ y: g.entry() }, { mode: 'auto', grants: HOSTS, config: rules(['deny', 'shell(mcp x/y --start)']) })
     expect((await other.mcp(other.sid, { action: 'tools', server: 'x/y' })).text).toBe('denied_by_rule')
     expect(other.spawns).toEqual([])
+  })
+
+  it('I1: a tool named --start cannot use the start key: refused before the gate, listed by nobody', async () => {
+    const f = fake({ badNames: ['--start', '-x'] })
+    const m = await setup({ y: f.entry() }, { mode: 'auto', grants: HOSTS })
+    const started = await m.mcp(m.sid, { action: 'tools', server: 'x/y' }, { decide: 'allow_session' })
+    expect(started.cards.length).toBe(1)
+    expect(started.text).not.toContain('--start')
+    expect(started.text).not.toContain('\n-x')
+    const forged = await m.mcp(m.sid, { action: 'call', server: 'x/y', tool: '--start', arguments: { leak: 'everything' } })
+    expect(forged.text).toBe('bad_tool_name')
+    expect(forged.cards).toEqual([])
+    expect(f.calls('tools/call')).toEqual([])
+    // 开始卡的键和工具的键长得不一样,放开了开始不等于放开任何工具
+    const real = await m.mcp(m.sid, echo())
+    expect(real.cards.length).toBe(1)
+    expect(real.cards[0].key).toMatch(/^mcp x\/y echo#/)
+  })
+
+  it('m3: ask shell(mcp x/*) gives a card before tools starts a no-host server; denied, no spawn', async () => {
+    const f = fake()
+    const m = await setup({ y: f.entry() }, { mode: 'auto', config: rules(['ask', 'shell(mcp x/*)']) })
+    const no = await m.mcp(m.sid, { action: 'tools', server: 'x/y' }, { decide: 'deny' })
+    expect(no.cards.length).toBe(1)
+    expect(no.cards[0].summary).toContain('--start')
+    expect(no.text).toBe('用户拒绝了该操作')
+    expect(m.spawns).toEqual([])
+    const yes = await m.mcp(m.sid, { action: 'describe', server: 'x/y', tool: 'echo' })
+    expect(yes.cards.length).toBe(1)
+    expect(m.spawns.length).toBe(1)
+    // 已经在跑:tools 什么都没起,不问
+    expect((await m.mcp(m.sid, { action: 'tools', server: 'x/y' })).cards).toEqual([])
+  })
+
+  it('m3: an ask rule on another server, or on one tool, puts no card on tools', async () => {
+    const f = fake()
+    const m = await setup({ y: f.entry() }, { mode: 'auto', config: rules(['ask', 'shell(mcp other/*)'], ['ask', 'shell(mcp x/y echo)']) })
+    expect((await m.mcp(m.sid, { action: 'tools', server: 'x/y' })).cards).toEqual([])
   })
 
   it('describe on a stopped server with hosts asks the same way', async () => {
@@ -752,6 +792,25 @@ describe('createMcpTool, on its own', () => {
     expect(redact(req.summary!).slice(0, 80)).toContain('x/y echo | args clipped | network: a.example | cwd: read')
   })
 
+  it('m2: only the host and client codes reach the model; anything else is one fixed word', async () => {
+    const path = '/secret/data/plugin-data/x/y/.spill'
+    const raw = await toolOnly({ network: [] }, { runError: new Error(`ENOTEMPTY: directory not empty, rmdir '${path}'`) })
+    const args = echo()
+    raw.t.permission(args, CTX)
+    expect(await raw.t.run(args, CTX)).toMatchObject({ isError: true, content: 'mcp_failed' })
+    // 自称有 code 的错误也不信
+    const coded = await toolOnly({ network: [] }, { runError: Object.assign(new Error(`EACCES: ${path}`), { code: 'EACCES' }) })
+    const args2 = echo()
+    coded.t.permission(args2, CTX)
+    expect(await coded.t.run(args2, CTX)).toMatchObject({ isError: true, content: 'mcp_failed' })
+    const fromPermission = await toolOnly({ network: [] }, { inspectRaw: new Error(`EACCES: ${path}`) })
+    expect(() => fromPermission.t.permission(echo(), CTX)).toThrow(/^mcp_failed$/)
+    const client = await toolOnly({ network: [] }, { runError: new McpError('call_timeout') })
+    const args3 = echo()
+    client.t.permission(args3, CTX)
+    expect(await client.t.run(args3, CTX)).toMatchObject({ isError: true, content: 'call_timeout' })
+  })
+
   it('a tool in the wrong place: stable codes from the host pass through', async () => {
     const r = await toolOnly({ network: [] }, { inspectError: 'needs_config' })
     expect(() => r.t.permission(echo(), CTX)).toThrow('needs_config')
@@ -767,7 +826,7 @@ const bodyLines = (text: string) => text.split('\n').slice(2, -1)
 
 const CTX: ToolContext = { sessionId: 's1', turnId: 't1', callId: 'c1', cwd: '/w', spillDir: '/w/s', signal: new AbortController().signal }
 
-async function toolOnly(o: { network: string[]; level?: 'full' | 'partial' }, more: { view?: boolean; inspectError?: string } = {}) {
+async function toolOnly(o: { network: string[]; level?: 'full' | 'partial' }, more: { view?: boolean; inspectError?: string; inspectRaw?: Error; runError?: Error } = {}) {
   const state = {
     running: false,
     epoch: 'ep123456',
@@ -778,23 +837,25 @@ async function toolOnly(o: { network: string[]; level?: 'full' | 'partial' }, mo
   const host = {
     inspect() {
       state.inspected++
-      if (more.inspectError) throw Object.assign(new Error(more.inspectError), { code: more.inspectError })
+      if (more.inspectError) throw new McpHostError(more.inspectError)
+      if (more.inspectRaw) throw more.inspectRaw
       return { hosts: o.network, cwd: 'read', epoch: state.epoch, level: o.level ?? 'full', configMasked: false, untranslatedPaths: 0 }
     },
     isRunning: () => state.running,
     async tools(_s: string, _p: string, _srv: string, _signal: AbortSignal, mayStart: boolean) {
-      if (!state.running && !mayStart) throw Object.assign(new Error('server_not_running'), { code: 'server_not_running' })
+      if (!state.running && !mayStart) throw new McpHostError('server_not_running')
       state.started.push('tools')
       return { tools: [], changed: new Set<string>() }
     },
     async callTool(_s: string, _p: string, _srv: string, _tool: string, args: unknown) {
+      if (more.runError) throw more.runError
       state.sent.push(args)
       return { text: 'ok', isError: false }
     },
     listFor: () => [],
   }
   const history = (): KernelEvent[] => (more.view === false ? [] : [{ seq: 1, ts: 1, type: 'plugins.injected', sessionId: 's1', payload: { turnId: 't1', text: 'i', skill: false, mcp: true } } as unknown as KernelEvent])
-  const t: Tool = createMcpTool({ host: host as never, history, gate: { check: () => 'allow' }, log: { warn() {} } })
+  const t: Tool = createMcpTool({ host: host as never, history, gate: { userRule: () => undefined }, log: { warn() {} } })
   return Object.assign(state, { t })
 }
 
