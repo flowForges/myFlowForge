@@ -163,7 +163,7 @@ export type PlainRead = { ok: true; bytes: Buffer } | { ok: false; error: 'not_f
 
 /** 读一个根内的文件:同样不跟随。超过 max 字节回 too_large,不多读。rel 是调用方查过的相对路径 */
 export function readPlain(root: string, rel: string, max: number): PlainRead {
-  let opened: { fd: number; st: Stats }
+  let opened: { fd: number }
   try {
     opened = openPlain(root, rel)
   } catch (e) {
@@ -171,11 +171,10 @@ export function readPlain(root: string, rel: string, max: number): PlainRead {
     if (code === 'symlink' || code === 'bad_file_type') return { ok: false, error: code }
     return { ok: false, error: 'not_found' }
   }
-  const { fd, st } = opened
+  const { fd } = opened
   try {
-    if (st.size > max) return { ok: false, error: 'too_large' }
     const buf = Buffer.allocUnsafe(max + 1)
-    // 大小可能在 fstat 之后变:读到上限加一就够判断了
+    // 不信 fstat 的大小,它之后还可能变:读到上限加一就够判断了
     let len = 0
     while (len <= max) {
       const n = readSync(fd, buf, len, buf.length - len, null)

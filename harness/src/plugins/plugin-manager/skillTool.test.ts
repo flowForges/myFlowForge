@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { call, lastResult, scriptQueue, storeOf, stubPlugin, stubTool, until, withManager } from '../../../test/managerRig'
+import { call, confirm, lastResult, scriptQueue, settled, storeOf, stubPlugin, stubTool, until, withManager } from '../../../test/managerRig'
 import { calling, say } from '../../../test/memoryRig'
 import { buildPlugin, pluginKernel, type PluginKernelOpts, type PluginRig, type PluginSpec } from '../../../test/pluginRig'
 import type { KernelEvent } from '../../protocol/index'
@@ -106,6 +106,8 @@ describe('action read', () => {
       extra: { 'skills/hidden/more.md': 'HIDDEN MORE' },
     })
     expect(await skill(sid, { action: 'read', name: 'demo:hidden' })).toBe('not_model_invocable')
+    // 用它的名字读别处的文件也不行
+    expect(await skill(sid, { action: 'read', name: 'demo:hidden', file: 'skills/open/SKILL.md' })).toBe('not_model_invocable')
     expect(await skill(sid, { action: 'read', name: 'demo:open', file: 'skills/hidden/SKILL.md' })).toBe('not_model_invocable')
     expect(await skill(sid, { action: 'read', name: 'demo:open', file: 'skills/hidden/more.md' })).toBe('not_model_invocable')
     expect(await skill(sid, { action: 'read', name: 'demo:open', file: 'SKILLS/HIDDEN/more.md' })).toBe('not_model_invocable')
@@ -180,6 +182,58 @@ describe('action read', () => {
     expect(text).not.toContain(secret)
     const ended = r.events(sid).filter(e => e.type === 'tool.ended').at(-1)!.payload as { content: string }
     expect(ended.content).toBe(text)
+  })
+})
+
+describe('after an upgrade', () => {
+  it('list and read follow the new tree: a new skill, a new description, a removed skill', async () => {
+    const { r, skill } = await setup()
+    const root = plugin({ skills: { old: { description: 'old description', body: 'old body' }, kept: { description: 'kept before', body: 'kept body' } } })
+    await r.install(root)
+    const sid = await r.session()
+    await r.turn(sid, 'pin')
+    expect(await skill(sid, { action: 'read', name: 'demo:old' })).toContain('old body')
+    rmSync(join(root, 'skills', 'old'), { recursive: true })
+    writeFileSync(join(root, 'skills', 'kept', 'SKILL.md'), '---\nname: kept\ndescription: kept after\n---\nkept body\n')
+    mkdirSync(join(root, 'skills', 'fresh'))
+    writeFileSync(join(root, 'skills', 'fresh', 'SKILL.md'), '---\nname: fresh\ndescription: fresh description\n---\nfresh body\n')
+    const { stagingId } = await call(r, 'plugins.upgrade.prepare', { id: 'demo' })
+    const st = await settled(r, stagingId)
+    await confirm(r, { stagingId, consentHash: st.consentHash }, { enable: true })
+    const listed = await skill(sid, { action: 'list' })
+    expect(listed).toContain('demo:fresh — fresh description')
+    expect(listed).toContain('demo:kept — kept after')
+    expect(listed).not.toContain('demo:old')
+    expect(await skill(sid, { action: 'read', name: 'demo:fresh' })).toContain('fresh body')
+    expect(await skill(sid, { action: 'read', name: 'demo:old' })).toBe('skill_not_found')
+  })
+})
+
+describe('a record that says enabled but failed its check', () => {
+  it('is not listed and not read', async () => {
+    let edit = false
+    const real = withManager().manager!
+    const { r, skill } = await setup({
+      manager: e => {
+        if (edit) {
+          const file = join(e.dataDir, 'plugins', 'plugin-manager', 'installed.json')
+          const saved = JSON.parse(readFileSync(file, 'utf8'))
+          saved.plugins[0].state = 'integrity_failed'
+          writeFileSync(file, JSON.stringify(saved))
+        }
+        return real(e)
+      },
+    })
+    await r.install(plugin())
+    const sid = await r.session()
+    await r.turn(sid, 'pin')
+    edit = true
+    await r.restart()
+    expect(await skill(sid, { action: 'read', name: 'demo:s' })).toBe('plugin_disabled')
+    expect(await skill(sid, { action: 'list' })).toBe('No skills are enabled.')
+    const fresh = await r.session()
+    await r.turn(fresh, 'hi')
+    expect(r.events(fresh).some(e => e.type === 'plugins.injected')).toBe(false)
   })
 })
 
@@ -515,6 +569,28 @@ describe('createSkillTool, on its own', () => {
     })
     await tool.run({ action: 'list' }, ctx)
     expect(order[0]).toBe('narrow')
+  })
+})
+
+describe('SkillCatalog', () => {
+  it('reads a version once: the directory is named by its content', async () => {
+    const { r } = await setup()
+    await r.install(plugin())
+    const log = { warn: vi.fn() }
+    const store = { list: () => [], plainVersionDir: () => versionDir(r) }
+    const catalog = new SkillCatalog(store, { home: r.home }, log)
+    const rec = { id: 'demo', integrity: 'sha256:a' } as InstalledRecord
+    const once = catalog.of(rec)
+    expect(once?.skills.map(s => s.name)).toEqual(['s'])
+    expect(catalog.of(rec)).toBe(once)
+    expect(catalog.of({ ...rec, integrity: 'sha256:b' })).not.toBe(once)
+  })
+
+  it('a directory it cannot read is no plugin, logged by id', () => {
+    const log = { warn: vi.fn() }
+    const catalog = new SkillCatalog({ list: () => [], plainVersionDir: () => undefined }, { home: tmp }, log)
+    expect(catalog.of({ id: 'demo', integrity: 'sha256:a' } as InstalledRecord)).toBeUndefined()
+    expect(log.warn).toHaveBeenCalledWith('plugin not readable', { id: 'demo' })
   })
 })
 

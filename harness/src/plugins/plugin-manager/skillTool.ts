@@ -44,9 +44,9 @@ export function settingsFor(rec: Pick<InstalledRecord, 'settings' | 'secretKeys'
   return { settings, sensitive }
 }
 
-/** 根内的相对路径,一段一段查。.git 在完整性的遍历之外,所以任何深度都不给 */
+/** 根内的相对路径,一段一段查:绝对路径的第一段是空的。.git 在完整性的遍历之外,所以任何深度都不给 */
 function cleanFilePath(file: string): string | undefined {
-  if (file === '' || file.length > FILE_MAX_CHARS || file.startsWith('/') || file.includes('\\') || file.includes('\0')) return undefined
+  if (file === '' || file.length > FILE_MAX_CHARS || file.includes('\\') || file.includes('\0')) return undefined
   const segs = file.split('/')
   for (const s of segs) {
     if (s === '' || s === '.' || s === '..') return undefined

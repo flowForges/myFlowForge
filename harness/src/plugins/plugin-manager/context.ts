@@ -37,10 +37,10 @@ export class SkillCatalog {
       this.log.warn('plugin not readable', { id: rec.id })
       return undefined
     }
-    const { skills, servers } = read.plugin
+    const parsed: Parsed = { skills: read.plugin.skills, servers: read.plugin.servers }
     if (this.cache.size >= CACHE_MAX) this.cache.clear()
-    this.cache.set(rec.integrity, { skills, servers })
-    return { skills, servers }
+    this.cache.set(rec.integrity, parsed)
+    return parsed
   }
 
   /** 现在启用的、模型能用的技能 */
