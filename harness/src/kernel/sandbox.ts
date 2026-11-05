@@ -11,6 +11,7 @@ import { join, posix } from 'node:path'
 import type { KernelEvent, PermissionsConfig, SandboxStatus, SessionOrigin } from '../protocol/index'
 import { canonicalRoots, credentialRoots, persistenceRoots, PROJECT_CONFIG_DIRS, type EnvSnapshot } from '../lib/fs/paths'
 import type { RepoPin } from '../lib/git/snapshot'
+import { imHiddenTops } from '../lib/git/imWorktree'
 import { userGitState, worktreeRootOf } from '../lib/git/worktree'
 import { literalRoots, matches, type MatchCtx, type Rule } from '../lib/permissions/rules'
 import { bwrapArgs, ensureGitHooksDir, execRootFor } from '../lib/sandbox/bwrap'
@@ -102,6 +103,8 @@ export interface SandboxOpts {
    * 没给 = 不加;给了而答不上来 = 加,失败方向是关
    */
   originOf?: (sessionId: string) => SessionOrigin | undefined
+  /** IM 会话的 worktree 从哪个检出建的(07 spec §8.1) */
+  projectTopOf?: (sessionId: string) => string | undefined
   /** 代理 Unix socket 的父目录(不能在沙箱可写范围内);默认 os.tmpdir() */
   proxyParent?: string
   uid?: number
@@ -198,6 +201,17 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
     return [...out]
   }
 
+  /** root 到 inner 之间的目录,含 root、不含 inner;两种拼写都算过 */
+  function between(inner: string, root: string): string[] {
+    const r = realSpelling(root)
+    const out: string[] = []
+    for (let a = posix.dirname(realSpelling(inner)); within(a, r); a = posix.dirname(a)) {
+      out.push(a)
+      if (a === r) break
+    }
+    return out
+  }
+
   // ---- git ----
 
   /**
@@ -218,6 +232,21 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
       // 没有 .git:没什么要保护的
     }
     return { gitDirs: [pin.commonDir], cwdGitFile }
+  }
+
+  /**
+   * IM 会话读不到用户的检出(07 spec §8.1):tops 整个拒读,只留 worktree 要用的 git 目录(keep),凭据和数据目录里的不算。
+   * cwd 就在里面的不算:那不是从它建的 worktree
+   */
+  function imHidden(sessionId: string, cwd: string): { tops: string[]; keep: string[] } {
+    if (o.originOf?.(sessionId) !== 'im') return { tops: [], keep: [] }
+    const pin = o.repoPin?.(sessionId)
+    if (pin?.kind !== 'repo') return { tops: [], keep: [] }
+    const real = realSpelling(cwd)
+    const tops = imHiddenTops(pin, o.projectTopOf?.(sessionId)).filter(t => !within(real, realSpelling(t)))
+    const closed = [...credentialList(), o.dataDir]
+    const keep = [pin.commonDir, pin.gitDir].filter(k => tops.some(t => within(realSpelling(k), realSpelling(t))) && !closed.some(c => within(k, c) || within(realSpelling(k), realSpelling(c))))
+    return { tops, keep: [...new Set(keep)] }
   }
 
   /**
@@ -504,6 +533,8 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
       // 豁免目录里嵌套的凭据不跟着放出来
       const insideExemption = (c: string) => x.allowRead.some(a => within(c, a) || within(c, realSpelling(a)))
       const nested = [...hidden, o.dataDir].filter(insideExemption)
+      const im = imHidden(s.sessionId, s.cwd)
+      const tops = cleaned(im.tops)
 
       if (platform === 'darwin') {
         const allowLoopback = cfg.sandbox.allowLoopback
@@ -515,13 +546,14 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
           writable,
           gitDirs: repo.gitDirs,
           cwdGitFile: repo.cwdGitFile,
-          denyRead: [...hidden, o.dataDir],
-          reAllowRead: [s.spillDir, tmp, ...x.allowRead],
+          denyRead: [...hidden, o.dataDir, ...tops],
+          reAllowRead: [s.spillDir, tmp, ...x.allowRead, ...cleaned(im.keep)],
+          traverse: im.keep.flatMap(k => tops.flatMap(t => between(k, t))),
           denyWrite: [...creds, o.dataDir, ...persistence, ...moduleGuard],
           reAllowWrite: [tmp, ...x.allowRead.filter(a => allowWrite.some(w => within(a, w) || within(realSpelling(a), realSpelling(w))))],
           finalDenyRead: [...x.denyRead, ...nested],
           // 读规则也拒写:否则 `mv secret/a ./a`、`ln` 就把它带出来了(与 Codex 的 `none` 一致)
-          finalDenyWrite: [...x.denyRead, ...x.denyWrite, ...nested, ...persistence.filter(insideExemption)],
+          finalDenyWrite: [...x.denyRead, ...x.denyWrite, ...nested, ...persistence.filter(insideExemption), ...tops.filter(t => !writable.some(w => within(realSpelling(w), realSpelling(t))))],
           // 可写根本身(及它在别的可写根里的父目录)也不能挪:Seatbelt 只按源、目标路径判,挪走之后里面的东西就换了路径,
           // 哪条规则都不再认得(`mv "$PWD" "$TMPDIR/r"` 再改 .git/hooks)。x.allowWrite 是要求的全部:缺的、丢掉的也不能在沙箱里建出来或换掉
           moveBlock: withAncestors([...writable, ...x.allowWrite, ...creds, o.dataDir, ...persistence, ...x.denyRead, ...x.denyWrite, ...repo.gitDirs.flatMap(g => [g, `${g}/hooks`, `${g}/config`, `${g}/modules`, `${g}/worktrees`]), ...moduleDirs, ...moduleGuard, ...modules.flatMap(m => m.between), ...(repo.cwdGitFile ? [repo.cwdGitFile] : [])], writable),
@@ -566,7 +598,8 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
         execRoot: execRootFor(execPath),
         readOnly: x.readOnly,
         // 与 Seatbelt 一致:在隐藏的根里的,只有豁免项放出来(bind 的源是宿主,不筛就绕过了隐藏)
-        extraWritable: allowWrite.filter(a => x.allowRead.some(r => within(a, r)) || ![...hidden, o.dataDir].some(c => within(a, c) || within(realSpelling(a), realSpelling(c)))),
+        extraWritable: allowWrite.filter(a => (x.allowRead.some(r => within(a, r)) || ![...hidden, o.dataDir].some(c => within(a, c) || within(realSpelling(a), realSpelling(c)))) && !tops.some(t => within(realSpelling(a), realSpelling(t)))),
+        hiddenTops: tops,
         ruleDenyRead: x.denyRead,
         ruleDenyWrite: [...x.denyWrite, ...projectConfig],
         command,
@@ -625,8 +658,10 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
     const restrictive = rules.filter(r => r.effect !== 'allow')
     // 本身就命中这个执行器的 shell 规则,权限门已经判过了
     const shell = restrictive.filter(r => r.subject === 'shell' && !(resource !== undefined && matches(r, resource, ctx)))
+    const im = imHidden(sessionId, cwd)
     return {
-      denyRead: [...credentialList(), o.dataDir],
+      denyRead: [...credentialList(), o.dataDir, ...im.tops],
+      ...(im.keep.length > 0 && { keepRead: im.keep }),
       persistence: persistenceList(),
       dataDir: o.dataDir,
       level: status(sessionId).level,

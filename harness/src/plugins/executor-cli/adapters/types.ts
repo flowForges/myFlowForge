@@ -25,6 +25,8 @@ export interface BuildInput {
   readOnly: boolean
   isolation: ExecutorIsolation
   denyRead: string[]
+  /** denyRead 里还要读的(最具体的条目赢):IM 会话的 worktree 要用用户检出里的 git 目录 */
+  keepRead?: string[]
   readOnlyPaths: string[]
   network: boolean
 }

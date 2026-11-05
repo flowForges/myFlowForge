@@ -12,6 +12,8 @@ const uniq = (list: string[]) => [...new Set(list)]
 export interface TranslatedPolicy {
   /** Codex 的 `none`:黑名单 + 数据目录 + 读规则 */
   denyRead: string[]
+  /** Codex 的 `read`,在 none 之后写:IM 会话的 worktree 要用的 git 目录 */
+  keepRead: string[]
   /** Codex 的 `read`:持久化文件 + 写规则 */
   readOnlyPaths: string[]
   /** 沙箱(planExec)的写规则。planExec 的 denyRead 要用 ExecPolicy.ruleDenyRead,不是上面那份:那份会盖住 allowRead 的豁免 */
@@ -23,6 +25,7 @@ export interface TranslatedPolicy {
 export function translate(p: ExecPolicy, protect: string[] = []): TranslatedPolicy {
   return {
     denyRead: uniq([...p.denyRead, ...p.ruleDenyRead]),
+    keepRead: uniq(p.keepRead ?? []),
     readOnlyPaths: uniq([...p.persistence, ...p.ruleDenyWrite, ...protect]),
     denyWrite: uniq([...p.ruleDenyWrite, ...protect]),
     untranslated: p.untranslatedRules,

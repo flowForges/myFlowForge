@@ -1,7 +1,7 @@
 // 设计参考 anthropic-experimental/sandbox-runtime(Apache-2.0)
 // Linux bubblewrap 参数(spec §9,评审修订 R5、R9,Task 8 评审 C1 / I1–I4)。纯函数:文件系统查询可注入,默认读真实文件系统。
 // bwrap 按参数顺序挂载,后挂的盖住先挂的,所以顺序即语义:
-//   只读根 + 私有 /tmp → [execRoot] → 可写根(cwd、各 gitDir、tmp)与只读 spill → git 保护 → 持久化文件只读 →
+//   只读根 + 私有 /tmp → [07:IM 会话看不到的检出] → [execRoot] → 可写根(cwd、各 gitDir、tmp)与只读 spill → git 保护 → 持久化文件只读 →
 //   隐藏(运行时目录、已知 Unix socket、凭据、数据目录)→ 盖回 tmp / spill →
 //   [04:额外可写 → git 保护与持久化再挂一次 → 规则只读 → 被盖回来的隐藏再挂一次 → 规则隐藏] → 代理 socket → 命令(full 时经中转)。
 // - 只挂 realpath:bwrap 先 pivot_root 再 mount(2),目标里的符号链接按新根解析 —— 绝对链接会 ENOENT 让 bwrap 起不来,
@@ -60,6 +60,11 @@ export interface BwrapParams {
   ruleDenyRead?: string[]
   /** 04:用户规则,只读挂回自己,在所有 --bind 之后 */
   ruleDenyWrite?: string[]
+  /**
+   * 07:IM 会话看不到的用户检出。最先盖:后面挂的 cwd、gitDir 的源是宿主,不受它影响,git 照常;
+   * 落在里面的其他东西不再单独挂回来
+   */
+  hiddenTops?: string[]
 }
 
 /** 宿主上常见的高权限 Unix socket(文件 → /dev/null,目录 → tmpfs) */
@@ -149,6 +154,7 @@ export function bwrapArgs(p: BwrapParams): string[] {
   const extra = (p.extraWritable ?? []).map(R)
   const ruleRead = (p.ruleDenyRead ?? []).map(R)
   const ruleWrite = (p.ruleDenyWrite ?? []).map(R)
+  const hiddenTops = (p.hiddenTops ?? []).map(R)
   for (const r of [...ruleRead, ...ruleWrite]) {
     if (r === '/' || HOST_VIEW.some(h => within(r, h))) throw new Error(`${who}: can't enforce a rule on ${JSON.stringify(r)}`)
   }
@@ -210,7 +216,18 @@ export function bwrapArgs(p: BwrapParams): string[] {
     mount(flag, ...xs)
   }
 
+  for (const t of hiddenTops) {
+    if (isDir(t)) mount('--tmpfs', t)
+    else mount('--ro-bind', '/dev/null', t)
+  }
+
   if (relay && execRoot !== undefined) self('--ro-bind', execRoot)
+  // 中转要跑得起来:开发时程序就在项目的 node_modules 里。只放它所在的目录,那个目录就是检出本身时不放
+  if (relay && hiddenTops.some(t => within(execPath, t))) {
+    const dir = posix.dirname(execPath)
+    if (hiddenTops.includes(dir)) throw new Error(`${who}: execPath sits at the top of a hidden checkout: ${JSON.stringify(execPath)}`)
+    self('--ro-bind', dir)
+  }
 
   // 可写根与只读 spill。只读运行照样要挂 cwd 与 gitDir:它们可能在私有的 /tmp 下
   const project = readOnly ? '--ro-bind' : '--bind'
@@ -288,6 +305,8 @@ export function bwrapArgs(p: BwrapParams): string[] {
   const ruleWriteMounted = ruleWrite.filter(r => {
     if (!exists(r)) return false
     if (reExposed.some(w => within(r, w))) return true
+    // 检出是盖住的:挂上去等于把这个路径读回来。cwd、gitDir 里的是挂回来了的,照常
+    if (hiddenTops.some(t => within(r, t)) && ![cwd, ...gitDirs].some(w => within(r, w))) return false
     if (targets.some(t => within(r, t.path))) return false
     return !within(r, '/tmp') || [cwd, ...gitDirs].some(w => within(r, w))
   })

@@ -1,7 +1,7 @@
 // IM 会话的 worktree(07 spec §8.1):一条 IM 消息是一条远程提示,会话的 cwd 本身就得是 worktree。
 // 基于 HEAD,不基于快照:没提交的改动和未跟踪的文件不进远程会话。建不了就失败,绝不退回在地。渠道中立,给 1b 复用
 import { lstatSync, mkdirSync, readdirSync, realpathSync, rmdirSync } from 'node:fs'
-import { dirname, join, relative, sep } from 'node:path'
+import { basename, dirname, join, relative, sep } from 'node:path'
 import { isInside, OUTSIDE, resolveToolPath } from '../fs/paths'
 import { lexists } from '../fs/safeFs'
 import { guarded, hasUnsafeFilter, pinnedGit, pinRepo, repoPrefix, type Git, type PinnedRepo, type RepoPin } from './snapshot'
@@ -12,7 +12,17 @@ export const imWorktreeRootOf = (dataDir: string) => `${dataDir}-im-worktrees`
 
 export type ImWorktreeError = 'not_git' | 'no_commits' | 'unsafe_repo' | 'root_conflict' | 'worktree_limit' | 'worktree_failed'
 
-export type ImWorktreeResult = { ok: true; id: string; path: string; cwd: string } | { ok: false; error: ImWorktreeError }
+export type ImWorktreeResult = { ok: true; id: string; path: string; cwd: string; top: string } | { ok: false; error: ImWorktreeError }
+
+/**
+ * IM 会话不该读到的用户检出(07 §8.1):建 worktree 的那个项目的顶层(建的时候记下的,linked worktree、子模块、独立 git 目录从 common 目录都推不出来),
+ * 以及 common 目录推得出来的主检出(旧会话没有记录时也靠它)。worktree 只基于 HEAD,未跟踪的 `.env` 只在这些地方
+ */
+export function imHiddenTops(pin: RepoPin | undefined, projectTop: string | undefined): string[] {
+  if (pin?.kind !== 'repo') return []
+  const main = basename(pin.commonDir) === '.git' ? dirname(pin.commonDir) : undefined
+  return [...new Set([projectTop, main])].filter((t): t is string => t !== undefined && t !== dirname(t))
+}
 
 /** cwd 真的在 IM 根下的某个 worktree 里(<根>/<聊天>/<id> 或更深)。两边都按 realpath:数据目录在链接下时,字符串比较会悄悄走 04 的嵌套 worktree */
 export function isImCwd(dataDir: string, cwd: string): boolean {
@@ -80,7 +90,7 @@ export async function createImWorktree(o: CreateImWorktreeOpts): Promise<ImWorkt
     if (existing && existing !== 'empty') {
       // 崩溃可能发生在删副本之前
       removeInWorktree(existing.path, o.denyReadOf(existing.path, pin.top))
-      return { ok: true, id, path: existing.path, cwd: enter(pin, existing.path, project) }
+      return { ok: true, id, path: existing.path, cwd: enter(pin, existing.path, project), top: pin.top }
     }
     // 空占位是上次崩溃留下的:删掉,下面照常占(名额照常算)。同一 id 的并发由 chats 的运行器排队
     if (existing === 'empty') rmdirSync(join(realpathSync.native(root), group, id))
@@ -88,7 +98,7 @@ export async function createImWorktree(o: CreateImWorktreeOpts): Promise<ImWorkt
     if (!path) return fail('worktree_limit')
     await addWorktree(pin, path, sha, git, { tmpDir, root })
     removeInWorktree(path, o.denyReadOf(path, pin.top))
-    return { ok: true, id, path, cwd: enter(pin, path, project) }
+    return { ok: true, id, path, cwd: enter(pin, path, project), top: pin.top }
   } catch {
     if (path) await cleanup(root, path, repo, git, tmpDir)
     return fail('worktree_failed')

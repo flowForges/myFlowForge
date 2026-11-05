@@ -806,7 +806,7 @@ export class RunManager implements BackgroundRuns {
     // 抛错(模型名不合规、路径是相对的)走 execute 的 catch:spawn_failed
     const built = adapter.buildArgs({
       prompt: s.prompt, cwd: run.cwd, model: s.model, readOnly: s.readOnly, isolation,
-      denyRead: t.denyRead, readOnlyPaths: t.readOnlyPaths, network: cfg.codex?.network === true,
+      denyRead: t.denyRead, keepRead: t.keepRead, readOnlyPaths: t.readOnlyPaths, network: cfg.codex?.network === true,
     })
 
     const wrap = adapter.isolationKind === 'wrap'

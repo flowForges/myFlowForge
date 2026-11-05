@@ -792,6 +792,31 @@ describe('decide: an IM message is a remote prompt (07 spec §8.3)', () => {
     expect(decide(exec(req), session(mode), env(l, over as Partial<DecideEnv>))).toBe(want)
   })
 
+  describe('the checkout the worktree came from (§8.1)', () => {
+    const ids = { top: { dev: 1, ino: 1 }, gitDir: { dev: 1, ino: 2 }, commonDir: { dev: 1, ino: 3 } }
+    const pin = { kind: 'repo' as const, top: '/h/wt', gitDir: '/h/repo/.git/worktrees/w', commonDir: '/h/repo/.git', ids }
+    const im = (over: Partial<SessionInfo> = {}): SessionInfo => ({ ...session('auto'), repo: pin, projectTop: '/h/repo', ...over })
+    const read = (resource: string): PermissionRequest => ({ actor: 'tools', action: 'read', resource, sessionId: 's1' })
+    const open = rules({ effect: 'allow', rule: 'read(/h/**)' })
+
+    it('refused by default, and an allow read rule does not open it', () => {
+      expect(decide(read('/h/repo/.env'), im(), env('full'))).toBe('deny')
+      expect(decide(read('/h/repo/.env'), im(), env('full', { rules: open }))).toBe('deny')
+      expect(decide(read('/h/repo/.git/config'), im(), env('full', { rules: open }))).toBe('deny')
+    })
+    it('a project that is not the main checkout, by the recorded top', () => {
+      expect(decide(read('/h/linked/.env'), im({ projectTop: '/h/linked' }), env('full', { rules: open }))).toBe('deny')
+      expect(decide(read('/h/repo/.env'), im({ projectTop: '/h/linked' }), env('full', { rules: open }))).toBe('deny')
+    })
+    it('the worktree itself and what the rule opens elsewhere stay as they were', () => {
+      expect(decide(read('/h/wt/.env'), im(), env('full'))).toBe('allow')
+      expect(decide(read('/h/notes.txt'), im(), env('full', { rules: open }))).toBe('allow')
+    })
+    it('an app session under the same rule reads it', () => {
+      expect(decide(read('/h/repo/.env'), im({ origin: 'app' }), env('full', { rules: open }))).toBe('allow')
+    })
+  })
+
   it('other origins keep the 05 table', () => {
     for (const origin of ['app', 'acp', 'schedule'] as const) {
       expect(decide(exec(), session('auto', origin), env('partial'))).toBe('allow')

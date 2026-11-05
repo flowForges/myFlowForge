@@ -1423,6 +1423,82 @@ describe('sessions that are not on this machine: the shared git state is read-on
     expect(roots).not.toContain(commonDir())
   })
 
+  describe('the checkout the worktree came from is hidden (07 spec §8.1)', () => {
+    const argPairs = (args: string[], flag: string) => args.flatMap((a, i) => (a === flag ? [args[i + 1]!] : []))
+    const denyLines = (profile: string, ops: string, path: string) => profile.split('\n').filter(l => l.startsWith(`(deny ${ops}`) && l.includes(`(subpath ${q(path)})`)).length
+
+    it('linux, shell: a tmpfs over the project first, then the git dir back, read-only, on top of it', async () => {
+      const { top, pin } = linked()
+      const { svc } = service({ ...LINUX, originOf: () => 'im', repoPin: () => pin })
+      const plan = await svc.plan('true', { ...session(), cwd: top }, baseEnv)
+      plan.release()
+      const tmpfs = plan.args.findIndex((a, i) => a === '--tmpfs' && plan.args[i + 1] === repo)
+      expect(tmpfs).toBeGreaterThan(-1)
+      const gitBind = plan.args.findIndex((a, i) => a === '--bind' && plan.args[i + 1] === commonDir())
+      expect(gitBind).toBeGreaterThan(tmpfs)
+      const lastRo = plan.args.reduce((at, a, i) => (a === '--ro-bind' && plan.args[i + 1] === commonDir() ? i : at), -1)
+      expect(lastRo).toBeGreaterThan(gitBind)
+      // and nothing else of the project is mounted back
+      for (const flag of ['--bind', '--ro-bind']) for (const src of argPairs(plan.args, flag)) if (src.startsWith(`${repo}/`)) expect(src.startsWith(`${commonDir()}`), src).toBe(true)
+    })
+
+    it('linux, delegated: planExec has the same tmpfs', async () => {
+      const { top, pin } = linked()
+      const { svc } = service({ ...LINUX, originOf: () => 'im', repoPin: () => pin })
+      const plan = await svc.planExec('/bin/true', [], { ...session(), cwd: top }, baseEnv, PLAN)
+      plan.release()
+      expect(argPairs(plan.args, '--tmpfs')).toContain(repo)
+    })
+
+    it('linux, a project that is not the main checkout: the recorded top is hidden as well', async () => {
+      const { top, pin } = linked()
+      const other = join(root, 'other')
+      mkdirSync(other)
+      const { svc } = service({ ...LINUX, originOf: () => 'im', repoPin: () => pin, projectTopOf: () => other })
+      const plan = await svc.plan('true', { ...session(), cwd: top }, baseEnv)
+      plan.release()
+      expect(argPairs(plan.args, '--tmpfs')).toEqual(expect.arrayContaining([repo, other]))
+    })
+
+    it.each(['app', 'acp', 'schedule'] as const)('%s: the project is not hidden', async origin => {
+      const { top, pin } = linked()
+      const { svc } = service({ ...LINUX, originOf: () => origin, repoPin: () => pin, projectTopOf: () => repo })
+      const plan = await svc.plan('true', { ...session(), cwd: top }, baseEnv)
+      plan.release()
+      expect(argPairs(plan.args, '--tmpfs')).not.toContain(repo)
+    })
+
+    it('an IM session whose cwd is in the top: not a worktree of it, nothing to hide', async () => {
+      const { svc } = service({ originOf: () => 'im' })
+      const plan = await svc.plan('true', session(), baseEnv)
+      plan.release()
+      expect(denyLines(plan.args[1]!, 'file-read', repo)).toBe(0)
+    })
+
+    it('darwin: read and write denied at the top, the git dir back, the top itself metadata only', async () => {
+      const { top, pin } = linked()
+      const { svc } = service({ originOf: () => 'im', repoPin: () => pin })
+      const plan = await svc.plan('true', { ...session(), cwd: top }, baseEnv)
+      plan.release()
+      const profile = plan.args[1]!
+      expect(denyLines(profile, 'file-read', repo)).toBe(1)
+      expect(denyLines(profile, 'file-write', repo)).toBeGreaterThan(0)
+      expect(profile.split('\n').some(l => l.startsWith('(allow file-read* ') && l.includes(`(subpath ${q(commonDir())})`))).toBe(true)
+      expect(profile).toContain(`(allow file-read-metadata (literal ${q(repo)})`)
+      expect(profile.indexOf(`(allow file-read-metadata`)).toBeGreaterThan(profile.indexOf(`(deny file-read* `))
+    })
+
+    it('the policy for a translated executor says the same, only for IM', () => {
+      const { top, pin } = linked()
+      const im = service({ originOf: () => 'im', repoPin: () => pin }).svc.execPolicy('s1', top, 'codex')
+      expect(im.denyRead).toContain(repo)
+      expect(im.keepRead).toEqual([commonDir(), pin.gitDir])
+      const app = service({ originOf: () => 'app', repoPin: () => pin }).svc.execPolicy('s1', top, 'codex')
+      expect(app.denyRead).not.toContain(repo)
+      expect(app.keepRead).toBeUndefined()
+    })
+  })
+
   it('level none: no plan to put it in. The gate asks for every command instead', async () => {
     const { svc } = service({ originOf: () => 'im', detected: { level: 'none', missing: ['sandbox-exec'] } })
     expect((await svc.plan('true', session(), baseEnv)).sandboxed).toBe(false)

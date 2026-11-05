@@ -220,6 +220,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
     idleMs: so.idleMs,
     repoPin: sid => sessions.get(sid)?.repo,
     originOf: sid => sessions.get(sid)?.origin,
+    projectTopOf: sid => sessions.get(sid)?.projectTop,
     log,
   })
   /** 沙箱外的 git:定会话的仓库、恢复时删 worktree */
@@ -442,6 +443,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
               ...(p.toolset && { toolset: p.toolset }),
               ...(p.origin && p.origin !== 'app' && { origin: p.origin }),
               ...(p.audience && { audience: p.audience }),
+              ...(p.origin === 'im' && p.projectTop !== undefined && { projectTop: p.projectTop }),
             }
             append({ type: 'session.created', sessionId, payload })
             return { result: { sessionId } }

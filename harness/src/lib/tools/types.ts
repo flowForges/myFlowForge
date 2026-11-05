@@ -125,6 +125,8 @@ export interface ShellPlan {
 /** 给执行器翻译隔离用的策略 */
 export interface ExecPolicy {
   denyRead: string[]
+  /** denyRead 里还要读的:IM 会话的 worktree 要用用户检出里的 git 目录 */
+  keepRead?: string[]
   persistence: string[]
   dataDir: string
   level: SandboxStatus['level']

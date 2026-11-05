@@ -1,5 +1,6 @@
 import { realpathSync } from 'node:fs'
 import { join } from 'node:path'
+import { imHiddenTops } from '../lib/git/imWorktree'
 import { canonicalRoots, credentialRoots, hasGitSegment, isComparablePath, isCredentialPath, isInside, isRootLike, OUTSIDE, persistenceRoots, PROJECT_CONFIG_DIRS, resolveToolPath, type EnvSnapshot } from '../lib/fs/paths'
 import { evaluate, type MatchCtx, type Rule } from '../lib/permissions/rules'
 import type { PermissionRequest } from '../lib/tools/types'
@@ -68,6 +69,8 @@ export function decide(req: PermissionRequest, s: SessionInfo | undefined, env: 
     const cwd = s?.cwd
     if (!cwd || isRootLike(cwd, env.platform) || !isComparablePath(resource, env.platform)) return 'deny'
     if (isCredentialPath(resource, [...env.roots, env.dataDir], env.platform)) return 'deny'
+    // 用户的 allow read 规则是对当面操作写的:放不开 IM 会话读用户的检出(07 §8.1),和沙箱同一份
+    if (s?.origin === 'im' && !isInside(resource, cwd, env.platform) && imHiddenTops(s.repo, s.projectTop).some(t => !isInside(cwd, t, env.platform) && isInside(resource, t, env.platform))) return 'deny'
     if (action === 'write') {
       if (hasGitSegment(resource, env.platform)) return 'deny' // .git/hooks、.git/config 能让 git status 跑代码
       if (!isInside(resource, cwd, env.platform)) return 'deny' // 工作目录外的写

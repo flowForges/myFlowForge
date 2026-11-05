@@ -51,14 +51,17 @@ function profilePaths(i: Pick<BuildInput, 'denyRead' | 'readOnlyPaths'>): { none
 const PROJECT_ROOTS = '":project_roots"={"."="write",".codex"="read",".qoder"="read","*/**/.git/hooks/**"="none","*/**/.git/config"="none"}'
 
 /** 真实运行和自检共用这一个。带 glob 字符的 read 不写:那样的运行已经按 none 算,写了只会让 Codex 退出 */
-export function filesystemMap(i: Pick<BuildInput, 'denyRead' | 'readOnlyPaths' | 'readOnly'>): string {
+export function filesystemMap(i: Pick<BuildInput, 'denyRead' | 'keepRead' | 'readOnlyPaths' | 'readOnly'>): string {
   const { none, read } = profilePaths(i)
+  // 用户的 deny read 落在 git 目录上时 none 留着
+  const keep = [...new Set((i.keepRead ?? []).map(p => pathKey(p, 'keepRead')))].filter(k => !GLOB.test(k) && !read.includes(k) && !none.includes(k))
   const entries = [
     '":root"="read"',
     ...(i.readOnly ? [] : [PROJECT_ROOTS]),
     '":tmpdir"="write"',
     ...none.map(p => `${tomlString(p)}="none"`),
     ...read.filter(p => !GLOB.test(p)).map(p => `${tomlString(p)}="read"`),
+    ...keep.map(p => `${tomlString(p)}="read"`),
   ]
   return `{${entries.join(',')}}`
 }
@@ -68,7 +71,7 @@ function profileGaps(i: Pick<BuildInput, 'cwd' | 'denyRead' | 'readOnlyPaths'>):
   return [i.cwd, ...none, ...read].some(p => GLOB.test(p)) ? [PATH_GLOB_GAP] : []
 }
 
-function configFlags(i: Pick<BuildInput, 'denyRead' | 'readOnlyPaths' | 'readOnly' | 'network'>): string[] {
+function configFlags(i: Pick<BuildInput, 'denyRead' | 'keepRead' | 'readOnlyPaths' | 'readOnly' | 'network'>): string[] {
   return [
     '-c', 'approval_policy="never"',
     '-c', 'web_search="disabled"',

@@ -58,7 +58,7 @@ describe('createImWorktree', () => {
     ug(['add', 'a.txt'])
     const before = bytes()
     const r = await create()
-    expect(r).toEqual({ ok: true, id: 'wt_1', path: pathOf(), cwd: pathOf() })
+    expect(r).toEqual({ ok: true, id: 'wt_1', path: pathOf(), cwd: pathOf(), top: repo })
     expect(readFileSync(join(pathOf(), 'a.txt'), 'utf8')).toBe('a\n')
     expect(existsSync(join(pathOf(), '.env'))).toBe(false)
     expect(ug(['rev-parse', 'HEAD'], pathOf())).toBe(ug(['rev-parse', 'HEAD']))

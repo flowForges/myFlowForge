@@ -25,6 +25,8 @@ const WorktreeSchema = z.object({
   project: z.string(),
   /** 建的时候别名指向的 realpath。别名改了指向,/new 就不再沿用 */
   projectPath: z.string(),
+  /** 项目所在检出的顶层:项目路径可能是仓库子目录。这棵 worktree 里的会话读不到它(§8.1) */
+  top: z.string().optional(),
   path: z.string(),
   cwd: z.string(),
   sessionIds: z.array(z.string()),
@@ -270,10 +272,10 @@ export class Projects {
       }
       const { worktreeId: previous, sessionId: previousSession } = chats.status(chatId)
       // 先记下来:之后崩溃,这是个列得出来、重投认得出来的 worktree。opened 还没有,不算"没人用过"
-      const record: Worktree = this.records.get(id) ?? { id, project: name, projectPath: realProject, path: made.path, cwd: made.cwd, sessionIds: [], createdAt: this.o.now() }
+      const record: Worktree = this.records.get(id) ?? { id, project: name, projectPath: realProject, top: made.top, path: made.path, cwd: made.cwd, sessionIds: [], createdAt: this.o.now() }
       this.store(record)
       this.o.save()
-      const target: SessionTarget = { project: name, worktreeId: id, cwd: made.cwd, approvalMode: this.approvalModeOf(project.auto) }
+      const target: SessionTarget = { project: name, worktreeId: id, cwd: made.cwd, projectTop: made.top, approvalMode: this.approvalModeOf(project.auto) }
       let result: NewSessionResult
       try {
         result = await chats.newSession(chatId, updateId, target, 'project', sessionId => {
@@ -321,7 +323,7 @@ export class Projects {
       return undefined
     }
     // auto 每次现判:app 里可能关了,级别可能降了(§8.3)
-    return { project: name, worktreeId: record.id, cwd: record.cwd, approvalMode: this.approvalModeOf(project.auto) }
+    return { project: name, worktreeId: record.id, cwd: record.cwd, projectTop: record.top ?? record.projectPath, approvalMode: this.approvalModeOf(project.auto) }
   }
 
   /** /project off */

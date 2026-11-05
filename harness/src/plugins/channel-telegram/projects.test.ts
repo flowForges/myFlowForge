@@ -1,6 +1,6 @@
 // 项目(07 spec §8.1、Review Focus 3 插件这一半):真 git,临时目录,私聊走到底。
 // git 全经 extraEnv 给配置:createGit 去掉 base 里的 GIT_*,放 base 里全局配置等于没读
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -407,6 +407,54 @@ describe('an IM session never writes to the user’s repo', () => {
     expect(readFileSync(join(cwd, 'f'), 'utf8')).toBe('x\n')
     expect(userState()).toEqual(before)
     expect(existsSync(join(repo, 'new.txt'))).toBe(false)
+  })
+
+  it('/project and /new record the checkout; a project in a subdirectory records the repo top', async () => {
+    mkdirSync(join(repo, 'pkg'))
+    writeFileSync(join(repo, 'pkg', 'b.txt'), 'b\n')
+    sh(['add', '-A'])
+    sh(['commit', '-qm', 'pkg'])
+    const r = await rig({ config: { channels: { telegram: { projects: [{ name: 'api', path: join(repo, 'pkg') }] } } } })
+    await send(r, '/project api')
+    await send(r, '/new')
+    expect(created(r).map(c => c.projectTop)).toEqual([repo, repo])
+    expect(events(r, 'session.created').length).toBe(2)
+  })
+
+  const seatbelt = process.platform === 'darwin' && spawnSync('/usr/bin/sandbox-exec', ['-p', '(version 1)(allow default)', '/usr/bin/true'], { stdio: 'ignore' }).status === 0
+  it.skipIf(!seatbelt)('through the kernel: the model reaches neither the untracked .env nor the rest of the checkout, git works', async () => {
+    const SECRET = 'UNTRACKED-ENV-VALUE'
+    writeFileSync(join(repo, '.env'), `TOKEN=${SECRET}\n`)
+    const envFile = join(repo, '.env')
+    const r = await rig({
+      level: 'full',
+      models: {
+        script: n => {
+          if (n === 1) return calling('c1', 'read', { path: envFile })
+          if (n === 2) return calling('c2', 'shell', { command: `cat ${JSON.stringify(envFile)}; echo "cat=$?"; git log -1 --format=log-%s; echo "git=$?"` })
+          return say('done')
+        },
+      },
+    })
+    const before = userState()
+    await send(r, '/project api')
+    await send(r, 'do it')
+    await expect.poll(async () => {
+      await flow(r, 1200)
+      return events(r, 'approval.requested').length
+    }, { timeout: 15_000, interval: 5 }).toBe(1)
+    const { approvalId } = events(r, 'approval.requested')[0].payload as { approvalId: string }
+    await r.k.handle('approval.respond', { approvalId, decision: 'allow' })
+    await turnEnds(r, 1)
+    const ended = events(r, 'tool.ended').map(e => e.payload as { name: string; ok: boolean })
+    expect(ended.find(e => e.name === 'read')?.ok).toBe(false)
+    const all = JSON.stringify(r.k.events.after(0))
+    expect(all).not.toContain(SECRET)
+    const out = JSON.stringify(events(r, 'tool.ended').find(e => (e.payload as { name: string }).name === 'shell')?.payload)
+    expect(out).toMatch(/cat=1/)
+    expect(out).toMatch(/log-init/)
+    expect(out).toMatch(/git=0/)
+    expect(userState()).toEqual(before)
   })
 
   it('delegate_codex with the fake CLI: in place, the project is byte-identical', async () => {

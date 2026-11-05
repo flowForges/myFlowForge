@@ -1,7 +1,7 @@
 // 真跑 sandbox-exec(07 spec §8.2,Review Focus 3):IM 会话的 shell 改不了用户的分支,app 会话不受影响。
 // 测试进程自己在沙箱里时不能嵌套 → 整个文件跳过(探测只跑一次)
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -26,6 +26,7 @@ let wtCwd = ''
 let svc: SandboxService
 const pins = new Map<string, RepoPin>()
 const origins = new Map<string, SessionOrigin>()
+const projectTops = new Map<string, string>()
 
 const env = () => ({ PATH: '/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin', HOME: home, GIT_CONFIG_GLOBAL: join(home, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1', LC_ALL: 'C' })
 const ug = (args: string[], cwd = repo) => execFileSync('git', args, { cwd, env: env(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
@@ -38,6 +39,28 @@ async function shell(sessionId: string, cwd: string, command: string): Promise<n
       const c = spawn(plan.file, plan.args, { cwd, env: plan.env, stdio: 'ignore' })
       c.on('error', reject)
       c.on('close', resolve)
+    })
+  } finally {
+    plan.release()
+  }
+}
+
+/** 跑完给退出码和输出,用来同时看"读不到"和"读到了什么" */
+async function run(sessionId: string, cwd: string, command: string): Promise<{ code: number | null; out: string }> {
+  const plan = await svc.plan(command, { sessionId, cwd, spillDir: join(data, 'sessions', sessionId, 'spill') }, env())
+  expect(plan.sandboxed).toBe(true)
+  return collect(plan, cwd)
+}
+
+async function collect(plan: { file: string; args: string[]; env: NodeJS.ProcessEnv; release(): void }, cwd: string): Promise<{ code: number | null; out: string }> {
+  try {
+    return await new Promise((resolve, reject) => {
+      const c = spawn(plan.file, plan.args, { cwd, env: plan.env, stdio: ['ignore', 'pipe', 'pipe'] })
+      let out = ''
+      c.stdout.on('data', d => (out += d))
+      c.stderr.on('data', d => (out += d))
+      c.on('error', reject)
+      c.on('close', code => resolve({ code, out }))
     })
   } finally {
     plan.release()
@@ -70,10 +93,11 @@ beforeEach(async () => {
   pins.set('app', await pinRepo(repo, git, { tmpDir: tmp }))
   origins.set('im', 'im')
   origins.set('app', 'app')
+  projectTops.set('im', repo)
   svc = createSandboxService({
     platform: 'darwin', dataDir: data, home, env: { HOME: home, PATH: env().PATH }, detected: { level: 'full', missing: [] },
     permissions: () => ({ rules: [], network: { allow: [] }, allowUnsandboxedAuto: false, sandbox: { enabled: true, allowLoopback: false } }),
-    rules: () => [], append: () => {}, repoPin: sid => pins.get(sid), originOf: sid => origins.get(sid), upstream: undefined,
+    rules: () => [], append: () => {}, repoPin: sid => pins.get(sid), originOf: sid => origins.get(sid), projectTopOf: sid => projectTops.get(sid), upstream: undefined,
   })
 })
 afterEach(async () => {
@@ -106,6 +130,104 @@ describe.skipIf(!usable)('Seatbelt, IM session in its worktree', () => {
 
   it('the worktree\'s .git file can not be rewritten', async () => {
     expect(await shell('im', wtCwd, 'echo "gitdir: /tmp/evil" > .git')).not.toBe(0)
+  })
+})
+
+const SECRET = 'UNTRACKED-ENV-VALUE'
+
+describe.skipIf(!usable)('Seatbelt, IM session and the checkout it came from (§8.1)', () => {
+  beforeEach(() => {
+    writeFileSync(join(repo, '.env'), `TOKEN=${SECRET}\n`)
+  })
+
+  it('the control: an app session in the project reads the untracked .env', async () => {
+    expect(await run('app', repo, 'cat .env')).toEqual({ code: 0, out: `TOKEN=${SECRET}\n` })
+  })
+
+  it('the .env really is not in the worktree', () => {
+    expect(existsSync(join(wtCwd, '.env'))).toBe(false)
+  })
+
+  it.each<[string, () => string]>([
+    ['cat', () => `cat ${JSON.stringify(join(repo, '.env'))}`],
+    ['a tracked file with no copy problem', () => `cat ${JSON.stringify(join(repo, 'a.txt'))}`],
+    ['listing the project', () => `ls -a ${JSON.stringify(repo)}`],
+    ['a hard link into the cwd', () => `ln ${JSON.stringify(join(repo, '.env'))} leak && cat leak`],
+    ['a symlink in the cwd', () => `ln -s ${JSON.stringify(join(repo, '.env'))} leak && cat leak`],
+    ['copy to the session tmp', () => `cp ${JSON.stringify(join(repo, '.env'))} "$TMPDIR/leak" && cat "$TMPDIR/leak"`],
+    ['the path found from the git file', () => 'cat "$(dirname "$(git rev-parse --git-common-dir)")/.env"'],
+  ])('at full: %s fails and shows nothing', async (_name, command) => {
+    const r = await run('im', wtCwd, command())
+    expect(r.code).not.toBe(0)
+    expect(r.out).not.toContain(SECRET)
+    expect(r.out).not.toContain('.env\n')
+  })
+
+  // git only lstats its way through the top and can't open it, so these exit 0 with an empty view
+  it.each<[string, () => string]>([
+    ['git run against the project', () => `git -C ${JSON.stringify(repo)} status --porcelain --ignored`],
+    ['git with the project as work tree', () => `git --work-tree=${JSON.stringify(repo)} ls-files --others`],
+  ])('at full: %s does not see the untracked file', async (_name, command) => {
+    const r = await run('im', wtCwd, command())
+    expect(r.out).not.toContain(SECRET)
+    expect(r.out).not.toContain('.env')
+  })
+
+  it('git status, log, diff and show still work in the worktree', async () => {
+    expect(await run('im', wtCwd, 'git status --porcelain')).toEqual({ code: 0, out: '' })
+    const log = await run('im', wtCwd, 'git log --format=%s')
+    expect(log).toEqual({ code: 0, out: 'two\none\n' })
+    expect(await run('im', wtCwd, 'git show HEAD:a.txt')).toEqual({ code: 0, out: '2\n' })
+    expect(await run('im', wtCwd, 'echo 3 > a.txt && git diff --stat')).toMatchObject({ code: 0, out: expect.stringContaining('a.txt') })
+    expect((await run('im', wtCwd, 'git status --porcelain')).out).toContain('a.txt')
+  })
+
+  it('what stays readable: tracked .env-like files in the worktree, and other files outside credentials', async () => {
+    writeFileSync(join(repo, '.env.example'), 'TRACKED=1\n')
+    ug(['add', '.env.example'])
+    ug(['commit', '-qm', 'three'])
+    ug(['reset', '-q', '--hard', 'HEAD'], wtCwd)
+    ug(['-c', 'advice.detachedHead=false', 'checkout', '-q', 'main~0'], wtCwd)
+    expect(await run('im', wtCwd, 'cat .env.example')).toEqual({ code: 0, out: 'TRACKED=1\n' })
+    const elsewhere = join(home, 'notes.txt')
+    writeFileSync(elsewhere, 'note\n')
+    expect(await run('im', wtCwd, `cat ${JSON.stringify(elsewhere)}`)).toEqual({ code: 0, out: 'note\n' })
+  })
+
+  it('a delegated run through planExec gets the same deny, and git still works', async () => {
+    const opts = { allowRead: [], allowWrite: [], allowHosts: [], proxyScope: 'r1', readOnly: false, denyRead: [], denyWrite: [] }
+    const spillDir = join(data, 'sessions', 'im', 'spill')
+    const denied = await collect(await svc.planExec('/bin/cat', [join(repo, '.env')], { sessionId: 'im', cwd: wtCwd, spillDir }, env(), opts), wtCwd)
+    expect(denied.code).not.toBe(0)
+    expect(denied.out).not.toContain(SECRET)
+    const git = execFileSync('/usr/bin/which', ['git'], { encoding: 'utf8' }).trim()
+    expect(await collect(await svc.planExec(git, ['log', '--format=%s'], { sessionId: 'im', cwd: wtCwd, spillDir }, env(), { ...opts, proxyScope: 'r2' }), wtCwd)).toEqual({ code: 0, out: 'two\none\n' })
+    // the policy Codex translates carries it too
+    const policy = svc.execPolicy('im', wtCwd, 'codex')
+    expect(policy.denyRead).toContain(repo)
+    expect(policy.keepRead).toContain(join(repo, '.git'))
+    expect(svc.execPolicy('app', repo, 'codex').denyRead).not.toContain(repo)
+  })
+
+  it('a project that is itself a linked worktree: that checkout and the main one are both hidden, git works', async () => {
+    const linked = join(home, 'linked')
+    ug(['worktree', 'add', '-q', '-b', 'side', linked])
+    writeFileSync(join(linked, '.env'), `TOKEN=${SECRET}-linked\n`)
+    projectTops.set('im', linked)
+    for (const f of [join(linked, '.env'), join(repo, '.env')]) {
+      const r = await run('im', wtCwd, `cat ${JSON.stringify(f)}`)
+      expect(r.code).not.toBe(0)
+      expect(r.out).not.toContain(SECRET)
+    }
+    expect(await run('im', wtCwd, 'git log -1 --format=%s')).toEqual({ code: 0, out: 'two\n' })
+  })
+
+  it('a symlink to the project spelled another way is still hidden', async () => {
+    const alias = join(home, 'alias')
+    symlinkSync(repo, alias)
+    const r = await run('im', wtCwd, `cat ${JSON.stringify(join(alias, '.env'))}`)
+    expect(r.code).not.toBe(0)
+    expect(r.out).not.toContain(SECRET)
   })
 })
 

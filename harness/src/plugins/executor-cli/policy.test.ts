@@ -91,6 +91,7 @@ describe('translate', () => {
   it('Codex lists: creds and rule reads go to none; persistence and rule writes to read', () => {
     const p = policyOf([rule('deny', 'read(hidden/**)'), rule('deny', 'write(src/gen/**)')])
     expect(translate(p)).toEqual({
+      keepRead: [],
       denyRead: ['/h/.ssh', '/h/data', join(cwd, 'hidden')],
       readOnlyPaths: ['/h/.zshrc', join(cwd, 'src/gen')],
       denyWrite: [join(cwd, 'src/gen')],

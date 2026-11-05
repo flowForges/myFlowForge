@@ -1,6 +1,6 @@
 // 设计参考 anthropic-experimental/sandbox-runtime(Apache-2.0)
 // macOS Seatbelt 配置(spec §8,评审修订 R1–R4、R6)。纯拼字符串;唯一的 I/O 是给每个路径取 realpath 拼写。
-// Seatbelt 后写的规则生效,所以顺序即语义:读 = 全放 → 拒 denyRead → 放回 reAllowRead → 拒 finalDenyRead;
+// Seatbelt 后写的规则生效,所以顺序即语义:读 = 全放 → 拒 denyRead → 放回 reAllowRead → 放回 traverse 的元数据 → 拒 finalDenyRead;
 // 写 = a 放 writable → b 拒 denyWrite 与 git 保护 → c 放回 reAllowWrite → c2 拒 finalDenyWrite → d 拒改名 / 删除 moveBlock → e 拒新建 .git。
 //
 // 转义(安全关键,已在 macOS 26.6 实测):
@@ -23,6 +23,11 @@ export interface SeatbeltParams {
   denyRead: string[]
   /** 本会话 spillDir 与临时目录(在数据目录里) */
   reAllowRead: string[]
+  /**
+   * 07:拒读的目录里放回来的路径上的各级目录,只放元数据(lstat)。git 对 git 目录取 realpath,逐级 lstat,
+   * 上一级拒了元数据它就认不出仓库;列目录、读文件仍然不行
+   */
+  traverse?: string[]
   /** 凭据黑名单、数据目录、持久化文件 */
   denyWrite: string[]
   /** 本会话临时目录(R3:必须在 denyWrite 之后) */
@@ -156,6 +161,7 @@ export function seatbeltProfile(p: SeatbeltParams): string {
     '(allow file-read*)',
     ...rule('deny', 'file-read*', [filters('subpath', spellings(p.denyRead))]),
     ...rule('allow', 'file-read*', [filters('subpath', spellings(p.reAllowRead))]),
+    ...rule('allow', 'file-read-metadata', [filters('literal', spellings(p.traverse ?? []))]),
     ...rule('deny', 'file-read*', [filters('subpath', spellings(p.finalDenyRead ?? []))]),
 
     // 写 a

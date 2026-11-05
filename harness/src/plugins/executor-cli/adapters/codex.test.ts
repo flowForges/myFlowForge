@@ -195,6 +195,15 @@ describe('filesystemMap and tomlString', () => {
     expect(filesystemMap({ denyRead: [''], readOnlyPaths: [], readOnly: false })).not.toContain('""')
   })
 
+  it('keepRead: the git dir stays readable under a none top, unless a rule denies it, and no glob key', () => {
+    const table = parseToml(filesystemMap({ denyRead: ['/p', '/p/.git/x', '/q/.git'], keepRead: ['/p/.git', '/q/.git', '/r[1]/.git'], readOnlyPaths: [], readOnly: false })) as Record<string, unknown>
+    expect(table['/p']).toBe('none')
+    expect(table['/p/.git']).toBe('read')
+    expect(table['/p/.git/x']).toBe('none')
+    expect(table['/q/.git']).toBe('none')
+    expect(table['/r[1]/.git']).toBeUndefined()
+  })
+
   it('a path listed twice stays one key and none beats read', () => {
     // 重复键是非法 TOML;Codex 解析不了 -c 时不保证报错
     const table = parseToml(filesystemMap({

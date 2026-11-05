@@ -1287,8 +1287,8 @@ describe('Chats with fake services', () => {
 
   it('newSession into a project sets the record; without a target it clears it', async () => {
     const u = unit({ call: async (method: string, params: { commandId: string }) => (method === 'session.create' ? { sessionId: params.commandId } : { accepted: true, turnId: 't1' }) })
-    expect(await u.chats.newSession(OWNER, 9, { project: 'api', worktreeId: 'wt_9', cwd: '/w', approvalMode: 'auto' }, 'project')).toMatchObject({ ok: true })
-    expect(u.calls.at(-1)?.params).toEqual({ commandId: 'tg:5:9:project', title: 'Telegram · api', origin: 'im', audience: 'owner', approvalMode: 'auto', cwd: '/w' })
+    expect(await u.chats.newSession(OWNER, 9, { project: 'api', worktreeId: 'wt_9', cwd: '/w', projectTop: '/p', approvalMode: 'auto' }, 'project')).toMatchObject({ ok: true })
+    expect(u.calls.at(-1)?.params).toEqual({ commandId: 'tg:5:9:project', title: 'Telegram · api', origin: 'im', audience: 'owner', approvalMode: 'auto', cwd: '/w', projectTop: '/p' })
     expect(u.record()).toMatchObject({ project: 'api', worktreeId: 'wt_9' })
     expect(await u.chats.newSession(OWNER, 10)).toMatchObject({ ok: true })
     expect(u.calls.at(-1)?.params).toEqual({ commandId: 'tg:5:10:new', title: 'Telegram', origin: 'im', audience: 'owner', approvalMode: 'ask' })

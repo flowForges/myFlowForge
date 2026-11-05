@@ -463,6 +463,44 @@ describe('bwrapArgs for a wrapped CLI (04 Task 7)', () => {
     expect(last(a, '--ro-bind', inAuth, inAuth)).toBeGreaterThan(last(a, '--bind', AUTH, AUTH))
   })
 
+  describe('hiddenTops (07 spec §8.1)', () => {
+    const TOP = `${H}/checkout`
+    const CG = `${TOP}/.git`
+    const wtCwd = `${H}/wt`
+    const base = (over: Partial<BwrapParams>, dirs: string[] = [], files: string[] = []) =>
+      bwrapArgs(params({ cwd: wtCwd, gitDirs: [CG], gitProtected: [], hiddenTops: [TOP], ...fs([TOP, CG, `${CG}/hooks`, wtCwd, ...dirs], [`${CG}/config`, ...files]), ...over }))
+
+    it('the tmpfs goes first, the git dir and its protections come after it', () => {
+      const a = base({})
+      const tmpfs = first(a, '--tmpfs', TOP)
+      expect(tmpfs).toBeGreaterThan(last(a, '--tmpfs', '/tmp'))
+      expect(last(a, '--bind', CG, CG)).toBeGreaterThan(tmpfs)
+      expect(last(a, '--ro-bind', `${CG}/hooks`, `${CG}/hooks`)).toBeGreaterThan(tmpfs)
+      expect(last(a, '--ro-bind', `${CG}/config`, `${CG}/config`)).toBeGreaterThan(tmpfs)
+      expect(last(a, '--bind', wtCwd, wtCwd)).toBeGreaterThan(tmpfs)
+    })
+
+    it('a deny-write rule in the checkout is not mounted back; one in the git dir still is', () => {
+      const rule = `${TOP}/.env`
+      const inGit = `${CG}/refs`
+      const a = base({ ruleDenyWrite: [rule, inGit] }, [inGit], [rule])
+      expect(a).not.toContain(rule)
+      expect(last(a, '--ro-bind', inGit, inGit)).toBeGreaterThan(last(a, '--bind', CG, CG))
+    })
+
+    it('no hiddenTops: the argv is what it was', () => {
+      expect(bwrapArgs(params({ hiddenTops: [] }))).toEqual(bwrapArgs(params()))
+    })
+
+    it('the relay program inside the checkout: only its directory comes back; right at the top it refuses', () => {
+      const dir = `${TOP}/node_modules/electron/dist`
+      const exec = `${dir}/electron`
+      const inDir = base({ execPath: exec }, [dir], [exec])
+      expect(last(inDir, '--ro-bind', dir, dir)).toBeGreaterThan(last(inDir, '--tmpfs', TOP))
+      expect(() => base({ execPath: `${TOP}/electron` }, [], [`${TOP}/electron`])).toThrow(/hidden checkout/)
+    })
+  })
+
   it('git protections are re-applied after an allowWrite bind that holds them (review I2)', () => {
     const cwd = `${QODER}/projects/p`
     const git = `${cwd}/.git`

@@ -21,6 +21,8 @@ export interface SessionInfo {
   audience: SessionAudience
   /** 建会话时定下的仓库。沙箱外的 git 只认它;旧日志里的会话没有,按没有仓库算(那时模型可能已经写过了) */
   repo?: RepoPin
+  /** IM 会话:worktree 从哪个检出建的(07 §8.1) */
+  projectTop?: string
 }
 
 const SAFE_ID = /^[A-Za-z0-9_-]+$/
@@ -69,6 +71,7 @@ export class Sessions {
     if (p.toolset === 'patch' || p.toolset === 'edit') info.toolset = p.toolset
     if (p.model) info.model = p.model
     if (info.cwd !== undefined) info.repo = parsePin(p.repo)
+    if (typeof p.projectTop === 'string' && posix.isAbsolute(p.projectTop)) info.projectTop = p.projectTop
     this.byId.set(e.sessionId, info)
   }
 

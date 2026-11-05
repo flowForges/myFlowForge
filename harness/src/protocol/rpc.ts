@@ -259,6 +259,8 @@ export const WorkerMethods = {
       toolset: ToolsetSchema.optional(),
       origin: SessionOriginSchema.optional(),
       audience: SessionAudienceSchema.optional(),
+      /** origin im:worktree 从哪个检出建的。沙箱和权限门不让这个会话读那里(07 §8.1) */
+      projectTop: z.string().optional(),
     }),
     result: z.object({ sessionId: z.string() }),
   },
