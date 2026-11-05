@@ -81,7 +81,8 @@ function locate(command: string, root: string, path: string): Located | undefine
   for (const dir of path.split(':')) {
     if (!isAbsolute(dir)) continue // 相对项相对 cwd 解析,仓库里放什么跑什么
     const hit = join(dir, command)
-    if (isProgram(hit)) return { real: realpathSync.native(hit), hit, viaPath: true }
+    // hit 的目录也取真实拼写:和家目录比的时候不能被 PATH 里的链接骗过
+    if (isProgram(hit)) return { real: realpathSync.native(hit), hit: join(realpathSync.native(dir), command), viaPath: true }
   }
   return undefined
 }
@@ -91,14 +92,51 @@ export function resolveProgram(command: string, root: string, path: string): str
   return locate(command, root, path)?.real
 }
 
+/** 家目录下认得的运行时布局,只认真实路径:整棵放回。不在表里的只放回程序自己的目录,跑不起来是看得见的,表从实测里长 */
+const HOME_RUNTIMES: readonly string[][] = [
+  ['.nvm', 'versions', 'node', '*'],
+  ['.fnm', 'node-versions', '*'],
+  ['.volta', 'tools', 'image', 'node', '*'],
+  ['.asdf', 'installs', '*', '*'],
+  ['.local', 'share', 'mise', 'installs', '*', '*'],
+  ['.pyenv', 'versions', '*'],
+  ['.rbenv', 'versions', '*'],
+  ['.local', 'share', 'uv', 'tools', '*'],
+  ['.local', 'share', 'uv', 'python', '*'],
+  ['.local', 'pipx', 'venvs', '*'],
+  ['.bun', 'install', 'global'],
+]
+
+function knownRuntime(real: string, home: string): string | undefined {
+  if (!within(real, home) || real === home) return undefined
+  const segs = real.slice(home.length + 1).split('/')
+  // 程序要在根的里面:根本身不算
+  const hit = HOME_RUNTIMES.find(l => segs.length > l.length && l.every((p, i) => p === '*' || p === segs[i]))
+  return hit && join(home, ...segs.slice(0, hit.length))
+}
+
 /**
- * 只有纯名字经 PATH 解析的程序才有运行时根(M15):插件写的绝对路径不算,否则它能自己点要放开家目录的哪一块。
- * 上两级,且严格在某个隐藏的根下:在外面的本来就读得到,等于根本身或更高的放回去就白隐藏了
+ * 只有纯名字经 PATH 解析的程序才放回东西(M15):插件写的绝对路径不算,否则它能自己点要放开家目录的哪一块。
+ * 家目录里只放回程序自己的目录(C1):上两级的 ~/Library、~/.cargo、~/.local 里全是别人的登录态。
+ * 那个目录就是家目录或它的直接子目录 → runtime_too_broad。真实路径落在认得的布局里才放回整棵。
+ * 家目录外本来读得到;在隐藏的根里的上两级,等于根本身或更高的放回去就白隐藏了
  */
-export function runtimeRoots(realProgram: string, home: string, viaPath: boolean, tops: string[] = []): string[] {
+export function runtimeRoots(realProgram: string, home: string, viaPath: boolean, tops: string[] = [], hit: string = realProgram): string[] {
   if (!viaPath) return []
-  const root = dirname(dirname(realProgram))
-  return [home, ...tops].some(t => root !== t && within(root, t)) ? [root] : []
+  const out = new Set<string>()
+  for (const p of [hit, realProgram]) {
+    const dir = dirname(p)
+    if (within(dir, home)) {
+      if (dir === home || dirname(dir) === home) throw refuse('runtime_too_broad')
+      out.add(dir)
+      continue
+    }
+    const root = dirname(dir)
+    if (tops.some(t => root !== t && within(root, t))) out.add(root)
+  }
+  const known = knownRuntime(realProgram, home)
+  if (known) out.add(known)
+  return [...out]
 }
 
 /**
@@ -531,7 +569,7 @@ export class McpHost {
     // 字符串检查之外再看真身(链接):绝对路径不能指进家目录、别的插件或临时目录。根内和 PATH 的不走这里
     if (srv.command.startsWith('/') && inTop(located.real)) throw refuse('bad_command')
     if (located.viaPath && (within(located.real, realSpelling(store)) || within(located.real, realSpelling(o.dataDir)))) throw refuse('bad_command')
-    const roots = [...new Set([located.real, ...(located.hit ? [located.hit] : [])].flatMap(p => runtimeRoots(p, realHome, located.viaPath, realTops)))]
+    const roots = runtimeRoots(located.real, realHome, located.viaPath, realTops, located.hit)
     if (roots.some(k => heldTop(k, baseTops, o.dataDir))) throw refuse('keep_too_broad')
 
     const data = this.plainDataDir(plugin, server)

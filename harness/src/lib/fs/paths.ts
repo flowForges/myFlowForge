@@ -128,6 +128,7 @@ export function isInside(child: string, parent: string, platform: NodeJS.Platfor
 const HOME_ROOTS = [
   '.ssh', '.aws', '.gnupg', '.config/gh', '.config/gcloud', '.azure', '.kube', '.docker', '.netrc',
   '.git-credentials', '.npmrc', '.pypirc', '.codex', '.claude', 'Library/Keychains',
+  '.cargo/credentials', '.cargo/credentials.toml', '.gem/credentials',
   '.qoder/.auth', // 只有登录态;~/.qoder 其余不是密钥(沙箱里哪些可写由委派的 planExec 定)
 ]
 

@@ -68,7 +68,7 @@ export const trackSpawn = (pids: number[], calls: string[][]): typeof nodeSpawn 
     return child
   }) as unknown as typeof nodeSpawn
 
-export interface McpRigOpts extends Pick<PluginKernelOpts, 'config' | 'before' | 'after' | 'kernel'> {
+export interface McpRigOpts extends Pick<PluginKernelOpts, 'config' | 'before' | 'after' | 'kernel' | 'layout'> {
   level?: 'none' | 'partial' | 'full'
   /** false:用内核真的沙箱服务 */
   stub?: Partial<StubOpts> | false
@@ -117,6 +117,7 @@ export async function mcpRig(o: McpRigOpts = {}): Promise<McpRig> {
     ...(o.before && { before: o.before }),
     ...(o.after && { after: o.after }),
     ...(o.kernel && { kernel: o.kernel }),
+    ...(o.layout && { layout: o.layout }),
     manager: e =>
       createPluginManager({
         allowFileProtocol: true,

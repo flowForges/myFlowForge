@@ -1508,7 +1508,8 @@ describe('sessions that are not on this machine: the shared git state is read-on
 
 describe('plans without hide or exactHosts (09 Task 1)', () => {
   /**
-   * no-hide-plans.golden.json 是改动之前(bd8c6925)的代码生成的。唯一允许多出来的是插件存储根(M13):它进持久化清单。
+   * no-hide-plans.golden.json 是改动之前(bd8c6925)的代码生成的。允许多出来的只有:插件存储根(M13),它进持久化清单;
+   * cargo、gem 的凭据文件(09 Task 9 C1),它们进凭据清单。
    * 路径换成 <ROOT>;代理是假的,端口固定。bwrap 的行要看宿主的 /run,Linux 上不比
    */
   const GOLDEN = join(__dirname, '../../test/fixtures/plugins/no-hide-plans.golden.json')
@@ -1550,9 +1551,9 @@ describe('plans without hide or exactHosts (09 Task 1)', () => {
   }
 
   /** 存储根在配置里的每一处(前面的空格一起去掉);bwrap 只挂存在的路径,这里它不存在 */
-  const withoutStore = (args: string[]) => args.map(a => a.replace(/ \((?:subpath|literal) "<ROOT>\/data-plugins"\)/g, ''))
+  const withoutStore = (args: string[]) => args.map(a => a.replace(/ \((?:subpath|literal) "<ROOT>\/data-plugins"\)/g, '').replace(/ \((?:subpath|literal) "<ROOT>\/[^"]*\/\.(?:cargo\/credentials(?:\.toml)?|gem\/credentials)"\)/g, ''))
 
-  it.each(['darwin', 'linux'] as const)('%s: byte-identical to before, apart from the store root', async platform => {
+  it.each(['darwin', 'linux'] as const)('%s: byte-identical to before, apart from the store root and the new credential files', async platform => {
     if (platform === 'linux' && process.platform === 'linux') return
     const now = await plans(platform)
     const golden = JSON.parse(readFileSync(GOLDEN, 'utf8')) as Record<string, string[]>

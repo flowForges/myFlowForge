@@ -157,7 +157,7 @@ describe('isInside', () => {
 describe('credential blacklist', () => {
   it('lists the spec §10.1 roots under home', () => {
     const r = credentialRoots('/h', 'darwin', {})
-    for (const rel of ['.ssh', '.aws', '.gnupg', '.config/gh', '.config/gcloud', '.azure', '.kube', '.docker', '.netrc',
+    for (const rel of ['.ssh', '.aws', '.gnupg', '.config/gh', '.config/gcloud', '.azure', '.kube', '.docker', '.netrc', '.cargo/credentials', '.cargo/credentials.toml', '.gem/credentials',
       '.git-credentials', '.npmrc', '.pypirc', '.codex', '.claude', 'Library/Keychains', '.qoder/.auth'])
       expect(r).toContain(`/h/${rel}`)
   })

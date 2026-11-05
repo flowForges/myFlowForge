@@ -119,6 +119,8 @@ export interface PluginKernelOpts {
   /** 内核看到的沙箱级别,默认 none。注入 full、partial 又真跑命令的用例要带平台 skipIf */
   level?: SandboxStatus['level']
   kernel?: Partial<Omit<KernelOpts, 'dataDir' | 'plugins' | 'home' | 'secrets' | 'log'>>
+  /** production:数据目录和存储都在临时 home 里(<home>/.myFlowForge、-plugins),cwd 是 <home>/work/proj,和真机一样 */
+  layout?: 'production'
 }
 
 export interface PluginRig {
@@ -158,10 +160,10 @@ const pause = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
 
 export async function pluginKernel(opts: PluginKernelOpts = {}): Promise<PluginRig> {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'mffai-plugins-')))
-  const dataDir = join(root, 'data')
   const home = join(root, 'home')
-  const cwd = join(root, 'work')
-  for (const d of [dataDir, home, cwd]) mkdirSync(d)
+  const dataDir = opts.layout === 'production' ? join(home, '.myFlowForge') : join(root, 'data')
+  const cwd = opts.layout === 'production' ? join(home, 'work', 'proj') : join(root, 'work')
+  for (const d of [dataDir, home, cwd]) mkdirSync(d, { recursive: true })
   writeFileSync(join(root, 'gitconfig'), '')
   // 没有代理变量:大小写两种都不传
   const env: NodeJS.ProcessEnv = { PATH: '/usr/bin:/bin', HOME: home, USERPROFILE: home, GIT_CONFIG_GLOBAL: join(root, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1' }

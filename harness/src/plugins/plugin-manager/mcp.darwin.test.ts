@@ -74,6 +74,7 @@ async function rig(o: McpRigOpts = {}) {
     ...(o.config && { config: o.config }),
     ...(o.before && { before: o.before }),
     ...(o.after && { after: o.after }),
+    ...(o.layout && { layout: o.layout }),
   })
   rigs.push(m)
   // node 从 PATH 来;它不在临时 home 下,不用放回
@@ -212,24 +213,99 @@ describe.skipIf(!usable)('an MCP server under real Seatbelt', () => {
     }
   }, 60_000)
 
-  it('a runtime root under home runs; a sibling stays hidden, and a credential dir nested in it stays unreadable', async () => {
+  describe('production layout: what a program on PATH opens of home (C1)', () => {
+    const put = (p: string, text = 'x') => {
+      mkdirSync(dirname(p), { recursive: true })
+      writeFileSync(p, text)
+    }
+    const program = (p: string) => {
+      put(p, `#!/bin/sh\nexec ${process.execPath} "$@"\n`)
+      chmodSync(p, 0o755)
+    }
+    const startOn = async (m: McpRig, bin: string) => {
+      m.r.env.PATH = `${bin}:/usr/bin:/bin`
+      return started(m, 'x', { y: { command: 'rt', args: ['${CLAUDE_PLUGIN_ROOT}/fake-mcp.mjs'] } })
+    }
+
+    it.each([
+      ['Library/pnpm/rt', ['Library/pnpm/sibling'], ['Library/Cookies/Cookies.binarycookies', 'Library/Application Support/Google/Chrome/Default/Login Data', 'Library/Messages/chat.db']],
+      ['.cargo/bin/rt', ['.cargo/bin/sibling'], ['.cargo/credentials.toml', '.cargo/credentials', '.cargo/registry/index']],
+      ['.local/bin/rt', ['.local/bin/sibling'], ['.local/share/gh/token', '.local/share/opencode/auth.json']],
+      ['.gem/bin/rt', ['.gem/bin/sibling'], ['.gem/credentials', '.gem/specs/x']],
+      ['.config/bin/rt', ['.config/bin/sibling'], ['.config/gcloud/creds.json', '.config/other/token', '.config/kept.txt']],
+      ['.npm-global/bin/rt', ['.npm-global/bin/sibling'], ['.npm-global/lib/secret', '.npm-global/etc/npmrc']],
+    ])('%s: its directory reads, the rest of that part of home does not', async (prog, open, closed) => {
+      const m = await rig({ layout: 'production' })
+      program(join(m.r.home, prog))
+      for (const f of [...open, ...closed, 'notes.txt']) put(join(m.r.home, f), 'content')
+      const s = await startOn(m, join(m.r.home, dirname(prog)))
+      for (const f of open) expect(await s.probe('x/y', 'probe_read', { path: join(m.r.home, f) })).toMatchObject({ ok: true })
+      for (const f of [...closed, 'notes.txt']) denied(await s.probe('x/y', 'probe_read', { path: join(m.r.home, f) }))
+    }, 60_000)
+
+    it('~/.local/bin/x as a link: only the link directory and the real directory', async () => {
+      const m = await rig({ layout: 'production' })
+      program(join(m.r.home, '.local', 'share', 'tool', 'run'))
+      mkdirSync(join(m.r.home, '.local', 'bin'), { recursive: true })
+      symlinkSync(join(m.r.home, '.local', 'share', 'tool', 'run'), join(m.r.home, '.local', 'bin', 'rt'))
+      for (const f of ['.local/share/tool/lib.txt', '.local/share/gh/token', '.local/share/opencode/auth.json']) put(join(m.r.home, f), 'content')
+      const s = await startOn(m, join(m.r.home, '.local', 'bin'))
+      expect(await s.probe('x/y', 'probe_read', { path: join(m.r.home, '.local/share/tool/lib.txt') })).toMatchObject({ ok: true })
+      denied(await s.probe('x/y', 'probe_read', { path: join(m.r.home, '.local/share/gh/token') }))
+      denied(await s.probe('x/y', 'probe_read', { path: join(m.r.home, '.local/share/opencode/auth.json') }))
+    }, 60_000)
+
+    it.each([
+      ['.nvm/versions/node/v20', '.nvm/versions/node/v18'],
+      ['.fnm/node-versions/v20', '.fnm/node-versions/v18'],
+      ['.volta/tools/image/node/20.1', '.volta/tools/image/node/18.1'],
+      ['.asdf/installs/nodejs/20', '.asdf/installs/python/3.12'],
+      ['.local/share/mise/installs/python/3.12', '.local/share/mise/installs/python/3.11'],
+      ['.pyenv/versions/3.12', '.pyenv/versions/3.11'],
+      ['.rbenv/versions/3.3', '.rbenv/versions/3.2'],
+      ['.local/share/uv/tools/ruff', '.local/share/uv/tools/black'],
+      ['.local/share/uv/python/cpython-3.12', '.local/share/uv/python/cpython-3.11'],
+      ['.local/pipx/venvs/black', '.local/pipx/venvs/ruff'],
+      ['.bun/install/global', '.bun/install/cache'],
+    ])('known layout %s: the whole runtime reads, its neighbour %s does not', async (root, neighbour) => {
+      const m = await rig({ layout: 'production' })
+      program(join(m.r.home, root, 'bin', 'rt'))
+      put(join(m.r.home, root, 'lib', 'module.js'), 'runtime file')
+      put(join(m.r.home, neighbour, 'lib', 'module.js'), 'not this one')
+      const s = await startOn(m, join(m.r.home, root, 'bin'))
+      expect(await s.probe('x/y', 'probe_read', { path: join(m.r.home, root, 'lib', 'module.js') })).toMatchObject({ ok: true, text: 'runtime file' })
+      denied(await s.probe('x/y', 'probe_read', { path: join(m.r.home, neighbour, 'lib', 'module.js') }))
+    }, 60_000)
+
+    it('containment holds with the data dir and the store inside home', async () => {
+      const m = await rig({ layout: 'production' })
+      put(join(m.r.home, 'notes.txt'), 'private')
+      put(join(m.r.cwd, 'in-cwd.txt'), 'cwd')
+      put(join(m.r.home, 'work', 'other', 'a.txt'), 'another project')
+      const s = await started(m)
+      expect(await s.probe('x/y', 'probe_read', { path: join(m.r.cwd, 'in-cwd.txt') })).toMatchObject({ ok: true })
+      expect(await s.probe('x/y', 'probe_read', { path: join(s.code(), 'scenario.json') })).toMatchObject({ ok: true })
+      expect(await s.probe('x/y', 'probe_write', { path: join(s.data(), 'w'), text: 'ok' })).toEqual({ ok: true })
+      denied(await s.probe('x/y', 'probe_read', { path: join(m.r.home, 'notes.txt') }))
+      denied(await s.probe('x/y', 'probe_read', { path: join(m.r.home, 'work', 'other', 'a.txt') }))
+      denied(await s.probe('x/y', 'probe_read', { path: join(m.r.dataDir, 'config.json') }))
+      denied(await s.probe('x/y', 'probe_write', { path: join(m.r.home, 'w'), text: 'x' }))
+    }, 60_000)
+  })
+
+  it('a runtime root under a hidden root outside home still runs; a credential dir there is hidden', async () => {
     const m = await rig()
-    const home = m.r.home
-    const bin = join(home, '.config', 'bin')
+    const bin = join(m.r.root, 'rt', 'bin')
     mkdirSync(bin, { recursive: true })
     const prog = join(bin, 'rtnode')
     writeFileSync(prog, `#!/bin/sh\nexec ${process.execPath} "$@"\n`)
     chmodSync(prog, 0o755)
-    writeFileSync(join(home, '.config', 'kept.txt'), 'in the runtime root')
-    mkdirSync(join(home, '.config', 'gcloud'))
-    writeFileSync(join(home, '.config', 'gcloud', 'creds.json'), 'a credential')
-    mkdirSync(join(home, 'Documents'))
-    writeFileSync(join(home, 'Documents', 'a.txt'), 'a document')
+    writeFileSync(join(m.r.root, 'rt', 'kept.txt'), 'in the runtime root')
+    writeFileSync(join(m.r.root, 'beside.txt'), 'beside it')
     m.r.env.PATH = `${bin}:/usr/bin:/bin`
     const s = await started(m, 'x', { y: { command: 'rtnode', args: ['${CLAUDE_PLUGIN_ROOT}/fake-mcp.mjs'] } })
-    expect(await s.probe('x/y', 'probe_read', { path: join(home, '.config', 'kept.txt') })).toMatchObject({ ok: true })
-    denied(await s.probe('x/y', 'probe_read', { path: join(home, '.config', 'gcloud', 'creds.json') }))
-    denied(await s.probe('x/y', 'probe_read', { path: join(home, 'Documents', 'a.txt') }))
+    expect(await s.probe('x/y', 'probe_read', { path: join(m.r.root, 'rt', 'kept.txt') })).toMatchObject({ ok: true })
+    denied(await s.probe('x/y', 'probe_read', { path: join(m.r.root, 'beside.txt') }))
   }, 60_000)
 
   it('a session at home: cwd_too_broad, never spawned', async () => {

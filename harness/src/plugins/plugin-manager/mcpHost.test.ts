@@ -365,20 +365,90 @@ describe('programs', () => {
     expect(resolveProgram('tool', join(tmp, 'root'), dir)).toBe(real)
   })
 
-  it('runtimeRoots: only names from PATH, two levels up, strictly under a top', () => {
-    const home = '/Users/me'
-    expect(runtimeRoots('/Users/me/.nvm/versions/node/v20/bin/node', home, true)).toEqual(['/Users/me/.nvm/versions/node/v20'])
-    expect(runtimeRoots('/Users/me/.bun/bin/bun', home, true)).toEqual(['/Users/me/.bun'])
-    // 插件写的绝对路径不算,否则它能自己点要放开家目录的哪一块(M15)
-    expect(runtimeRoots('/Users/me/Documents/a/b', home, false)).toEqual([])
-    expect(runtimeRoots('/Users/me/bin/x', home, true)).toEqual([])
-    // /bin 给出 /:放回去就白隐藏了;家目录外本来就读得到
-    expect(runtimeRoots('/bin/x', home, true)).toEqual([])
-    expect(runtimeRoots('/usr/local/bin/node', home, true)).toEqual([])
-    expect(runtimeRoots('/Users/bin/x', home, true)).toEqual([])
-    // 其他隐藏的根也算:/tmp 下的运行时要放回才读得到
-    expect(runtimeRoots('/private/tmp/rt/bin/node', home, true, ['/private/tmp'])).toEqual(['/private/tmp/rt'])
-    expect(runtimeRoots('/private/tmp/bin/node', home, true, ['/private/tmp'])).toEqual([])
+  describe('runtimeRoots (C1)', () => {
+    const home = '/h'
+    it.each([
+      // 自己所在的目录,从不上两级
+      ['/h/.cargo/bin/x', ['/h/.cargo/bin']],
+      ['/h/.local/bin/x', ['/h/.local/bin']],
+      ['/h/.gem/bin/x', ['/h/.gem/bin']],
+      ['/h/.config/bin/x', ['/h/.config/bin']],
+      ['/h/.npm-global/bin/x', ['/h/.npm-global/bin']],
+      ['/h/Library/pnpm/x', ['/h/Library/pnpm']],
+      ['/h/.bun/bin/bun', ['/h/.bun/bin']],
+    ])('%s keeps only %j', (real, want) => {
+      expect(runtimeRoots(real, home, true)).toEqual(want)
+    })
+
+    it('a link on PATH: the link directory and the real directory, nothing above', () => {
+      expect(runtimeRoots('/h/.local/share/tool/run', home, true, [], '/h/.local/bin/tool').sort()).toEqual(['/h/.local/bin', '/h/.local/share/tool'])
+    })
+
+    it.each([
+      ['/h/.nvm/versions/node/v20/lib/node_modules/npm/bin/npx-cli.js', '/h/.nvm/versions/node/v20'],
+      ['/h/.nvm/versions/node/v20/bin/node', '/h/.nvm/versions/node/v20'],
+      ['/h/.fnm/node-versions/v20/installation/bin/node', '/h/.fnm/node-versions/v20'],
+      ['/h/.volta/tools/image/node/20.1/bin/node', '/h/.volta/tools/image/node/20.1'],
+      ['/h/.asdf/installs/nodejs/20/bin/node', '/h/.asdf/installs/nodejs/20'],
+      ['/h/.local/share/mise/installs/python/3.12/bin/python', '/h/.local/share/mise/installs/python/3.12'],
+      ['/h/.pyenv/versions/3.12/bin/python', '/h/.pyenv/versions/3.12'],
+      ['/h/.rbenv/versions/3.3/bin/ruby', '/h/.rbenv/versions/3.3'],
+      ['/h/.local/share/uv/tools/ruff/bin/ruff', '/h/.local/share/uv/tools/ruff'],
+      ['/h/.local/share/uv/python/cpython-3.12/bin/python3', '/h/.local/share/uv/python/cpython-3.12'],
+      ['/h/.local/pipx/venvs/black/bin/black', '/h/.local/pipx/venvs/black'],
+      ['/h/.bun/install/global/node_modules/x/cli.js', '/h/.bun/install/global'],
+    ])('known layout, on the real path: %s → %s', (real, root) => {
+      expect(runtimeRoots(real, home, true)).toContain(root)
+    })
+
+    it.each([
+      // 位置不对、缺版本段、程序就是根本身:都不算
+      '/h/sub/.nvm/versions/node/v20/bin/node',
+      '/h/.nvm/versions/other/v20/bin/node',
+      '/h/.asdf/installs/nodejs/bin',
+      '/h/.local/share/uv/other/x/bin/y',
+      '/h/.bun/install/other/bin/x',
+    ])('not a known layout: %s keeps only its own directory', real => {
+      expect(runtimeRoots(real, home, true)).toEqual([dirname(real)])
+    })
+
+    it('the layout is matched on the real path, never on where PATH found it', () => {
+      expect(runtimeRoots('/h/tools/run/x', home, true, [], '/h/.nvm/versions/node/v20/bin/x').sort()).toEqual(['/h/.nvm/versions/node/v20/bin', '/h/tools/run'])
+    })
+
+    it.each([
+      ['/h/bin/x', undefined],
+      ['/h/x', undefined],
+      ['/h/.nvm/versions/node/v20/bin/node', '/h/bin/node'],
+      ['/h/bin/node', '/h/.local/bin/node'],
+    ])('a program in home or a direct child: runtime_too_broad (%s, hit %s)', (real, hit) => {
+      expect(() => runtimeRoots(real, home, true, [], hit)).toThrow('runtime_too_broad')
+    })
+
+    it('only names from PATH; outside home as before, under a hidden root only', () => {
+      expect(runtimeRoots('/h/Documents/a/b', home, false)).toEqual([])
+      expect(runtimeRoots('/h/bin/x', home, false)).toEqual([])
+      expect(runtimeRoots('/bin/x', home, true)).toEqual([])
+      expect(runtimeRoots('/usr/local/bin/node', home, true)).toEqual([])
+      expect(runtimeRoots('/opt/homebrew/Cellar/node/20/bin/node', home, true)).toEqual([])
+      expect(runtimeRoots('/hx/bin/x', home, true)).toEqual([])
+      expect(runtimeRoots('/private/tmp/rt/bin/node', home, true, ['/private/tmp'])).toEqual(['/private/tmp/rt'])
+      expect(runtimeRoots('/private/tmp/bin/node', home, true, ['/private/tmp'])).toEqual([])
+    })
+  })
+
+  it('a program in a direct child of home: refused before spawning, no crash budget used', async () => {
+    const m = await rigOnly({ layout: 'production' })
+    const f = fake()
+    const prog = exe(join(m.r.home, 'bin', 'rtnode'), `#!/bin/sh\nexec ${process.execPath} "$@"\n`)
+    m.r.env.PATH = `${dirname(prog)}:/usr/bin:/bin`
+    await m.r.install(buildPlugin(dirFor(), { format: 'claude', id: 'x', mcp: { y: { command: 'rtnode', args: [join(f.dir, 'fake-mcp.mjs')] } } }))
+    const sid = await m.r.session({ approvalMode: 'auto' })
+    await m.r.turn(sid, 'pin')
+    for (let i = 0; i < 4; i++) expect((await m.mcp(sid, { action: 'tools', server: 'x/y' })).text).toBe('runtime_too_broad')
+    expect(m.spawns).toEqual([])
+    expect(m.sandbox!.plans).toEqual([])
+    expect(m.host().failureCount(sid, 'x', 'y')).toBe(0)
   })
 
   it('a name on PATH: the program and the runtime root under home come from PATH', async () => {
@@ -390,7 +460,8 @@ describe('programs', () => {
     const sid = await m.r.session({ approvalMode: 'auto' })
     await m.r.turn(sid, 'pin')
     expect((await m.mcp(sid, { action: 'tools', server: 'x/y' })).text).toContain('echo')
-    expect(planOf(m).x.hide!.keep).toContain(join(m.r.home, '.rt'))
+    expect(planOf(m).x.hide!.keep).toContain(join(m.r.home, '.rt', 'bin'))
+    expect(planOf(m).x.hide!.keep).not.toContain(join(m.r.home, '.rt'))
   })
 
   it('a runtime root holding a hidden root is refused with a stable code', async () => {
