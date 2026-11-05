@@ -6,7 +6,10 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { alive, call, confirm, eventsOf, gatedSpawn, prepare, refused, settled, snapshot, spySpawn, storeOf, until, withManager } from '../../../test/managerRig'
 import { buildPlugin, buildRepo, pluginKernel, type PluginRig, type PluginSpec } from '../../../test/pluginRig'
+import { nullLogger } from '../../kernel/log'
 import type { PluginManagerOpts } from './index'
+import { Installer } from './installer'
+import { PluginStore } from './store'
 
 let tmp: string
 const rigs: PluginRig[] = []
@@ -291,27 +294,60 @@ describe('prepare runs in the background', () => {
     expect(await refused(confirm(r, { stagingId, consentHash: 'x' }))).toBe('consent_stale')
   })
 
-  it('cancel between two git commands still stops the next one', async () => {
-    const r0 = await rig()
-    const { url } = repoOf(simple())
-    let spawned = 0
-    let stagingId = ''
-    const pids: number[] = []
-    const r = await rig({
-      spawn: ((cmd: string, args: string[], o: Parameters<typeof nodeSpawn>[2]) => {
-        // 第二条 git 起来之前取消:组还没登记
-        if (++spawned === 2) void call(r, 'plugins.install.cancel', { stagingId })
-        const c = nodeSpawn(cmd, args, o)
-        pids.push(c.pid!)
-        return c
-      }) as unknown as typeof nodeSpawn,
+  describe('stopping between two git commands, when no group is registered to kill', () => {
+    const between = (stop: (i: Installer, stagingId: string) => void) => {
+      const dataDir = join(tmp, 'data')
+      mkdirSync(dataDir)
+      const { url } = repoOf(simple())
+      const pids: number[] = []
+      let stagingId = ''
+      let spawned = 0
+      const installer: Installer = new Installer({
+        store: PluginStore.open({ dataDir }, nullLogger),
+        commands: { validateCwd: p => p },
+        append: () => {},
+        log: nullLogger,
+        dataDir,
+        home: join(tmp, 'home'),
+        env: { PATH: '/usr/bin:/bin' },
+        now: Date.now,
+        timers: { setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: h => clearTimeout(h as NodeJS.Timeout) },
+        reservedIds: () => new Set(),
+        killPluginProcesses: async () => {},
+        allowFileProtocol: true,
+        spawn: ((cmd: string, args: string[], o: Parameters<typeof nodeSpawn>[2]) => {
+          // 第二条换成不会自己退的程序:没人杀就一直在
+          const second = ++spawned === 2
+          if (second) stop(installer, stagingId)
+          const c = second ? nodeSpawn('/bin/sleep', ['30'], o) : nodeSpawn(cmd, args, o)
+          if (c.pid !== undefined) {
+            pids.push(c.pid)
+            pidsToKill.push(c.pid)
+          }
+          return c
+        }) as unknown as typeof nodeSpawn,
+      })
+      ;({ stagingId } = installer.prepare({ kind: 'git', url }))
+      return { installer, pids, dataDir, spawnedCount: () => spawned, stagingId }
+    }
+
+    it('close: the cwd is still there, so the next git starts, and dies as soon as its group is known', async () => {
+      const t = between(i => void i.close())
+      await until(() => t.pids.length === 2)
+      await until(() => !alive(t.pids[1]), 1500)
+      await t.installer.close()
+      expect(t.spawnedCount()).toBe(2)
+      expect(existsSync(`${t.dataDir}-plugins`)).toBe(false)
     })
-    ;({ stagingId } = await call(r, 'plugins.install.prepare', { source: { kind: 'git', url } }))
-    expect(await settled(r, stagingId)).toMatchObject({ state: 'failed', error: 'cancelled' })
-    await until(() => pids.every(p => !alive(p)))
-    expect(spawned).toBeLessThanOrEqual(2)
-    await until(() => !existsSync(storeOf(r)))
-    expect(existsSync(storeOf(r0))).toBe(false)
+
+    it('cancel: the staging is already gone, so the next git cannot start in it; the answer stays cancelled', async () => {
+      const t = between((i, id) => void i.cancel(id))
+      await until(() => t.spawnedCount() === 2)
+      expect(t.installer.status(t.stagingId)).toMatchObject({ state: 'failed', error: 'cancelled' })
+      await t.installer.close()
+      expect(t.pids.filter(alive)).toEqual([])
+      expect(existsSync(`${t.dataDir}-plugins`)).toBe(false)
+    })
   })
 
   it('cancel of a ready staging removes it; an unknown id is fine', async () => {
