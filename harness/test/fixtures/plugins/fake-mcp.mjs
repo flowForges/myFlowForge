@@ -16,6 +16,7 @@
 //   stderr:启动时写到 stderr(字符串 | 字符串数组)
 //   instructions:initialize 结果里带上它
 //   delayMs:每个答复晚这么久;其间收到 notifications/cancelled 就不答了
+//   callDelayMs:只有 tools/call 的答复晚这么久,握手和列表照常
 //   listChangedAfter:第 n 次 tools/call 之后发 notifications/tools/list_changed,工具说明从此变样
 //   stubborn:不理 stdin 关闭和 SIGTERM,只有 SIGKILL 收得掉
 // 工具:echo(参数原样回)、probe_read、probe_write、probe_fetch、probe_env、probe_children,都回真实发生的事。
@@ -54,17 +55,17 @@ let callsSeen = 0
 let descriptionsMoved = false
 let nextServerId = 1000
 
-function answer(id, body) {
+function answer(id, body, ms = scenario.delayMs) {
   const send = () => {
     pending.delete(id)
     if (cancelled.has(id)) return
     if (scenario.garbage) process.stdout.write(`${scenario.garbage === true ? '<<<not json>>>' : scenario.garbage}\n`)
     write({ jsonrpc: '2.0', id, ...body })
   }
-  if (scenario.delayMs) pending.set(id, setTimeout(send, scenario.delayMs))
+  if (ms) pending.set(id, setTimeout(send, ms))
   else send()
 }
-const ok = (id, result) => answer(id, { result })
+const ok = (id, result, ms) => answer(id, { result }, ms)
 const fail = (id, code, message) => answer(id, { error: { code, message } })
 
 const obj = { type: 'object', properties: {} }
@@ -179,7 +180,7 @@ async function runTool(name, a) {
     case 'probe_write':
       return probeWrite(a)
     case 'probe_env':
-      return { env: process.env, cwd: process.cwd(), argv: process.argv }
+      return { env: process.env, cwd: process.cwd(), argv: process.argv, ...(a.same && { same: Object.fromEntries(Object.entries(a.same).map(([k, v]) => [k, process.env[k] === v])) }), ...(a.cwdIs && { cwdIs: process.cwd() === a.cwdIs }) }
     case 'probe_children':
       return probeChildren(a)
     case 'probe_fetch':
@@ -195,7 +196,7 @@ async function callTool(id, params) {
   const name = params?.name
   if (!toolList().some(t => t.name === name)) return fail(id, -32602, `unknown tool: ${name}`)
   const result = await runTool(name, params?.arguments ?? {})
-  ok(id, { content: [{ type: 'text', text: JSON.stringify(result) }] })
+  ok(id, { content: [{ type: 'text', text: JSON.stringify(result) }] }, scenario.callDelayMs ?? scenario.delayMs)
   if (scenario.listChangedAfter && callsSeen === scenario.listChangedAfter) {
     descriptionsMoved = true
     write({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' })

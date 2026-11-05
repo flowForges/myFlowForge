@@ -126,7 +126,7 @@ describe('a plugin enabled before the first turn', () => {
 
 describe('a session started without plugins', () => {
   it('a plugin enabled later changes nothing: no index, no skill in tools, bytes unchanged, forged call not_available', async () => {
-    const { r, q, reqs } = await setup({ level: 'full', before: () => [toolsRegistry, stubPlugin([stubTool('mcp', { ambient: true, pluginScoped: 'mcp' })])] })
+    const { r, q, reqs } = await setup({ level: 'full' })
     const sid = await r.session()
     await r.turn(sid, 'one')
     await r.install(plugin({ mcp: { srv: { command: 'node' } } }))
@@ -425,10 +425,9 @@ describe('the pin survives the manager (M8)', () => {
 })
 
 describe('the mcp flag', () => {
-  const mcpStub = () => [toolsRegistry, stubPlugin([stubTool('mcp', { ambient: true, pluginScoped: 'mcp' })])]
   const server = { command: 'node' }
   const flags = async (o: { level?: PluginKernelOpts['level']; origin?: 'app' | 'im' | 'acp' | 'schedule'; spec?: Partial<PluginSpec> }) => {
-    const { r, reqs } = await setup({ before: mcpStub, ...(o.level && { level: o.level }) })
+    const { r, reqs } = await setup({ ...(o.level && { level: o.level }) })
     await r.install(plugin({ mcp: { srv: server }, ...o.spec }))
     const sid = await r.session(o.origin ? { origin: o.origin } : {})
     await r.turn(sid, 'one')

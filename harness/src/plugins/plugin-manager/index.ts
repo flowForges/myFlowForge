@@ -4,18 +4,21 @@ import type { spawn as nodeSpawn } from 'node:child_process'
 import { resolve } from 'node:path'
 import type { Plugin, PluginContext } from '../../kernel/pluginHost'
 import { RpcError } from '../../kernel/rpcError'
-import { effectiveGrants, escapeDisplay, type Declared } from '../../lib/plugins/consent'
+import { effectiveGrants, escapeDisplay } from '../../lib/plugins/consent'
 import { scrub } from '../../lib/memory/scrub'
 import type { FetchTimers } from '../../lib/plugins/fetchGit'
 import { USER_CONFIG_KEY_RE } from '../../lib/plugins/manifest'
 import type { PgidRegistry } from '../../lib/proc/pgids'
-import type { SandboxService, SessionCommands, ToolsService } from '../../lib/tools/types'
+import { loginShellPath } from '../../lib/tools/shellEnv'
+import type { PermissionRequest, SandboxService, SessionCommands, ToolsService } from '../../lib/tools/types'
 import { MCP_SERVER_NAME, type Grants, type WorkerParams } from '../../protocol/index'
 import type { Sessions } from '../../kernel/sessions'
 import { createPluginsService, SkillCatalog } from './context'
 import { fail, Installer } from './installer'
 import { manifest } from './manifest'
 import { listCommands, runCommand } from './commands'
+import { declaredOf, McpHost } from './mcpHost'
+import { createMcpTool } from './mcpTool'
 import { createSkillTool } from './skillTool'
 import { PluginStore, type InstalledRecord } from './store'
 
@@ -30,8 +33,16 @@ export interface PluginManagerOpts {
   reservedIds?: () => Set<string>
   /** git 的基础环境,fetchGit 只从里面取 PATH、语言和代理。默认 process.env */
   env?: NodeJS.ProcessEnv
-  /** 杀这个插件的全部进程。服务进程接进来之前没有东西可杀 */
+  /** 杀这个插件的全部进程。默认是 MCP 宿主的 killPlugin */
   killPluginProcesses?: (id: string) => Promise<void>
+  /** 登录 shell 的 PATH;默认探测一次,测试注入 `async () => ''` */
+  loginPath?: () => Promise<string>
+  /** 只给测试:宿主和工具用的沙箱(不改内核的级别)。配置、环境变量、RPC 都改不了 */
+  mcpSandbox?: SandboxService
+  /** 只给测试:看宿主读了哪些 secret */
+  mcpSecrets?: (real: { get(k: string): Promise<string | undefined> }) => { get(k: string): Promise<string | undefined> }
+  /** 只给测试:拿到宿主 */
+  onMcpHost?: (host: McpHost) => void
 }
 
 const defaultTimers: FetchTimers = {
@@ -46,8 +57,7 @@ const canon = (g: Grants) => JSON.stringify(Object.entries(g.servers).sort(([a],
 const isSet = (rec: InstalledRecord, key: string) => Object.hasOwn(rec.settings, key) || rec.secretKeys.includes(key)
 const without = <T,>(xs: T[], x: T) => xs.filter(v => v !== x)
 
-/** Task 9 换成进程的真实状态。这里只有记录能回答的 */
-function serverRows(rec: InstalledRecord) {
+function serverRows(rec: InstalledRecord, host: McpHost) {
   return rec.consent.mcp
     .filter(m => MCP_SERVER_NAME.test(m.name))
     .map(m => {
@@ -57,12 +67,8 @@ function serverRows(rec: InstalledRecord) {
       if (rec.state !== 'ok') return { name: m.name, state: 'integrity_failed' }
       if (!rec.enabled) return { name: m.name, state: 'disabled' }
       if (missing) return { name: m.name, state: 'needs_config', reason: 'needs_config' }
-      return { name: m.name, state: 'stopped' }
+      return { name: m.name, ...host.stateAcross(rec, m.name) }
     })
-}
-
-function declaredOf(rec: InstalledRecord): Record<string, Declared | null> {
-  return Object.fromEntries(rec.consent.mcp.map(m => [m.name, m.declared]))
 }
 
 export function createPluginManager(o: PluginManagerOpts = {}): Plugin {
@@ -80,12 +86,44 @@ export function createPluginManager(o: PluginManagerOpts = {}): Plugin {
       const pgids = process.platform === 'win32' ? undefined : ctx.services.get<PgidRegistry>('pgids')
       const now = o.now ?? Date.now
       const timers = o.timers ?? defaultTimers
-      const killPluginProcesses = o.killPluginProcesses ?? (async () => {})
       // pluginHost:ctx.dataDir = <数据目录>/plugins/<id>
       const dataDir = resolve(ctx.dataDir, '..', '..')
       const store = PluginStore.open({ dataDir }, ctx.log)
 
       const secretKey = (id: string, key: string) => `${id}/${key}`
+      const catalog = new SkillCatalog(store, { home: commands.home }, ctx.log)
+      const failIntegrity = (rec: InstalledRecord) => {
+        store.put({ ...rec, enabled: false, state: 'integrity_failed' })
+        try {
+          store.save()
+        } catch (err) {
+          // 内存里已经关了;下次启动会再查一遍
+          ctx.log.warn('plugin record not saved', { code: (err as NodeJS.ErrnoException).code ?? 'unknown' })
+        }
+        ctx.append({ type: 'plugins.integrity.failed', payload: { id: rec.id } })
+      }
+      const host = new McpHost({
+        sandbox: o.mcpSandbox ?? sandbox,
+        sessions,
+        store,
+        catalog,
+        secrets: o.mcpSecrets ? o.mcpSecrets(ctx.secrets) : ctx.secrets,
+        ...(pgids && { pgids }),
+        ...(o.spawn && { spawn: o.spawn }),
+        now,
+        timers,
+        log: ctx.log,
+        append: e => ctx.append(e),
+        loginPath: o.loginPath ?? (() => loginShellPath()),
+        dataDir,
+        home: commands.home,
+        env: o.env ?? process.env,
+        onIntegrityFailed: failIntegrity,
+      })
+      o.onMcpHost?.(host)
+      // 兜底:kernel.close 的 killLive 已经收过登记的组
+      ctx.effect(() => host.killAllNow())
+      const killPluginProcesses = o.killPluginProcesses ?? ((id: string) => host.killPlugin(id))
       const installer = new Installer({
         store,
         commands,
@@ -105,17 +143,6 @@ export function createPluginManager(o: PluginManagerOpts = {}): Plugin {
       })
       ctx.effect(() => installer.close())
 
-      const failIntegrity = (rec: InstalledRecord) => {
-        store.put({ ...rec, enabled: false, state: 'integrity_failed' })
-        try {
-          store.save()
-        } catch (err) {
-          // 内存里已经关了;下次启动会再查一遍
-          ctx.log.warn('plugin record not saved', { code: (err as NodeJS.ErrnoException).code ?? 'unknown' })
-        }
-        ctx.append({ type: 'plugins.integrity.failed', payload: { id: rec.id } })
-      }
-
       // 启动:已启用的都重算(§13)。不符的这次就关掉,不等谁来用
       for (const rec of store.list()) {
         if (rec.enabled && !store.verify(rec)) {
@@ -125,9 +152,11 @@ export function createPluginManager(o: PluginManagerOpts = {}): Plugin {
       }
 
       // 第三方文字给模型的路只有这两条:第一轮钉住的索引,和模型自己调的 skill
-      const catalog = new SkillCatalog(store, { home: commands.home }, ctx.log)
       ctx.services.provide('plugins', createPluginsService({ store, catalog, sessions, sandbox, append: e => ctx.append(e), log: ctx.log }))
       ctx.effect(tools.register(createSkillTool({ store, catalog, commands, sessions, history: sid => ctx.events.history(sid), log: ctx.log })))
+      const gate = ctx.services.get<{ check(req: PermissionRequest): string }>('permissionGate')
+      if (!gate) throw new Error('permissionGate service missing')
+      ctx.effect(tools.register(createMcpTool({ host, gate, history: sid => ctx.events.history(sid), log: ctx.log })))
 
       // 改记录的 RPC 排队:改写是读旧记录、等杀进程、写新记录,交错了会丢更新
       let tail: Promise<unknown> = Promise.resolve()
@@ -200,9 +229,11 @@ export function createPluginManager(o: PluginManagerOpts = {}): Plugin {
             // 落盘时查过,但打码规则可能是后来才加的
             return { key: escapeDisplay(c.key), set: isSet(rec, c.key), sensitive: secret, ...(value !== undefined && { value: scrub(value).text }) }
           }),
-          servers: serverRows(rec),
+          servers: serverRows(rec, host),
         }
       })
+
+      on('plugins.mcp.status', p => ({ servers: host.status(p.sessionId) }))
 
       on('plugins.commands', () => ({ commands: listCommands({ store, catalog }) }))
       on('plugins.command.run', p => runCommand(p, { store, catalog, commands, sessions, log: ctx.log }))

@@ -1,0 +1,358 @@
+// 真 Seatbelt(09 Review Focus 4):临时 home,假服务在插件根里,经 probe_* 回报真实发生的事。
+// 每条"读不到"都带能成功的对照,否则什么都干不了也会通过。测试进程自己在沙箱里时不能嵌套 → 整个文件跳过
+import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer, type Server } from 'node:net'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { alive, call, storeOf, stubPlugin, until } from '../../../test/managerRig'
+import { calling, say } from '../../../test/memoryRig'
+import { mcpRig, statusOf, type McpRig, type McpRigOpts } from '../../../test/mcpRig'
+import { startFakeUpstream, type FakeServer } from '../../../test/fakeUpstream'
+import { buildPlugin, FAKE_MCP, type PluginSpec } from '../../../test/pluginRig'
+import { createGit } from '../../lib/git/snapshot'
+import { createToolsCoding } from '../tools-coding'
+import toolsRegistry from '../tools-registry'
+
+function sandboxExecUsable(): boolean {
+  if (process.platform !== 'darwin') return false
+  return spawnSync('/usr/bin/sandbox-exec', ['-p', '(version 1)(allow default)', '/usr/bin/true'], { stdio: 'ignore' }).status === 0
+}
+const usable = sandboxExecUsable()
+
+let tmp = ''
+const rigs: McpRig[] = []
+let upstream: FakeServer
+
+beforeAll(async () => {
+  if (usable) upstream = await startFakeUpstream()
+})
+afterAll(async () => {
+  await upstream?.close()
+})
+beforeEach(() => {
+  tmp = realpathSync(mkdtempSync(join(tmpdir(), 'mffai-mcpd-')))
+})
+afterEach(async () => {
+  for (const m of rigs.splice(0)) await m.dispose()
+  rmSync(tmp, { recursive: true, force: true })
+})
+
+let n = 0
+const plugin = (id: string, mcp: Record<string, object>, spec: Partial<PluginSpec> = {}) =>
+  buildPlugin(join(tmp, `p${++n}`), {
+    format: 'claude',
+    id,
+    mcp,
+    extra: { 'fake-mcp.mjs': readFileSync(FAKE_MCP, 'utf8'), 'scenario.json': '{}', ...spec.extra },
+    ...(spec.manifest && { manifest: spec.manifest }),
+  })
+const SERVER = { command: 'node', args: ['${CLAUDE_PLUGIN_ROOT}/fake-mcp.mjs'] }
+
+const jsonOf = (text: string) => {
+  const lines = text.split('\n')
+  if (!text.startsWith('<mcp-result')) throw new Error(`not a result: ${text}`)
+  return JSON.parse(lines.slice(2, -1).join('\n'))
+}
+
+async function rig(o: McpRigOpts = {}) {
+  const gitBase = { PATH: '/usr/bin:/bin', HOME: tmp, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' }
+  const m = await mcpRig({
+    stub: false,
+    level: 'full',
+    kernel: {
+      sandbox: {
+        detect: () => ({ level: 'full' as const, missing: [] }),
+        upstream: { url: new URL(`http://127.0.0.1:${upstream.port}`), noProxy: () => false },
+        lookup: async () => [{ address: '93.184.216.34', family: 4 as const }],
+        git: createGit({ base: gitBase }),
+      },
+      ...o.kernel,
+    },
+    ...(o.config && { config: o.config }),
+    ...(o.before && { before: o.before }),
+    ...(o.after && { after: o.after }),
+  })
+  rigs.push(m)
+  // node 从 PATH 来;它不在临时 home 下,不用放回
+  m.r.env.PATH = `${dirname(process.execPath)}:/usr/bin:/bin`
+  return m
+}
+
+interface Started {
+  m: McpRig
+  sid: string
+  probe(server: string, tool: string, args?: object): Promise<any>
+  data(server?: string, id?: string): string
+  code(id?: string): string
+}
+
+/** grants 按服务名;第一轮钉住视图。auto:没网的服务不问,有网的卡片一律放行 */
+async function started(m: McpRig, id = 'x', servers: Record<string, object> = { y: SERVER }, grants: Record<string, { network: string[]; cwd: 'none' | 'read' | 'write' }> = {}, cwd?: string): Promise<Started> {
+  await m.r.install(plugin(id, servers), { servers: grants })
+  const sid = await m.r.session({ approvalMode: 'auto', ...(cwd && { cwd }) })
+  await m.r.turn(sid, 'pin')
+  return {
+    m,
+    sid,
+    probe: async (server, tool, args = {}) => jsonOf((await m.mcp(sid, { action: 'call', server, tool, arguments: args })).text),
+    data: (server = 'y', pid = id) => join(m.r.dataDir, 'plugin-data', pid, server),
+    code: (pid = id) => join(storeOf(m.r), pid, readdirSync(join(storeOf(m.r), pid))[0]),
+  }
+}
+
+const denied = (r: any) => {
+  expect(r.ok).toBe(false)
+  expect(['EPERM', 'EACCES']).toContain(r.code)
+}
+
+describe.skipIf(!usable)('an MCP server under real Seatbelt', () => {
+  it('reads: its root, its data and cwd yes; home, other plugins, credentials, the data dir, spill and shell tmp no', async () => {
+    const m = await rig()
+    const other = plugin('other', { z: SERVER }, { extra: { 'secret-code.txt': 'other code' } })
+    await m.r.install(other)
+    const home = m.r.home
+    writeFileSync(join(home, 'notes.txt'), 'private notes')
+    mkdirSync(join(home, '.ssh'))
+    writeFileSync(join(home, '.ssh', 'id_rsa'), 'a private key')
+    writeFileSync(join(m.r.cwd, 'in-cwd.txt'), 'cwd file')
+    writeFileSync(join(m.r.dataDir, 'data-dir-file'), 'kernel data')
+    const s = await started(m)
+    await s.m.mcp(s.sid, { action: 'tools', server: 'x/y' })
+    const otherData = s.data('z', 'other')
+    mkdirSync(otherData, { recursive: true })
+    writeFileSync(join(otherData, 'state'), 'other data')
+    const spill = join(m.r.dataDir, 'sessions', s.sid, 'spill')
+    mkdirSync(spill, { recursive: true })
+    writeFileSync(join(spill, 'out.txt'), 'spilled output of the shell')
+    const shellTmp = join(m.r.dataDir, 'sessions', s.sid, 'tmp')
+    mkdirSync(shellTmp, { recursive: true })
+    writeFileSync(join(shellTmp, 'a'), 'shell temp')
+    writeFileSync(join(s.data(), 'own'), 'own data')
+
+    // 对照
+    expect(await s.probe('x/y', 'probe_read', { path: join(s.code(), 'scenario.json') })).toMatchObject({ ok: true })
+    expect(await s.probe('x/y', 'probe_read', { path: join(s.data(), 'own') })).toMatchObject({ ok: true, text: 'own data' })
+    expect(await s.probe('x/y', 'probe_read', { path: join(m.r.cwd, 'in-cwd.txt') })).toMatchObject({ ok: true, text: 'cwd file' })
+    expect(await s.probe('x/y', 'probe_read', { path: '/etc/hosts' })).toMatchObject({ ok: true })
+
+    for (const path of [
+      join(home, 'notes.txt'),
+      join(home, '.ssh', 'id_rsa'),
+      join(s.code('other'), 'secret-code.txt'),
+      join(otherData, 'state'),
+      join(m.r.dataDir, 'data-dir-file'),
+      join(spill, 'out.txt'),
+      join(shellTmp, 'a'),
+      join(m.r.dataDir, 'config.json'),
+    ])
+      denied(await s.probe('x/y', 'probe_read', { path }))
+  }, 60_000)
+
+  it('writes: own data yes; own root no, and the next start still passes its integrity check; cwd no by default', async () => {
+    const m = await rig()
+    const s = await started(m)
+    expect(await s.probe('x/y', 'probe_write', { path: join(s.data(), 'w'), text: 'ok' })).toEqual({ ok: true })
+    expect(readFileSync(join(s.data(), 'w'), 'utf8')).toBe('ok')
+    denied(await s.probe('x/y', 'probe_write', { path: join(s.code(), 'evil.txt'), text: 'x' }))
+    denied(await s.probe('x/y', 'probe_write', { path: join(m.r.cwd, 'evil.txt'), text: 'x' }))
+    expect(existsSync(join(m.r.cwd, 'evil.txt'))).toBe(false)
+    // 打码会盖住系统临时目录里长得像令牌的段:路径让服务自己比
+    const ownTmp = join(m.r.dataDir, 'sessions', s.sid, 'mcp', createHash('sha256').update('x/y').digest('hex').slice(0, 12), 'tmp')
+    const { same } = await s.probe('x/y', 'probe_env', { same: { HOME: s.data(), TMPDIR: ownTmp } })
+    expect(same).toEqual({ HOME: true, TMPDIR: true })
+    expect(await s.probe('x/y', 'probe_write', { path: join(ownTmp, 'mine'), text: 'mine' })).toEqual({ ok: true })
+    // calls.jsonl 落回 $HOME:存储里写不进去
+    expect(existsSync(join(s.data(), 'calls.jsonl'))).toBe(true)
+    expect(existsSync(join(s.code(), 'calls.jsonl'))).toBe(false)
+    process.kill(-s.m.pids[0], 'SIGKILL')
+    await until(() => m.live().length === 0)
+    expect((await s.probe('x/y', 'probe_read', { path: join(s.data(), 'w') })).text).toBe('ok')
+  }, 60_000)
+
+  it("cwd:'write' is writable; cwd:'none' is unreadable even outside home", async () => {
+    const m = await rig()
+    writeFileSync(join(m.r.cwd, 'f.txt'), 'x')
+    const s = await started(m, 'x', { w: SERVER, n: SERVER }, { w: { network: [], cwd: 'write' }, n: { network: [], cwd: 'none' } })
+    expect(await s.probe('x/w', 'probe_write', { path: join(m.r.cwd, 'made.txt'), text: 'yes' })).toEqual({ ok: true })
+    expect(readFileSync(join(m.r.cwd, 'made.txt'), 'utf8')).toBe('yes')
+    denied(await s.probe('x/n', 'probe_read', { path: join(m.r.cwd, 'f.txt') }))
+    denied(await s.probe('x/n', 'probe_write', { path: join(m.r.cwd, 'made2.txt'), text: 'no' }))
+    expect((await s.probe('x/n', 'probe_env', { cwdIs: s.data('n') })).cwdIs).toBe(true)
+  }, 60_000)
+
+  it("server A's data is unreadable by server B of the same plugin", async () => {
+    const m = await rig()
+    const s = await started(m, 'x', { a: SERVER, b: SERVER })
+    expect(await s.probe('x/a', 'probe_write', { path: join(s.data('a'), 'state'), text: 'of a' })).toEqual({ ok: true })
+    denied(await s.probe('x/b', 'probe_read', { path: join(s.data('a'), 'state') }))
+    denied(await s.probe('x/b', 'probe_write', { path: join(s.data('a'), 'more'), text: 'x' }))
+  }, 60_000)
+
+  it('$TMPDIR of the worker and /tmp are unreadable', async () => {
+    const m = await rig()
+    const s = await started(m)
+    const inTmp = join(realpathSync(tmpdir()), `mffai-mcpd-probe-${process.pid}-${++n}`)
+    const inSlashTmp = `/tmp/mffai-mcpd-probe-${process.pid}-${++n}`
+    writeFileSync(inTmp, 'tmp file')
+    writeFileSync(inSlashTmp, 'slash tmp file')
+    try {
+      denied(await s.probe('x/y', 'probe_read', { path: inTmp }))
+      denied(await s.probe('x/y', 'probe_read', { path: inSlashTmp }))
+      denied(await s.probe('x/y', 'probe_write', { path: `${inSlashTmp}-w`, text: 'x' }))
+      expect(existsSync(`${inSlashTmp}-w`)).toBe(false)
+    } finally {
+      rmSync(inTmp, { force: true })
+      rmSync(inSlashTmp, { force: true })
+    }
+  }, 60_000)
+
+  it('a runtime root under home runs; a sibling stays hidden, and a credential dir nested in it stays unreadable', async () => {
+    const m = await rig()
+    const home = m.r.home
+    const bin = join(home, '.config', 'bin')
+    mkdirSync(bin, { recursive: true })
+    const prog = join(bin, 'rtnode')
+    writeFileSync(prog, `#!/bin/sh\nexec ${process.execPath} "$@"\n`)
+    chmodSync(prog, 0o755)
+    writeFileSync(join(home, '.config', 'kept.txt'), 'in the runtime root')
+    mkdirSync(join(home, '.config', 'gcloud'))
+    writeFileSync(join(home, '.config', 'gcloud', 'creds.json'), 'a credential')
+    mkdirSync(join(home, 'Documents'))
+    writeFileSync(join(home, 'Documents', 'a.txt'), 'a document')
+    m.r.env.PATH = `${bin}:/usr/bin:/bin`
+    const s = await started(m, 'x', { y: { command: 'rtnode', args: ['${CLAUDE_PLUGIN_ROOT}/fake-mcp.mjs'] } })
+    expect(await s.probe('x/y', 'probe_read', { path: join(home, '.config', 'kept.txt') })).toMatchObject({ ok: true })
+    denied(await s.probe('x/y', 'probe_read', { path: join(home, '.config', 'gcloud', 'creds.json') }))
+    denied(await s.probe('x/y', 'probe_read', { path: join(home, 'Documents', 'a.txt') }))
+  }, 60_000)
+
+  it('a session at home: cwd_too_broad, never spawned', async () => {
+    const m = await rig()
+    await m.r.install(plugin('x', { y: SERVER }))
+    const sid = await m.r.session({ approvalMode: 'auto', cwd: m.r.home })
+    await m.r.turn(sid, 'pin')
+    expect((await m.mcp(sid, { action: 'tools', server: 'x/y' })).text).toBe('cwd_too_broad')
+    expect(m.spawns).toEqual([])
+  }, 60_000)
+
+  it("a store byte changed after startup: the next start refuses, the plugin's marker never written", async () => {
+    const m = await rig()
+    const s = await started(m)
+    writeFileSync(join(s.code(), 'scenario.json'), '{"neverInit":true}')
+    expect((await m.mcp(s.sid, { action: 'tools', server: 'x/y' })).text).toBe('integrity_failed')
+    expect(m.spawns).toEqual([])
+  }, 60_000)
+
+  it('network with no hosts fails for a host on the default list, and direct', async () => {
+    const m = await rig()
+    const s = await started(m)
+    const before = upstream.connects.length
+    const via = await s.probe('x/y', 'probe_fetch', { host: 'github.com', port: 443 })
+    expect(via).toMatchObject({ ok: false, status: 403, via: 'proxy' })
+    expect((await s.probe('x/y', 'probe_fetch', { host: 'github.com', port: 443, direct: true, timeoutMs: 1500 })).ok).toBe(false)
+    expect(upstream.connects.length).toBe(before)
+  }, 60_000)
+
+  it('network with no hosts fails for loopback even with allowLoopback:true, while the level says partial', async () => {
+    const listening: Server = createServer(sock => sock.destroy())
+    await new Promise<void>(res => listening.listen(0, '127.0.0.1', res))
+    const port = (listening.address() as { port: number }).port
+    try {
+      const m = await rig({ config: { permissions: { sandbox: { allowLoopback: true } } } })
+      const s = await started(m)
+      const res = await s.probe('x/y', 'probe_fetch', { host: '127.0.0.1', port, direct: true, timeoutMs: 1500 })
+      expect(res.ok).toBe(false)
+      const { env } = await s.probe('x/y', 'probe_env')
+      expect(env.NO_PROXY).toBe('')
+      expect((await s.probe('x/y', 'probe_fetch', { host: '127.0.0.1', port })).ok).toBe(false)
+    } finally {
+      await new Promise<void>(res => listening.close(() => res()))
+    }
+  }, 60_000)
+
+  it('a granted host through the fake upstream succeeds, only for that host', async () => {
+    const m = await rig()
+    const s = await started(m, 'x', { y: SERVER }, { y: { network: ['granted.example'], cwd: 'read' } })
+    const before = upstream.connects.length
+    expect(await s.probe('x/y', 'probe_fetch', { host: 'granted.example', port: 443 })).toMatchObject({ ok: true, status: 200 })
+    expect(await s.probe('x/y', 'probe_fetch', { host: 'other.example', port: 443 })).toMatchObject({ ok: false, status: 403 })
+    expect(await s.probe('x/y', 'probe_fetch', { host: 'github.com', port: 443 })).toMatchObject({ ok: false, status: 403 })
+    expect(upstream.connects.slice(before).map(c => c.line)).toEqual(['CONNECT granted.example:443 HTTP/1.1'])
+  }, 60_000)
+
+  it('M3: after narrowing a grant, an immediate restart reaches no dropped host', async () => {
+    const m = await rig()
+    const s = await started(m, 'x', { y: SERVER }, { y: { network: ['granted.example', 'kept.example'], cwd: 'read' } })
+    expect((await s.probe('x/y', 'probe_fetch', { host: 'granted.example', port: 443 })).ok).toBe(true)
+    await call(m.r, 'plugins.grants.set', { commandId: 'g', id: 'x', grants: { servers: { y: { network: ['kept.example'], cwd: 'read' } } } })
+    expect(m.live()).toEqual([])
+    const before = upstream.connects.length
+    expect(await s.probe('x/y', 'probe_fetch', { host: 'granted.example', port: 443 })).toMatchObject({ ok: false, status: 403 })
+    expect((await s.probe('x/y', 'probe_fetch', { host: 'kept.example', port: 443 })).ok).toBe(true)
+    expect(upstream.connects.slice(before).map(c => c.line)).toEqual(['CONNECT kept.example:443 HTTP/1.1'])
+  }, 60_000)
+
+  it("env: exactly the whitelist plus declared, under the sandbox's own additions", async () => {
+    const m = await rig()
+    Object.assign(m.r.env, { RANDOM_THING: 'nope', OPENAI_API_KEY: 'sk-' + 'a'.repeat(24) })
+    const s = await started(m, 'x', { y: { ...SERVER, env: { DECLARED: 'v' } } })
+    const { env } = await s.probe('x/y', 'probe_env')
+    expect(env.RANDOM_THING).toBeUndefined()
+    expect(env.OPENAI_API_KEY).toBeUndefined()
+    expect(env.DECLARED).toBe('v')
+    expect(env.MFFAI_SANDBOX).toBe('full')
+  }, 60_000)
+
+  it('a level of none through permissions.set: needs_sandbox, zero spawns, under allow shell(mcp *) too', async () => {
+    const m = await rig({ config: { permissions: { allowUnsandboxedAuto: true, rules: [{ effect: 'allow', rule: 'shell(mcp *)' }] } } })
+    const s = await started(m)
+    await call(m.r, 'permissions.set', { commandId: 'off', config: { sandbox: { enabled: false } } })
+    expect((await m.mcp(s.sid, { action: 'tools', server: 'x/y' })).text).toBe('needs_sandbox')
+    expect((await m.mcp(s.sid, { action: 'call', server: 'x/y', tool: 'echo', arguments: {} })).text).toBe('needs_sandbox')
+    expect(m.spawns).toEqual([])
+    expect((await statusOf(m.r, s.sid))[0].state).toBe('needs_sandbox')
+  }, 60_000)
+
+  it("a session's write and sandboxed shell can't change the store, even at cwd = home", async () => {
+    const m = await rig({ before: () => [toolsRegistry, createToolsCoding({ loginPath: async () => '' }), stubPlugin()] })
+    await m.r.install(plugin('x', { y: SERVER }))
+    const sid = await m.r.session({ approvalMode: 'auto', cwd: m.r.home })
+    await m.r.turn(sid, 'pin')
+    const store = storeOf(m.r)
+    const code = join(store, 'x', readdirSync(join(store, 'x'))[0])
+    const victim = join(code, 'scenario.json')
+    const before = readFileSync(victim, 'utf8')
+    m.queue.push(
+      calling('w1', 'write', { path: victim, content: 'overwritten' }),
+      calling('s1', 'shell', { command: `echo overwritten > ${JSON.stringify(victim)}; touch ${JSON.stringify(join(code, 'planted'))}; echo done` }),
+      say('done'),
+    )
+    await m.r.turn(sid, 'go')
+    expect(readFileSync(victim, 'utf8')).toBe(before)
+    expect(existsSync(join(code, 'planted'))).toBe(false)
+    expect((await m.mcp(sid, { action: 'tools', server: 'x/y' })).text).toBe('cwd_too_broad')
+  }, 60_000)
+
+  it('a detached child and the server are both gone after disable, proven by pid', async () => {
+    const m = await rig()
+    const s = await started(m)
+    const { self, spawned } = await s.probe('x/y', 'probe_children', { spawn: true })
+    expect(alive(spawned)).toBe(true)
+    expect(m.pids).toContain(self.pid)
+    await call(m.r, 'plugins.setEnabled', { commandId: 'off', id: 'x', enabled: false })
+    await until(() => !alive(spawned), 6000)
+    expect(alive(self.pid)).toBe(false)
+  }, 60_000)
+
+  it('kernel.close leaves no pid', async () => {
+    const m = await rig()
+    const s = await started(m)
+    await m.mcp(s.sid, { action: 'tools', server: 'x/y' })
+    expect(m.live().length).toBe(1)
+    await m.r.kernel.close()
+    await until(() => m.live().length === 0, 3000)
+  }, 60_000)
+})
