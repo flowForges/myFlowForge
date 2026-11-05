@@ -543,6 +543,10 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
     },
     hasReceipt: commandId => receipts.get(commandId) !== undefined,
     validateCwd: path => validateCwd(path, { home, dataDir: opts.dataDir, platform: process.platform, env: envSnapshot }),
+    narrowApproval: sessionId => {
+      const s = sessions.get(sessionId)
+      if (s?.origin === 'im' && s.approvalMode === 'auto') append({ type: 'session.approvalNarrowed', sessionId, payload: { approvalMode: 'ask' } })
+    },
   }
   services.provide('sessionCommands', sessionCommands)
   services.provide('approvals', approvals)

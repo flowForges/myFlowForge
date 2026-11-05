@@ -20,6 +20,7 @@ const ROLLBACK_FAILED_LINE = '回滚没成功,文件以 worktree 里的为准'
 const COMMAND_FAILED_LINE = '这条命令没执行成功,再发一次'
 const UNPAIR_HINT_LINE = '要解除配对,发 /unpair confirm'
 const UNPAIRED_LINE = '已解除配对'
+const UNPAIR_UNSAVED_LINE = '已解除配对,但没存上盘,后台重启后可能又配上。回 app 再撤销一次'
 const IN_CHAT_LINE = '回到纯对话了'
 const MODEL_LIST_MAX = 30
 
@@ -47,8 +48,10 @@ export function parseCommand(text: string, botUsername?: string): { name: string
   return { name: m[1], args: (m[3] ?? '').split(/\s+/).filter(Boolean) }
 }
 
+export type CommandDm = Pick<DmInbound, 'chatId' | 'accountId' | 'updateId'>
+
 export interface CommandDeps {
-  chats: Pick<Chats, 'status' | 'cancel' | 'isOpen' | 'setModel'>
+  chats: Pick<Chats, 'status' | 'cancel' | 'isOpen' | 'setModel' | 'guard'>
   projects: Pick<Projects, 'open' | 'off' | 'renew' | 'names'>
   commands: SessionCommands
   sessions: Pick<Sessions, 'get'>
@@ -56,8 +59,8 @@ export interface CommandDeps {
   models(): ModelsService | undefined
   history(sessionId: string): KernelEvent[]
   channelState(): string
-  /** 和 RPC 的撤销同一条路 */
-  unpair(accountId: string): void
+  /** 和 RPC 的撤销同一条路。false = 名单改了但没存上盘 */
+  unpair(accountId: string): boolean
   botId(): number
   mask(text: string): string
   reply(chatId: string, text: string): void
@@ -65,7 +68,7 @@ export interface CommandDeps {
 
 interface Ctx {
   args: string[]
-  dm: DmInbound
+  dm: CommandDm
   deps: CommandDeps
   commandId: string
   reply(text: string): void
@@ -117,7 +120,7 @@ async function rollback(c: Ctx): Promise<void> {
   const chatId = c.dm.chatId
   const { sessionId } = chats.status(chatId)
   if (sessionId === undefined || sessions.get(sessionId)?.cwd === undefined) return c.reply(CHAT_ROLLBACK_LINE)
-  if (chats.isOpen(chatId)) return c.reply(BUSY_LINE)
+  if (chats.isOpen(chatId, c.dm.updateId)) return c.reply(BUSY_LINE)
   // 重投时回执作答,内核不看 turnId;那时"最近一轮"已经是更早的一轮了,所以先看回执
   const replay = commands.hasReceipt(c.commandId)
   const turnId = lastRollbackable(history(sessionId))
@@ -143,11 +146,12 @@ async function project(c: Ctx): Promise<void> {
   if (c.args.length > 1) return c.reply(NO_PROJECT_LINE)
   const name = c.args[0]!
   if (name === 'off') {
-    const r = await projects.off(chatId)
+    const r = await projects.off(chatId, c.dm.updateId)
     return c.reply(r === 'busy' ? BUSY_LINE : IN_CHAT_LINE)
   }
   const r = await projects.open(chatId, c.dm.updateId, name)
   if (r.ok) return c.reply(`进了项目 ${name}。改动都在单独的 worktree 里,你的仓库不动`)
+  if (r.reason === 'stopped') return
   if (r.reason === 'busy') return c.reply(BUSY_LINE)
   if (r.reason === 'unknown') return c.reply(NO_PROJECT_LINE)
   if (r.reason === 'no_model') return c.reply(NO_MODEL_LINE)
@@ -179,6 +183,7 @@ export const COMMANDS = {
 
   async new(c: Ctx) {
     const r = await c.deps.projects.renew(c.dm.chatId, c.dm.updateId)
+    if (!r.ok && r.reason === 'stopped') return
     if (!r.ok) return c.reply(r.reason === 'busy' ? BUSY_LINE : r.reason === 'no_model' ? NO_MODEL_LINE : CODING_ONLY_LINE)
     if (r.lost !== undefined) return c.reply(`项目 ${r.lost} 已经不在配置里了,回到纯对话`)
     c.reply(r.project !== undefined ? `新对话 · ${r.project}` : '新对话')
@@ -205,14 +210,19 @@ export const COMMANDS = {
 
   async unpair(c: Ctx) {
     if (c.args.length !== 1 || c.args[0] !== 'confirm') return c.reply(UNPAIR_HINT_LINE)
-    c.deps.unpair(c.dm.accountId)
-    c.reply(UNPAIRED_LINE)
+    const saved = c.deps.unpair(c.dm.accountId)
+    // 名单已经改了,c.reply 不再说话;这一句是说给刚走的人听的
+    c.deps.reply(c.dm.chatId, saved ? UNPAIRED_LINE : UNPAIR_UNSAVED_LINE)
   },
 } as const
 
 /** cmd 没有 = 这个形状但不认识(给别的机器人的也算) */
-export async function runCommand(cmd: { name: string; args: string[] } | undefined, dm: DmInbound, deps: CommandDeps, log: { warn(m: string, d?: unknown): void }): Promise<void> {
-  const reply = (text: string) => deps.reply(dm.chatId, text)
+export async function runCommand(cmd: { name: string; args: string[] } | undefined, dm: CommandDm, deps: CommandDeps, log: { warn(m: string, d?: unknown): void }): Promise<void> {
+  // 等 git 的时候撤销了:结果不能再发给他
+  const ours = deps.chats.guard(dm.chatId)
+  const reply = (text: string) => {
+    if (ours()) deps.reply(dm.chatId, text)
+  }
   if (!cmd || !Object.hasOwn(COMMANDS, cmd.name)) return reply(`不认识这个命令\n${HELP}`)
   const name = cmd.name as keyof typeof COMMANDS
   try {

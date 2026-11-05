@@ -51,6 +51,12 @@ export class Sessions {
   }
 
   observe(e: KernelEvent): void {
+    // 只收窄不放宽(07 §8.3):auto 的条件没了,这个会话从此每条命令都问,重启后也是。放宽要开新会话
+    if (e.type === 'session.approvalNarrowed' && e.sessionId) {
+      const narrowed = this.byId.get(e.sessionId)
+      if (narrowed) narrowed.approvalMode = 'ask'
+      return
+    }
     if (e.type !== 'session.created' || !e.sessionId) return
     const p = (e.payload ?? {}) as Partial<Omit<SessionInfo, 'sessionId'>>
     const info: SessionInfo = {

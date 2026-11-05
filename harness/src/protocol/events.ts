@@ -7,6 +7,7 @@ export const EVENT_TYPES = [
   'plugin.activated',
   'plugin.failed',
   'session.created',
+  'session.approvalNarrowed',
   'turn.started',
   'message.user',
   'message.assistant.delta',

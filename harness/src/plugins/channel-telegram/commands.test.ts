@@ -12,6 +12,7 @@ import { Cards } from './cards'
 import { Chats } from './chats'
 import { COMMANDS, parseCommand } from './commands'
 import { Sender } from './sender'
+import { TelegramState } from './state'
 
 const BUSY = '这轮还在跑,先 /cancel'
 const ALL = ['/help', '/status', '/new', '/project', '/project api', '/project off', '/model', '/model 1', '/cancel', '/rollback', '/unpair', '/unpair confirm']
@@ -353,6 +354,31 @@ describe('redelivered after a crash', () => {
   })
 })
 
+describe('a split paste', () => {
+  const part = 'x'.repeat(3600)
+
+  it.each(['/unpair confirm', '/model 2', '/cancel now', '/help'])('a fragment that reads %j is text, it runs nothing', async fragment => {
+    const r = await rig({ models: TWO_MODELS })
+    r.dm(part)
+    await handled(r, r.dm(fragment))
+    await flow(r)
+    expect(onDisk(r).pairings).toHaveLength(1)
+    expect(chatOf(r).model).toBeUndefined()
+    expect(users(r).map(u => u.text)).toEqual([`${part}\n${fragment}`])
+  })
+
+  it('after the window a command is a command again; a short message opens no paste', async () => {
+    const r = await rig()
+    await send(r, part)
+    await send(r, '/help')
+    expect(texts(r).at(-1)).toContain('/rollback')
+    await handled(r, r.dm('short'))
+    await handled(r, r.dm('/help'))
+    await flow(r)
+    expect(users(r).map(u => u.text)).toEqual([part, 'short'])
+  })
+})
+
 describe('/cancel', () => {
   it('cancels the turn and clears the queue', async () => {
     const gated = gatedStream('thinking', ' done')
@@ -425,6 +451,26 @@ describe('/unpair', () => {
     expect(sends(r)).toHaveLength(before)
     expect(r.models.foreground()).toHaveLength(1)
     expect(users(r).map(u => u.text)).toEqual(['hello'])
+  })
+
+  it('a save that fails is reported, not 已解除配对; revoked in memory all the same', async () => {
+    const r = await rig()
+    const real = TelegramState.prototype.save
+    let failed = false
+    vi.spyOn(TelegramState.prototype, 'save').mockImplementation(function (this: TelegramState) {
+      if (!failed && this.data.pairings.length === 0) {
+        failed = true
+        throw Object.assign(new Error('disk full'), { code: 'ENOSPC' })
+      }
+      real.call(this)
+    })
+    await send(r, '/unpair confirm')
+    expect(failed).toBe(true)
+    expect(texts(r).at(-1)).toContain('没存上')
+    expect(texts(r).at(-1)).not.toBe('已解除配对')
+    const before = sends(r).length
+    await send(r, 'hello')
+    expect(sends(r)).toHaveLength(before)
   })
 
   it('/unpair confirm: revoke, then drop, then expire. Dropping after the expiry would throw away the 已失效 edits', async () => {

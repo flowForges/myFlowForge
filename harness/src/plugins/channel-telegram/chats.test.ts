@@ -856,6 +856,7 @@ describe('Chats with fake services', () => {
         }) as never,
         hasReceipt: () => false,
         validateCwd: p => p,
+        narrowApproval: () => {},
       },
       sessions: { get: (id: string) => (known.has(id) ? { sessionId: id, approvalMode: 'ask', origin: 'im', audience: 'owner' } : undefined) } as never,
       models: () => ({ catalog: () => ({ presets: [], models: {}, default: { accountId: 'a', modelId: 'm' } }), accounts: () => [] }) as never,

@@ -22,7 +22,11 @@ export const texts = (r: TelegramRig) => r.fake.outbox(r.owner).map(m => m.text)
 export const sends = (r: TelegramRig, method = 'sendMessage') => r.fake.requests.filter(q => q.method === method)
 export const chatOf = (r: TelegramRig) => onDisk(r).chats[String(r.owner)]
 
-export const handled = (r: TelegramRig, updateId: number) => expect.poll(() => onDisk(r).offset, { timeout: 3000, interval: 2 }).toBeGreaterThan(updateId)
+/** 这条收下了,收下的命令也跑完了(命令不挡轮询,跑完才从记录里移走) */
+export const handled = async (r: TelegramRig, updateId: number, timeout = 3000) => {
+  await expect.poll(() => onDisk(r).offset, { timeout, interval: 2 }).toBeGreaterThan(updateId)
+  await expect.poll(() => onDisk(r).chats[String(r.owner)]?.commands?.length ?? 0, { timeout, interval: 2 }).toBe(0)
+}
 
 export const flow = (r: TelegramRig, ms = FLOW) => r.settle({ advance: ms })
 

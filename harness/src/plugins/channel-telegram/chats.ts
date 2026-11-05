@@ -45,6 +45,8 @@ const DeliverySchema = z.object({
   /** 重试了 1 小时还是没发出去;status.undelivered 数的就是它 */
   gaveUp: z.boolean().optional(),
 })
+const PendingCommandSchema = z.object({ updateId: z.number(), text: z.string(), date: z.number() })
+export type PendingCommand = z.infer<typeof PendingCommandSchema>
 const ChatSchema = z.object({
   blocked: z.boolean().optional(),
   sessionId: z.string().optional(),
@@ -59,6 +61,8 @@ const ChatSchema = z.object({
   /** 这一小时发过的 session.prompt */
   prompts: z.array(z.number()).optional(),
   limitedAt: z.number().optional(),
+  /** 收下了还没跑完的命令,和 offset 同一次落盘;做完才移走,崩溃就按同一个 commandId 重跑 */
+  commands: z.array(PendingCommandSchema).optional(),
 })
 
 export type ChatRecord = z.infer<typeof ChatSchema>
@@ -66,6 +70,7 @@ type TurnDelivery = z.infer<typeof DeliverySchema>
 type Queued = z.infer<typeof QueuedSchema>
 
 const QUEUE_MAX = 5
+const COMMANDS_MAX = 20
 const DEBOUNCE_MS = 700
 const LONG_DEBOUNCE_MS = 1500
 const LONG_MESSAGE = 3500
@@ -145,6 +150,8 @@ interface PasteGroup {
   ids: number[]
   size: number
   refused: boolean
+  /** 里面有长消息:这是一段被拆开的粘贴,后面几段是粘贴的内容,不是他发的命令 */
+  long: boolean
 }
 
 interface Runner {
@@ -163,6 +170,8 @@ interface Runner {
   pumping: boolean
   again: boolean
   fails: number
+  /** 这个聊天正在跑命令 */
+  commanding?: Promise<void>
 }
 
 export interface ChatsOpts {
@@ -186,9 +195,12 @@ export interface ChatsOpts {
   save(): boolean
   /** 审批卡片。不给 = 这个聊天的审批只能在 app 里答 */
   cards?: Pick<Cards, 'onRequested' | 'onResolved'>
+  /** 跑一条命令。自己接住错,回一句;不给 = 这里没有命令(只有单元测试) */
+  runCommand?(chatId: string, command: PendingCommand): Promise<void>
 }
 
-export type NewSessionResult = { ok: true; sessionId: string } | { ok: false; reason: 'busy' | 'no_model' | 'coding_only' }
+/** stopped:等的时候撤销了、换了机器人或在关闭。什么都不说,也不改聊天 */
+export type NewSessionResult = { ok: true; sessionId: string } | { ok: false; reason: 'busy' | 'no_model' | 'coding_only' | 'stopped' }
 
 /** 新会话开在哪个项目里。cwd 只能来自 projects.ts,那里只收 app 配的别名(§7.1) */
 export interface SessionTarget {
@@ -219,6 +231,8 @@ export class Chats {
   /** 渠道开着、有令牌。关着时队列留着,不发提示、不画、不回话 */
   private running = false
   private disposed = false
+  /** 要关了:手上这条跑完,后面的留到下次启动 */
+  private stopping = false
 
   constructor(private readonly o: ChatsOpts) {}
 
@@ -231,7 +245,7 @@ export class Chats {
     if (rec.queue.some(q => q.updateId === i.updateId) || rec.batch?.updateIds.includes(i.updateId)) return
     const run = this.runnerOf(i.chatId)
     const long = i.text.length >= LONG_MESSAGE
-    const group = run.debounce !== undefined && run.paste ? run.paste : (run.paste = { ids: [], size: 0, refused: false })
+    const group = run.debounce !== undefined && run.paste ? run.paste : (run.paste = { ids: [], size: 0, refused: false, long: false })
     if (group.refused) {
       // 同一段的后面几条:说过了,不再说。窗口跟着延长
       this.armDebounce(i.chatId, run, long)
@@ -254,12 +268,86 @@ export class Chats {
     rec.queue.push({ updateId: i.updateId, text: i.text, ...(i.forwardedFrom !== undefined && { from: i.forwardedFrom }), date: i.date, receivedAt: this.o.now() })
     group.ids.push(i.updateId)
     group.size += i.text.length
+    if (long) group.long = true
     this.o.state.advance(i.updateId)
     this.o.save()
     // 关到一半还在处理的一批:记下来就够了,下次启动接着发
     if (this.disposed) return
     this.armDebounce(i.chatId, run, long)
     if (run.live) this.markDirty(i.chatId, run, run.live)
+  }
+
+  /** 一段被拆开的粘贴还开着:命令形状的这一段也是粘贴的内容,毒文本不能拆出一条 /unpair confirm */
+  inPaste(chatId: string): boolean {
+    const run = this.runners.get(chatId)
+    return run?.debounce !== undefined && run.paste?.long === true
+  }
+
+  /**
+   * 命令不挡轮询(/project 要等好几次 git):收下、和 offset 一起落盘,在这个聊天自己的线上按序跑。
+   * 崩溃了下次启动按同一个 commandId 重跑:回执和 worktree id 挡住第二次效果;过期了就回一句
+   */
+  onCommand(i: DmInbound): void {
+    if (!this.admit(i)) return
+    const rec = this.ensure(i.chatId)
+    if (rec.commands?.some(c => c.updateId === i.updateId)) return
+    if ((rec.commands?.length ?? 0) >= COMMANDS_MAX) {
+      if (!this.refused.has(i.chatId)) {
+        this.refused.add(i.chatId)
+        this.reply(i.chatId, QUEUE_FULL_LINE)
+      }
+      return
+    }
+    ;(rec.commands ??= []).push({ updateId: i.updateId, text: i.text, date: i.date })
+    this.o.state.advance(i.updateId)
+    this.o.save()
+    this.drainCommands(i.chatId)
+  }
+
+  private drainCommands(chatId: string): void {
+    const run = this.runnerOf(chatId)
+    if (run.commanding || this.disposed || this.stopping) return
+    run.commanding = this.runCommands(chatId)
+      .catch((err: unknown) => this.o.log.warn('telegram command failed', { code: codeOf(err) }))
+      .finally(() => {
+        delete run.commanding
+        if (this.disposed || this.stopping) return
+        // 收尾的时候又来了一条
+        if (this.running && this.peek(chatId)?.commands?.length && this.o.isPaired(chatId)) this.drainCommands(chatId)
+        else this.pump(chatId)
+      })
+  }
+
+  private async runCommands(chatId: string): Promise<void> {
+    const ours = this.guard(chatId)
+    for (;;) {
+      const head = this.peek(chatId)?.commands?.[0]
+      if (!head || !ours() || !this.running || this.stopping) return
+      await this.o.runCommand?.(chatId, head)
+      // 关到一半:留着,下次启动重跑。撤销和换机器人已经把队列清了
+      if (!ours()) return
+      const rec = this.peek(chatId)
+      if (!rec?.commands) continue
+      rec.commands = rec.commands.filter(c => c.updateId !== head.updateId)
+      if (rec.commands.length === 0) delete rec.commands
+      this.o.save()
+    }
+  }
+
+  /** 这一刻起,等完 await 还算不算数:没撤销、没换机器人、没在关闭。等 git、等内核之后都要问 */
+  guard(chatId: string): () => boolean {
+    const botId = this.o.state.data.bot?.id
+    return () => !this.disposed && this.o.state.data.bot?.id === botId && this.o.isPaired(chatId)
+  }
+
+  /** 关闭前:手上的命令等一会儿,不再开新的。超时了 guard 也会让它在下一个 await 之后停下 */
+  async commandsIdle(ms: number): Promise<void> {
+    this.stopping = true
+    const busy = [...this.runners.values()].flatMap(r => (r.commanding ? [r.commanding] : []))
+    if (busy.length === 0) return
+    let timer: NodeJS.Timeout | undefined
+    await Promise.race([Promise.all(busy), new Promise<void>(res => (timer = setTimeout(res, ms).unref()))])
+    clearTimeout(timer)
   }
 
   /** 每条私聊先过这里,命令也一样。false = 过期了,不执行,这一批末尾回一句(§7.3) */
@@ -451,6 +539,8 @@ export class Chats {
   private pump(chatId: string): void {
     if (this.disposed) return
     const run = this.runnerOf(chatId)
+    // 排在命令后面的消息等命令跑完,跑完会再叫一次。在这里就回去:pumping 哪怕只亮一下,跑着的命令也会以为有轮开着
+    if (run.commanding || this.peek(chatId)?.commands?.length) return
     if (run.pumping) {
       run.again = true
       return
@@ -704,10 +794,12 @@ export class Chats {
         delete rec.batch
         delete rec.delivery
         delete rec.undone
+        delete rec.commands
         continue
       }
       this.dropStale(chatId, rec)
       this.holdForPaste(chatId, rec, run)
+      this.drainCommands(chatId)
       this.pump(chatId)
       // 关着的时候结束的轮:它们的 delivery 还开着,下面从事件补,不再走 closing
       run.closing.length = 0
@@ -722,7 +814,7 @@ export class Chats {
     const parts: Queued[] = []
     for (let i = rec.queue.length - 1; i >= 0 && rec.queue[i]!.text.length >= LONG_MESSAGE; i--) parts.push(rec.queue[i]!)
     if (parts.length === 0 || run.debounce !== undefined) return
-    run.paste = { ids: parts.map(q => q.updateId), size: parts.reduce((n, q) => n + q.text.length, 0), refused: false }
+    run.paste = { ids: parts.map(q => q.updateId), size: parts.reduce((n, q) => n + q.text.length, 0), refused: false, long: true }
     this.armDebounce(chatId, run, true)
   }
 
@@ -744,6 +836,13 @@ export class Chats {
     const fresh = rec.queue.filter(q => receivedAtOf(q) >= cutoff)
     let dropped = rec.queue.length - fresh.length
     rec.queue = fresh
+    if (rec.commands) {
+      // 过期的命令不执行。回执里有的也不用补:效果已经在了,只是那句回复丢了
+      const live = rec.commands.filter(c => c.date * 1000 >= cutoff)
+      dropped += rec.commands.length - live.length
+      if (live.length > 0) rec.commands = live
+      else delete rec.commands
+    }
     // 回执里有的已经执行过了,留给 sendBatch 回放:那不算发第二次
     if (rec.batch && rec.batch.date * 1000 < cutoff && !this.o.commands.hasReceipt(rec.batch.commandId)) {
       dropped += rec.batch.updateIds.length
@@ -833,18 +932,25 @@ export class Chats {
 
   /**
    * 轮开着,或者有写给当前会话、还没进内核的消息。这时不能换会话(R1):`chats` 只映射当前会话,切走后旧轮的输出和审批没有去处,
-   * 冻结的批次发到旧会话也没人看;还没发的消息是冲着这个模式写的,纯对话里说的话不能落到有工具的项目里
+   * 冻结的批次发到旧会话也没人看;还没发的消息是冲着这个模式写的,纯对话里说的话不能落到有工具的项目里。
+   * 命令问的时候给自己的 update id:排在它后面的消息是冲着切换之后写的,不算。不给(RPC):还没跑完的命令也算
    */
-  isOpen(chatId: string): boolean {
+  isOpen(chatId: string, before?: number): boolean {
     const run = this.runners.get(chatId)
     const rec = this.peek(chatId)
-    return run?.live !== undefined || run?.pumping === true || rec?.batch !== undefined || (rec?.queue.length ?? 0) > 0
+    if (run?.live !== undefined || run?.pumping === true || rec?.batch !== undefined) return true
+    if (before !== undefined) return rec?.queue.some(q => q.updateId < before) === true
+    return (rec?.queue.length ?? 0) > 0 || (rec?.commands?.length ?? 0) > 0 || run?.commanding !== undefined
   }
 
-  /** 新会话的模式由 target 定:给了就在这个项目里,没给就是纯对话。模型用聊天上记的那个,按要开的这个会话判能不能开 */
-  async newSession(chatId: string, updateId: number, target?: SessionTarget, name: 'new' | 'project' = 'new'): Promise<NewSessionResult> {
+  /**
+   * 新会话的模式由 target 定:给了就在这个项目里,没给就是纯对话。模型用聊天上记的那个,按要开的这个会话判能不能开。
+   * onCreated 和聊天映射同一次落盘:worktree 记录要知道它的每个会话,否则崩溃后看着像没人用过
+   */
+  async newSession(chatId: string, updateId: number, target?: SessionTarget, name: 'new' | 'project' = 'new', onCreated?: (sessionId: string) => void): Promise<NewSessionResult> {
     const rec = this.ensure(chatId)
-    if (this.isOpen(chatId)) return { ok: false, reason: 'busy' }
+    if (this.isOpen(chatId, updateId)) return { ok: false, reason: 'busy' }
+    const ours = this.guard(chatId)
     const line = this.refusalFor(rec.model, target !== undefined)
     if (line) return { ok: false, reason: line === NO_MODEL_LINE ? 'no_model' : 'coding_only' }
     const { sessionId } = await createImSession(this.o.commands, {
@@ -853,6 +959,8 @@ export class Chats {
       ...(rec.model && { model: rec.model }),
       ...(target && { cwd: target.cwd, approvalMode: target.approvalMode }),
     })
+    if (!ours() || this.peek(chatId) !== rec) return { ok: false, reason: 'stopped' }
+    onCreated?.(sessionId)
     rec.sessionId = sessionId
     if (target) {
       rec.project = target.project
@@ -885,6 +993,14 @@ export class Chats {
   setModel(chatId: string, model: ModelRef): void {
     this.ensure(chatId).model = model
     this.o.save()
+  }
+
+  /** 当前会话是这些之一的聊天:丢了记录的 worktree 只能这样认 */
+  chatOnSession(sessionIds: readonly string[]): string | undefined {
+    return Object.keys(this.o.state.data.chats).find(chatId => {
+      const sessionId = this.peek(chatId)?.sessionId
+      return sessionId !== undefined && sessionIds.includes(sessionId)
+    })
   }
 
   /** 正用着这个 worktree 的聊天 */
@@ -945,6 +1061,7 @@ export class Chats {
       }
       delete rec.delivery
       delete rec.undone
+      delete rec.commands
     }
     this.recount()
     if (live) void this.o.commands.call('session.cancel', { commandId: `tg:${this.botId()}:revoke:${live.turnId}`, sessionId: live.sessionId }).catch((err: unknown) => this.o.log.warn('telegram cancel failed', { code: codeOf(err) }))

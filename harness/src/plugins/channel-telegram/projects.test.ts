@@ -4,19 +4,20 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { imWorktreeRootOf } from '../../lib/git/imWorktree'
 import { createGit, type Git } from '../../lib/git/snapshot'
 import { ERR_BUSY } from '../../protocol/index'
 import { CODEX_OK, delegate, untilGo } from '../../../test/executorRig'
 import { cleanupFakes, installFake } from '../../../test/fakeCli'
 import { calling, say, type Script } from '../../../test/memoryRig'
-import { chatOf, events, flow, gatedScript, gatedStream, onDisk, online, pairedRig, stateFile, texts, users, type ChatRigOpts } from '../../../test/telegramChats'
+import { chatOf, events, flow, gatedScript, handled, gatedStream, onDisk, online, pairedRig, stateFile, texts, users, type ChatRigOpts } from '../../../test/telegramChats'
 import type { TelegramRig } from '../../../test/telegramRig'
 import { createExecutorCli } from '../executor-cli/index'
 import { createLoopDefault } from '../loop-default'
 import { createToolsCoding } from '../tools-coding'
 import toolsRegistry from '../tools-registry'
+import { TelegramState } from './state'
 
 const BUSY = '这轮还在跑,先 /cancel'
 const PATH = process.env.PATH ?? '/usr/bin:/bin'
@@ -75,7 +76,7 @@ async function rig(o: Rig = {}): Promise<TelegramRig> {
 
 /** 真 git 比轮询慢得多:等它落盘,再让假时间走 */
 async function done(r: TelegramRig, id: number) {
-  await expect.poll(() => onDisk(r).offset, { timeout: 20_000, interval: 5 }).toBeGreaterThan(id)
+  await handled(r, id, 20_000)
   await flow(r)
 }
 async function send(r: TelegramRig, text: string) {
@@ -687,6 +688,300 @@ describe('/rollback redelivered, the only turn', () => {
   })
 })
 
+describe('a command does not hold the poll loop', () => {
+  /** 一次 worktree add 按住不放。git 卡多久都行,别的都该接着走 */
+  function holdAdd() {
+    let open = () => {}
+    const gate = new Promise<void>(res => (open = res))
+    const h = {
+      held: true,
+      reached: false,
+      git: ((args, o) => {
+        if (h.held && args.includes('worktree') && args.includes('add')) {
+          h.reached = true
+          return gate.then(() => git(args, o))
+        }
+        return git(args, o)
+      }) as Git,
+      release() {
+        h.held = false
+        open()
+      },
+    }
+    return h
+  }
+  const reached = (h: { reached: boolean }) => expect.poll(() => h.reached, { timeout: 15_000, interval: 5 }).toBe(true)
+  const offset = (r: TelegramRig, id: number) => expect.poll(() => onDisk(r).offset, { timeout: 5000, interval: 2 }).toBeGreaterThan(id)
+
+  it('during a held /project: the poller reads on, other chats answer, a message waits and lands in the project', async () => {
+    const h = holdAdd()
+    const r = await rig({ channel: { git: h.git }, models: { script: () => say('in the project') } })
+    const seeded = onDisk(r)
+    seeded.pairings.push({ accountId: '3001', name: 'Other', pairedAt: 1 })
+    writeFileSync(stateFile(r), JSON.stringify(seeded))
+    await r.restart({ kill: true })
+    await online(r)
+
+    r.dm('/project api')
+    await reached(h)
+    const message = r.dm('hello project')
+    await offset(r, message)
+    const other = r.dm('/help', { from: 3001 })
+    await offset(r, other)
+    await flow(r)
+    expect(r.fake.outbox(3001).at(-1)?.text).toContain('/rollback')
+    expect(users(r)).toEqual([])
+    expect(created(r)).toEqual([])
+
+    h.release()
+    await expect.poll(async () => {
+      await flow(r, 1200)
+      return events(r, 'turn.ended').length
+    }, { timeout: 20_000, interval: 5 }).toBe(1)
+    expect(created(r)).toHaveLength(1)
+    expect(events(r, 'message.user').map(e => e.sessionId)).toEqual([created(r)[0].sessionId])
+    expect(chatOf(r).project).toBe('api')
+    expect(chatOf(r).commands).toBeUndefined()
+  })
+
+  it('commands in one chat stay in order: /status after a held /project sees the project', async () => {
+    const h = holdAdd()
+    const r = await rig({ channel: { git: h.git } })
+    r.dm('/project api')
+    await reached(h)
+    const id = r.dm('/status')
+    await offset(r, id)
+    await flow(r)
+    expect(texts(r).join('\n')).not.toContain('机器人')
+    h.release()
+    await done(r, id)
+    expect(texts(r).at(-1)).toContain('项目 api')
+  })
+
+  it('a message before the command still refuses it', async () => {
+    const r = await rig()
+    await handled(r, r.dm('first'))
+    await handled(r, r.dm('/project api'))
+    await flow(r)
+    expect(texts(r)).toContain(BUSY)
+    expect(created(r).every(s => s.cwd === undefined)).toBe(true)
+  })
+
+  it('the app unpairs during the git work: no session, no mapping, nothing sent to him, no worktree left', async () => {
+    const h = holdAdd()
+    const r = await rig({ channel: { git: h.git } })
+    const id = r.dm('/project api')
+    await reached(h)
+    await offset(r, id)
+    await r.k.handle('channel.telegram.unpair', { commandId: 'u1', accountId: String(r.owner) })
+    const before = texts(r).length
+    h.release()
+    await expect.poll(() => onDiskWorktrees(r).length + (gitWorktrees().length - 1), { timeout: 15_000, interval: 10 }).toBe(0)
+    await flow(r)
+    expect(created(r)).toEqual([])
+    expect(chatOf(r)?.project).toBeUndefined()
+    expect(chatOf(r)?.commands).toBeUndefined()
+    expect(texts(r).length).toBe(before)
+    expect((await listed(r)).worktrees).toEqual([])
+  })
+
+  it('a crash during the git work: it runs after restart, one worktree, one session', async () => {
+    const h = holdAdd()
+    const r = await rig({ channel: { git: h.git } })
+    r.dm('/project api')
+    await reached(h)
+    expect(chatOf(r).commands).toHaveLength(1)
+    h.held = false
+    // 旧进程按住的那次 git 永远不放:真的崩溃了它也回不来
+    await r.restart({ kill: true })
+    await online(r)
+    await expect.poll(() => chatOf(r)?.commands?.length ?? 0, { timeout: 20_000, interval: 5 }).toBe(0)
+    await flow(r)
+    expect(created(r)).toHaveLength(1)
+    expect(chatOf(r).project).toBe('api')
+    expect(texts(r).at(-1)).toContain('api')
+    expect((await listed(r)).worktrees).toHaveLength(1)
+  })
+
+  it('a crash, and back after the stale limit: not run, one line', async () => {
+    const h = holdAdd()
+    const r = await rig({ channel: { git: h.git } })
+    r.dm('/project api')
+    await reached(h)
+    h.held = false
+    r.clock.advance(11 * 60_000)
+    await r.restart({ kill: true })
+    await online(r)
+    await flow(r)
+    expect(texts(r).at(-1)).toBe('离线期间的 1 条没有执行,要的话重发。')
+    expect(chatOf(r)?.commands).toBeUndefined()
+    expect(chatOf(r)?.project).toBeUndefined()
+    expect(created(r)).toEqual([])
+  })
+
+  it('a clean close during the git work: the kernel closes in bounded time, the command runs on the next start', async () => {
+    const h = holdAdd()
+    const r = await rig({ channel: { git: h.git } })
+    r.dm('/project api')
+    await reached(h)
+    h.held = false
+    await r.restart()
+    await online(r)
+    await expect.poll(() => chatOf(r)?.commands?.length ?? 0, { timeout: 20_000, interval: 5 }).toBe(0)
+    await flow(r)
+    expect(created(r)).toHaveLength(1)
+    expect(chatOf(r).project).toBe('api')
+  })
+})
+
+describe('turning auto off reaches the session already open', () => {
+  const on = [{ name: 'api', path: '', auto: true }]
+  const setAuto = (r: TelegramRig, id: string, auto: boolean) => r.k.handle('channel.telegram.config.set', { commandId: id, config: { enabled: true, staleMinutes: 10, projects: [{ name: 'api', path: repo, auto }] } })
+  const shellDefault = async (r: TelegramRig, sessionId: string) => ((await r.k.handle('permissions.get', { sessionId })) as { defaults: string[] }).defaults.find(d => d.endsWith('shell(*)'))
+  const autoRig = (o: Rig = {}) => rig({ level: 'full', projects: on.map(p => ({ ...p, path: repo })), ...o })
+
+  it('off in the app: the next shell asks; no spawn, no /new; the chat hears one line', async () => {
+    const r = await autoRig({ models: { script: n => (n === 1 ? calling('c1', 'shell', { command: 'echo hi' }) : say('done')) } })
+    await send(r, '/project api')
+    const { sessionId } = created(r)[0]
+    expect(await shellDefault(r, sessionId)).toBe('allow shell(*)')
+    await setAuto(r, 'c1', false)
+    expect(await shellDefault(r, sessionId)).toBe('ask shell(*)')
+    await flow(r)
+    expect(texts(r).at(-1)).toContain('自动放行关了')
+    await send(r, 'run')
+    await expect.poll(async () => {
+      await flow(r, 1200)
+      return events(r, 'approval.requested').length
+    }, { timeout: 15_000, interval: 5 }).toBe(1)
+    expect(chatOf(r).sessionId).toBe(sessionId)
+    const { approvalId } = events(r, 'approval.requested')[0].payload as { approvalId: string }
+    await r.k.handle('approval.respond', { approvalId, decision: 'deny' })
+    await turnEnds(r, 1)
+  })
+
+  it('it survives a restart; on again does not widen it, and /new does', async () => {
+    const r = await autoRig()
+    await send(r, '/project api')
+    const { sessionId } = created(r)[0]
+    await setAuto(r, 'c1', false)
+    await r.restart({ kill: true })
+    await online(r)
+    expect(await shellDefault(r, sessionId)).toBe('ask shell(*)')
+    await setAuto(r, 'c2', true)
+    expect(await shellDefault(r, sessionId)).toBe('ask shell(*)')
+    await send(r, '/new')
+    expect(created(r)[1].approvalMode).toBe('auto')
+    expect(await shellDefault(r, created(r)[1].sessionId)).toBe('allow shell(*)')
+  })
+
+  it('the alias removed: the same, every session of that worktree', async () => {
+    const r = await autoRig()
+    await send(r, '/project api')
+    await send(r, '/new')
+    await r.k.handle('channel.telegram.config.set', { commandId: 'c1', config: { enabled: true, staleMinutes: 10, projects: [] } })
+    for (const s of created(r)) expect(await shellDefault(r, s.sessionId)).toBe('ask shell(*)')
+    expect(events(r, 'session.approvalNarrowed')).toHaveLength(2)
+  })
+
+  it('config.json edited while the daemon was down: narrowed before the first turn', async () => {
+    const r = await autoRig()
+    await send(r, '/project api')
+    const { sessionId } = created(r)[0]
+    await r.restart()
+    const file = join(r.dataDir, 'config.json')
+    const config = JSON.parse(readFileSync(file, 'utf8'))
+    config.channels.telegram.projects[0].auto = false
+    writeFileSync(file, JSON.stringify(config))
+    await r.restart()
+    await online(r)
+    expect(await shellDefault(r, sessionId)).toBe('ask shell(*)')
+  })
+
+  it('auto stays where it is still allowed: a config.set that keeps it narrows nothing', async () => {
+    const r = await autoRig()
+    await send(r, '/project api')
+    await setAuto(r, 'c1', true)
+    expect(await shellDefault(r, created(r)[0].sessionId)).toBe('allow shell(*)')
+    expect(events(r, 'session.approvalNarrowed')).toEqual([])
+  })
+
+  it('the service only narrows IM sessions: an app session on auto is untouched', async () => {
+    let service: { narrowApproval(id: string): void } | undefined
+    const r = await autoRig({
+      plugins: () => [...coding(), createLoopDefault({ git }), { manifest: { id: 'spy', version: '0', kernel: '^0.1.0', inject: ['sessionCommands'] }, activate: ctx => void (service = ctx.services.get('sessionCommands')) }],
+    })
+    const { sessionId } = (await r.k.handle('session.create', { commandId: 'a1', approvalMode: 'auto', cwd: repo })) as { sessionId: string }
+    service!.narrowApproval(sessionId)
+    expect(await shellDefault(r, sessionId)).toBe('allow shell(*)')
+    expect(events(r, 'session.approvalNarrowed')).toEqual([])
+  })
+})
+
+describe('a worktree with content is not deleted on a guess', () => {
+  it('on disk, the chat mapping never appears without the session in the record', async () => {
+    const real = TelegramState.prototype.save
+    const seen: boolean[] = []
+    const spy = vi.spyOn(TelegramState.prototype, 'save').mockImplementation(function (this: TelegramState) {
+      for (const raw of Object.values(this.data.chats)) {
+        const chat = raw as { worktreeId?: string; sessionId?: string }
+        if (chat.worktreeId === undefined) continue
+        const record = this.data.worktrees[chat.worktreeId] as { sessionIds: string[]; opened?: boolean }
+        seen.push(record.opened === true && record.sessionIds.includes(chat.sessionId!))
+      }
+      real.call(this)
+    })
+    const r = await rig()
+    await send(r, '/project api')
+    await send(r, '/new')
+    expect(seen.length).toBeGreaterThan(0)
+    expect(seen.every(Boolean)).toBe(true)
+    spy.mockRestore()
+  })
+
+  it.each([
+    ['no session ids, no opened flag (a crash between two writes in an older state file)', (w: { sessionIds: string[]; opened?: boolean }) => {
+      w.sessionIds = []
+      delete w.opened
+    }],
+    ['the session he just left is not in the record', (w: { sessionIds: string[] }) => {
+      w.sessionIds = ['some-other-session']
+    }],
+  ])('%s: /project off keeps it and says so in the log; it stays listed', async (_n, edit) => {
+    const r = await rig({ models: { script: n => (n === 1 ? calling('c1', 'write', { path: 'work.txt', content: 'work\n' }) : say('done')) } })
+    const id = await send(r, '/project api')
+    await send(r, 'do it')
+    await turnEnds(r, 1)
+    const cwd = created(r)[0].cwd!
+    const seeded = onDisk(r)
+    edit(seeded.worktrees[`wt_${id}`])
+    writeFileSync(stateFile(r), JSON.stringify(seeded))
+    await r.restart({ kill: true })
+    await online(r)
+    await send(r, '/project off')
+    expect(readFileSync(join(cwd, 'work.txt'), 'utf8')).toBe('work\n')
+    expect((await listed(r)).worktrees.map(w => w.id)).toEqual([`wt_${id}`])
+    expect(r.logs.join('\n')).toContain('kept')
+  })
+
+  it('a record still opening (crash before the session): never removed on leaving, the chat is not in it', async () => {
+    const r = await rig()
+    const id = await send(r, '/project api')
+    const seeded = onDisk(r)
+    delete seeded.worktrees[`wt_${id}`].opened
+    seeded.worktrees[`wt_${id}`].sessionIds = []
+    delete seeded.chats[String(r.owner)].project
+    delete seeded.chats[String(r.owner)].worktreeId
+    delete seeded.chats[String(r.owner)].sessionId
+    writeFileSync(stateFile(r), JSON.stringify(seeded))
+    await r.restart({ kill: true })
+    await online(r)
+    await send(r, '/project off')
+    expect((await listed(r)).worktrees.map(w => w.id)).toEqual([`wt_${id}`])
+    expect(existsSync(created(r)[0].cwd!)).toBe(true)
+  })
+})
+
 describe('redelivery', () => {
   it('a redelivered /project makes one worktree and one session', async () => {
     const r = await rig()
@@ -706,6 +1001,8 @@ describe('redelivery', () => {
 })
 
 describe('reconciliation at activation', () => {
+  const C1 = `c${'1'.repeat(16)}`
+  const C2 = `c${'2'.repeat(16)}`
   const plant = (r: TelegramRig, group: string, id: string, file?: string) => {
     const path = join(imWorktreeRootOf(r.dataDir), group, id)
     mkdirSync(path, { recursive: true })
@@ -715,12 +1012,12 @@ describe('reconciliation at activation', () => {
 
   it('an empty reservation is removed; an unknown directory is listed as an orphan and discardable', async () => {
     const r = await rig()
-    const empty = plant(r, 'c1', 'wt_empty')
-    const orphan = plant(r, 'c2', 'wt_orphan', 'left.txt')
+    const empty = plant(r, C1, 'wt_empty')
+    const orphan = plant(r, C2, 'wt_orphan', 'left.txt')
     await r.restart()
     await online(r)
     expect(existsSync(empty)).toBe(false)
-    expect(existsSync(join(imWorktreeRootOf(r.dataDir), 'c1'))).toBe(false)
+    expect(existsSync(join(imWorktreeRootOf(r.dataDir), C1))).toBe(false)
     const { worktrees } = await listed(r)
     expect(worktrees).toEqual([{ id: 'wt_orphan', project: '', path: realpathSync(orphan), sessionIds: [], createdAt: expect.any(Number) }])
     await r.k.handle('channel.telegram.worktree.discard', { commandId: 'd1', worktreeId: 'wt_orphan' })
@@ -774,7 +1071,7 @@ describe('reconciliation at activation', () => {
 
   it('twenty orphans fill the quota: /project says so, a discard makes room', async () => {
     const r = await rig()
-    for (let i = 0; i < 20; i++) plant(r, 'c9', `wt_o${i}`, 'x')
+    for (let i = 0; i < 20; i++) plant(r, C2, `wt_o${i}`, 'x')
     await r.restart()
     await online(r)
     await send(r, '/project api')
@@ -805,17 +1102,80 @@ describe('reconciliation at activation', () => {
   it('symlinks and files in the IM root are left alone', async () => {
     const r = await rig()
     const root = imWorktreeRootOf(r.dataDir)
-    mkdirSync(join(root, 'c1'), { recursive: true })
+    mkdirSync(join(root, C1), { recursive: true })
     const target = join(base, 'target')
     mkdirSync(target)
     writeFileSync(join(target, 'keep.txt'), 'keep')
-    symlinkSync(target, join(root, 'c1', 'wt_link'))
-    writeFileSync(join(root, 'c1', 'file'), 'x')
+    symlinkSync(target, join(root, C1, 'wt_link'))
+    writeFileSync(join(root, C1, 'file'), 'x')
     await r.restart()
     await online(r)
     expect((await listed(r)).worktrees).toEqual([])
     expect(readFileSync(join(target, 'keep.txt'), 'utf8')).toBe('keep')
-    expect(existsSync(join(root, 'c1', 'file'))).toBe(true)
+    expect(existsSync(join(root, C1, 'file'))).toBe(true)
+  })
+
+  it('names we never made are not ours: neither removed nor listed', async () => {
+    const r = await rig()
+    const emptyGroup = join(imWorktreeRootOf(r.dataDir), 'notes')
+    mkdirSync(emptyGroup, { recursive: true })
+    const emptyId = plant(r, C1, 'keepme')
+    const full = plant(r, 'backup', 'wt_1', 'x')
+    await r.restart()
+    await online(r)
+    expect((await listed(r)).worktrees).toEqual([])
+    for (const p of [emptyGroup, emptyId, full]) expect(existsSync(p)).toBe(true)
+  })
+
+  it('a symlinked root is not followed: nothing removed, nothing listed, a discard refuses', async () => {
+    const r = await rig()
+    await send(r, '/project api')
+    const { worktrees } = await listed(r)
+    const away = join(base, 'away')
+    const root = imWorktreeRootOf(r.dataDir)
+    mkdirSync(join(away, C1, 'wt_empty'), { recursive: true })
+    mkdirSync(join(away, C2, 'wt_full'), { recursive: true })
+    writeFileSync(join(away, C2, 'wt_full', 'x'), 'x')
+    rmSync(worktrees[0].path, { recursive: true })
+    sh(['worktree', 'prune'])
+    rmSync(root, { recursive: true })
+    symlinkSync(away, root)
+    await r.restart()
+    await online(r)
+    expect(existsSync(join(away, C1, 'wt_empty'))).toBe(true)
+    expect((await listed(r)).worktrees.map(w => w.id)).toEqual([worktrees[0].id])
+    expect(r.logs.join('\n')).toContain('symlink')
+    await expect(r.k.handle('channel.telegram.worktree.discard', { commandId: 'd1', worktreeId: worktrees[0].id })).rejects.toBeDefined()
+    expect(readFileSync(join(away, C2, 'wt_full', 'x'), 'utf8')).toBe('x')
+  })
+
+  it.skipIf(process.platform !== 'darwin')('a record spelled in another case is the same directory, not an orphan', async () => {
+    const r = await rig()
+    const id = await send(r, '/project api')
+    const seeded = onDisk(r)
+    seeded.worktrees[`wt_${id}`].path = seeded.worktrees[`wt_${id}`].path.replace(/wt_/, 'WT_')
+    writeFileSync(stateFile(r), JSON.stringify(seeded))
+    await r.restart({ kill: true })
+    await online(r)
+    expect((await listed(r)).worktrees.map(w => w.id)).toEqual([`wt_${id}`])
+  })
+
+  it('an orphan with a turn open: ERR_BUSY', async () => {
+    const gated = gatedStream('thinking', ' done')
+    const r = await rig({ models: { script: gatedScript(gated) } })
+    const saved = readFileSync(stateFile(r))
+    await send(r, '/project api')
+    const { sessionId, cwd } = created(r)[0]
+    writeFileSync(stateFile(r), saved)
+    await r.restart({ kill: true })
+    await online(r)
+    await r.k.handle('session.prompt', { commandId: 'p1', sessionId, text: 'from the app' })
+    await expect.poll(() => events(r, 'message.user').length, { timeout: 5000, interval: 5 }).toBe(1)
+    const { worktrees } = await listed(r)
+    await expect(r.k.handle('channel.telegram.worktree.discard', { commandId: 'd1', worktreeId: worktrees[0].id })).rejects.toMatchObject({ code: ERR_BUSY })
+    expect(existsSync(cwd!)).toBe(true)
+    gated.open()
+    await turnEnds(r, 1)
   })
 })
 

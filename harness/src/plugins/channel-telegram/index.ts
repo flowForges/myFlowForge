@@ -40,6 +40,8 @@ const LEAVES_PER_WINDOW = 30
 const LEFT_CHATS_MAX = 1000
 /** 关闭时最多再等这么久(§5.2) */
 const FLUSH_MS = 500
+/** 关闭时等手上的命令(git 打断不了);等不到它也不会再动内核 */
+const COMMAND_STOP_MS = 2000
 const SAVE_FAILED = 'state_save_failed'
 const CONFIG_INVALID = 'config_invalid'
 
@@ -213,6 +215,7 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
         now,
         timers,
         ...(opts.debounceMs !== undefined && { debounceMs: opts.debounceMs }),
+        runCommand: (chatId, c) => runCommand(parseCommand(c.text, state.data.bot?.username), { chatId, accountId: chatId, updateId: c.updateId }, commandDeps, ctx.log),
         log: ctx.log,
         isPaired: chatId => isPaired(chatId, chatId),
         mask,
@@ -310,7 +313,10 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
         models: () => ctx.services.get<ModelsService>('models'),
         history: sessionId => ctx.events.history(sessionId),
         channelState: () => current.state,
-        unpair: accountId => void revokeAccount(accountId, 'im'),
+        unpair: accountId => {
+          revokeAccount(accountId, 'im')
+          return saveNow()
+        },
         botId: () => {
           const id = state.data.bot?.id
           if (id === undefined) throw new Error('no bot')
@@ -334,13 +340,9 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
           // 等的时候可能撤销、换机器人了
           if (state.data.bot?.id !== botId || !isPaired(i.accountId, i.chatId)) return
         }
-        // 转发的永远不是命令(R15)。命令的效果和 offset 同一次落盘,和排队的消息一样
-        if (!external && isCommandShaped(i.text)) {
-          if (chats.admit(i)) await runCommand(parseCommand(i.text, state.data.bot?.username), i, commandDeps, ctx.log)
-          // /project 要等 git:等的时候可能换了机器人,offset 已经是新机器人的了
-          if (state.data.bot?.id !== botId) return
-          state.advance(i.updateId)
-          saveNow()
+        // 转发的永远不是命令(R15);拆开的粘贴里的一段也不是。命令不挡轮询,收下和 offset 同一次落盘
+        if (!external && isCommandShaped(i.text) && !chats.inPaste(i.chatId)) {
+          chats.onCommand(i)
           return
         }
         chats.onDm(i)
@@ -634,6 +636,8 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
           if (invalid >= 0) state.problems.splice(invalid, 1)
           const switched = next.enabled !== config.enabled
           config = next
+          // 收窄马上生效,不等 /new(§8.3)
+          projects.narrow(true)
           if (switched) {
             await poller.stop()
             if (!next.enabled) pairing.cancel()
@@ -648,6 +652,7 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
         timers.clearTimeout(statusTimer)
         statusTimer = undefined
         await poller.stop()
+        await chats.commandsIdle(COMMAND_STOP_MS)
         // 关内核时轮已经停了:终态在这里交给发送器。发不出去的 delivery 还开着,下次启动补
         chats.dispose()
         cards.dispose()
@@ -662,6 +667,8 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
         // 根读不了不挡激活:名额的问题,建新的时候会说
         ctx.log.warn('telegram worktree reconcile failed', { code: codeOf(err) })
       }
+      // 后台关着的时候手改了配置也一样:第一轮之前收窄
+      projects.narrow(false)
 
       try {
         token = await ctx.secrets.get(TOKEN_KEY)
