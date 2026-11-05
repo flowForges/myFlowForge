@@ -57,11 +57,11 @@ describe('parseCommand', () => {
   })
 
   it('a plugin command is command-shaped and parses to nothing: 09 has no way in from here', () => {
-    for (const text of ['/x:y', '/my-plugin:do.it now']) {
+    for (const text of ['/x:y', '/my-plugin:do.it now', '/x:y@bot', '/x:y@bot now']) {
       expect(isCommandShaped(text)).toBe(true)
       expect(parseCommand(text, 'fake_bot')).toBeUndefined()
     }
-    for (const text of ['/usr/local:x', 'x:y', '/x:', '/:y', '/http://a:b/c']) expect(isCommandShaped(text)).toBe(false)
+    for (const text of ['/usr/local:x', 'x:y', '/x:', '/:y', '/http://a:b/c', '/x:y@', '/x:y@a/b']) expect(isCommandShaped(text)).toBe(false)
   })
 
   it('no known username: a mention names some other bot', () => {
@@ -75,7 +75,7 @@ describe('parseCommand', () => {
 })
 
 describe('what is not a command', () => {
-  it.each(['/x', '/x:y', '/my-plugin:do-it', '/x:y some args', '/auto', '/approve', '/__proto__', '/constructor', '/status@other_bot', '/x with some words'])('%j gets the help, and no model request', async text => {
+  it.each(['/x', '/x:y', '/my-plugin:do-it', '/x:y some args', '/x:y@fake_bot', '/x:y@other_bot now', '/auto', '/approve', '/__proto__', '/constructor', '/status@other_bot', '/x with some words'])('%j gets the help, and no model request', async text => {
     const r = await rig()
     await send(r, text)
     expect(texts(r).at(-1)).toContain('/project')

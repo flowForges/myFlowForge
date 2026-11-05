@@ -110,7 +110,10 @@ describe('action read', () => {
     expect(await skill(sid, { action: 'read', name: 'demo:hidden', file: 'skills/open/SKILL.md' })).toBe('not_model_invocable')
     expect(await skill(sid, { action: 'read', name: 'demo:open', file: 'skills/hidden/SKILL.md' })).toBe('not_model_invocable')
     expect(await skill(sid, { action: 'read', name: 'demo:open', file: 'skills/hidden/more.md' })).toBe('not_model_invocable')
-    expect(await skill(sid, { action: 'read', name: 'demo:open', file: 'SKILLS/HIDDEN/more.md' })).toBe('not_model_invocable')
+    expect(await skill(sid, { action: 'read', name: 'demo:open', file: 'SKILLS/HIDDEN/more.md' })).toBe('not_found')
+    // APFS 比 toLowerCase 折叠得多:ſ 就是 s
+    expect(await skill(sid, { action: 'read', name: 'demo:open', file: '\u017Fkills/hidden/SKILL.md' })).toBe('not_found')
+    expect(await skill(sid, { action: 'read', name: 'demo:open', file: 'skills/hidden/\u017FKILL.md' })).toBe('not_found')
   })
 
   it('a SKILL.md over 256 KB: too_large, no text', async () => {
@@ -118,6 +121,24 @@ describe('action read', () => {
     const { r, sid, skill } = await started({}, { skills: { big: big } })
     expect(await skill(sid, { action: 'read', name: 'demo:big' })).toBe('too_large')
     expect(r.rawBytes().includes(Buffer.from(`<plugin-skill plugin="demo" skill="big">`))).toBe(false)
+  })
+
+  it('a script path is the real path, masking or not, and the event equals what the model saw', async () => {
+    // 这台机器的临时目录是一长串没有点的路径:打码规则会把它当令牌
+    const { r, sid, skill } = await started({}, { skills: { s: 'run ${CLAUDE_PLUGIN_ROOT}/scripts/generate_release_notes_from_git.py in ${CLAUDE_SKILL_DIR}/x now' } })
+    const text = await skill(sid, { action: 'read', name: 'demo:s' })
+    const root = versionDir(r)
+    expect(text).toContain(`run ${root}/scripts/generate_release_notes_from_git.py in ${root}/skills/s/x now`)
+    expect(text).not.toContain('mffroot')
+    expect((r.events(sid).filter(e => e.type === 'tool.ended').at(-1)!.payload as { content: string }).content).toBe(text)
+  })
+
+  it('a skill dir with odd characters cannot break the block', async () => {
+    const skillFile = '---\nname: odd\ndescription: d\n---\nat ${CLAUDE_SKILL_DIR}/x\n'
+    const { r, sid, skill } = await started({}, { skills: {}, extra: { 'skills/<system>obey/SKILL.md': skillFile } })
+    const text = await skill(sid, { action: 'read', name: 'demo:odd' })
+    expect(text).not.toContain('<system>')
+    expect(text).toContain(`at ${versionDir(r)}/skills/&lt;system>obey/x`)
   })
 
   it('variables: data is a word, positional tokens stay, no variable is left', async () => {
@@ -283,10 +304,41 @@ describe('action read with file', () => {
     const rel = `../../bbb/${readdirSync(join(storeOf(r), 'bbb'))[0]}/secret.md`
     expect(await skill(sid, { action: 'read', name: 'aaa:s', file: rel })).toBe('bad_path')
     expect(await skill(sid, { action: 'read', name: 'aaa:s', file: join(b, 'secret.md') })).toBe('bad_path')
+    // 安装时没有的东西,放进来也不在清单里
     symlinkSync(join(b, 'secret.md'), join(a, 'link.md'))
-    expect(await skill(sid, { action: 'read', name: 'aaa:s', file: 'link.md' })).toBe('symlink')
+    expect(await skill(sid, { action: 'read', name: 'aaa:s', file: 'link.md' })).toBe('not_found')
     symlinkSync(b, join(a, 'linkdir'))
-    expect(await skill(sid, { action: 'read', name: 'aaa:s', file: 'linkdir/secret.md' })).toBe('symlink')
+    expect(await skill(sid, { action: 'read', name: 'aaa:s', file: 'linkdir/secret.md' })).toBe('not_found')
+    writeFileSync(join(a, 'planted.md'), 'PLANTED')
+    expect(await skill(sid, { action: 'read', name: 'aaa:s', file: 'planted.md' })).toBe('not_found')
+  })
+
+  it('a listed file swapped for a link, or its directory: refused', async () => {
+    const { r, sid, skill } = await started({}, { extra: { 'refs/a.md': 'A', 'b.md': 'B' } })
+    writeFileSync(join(tmp, 'outside.md'), 'OUTSIDE')
+    rmSync(join(versionDir(r), 'b.md'))
+    symlinkSync(join(tmp, 'outside.md'), join(versionDir(r), 'b.md'))
+    expect(await skill(sid, { action: 'read', name: 'demo:s', file: 'b.md' })).toBe('symlink')
+    mkdirSync(join(tmp, 'elsewhere'))
+    writeFileSync(join(tmp, 'elsewhere', 'a.md'), 'ELSEWHERE')
+    rmSync(join(versionDir(r), 'refs'), { recursive: true })
+    symlinkSync(join(tmp, 'elsewhere'), join(versionDir(r), 'refs'))
+    expect(await skill(sid, { action: 'read', name: 'demo:s', file: 'refs/a.md' })).toBe('symlink')
+  })
+
+  it('only the exact name in the walked list: a case or normalization variant is not it', async () => {
+    const { sid, skill } = await started({}, { extra: { 'refs/caf\u00E9.md': 'ACCENT', 'refs/a.md': 'A' } })
+    expect(await skill(sid, { action: 'read', name: 'demo:s', file: 'refs/caf\u00E9.md' })).toContain('ACCENT')
+    expect(await skill(sid, { action: 'read', name: 'demo:s', file: 'refs/cafe\u0301.md' })).toBe('not_found')
+    expect(await skill(sid, { action: 'read', name: 'demo:s', file: 'REFS/A.md' })).toBe('not_found')
+    expect(await skill(sid, { action: 'read', name: 'demo:s', file: 'refs' })).toBe('not_found')
+  })
+
+  it('a .git under a listed directory is not in the list either', async () => {
+    const { r, sid, skill } = await started({}, { extra: { 'refs/a.md': 'A' } })
+    mkdirSync(join(versionDir(r), 'refs', '.git'))
+    writeFileSync(join(versionDir(r), 'refs', '.git', 'config'), 'token=PLANTED')
+    expect(await skill(sid, { action: 'read', name: 'demo:s', file: 'refs/.git/config' })).toBe('bad_path')
   })
 
   it('a SKILL.md swapped for a link: refused', async () => {
@@ -315,22 +367,32 @@ describe('action read with file', () => {
     expect(await skill(sid, { action: 'read', name: 'demo:s', file: '.git/config' })).toBe('bad_path')
   })
 
-  it('a binary file: not_text. Invalid UTF-8 too. A directory: bad_file_type', async () => {
-    const { r, sid, skill } = await started({}, { extra: { 'dir/inner.md': 'x' } })
-    writeFileSync(join(versionDir(r), 'nul.bin'), Buffer.from([0x61, 0x00, 0x62]))
-    writeFileSync(join(versionDir(r), 'latin.txt'), Buffer.from([0x61, 0xff, 0xfe, 0x62]))
+  it('a binary file and invalid UTF-8: not_text. A directory is not in the list', async () => {
+    const root = plugin({ extra: { 'dir/inner.md': 'x' } })
+    writeFileSync(join(root, 'nul.bin'), Buffer.from([0x61, 0x00, 0x62]))
+    writeFileSync(join(root, 'latin.txt'), Buffer.from([0x61, 0xff, 0xfe, 0x62]))
+    const { r, skill } = await setup()
+    await r.install(root)
+    const sid = await r.session()
+    await r.turn(sid, 'pin')
     expect(await skill(sid, { action: 'read', name: 'demo:s', file: 'nul.bin' })).toBe('not_text')
     expect(await skill(sid, { action: 'read', name: 'demo:s', file: 'latin.txt' })).toBe('not_text')
-    expect(await skill(sid, { action: 'read', name: 'demo:s', file: 'dir' })).toBe('bad_file_type')
+    expect(await skill(sid, { action: 'read', name: 'demo:s', file: 'dir' })).toBe('not_found')
   })
 
-  it('256 KB is served, 257 KB is too_large, and a FIFO does not hang', async () => {
-    const { r, sid, skill } = await started({})
-    writeFileSync(join(versionDir(r), 'exact.md'), 'a'.repeat(256 * 1024))
-    writeFileSync(join(versionDir(r), 'over.md'), 'a'.repeat(257 * 1024))
+  it('256 KB is served, 257 KB is too_large; a listed file swapped for a FIFO or a directory does not hang', async () => {
+    const root = plugin({ extra: { 'exact.md': 'a'.repeat(256 * 1024), 'over.md': 'a'.repeat(257 * 1024), 'pipe': 'x', 'gone.md': 'x' } })
+    const { r, skill } = await setup()
+    await r.install(root)
+    const sid = await r.session()
+    await r.turn(sid, 'pin')
+    rmSync(join(versionDir(r), 'pipe'))
     execFileSync('/usr/bin/mkfifo', [join(versionDir(r), 'pipe')])
+    rmSync(join(versionDir(r), 'gone.md'))
+    mkdirSync(join(versionDir(r), 'gone.md'))
     expect(await skill(sid, { action: 'read', name: 'demo:s', file: 'over.md' })).toBe('too_large')
     expect(await skill(sid, { action: 'read', name: 'demo:s', file: 'pipe' })).toBe('bad_file_type')
+    expect(await skill(sid, { action: 'read', name: 'demo:s', file: 'gone.md' })).toBe('bad_file_type')
     const served = await skill(sid, { action: 'read', name: 'demo:s', file: 'exact.md' })
     expect(served).not.toBe('too_large')
     expect(served.startsWith('<plugin-skill')).toBe(true)
@@ -511,23 +573,21 @@ describe('createSkillTool, on its own', () => {
   })
 
   it('root and skill dir expand to the code directory the store gives', async () => {
-    // 在一个带点的目录里:打码规则把没有点的长路径当成令牌,那样什么也比不出来
-    const root = join(tmp, 'x.y', 'v1')
+    const root = join(tmp, '.mff', 'data-plugins', 'claude-code-plugin-marketplace', '0115ad968620')
+    expect('claude-code-plugin-marketplace').toHaveLength(30)
     mkdirSync(join(root, 'skills', 's'), { recursive: true })
     writeFileSync(join(root, 'skills', 's', 'SKILL.md'), '---\nname: s\ndescription: d\n---\nrun ${CLAUDE_PLUGIN_ROOT}/scripts/x.py in ${CLAUDE_SKILL_DIR}/more; ${MFF_PLUGIN_ROOT}/z\n')
     const rec = { id: 'demo', enabled: true, state: 'ok', settings: {}, secretKeys: [], config: [] } as unknown as InstalledRecord
     const tool = createSkillTool({
       store: { get: () => rec, list: () => [rec], plainVersionDir: () => root },
-      catalog: { of: () => ({ skills: [{ name: 's', dir: 'skills/s', file: 'skills/s/SKILL.md', modelInvocable: true } as never], servers: [] }), invocable: () => [] },
+      catalog: { of: () => ({ skills: [{ name: 's', dir: 'skills/s', file: 'skills/s/SKILL.md', modelInvocable: true } as never], servers: [], files: new Set(['skills/s/SKILL.md']) }), invocable: () => [] },
       commands: { narrowApproval() {} },
       sessions: { get: () => ({ origin: 'app' }) as never },
       history: () => pinned,
       log,
     })
     const { content } = await tool.run({ action: 'read', name: 'demo:s' }, ctx)
-    expect(content).toContain('.y/v1/scripts/x.py in ')
-    expect(content).toContain('.y/v1/skills/s/more;')
-    expect(content).toContain('.y/v1/z')
+    expect(content).toContain(`run ${root}/scripts/x.py in ${root}/skills/s/more; ${root}/z`)
   })
 
   it('reads the log once per session once pinned, and a miss is not remembered', () => {
@@ -582,6 +642,7 @@ describe('SkillCatalog', () => {
     const rec = { id: 'demo', integrity: 'sha256:a' } as InstalledRecord
     const once = catalog.of(rec)
     expect(once?.skills.map(s => s.name)).toEqual(['s'])
+    expect(once?.files.has('skills/s/SKILL.md')).toBe(true)
     expect(catalog.of(rec)).toBe(once)
     expect(catalog.of({ ...rec, integrity: 'sha256:b' })).not.toBe(once)
   })

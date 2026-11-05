@@ -1,5 +1,9 @@
 // 技能和命令正文里的变量(09 spec §5.2、§9.5)。一遍替换:替换进去的值不会再被展开,
 // 所以参数里的 `$2` 不会变成第二个参数
+import { randomBytes } from 'node:crypto'
+import { escapeTags } from '../memory/wrap'
+import { cleanText } from '../tools/diagnostics'
+
 export interface ExpandVars {
   root: string
   skillDir?: string
@@ -99,4 +103,30 @@ export function expandBody(text: string, v: ExpandVars, max = EXPAND_MAX): Expan
   if (!push(text.slice(last))) return TOO_LARGE
   if (given && !placeholder && args.trim() !== '' && !push(`\n\nARGUMENTS: ${args}`)) return TOO_LARGE
   return { ok: true, text: out.join('') }
+}
+
+/** 包裹之后调,把哨兵换回真实路径 */
+export type PathSeal = (wrapped: string) => string
+
+/** 路径不是第三方能写的文字以外的东西:技能目录名是它写的,所以写不出标签、换不了行,其余原样 */
+const safePath = (p: string) => escapeTags(cleanText(p)).replace(/\n/g, '\\n')
+
+/**
+ * 路径是已知的,不是密钥,但打码规则分不出来:一长串没有点的路径会被当成令牌,脚本就跑不了。
+ * 所以先放哨兵:全小写、带点,打码碰不到,也不和前后的文字连成一串;每次调用都不同,正文和设置值都猜不到。
+ * 设置值和参数还在正文里,照样打码。上限按真实路径算
+ */
+export function expandSealed(text: string, v: ExpandVars, max = EXPAND_MAX): { ok: true; text: string; seal: PathSeal } | { ok: false; error: 'too_large' } {
+  const real = expandBody(text, v, max)
+  if (!real.ok) return real
+  const nonce = randomBytes(16).toString('hex')
+  const root = `.mffroot.${nonce}.`
+  const skillDir = `.mffskill.${nonce}.`
+  // 路径比哨兵短时展开后会变长:哨兵不到 50 字,每个变量至少 20 字
+  const sealed = expandBody(text, { ...v, root, ...(v.skillDir !== undefined && { skillDir }) }, max * 4)
+  if (!sealed.ok) return sealed
+  const realRoot = safePath(v.root)
+  const realDir = v.skillDir === undefined ? '' : safePath(v.skillDir)
+  // 替换值用函数:路径里的 `$&` 不是替换模式
+  return { ok: true, text: sealed.text, seal: s => s.replaceAll(root, () => realRoot).replaceAll(skillDir, () => realDir) }
 }

@@ -2,7 +2,7 @@
 // 权限不因这里的文字改变任何东西:门、沙箱、审批都在模型之外。IM 会话读之前先永久收窄(M22)
 import { join } from 'node:path'
 import type { Logger } from '../../kernel/log'
-import { expandBody } from '../../lib/plugins/expand'
+import { expandSealed } from '../../lib/plugins/expand'
 import { parseFrontmatter } from '../../lib/plugins/frontmatter'
 import { readPlain } from '../../lib/plugins/tree'
 import { SKILL_MAX, type ParsedSkill } from '../../lib/plugins/types'
@@ -55,10 +55,9 @@ function cleanFilePath(file: string): string | undefined {
   return segs.join('/')
 }
 
-/** 不给模型的技能,目录也不能绕 file 读。根上的 SKILL.md 没有自己的目录,只比文件。不分大小写:卷可能不分 */
+/** 不给模型的技能,目录也不能绕 file 读。根上的 SKILL.md 没有自己的目录,只比文件。file 已经逐字在清单里,变体到不了这里 */
 function holdsHiddenSkill(skills: ParsedSkill[], file: string): boolean {
-  const f = file.toLowerCase()
-  return skills.some(s => !s.modelInvocable && (f === s.file.toLowerCase() || (s.dir !== '' && f.startsWith(`${s.dir.toLowerCase()}/`))))
+  return skills.some(s => !s.modelInvocable && (file === s.file || (s.dir !== '' && file.startsWith(`${s.dir}/`))))
 }
 
 function textOf(bytes: Buffer): string | undefined {
@@ -107,6 +106,7 @@ export function createSkillTool(d: SkillToolDeps): Tool {
 
     const rel = file === undefined ? skill.file : cleanFilePath(file)
     if (rel === undefined) return code('bad_path')
+    if (!parsed.files.has(rel)) return code('not_found')
     if (holdsHiddenSkill(parsed.skills, rel)) return code('not_model_invocable')
     const root = d.store.plainVersionDir(rec)
     if (!root) return code('plugin_unreadable')
@@ -117,9 +117,9 @@ export function createSkillTool(d: SkillToolDeps): Tool {
     if (file !== undefined) return { content: skillBlock({ plugin: rec.id, skill: skill.name, text }) }
 
     const { settings, sensitive } = settingsFor(rec)
-    const expanded = expandBody(parseFrontmatter(text).body, { root, skillDir: join(root, skill.dir), settings, sensitive })
+    const expanded = expandSealed(parseFrontmatter(text).body, { root, skillDir: join(root, skill.dir), settings, sensitive })
     if (!expanded.ok) return code(expanded.error)
-    return { content: skillBlock({ plugin: rec.id, skill: skill.name, text: expanded.text }) }
+    return { content: skillBlock({ plugin: rec.id, skill: skill.name, text: expanded.text, seal: expanded.seal }) }
   }
 
   return {

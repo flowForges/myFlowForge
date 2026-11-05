@@ -39,7 +39,7 @@ const OPEN_FAILED: Record<string, string> = {
 /** 这个形状的文字不进模型。给别的机器人的算不认识,也不进(§11) */
 const SHAPE = /^\/[a-z_]+(?:@[A-Za-z0-9_]+)?(?:\s|$)/
 /** 09 的插件命令:表是闭合的,这里没有入口(§9.6)。长得像就回帮助,也不当成一句话发给模型 */
-const PLUGIN_SHAPE = /^\/[A-Za-z0-9_.-]+:[A-Za-z0-9_.:-]+(?:\s|$)/
+const PLUGIN_SHAPE = /^\/[A-Za-z0-9_.-]+:[A-Za-z0-9_.:-]+(?:@[A-Za-z0-9_]+)?(?:\s|$)/
 
 export const isCommandShaped = (text: string) => SHAPE.test(text) || PLUGIN_SHAPE.test(text)
 

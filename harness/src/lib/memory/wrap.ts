@@ -27,7 +27,7 @@ export function dataText(s: string): string {
 }
 
 /** 像标签的 < 都转义。转义过的文本再过一遍不变 */
-const escapeTags = (s: string) => s.replace(/<(?=[A-Za-z/!?])/g, '&lt;')
+export const escapeTags = (s: string) => s.replace(/<(?=[A-Za-z/!?])/g, '&lt;')
 
 /**
  * Markdown 条目:压成一行、去掉注释记号,否则模型能在行尾伪造 `src=user`。

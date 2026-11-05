@@ -3,6 +3,7 @@
 import type { Logger } from '../../kernel/log'
 import { HARNESS_VERSION } from '../../kernel/version'
 import { readPlugin } from '../../lib/plugins/read'
+import { walkTree } from '../../lib/plugins/tree'
 import { pluginViewOf, type PluginView } from '../../lib/plugins/view'
 import type { IndexItem, IndexServer } from '../../lib/plugins/wrap'
 import { pluginIndex } from '../../lib/plugins/wrap'
@@ -16,7 +17,8 @@ export const INDEX_MAX = 6000
 const NONE: PluginView = { skill: false, mcp: false }
 const CACHE_MAX = 64
 
-type Parsed = Pick<ParsedPlugin, 'skills' | 'servers'>
+/** files:完整性走过的那份清单。skill read 的 file 必须逐字是其中一个,大小写和 Unicode 折叠的变体、后来放进来的都不算 */
+type Parsed = Pick<ParsedPlugin, 'skills' | 'servers'> & { files: ReadonlySet<string> }
 
 /** 记录的代码读成技能和服务。版本目录按内容取名,所以按完整性缓存;读不了就是没有,只记日志 */
 export class SkillCatalog {
@@ -33,11 +35,12 @@ export class SkillCatalog {
     if (hit) return hit
     const dir = this.store.plainVersionDir(rec)
     const read = dir ? readPlugin(dir, { nameHint: rec.id, reservedIds: new Set(), kernelVersion: HARNESS_VERSION, home: this.opts.home }) : undefined
-    if (!read?.ok) {
+    const walked = dir && read?.ok ? walkTree(dir) : undefined
+    if (!read?.ok || !walked?.ok) {
       this.log.warn('plugin not readable', { id: rec.id })
       return undefined
     }
-    const parsed: Parsed = { skills: read.plugin.skills, servers: read.plugin.servers }
+    const parsed: Parsed = { skills: read.plugin.skills, servers: read.plugin.servers, files: new Set(walked.files.map(f => f.path)) }
     if (this.cache.size >= CACHE_MAX) this.cache.clear()
     this.cache.set(rec.integrity, parsed)
     return parsed
