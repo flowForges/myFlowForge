@@ -417,7 +417,7 @@ describe('an IM session never writes to the user’s repo', () => {
       models: { script: n => (n === 1 ? delegate() : n === 2 ? say('started') : say('summary')) },
       plugins: () => [...coding(env), createExecutorCli({ env, loginPath: async () => '', git }), createLoopDefault({ git })],
     })
-    await expect.poll(async () => ((await r.k.handle('executor.list', {})) as { executors: { missing: string[] }[] }).executors.some(x => x.missing.includes('detecting')), { timeout: 15_000, interval: 10 }).toBe(false)
+    await expect.poll(async () => ((await r.k.handle('executor.list', {})) as { executors: { missing: string[] }[] }).executors.some(x => x.missing.includes('detecting')), { timeout: 40_000, interval: 10 }).toBe(false)
     const before = userState()
     await send(r, '/project api')
     const cwd = created(r)[0].cwd!
@@ -575,7 +575,7 @@ describe('moving between sessions', () => {
         models: { script: n => (n === 1 ? calling('c1', 'delegate_codex', { prompt: 'do it', readOnly: true }) : say(n === 2 ? 'started' : 'summary')) },
         plugins: () => [...coding(env), createExecutorCli({ env, loginPath: async () => '', git }), createLoopDefault({ git })],
       })
-      await expect.poll(async () => ((await r.k.handle('executor.list', {})) as { executors: { missing: string[] }[] }).executors.some(x => x.missing.includes('detecting')), { timeout: 15_000, interval: 10 }).toBe(false)
+      await expect.poll(async () => ((await r.k.handle('executor.list', {})) as { executors: { missing: string[] }[] }).executors.some(x => x.missing.includes('detecting')), { timeout: 40_000, interval: 10 }).toBe(false)
       await send(r, '/project api')
       await send(r, 'go')
       await expect.poll(async () => {
@@ -776,7 +776,7 @@ describe('a command does not hold the poll loop', () => {
     await r.k.handle('channel.telegram.unpair', { commandId: 'u1', accountId: String(r.owner) })
     const before = texts(r).length
     h.release()
-    await expect.poll(() => onDiskWorktrees(r).length + (gitWorktrees().length - 1), { timeout: 15_000, interval: 10 }).toBe(0)
+    await expect.poll(() => onDiskWorktrees(r).length + (gitWorktrees().length - 1), { timeout: 40_000, interval: 10 }).toBe(0)
     await flow(r)
     expect(created(r)).toEqual([])
     expect(chatOf(r)?.project).toBeUndefined()

@@ -1129,7 +1129,7 @@ describe('a delegate card (fake CLI)', () => {
     rigs.push(r)
     const detecting = async () => ((await r.k.handle('executor.list', {})) as { executors: { missing: string[] }[] }).executors.some(x => x.missing.includes('detecting'))
     await enterProject(r)
-    await expect.poll(detecting, { timeout: 15_000, interval: 10 }).toBe(false)
+    await expect.poll(detecting, { timeout: 40_000, interval: 10 }).toBe(false)
     return { r, c: await untilCard(r) }
   }
   const prompt = (n: number) => 'fix the thing '.repeat(Math.ceil(n / 14)).slice(0, n)

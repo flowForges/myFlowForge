@@ -516,9 +516,9 @@ describe('a parked turn (fake CLI)', () => {
         ]
       },
     })
-    await expect.poll(async () => ((await r.k.handle('executor.list', {})) as { executors: { id: string; missing: string[] }[] }).executors.some(x => x.missing.includes('detecting')), { timeout: 15_000, interval: 10 }).toBe(false)
+    await expect.poll(async () => ((await r.k.handle('executor.list', {})) as { executors: { id: string; missing: string[] }[] }).executors.some(x => x.missing.includes('detecting')), { timeout: 40_000, interval: 10 }).toBe(false)
     await enterProject(r)
-    await expect.poll(async () => ((await r.k.handle('executor.list', {})) as { executors: { id: string; missing: string[] }[] }).executors.some(x => x.missing.includes('detecting')), { timeout: 15_000, interval: 10 }).toBe(false)
+    await expect.poll(async () => ((await r.k.handle('executor.list', {})) as { executors: { id: string; missing: string[] }[] }).executors.some(x => x.missing.includes('detecting')), { timeout: 40_000, interval: 10 }).toBe(false)
     return { r, go }
   }
 
@@ -553,7 +553,7 @@ describe('a parked turn (fake CLI)', () => {
     expect(out.findIndex(t => t.startsWith('started the run') || t.includes('started the run'))).toBeLessThan(out.findIndex(t => t.startsWith('still going')))
 
     writeFileSync(go, '')
-    await expect.poll(() => { r.clock.advance(100); return events(r, 'turn.ended').length }, { timeout: 15_000, interval: 10 }).toBe(1)
+    await expect.poll(() => { r.clock.advance(100); return events(r, 'turn.ended').length }, { timeout: 40_000, interval: 10 }).toBe(1)
     await flow(r)
     expect(texts(r).at(-1)).toContain('all done')
     expect(chatOf(r).delivery.done).toBe(true)

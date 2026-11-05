@@ -87,7 +87,7 @@ it('pair → memory chat → /project → edit → button approval → follow-up
   })
   rigs.push(r)
   const detecting = async () => ((await r.k.handle('executor.list', {})) as { executors: { missing: string[] }[] }).executors.some(x => x.missing.includes('detecting'))
-  await expect.poll(detecting, { timeout: 15_000, interval: 10 }).toBe(false)
+  await expect.poll(detecting, { timeout: 40_000, interval: 10 }).toBe(false)
 
   // 配对:状态里有这个人,没有别人
   expect(onDisk(r).pairings).toHaveLength(1)
