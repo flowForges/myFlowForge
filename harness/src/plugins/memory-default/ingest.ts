@@ -241,6 +241,7 @@ export class Ingest {
       case 'tool.ended': {
         const name = str(p.name)
         if (name?.startsWith('memory_')) return // 结果里的东西已经在库里了
+        if (name === 'skill') return // 是存储里文件的副本,进来就会被 memory_search 当对话内容搜出来(09 §9.4)
         return this.row(e, 'tool', p.content, CLIP_TOOL, name)
       }
       case 'turn.rolledBack': {

@@ -40,7 +40,7 @@ const secretKeys = (r: PluginRig) => (existsSync(secretsFile(r)) ? Object.keys(J
 
 describe('manifest', () => {
   it('declares what spec §4 asks; pgids only on posix (win32 would wait forever)', () => {
-    expect(manifestFor('darwin')).toMatchObject({ id: 'plugin-manager', inject: ['tools', 'sandbox', 'sessions', 'sessionCommands', 'pgids'] })
+    expect(manifestFor('darwin')).toMatchObject({ id: 'plugin-manager', provides: ['plugins'], inject: ['tools', 'sandbox', 'sessions', 'sessionCommands', 'pgids'] })
     expect(manifestFor('win32').inject).toEqual(['tools', 'sandbox', 'sessions', 'sessionCommands'])
   })
 })

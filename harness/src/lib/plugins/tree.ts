@@ -159,6 +159,35 @@ function openPlain(root: string, rel: string): { fd: number; st: Stats } {
   }
 }
 
+export type PlainRead = { ok: true; bytes: Buffer } | { ok: false; error: 'not_found' | 'symlink' | 'bad_file_type' | 'too_large' }
+
+/** 读一个根内的文件:同样不跟随。超过 max 字节回 too_large,不多读。rel 是调用方查过的相对路径 */
+export function readPlain(root: string, rel: string, max: number): PlainRead {
+  let opened: { fd: number; st: Stats }
+  try {
+    opened = openPlain(root, rel)
+  } catch (e) {
+    const code = e instanceof TreeError ? e.code : undefined
+    if (code === 'symlink' || code === 'bad_file_type') return { ok: false, error: code }
+    return { ok: false, error: 'not_found' }
+  }
+  const { fd, st } = opened
+  try {
+    if (st.size > max) return { ok: false, error: 'too_large' }
+    const buf = Buffer.allocUnsafe(max + 1)
+    // 大小可能在 fstat 之后变:读到上限加一就够判断了
+    let len = 0
+    while (len <= max) {
+      const n = readSync(fd, buf, len, buf.length - len, null)
+      if (n === 0) break
+      len += n
+    }
+    return len > max ? { ok: false, error: 'too_large' } : { ok: true, bytes: buf.subarray(0, len) }
+  } finally {
+    closeSync(fd)
+  }
+}
+
 /** `sha256:<hex>`:排序后的 (路径, 是否可执行, 内容 sha256)。可执行位和内容取自同一个 fd,不看传进来的 exec。链接换进来 → TreeError */
 export function integrityOf(root: string, files: readonly TreeFile[]): string {
   const all = createHash('sha256')

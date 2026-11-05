@@ -532,3 +532,52 @@ describe('buildMessages: includeCurrent (06 spec §12)', () => {
     expect(rebuildHistory([u1], 't1', 'q1', OPTS).opening).toBe(0)
   })
 })
+
+describe('the plugin index block', () => {
+  const REMIND = { environment: '<environment/>', reminder: () => '<reminder/>' }
+  const injected = (text: string) => ev('plugins.injected', { turnId: 't1', text, skill: true, mcp: false })
+  const texts = (m: { parts: { type: string; text?: string }[] }) => m.parts.map(p => p.text)
+
+  it('goes after the environment and memory session block, before the reminder, on the first message only', () => {
+    const events = [
+      ev('message.user', { turnId: 't1', text: 'q1' }),
+      ev('memory.injected', { turnId: 't1', kind: 'session', text: '<memory/>' }),
+      ev('memory.injected', { turnId: 't1', kind: 'turn', text: '<recall/>' }),
+      injected('<plugin-index/>'),
+      ev('message.assistant', { turnId: 't1', step: 1, text: 'a', parts: [{ type: 'text', text: 'a' }] }),
+      ev('message.user', { turnId: 't2', text: 'q2' }),
+    ]
+    const [first, , second] = buildMessages(events, 't2', 'q2', REMIND)
+    expect(texts(first)).toEqual(['<environment/>', '<memory/>', '<plugin-index/>', '<reminder/>', '<recall/>', 'q1'])
+    expect(texts(second)).toEqual(['<reminder/>', 'q2'])
+  })
+
+  it('absent: parts unchanged', () => {
+    const events = [ev('message.user', { turnId: 't1', text: 'q1' })]
+    expect(texts(buildMessages(events, 't1', 'q1', { ...REMIND, includeCurrent: true })[0])).toEqual(['<environment/>', '<reminder/>', 'q1'])
+  })
+
+  it('the first in the log counts, its turn rolled back or not; a later or malformed one does not', () => {
+    const events = [
+      ev('message.user', { turnId: 't1', text: 'q1' }),
+      ev('plugins.injected', { turnId: 't1', text: 42, skill: true, mcp: false }),
+      injected('<first/>'),
+      injected('<second/>'),
+      ev('turn.rolledBack', { turnId: 't1' }),
+      ev('message.user', { turnId: 't2', text: 'q2' }),
+    ]
+    expect(texts(buildMessages(events, 't2', 'q2', REMIND)[0])).toEqual(['<environment/>', '<first/>', '<reminder/>', 'q2'])
+  })
+
+  it('the checkpoint branch keeps it', () => {
+    const q1 = ev('message.user', { turnId: 't1', text: 'q1' })
+    const block = injected('<plugin-index/>')
+    const a1 = ev('message.assistant', { turnId: 't1', step: 1, text: 'a', parts: [{ type: 'text', text: 'a' }] })
+    const q2 = ev('message.user', { turnId: 't2', text: 'q2' })
+    const events = [q1, block, a1, q2]
+    const { messages } = rebuildHistory(events, 't2', 'q2', { ...REMIND, rebuild: { throughSeq: a1.seq, text: 'CP' } })
+    expect(texts(messages[0])).toEqual(['<environment/>', '<plugin-index/>', '<reminder/>', 'q1'])
+    expect(JSON.stringify(messages[1])).toContain('CP')
+    expect(JSON.stringify(messages.slice(2))).not.toContain('plugin-index')
+  })
+})

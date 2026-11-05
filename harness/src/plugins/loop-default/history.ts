@@ -3,10 +3,12 @@
 // 该步之后的 tool.ended → 一条 role:'tool' 消息。未配对的调用补"已中断";已回滚的轮与当前轮跳过。
 // executor.notice、followUp 的 message.user → 同一轮里按 seq 排的 user 消息(本轮的循环用同样的构造,逐字节相同)
 // memory.injected(06 §7):会话块进第一条,轮块进它那一轮的开场消息。只读事件,不读文件
+// plugins.injected(09 §9.3):索引进第一条,紧跟会话块
 // context.rebuilt(06 §12):第一条 + 检查点 + 盖不住的部分。字节只由事件和标记决定,事件一条不删
 import { activeRebuild, clipOpening, isCovered } from '../../lib/memory/checkpoint'
 import { blocksOf } from '../../lib/memory/inject'
 import { checkpointBlock } from '../../lib/memory/wrap'
+import { pluginBlockOf } from '../../lib/plugins/view'
 import type { Message, Part } from '../../lib/models/types'
 import type { KernelEvent } from '../../protocol/index'
 
@@ -64,10 +66,11 @@ function stepParts(payload: Record<string, unknown>, origin: ReplayOrigin | unde
   return parts.some(p => p.type === 'text' || p.type === 'tool_call') ? parts : []
 }
 
-function userMessage(text: string, ts: number, opts: BuildOpts, first: boolean, memory: { session?: string; turn?: string } = {}): Message {
+function userMessage(text: string, ts: number, opts: BuildOpts, first: boolean, memory: { session?: string; plugin?: string; turn?: string } = {}): Message {
   const parts: Part[] = []
   if (first && opts.environment) parts.push({ type: 'text', text: opts.environment })
   if (first && memory.session) parts.push({ type: 'text', text: memory.session })
+  if (first && memory.plugin) parts.push({ type: 'text', text: memory.plugin })
   if (opts.reminder) parts.push({ type: 'text', text: opts.reminder(ts) })
   if (memory.turn) parts.push({ type: 'text', text: memory.turn })
   parts.push({ type: 'text', text })
@@ -146,16 +149,17 @@ export function rebuildHistory(events: KernelEvent[], currentTurnId: string, cur
   const firstTurn = order.length ? turns.get(order[0]) : undefined
   const checkpoint = rebuild && firstTurn && isCovered(firstTurn.firstSeq, rebuild.throughSeq) ? rebuild : undefined
   const blocks = blocksOf(events)
+  const plugin = pluginBlockOf(events)
   const out: Message[] = []
   let opening = -1
   const user = (text: string, ts: number, turnId?: string): Message =>
-    userMessage(text, ts, opts, !out.length, { session: blocks.session, turn: turnId === undefined ? undefined : blocks.turns.get(turnId) })
+    userMessage(text, ts, opts, !out.length, { session: blocks.session, plugin, turn: turnId === undefined ? undefined : blocks.turns.get(turnId) })
   for (const id of order) {
     const t = turns.get(id)!
     if (id === currentTurnId) opening = out.length
     if (checkpoint && !out.length) {
       // 第一条总在;它的轮块不带,要是更新块,lastSeen 看不见了就会补发
-      out.push(userMessage(clipOpening(t.user), t.ts, opts, true, { session: blocks.session }))
+      out.push(userMessage(clipOpening(t.user), t.ts, opts, true, { session: blocks.session, plugin }))
       out.push(noticeMessage(checkpointBlock(checkpoint.throughSeq, checkpoint.text)))
     } else if (checkpoint && isCovered(t.firstSeq, checkpoint.throughSeq)) {
       // 落在中间的那一轮:手上的任务不能只剩摘要。整轮都盖住了就没有它的事,除非它正是当前轮

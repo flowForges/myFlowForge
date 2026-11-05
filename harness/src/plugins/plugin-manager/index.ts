@@ -1,5 +1,5 @@
-// plugin-manager:唯一的插件管理者(09 spec §4)。这一步只有存储、安装、启用、卸载、授权和配置;
-// 技能工具、命令、MCP 进程后面接进来,杀进程走 killPluginProcesses 这个缝
+// plugin-manager:唯一的插件管理者(09 spec §4)。存储、安装、启用、卸载、授权、配置,以及技能的索引和 skill 工具;
+// 命令、MCP 进程后面接进来,杀进程走 killPluginProcesses 这个缝
 import type { spawn as nodeSpawn } from 'node:child_process'
 import { resolve } from 'node:path'
 import type { Plugin, PluginContext } from '../../kernel/pluginHost'
@@ -9,10 +9,13 @@ import { scrub } from '../../lib/memory/scrub'
 import type { FetchTimers } from '../../lib/plugins/fetchGit'
 import { USER_CONFIG_KEY_RE } from '../../lib/plugins/manifest'
 import type { PgidRegistry } from '../../lib/proc/pgids'
-import type { SessionCommands } from '../../lib/tools/types'
+import type { SandboxService, SessionCommands, ToolsService } from '../../lib/tools/types'
 import { MCP_SERVER_NAME, type Grants, type WorkerParams } from '../../protocol/index'
+import type { Sessions } from '../../kernel/sessions'
+import { createPluginsService, SkillCatalog } from './context'
 import { fail, Installer } from './installer'
 import { manifest } from './manifest'
+import { createSkillTool } from './skillTool'
 import { PluginStore, type InstalledRecord } from './store'
 
 export interface PluginManagerOpts {
@@ -67,6 +70,12 @@ export function createPluginManager(o: PluginManagerOpts = {}): Plugin {
     activate(ctx: PluginContext) {
       const commands = ctx.services.get<SessionCommands>('sessionCommands')
       if (!commands) throw new Error('sessionCommands service missing')
+      const tools = ctx.services.get<ToolsService>('tools')
+      if (!tools) throw new Error('tools service missing')
+      const sessions = ctx.services.get<Sessions>('sessions')
+      if (!sessions) throw new Error('sessions service missing')
+      const sandbox = ctx.services.get<SandboxService>('sandbox')
+      if (!sandbox) throw new Error('sandbox service missing')
       const pgids = process.platform === 'win32' ? undefined : ctx.services.get<PgidRegistry>('pgids')
       const now = o.now ?? Date.now
       const timers = o.timers ?? defaultTimers
@@ -113,6 +122,11 @@ export function createPluginManager(o: PluginManagerOpts = {}): Plugin {
           failIntegrity(rec)
         }
       }
+
+      // 第三方文字给模型的路只有这两条:第一轮钉住的索引,和模型自己调的 skill
+      const catalog = new SkillCatalog(store, { home: commands.home }, ctx.log)
+      ctx.services.provide('plugins', createPluginsService({ store, catalog, sessions, sandbox, append: e => ctx.append(e), log: ctx.log }))
+      ctx.effect(tools.register(createSkillTool({ store, catalog, commands, sessions, history: sid => ctx.events.history(sid), log: ctx.log })))
 
       // 改记录的 RPC 排队:改写是读旧记录、等杀进程、写新记录,交错了会丢更新
       let tail: Promise<unknown> = Promise.resolve()

@@ -8,10 +8,11 @@ import type { Logger } from '../../kernel/log'
 import type { SessionInfo, Sessions } from '../../kernel/sessions'
 import { activeRebuild, selectCheckpoint } from '../../lib/memory/checkpoint'
 import { injectMemory } from '../../lib/memory/inject'
+import { pluginViewOf, type PluginView } from '../../lib/plugins/view'
 import type { MemoryService } from '../../lib/memory/types'
 import type { Message, ModelError, ModelEvent, ModelRequest, ModelsService, Part } from '../../lib/models/types'
 import { redact } from '../../lib/tools/redact'
-import type { BackgroundRuns, FollowUp, ToolsService, TurnInbox } from '../../lib/tools/types'
+import type { BackgroundRuns, FollowUp, PluginsService, ToolsService, TurnInbox } from '../../lib/tools/types'
 import type { KernelEvent, ModelRef } from '../../protocol/index'
 import { charsToTokens, compact, contextWindow, dropOldest, estimateTokens } from './compact'
 import { accountProtocol, family, toolDefs, toolsetFor } from './family'
@@ -92,6 +93,23 @@ export interface LoopDeps {
   inbox?: TurnInbox
   /** `memory` 服务;没有 = 不注入 */
   memory?: MemoryService
+  /** `plugins` 服务:只在第一轮用。之后只读事件,所以它不在时老会话不变 */
+  plugins?: PluginsService
+}
+
+const NO_PLUGINS: PluginView = { skill: false, mcp: false }
+
+/** 钉住的视图(09 §9.3、M8)。服务坏了这一轮照常,错误信息不进日志:可能带第三方文字 */
+function pinnedView(deps: LoopDeps, sessionId: string, turnId: string): PluginView {
+  const events = deps.history(sessionId)
+  const pinned = pluginViewOf(events)
+  if (pinned) return pinned
+  try {
+    return deps.plugins?.injectFirst({ sessionId, turnId, events }) ?? NO_PLUGINS
+  } catch (err) {
+    deps.log.warn('plugin view failed', { turnId, error: err instanceof Error ? err.name : 'unknown' })
+    return NO_PLUGINS
+  }
 }
 
 export interface TurnRequest {
@@ -150,7 +168,8 @@ export async function runTurn(deps: LoopDeps, req: TurnRequest): Promise<TurnOut
   const concrete = req.ref === 'default' ? models.catalog().default : req.ref
   const fam = family(concrete ? accountProtocol(models, concrete) : undefined, concrete?.modelId)
   const toolset = toolsetFor(fam, info.toolset)
-  const defs = toolDefs(tools.list(), toolset)
+  const view = pinnedView(deps, sessionId, turnId)
+  const defs = toolDefs(tools.list(t => !t.pluginScoped || view[t.pluginScoped]), toolset)
   const system = systemPrompt(fam, toolset)
 
   // 回传推理 replay 只限同一账号 / 协议 / 模型('default' 换了模型或协议后,旧 replay 不再发)

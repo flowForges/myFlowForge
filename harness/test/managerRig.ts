@@ -3,9 +3,13 @@ import { spawn as nodeSpawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync } from 'node:fs'
 import { join } from 'node:path'
+import type { Plugin, PluginContext } from '../src/kernel/pluginHost'
 import { pluginStoreRootOf } from '../src/lib/fs/paths'
+import type { ModelEvent } from '../src/lib/models/types'
+import type { Tool, ToolsService } from '../src/lib/tools/types'
 import { createPluginManager, type PluginManagerOpts } from '../src/plugins/plugin-manager'
 import type { PluginSourceParam, WorkerResult } from '../src/protocol/index'
+import { say, type Req, type Script } from './memoryRig'
 import type { PluginEnvInjected, PluginKernelOpts, PluginRig } from './pluginRig'
 
 export const RESERVED = () => new Set(['memory-default', 'tools-registry', 'plugin-manager'])
@@ -101,3 +105,39 @@ export async function until(cond: () => boolean, ms = WAIT_MS): Promise<void> {
     await new Promise(r => setTimeout(r, POLL_MS))
   }
 }
+
+/** 剧本队列:前台请求按顺序取下一步,取完了回 ok;后台请求不占队列 */
+export function scriptQueue(): { script: Script; push(...steps: AsyncIterable<ModelEvent>[]): void } {
+  const steps: AsyncIterable<ModelEvent>[] = []
+  return {
+    script: (_n, req) => (req.interactive ? (steps.shift() ?? say('ok')) : say('{}')),
+    push: (...s) => void steps.push(...s),
+  }
+}
+
+/** 这个请求里最后一条工具结果的文字 */
+export function lastResult(req: Req): string {
+  const part = req.messages.filter(m => m.role === 'tool').at(-1)?.parts.at(-1)
+  return part?.type === 'tool_result' ? String(part.content) : ''
+}
+
+/** 只拿到插件的 ctx 和注册几个工具:用例要自己写事件、放假工具时用 */
+export function stubPlugin(tools: Tool[] = [], onActivate?: (ctx: PluginContext) => void): Plugin {
+  return {
+    manifest: { id: 'stub-tools', version: '0', kernel: '^0.1.0', inject: ['tools'] },
+    activate(ctx) {
+      const service = ctx.services.get<ToolsService>('tools')!
+      for (const t of tools) ctx.effect(service.register(t))
+      onActivate?.(ctx)
+    },
+  }
+}
+
+export const stubTool = (name: string, over: Partial<Tool> = {}): Tool => ({
+  name,
+  description: `${name} stub`,
+  parameters: { type: 'object', properties: {} },
+  permission: () => [{ actor: 'tools', action: 'memory' }],
+  run: async () => ({ content: `${name} ran` }),
+  ...over,
+})

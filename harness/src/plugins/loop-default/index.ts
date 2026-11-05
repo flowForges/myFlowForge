@@ -9,7 +9,7 @@ import type { Sessions } from '../../kernel/sessions'
 import { createGit, NO_REPO, type Git } from '../../lib/git/snapshot'
 import type { MemoryService } from '../../lib/memory/types'
 import type { ModelsService } from '../../lib/models/types'
-import type { BackgroundRuns, ToolsService, TurnInbox } from '../../lib/tools/types'
+import type { BackgroundRuns, PluginsService, ToolsService, TurnInbox } from '../../lib/tools/types'
 import { ERR_BUSY, type ModelRef, type WorkerParams } from '../../protocol/index'
 import { runTurn, type LoopDeps, type TurnOutcome } from './loop'
 import { manifest } from './manifest'
@@ -80,6 +80,7 @@ export function createLoopDefault(opts: LoopDefaultOpts = {}): Plugin {
         // 只经服务,不 import 插件;没有 executor-cli 时循环与 03 完全一样
         const background = ctx.services.get<BackgroundRuns>('executors')
         const memory = ctx.services.get<MemoryService>('memory')
+        const plugins = ctx.services.get<PluginsService>('plugins')
         active.add(sessionId)
         const target = { sessionId, cwd, pin: info.repo ?? NO_REPO }
         let startRef: string | undefined
@@ -101,6 +102,7 @@ export function createLoopDefault(opts: LoopDefaultOpts = {}): Plugin {
               ...(background && { background }),
               ...(inbox && { inbox }),
               ...(memory && { memory }),
+              ...(plugins && { plugins }),
             },
             { sessionId, turnId, text, info: { ...info, cwd }, ref },
           )

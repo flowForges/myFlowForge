@@ -175,6 +175,24 @@ describe('which events enter', () => {
     expect(texts(h.store)).toEqual(['after'])
   })
 
+  it('a skill result adds no raw row: it is a copy of a file in the store', async () => {
+    const h = await harness()
+    session(h, 's')
+    h.ctx().append({ type: 'tool.ended', sessionId: 's', payload: { turnId: 't', callId: 'c', name: 'skill', ok: true, content: 'SKILL TEXT' } })
+    h.ingest().flush()
+    expect(rowCount(h.store)).toBe(0)
+  })
+
+  it('an mcp result is a tool row: not evidence, not recalled', async () => {
+    const h = await harness()
+    session(h, 's')
+    h.ctx().append({ type: 'tool.ended', sessionId: 's', payload: { turnId: 't', callId: 'c', name: 'mcp', ok: true, content: 'SERVER SAYS' } })
+    h.ingest().flush()
+    expect(texts(h.store)).toEqual(['SERVER SAYS'])
+    expect((h.store.db.prepare('SELECT role FROM raw').get() as { role: string }).role).toBe('tool')
+    expect(h.store.recallUserRaw({ q: 'SERVER', excludeSession: 'x', limit: 5 })).toEqual([])
+  })
+
   it.each(['memory_search', 'memory_get', 'memory_write'])('%s results are not indexed again', async name => {
     const h = await harness()
     session(h, 's')

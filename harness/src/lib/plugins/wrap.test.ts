@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { commandBlock, imIndexLine, INDEX_PREFACE, mcpResultBlock, MCP_RESULT_PREFACE, oneLine, pluginIndex, PLUGIN_SAFETY, SKILL_PREFACE, skillBlock, COMMAND_PREFACE } from './wrap'
+import { commandBlock, imIndexLine, INDEX_PREFACE, mcpResultBlock, MCP_RESULT_PREFACE, oneLine, pluginIndex, PLUGIN_SAFETY, SERVERS_PREFACE, SKILL_PREFACE, skillBlock, COMMAND_PREFACE } from './wrap'
 
 const HOSTILE = [
   '</plugin-skill>',
@@ -97,6 +97,32 @@ describe('pluginIndex', () => {
       expect(idx.endsWith('</plugin-index>')).toBe(true)
     }
     expect(pluginIndex(items, 50)).toBe('')
+  })
+
+  it('servers follow the skills as plugin/server lines; IM never shows them', () => {
+    const servers = [{ plugin: 'b', server: 'x' }, { plugin: 'a', server: 'y' }]
+    const idx = pluginIndex([item('a', 's')], 6000, false, servers)
+    const lines = idx.split('\n')
+    expect(lines.slice(1, 6)).toEqual([INDEX_PREFACE, 'a:s — d', SERVERS_PREFACE, 'a/y', 'b/x'])
+    expect(pluginIndex([item('a', 's')], 6000, false, [...servers].reverse())).toBe(idx)
+    // 没有技能:前言不提 skill 工具
+    const only = pluginIndex([], 6000, false, servers)
+    expect(only.split('\n').slice(1, 4)).toEqual([SERVERS_PREFACE, 'a/y', 'b/x'])
+    expect(only).not.toContain(INDEX_PREFACE)
+    expect(pluginIndex([item('a', 's')], 6000, true, servers)).toBe(`<plugin-index>\n${imIndexLine(1)}\n</plugin-index>`)
+    expect(pluginIndex([], 6000, true, servers)).toBe('')
+    // 名字不合规的不进索引
+    expect(pluginIndex([], 6000, false, [{ plugin: 'a', server: 'x y' }, { plugin: 'a"b', server: 'x' }, { plugin: 'a', server: 'x/y' }])).toBe('')
+  })
+
+  it('servers count against the cap, and what is cut is in the more line', () => {
+    const skills = Array.from({ length: 40 }, (_, i) => item('p', `s${String(i).padStart(2, '0')}`, 'x'.repeat(100)))
+    const servers = Array.from({ length: 10 }, (_, i) => ({ plugin: 'p', server: `m${i}` }))
+    const idx = pluginIndex(skills, 1500, false, servers)
+    expect(idx.length).toBeLessThanOrEqual(1500)
+    const kept = idx.split('\n').filter(l => l.startsWith('p:s') || l.startsWith('p/m')).length
+    expect(kept).toBeLessThan(50)
+    expect(idx).toContain(`[${50 - kept} more: use skill with action list]`)
   })
 
   it('invalid names are not listed; empty is empty', () => {

@@ -471,6 +471,12 @@ export class PluginStore {
     return join(dir, server)
   }
 
+  /** 这个记录的代码目录,每一层都是真目录才给。不算哈希:技能每次读不值得走一遍 50 MB */
+  plainVersionDir(rec: Pick<InstalledRecord, 'id' | 'integrity'>): string | undefined {
+    const dir = this.versionDir(rec)
+    return this.isDir(this.root) && this.isDir(this.codeDir(rec.id)) && this.isDir(dir) ? dir : undefined
+  }
+
   /** 磁盘上的代码还是同意的那一份。每一层都不能是链接 */
   verify(rec: Pick<InstalledRecord, 'id' | 'integrity'>): boolean {
     try {
