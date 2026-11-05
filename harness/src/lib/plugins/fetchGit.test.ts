@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { buildRepo } from '../../../test/pluginRig'
 import { checkGitUrl, fetchGit, type FetchOpts } from './fetchGit'
+import { isInternalHost } from './hosts'
 import { integrityOf, walkTree } from './tree'
 
 const PATH = '/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin'
@@ -27,6 +28,7 @@ const FLAGS = [
   'core.protectNTFS=true',
   'submodule.recurse=false',
   'gc.auto=0',
+  'maintenance.auto=false',
 ]
 
 const dirs: string[] = []
@@ -199,52 +201,93 @@ describe('checkGitUrl', () => {
     'ext::sh -c touch%20/tmp/x',
     'file:///x',
     'FILE:///x',
-    'ssh://git@host/x',
+    'ssh://git@example.com/x',
     'git@host:x',
     'git://host/x',
     'http://host/x',
-    'HTTPS://host/x',
-    'https://user:pw@host/x',
-    'https://user@host/x',
-    'https://:pw@host/x',
-    'https://token@host/x',
+    'HTTPS://example.com/x',
+    'https://user:pw@example.com/x',
+    'https://user@example.com/x',
+    'https://:pw@example.com/x',
+    'https://token@example.com/x',
     '--upload-pack=x',
     '-oProxyCommand=x',
-    ' https://host/x',
-    'https://host/x ',
-    'https://ho st/x',
-    'https://host/a b',
-    'https://host/a\nb',
-    'https://host/a\tb',
-    'https://host/a\x7fb',
-    'https://host/a%0ab',
-    'https://host/a%0Ab',
-    'https://host/a%00b',
-    'https://hosт/x',
-    'https://host/‮x',
+    ' https://example.com/x',
+    'https://example.com/x ',
+    'https://ho st.example.com/x',
+    'https://example.com/a b',
+    'https://example.com/a\nb',
+    'https://example.com/a\tb',
+    'https://example.com/a\x7fb',
+    'https://example.com/a%0ab',
+    'https://example.com/a%0Ab',
+    'https://example.com/a%00b',
+    'https://hos\u0442/x',
+    'https://example.com/\u202ex',
     'https:///x',
     'https://',
     'https:/host/x',
-    'https://-host/x',
-    'https://host:99999/x',
-    'https://evil\\@host/x',
-    'https://host/x?token=abc',
-    'https://host/x#frag',
+    'https://-x.example.com/x',
+    'https://example.com:99999/x',
+    'https://evil\\@example.com/x',
+    'https://example.com/x?token=abc',
+    'https://example.com/x#frag',
     '/some/path',
     './x',
     '',
-    `https://host/${'x'.repeat(2100)}`,
+    `https://example.com/${'x'.repeat(2100)}`,
   ])('refuses %j', url => {
     expect(checkGitUrl(url, { allowFileProtocol: false })).toEqual({ ok: false, error: 'bad_url' })
+  })
+
+  it.each([
+    '169.254.169.254',
+    '10.0.0.1',
+    '8.8.8.8',
+    '2852039166',
+    '0xa9.0xfe.0xa9.0xfe',
+    '0251.0376.0251.0376',
+    '127.1',
+    '0',
+    'localhost',
+    'LOCALHOST',
+    'foo.localhost',
+    'foo.local',
+    'FOO.Local',
+    'foo.internal',
+    'a.b.internal',
+    'foo.lan',
+    'nas.home.arpa',
+    'intranet',
+    'gitlab',
+  ])('refuses the internal host %s, with a port and a path too', host => {
+    for (const url of [`https://${host}`, `https://${host}/o/r.git`, `https://${host}:8443/o/r.git`]) {
+      expect(checkGitUrl(url, { allowFileProtocol: false }), url).toEqual({ ok: false, error: 'bad_url' })
+      expect(checkGitUrl(url, { allowFileProtocol: true }), url).toEqual({ ok: false, error: 'bad_url' })
+    }
+  })
+
+  it.each(['internal.example.com', 'local.example.com', 'localhost.example.com', 'mylan.example.org', 'lan.io', 'home.arpa.example.com', 'foolocal.com', '1.2.3.4.example.com', 'foo.mylocal', 'foo.notlocalhost', 'foo.notinternal', 'foo.mylan', 'foo.myhome.arpa'])('keeps the public name %s', host => {
+    expect(checkGitUrl(`https://${host}/o/r.git`, { allowFileProtocol: false })).toEqual({ ok: true })
   })
 
   it('the option opens an absolute file:// and nothing else', () => {
     const allow = { allowFileProtocol: true }
     expect(checkGitUrl('file:///tmp/x/repo', allow)).toEqual({ ok: true })
-    expect(checkGitUrl('https://host/x', allow)).toEqual({ ok: true })
-    for (const bad of ['ext::sh -c x', 'file://host/x', 'file://x', 'file:///a b', 'file:///a\nb', 'ssh://h/x', 'git@h:x', 'http://h/x', '--upload-pack=x', 'https://u:p@h/x']) {
+    expect(checkGitUrl('https://example.com/x', allow)).toEqual({ ok: true })
+    for (const bad of ['ext::sh -c x', 'file://host/x', 'file://x', 'file:///a b', 'file:///a\nb', 'ssh://h/x', 'git@h:x', 'http://h/x', '--upload-pack=x', 'https://u:p@example.com/x']) {
       expect(checkGitUrl(bad, allow)).toEqual({ ok: false, error: 'bad_url' })
     }
+  })
+})
+
+describe('isInternalHost', () => {
+  it.each(['169.254.169.254', '2852039166', '0xa9.0xfe.0xa9.0xfe', '127.1', '0', 'localhost', 'LocalHost', 'localhost.', 'foo.localhost', 'foo.local.', 'x.internal', 'x.lan', 'x.home.arpa', 'single', '[::1]', '::1', 'fe80::1', '', ' ', 'a b.com', 'a.com/x', 'u@a.com', 'a.com:80', '256.1.1.1'])('%j is internal, or not a host at all', host => {
+    expect(isInternalHost(host)).toBe(true)
+  })
+
+  it.each(['github.com', 'GitHub.com', 'git.example.com', 'github.com.'])('%s is not', host => {
+    expect(isInternalHost(host)).toBe(false)
   })
 })
 
@@ -342,6 +385,14 @@ describe('fetchGit: a clean fetch', () => {
     await expect(fetchGit({ url: r.url, into: t.into, tmpHome: t.tmpHome, baseEnv: { PATH }, allowFileProtocol: true, spawn: s.spawn })).rejects.toThrow()
     expect(s.calls).toEqual([])
     expect(readFileSync(join(t.into, 'keep.txt'), 'utf8')).toBe('k')
+  })
+
+  it('a tmpHome that cannot be made leaves no into', async () => {
+    const r = source({ 'a.txt': 'a' })
+    const t = target()
+    writeFileSync(join(t.base, 'file'), '')
+    await expect(fetchGit({ url: r.url, into: t.into, tmpHome: join(t.base, 'file', 'home'), baseEnv: { PATH }, allowFileProtocol: true })).rejects.toThrow()
+    expect(existsSync(t.into)).toBe(false)
   })
 
   it('an into that is a link is refused', async () => {
@@ -478,7 +529,7 @@ describe('fetchGit: refused with nothing fetched', () => {
     expect(existsSync(into)).toBe(false)
   })
 
-  it.each(['..', '../x', 'a/../b', 'a/..', '/abs', '/etc/passwd', '', '.', './a', 'a//b', '.git', 'a/.git', 'a/.GIT/b', 'a\nb', 'a\\b', 'a‮b', '-x', ':(glob)x', 'x/'.repeat(40) + 'x', 'a'.repeat(1100)])('subpath %j', async subpath => {
+  it.each(['..', '../x', 'a/../b', 'a/..', '/abs', '/etc/passwd', '', '.', './a', 'a//b', '.git', 'a/.git', 'a/.GIT/b', 'a\nb', 'a\\b', 'a\u202eb', 'a\u2028b', 'a\u2029b', '-x', ':(glob)x', 'x/'.repeat(40) + 'x', 'a'.repeat(1100)])('subpath %j', async subpath => {
     const s = spy()
     const { result, into } = await done(HTTPS, { allowFileProtocol: false, subpath, spawn: s.spawn, baseEnv: { PATH: fakeGit('x') } })
     expect(result).toEqual({ ok: false, error: 'bad_path' })
@@ -626,6 +677,56 @@ describe('fetchGit: the evil fixture', () => {
   })
 })
 
+describe('fetchGit: attributes in the tree change no bytes', () => {
+  const body = 'line $Id$\nline two\n'
+  it.each([
+    ['ident', '*.txt ident\n'],
+    ['text with crlf', '*.txt text eol=crlf\n'],
+    ['legacy crlf', '*.txt crlf\n'],
+    ['working-tree-encoding', '*.txt text working-tree-encoding=UTF-16\n'],
+    ['all at once', '*.txt ident text eol=crlf working-tree-encoding=UTF-16 filter=evil\n'],
+  ])('%s', async (_n, attrs) => {
+    // 属性放在第二个 commit:blob 是原样进去的,不被作者这边的 git add 转换
+    const r = source({ 'a.txt': body, 'sub/b.txt': body })
+    put(r.repo, { '.gitattributes': attrs })
+    r.git('add', '.gitattributes')
+    r.git('commit', '-qm', 'attrs')
+    const d = await done(r.url)
+    expect(d.result.ok).toBe(true)
+    expect(readFileSync(join(d.into, 'a.txt'), 'utf8')).toBe(body)
+    expect(readFileSync(join(d.into, 'sub/b.txt'), 'utf8')).toBe(body)
+    expect(readFileSync(join(d.into, '.gitattributes'), 'utf8')).toBe(attrs)
+  })
+
+  it('an attributes file inside the subtree or a nested dir counts for nothing either', async () => {
+    const r = source({ 'plugin/a.txt': body, 'plugin/.gitattributes': '* ident\n', 'plugin/n/b.txt': body, 'plugin/n/.gitattributes': '* text eol=crlf\n' })
+    const d = await done(r.url, { subpath: 'plugin' })
+    expect(d.result.ok).toBe(true)
+    expect(readFileSync(join(d.into, 'a.txt'), 'utf8')).toBe(body)
+    expect(readFileSync(join(d.into, 'n/b.txt'), 'utf8')).toBe(body)
+  })
+
+  it('ident cannot blow a tree past what ls-tree counted', async () => {
+    const big = '$Id$\n'.repeat(200_000)
+    const r = source({ 'a.txt': big, '.gitattributes': '* ident\n' })
+    const d = await done(r.url)
+    expect(d.result.ok).toBe(true)
+    expect(lstatSync(join(d.into, 'a.txt')).size).toBe(big.length)
+  })
+
+  it('the overriding file is written before the fetch, and leaves with .git', async () => {
+    const r = source({ 'a.txt': 'a' })
+    let at: string | undefined
+    const s = spy((args, o) => {
+      if (subOf(args) === 'fetch') at = readFileSync(join(o.cwd as string, '.git/info/attributes'), 'utf8')
+      return undefined
+    })
+    const d = await done(r.url, { spawn: s.spawn })
+    expect(at).toBe('* -text -eol -ident -filter -working-tree-encoding -crlf\n')
+    expect(existsSync(join(d.into, '.git'))).toBe(false)
+  })
+})
+
 describe('fetchGit: links and the tree check', () => {
   it('a symlink in the tree is refused by name, before any checkout, and into is gone', async () => {
     const r = source({ 'a/b.txt': 'x' }, root => symlinkSync('/etc/passwd', join(root, 'a/l')))
@@ -637,10 +738,10 @@ describe('fetchGit: links and the tree check', () => {
   })
 
   it('a link path with odd characters comes back clean', async () => {
-    const r = source({ 'a.txt': 'a' }, root => symlinkSync('/etc/passwd', join(root, 'x\ny‮z')))
+    const r = source({ 'a.txt': 'a' }, root => symlinkSync('/etc/passwd', join(root, 'x\ny\u202ez\u2028w\u2029')))
     const { result } = await done(r.url)
     expect(result).toMatchObject({ ok: false, error: 'symlink' })
-    if (!result.ok) expect(result.path).not.toMatch(/[\p{Cc}\p{Cf}]/u)
+    if (!result.ok) expect(result.path).not.toMatch(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u)
   })
 
   it('50 MB in the tree is refused before any checkout, with no file on disk', async () => {
@@ -993,6 +1094,37 @@ describe('fetchGit: codes and stderr', () => {
     expect(result).toEqual({ ok: false, error: 'network' })
   })
 
+  it.each([
+    'fatal: remote error: Authentication failed',
+    "fatal: remote error: couldn't find remote ref x",
+    'fatal: remote error: object is corrupt',
+    'fatal: remote error: x\nAuthentication failed',
+    'fatal: remote error: x\ncould not read Username',
+    "fatal: remote error: x\ncouldn't find remote ref y",
+    'fatal: remote error: x\nfsck error',
+    'fatal: remote error: x\nnot our ref y',
+  ])('an ERR from the remote cannot pick the code: %j', async stderr => {
+    expect((await done(HTTPS, { allowFileProtocol: false, baseEnv: { PATH: fakeGit(stderr) } })).result).toEqual({ ok: false, error: 'network' })
+  })
+
+  it.each([
+    ['https://example.com/fsck-helpers.git', "fatal: unable to access 'https://example.com/fsck-helpers.git/': Failed to connect to example.com port 443: Connection refused"],
+    ['https://example.com/index-pack.git', "fatal: unable to access 'https://example.com/index-pack.git/info/refs': Connection refused"],
+    ['https://example.com/corrupt/not-our-ref.git', "fatal: unable to access 'https://example.com/corrupt/not-our-ref.git/': Connection refused"],
+    ['https://EXAMPLE.com/malformed.git', "fatal: unable to access 'https://example.com/malformed.git/': Connection refused"],
+    ['https://fsck.example.com/x.git', 'fatal: unable to access: Could not resolve host: fsck.example.com'],
+    ['https://corrupt.example.com/x.git', 'fatal: unable to access: Failed to connect to corrupt.example.com port 443'],
+    ['https://FSCK.example.com/x.git', 'fatal: unable to access: Could not resolve host: fsck.example.com'],
+  ])('the address cannot pick the code: %s', async (url, stderr) => {
+    expect((await done(url, { allowFileProtocol: false, baseEnv: { PATH: fakeGit(stderr) } })).result).toEqual({ ok: false, error: 'network' })
+  })
+
+  it('the real words still count once the address is out of them', async () => {
+    const url = 'https://example.com/fsck.git'
+    const stderr = `fatal: Authentication failed for '${url}/'`
+    expect((await done(url, { allowFileProtocol: false, baseEnv: { PATH: fakeGit(stderr) } })).result).toEqual({ ok: false, error: 'auth_required' })
+  })
+
   it('stderr holding a URL with a token reaches nothing', async () => {
     const token = 'ghp_' + 'y'.repeat(36)
     const stderr = `fatal: unable to access 'https://user:${token}@host/x/': proxy http://acct:${token}@proxy:8080 refused`
@@ -1083,6 +1215,20 @@ describe('fetchGit: a real HTTP remote on loopback, real git', () => {
       res.end()
     })
     expect((await done(HTTPS, { allowFileProtocol: false, spawn })).result).toEqual({ ok: false, error: 'auth_required' })
+  })
+
+  it.each([
+    ['Authentication failed'],
+    ["couldn't find remote ref x"],
+    ['object is corrupt'],
+    ['x\nAuthentication failed'],
+  ])('a real ERR packet from the server is network: %j', async text => {
+    const { spawn } = await listen((_req, res) => {
+      const line = `ERR ${text}`
+      res.writeHead(200, { 'Content-Type': 'application/x-git-upload-pack-advertisement' })
+      res.end((line.length + 4).toString(16).padStart(4, '0') + line)
+    })
+    expect((await done(HTTPS, { allowFileProtocol: false, spawn })).result).toEqual({ ok: false, error: 'network' })
   })
 
   it('a 404 is network', async () => {

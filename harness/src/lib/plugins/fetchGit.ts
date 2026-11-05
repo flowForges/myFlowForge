@@ -2,8 +2,9 @@
 // 这里不解析、不运行任何东西;落地的只是文件。stderr 只用来判代码,判完就丢
 import { spawn as nodeSpawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { lstatSync, mkdirSync, readdirSync, renameSync, rmdirSync, rmSync, type Stats } from 'node:fs'
+import { lstatSync, mkdirSync, readdirSync, renameSync, rmdirSync, rmSync, writeFileSync, type Stats } from 'node:fs'
 import { join } from 'node:path'
+import { isInternalHost } from './hosts'
 import { badSegment, cleanPath, TREE_LIMITS } from './tree'
 import type { Warning } from './types'
 
@@ -54,6 +55,8 @@ const HARDENING = [
   'submodule.recurse=false',
   // gc 会自己脱离进程组,杀不到
   'gc.auto=0',
+  // 新版 git 的 fetch 另起 `git maintenance run --auto --detach`,也会脱离进程组
+  'maintenance.auto=false',
 ]
 const ENV_KEEP = ['PATH', 'LANG', 'LC_ALL', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy']
 
@@ -75,6 +78,8 @@ const FILE_URL = /^file:\/\/\/[^\s\p{Cc}\p{Cf}\\]*$/u
 /** %00-%1F、%7F:解码后是控制字符(CVE-2020-5260 那一类) */
 const ENCODED_CONTROL = /%(?:[01][0-9a-f]|7f)/i
 const REF = /^[A-Za-z0-9._/-]{1,200}$/
+/** 优先于树里任何 .gitattributes:ls-tree 数的是 blob 的大小,`* ident` 能把落盘撑到几十倍,落地的字节也得就是 blob 的字节 */
+const NO_ATTRIBUTES = '* -text -eol -ident -filter -working-tree-encoding -crlf\n'
 const SHA = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/
 const LISTING_ROW = /^(\d{6}) (blob|tree|commit) [0-9a-f]{40,64}\s+(\d+|-)\t(.+)$/s
 
@@ -84,12 +89,13 @@ export function checkGitUrl(url: string, o: { allowFileProtocol?: boolean } = {}
   if (typeof url !== 'string' || url.length > URL_MAX) return bad
   if (o.allowFileProtocol === true && FILE_URL.test(url)) return { ok: true }
   if (!HTTPS_URL.test(url) || ENCODED_CONTROL.test(url)) return bad
+  let host: string
   try {
-    new URL(url)
+    host = new URL(url).hostname
   } catch {
     return bad
   }
-  return { ok: true }
+  return isInternalHost(host) ? bad : { ok: true }
 }
 
 export const checkRef = (ref: string) => REF.test(ref) && !ref.startsWith('-') && !ref.includes('..')
@@ -123,12 +129,29 @@ function buildEnv(base: NodeJS.ProcessEnv, home: string): NodeJS.ProcessEnv {
   }
 }
 
-/** 从 stderr 判代码。sideband 的 `remote:` 行是对方写的,不算 */
-function codeOf(stderr: string): FetchError {
-  const text = stderr
+const escapeRe = (t: string) => t.replace(/[.*+?^${}()|[\]\\/-]/g, '\\$&')
+
+/** 地址和主机名是用户给的、对方起的:里面的 fsck、corrupt 不算 git 说的话。大小写都去,git 和 curl 不一定照原样打印 */
+function withoutAddress(stderr: string, url: string): string {
+  let host = ''
+  try {
+    host = new URL(url).hostname
+  } catch {
+    /* file:// 和坏地址没有主机名 */
+  }
+  return [url, host].filter(t => t !== '').reduce((text, t) => text.replace(new RegExp(escapeRe(t), 'gi'), ' '), stderr)
+}
+
+/**
+ * 从 stderr 判代码。对方能写进来的都不算:sideband 的 `remote:` 行、地址;
+ * ERR 包打印成 `fatal: remote error: <对方的文字>`,文字里的换行还能造出没有前缀的下一行,所以有这一行就不再往下看
+ */
+function codeOf(stderr: string, url: string): FetchError {
+  const text = withoutAddress(stderr, url)
     .split('\n')
     .filter(l => !l.startsWith('remote:'))
     .join('\n')
+  if (/fatal: remote error:/i.test(text)) return /fatal: remote error:[^\n]*not our ref/i.test(text) ? 'bad_ref' : 'network'
   if (/could not read (?:Username|Password)|terminal prompts disabled|Authentication failed|returned error: 40[13]\b/i.test(text)) return 'auth_required'
   if (/couldn't find remote ref|Remote branch .* not found|not our ref|unadvertised object|invalid refspec/i.test(text)) return 'bad_ref'
   if (/fsck|index-pack|unpack-objects|bad object|bad pack|corrupt|malformed|did not send all necessary objects|does not appear to be a git repository|not a git repository|is this a git repository/i.test(text)) return 'bad_repo'
@@ -237,8 +260,8 @@ export async function fetchGit(o: FetchOpts): Promise<FetchResult> {
   const subpath = o.subpath === undefined ? undefined : normalizeSubpath(o.subpath)
   if (o.subpath !== undefined && subpath === undefined) return { ok: false, error: 'bad_path' }
 
-  prepareInto(o.into)
   mkdirSync(o.tmpHome, { recursive: true })
+  prepareInto(o.into)
 
   const spawn = o.spawn ?? nodeSpawn
   const timers = o.timers ?? { setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: h => clearTimeout(h as NodeJS.Timeout) }
@@ -348,11 +371,13 @@ export async function fetchGit(o: FetchOpts): Promise<FetchResult> {
     if (stop) return fail(stop)
     if (init.missing || /xcrun: error|xcode-select|developer tools/i.test(init.stderr)) return fail('git_not_found')
     if (init.code !== 0) return fail('bad_repo')
+    mkdirSync(join(o.into, '.git', 'info'), { recursive: true })
+    writeFileSync(join(o.into, '.git', 'info', 'attributes'), NO_ATTRIBUTES)
 
     const fetched = await git(['fetch', '--depth', '1', '--no-tags', '--no-recurse-submodules', '--', o.url, o.ref ?? 'HEAD'])
     if (stop) return fail(stop)
     if (fetched.missing) return fail('git_not_found')
-    if (fetched.code !== 0) return fail(codeOf(fetched.stderr))
+    if (fetched.code !== 0) return fail(codeOf(fetched.stderr, o.url))
     measure()
     if (stop) return fail(stop)
 

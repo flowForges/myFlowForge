@@ -129,8 +129,10 @@ describe('walkTree', () => {
     ['tab', 'a\tb'],
     ['escape', 'a\x1bb'],
     ['del', 'a\x7fb'],
-    ['bidi override', 'a‮b'],
-    ['zero width', 'a​b'],
+    ['bidi override', 'a\u202eb'],
+    ['zero width', 'a\u200bb'],
+    ['line separator', 'a\u2028b'],
+    ['paragraph separator', 'a\u2029b'],
     ['backslash', 'a\\b'],
   ])('refuses a path with %s, and the reported path is clean', (_n, name) => {
     const root = make()
@@ -138,7 +140,7 @@ describe('walkTree', () => {
     const r = walkTree(root)
     expect(r).toMatchObject({ ok: false, error: 'bad_path' })
     if (r.ok) return
-    expect(r.path).not.toMatch(/[\p{Cc}\p{Cf}]/u)
+    expect(r.path).not.toMatch(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u)
     expect(r.path).toContain('a')
   })
 
@@ -436,6 +438,39 @@ describe('copyTree', () => {
 
     const grown = make({ 'a.txt': 'a' })
     expect(code(() => copyTree(grown, to, { beforeOpen: rel => writeFileSync(join(grown, rel), 'a much longer body') }))).toBe('changed')
+    expect(existsSync(to)).toBe(false)
+  })
+
+  // 分大小写的来源拷到不分大小写的目标时 Foo 和 foo 撞车;这个卷造不出来,用预先放好的目标代替
+  it('a file whose target already exists is bad_path with the relative path, nothing absolute', () => {
+    const root = make({ 'sub/foo': 'a' })
+    const to = dest()
+    let err: unknown
+    try {
+      copyTree(root, to, {
+        beforeOpen: rel => writeFileSync(join(to, rel), 'there first'),
+      })
+    } catch (e) {
+      err = e
+    }
+    expect(err).toBeInstanceOf(TreeError)
+    expect(err).toMatchObject({ code: 'bad_path', path: 'sub/foo' })
+    expect((err as Error).message).not.toContain(to)
+    expect(existsSync(to)).toBe(false)
+  })
+
+  it('a directory whose target already exists is bad_path with the relative path', () => {
+    const root = make({ 'sub/foo': 'a' })
+    const to = dest()
+    let err: unknown
+    try {
+      copyTree(root, to, { beforeMkdir: rel => mkdirSync(join(to, rel)) })
+    } catch (e) {
+      err = e
+    }
+    expect(err).toBeInstanceOf(TreeError)
+    expect(err).toMatchObject({ code: 'bad_path', path: 'sub' })
+    expect((err as Error).message).not.toContain(to)
     expect(existsSync(to)).toBe(false)
   })
 

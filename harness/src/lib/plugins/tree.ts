@@ -46,11 +46,11 @@ const CHUNK = 64 * 1024
 
 const isGit = (name: string) => name.toLowerCase() === '.git'
 
-/** 路径段不合规:控制字符、不可见的格式字符(方向覆盖、零宽)、反斜杠 */
-export const badSegment = (name: string) => name === '' || name === '.' || name === '..' || /[\p{Cc}\p{Cf}\\/]/u.test(name)
+/** 路径段不合规:控制字符、不可见的格式字符(方向覆盖、零宽)、行和段分隔符、反斜杠 */
+export const badSegment = (name: string) => name === '' || name === '.' || name === '..' || /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\\/]/u.test(name)
 
-/** 给人看的路径:控制和格式字符写成 \uXXXX,截断 */
-export const cleanPath = (p: string) => clip(p.replace(/[\p{Cc}\p{Cf}]/gu, c => `\\u${c.codePointAt(0)!.toString(16).padStart(4, '0')}`), PATH_SHOWN_MAX)
+/** 给人看的路径:控制、格式、行段分隔字符写成 \uXXXX,截断 */
+export const cleanPath = (p: string) => clip(p.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, c => `\\u${c.codePointAt(0)!.toString(16).padStart(4, '0')}`), PATH_SHOWN_MAX)
 
 interface Walked extends TreeFile {
   dev: number
@@ -182,6 +182,8 @@ export interface CopyOpts {
   limits?: Partial<TreeLimits>
   /** 只给测试:每个文件打开之前调一次,在这里换文件 */
   beforeOpen?: (rel: string) => void
+  /** 只给测试:每个目录建之前调一次 */
+  beforeMkdir?: (rel: string) => void
 }
 
 function freshDir(to: string): void {
@@ -197,13 +199,23 @@ function freshDir(to: string): void {
   if (!st.isDirectory() || readdirSync(to).length > 0) throw new TreeError('bad_path')
 }
 
+/** 目标里已有这一项:Foo 和 foo 拷到不分大小写的卷上会撞。报相对路径,不带暂存区的绝对路径 */
+function exclusive<T>(rel: string, create: () => T): T {
+  try {
+    return create()
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'EEXIST') throw new TreeError('bad_path', cleanPath(rel))
+    throw e
+  }
+}
+
 function copyOne(from: string, to: string, f: Walked, buf: Buffer, beforeOpen?: (rel: string) => void): void {
   beforeOpen?.(f.path)
   const { fd, st } = openPlain(from, f.path)
   try {
     // 和遍历时不是同一个文件:同意的是遍历看到的那棵树
     if (st.dev !== f.dev || st.ino !== f.ino || st.size !== f.size) throw new TreeError('changed', cleanPath(f.path))
-    const out = openSync(join(to, f.path), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | O_NOFOLLOW, 0o600)
+    const out = exclusive(f.path, () => openSync(join(to, f.path), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | O_NOFOLLOW, 0o600))
     try {
       let copied = 0
       for (let n = readSync(fd, buf); n > 0; n = readSync(fd, buf)) {
@@ -228,7 +240,10 @@ export function copyTree(from: string, to: string, o: CopyOpts = {}): void {
   if (!r.ok) throw new TreeError(r.error, r.path)
   freshDir(to)
   try {
-    for (const d of r.dirs) mkdirSync(join(to, d), { mode: 0o755 })
+    for (const d of r.dirs) {
+      o.beforeMkdir?.(d)
+      exclusive(d, () => mkdirSync(join(to, d), { mode: 0o755 }))
+    }
     const buf = Buffer.allocUnsafe(CHUNK)
     for (const f of r.files) copyOne(from, to, f, buf, o.beforeOpen)
   } catch (e) {
