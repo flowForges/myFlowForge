@@ -228,6 +228,8 @@ export function renderTurn(events: readonly KernelEvent[], o: RenderOptions): Ch
 
   const rootList = [...roots].sort((a, b) => b.length - a.length)
   const last = segments[segments.length - 1]!
+  // 下面两行尾注只是状态,不是模型接着写的内容:排着消息、挂起,都不能让还在写的那块算成完整
+  const lastContent = last.length - 1
   if (parked && !ended) {
     const waiting = [...runs.values()].filter(r => r.phase !== 'ended').map(r => r.executor)
     last.push({ k: 'line', text: `等 ${waiting.length > 0 ? [...new Set(waiting)].join('、') : 'executor'} 跑完,可以接着发消息` })
@@ -264,7 +266,7 @@ export function renderTurn(events: readonly KernelEvent[], o: RenderOptions): Ch
         case 'text': {
           const raw = b.full ?? b.parts.join('')
           // 还在写的最后一块只发稳定的部分;后面已经有别的内容,或步骤、轮结束了,就是完整的
-          const complete = b.full !== undefined || o.final || i < blocks.length - 1
+          const complete = b.full !== undefined || o.final || i < (blocks === last ? lastContent : blocks.length - 1)
           const masked = o.mask(complete ? raw : stableText(raw, false))
           if (masked.length > TEXT_CLIP) clipped = true
           const md = clip(masked, TEXT_CLIP).trim()

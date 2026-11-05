@@ -38,36 +38,57 @@ function leaks(secret: string, text: string): boolean {
   return false
 }
 
-function perChar(wrap: (s: string) => string, secret: string) {
+function perChar(wrap: (s: string) => string, secret: string, queued = 0, before: KernelEvent[] = []) {
   const full = wrap(secret)
-  const events: KernelEvent[] = []
+  const events: KernelEvent[] = [...before]
   for (let i = 0; i < full.length; i++) {
     events.push(delta(full[i]!))
-    const out = all(render(events))
-    expect(leaks(secret, out), `leak at char ${i}: ${out.slice(-60)}`).toBe(false)
+    const out = all(render(events, { queued }))
+    expect(leaks(secret, out), `leak at char ${i}, queued ${queued}: ${out.slice(-60)}`).toBe(false)
   }
   return events
 }
 
-describe('renderTurn: secrets at every moment of the stream', () => {
+describe.each([0, 1, 3])('renderTurn: secrets at every moment of the stream, queued %i', queued => {
   for (const [name, secret] of SECRETS) {
     it(`${name}: plain, in Chinese, in a fence, across a step`, () => {
-      const plain = perChar(s => `请看 ${s} 完毕。`, secret)
-      expect(all(render([...plain, ev('message.assistant', { text: `请看 ${secret} 完毕。` })], { final: true }))).toContain('***')
-      perChar(s => `这是中文说明,${s}然后继续`, secret)
-      perChar(s => '```sh\nexport K=' + s + '\n```\n', secret)
+      const plain = perChar(s => `请看 ${s} 完毕。`, secret, queued)
+      expect(all(render([...plain, ev('message.assistant', { text: `请看 ${secret} 完毕。` })], { final: true, queued }))).toContain('***')
+      perChar(s => `这是中文说明,${s}然后继续`, secret, queued)
+      perChar(s => '```sh\nexport K=' + s + '\n```\n', secret, queued)
       // the step ends right after the secret, then the next step streams on
       const text = `用 ${secret} 即可`
-      const evs = [...perChar(s => `用 ${s} 即可`, secret), ev('message.assistant', { text })]
+      const evs = [...perChar(s => `用 ${s} 即可`, secret, queued), ev('message.assistant', { text })]
       for (const tail of ['下一步', ' next step']) {
         const more = [...evs]
         for (const ch of tail) {
           more.push(delta(ch))
-          expect(leaks(secret, all(render(more)))).toBe(false)
+          expect(leaks(secret, all(render(more, { queued })))).toBe(false)
         }
       }
     })
+    it(`${name}: a parked turn's tail line and a follow-up segment`, () => {
+      perChar(s => `请看 ${s} 完毕。`, secret, queued, [ev('turn.parked')])
+      // the follow-up streams into its own segment, which is the last one and carries the tail lines
+      perChar(s => `请看 ${s} 完毕。`, secret, queued, [delta('前面'), ev('message.assistant', { text: '前面' }), ev('message.user', { followUp: true })])
+    })
   }
+  it('PEM body never appears before the END line', () => {
+    const events: KernelEvent[] = []
+    for (let i = 0; i < PEM.length; i++) {
+      events.push(delta(PEM[i]!))
+      const out = all(render(events, { queued }))
+      expect(out).not.toContain('MIIEowIBAAKC'.slice(0, 6))
+      expect(out).not.toContain('H2Mo4l')
+    }
+  })
+  it('the tail line itself still shows', () => {
+    if (queued > 0) expect(all(render([delta('今天天气不错')], { queued }))).toBe(`今天天气不错\n已收到 ${queued} 条`)
+    expect(all(render([delta('key is sk-abc')], { queued }))).not.toContain('sk-abc')
+  })
+})
+
+describe('renderTurn: the rest of the stream', () => {
   it('PEM body never appears before the END line, and is masked after', () => {
     const events: KernelEvent[] = []
     for (let i = 0; i < PEM.length; i++) {

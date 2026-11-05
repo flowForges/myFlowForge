@@ -165,6 +165,28 @@ describe('secrets', () => {
     expect(texts(r).at(-1)).toContain('end')
   })
 
+  it('a message queued while a key is streaming does not release the half that is out', async () => {
+    const key = 'sk-abcDEF123abcDEF123abcDEF123abc'
+    const half = key.slice(0, 17)
+    const { open, stream } = gatedStream(`key is ${half}`, `${key.slice(17)} end`)
+    const r = await rig({ models: { script: (_n, req) => stream(req) } })
+    await handled(r, r.dm('go'))
+    await flow(r)
+    expect(texts(r).at(-1)).toBe('key is')
+    r.dm('one more thing')
+    await flow(r)
+    await flow(r)
+    expect(texts(r).at(-1)).toBe('key is\n已收到 1 条')
+    // every recorded request, not only the last state of the message
+    const wire = () => JSON.stringify(r.fake.requests.filter(q => q.method !== 'getUpdates').map(q => q.body))
+    expect(wire()).not.toContain('sk-')
+    open()
+    await flow(r)
+    expect(wire()).not.toContain(half)
+    expect(wire()).not.toContain(key)
+    expect(texts(r).join('\n')).toContain('end')
+  })
+
   it('every message of a turn has link previews off', async () => {
     const r = await rig({ models: { script: () => say('see https://evil.example/?d=1 ok') } })
     await handled(r, r.dm('go'))
