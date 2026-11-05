@@ -2,7 +2,7 @@
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { call, lastResult, storeOf, until } from '../../../test/managerRig'
+import { alive, call, lastResult, storeOf, until } from '../../../test/managerRig'
 import { calling, say } from '../../../test/memoryRig'
 import { fakeOutside, mcpRig, statusEvents, stubSandbox, type McpRig, type McpRigOpts } from '../../../test/mcpRig'
 import { buildPlugin, type PluginSpec } from '../../../test/pluginRig'
@@ -783,6 +783,20 @@ describe('a full turn with a fake model', () => {
       await until(() => m.live().length === 0, 6000)
     })
 
+    it("one session's turn ending leaves another session's write server alone", async () => {
+      const f = fake({ callDelayMs: 1200 })
+      const { m, repo, sid } = await repoRig(f)
+      const other = await m.r.session({ approvalMode: 'auto', cwd: repo })
+      await m.r.turn(other, 'pin')
+      const signal = new AbortController().signal
+      const busy = m.host().callTool(other, 'x', 'y', 'echo', { from: 'other' }, signal, true)
+      await until(() => f.calls('tools/call').length === 1)
+      const [otherPid] = m.pids
+      await m.mcp(sid, { action: 'tools', server: 'x/y' })
+      expect(alive(otherPid)).toBe(true)
+      expect((await busy).isError).toBe(false)
+    })
+
     it('a read-only server stays up between turns', async () => {
       const f = fake()
       const { m, sid } = await repoRig(f, { y: { network: [], cwd: 'read' } })
@@ -796,7 +810,7 @@ describe('a full turn with a fake model', () => {
       const dir = dirFor()
       mkdirSync(dir)
       const script = join(dir, 'leaver.mjs')
-      writeFileSync(script, `import { writeFileSync } from 'node:fs'\nprocess.stdin.on('data', d => { for (const l of String(d).split('\\n').filter(Boolean)) { const q = JSON.parse(l); if (q.method === 'initialize') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: q.id, result: { protocolVersion: '2025-06-18' } }) + '\\n'); if (q.method === 'tools/list') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: q.id, result: { tools: [] } }) + '\\n') } })\nprocess.on('SIGINT', () => {})\nprocess.stdin.on('end', () => { writeFileSync('at-stop.txt', 'written while stopping'); process.exit(0) })\n`)
+      writeFileSync(script, `import { writeFileSync } from 'node:fs'\nprocess.stdin.on('data', d => { for (const l of String(d).split('\\n').filter(Boolean)) { const q = JSON.parse(l); if (q.method === 'initialize') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: q.id, result: { protocolVersion: '2025-06-18' } }) + '\\n'); if (q.method === 'tools/list') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: q.id, result: { tools: [] } }) + '\\n') } })\nprocess.on('SIGINT', () => {})\nprocess.stdin.on('end', () => setTimeout(() => { writeFileSync('at-stop.txt', 'written while stopping'); process.exit(0) }, 400))\n`)
       const { m, repo, sid } = await repoRig({ entry: () => ({ command: process.execPath, args: [script] }) })
       await m.mcp(sid, { action: 'tools', server: 'x/y' })
       expect(readdirSync(repo)).toContain('at-stop.txt')
