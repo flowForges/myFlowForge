@@ -5,6 +5,7 @@ import { resolve } from 'node:path'
 import type { Plugin, PluginContext } from '../../kernel/pluginHost'
 import { RpcError } from '../../kernel/rpcError'
 import { effectiveGrants, escapeDisplay } from '../../lib/plugins/consent'
+import { readDevIndex, removeDevPlugin, trustDevPlugin } from '../../lib/plugins/devStore'
 import { scrub } from '../../lib/memory/scrub'
 import type { FetchTimers } from '../../lib/plugins/fetchGit'
 import { USER_CONFIG_KEY_RE } from '../../lib/plugins/manifest'
@@ -124,6 +125,7 @@ export function createPluginManager(o: PluginManagerOpts = {}): Plugin {
       // 兜底:kernel.close 的 killLive 已经收过登记的组
       ctx.effect(() => host.killAllNow())
       const killPluginProcesses = o.killPluginProcesses ?? ((id: string) => host.killPlugin(id))
+      const reservedIds = o.reservedIds ?? (() => new Set(['plugin-manager']))
       const installer = new Installer({
         store,
         commands,
@@ -134,7 +136,7 @@ export function createPluginManager(o: PluginManagerOpts = {}): Plugin {
         env: o.env ?? process.env,
         now,
         timers,
-        reservedIds: o.reservedIds ?? (() => new Set(['plugin-manager'])),
+        reservedIds,
         killPluginProcesses,
         ...(pgids && { pgids }),
         ...(o.spawn && { spawn: o.spawn }),
@@ -224,7 +226,7 @@ export function createPluginManager(o: PluginManagerOpts = {}): Plugin {
           integrity: r.integrity,
           installedAt: r.installedAt,
         })),
-        dev: [],
+        dev: readDevIndex(dataDir, ctx.log).map(e => ({ id: e.id, hash: e.hash, trustedAt: e.trustedAt })),
         problems: store.problems,
       }))
 
@@ -314,6 +316,39 @@ export function createPluginManager(o: PluginManagerOpts = {}): Plugin {
           store.discardUnknown()
           ctx.append({ type: 'plugins.store.discarded', payload: {} })
           return { ok: true }
+        }),
+      )
+
+      // 开发模式(§12):只有这两个 RPC,模型碰不到。下次工作进程启动才生效
+      const pathOk = (path: string) => {
+        try {
+          return commands.validateCwd(path)
+        } catch {
+          return undefined
+        }
+      }
+      on('plugins.dev.trust', p =>
+        serial(async () => {
+          const real = pathOk(p.path)
+          if (real === undefined) throw fail('path_refused')
+          const r = trustDevPlugin({ dataDir, path: real, reservedIds: reservedIds(), now, refusePath: dir => pathOk(dir) === undefined })
+          if (!r.ok) throw fail(r.error)
+          // 模型可能刚改过那个文件:用户要看得到批的是哪一份
+          ctx.append({ type: 'plugins.dev.trusted', payload: { id: r.id, hash: r.hash } })
+          return { ok: true, id: r.id, hash: r.hash, bytes: r.bytes, main: escapeDisplay(r.main), restartRequired: true as const }
+        }),
+      )
+      on('plugins.dev.remove', p =>
+        serial(async () => {
+          if (!readDevIndex(dataDir, ctx.log).some(e => e.id === p.id)) throw fail('plugin_not_installed')
+          let ok: boolean
+          try {
+            ok = removeDevPlugin({ dataDir, id: p.id })
+          } catch (err) {
+            ctx.log.warn('dev plugin record not saved', { code: (err as NodeJS.ErrnoException).code ?? 'unknown' })
+            throw fail('store_error')
+          }
+          return { ok, restartRequired: true as const }
         }),
       )
 

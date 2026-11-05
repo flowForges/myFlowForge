@@ -1,4 +1,5 @@
 import { statSync } from 'node:fs'
+import { join } from 'node:path'
 import { BUILTIN_PLUGINS } from '../plugins/index'
 import { createKernel, type Kernel } from '../kernel/kernel'
 import { purgeHoldMs } from '../kernel/pluginHost'
@@ -10,6 +11,7 @@ import { sweepStaleNetDirs } from '../lib/sandbox/net/proxy'
 import { HARNESS_VERSION } from '../kernel/version'
 import { dataDir, ensureToken, runtimePaths } from '../protocol/index'
 import { createFileLogger } from '../supervisor/fileLog'
+import { loadDevPlugins, type DevLoad } from './devPlugins'
 import { createWatchdogHold } from './watchdogHold'
 
 
@@ -20,6 +22,7 @@ export async function runWorker(): Promise<void> {
   const log = createFileLogger(paths.logs, 'worker')
   let kernel: Kernel | undefined
   let server: { close(): Promise<void> } | undefined
+  let dev: DevLoad | undefined
   let stopping = false
   let startup: Promise<void> = Promise.resolve()
 
@@ -36,6 +39,8 @@ export async function runWorker(): Promise<void> {
     } catch (err) {
       log.error('worker stop failed', { error: String(err) })
     }
+    // 走到这里就不是崩溃:启动 30 s 内的正常停机不能变成假的 dev_crashed。停不下来被杀的,标记留着
+    dev?.markLoaded()
     process.exit(0)
   }
 
@@ -58,13 +63,15 @@ export async function runWorker(): Promise<void> {
       const swept = sweepStaleNetDirs(proxySocketParents(), { log })
       if (swept.length) log.info('stale proxy socket dirs removed', { count: swept.length })
     }
+    // 开发插件排在内置之后,载的是用户批过的副本(09 spec §12)。模块顶层的代码这一步就跑了
+    dev = await loadDevPlugins({ dataDir: dir, runDir: join(dir, 'run'), log })
     // MFFAI_SECRETS_PLAINTEXT=1:端到端测试用,不碰系统钥匙串
     const secrets = { osBackend: process.env.MFFAI_SECRETS_PLAINTEXT !== '1' }
     // 启动时整个事件日志同步读好几遍(约 30 ms/MB),这期间回不了 ping:日志大了会被当成卡死,杀了又起,再也起不来
     const holdWatchdog = createWatchdogHold()
     const logBytes = statSync(paths.db, { throwIfNoEntry: false })?.size ?? 0
     await holdWatchdog(purgeHoldMs(logBytes)).catch((err: unknown) => log.warn('startup hold refused', { error: String(err) }))
-    kernel = await createKernel({ dataDir: dir, plugins: BUILTIN_PLUGINS, log, secrets, pgidFile: pgids, pgidSeed: kept, holdWatchdog })
+    kernel = await createKernel({ dataDir: dir, plugins: [...BUILTIN_PLUGINS, ...dev.plugins], devPlugins: { ids: dev.plugins.map(p => p.manifest.id), ...(dev.skipped && { skipped: dev.skipped }) }, log, secrets, pgidFile: pgids, pgidSeed: kept, holdWatchdog })
     const k = kernel
     server = await startRpcServer({
       addr: paths.workerAddr,
@@ -84,5 +91,6 @@ export async function runWorker(): Promise<void> {
   if (stopping) return
   log.info('worker ready', { pid: process.pid, addr: paths.workerAddr })
   process.send?.({ t: 'ready' })
+  dev?.armMarkLoaded()
   await createWatchdogHold()(0)
 }

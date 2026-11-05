@@ -72,6 +72,8 @@ export interface PluginState {
   id: string
   state: 'active' | 'failed' | 'disabled'
   error?: string
+  /** 开发插件:什么都能做。08 要一直显示 */
+  trust?: 'dev'
 }
 
 /** 实测约 13 ms/MB;机器忙的时候留够 7 倍,再加一段启动余量 */
@@ -92,6 +94,8 @@ export interface PluginHostDeps {
   injectTimeoutMs?: number
   secrets: SecretStore
   config?: PluginConfigAccess
+  /** 开发插件的 id(entry/worker.ts 给) */
+  devIds?: readonly string[]
 }
 
 export class PluginHost {
@@ -233,6 +237,6 @@ export class PluginHost {
   }
 
   states(): PluginState[] {
-    return this.list.map(s => ({ ...s }))
+    return this.list.map(s => ({ ...s, ...(this.deps.devIds?.includes(s.id) && { trust: 'dev' as const }) }))
   }
 }

@@ -434,6 +434,35 @@ describe.skipIf(!usable)('an MCP server under real Seatbelt', () => {
     expect((await m.mcp(sid, { action: 'tools', server: 'x/y' })).text).toBe('cwd_too_broad')
   }, 60_000)
 
+  it("a session's write and sandboxed shell can't change dev-plugins, even at cwd = home with the data dir inside it", async () => {
+    const m = await rig({ layout: 'production', before: () => [toolsRegistry, createToolsCoding({ loginPath: async () => '' }), stubPlugin()] })
+    const src = join(m.r.root, 'dev-src')
+    mkdirSync(src)
+    writeFileSync(join(src, 'mff-plugin.json'), JSON.stringify({ id: 'dev-x', version: '1.0.0', main: 'p.mjs' }))
+    writeFileSync(join(src, 'p.mjs'), 'export default {}\n')
+    await call(m.r, 'plugins.dev.trust', { path: src, acknowledge: 'runs_with_full_access' })
+    const root = join(m.r.dataDir, 'dev-plugins')
+    const dir = join(root, 'dev-x')
+    const copy = join(dir, readdirSync(dir)[0])
+    const index = join(root, 'index.json')
+    const before = [readFileSync(copy, 'utf8'), readFileSync(index, 'utf8')]
+    const sid = await m.r.session({ approvalMode: 'auto', cwd: m.r.home })
+    await m.r.turn(sid, 'pin')
+    // 对照:同一条命令写得到 home 里的普通文件,说明命令真跑了
+    const control = join(m.r.home, 'control.txt')
+    m.queue.push(
+      calling('w1', 'write', { path: copy, content: 'overwritten' }),
+      calling('w2', 'write', { path: index, content: 'overwritten' }),
+      calling('s1', 'shell', { command: `echo ran > ${JSON.stringify(control)}; echo overwritten > ${JSON.stringify(copy)}; echo overwritten > ${JSON.stringify(index)}; touch ${JSON.stringify(join(dir, 'planted'))}; mkdir ${JSON.stringify(join(root, 'dev-y'))}; echo done` }),
+      say('done'),
+    )
+    await m.r.turn(sid, 'go')
+    expect(readFileSync(control, 'utf8')).toBe('ran\n')
+    expect([readFileSync(copy, 'utf8'), readFileSync(index, 'utf8')]).toEqual(before)
+    expect(readdirSync(dir)).toEqual([copy.split('/').pop()])
+    expect(readdirSync(root).sort()).toEqual(['dev-x', 'index.json'])
+  }, 60_000)
+
   it('a detached child and the server are both gone after disable, proven by pid', async () => {
     const m = await rig()
     const s = await started(m)

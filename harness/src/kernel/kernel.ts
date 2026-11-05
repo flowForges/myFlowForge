@@ -83,6 +83,8 @@ export interface KernelOpts {
     /** 查 gitDir 用的 git(测试注入隔离的环境) */
     git?: Git
   }
+  /** 哪些插件是开发模式载进来的,以及这次是否跳过了它们(entry/devPlugins.ts)。内核没有别的办法知道 */
+  devPlugins?: { ids: string[]; skipped?: 'dev_crashed' }
 }
 
 const ERR_METHOD_NOT_FOUND = -32601
@@ -235,7 +237,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   // 后端故障不抛错:状态为 unavailable / unreadable,内核照常启动
   const secrets = await openSecretStore({ ...opts.secrets, dataDir: opts.dataDir, log })
   const host = new PluginHost({
-    services, events: bus, rpc, append, history: sid => eventLog.bySession(sid), eventLog, log, dataDir: opts.dataDir, injectTimeoutMs: opts.injectTimeoutMs, secrets, config: configAccess, ...(opts.holdWatchdog && { holdWatchdog: opts.holdWatchdog }),
+    services, events: bus, rpc, append, history: sid => eventLog.bySession(sid), eventLog, log, dataDir: opts.dataDir, injectTimeoutMs: opts.injectTimeoutMs, secrets, config: configAccess, ...(opts.holdWatchdog && { holdWatchdog: opts.holdWatchdog }), ...(opts.devPlugins && { devIds: opts.devPlugins.ids }),
   })
 
   let state: StatusResult['state'] = 'starting'
@@ -388,6 +390,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
       rssMb: Math.round(process.memoryUsage().rss / 1048576),
       version: HARNESS_VERSION,
       plugins: host.states(),
+      ...(opts.devPlugins?.skipped && { problems: [opts.devPlugins.skipped] }),
       secretsBackend: secrets.backend,
       sandbox: sandboxStatus(),
       ...(dbUnprotected && { dbUnprotected: true as const }),
