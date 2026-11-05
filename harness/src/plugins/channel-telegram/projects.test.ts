@@ -940,12 +940,13 @@ describe('a worktree with content is not deleted on a guess', () => {
   })
 
   it.each([
-    ['no session ids, no opened flag (a crash between two writes in an older state file)', (w: { sessionIds: string[]; opened?: boolean }) => {
+    ['no session ids, no opened flag (a crash between two writes in an older state file)', (w: { sessionIds: string[]; opened?: boolean }, _other: string) => {
       w.sessionIds = []
       delete w.opened
     }],
-    ['the session he just left is not in the record', (w: { sessionIds: string[] }) => {
-      w.sessionIds = ['some-other-session']
+    // 记录里的会话是真的、也没说过话:只有"他刚离开的不在里面"这一条挡得住
+    ['the session he just left is not in the record', (w: { sessionIds: string[] }, other: string) => {
+      w.sessionIds = [other]
     }],
   ])('%s: /project off keeps it and says so in the log; it stays listed', async (_n, edit) => {
     const r = await rig({ models: { script: n => (n === 1 ? calling('c1', 'write', { path: 'work.txt', content: 'work\n' }) : say('done')) } })
@@ -953,8 +954,9 @@ describe('a worktree with content is not deleted on a guess', () => {
     await send(r, 'do it')
     await turnEnds(r, 1)
     const cwd = created(r)[0].cwd!
+    const { sessionId: other } = (await r.k.handle('session.create', { commandId: 'x1', origin: 'im', audience: 'owner', cwd: repo })) as { sessionId: string }
     const seeded = onDisk(r)
-    edit(seeded.worktrees[`wt_${id}`])
+    edit(seeded.worktrees[`wt_${id}`], other)
     writeFileSync(stateFile(r), JSON.stringify(seeded))
     await r.restart({ kill: true })
     await online(r)
