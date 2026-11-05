@@ -1,7 +1,7 @@
 // 按行传输:服务发来的每个字节都是敌意输入。这里只用 PassThrough 喂精确的字节
-import { PassThrough } from 'node:stream'
+import { PassThrough, Writable } from 'node:stream'
 import { describe, expect, it } from 'vitest'
-import { LineTransport } from './stdio'
+import { LineTransport, MAX_LINE } from './stdio'
 
 function make(maxLine = 1000) {
   const stdin = new PassThrough()
@@ -153,7 +153,106 @@ describe('LineTransport', () => {
     r.t.close()
     r.t.close()
     await r.tick()
-    expect(r.stdin.writableEnded).toBe(true)
+    expect(r.stdin.destroyed).toBe(true)
+    expect(r.stdout.destroyed).toBe(true)
+    expect(r.stderr.destroyed).toBe(true)
     expect(r.closed).toEqual([])
+  })
+
+  it('exports the 4 MB line limit', () => {
+    expect(MAX_LINE).toBe(4 * 1024 * 1024)
+  })
+
+  it('U+2028 and U+2029 are escaped on the wire', async () => {
+    const r = make()
+    r.t.send({ s: 'a b c' })
+    await r.tick()
+    const out = r.written.join('')
+    expect(out).not.toContain(' ')
+    expect(out).not.toContain(' ')
+    expect(out).toContain('\\u2028')
+    expect(JSON.parse(out).s).toBe('a b c')
+  })
+
+  it('an unterminated line of exactly maxLine bytes waits for its newline instead of overflowing', async () => {
+    const r = make(50)
+    r.stdout.write(`{"p":"${'x'.repeat(42)}"}`)
+    await r.tick()
+    expect(r.closed).toEqual([])
+    r.stdout.write('\n')
+    await r.tick()
+    expect(r.got).toHaveLength(1)
+    expect(r.closed).toEqual([])
+  })
+
+  it('an error event on stderr or stdin does not throw; one on stdout closes with exit', async () => {
+    const r = make()
+    expect(() => r.stderr.emit('error', new Error('boom'))).not.toThrow()
+    expect(() => r.stdin.emit('error', new Error('boom'))).not.toThrow()
+    expect(r.closed).toEqual([])
+    r.stdout.emit('error', new Error('boom'))
+    await r.tick()
+    expect(r.closed).toEqual(['exit'])
+  })
+
+  it('overflow destroys all three streams so nothing stays queued', async () => {
+    const r = make(50)
+    r.stdout.write('x'.repeat(80))
+    await r.tick()
+    expect(r.closed).toEqual(['overflow'])
+    expect(r.stdout.destroyed).toBe(true)
+    expect(r.stdin.destroyed).toBe(true)
+  })
+
+  it('a line delivered in a million one-byte writes does not hold a million buffers', async () => {
+    const r = make(4 * 1024 * 1024)
+    const before = process.memoryUsage().rss
+    const started = Date.now()
+    for (let i = 0; i < 1_000_000; i++) r.stdout.emit('data', Buffer.from([120]))
+    r.stdout.emit('data', Buffer.from('\n{"after":1}\n'))
+    expect(process.memoryUsage().rss - before).toBeLessThan(150 * 1024 * 1024)
+    expect(Date.now() - started).toBeLessThan(10_000)
+    expect(r.got).toEqual([{ after: 1 }])
+  })
+
+  it('writes queued past four times maxLine close with overflow; below that they do not', async () => {
+    const stdin = new Writable({ write() {} }) // 永远不消费
+    const t = new LineTransport({ stdin, stdout: new PassThrough(), stderr: new PassThrough() }, { maxLine: 1000 })
+    const closed: string[] = []
+    t.onClose(w => closed.push(w))
+    t.send({ s: 'x'.repeat(2900) })
+    expect(closed).toEqual([])
+    t.send({ s: 'y'.repeat(1200) })
+    expect(closed).toEqual(['overflow'])
+    expect(stdin.destroyed).toBe(true)
+  })
+
+  it('congested says when stdin needs draining', () => {
+    const stdin = new Writable({ highWaterMark: 10, write() {} })
+    const t = new LineTransport({ stdin, stdout: new PassThrough(), stderr: new PassThrough() }, { maxLine: 1000 })
+    expect(t.congested).toBe(false)
+    t.send({ s: 'x'.repeat(30) })
+    expect(t.congested).toBe(true)
+  })
+
+  it('messages carry their byte size; junk and blank lines are reported through onJunk', async () => {
+    const r = make()
+    const sizes: number[] = []
+    const junk: number[] = []
+    r.t.onMessage((_m, bytes) => sizes.push(bytes))
+    r.t.onJunk(bytes => junk.push(bytes))
+    r.stdout.write('{"a":1}\nhello\n\n[1]\n')
+    await r.tick()
+    expect(sizes).toEqual([8])
+    expect(junk).toEqual([6, 1, 4])
+  })
+
+  it('overflow() ends the stream with overflow once', async () => {
+    const r = make()
+    r.t.overflow()
+    r.t.overflow()
+    await r.tick()
+    expect(r.closed).toEqual(['overflow'])
+    expect(r.stdout.destroyed).toBe(true)
   })
 })

@@ -3,12 +3,13 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { PassThrough } from 'node:stream'
+import { PassThrough, Writable } from 'node:stream'
+import { getEventListeners } from 'node:events'
 import { inspect } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { installFakeMcp } from '../../../test/pluginRig'
-import { McpClient, McpError } from './client'
-import { LineTransport } from './stdio'
+import { DEFAULT_CALL_MS, DEFAULT_INIT_MS, McpClient, McpError, UNSOLICITED_BUDGET } from './client'
+import { LineTransport, MAX_LINE } from './stdio'
 
 class FakeTimers {
   now = 0
@@ -33,8 +34,8 @@ class FakeTimers {
   }
 }
 
-const INIT_MS = 30_000
-const CALL_MS = 120_000
+const INIT_MS = DEFAULT_INIT_MS
+const CALL_MS = DEFAULT_CALL_MS
 const MB = 1024 * 1024
 let root = ''
 let timers: FakeTimers
@@ -53,9 +54,9 @@ afterEach(async () => {
   rmSync(root, { recursive: true, force: true })
 })
 
-function client(child: { stdin: any; stdout: any; stderr: any }, o: { maxLine?: number } = {}) {
-  const t = new LineTransport(child, { maxLine: o.maxLine ?? 4 * MB })
-  const c = new McpClient(t, { timers, initMs: INIT_MS, callMs: CALL_MS, clientInfo: { name: 'mff-test', version: '1.0.0' } })
+function client(child: { stdin: any; stdout: any; stderr: any }, o: { maxLine?: number; unsolicitedBudget?: number } = {}) {
+  const t = new LineTransport(child, { maxLine: o.maxLine ?? MAX_LINE })
+  const c = new McpClient(t, { timers, initMs: INIT_MS, callMs: CALL_MS, clientInfo: { name: 'mff-test', version: '1.0.0' }, unsolicitedBudget: o.unsolicitedBudget })
   clients.push(c)
   return { c, t }
 }
@@ -71,7 +72,7 @@ function real(scenario: object, o: { maxLine?: number } = {}) {
 }
 
 /** 精确字节:test 自己扮服务 */
-function scripted(o: { maxLine?: number } = {}) {
+function scripted(o: { maxLine?: number; unsolicitedBudget?: number } = {}) {
   const stdin = new PassThrough()
   const stdout = new PassThrough()
   const stderr = new PassThrough()
@@ -89,6 +90,7 @@ function scripted(o: { maxLine?: number } = {}) {
   })
   const say = (m: unknown) => void stdout.write(typeof m === 'string' ? m : `${JSON.stringify(m)}\n`)
   const { c, t } = client({ stdin, stdout, stderr }, o)
+  const raw = (s: string) => void stdout.write(s)
   const until = async (pred: (m: any) => boolean) => {
     for (let i = 0; i < 2000; i++) {
       const hit = sent.find(pred)
@@ -105,7 +107,7 @@ function scripted(o: { maxLine?: number } = {}) {
     await c.initialize()
   }
   const tick = () => new Promise<void>(r => setImmediate(r))
-  return { c, t, sent, say, until, reqs, answer, initOk, ready, hooks, tick, stdout, stdin }
+  return { c, t, sent, say, raw, until, reqs, answer, initOk, ready, hooks, tick, stdout, stdin }
 }
 
 const text = (s: string) => ({ content: [{ type: 'text', text: s }] })
@@ -448,7 +450,7 @@ describe('tools/call results', () => {
     })
     const out = await r
     expect(out.isError).toBe(false)
-    expect(out.text.split('\n')).toEqual(['one', '[image omitted]', '[audio omitted]', 'res-text', '[resource omitted]', '[resource link omitted]', '[content omitted]', '[content omitted]', '[content omitted]', '[content omitted]', 'two'])
+    expect(out.text.split('\n')).toEqual(['one', '[image omitted]', '[audio omitted]', 'res-text', '[resource omitted]', '[resource link omitted]', '[content omitted x4]', 'two'])
     expect(out.text).not.toContain('/etc/passwd')
     expect(out.text).not.toContain('sneaky')
     expect(out.text).not.toContain('AAAA')
@@ -533,11 +535,18 @@ describe('hostile traffic', () => {
     expect(timers.pending).toBe(0)
   })
 
-  it('a 4 MB line is not refused (the limit is per line, inclusive)', async () => {
-    const s = scripted({ maxLine: 1000 })
-    await s.ready()
-    s.hooks.push(m => m.method === 'tools/call' && s.say({ jsonrpc: '2.0', id: m.id, result: text('y'.repeat(900)) }))
-    expect((await s.c.callTool('t', {}, new AbortController().signal)).text).toHaveLength(900)
+  it('a line of exactly MAX_LINE bytes passes; one byte more is protocol_error', async () => {
+    for (const extra of [0, 1]) {
+      const s = scripted()
+      await s.ready()
+      const call = code(s.c.callTool('t', {}, new AbortController().signal))
+      const req = await s.until(m => m.method === 'tools/call')
+      const head = `{"jsonrpc":"2.0","id":${req.id},"result":{"content":[{"type":"text","text":"`
+      const tail = '"}]}}'
+      const fill = MAX_LINE + extra - head.length - tail.length
+      s.raw(`${head}${'y'.repeat(fill)}${tail}\n`)
+      expect(await call).toBe(extra === 0 ? 'resolved' : 'protocol_error')
+    }
   })
 
   it('server requests: ping answered; sampling, roots, elicitation, initialize, anything else get -32601', async () => {
@@ -622,7 +631,7 @@ describe('hostile traffic', () => {
     const req = await s.until(m => m.method === 'tools/call')
     s.say([{ jsonrpc: '2.0', id: req.id, result: text('batched') }])
     await s.tick()
-    s.say({ jsonrpc: '2.0', id: req.id, result: text('fine'), __proto__: { polluted: 1 }, extra: { deep: [1, 2] } })
+    s.raw(`{"jsonrpc":"2.0","id":${req.id},"result":{"content":[{"type":"text","text":"fine"}],"__proto__":{"polluted":1}},"extra":{"deep":[1,2]},"__proto__":{"polluted":2}}\n`)
     expect((await call).text).toBe('fine')
     expect(({} as any).polluted).toBeUndefined()
   })
@@ -790,6 +799,260 @@ describe('cancel, timeout, close', () => {
     expect((await b).text).toBe('for-b')
   })
 })
+
+const nest = (n: number, leaf = '1') => '{"a":'.repeat(n) + leaf + '}'.repeat(n)
+const nestIdx = (n: number) => '{"0":'.repeat(n) + '1' + '}'.repeat(n)
+const listRaw = (s: ReturnType<typeof scripted>, toolsJson: string) => s.hooks.push(m => m.method === 'tools/list' && s.raw(`{"jsonrpc":"2.0","id":${m.id},"result":{"tools":${toolsJson}}}\n`))
+const callRaw = (s: ReturnType<typeof scripted>, resultJson: string) => s.hooks.push(m => m.method === 'tools/call' && s.raw(`{"jsonrpc":"2.0","id":${m.id},"result":${resultJson}}\n`))
+const good = '{"name":"good","inputSchema":{"type":"object"}}'
+
+describe('deep and odd JSON', () => {
+  it.each([[30_000], [4000], [65]])('a schema %i levels deep is dropped; the good tools survive and listing keeps working', async n => {
+    for (const build of [nest, nestIdx]) {
+      const s = scripted()
+      await s.ready()
+      listRaw(s, `[${good},{"name":"deep","inputSchema":{"type":"object","x":${build(n)}}},{"name":"deep2","inputSchema":${build(n)}}]`)
+      expect((await s.c.listTools()).map(t => t.name)).toEqual(['good'])
+      expect((await s.c.listTools()).map(t => t.name)).toEqual(['good'])
+    }
+  })
+
+  it('64 levels is accepted and 65 is not, whatever the shape', async () => {
+    const s = scripted()
+    await s.ready()
+    listRaw(s, `[{"name":"d64","inputSchema":{"type":"object","x":${nest(63)}}},{"name":"d65","inputSchema":{"type":"object","x":${nest(64)}}},{"name":"arr","inputSchema":{"a":${'['.repeat(63)}${']'.repeat(63)}}},{"name":"arr65","inputSchema":{"a":${'['.repeat(64)}${']'.repeat(64)}}}]`)
+    const tools = await s.c.listTools()
+    expect(tools.map(t => t.name)).toEqual(['d64', 'arr'])
+    for (const t of tools) expect(() => JSON.stringify(t)).not.toThrow()
+  })
+
+  it('toJSON and __proto__ keys are removed from kept schemas at every depth, so stringify and copies are safe', async () => {
+    const s = scripted()
+    await s.ready()
+    listRaw(s, '[{"name":"t","inputSchema":{"type":"object","toJSON":"x","__proto__":{"p":1},"properties":{"a":{"toJSON":{"b":1},"items":[{"toJSON":1,"k":2}]}}}}]')
+    const [t] = await s.c.listTools()
+    const schema = t.inputSchema as any
+    expect(Object.hasOwn(schema, 'toJSON')).toBe(false)
+    expect(Object.hasOwn(schema, '__proto__')).toBe(false)
+    expect(Object.hasOwn(schema.properties.a, 'toJSON')).toBe(false)
+    expect(Object.hasOwn(schema.properties.a.items[0], 'toJSON')).toBe(false)
+    expect(schema.properties.a.items[0].k).toBe(2)
+    expect(JSON.stringify(schema)).not.toContain('toJSON')
+    expect(({} as any).p).toBeUndefined()
+  })
+
+  it('structuredContent deeper than 64 levels is protocol_error, not a RangeError; 64 levels works', async () => {
+    for (const n of [65, 30_000]) {
+      const s = scripted()
+      await s.ready()
+      callRaw(s, `{"structuredContent":${nest(n)}}`)
+      expect(await code(s.c.callTool('t', {}, new AbortController().signal)), String(n)).toBe('protocol_error')
+    }
+    const ok = scripted()
+    await ok.ready()
+    callRaw(ok, `{"structuredContent":${nest(64)}}`)
+    expect((await ok.c.callTool('t', {}, new AbortController().signal)).text).toBe(nest(64))
+  })
+
+  it('a thousand unknown content items collapse into one marker; real text equal to a marker is kept', async () => {
+    const s = scripted()
+    await s.ready()
+    const junk = Array.from({ length: 1000 }, () => '{"type":"mystery"}').join(',')
+    callRaw(s, `{"content":[${junk},{"type":"image"},{"type":"image"},{"type":"mystery"},{"type":"text","text":"[content omitted]"},{"type":"text","text":"[content omitted]"}]}`)
+    const out = await s.c.callTool('t', {}, new AbortController().signal)
+    expect(out.text.split('\n')).toEqual(['[content omitted x1000]', '[image omitted x2]', '[content omitted]', '[content omitted]', '[content omitted]'])
+  })
+})
+
+describe('schema size', () => {
+  it('64 KB + 1 byte is dropped; the cap counts bytes, not characters', async () => {
+    const s = scripted()
+    await s.ready()
+    const mk = (pad: string) => ({ type: 'object', pad })
+    const sizeOf = (o: object) => Buffer.byteLength(JSON.stringify(o))
+    const over = mk('')
+    over.pad = 'o'.repeat(64 * 1024 + 1 - sizeOf(over))
+    expect(sizeOf(over)).toBe(64 * 1024 + 1)
+    const wide = mk('世'.repeat(30_000)) // 30000 字符,90000 字节
+    expect(JSON.stringify(wide).length).toBeLessThan(64 * 1024)
+    const small = mk('世'.repeat(20_000)) // 60000 字节,在上限内
+    s.answer('tools/list', { tools: [{ name: 'over', inputSchema: over }, { name: 'wide', inputSchema: wide }, { name: 'small', inputSchema: small }] })
+    expect((await s.c.listTools()).map(t => t.name)).toEqual(['small'])
+  })
+})
+
+describe('answers and cache details', () => {
+  it('list_changed does not refetch by itself; only the next listTools does', async () => {
+    const s = scripted()
+    await s.ready()
+    s.answer('tools/list', { tools: [] })
+    await s.c.listTools()
+    s.say({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' })
+    await s.tick()
+    await s.tick()
+    expect(s.reqs('tools/list')).toHaveLength(1)
+  })
+
+  it('when a response carries both result and error, the error wins', async () => {
+    const s = scripted()
+    await s.ready()
+    s.hooks.push(m => m.method === 'tools/call' && s.say({ jsonrpc: '2.0', id: m.id, result: text('ignored'), error: { code: 1, message: 'the error' } }))
+    expect(await s.c.callTool('t', {}, new AbortController().signal)).toEqual({ text: 'the error', isError: true })
+  })
+
+  it('a server request whose id is not finite (1e999) gets no answer; a 64-character string id does, a 65-character one does not', async () => {
+    const s = scripted()
+    await s.ready()
+    const before = s.sent.length
+    s.raw('{"jsonrpc":"2.0","id":1e999,"method":"roots/list"}\n')
+    s.raw(`{"jsonrpc":"2.0","id":"${'a'.repeat(65)}","method":"roots/list"}\n`)
+    s.raw(`{"jsonrpc":"2.0","id":"${'b'.repeat(64)}","method":"roots/list"}\n`)
+    await s.until(m => m.id === 'b'.repeat(64))
+    await s.tick()
+    expect(s.sent.length).toBe(before + 1)
+  })
+
+  it('abort listeners are removed after a call finishes, times out, is cancelled, or the client closes', async () => {
+    const count = (ac: AbortController) => getEventListeners(ac.signal, 'abort').length
+    const start = async (answerIt: boolean) => {
+      const s = scripted()
+      await s.ready()
+      if (answerIt) s.answer('tools/call', text('ok'))
+      const ac = new AbortController()
+      const p = code(s.c.callTool('t', {}, ac.signal))
+      await s.until(m => m.method === 'tools/call')
+      return { s, ac, p }
+    }
+    const done = await start(true)
+    expect(await done.p).toBe('resolved')
+    expect(count(done.ac)).toBe(0)
+
+    const cancelled = await start(false)
+    expect(count(cancelled.ac)).toBe(1)
+    cancelled.ac.abort()
+    await cancelled.p
+    expect(count(cancelled.ac)).toBe(0)
+
+    const slow = await start(false)
+    expect(count(slow.ac)).toBe(1)
+    timers.advance(CALL_MS)
+    expect(await slow.p).toBe('call_timeout')
+    expect(count(slow.ac)).toBe(0)
+
+    const closed = await start(false)
+    expect(count(closed.ac)).toBe(1)
+    closed.s.c.close()
+    expect(await closed.p).toBe('server_exited')
+    expect(count(closed.ac)).toBe(0)
+  })
+})
+
+describe('listTools signal and deadline', () => {
+  it('abort rejects as cancelled and stops asking for pages', async () => {
+    const s = scripted()
+    await s.ready()
+    const ac = new AbortController()
+    const p = code(s.c.listTools(ac.signal))
+    await s.until(m => m.method === 'tools/list')
+    ac.abort()
+    expect(await p).toBe('cancelled')
+    expect(s.sent.find(m => m.method === 'notifications/cancelled')).toBeDefined()
+    expect(timers.pending).toBe(0)
+    expect(getEventListeners(ac.signal, 'abort')).toHaveLength(0)
+  })
+
+  it('an already-aborted signal rejects as cancelled and sends nothing', async () => {
+    const s = scripted()
+    await s.ready()
+    const ac = new AbortController()
+    ac.abort()
+    const before = s.sent.length
+    expect(await code(s.c.listTools(ac.signal))).toBe('cancelled')
+    expect(s.sent.length).toBe(before)
+  })
+
+  it('a total deadline covers all pages: slow pages that each beat the per-page timer still end in call_timeout', async () => {
+    const s = scripted()
+    await s.ready()
+    const p = code(s.c.listTools())
+    const first = await s.until(m => m.method === 'tools/list')
+    timers.advance(CALL_MS - 10)
+    s.say({ jsonrpc: '2.0', id: first.id, result: { tools: [], nextCursor: 'two' } })
+    await s.until(m => m.method === 'tools/list' && m.params?.cursor === 'two')
+    timers.advance(20)
+    expect(await p).toBe('call_timeout')
+    expect(timers.pending).toBe(0)
+  })
+})
+
+describe('flooding', () => {
+  it('exports the unsolicited budget at 64 MB', () => {
+    expect(UNSOLICITED_BUDGET).toBe(64 * MB)
+  })
+
+  it('bytes that answer nothing past the budget end the stream with protocol_error for the waiting call', async () => {
+    const s = scripted({ unsolicitedBudget: 1000 })
+    await s.ready()
+    const call = code(s.c.callTool('t', {}, new AbortController().signal))
+    await s.until(m => m.method === 'tools/call')
+    s.raw(`${'n'.repeat(400)}\n`)
+    s.raw(`{"jsonrpc":"2.0","method":"notifications/message","params":{"d":"${'m'.repeat(400)}"}}\n`)
+    await s.tick()
+    s.raw(`{"jsonrpc":"2.0","id":99999,"result":{"d":"${'u'.repeat(300)}"}}\n`)
+    expect(await call).toBe('protocol_error')
+    expect(timers.pending).toBe(0)
+  })
+
+  it('a normal amount of unsolicited output passes, and an answered request resets the count', async () => {
+    const s = scripted({ unsolicitedBudget: 1000 })
+    await s.ready()
+    for (let i = 0; i < 3; i++) {
+      s.raw(`${'l'.repeat(800)}\n`)
+      s.answer('tools/call', text(`r${i}`))
+      expect((await s.c.callTool('t', {}, new AbortController().signal)).text).toBe(`r${i}`)
+      s.hooks.length = 0
+      s.initOk()
+    }
+  })
+
+  it('server requests count as unsolicited bytes too', async () => {
+    const s = scripted({ unsolicitedBudget: 500 })
+    await s.ready()
+    const call = code(s.c.callTool('t', {}, new AbortController().signal))
+    await s.until(m => m.method === 'tools/call')
+    for (let i = 0; i < 20; i++) s.say({ jsonrpc: '2.0', id: i + 1, method: 'ping' })
+    expect(await call).toBe('protocol_error')
+  })
+
+  it('replies to server requests are dropped while stdin needs draining', async () => {
+    const stdin = new Writable({ highWaterMark: 100, write() {} })
+    const stdout = new PassThrough()
+    const { c } = client({ stdin, stdout, stderr: new PassThrough() })
+    void c
+    for (let i = 0; i < 200; i++) stdout.write(`{"jsonrpc":"2.0","id":${i + 1},"method":"roots/list"}\n`)
+    await new Promise<void>(r => setImmediate(r))
+    await new Promise<void>(r => setImmediate(r))
+    expect(stdin.writableLength).toBeLessThan(400)
+    expect(stdin.writableLength).toBeGreaterThan(0)
+  })
+
+  it('a real server that never reads stdin and floods requests: bounded queue, then overflow', async () => {
+    const flood = `const l='{"jsonrpc":"2.0","id":1,"method":"x"}\\n';setInterval(()=>{for(let i=0;i<2000;i++)process.stdout.write(l)},1);setTimeout(()=>process.exit(0),20000)`
+    const child = spawn(process.execPath, ['-e', flood], { env: { PATH: '/usr/bin:/bin' }, stdio: ['pipe', 'pipe', 'pipe'] })
+    kids.push(child)
+    const { t } = client(child, { maxLine: 64 * 1024, unsolicitedBudget: 2 * MB })
+    let closed = ''
+    t.onClose(w => (closed = w))
+    let max = 0
+    for (let i = 0; i < 1000 && !closed; i++) {
+      max = Math.max(max, child.stdin.writableLength)
+      await new Promise(r => setTimeout(r, 10))
+    }
+    expect(closed).toBe('overflow')
+    expect(max).toBeLessThan(128 * 1024) // 不回复时会涨到 4*maxLine = 256 KB 才被截断
+  })
+})
+
 
 describe('McpError', () => {
   it('carries a stable code and is an Error', () => {

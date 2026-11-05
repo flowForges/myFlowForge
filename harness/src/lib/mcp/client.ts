@@ -14,6 +14,7 @@ export class McpError extends Error {
   }
 }
 
+/** 字段都来自服务,没清洗过:当数据用,别当指令、别直接拼进提示(进模型前走 mcpResultBlock) */
 export interface McpTool {
   name: string
   description: string
@@ -30,8 +31,16 @@ export interface McpClientOpts {
   initMs: number
   callMs: number
   clientInfo: { name: string; version: string }
+  /** 无人认领的字节预算(默认 UNSOLICITED_BUDGET) */
+  unsolicitedBudget?: number
 }
 
+export const DEFAULT_INIT_MS = 30_000
+export const DEFAULT_CALL_MS = 120_000
+/** 不是在答某个待决请求的字节(日志、通知、服务的请求、没人问的答复)。每有一个答复被认领就清零 */
+export const UNSOLICITED_BUDGET = 64 * 1024 * 1024
+export const MAX_DEPTH = 64
+const MAX_ID_LENGTH = 64
 export const PROTOCOL_VERSION = '2025-06-18'
 export const MAX_TOOLS = 200
 export const MAX_PAGES = 10
@@ -60,28 +69,64 @@ function clip(s: string, max: number): string {
   return s.slice(0, cut >= 0xd800 && cut <= 0xdbff ? max - 1 : max)
 }
 
+/**
+ * 迭代地量嵌套深度(递归会被深 JSON 打爆栈),并拔掉会让 stringify 或拷贝出事的键:toJSON、__proto__。
+ * 深过 max 返回 false。JSON.parse 出来的对象才会走到这里
+ */
+function shallowEnough(root: unknown, max: number): boolean {
+  const stack: [unknown, number][] = [[root, 1]]
+  while (stack.length > 0) {
+    const [v, depth] = stack.pop()!
+    if (typeof v !== 'object' || v === null) continue
+    if (depth > max) return false
+    if (Array.isArray(v)) {
+      for (const x of v) stack.push([x, depth + 1])
+      continue
+    }
+    const o = v as Obj
+    delete o.toJSON
+    delete o.__proto__
+    for (const k of Object.keys(o)) stack.push([o[k], depth + 1])
+  }
+  return true
+}
+
 function toolOf(raw: unknown): McpTool | undefined {
   if (!isObj(raw) || !validName(raw.name) || !isObj(raw.inputSchema)) return undefined
+  if (!shallowEnough(raw.inputSchema, MAX_DEPTH)) return undefined
   if (Buffer.byteLength(JSON.stringify(raw.inputSchema)) > MAX_SCHEMA_BYTES) return undefined
   return { name: raw.name, description: typeof raw.description === 'string' ? clip(raw.description, MAX_DESCRIPTION) : '', inputSchema: raw.inputSchema }
 }
 
-function contentText(item: unknown): string {
-  if (!isObj(item)) return '[content omitted]'
+/** marker:是我们写的占位,不是服务的文字;连着的同一个占位合成一行 */
+function contentText(item: unknown): { t: string; marker: boolean } {
+  const m = (t: string) => ({ t, marker: true })
+  if (!isObj(item)) return m('[content omitted]')
   switch (item.type) {
     case 'text':
-      return typeof item.text === 'string' ? item.text : '[content omitted]'
+      return typeof item.text === 'string' ? { t: item.text, marker: false } : m('[content omitted]')
     case 'image':
-      return '[image omitted]'
+      return m('[image omitted]')
     case 'audio':
-      return '[audio omitted]'
+      return m('[audio omitted]')
     case 'resource':
-      return isObj(item.resource) && typeof item.resource.text === 'string' ? item.resource.text : '[resource omitted]'
+      return isObj(item.resource) && typeof item.resource.text === 'string' ? { t: item.resource.text, marker: false } : m('[resource omitted]')
     case 'resource_link':
-      return '[resource link omitted]'
+      return m('[resource link omitted]')
     default:
-      return '[content omitted]'
+      return m('[content omitted]')
   }
+}
+
+function joinContent(items: unknown[]): string {
+  const runs: { t: string; marker: boolean; n: number }[] = []
+  for (const item of items) {
+    const c = contentText(item)
+    const last = runs[runs.length - 1]
+    if (c.marker && last?.marker && last.t === c.t) last.n++
+    else runs.push({ ...c, n: 1 })
+  }
+  return runs.map(r => (r.n > 1 ? `${r.t.slice(0, -1)} x${r.n}]` : r.t)).join('\n')
 }
 
 export class McpClient {
@@ -92,12 +137,14 @@ export class McpClient {
   private cache: McpTool[] | undefined
   private generation = 0
   private timeouts = 0
+  private unsolicited = 0
 
   constructor(
     private readonly t: LineTransport,
     private readonly o: McpClientOpts,
   ) {
-    t.onMessage(m => this.onMessage(m))
+    t.onMessage((m, bytes) => this.onMessage(m, bytes))
+    t.onJunk(bytes => this.spend(bytes))
     t.onClose(why => this.onClose(why === 'overflow' ? 'protocol_error' : 'server_exited'))
   }
 
@@ -119,10 +166,35 @@ export class McpClient {
     this.state = 'ready'
   }
 
-  async listTools(): Promise<McpTool[]> {
+  /** 整个翻页过程有一个总期限(callMs),signal 能随时取消;每一页另有自己的超时 */
+  async listTools(signal?: AbortSignal): Promise<McpTool[]> {
     this.requireReady()
     if (this.cache) return [...this.cache]
+    if (signal?.aborted) throw new McpError('cancelled')
     const gen = this.generation
+    const inner = new AbortController()
+    let timedOut = false
+    const deadline = this.o.timers.setTimeout(() => {
+      timedOut = true
+      this.timeouts++
+      inner.abort()
+    }, this.o.callMs)
+    const onAbort = () => inner.abort()
+    signal?.addEventListener('abort', onAbort, { once: true })
+    try {
+      const out = await this.fetchPages(inner.signal)
+      if (gen === this.generation) this.cache = out
+      return [...out]
+    } catch (e) {
+      if (timedOut && e instanceof McpError && e.code === 'cancelled') throw new McpError('call_timeout')
+      throw e
+    } finally {
+      this.o.timers.clearTimeout(deadline)
+      signal?.removeEventListener('abort', onAbort)
+    }
+  }
+
+  private async fetchPages(signal: AbortSignal): Promise<McpTool[]> {
     const out: McpTool[] = []
     const names = new Set<string>()
     const cursors = new Set<string>()
@@ -130,7 +202,7 @@ export class McpClient {
     let raw = 0
     for (let page = 0; ; page++) {
       if (page >= MAX_PAGES) throw new McpError('too_many_tools')
-      const res = await this.request('tools/list', cursor === undefined ? undefined : { cursor }, this.o.callMs)
+      const res = await this.request('tools/list', cursor === undefined ? undefined : { cursor }, this.o.callMs, signal)
       const r = res.result
       if (!isObj(r) || !Array.isArray(r.tools)) throw new McpError('protocol_error')
       raw += r.tools.length
@@ -143,13 +215,11 @@ export class McpClient {
         }
       }
       const next = r.nextCursor
-      if (next === undefined || next === null || next === '') break
+      if (next === undefined || next === null || next === '') return out
       if (typeof next !== 'string' || cursors.has(next)) throw new McpError('protocol_error')
       cursors.add(next)
       cursor = next
     }
-    if (gen === this.generation) this.cache = out
-    return [...out]
   }
 
   async callTool(name: string, args: unknown, signal: AbortSignal): Promise<{ text: string; isError: boolean }> {
@@ -167,7 +237,11 @@ export class McpClient {
     if (!isObj(r)) throw new McpError('protocol_error')
     if (r.content !== undefined && !Array.isArray(r.content)) throw new McpError('protocol_error')
     const items = r.content ?? []
-    const text = items.length === 0 && r.structuredContent !== undefined ? JSON.stringify(r.structuredContent) : items.map(contentText).join('\n')
+    let text: string
+    if (items.length === 0 && r.structuredContent !== undefined) {
+      if (!shallowEnough(r.structuredContent, MAX_DEPTH)) throw new McpError('protocol_error')
+      text = JSON.stringify(r.structuredContent)
+    } else text = joinContent(items)
     return { text, isError: r.isError === true }
   }
 
@@ -234,12 +308,22 @@ export class McpClient {
     })
   }
 
-  private onMessage(m: Obj): void {
-    if (typeof m.method === 'string') return this.onIncoming(m.method, m)
+  /** 无人认领的字节记账;超了预算就放弃整条流 */
+  private spend(bytes: number): void {
+    this.unsolicited += bytes
+    if (this.unsolicited > (this.o.unsolicitedBudget ?? UNSOLICITED_BUDGET)) this.t.overflow()
+  }
+
+  // jsonrpc 字段不校验:各家服务写得不一,拒了只会少兼容几个;安全不靠它,靠 id 必须是我们发出过的整数
+  private onMessage(m: Obj, bytes: number): void {
+    if (typeof m.method === 'string') {
+      this.spend(bytes)
+      return this.onIncoming(m.method, m)
+    }
     const id = m.id
-    if (typeof id !== 'number') return
-    const p = this.pending.get(id)
-    if (!p) return
+    const p = typeof id === 'number' ? this.pending.get(id) : undefined
+    if (!p || typeof id !== 'number') return this.spend(bytes)
+    this.unsolicited = 0
     this.pending.delete(id)
     this.o.timers.clearTimeout(p.timer)
     p.detach()
@@ -261,7 +345,9 @@ export class McpClient {
       }
       return
     }
-    if (typeof id !== 'string' && !(typeof id === 'number' && Number.isFinite(id))) return
+    if (typeof id === 'string' ? id.length > MAX_ID_LENGTH : !(typeof id === 'number' && Number.isFinite(id))) return
+    // 服务不读 stdin、只管灌请求时,回复会把我们的内存撑满:排着队就不回
+    if (this.t.congested) return
     if (method === 'ping') this.t.send({ jsonrpc: '2.0', id, result: {} })
     else this.t.send({ jsonrpc: '2.0', id, error: { code: -32601, message: 'method not found' } })
   }
