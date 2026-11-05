@@ -26,7 +26,8 @@ import { parseExecutorsConfig, RunManager } from './runs'
 
 export { manifestFor }
 
-const SUMMARY_MAX = 300
+/** 审批摘要:IM 卡片上看不全就不能批。runs.ts 里 executor.run.queued 的 300 是另一回事 */
+const SUMMARY_MAX = 2000
 /** spec §11:结果缓存 30 秒,missing 每次重探 */
 const AUTH_CACHE_MS = 30_000
 /** 内核已经限时等过 abandonAll:这里不能再加一轮等待,否则超出停机预算 */
@@ -222,7 +223,8 @@ export function createExecutorCli(opts: ExecutorCliOpts = {}): Plugin {
           action: 'exec',
           resource: a.id,
           sessionId: ctx.sessionId,
-          summary: `${a.id}: ${clip(redact(args.prompt), SUMMARY_MAX)}`,
+          // 只读还是可写是模型选的,人要看得到;前缀在提示前面,提示写不进来
+          summary: `${a.id} · ${args.readOnly ? '只读' : '可写'}${args.model !== undefined ? ` · ${args.model}` : ''}: ${clip(redact(args.prompt), SUMMARY_MAX)}`,
           // 落实不了的规则、无隔离的运行:每次都问,不给本会话放行
           ...(!must && !unsandboxed && { key: `executor:${a.id}:${args.readOnly ? 'ro' : 'rw'}` }),
           unsandboxed,

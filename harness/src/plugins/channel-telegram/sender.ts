@@ -12,6 +12,8 @@ export interface OutgoingMessage {
   entities?: readonly Entity[]
   /** 原样进 reply_markup */
   keyboard?: unknown
+  /** 退到纯文本时换成这个键盘:卡片没了 pre 的边界,正文能伪造卡片的行 */
+  plainKeyboard?: unknown
   silent?: boolean
 }
 
@@ -74,7 +76,7 @@ type SyncOp = {
   /** 第几块原消息没了,发新的 */
   resend: Set<number>
 }
-type SendOp = { kind: 'send'; msg: OutgoingMessage; plain: boolean; retryWhile?: () => boolean; resolve(id: number | undefined): void }
+type SendOp = { kind: 'send'; msg: OutgoingMessage; plain: boolean; retryWhile?: () => boolean; onPlain?: () => void; resolve(id: number | undefined): void }
 type EditOp = { kind: 'edit'; messageId: number; msg: OutgoingMessage; plain: boolean }
 type CallOp = { kind: 'call'; method: string; body: object; limited: boolean }
 type Op = (SyncOp | SendOp | EditOp | CallOp) & {
@@ -120,7 +122,7 @@ function content(msg: OutgoingMessage, plain: boolean): object {
   return {
     text: msg.text,
     ...(!plain && msg.entities && msg.entities.length > 0 && { entities: msg.entities }),
-    ...(msg.keyboard !== undefined && { reply_markup: msg.keyboard }),
+    ...(msg.keyboard !== undefined && { reply_markup: plain && msg.plainKeyboard !== undefined ? msg.plainKeyboard : msg.keyboard }),
     link_preview_options: { is_disabled: true },
   }
 }
@@ -165,7 +167,7 @@ export class Sender {
   }
 
   /** 卡片、命令回复。给 retryWhile 的重试到它为假,不给的最多 1 小时。结果只有 message_id 或 undefined,永不 reject */
-  send(chatId: string, msg: OutgoingMessage, o: { retryWhile?: () => boolean } = {}): Promise<number | undefined> {
+  send(chatId: string, msg: OutgoingMessage, o: { retryWhile?: () => boolean; onPlain?: () => void } = {}): Promise<number | undefined> {
     if (!this.accepting(chatId)) return Promise.resolve(undefined)
     const lane = this.laneOf(chatId, true)
     if (!this.hasRoom(lane)) {
@@ -174,7 +176,7 @@ export class Sender {
     }
     return new Promise(resolve => {
       this.queued++
-      lane.ops.push({ ...FRESH, kind: 'send', msg, plain: false, ...(o.retryWhile && { retryWhile: o.retryWhile }), resolve })
+      lane.ops.push({ ...FRESH, kind: 'send', msg, plain: false, ...(o.retryWhile && { retryWhile: o.retryWhile }), ...(o.onPlain && { onPlain: o.onPlain }), resolve })
       this.pump(lane)
     })
   }
@@ -532,6 +534,8 @@ export class Sender {
         return
       case 'blocked':
         this.markBlocked(lane.chatId)
+        // clearLane 不回手上这条,而它已经过了上面的检查:没人会再回它了
+        if (op.kind === 'send') op.resolve(undefined)
         return
       case 'rate_limited':
         this.onRateLimited(lane, op, step, err)
@@ -561,7 +565,10 @@ export class Sender {
 
   private fallBackToPlain(op: Op, step: Step): void {
     if (op.kind === 'sync' && step.index !== undefined) op.plain.add(step.index)
-    else if (op.kind === 'send' || op.kind === 'edit') op.plain = true
+    else if (op.kind === 'send' || op.kind === 'edit') {
+      op.plain = true
+      if (op.kind === 'send') op.onPlain?.()
+    }
   }
 
   private pauseFor(lane: Lane, err: TelegramError): number {

@@ -36,17 +36,29 @@ const STALE = '已失效'
 const MASK = '***'
 /** 一行里超过这么多个连续空白写成个数:否则能把后半段推出屏幕(R20) */
 const BLANK_RUN_SHOWN = 8
-/** 再多一屏就放不下,按钮旁边看到的只是结尾 */
-const LINES_MAX = 40
+/** 再多一屏就放不下,按钮旁边看到的只是结尾。按折行之后估算:一条很宽的行和很多短行一样高 */
+const ROWS_MAX = 40
+/** 手机上等宽字体一行大约这么多个半角 */
+const ROW_COLS = 40
 /** 上限 4096;制表符写成个数之后会变长,摘要的 2000 字不是正文的上限 */
 const BODY_MAX = 3000
 const TOOL_MAX = 64
 const NOT_WELL_FORMED = /\p{Cs}/gu
 
-/**
- * cleanText 不动、看起来却是别的东西的:不换行空格这类像空格而不是空格(shell 当成普通字符),盲文空白看起来什么都没有,半个代理对发不出去
- */
-const LOOKS_LIKE_SOMETHING_ELSE = /[^\S \t\n]|⠀|\p{Cs}/u
+/** cleanText 不动、看起来却是别的东西的:不换行空格这类像空格而不是空格(shell 当成普通字符),半个代理对发不出去 */
+const NOT_REALLY_SPACE = String.raw`[^\S \t\n]|\p{Cs}`
+/** 可能什么都不显示,或者显示成什么要看字体 */
+const MAYBE_BLANK = String.raw`\u2800|\u{1d159}|\ufffc|\p{Co}|\p{Cn}`
+/** 强从右到左的文字:没有方向控制符,一行里的片段也能倒过来显示(R20 拒绝的就是这个) */
+const RIGHT_TO_LEFT = String.raw`\p{Script=Hebrew}|\p{Script=Arabic}|\p{Script=Syriac}|\p{Script=Thaana}|\p{Script=Nko}|\p{Script=Samaritan}|\p{Script=Mandaic}`
+/** 叠在一起能盖住旁边的字;正常文字一个字母最多两三个 */
+const STACKED_MARKS = String.raw`\p{M}{4,}`
+const HARD_TO_READ = new RegExp([NOT_REALLY_SPACE, MAYBE_BLANK, RIGHT_TO_LEFT, STACKED_MARKS].join('|'), 'u')
+const WIDE = /[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6]|[\u{1f300}-\u{1faff}]|[\u{20000}-\u{3fffd}]/u
+const COMBINING = /\p{M}/u
+/** 模型选的只读或可写。前缀是 executor-cli 写的,提示在它后面;只有委派工具才读,shell 命令不能自称只读 */
+const DELEGATE_MODE = /^[\w.-]+ · (可写|只读)(?: · \S+)?: /
+const DELEGATE_KEY = /^executor:([\w.-]+):(ro|rw)$/
 
 export interface CardView {
   /** 改卡片时第一行和命令块还用这两个 */
@@ -71,6 +83,24 @@ function compactBlanks(s: string): string {
   return lines.join('\n')
 }
 
+/** 折行之后大约多少行 */
+function estimatedRows(s: string): number {
+  let rows = 0
+  for (const line of s.split('\n')) {
+    let width = 0
+    for (const c of line) width += WIDE.test(c) ? 2 : COMBINING.test(c) ? 0 : 1
+    rows += Math.max(1, Math.ceil(width / ROW_COLS))
+  }
+  return rows
+}
+
+/** 本会话放行的是什么,用人话说。委派的键放行的是之后所有提示,不管写的是什么 */
+function scopeLine(key: string): string {
+  const delegate = DELEGATE_KEY.exec(key)
+  if (!delegate) return `本会话放行范围:${key}`
+  return `本会话放行范围:之后发给 ${delegate[1]} 的${delegate[2] === 'ro' ? '只读' : '可写'}提示都不再弹卡片`
+}
+
 function framed(first: string, body: string, rest: readonly string[]): { text: string; entities: Entity[] } {
   const head = `${first}\n`
   return { text: [head + body, ...rest].join('\n'), entities: [{ type: 'pre', offset: head.length, length: body.length }] }
@@ -84,22 +114,24 @@ export function buildCard(p: CardInput, o: { mask(s: string): string; level: San
   const compact = compactBlanks(shown).replace(NOT_WELL_FORMED, '�')
   const cut = compact.length > BODY_MAX
   const body = (cut ? clip(compact, BODY_MAX) : compact) || '(空)'
-  const lineCount = compact.split('\n').length
+  const rows = estimatedRows(compact)
 
   const flags: string[] = []
   // 有这个记号就算截断过:模型把它写进短命令,结果只是少按钮
   if (cut || summary.includes(SUMMARY_CLIP_MARK) || summary.includes(CLIP_MARK)) flags.push('中间已截断')
-  if (clean !== summary || LOOKS_LIKE_SOMETHING_ELSE.test(summary)) flags.push('含不可见字符')
+  if (clean !== summary) flags.push('含不可见字符')
+  if (HARD_TO_READ.test(summary)) flags.push('含难辨认字符')
   // 打码的模式能盖住任何东西:没有 END 的私钥头盖到结尾,Cookie: 盖到行尾,password=$(…) 盖住一段命令。摘要进事件前已经打过一次,只能从记号看出来
   if (shown !== clean || summary.includes(MASK)) flags.push('含已打码内容')
-  if (lineCount > LINES_MAX) flags.push(`共 ${lineCount} 行`)
+  if (rows > ROWS_MAX) flags.push(`约 ${rows} 行`)
 
   const judgeable = flags.length === 0 && compact !== ''
-  const scoped = judgeable && key !== undefined && p.unsandboxed !== true && o.level === 'full' && sanitizeLine(key) === key && o.mask(key) === key && !key.includes(MASK)
+  const scoped = judgeable && key !== undefined && p.unsandboxed !== true && o.level === 'full' && sanitizeLine(key) === key && o.mask(key) === key && !key.includes(MASK) && !HARD_TO_READ.test(key)
 
   const tool = [...sanitizeLine(o.mask(p.tool))].slice(0, TOOL_MAX).join('') || 'unknown'
-  const header = `需要批准 · ${tool}${p.unsandboxed === true ? ' · 未隔离' : ''}`
-  const rest = [...flags, ...(scoped ? [`本会话放行范围:${key}`] : [])]
+  const mode = /^delegate_/.test(p.tool) ? DELEGATE_MODE.exec(summary)?.[1] : undefined
+  const header = `需要批准 · ${tool}${mode !== undefined ? ` · ${mode}` : ''}${p.unsandboxed === true ? ' · 未隔离' : ''}`
+  const rest = [...flags, ...(scoped ? [scopeLine(key)] : [])]
   return { tool, body, ...framed(header, body, rest), choices: [...(judgeable ? (['y'] as const) : []), ...(scoped ? (['s'] as const) : []), 'n'] }
 }
 
@@ -298,9 +330,20 @@ export class Cards {
     this.o.state.data.cards.push(row)
     this.open.set(nonce, card)
     this.o.save()
-    const keyboard = { inline_keyboard: [view.choices.map(c => ({ text: BUTTON_LABEL[c], callback_data: `a:${nonce}:${c}` }))] }
+    const buttons = (choices: readonly Choice[]) => ({ inline_keyboard: [choices.map(c => ({ text: BUTTON_LABEL[c], callback_data: `a:${nonce}:${c}` }))] })
     void this.o.sender
-      .send(w.chatId, { text: view.text, entities: view.entities, keyboard }, { retryWhile: () => card.outcome === undefined && !this.disposed })
+      .send(
+        w.chatId,
+        { text: view.text, entities: view.entities, keyboard: buttons(view.choices), plainKeyboard: buttons(['n']) },
+        {
+          retryWhile: () => card.outcome === undefined && !this.disposed,
+          // 没了 pre,正文能伪造卡片的行:只能拒绝,改过的客户端也按不出别的
+          onPlain: () => {
+            row.choices = ['n']
+            this.o.save()
+          },
+        },
+      )
       .then(id => this.onSent(card, id))
       .catch((err: unknown) => this.o.log.warn('telegram card failed', { code: codeOf(err) }))
   }
