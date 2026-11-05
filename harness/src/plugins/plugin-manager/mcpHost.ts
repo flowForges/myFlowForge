@@ -509,7 +509,7 @@ export class McpHost {
 
     const store = pluginStoreRootOf(o.dataDir)
     const tmpReal = realSpelling(tmpdir())
-    const baseTops = [o.home, store, tmpReal, '/tmp']
+    const baseTops = [...new Set([o.home, store, tmpReal, '/tmp'])]
     const realCwd = realSpelling(cwd)
     if (heldTop(cwd, baseTops, o.dataDir) || within(realCwd, realSpelling(store))) throw refuse('cwd_too_broad')
 
@@ -669,7 +669,11 @@ export class McpHost {
       const pid = e.pid
       if (pid !== undefined) {
         try {
-          if (!e.exited) await killLadder(pid, { fast: true, alive: () => groupExists(pid, liveKill), owned: () => !e.exited, log: this.o.log })
+          if (!e.exited) {
+            const { gone } = await killLadder(pid, { fast: true, alive: () => groupExists(pid, liveKill), owned: () => !e.exited, log: this.o.log })
+            // 还登记着:kernel.close 的 killLive 和崩溃后的 reapOrphans 还会再收
+            if (!gone) this.o.log.warn('mcp server still alive after the ladder', { pid })
+          }
           else if (groupExists(pid, liveKill)) {
             // 组长崩了,组员还在:能认出来的才杀
             const anchors = groupMembers(pid).filter(m => m.pid !== pid)

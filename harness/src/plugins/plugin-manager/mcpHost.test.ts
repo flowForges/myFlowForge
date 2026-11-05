@@ -1065,6 +1065,16 @@ describe('shutting down', () => {
     expect(Date.now() - t0).toBeLessThan(5000)
   }, 20_000)
 
+  it('deactivate is synchronous in effect: killAllNow takes a stubborn server by itself, and nothing starts after', async () => {
+    const m = await setup({ y: fake({ stubborn: true }).entry() })
+    await m.mcp(m.sid, { action: 'tools', server: 'x/y' })
+    const [pid] = m.pids
+    m.host().killAllNow()
+    await until(() => !alive(pid), 1500)
+    await expect(m.host().client(m.sid, 'x', 'y')).rejects.toMatchObject({ code: 'server_stopped' })
+    expect(m.pids.length).toBe(1)
+  })
+
   it('a killed worker: the group is in the registry file, reapOrphans takes it, wipeSessionTmp takes <sid>/mcp', async () => {
     const m = await setup({ y: fake({ stubborn: true }).entry() })
     await m.mcp(m.sid, { action: 'tools', server: 'x/y' })

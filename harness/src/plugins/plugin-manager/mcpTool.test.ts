@@ -342,6 +342,16 @@ describe('--start (M18)', () => {
     expect(m.spawns.length).toBe(1)
   })
 
+  it('allow shell(mcp x/y *) covers the start too; denied by deny shell(mcp x/y --start)', async () => {
+    const f = fake()
+    const m = await setup({ y: f.entry() }, { mode: 'auto', grants: HOSTS, config: rules(['allow', 'shell(mcp x/y *)']) })
+    expect((await m.mcp(m.sid, { action: 'tools', server: 'x/y' })).cards).toEqual([])
+    const g = fake()
+    const other = await setup({ y: g.entry() }, { mode: 'auto', grants: HOSTS, config: rules(['deny', 'shell(mcp x/y --start)']) })
+    expect((await other.mcp(other.sid, { action: 'tools', server: 'x/y' })).text).toBe('denied_by_rule')
+    expect(other.spawns).toEqual([])
+  })
+
   it('describe on a stopped server with hosts asks the same way', async () => {
     const m = await setup({ y: fake().entry() }, { mode: 'auto', grants: HOSTS })
     const { cards } = await m.mcp(m.sid, { action: 'describe', server: 'x/y', tool: 'echo' }, { decide: 'deny' })

@@ -1,8 +1,8 @@
 // 真 Seatbelt(09 Review Focus 4):临时 home,假服务在插件根里,经 probe_* 回报真实发生的事。
 // 每条"读不到"都带能成功的对照,否则什么都干不了也会通过。测试进程自己在沙箱里时不能嵌套 → 整个文件跳过
-import { spawnSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -345,6 +345,79 @@ describe.skipIf(!usable)('an MCP server under real Seatbelt', () => {
     await call(m.r, 'plugins.setEnabled', { commandId: 'off', id: 'x', enabled: false })
     await until(() => !alive(spawned), 6000)
     expect(alive(self.pid)).toBe(false)
+  }, 60_000)
+
+  it('a link planted in its own data dir reaches nothing: the rule follows the real path', async () => {
+    const m = await rig()
+    writeFileSync(join(m.r.home, 'notes.txt'), 'private notes')
+    const s = await started(m)
+    await s.m.mcp(s.sid, { action: 'tools', server: 'x/y' })
+    symlinkSync(join(m.r.home, 'notes.txt'), join(s.data(), 'link-to-notes'))
+    symlinkSync(s.data('z', 'other'), join(s.data(), 'link-to-other'))
+    denied(await s.probe('x/y', 'probe_read', { path: join(s.data(), 'link-to-notes') }))
+    denied(await s.probe('x/y', 'probe_write', { path: join(s.data(), 'link-to-notes'), text: 'x' }))
+    expect(readFileSync(join(m.r.home, 'notes.txt'), 'utf8')).toBe('private notes')
+  }, 60_000)
+
+  it("a link it leaves as .spill is gone at the next start, so the plan's re-allowed path opens nothing", async () => {
+    const m = await rig()
+    writeFileSync(join(m.r.home, 'notes.txt'), 'private notes')
+    const s = await started(m)
+    await s.m.mcp(s.sid, { action: 'tools', server: 'x/y' })
+    const spill = join(s.data(), '.spill')
+    rmSync(spill, { recursive: true })
+    symlinkSync(m.r.home, spill)
+    process.kill(-m.pids[0], 'SIGKILL')
+    await until(() => m.live().length === 0)
+    denied(await s.probe('x/y', 'probe_read', { path: join(m.r.home, 'notes.txt') }))
+    // 新的空目录:链接没了,里面什么都没有
+    expect(await s.probe('x/y', 'probe_read', { path: join(spill, 'notes.txt') })).toMatchObject({ ok: false, code: 'ENOENT' })
+    expect(lstatSync(spill).isDirectory()).toBe(true)
+  }, 60_000)
+
+  it("cwd:'write' still can't plant what runs outside the sandbox: git hooks and config, CLI project config", async () => {
+    const m = await rig()
+    const repo = join(m.r.root, 'repo')
+    mkdirSync(repo)
+    writeFileSync(join(repo, 'README'), 'x')
+    const env = { PATH: '/usr/bin:/bin', HOME: m.r.home, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' }
+    const git = (...a: string[]) => execFileSync('git', a, { cwd: repo, env, stdio: 'ignore' })
+    git('init', '-q')
+    git('add', '-A')
+    git('-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-qm', 'init')
+    const config = readFileSync(join(repo, '.git', 'config'), 'utf8')
+    mkdirSync(join(repo, '.codex'))
+    const s = await started(m, 'x', { y: SERVER }, { y: { network: [], cwd: 'write' } }, repo)
+    expect(await s.probe('x/y', 'probe_write', { path: join(repo, 'ordinary.txt'), text: 'fine' })).toEqual({ ok: true })
+    denied(await s.probe('x/y', 'probe_write', { path: join(repo, '.git', 'hooks', 'pre-commit'), text: '#!/bin/sh' }))
+    denied(await s.probe('x/y', 'probe_write', { path: join(repo, '.git', 'config'), text: 'evil' }))
+    denied(await s.probe('x/y', 'probe_write', { path: join(repo, '.codex', 'config.toml'), text: 'evil' }))
+    expect(readFileSync(join(repo, '.git', 'config'), 'utf8')).toBe(config)
+    expect(existsSync(join(repo, '.git', 'hooks', 'pre-commit'))).toBe(false)
+  }, 60_000)
+
+  it('rules through the real policy: deny read(**/x*) makes every call mustAsk; deny shell(git push*) alone does not', async () => {
+    const untranslatable = await rig({ config: { permissions: { rules: [{ effect: 'deny', rule: 'read(**/x*)' }] } } })
+    const a = await started(untranslatable)
+    const started1 = await untranslatable.mcp(a.sid, { action: 'tools', server: 'x/y' }, { decide: 'allow_session' })
+    expect(started1.cards.length).toBe(1)
+    const c1 = await untranslatable.mcp(a.sid, { action: 'call', server: 'x/y', tool: 'echo', arguments: {} }, { decide: 'allow_session' })
+    expect(c1.cards.length).toBe(1)
+    expect(c1.cards[0].key).toBeUndefined()
+    expect((await untranslatable.mcp(a.sid, { action: 'call', server: 'x/y', tool: 'echo', arguments: {} })).cards.length).toBe(1)
+    const shellOnly = await rig({ config: { permissions: { rules: [{ effect: 'deny', rule: 'shell(git push*)' }] } } })
+    const b = await started(shellOnly)
+    expect((await shellOnly.mcp(b.sid, { action: 'call', server: 'x/y', tool: 'echo', arguments: {} })).cards).toEqual([])
+  }, 60_000)
+
+  it('a literal deny read rule reaches the sandbox: the file is unreadable in a kept cwd', async () => {
+    const m = await rig({ config: { permissions: { rules: [{ effect: 'deny', rule: 'read(./private/**)' }] } } })
+    mkdirSync(join(m.r.cwd, 'private'))
+    writeFileSync(join(m.r.cwd, 'private', 'x.txt'), 'denied by the user')
+    writeFileSync(join(m.r.cwd, 'open.txt'), 'open')
+    const s = await started(m)
+    expect(await s.probe('x/y', 'probe_read', { path: join(m.r.cwd, 'open.txt') })).toMatchObject({ ok: true })
+    denied(await s.probe('x/y', 'probe_read', { path: join(m.r.cwd, 'private', 'x.txt') }))
   }, 60_000)
 
   it('kernel.close leaves no pid', async () => {
