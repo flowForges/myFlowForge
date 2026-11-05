@@ -331,7 +331,7 @@ describe('what cannot move the block', () => {
       await r.install(plugin())
       const sid = await r.session()
       await r.turn(sid, 'one')
-      return { sent: toolNames(reqs()[0]), others: tools!.list().map(t => t.name).filter(x => x !== 'skill') }
+      return { sent: toolNames(reqs()[0]), others: tools!.list().map(t => t.name).filter(x => x !== 'skill' && x !== 'mcp') }
     }
     const early = await run(true)
     const late = await run(false)

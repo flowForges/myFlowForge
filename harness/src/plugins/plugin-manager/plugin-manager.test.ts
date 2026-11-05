@@ -116,7 +116,8 @@ describe('plugins.list and plugins.get', () => {
     await install(r, plugin({ mcp: { dock: { command: 'docker' }, fine: { command: 'node' } } }))
     expect((await call(r, 'plugins.get', { id: 'demo' })).servers).toEqual([
       { name: 'dock', state: 'problem', reason: 'runtime_unsupported' },
-      { name: 'fine', state: 'stopped' },
+      // 这个夹具的沙箱级别是 none:起不来就要这么说(§10.3)
+      { name: 'fine', state: 'needs_sandbox' },
     ])
     await call(r, 'plugins.setEnabled', { commandId: 'x', id: 'demo', enabled: false })
     expect((await call(r, 'plugins.get', { id: 'demo' })).servers.map((s: { state: string }) => s.state)).toEqual(['problem', 'disabled'])
@@ -294,7 +295,7 @@ describe('plugins.settings', () => {
     await call(r, 'plugins.settings.set', { id: 'demo', key: 'token', value: 'v' })
     expect((await call(r, 'plugins.get', { id: 'demo' })).servers[0].state).toBe('needs_config')
     await call(r, 'plugins.settings.set', { id: 'demo', key: 'RAW_KEY', value: 'v' })
-    expect((await call(r, 'plugins.get', { id: 'demo' })).servers[0]).toEqual({ name: 'srv', state: 'stopped' })
+    expect((await call(r, 'plugins.get', { id: 'demo' })).servers[0]).toEqual({ name: 'srv', state: 'needs_sandbox' })
     await call(r, 'plugins.settings.clear', { id: 'demo', key: 'RAW_KEY' })
     expect((await call(r, 'plugins.get', { id: 'demo' })).servers[0].state).toBe('needs_config')
   })

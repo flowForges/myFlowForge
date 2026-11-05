@@ -522,8 +522,7 @@ describe('an IM session on a real gate', () => {
   })
 
   it('no mcp in its view: a pluginScoped mcp tool is not offered', async () => {
-    const mcp = stubTool('mcp', { ambient: true, pluginScoped: 'mcp' })
-    const { r } = await setup({ level: 'full', before: () => [toolsRegistry, stubPlugin([mcp])] })
+    const { r } = await setup({ level: 'full' })
     await r.install(plugin({ mcp: { srv: { command: 'node' } } }))
     const sid = await r.session({ origin: 'im', approvalMode: 'auto' })
     await r.turn(sid, 'one')
