@@ -225,6 +225,23 @@ describe('validateCwd', () => {
   it('returns the realpath of an existing absolute directory', () => {
     expect(validateCwd(work, opts())).toBe(realpathSync.native(work))
   })
+  it('rejects the plugin store and everything in it (09 M13); a sibling with the same prefix is fine', () => {
+    const store = `${dir}-plugins`
+    const near = `${dir}-plugins-not`
+    try {
+      mkdirSync(join(store, 'a', 'b'), { recursive: true })
+      mkdirSync(near)
+      symlinkSync(join(store, 'a'), join(work, 'to-store'))
+      for (const p of [store, join(store, 'a'), join(store, 'a', 'b'), join(work, 'to-store')]) expect(() => validateCwd(p, opts()), p).toThrow('invalid cwd')
+      expect(validateCwd(near, opts())).toBe(realpathSync.native(near))
+      // 没建出来时也按字面拒;包含它的目录可以(那个方向由写保护管)
+      expect(validateCwd(work, opts())).toBe(realpathSync.native(work))
+    } finally {
+      rmSync(join(work, 'to-store'), { force: true })
+      rmSync(store, { recursive: true, force: true })
+      rmSync(near, { recursive: true, force: true })
+    }
+  })
   it('rejects the IM worktree root and a group under it, a worktree in it is legal', () => {
     const wt = `${dir}-im-worktrees`
     try {

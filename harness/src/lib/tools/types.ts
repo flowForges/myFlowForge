@@ -1,11 +1,12 @@
 // 工具与 tools 服务的接口(spec §6);实现在 plugins/tools-registry
 import type { ZodType } from 'zod'
+import type { KernelEvent } from '../../protocol/events'
 import type { SandboxStatus, WorkerParams, WorkerResult } from '../../protocol/rpc'
 
 /** 权限请求;路径资源由工具解析成绝对路径后给出(lib/fs/paths 的 resolveToolPath) */
 export interface PermissionRequest {
   actor: 'kernel' | string
-  action: 'read' | 'write' | 'exec' | 'memory' | string
+  action: 'read' | 'write' | 'exec' | 'memory' | 'plugin' | string
   resource?: string
   sessionId?: string
   /** 审批卡片的摘要;委派工具给(已打码) */
@@ -16,6 +17,8 @@ export interface PermissionRequest {
   unsandboxed?: boolean
   /** 有用户 deny / ask 规则这次落实不了:任何模式都问,且没有本会话放行 */
   mustAsk?: boolean
+  /** 这次调用要人看,哪怕 auto(09 §10.4)。和 mustAsk 不同:以 `mcp ` 开头的 allow 规则算数,本会话放行也算数;allow shell(*) 不算 */
+  confirm?: boolean
 }
 
 export interface ToolContext {
@@ -50,6 +53,10 @@ export interface Tool {
   delegate?: boolean
   /** 不属于工具集、每个会话都有的工具(记忆):toolDefs 按名字排序接在工具集之后、委派工具之前 */
   ambient?: boolean
+  /** 只有钉住的视图里有它的会话才给模型(09 §9.3) */
+  pluginScoped?: 'skill' | 'mcp'
+  /** 工具自己给本会话放行的键,不按 sessionKey 算(09 §10.4) */
+  ownsKey?: boolean
   /** 权限请求:由参数算出动作与资源;返回多个时全部要放行;空数组 = 拒绝(tools 服务不执行) */
   permission(args: unknown, ctx: ToolContext): PermissionRequest[]
   run(args: unknown, ctx: ToolContext): Promise<ToolResult>
@@ -134,6 +141,8 @@ export interface ExecPolicy {
   ruleDenyWrite: string[]
   /** literalRoots 翻译不了的 deny / ask 读写规则,加上 deny / ask 的 shell 规则(Task 7) */
   untranslatedRules: number
+  /** untranslatedRules 里路径规则的部分,不含 shell 规则(09 M10)。可选:现有的 stub 不用改;没有 = 0 */
+  untranslatedPaths?: number
   totalRules: number
 }
 
@@ -152,6 +161,12 @@ export interface ExecPlanOpts {
   /** 用户规则翻译来的 */
   denyRead: string[]
   denyWrite: string[]
+  /** 再隐藏这些根,只放回 keep:和 07 的 IM 隐藏同一机制 */
+  hide?: { tops: string[]; keep: string[] }
+  /** 这次运行自己的临时目录,不用会话的 */
+  tmpDir?: string
+  /** 代理的放行表只有 allowHosts,不加 permissions.network.allow;loopback 也关(09 M1) */
+  exactHosts?: boolean
 }
 
 /** 内核 `sandbox` 服务(实现在 kernel/sandbox.ts) */
@@ -168,6 +183,12 @@ export interface SandboxService {
   /** plan() 的 argv 版本:CLI 主程序包进沙箱;失败 → reject,绝不退回无沙箱 */
   planExec(file: string, args: string[], s: { sessionId: string; cwd: string; spillDir: string }, env: NodeJS.ProcessEnv, o: ExecPlanOpts): Promise<ShellPlan>
   close(): Promise<void>
+}
+
+/** 内核之外第一轮钉视图的服务(09 §9.3);plugin-manager 提供。之后每轮循环只读事件(lib/plugins/view) */
+export interface PluginsService {
+  /** 只在第一轮、日志里没有 plugins.injected 时被循环调用:可能写事件,返回写下的标记。出错 = 不写,这一轮照常 */
+  injectFirst(r: { sessionId: string; turnId: string; events: KernelEvent[] }): { skill: boolean; mcp: boolean }
 }
 
 export type SessionCommandName = 'session.create' | 'session.prompt' | 'session.cancel' | 'turn.rollback' | 'turn.changes'

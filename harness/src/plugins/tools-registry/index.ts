@@ -186,15 +186,18 @@ export class ToolsRegistry implements ToolsService {
 
   /**
    * actor 与会话一律由注册表定:工具不能自称 kernel,也不能借别的会话的 cwd。
-   * 本会话放行的键和这次运行的隔离,只认委派工具的 exec;其他工具按会话级别与 sessionKey(04 spec §6)
+   * 本会话放行的键和这次运行的隔离,只认委派工具的 exec;键也认声明了 ownsKey 的工具的 exec(09 §10.4);其他工具按会话级别与 sessionKey(04 spec §6)
    */
   private normalize(req: PermissionRequest, tool: Tool, ctx: ToolContext): PermissionRequest {
     const delegated = tool.delegate === true && req.action === 'exec'
+    const keyed = tool.ownsKey === true && req.action === 'exec'
     return {
       action: req.action,
       resource: req.resource,
       summary: req.summary,
       mustAsk: req.mustAsk,
+      confirm: req.confirm,
+      ...(keyed && { key: req.key }),
       ...(delegated && { key: req.key, unsandboxed: req.unsandboxed }),
       actor: 'tools',
       sessionId: ctx.sessionId,

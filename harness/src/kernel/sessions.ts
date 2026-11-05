@@ -2,7 +2,7 @@ import { realpathSync, statSync } from 'node:fs'
 import { join, posix, win32 } from 'node:path'
 import type { ApprovalMode, KernelEvent, ModelRef, SessionAudience, SessionOrigin, Toolset } from '../protocol/index'
 import { RpcError } from './rpcError'
-import { isCredentialPath, isInside, isRootLike, type EnvSnapshot } from '../lib/fs/paths'
+import { isCredentialPath, isInside, isRootLike, pluginStoreRootOf, type EnvSnapshot } from '../lib/fs/paths'
 import { parsePin, type RepoPin } from '../lib/git/snapshot'
 import { imWorktreeRootOf } from '../lib/git/imWorktree'
 import { worktreeRootOf } from '../lib/git/worktree'
@@ -128,5 +128,14 @@ export function validateCwd(raw: string, env: CwdEnv): string {
       if (isInside(real, r, env.platform) && path.relative(r, real).split(path.sep).filter(Boolean).length < 2) throw invalid()
     }
   }
+  // 插件存储根和它里面(09 M13):可写的 cwd 开在这里就是改插件代码
+  const store = pluginStoreRootOf(env.dataDir)
+  let storeReal = store
+  try {
+    storeReal = fs.realpath(store)
+  } catch {
+    // 还没建
+  }
+  for (const r of new Set([store, storeReal])) if (isInside(real, r, env.platform)) throw invalid()
   return real
 }

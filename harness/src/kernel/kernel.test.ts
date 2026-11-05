@@ -575,6 +575,39 @@ describe('kernel: session commands for plugins (07)', () => {
   })
 })
 
+describe('kernel: plugins methods (09 §14)', () => {
+  const CALLS: [string, object][] = [
+    ['plugins.list', {}], ['plugins.get', { id: 'a' }], ['plugins.install.prepare', { source: { kind: 'path', path: '/p' } }], ['plugins.upgrade.prepare', { id: 'a' }],
+    ['plugins.install.status', { stagingId: 's' }], ['plugins.install.confirm', { commandId: 'c1', stagingId: 's', consentHash: 'h', grants: { servers: {} }, enable: true }],
+    ['plugins.install.cancel', { stagingId: 's' }], ['plugins.setEnabled', { commandId: 'c2', id: 'a', enabled: true }], ['plugins.uninstall', { commandId: 'c3', id: 'a' }],
+    ['plugins.grants.set', { commandId: 'c4', id: 'a', grants: { servers: {} } }], ['plugins.settings.set', { id: 'a', key: 'k', value: 'v' }], ['plugins.settings.clear', { id: 'a', key: 'k' }],
+    ['plugins.commands', {}], ['plugins.command.run', { commandId: 'c5', sessionId: 's', name: 'a:b', args: '' }], ['plugins.mcp.status', {}],
+    ['plugins.dev.trust', { path: '/p', acknowledge: 'runs_with_full_access' }], ['plugins.dev.remove', { id: 'dev-x' }],
+  ]
+  it('every method answers -32601 until a plugin registers it, and it is not reserved', async () => {
+    const k = await boot([])
+    for (const [m, p] of CALLS) await expect(k.handle(m, p), m).rejects.toMatchObject({ code: -32601 })
+    await k.close()
+    kernels = []
+    const seen: unknown[] = []
+    const p: Plugin = { manifest: { id: 'plugin-manager', version: '0', kernel: '*' }, activate: ctx => {
+      ctx.rpc.register('plugins.list', async () => ({ plugins: [], dev: [], problems: [] }))
+      ctx.rpc.register('plugins.settings.set', async params => { seen.push(params); return { ok: true } })
+    } }
+    const k2 = await boot([p])
+    expect(types(k2)).not.toContain('plugin.failed')
+    expect(await k2.handle('plugins.list', {})).toEqual({ plugins: [], dev: [], problems: [] })
+    // 带了 commandId 也不进回执:schema 剥掉它,值不落库
+    await k2.handle('plugins.settings.set', { commandId: 'rc', id: 'a', key: 'k', value: 'SETTING-VALUE' })
+    await k2.handle('plugins.settings.set', { commandId: 'rc', id: 'a', key: 'k', value: 'SETTING-VALUE' })
+    expect(seen).toEqual([{ id: 'a', key: 'k', value: 'SETTING-VALUE' }, { id: 'a', key: 'k', value: 'SETTING-VALUE' }])
+    await k2.handle('plugins.settings.set', { id: 'a', key: 'k', value: 'x'.repeat(9000) }).then(() => { throw new Error('accepted') }, err => {
+      expect(err).toMatchObject({ code: -32602 })
+      expect(JSON.stringify(err)).not.toContain('xxxx')
+    })
+  })
+})
+
 describe('kernel: channel methods and config (07)', () => {
   it('channel.* is not reserved: a plugin registers it, and before that it answers -32601', async () => {
     const k = await boot([])

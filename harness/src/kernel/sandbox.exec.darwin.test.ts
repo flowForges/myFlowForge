@@ -2,7 +2,7 @@
 // 只读 / 只写的断言都带一条能成功的对照:否则"什么都干不了"也会通过。
 // 测试进程自己在沙箱里时不能嵌套 → 整个文件跳过(探测只跑一次)
 import { spawn, spawnSync } from 'node:child_process'
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, constants as fsConstants, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -11,7 +11,7 @@ import { startFakeUpstream, type FakeServer } from '../../test/fakeUpstream'
 import { NO_REPO, pinFromPaths } from '../lib/git/snapshot'
 import { parseRule, type Rule } from '../lib/permissions/rules'
 import { runCli } from '../lib/proc/runCli'
-import type { SandboxService, ShellPlan } from '../lib/tools/types'
+import type { ExecPlanOpts, SandboxService, ShellPlan } from '../lib/tools/types'
 import { qoderAdapter } from '../plugins/executor-cli/adapters/qoder'
 import { translate } from '../plugins/executor-cli/policy'
 import { createSandboxService } from './sandbox'
@@ -567,5 +567,220 @@ describe.skipIf(!usable)('planExec, real sandbox-exec', () => {
       expect(control.trim()).toBe('200')
       expect(shellOut.trim()).toBe('000')
     })
+  })
+})
+
+describe.skipIf(!usable)('planExec with hide, real sandbox-exec (09 Task 1, M1, M4, M13)', () => {
+  let box = ''
+  let h = ''
+  let dataDir = ''
+  let store = ''
+  let cwd = ''
+  let code = ''
+  let runtime = ''
+  let nodeBin = ''
+  let serverData = ''
+  let tmpDir = ''
+  let sessionTmp = ''
+  let spill = ''
+  let up: FakeServer
+  let sbx: SandboxService
+  let loopback: SandboxService
+  let n = 0
+
+  const spawnPlan = (plan: ShellPlan, dir: string) =>
+    new Promise<{ code: number | null; out: string; err: string }>((resolve, reject) => {
+      const c = spawn(plan.file, plan.args, { cwd: dir, env: plan.env, stdio: ['ignore', 'pipe', 'pipe'] })
+      let out = ''
+      let err = ''
+      c.stdout!.on('data', d => { out += d })
+      c.stderr!.on('data', d => { err += d })
+      c.on('error', reject)
+      c.on('close', code => resolve({ code, out, err }))
+    })
+
+  /** 服务的选项,和 09 §10.3 同形:argv 版计划,读写由 hide 定 */
+  async function serve(file: string, args: string[], o: Partial<ExecPlanOpts> = {}, s: SandboxService = sbx, dir = cwd) {
+    const plan = await s.planExec(file, args, { sessionId: 's1', cwd: dir, spillDir: spill }, { PATH: '/usr/bin:/bin', HOME: serverData, LC_ALL: 'C' }, {
+      allowRead: [serverData],
+      allowWrite: [serverData],
+      allowHosts: [],
+      exactHosts: true,
+      proxyScope: `mcp_${++n}`,
+      readOnly: true,
+      denyRead: [],
+      denyWrite: [],
+      hide: { tops: [h, store, join(box, 'systmp')], keep: [cwd, code, runtime] },
+      tmpDir,
+      ...o,
+    })
+    expect(plan.sandboxed).toBe(true)
+    try {
+      return { ...(await spawnPlan(plan, dir)), env: plan.env }
+    } finally {
+      plan.release()
+    }
+  }
+  const cat = (p: string, o?: Partial<ExecPlanOpts>) => serve('/bin/cat', [p], o)
+  const sh2 = (script: string, o?: Partial<ExecPlanOpts>) => serve('/bin/sh', ['-c', script], o)
+
+  beforeAll(async () => {
+    box = realpathSync(mkdtempSync(join(tmpdir(), 'mffai-hide-')))
+    h = join(box, 'home')
+    dataDir = join(h, '.myFlowForge', 'mff-ai')
+    store = `${dataDir}-plugins`
+    cwd = join(h, 'proj')
+    code = join(store, 'p', 'abc123')
+    runtime = join(h, '.nvm', 'versions', 'node', 'v1')
+    serverData = join(dataDir, 'plugin-data', 'p', 'srv')
+    tmpDir = join(dataDir, 'sessions', 's1', 'mcp', 'h1', 'tmp')
+    sessionTmp = join(dataDir, 'sessions', 's1', 'tmp')
+    spill = join(dataDir, 'sessions', 's1', 'mcp', 'h1', 'spill')
+    for (const d of [cwd, code, join(runtime, 'bin'), serverData, sessionTmp, spill, join(h, 'other'), join(h, '.ssh'), join(box, 'systmp'), join(h, '.config', 'gh'), join(h, '.config', 'tool')]) mkdirSync(d, { recursive: true })
+    writeFileSync(join(h, 'notes.txt'), 'NOTES')
+    writeFileSync(join(h, 'other', 'x'), 'SIBLING')
+    writeFileSync(join(h, '.ssh', 'id'), 'SSHKEY')
+    writeFileSync(join(cwd, 'a.txt'), 'CWD-FILE')
+    writeFileSync(join(code, 'server.js'), "process.stdout.write('from-code ' + require('node:fs').realpathSync(__filename))\n")
+    writeFileSync(join(sessionTmp, 'shell-tmp'), 'SHELL-TMP')
+    writeFileSync(join(serverData, 'mine'), 'MINE')
+    writeFileSync(join(box, 'systmp', 'other-program'), 'SYS-TMP')
+    writeFileSync(join(h, '.config', 'gh', 'hosts.yml'), 'GH-TOKEN')
+    writeFileSync(join(h, '.config', 'tool', 'ok'), 'TOOL-OK')
+    // 真的 node 拷进隐藏的家目录里,和 nvm 的布局一样
+    const real = realpathSync(process.execPath)
+    nodeBin = join(runtime, 'bin', 'node')
+    copyFileSync(real, nodeBin, fsConstants.COPYFILE_FICLONE)
+    const libDir = join(dirname(dirname(real)), 'lib')
+    if (existsSync(libDir)) {
+      mkdirSync(join(runtime, 'lib'))
+      for (const f of readdirSync(libDir).filter(x => x.startsWith('libnode'))) copyFileSync(join(libDir, f), join(runtime, 'lib', f), fsConstants.COPYFILE_FICLONE)
+    }
+    up = await startFakeUpstream()
+    const make = (allowLoopback: boolean) => createSandboxService({
+      platform: 'darwin', dataDir, home: h, env: { HOME: h }, detected: { level: 'full', missing: [] },
+      permissions: () => ({ rules: [], network: { allow: ['github.com'] }, sandbox: { enabled: true, allowLoopback }, allowUnsandboxedAuto: false }),
+      rules: () => [],
+      append: () => {},
+      upstream: { url: new URL(`http://127.0.0.1:${up.port}`), noProxy: () => false },
+      lookup: async () => [{ address: '93.184.216.34', family: 4 }],
+    })
+    sbx = make(false)
+    loopback = make(true)
+  })
+  afterAll(async () => {
+    await sbx?.close()
+    await loopback?.close()
+    await up?.close()
+    if (box) rmSync(box, { recursive: true, force: true })
+  })
+
+  it('a hide top is unreadable; a kept dir reads; a sibling of it does not', async () => {
+    expect((await cat(join(cwd, 'a.txt'))).out).toBe('CWD-FILE')
+    expect(await cat(join(h, 'notes.txt'))).toMatchObject({ out: '', code: 1 })
+    expect(await cat(join(h, 'other', 'x'))).toMatchObject({ out: '', code: 1 })
+    // 祖先只有元数据:列不出目录
+    expect((await serve('/bin/ls', [h])).code).not.toBe(0)
+    expect((await serve('/bin/ls', [cwd])).out).toContain('a.txt')
+  })
+
+  it('the rest of the top stays closed: a credential root, the system temp dir', async () => {
+    expect(await cat(join(h, '.ssh', 'id'))).toMatchObject({ out: '', code: 1 })
+    expect(await cat(join(box, 'systmp', 'other-program'))).toMatchObject({ out: '', code: 1 })
+  })
+
+  it('a credential dir under a kept dir stays unreadable; its neighbour reads', async () => {
+    const o = { hide: { tops: [h], keep: [cwd, join(h, '.config')] } }
+    expect((await cat(join(h, '.config', 'tool', 'ok'), o)).out).toBe('TOOL-OK')
+    expect(await cat(join(h, '.config', 'gh', 'hosts.yml'), o)).toMatchObject({ out: '', code: 1 })
+  })
+
+  it('a kept dir holding the data dir: it stays closed apart from what the plan opened', async () => {
+    writeFileSync(join(dataDir, 'token'), 'TOKEN')
+    const o = { hide: { tops: [h], keep: [cwd, join(h, '.myFlowForge')] } }
+    expect(await cat(join(dataDir, 'token'), o)).toMatchObject({ out: '', code: 1 })
+  })
+
+  /** 这台机器的 node 拷出来跑不了(依赖找不到)时跳过:和隐藏无关 */
+  const copiedNodeRuns = () => spawnSync(nodeBin, ['-e', '0'], { stdio: 'ignore' }).status === 0
+
+  it('node runs from a kept runtime root under the hidden home, and loads a script from kept code', async ctx => {
+    if (!copiedNodeRuns()) ctx.skip()
+    const r = await serve(nodeBin, ['-e', "process.stdout.write('ran ' + process.version)"])
+    expect(r.out).toMatch(/^ran v/)
+    expect(r.code).toBe(0)
+    const script = await serve(nodeBin, [join(code, 'server.js')])
+    expect(script.out).toBe(`from-code ${join(code, 'server.js')}`)
+    // 没放回来的话同一个程序根本起不来:对照
+    const closed = await serve(nodeBin, ['-e', '0'], { hide: { tops: [h], keep: [cwd] } })
+    expect(closed.code).not.toBe(0)
+  })
+
+  it('node finds its way to the data dir through the hidden ancestors', async ctx => {
+    if (!copiedNodeRuns()) ctx.skip()
+    const script = `const fs = require('node:fs'); process.stdout.write(fs.realpathSync(${JSON.stringify(serverData)}) + ' ' + fs.realpathSync(process.env.TMPDIR))`
+    const r = await serve(nodeBin, ['-e', script])
+    expect(r.out).toBe(`${serverData} ${tmpDir}`)
+  })
+
+  it('tmpDir is writable and is TMPDIR; the session tmp is neither readable nor writable', async () => {
+    const r = await sh2(`echo made > "$TMPDIR/f" && cat "$TMPDIR/f"`)
+    expect(r.out.trim()).toBe('made')
+    expect(r.env.TMPDIR).toBe(tmpDir)
+    expect(await cat(join(sessionTmp, 'shell-tmp'))).toMatchObject({ out: '', code: 1 })
+    expect((await sh2(`echo x > ${JSON.stringify(join(sessionTmp, 'planted'))}`)).code).not.toBe(0)
+    expect(existsSync(join(sessionTmp, 'planted'))).toBe(false)
+  })
+
+  it('own data reads and writes; the kept cwd does not take writes; own code does not either', async () => {
+    expect((await cat(join(serverData, 'mine'))).out).toBe('MINE')
+    expect((await sh2(`echo y > ${JSON.stringify(join(serverData, 'new'))}`)).code).toBe(0)
+    expect((await sh2(`echo y > ${JSON.stringify(join(cwd, 'planted'))}`)).code).not.toBe(0)
+    expect((await sh2(`echo y > ${JSON.stringify(join(code, 'planted'))}`)).code).not.toBe(0)
+    expect(existsSync(join(cwd, 'planted'))).toBe(false)
+    expect(existsSync(join(code, 'planted'))).toBe(false)
+    // cwd:'write':对照
+    expect((await sh2(`echo y > ${JSON.stringify(join(cwd, 'granted'))}`, { readOnly: false })).code).toBe(0)
+    expect(existsSync(join(cwd, 'granted'))).toBe(true)
+    rmSync(join(cwd, 'granted'))
+  })
+
+  it("cwd hidden (cwd:'none'): unreadable", async () => {
+    const r = await serve('/bin/cat', [join(cwd, 'a.txt')], { hide: { tops: [h, cwd], keep: [code, runtime] } }, sbx, serverData)
+    expect(r).toMatchObject({ out: '', code: 1 })
+  })
+
+  it('exactHosts: the proxy refuses a default-list host, passes a granted one; loopback stays shut even with allowLoopback', async () => {
+    const curlVia = (target: string) => `/usr/bin/curl -q -sS --max-time 5 -o /dev/null -w '%{http_connect}' "https://${target}/" 2>/dev/null; true`
+    const blocked = await sh2(curlVia('github.com'))
+    expect(blocked.out).toBe('403')
+    const granted = await sh2(curlVia('api.example.com'), { allowHosts: ['api.example.com'] })
+    expect(granted.out).not.toBe('403')
+    expect(await sh2(curlVia('github.com'), { allowHosts: ['api.example.com'] })).toMatchObject({ out: '403' })
+    const direct = `/usr/bin/curl -q -sS --noproxy '*' --max-time 3 -o /dev/null -w '%{http_code}' http://127.0.0.1:${up.port}/ 2>/dev/null; true`
+    // 对照:同样的配置,不带 exactHosts 就连得上
+    const open = await serve('/bin/sh', ['-c', direct], { exactHosts: undefined }, loopback)
+    expect(open.out).not.toBe('000')
+    expect((await serve('/bin/sh', ['-c', direct], {}, loopback)).out).toBe('000')
+  })
+
+  it("the session's own shell can't change the store, even at cwd = home; it can read it (M13)", async () => {
+    writeFileSync(join(code, 'skill.md'), 'SKILL')
+    const shell2 = async (cmd: string) => {
+      const plan = await sbx.plan(cmd, { sessionId: 's2', cwd: h, spillDir: join(dataDir, 'sessions', 's2', 'spill') }, { PATH: '/usr/bin:/bin', HOME: h })
+      try {
+        return await spawnPlan(plan, h)
+      } finally {
+        plan.release()
+      }
+    }
+    expect((await shell2(`cat ${JSON.stringify(join(code, 'skill.md'))}`)).out).toBe('SKILL')
+    expect((await shell2(`echo x >> ${JSON.stringify(join(code, 'skill.md'))}`)).code).not.toBe(0)
+    expect((await shell2(`mv ${JSON.stringify(store)} ${JSON.stringify(`${store}-moved`)}`)).code).not.toBe(0)
+    expect((await shell2(`mv ${JSON.stringify(join(h, '.myFlowForge'))} ${JSON.stringify(join(h, 'moved'))}`)).code).not.toBe(0)
+    expect((await shell2(`rm -rf ${JSON.stringify(join(store, 'p'))}`)).code).not.toBe(0)
+    expect(readFileSync(join(code, 'skill.md'), 'utf8')).toBe('SKILL')
+    // 对照:同一个 shell 写得了家目录
+    expect((await shell2(`echo x > ${JSON.stringify(join(h, 'ok'))}`)).code).toBe(0)
   })
 })

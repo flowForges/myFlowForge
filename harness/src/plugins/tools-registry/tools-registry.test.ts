@@ -572,6 +572,74 @@ describe('tools-registry', () => {
       await p
     })
 
+    describe('09: ownsKey and confirm', () => {
+      const ctxFor = (): ToolContext => ({ sessionId: 's', turnId: 't', callId: 'c', cwd, spillDir: join(root, 'spill'), signal: new AbortController().signal })
+      const REQ = { actor: 'x', action: 'exec', resource: 'mcp x/y z', key: 'mcp x/y z#e1', confirm: true, unsandboxed: true }
+      function capture(tool: Partial<Tool>, req: object = REQ) {
+        const seen: PermissionRequest[] = []
+        const approvals: { key?: string }[] = []
+        const reg = new ToolsRegistry({ gate: { check: r => (seen.push(r), 'ask') }, approvals: { request: async r => (approvals.push(r), 'deny') }, append: () => {}, log: nullLogger })
+        reg.register({ name: 't', description: '', parameters: {}, permission: () => [req as PermissionRequest], run: async () => ({ content: '' }), ...tool })
+        return { seen, approvals, go: () => reg.call('t', '{}', ctxFor()) }
+      }
+
+      it('ownsKey: the key survives normalize and reaches the card; unsandboxed does not', async () => {
+        const c = capture({ ownsKey: true })
+        await c.go()
+        expect(c.seen[0]).toMatchObject({ key: REQ.key, confirm: true, actor: 'tools', sessionId: 's' })
+        expect(c.seen[0].unsandboxed).toBeUndefined()
+        expect(c.approvals[0].key).toBe(REQ.key)
+      })
+
+      it('a plain tool: the key is dropped, the card uses sessionKey; confirm still survives', async () => {
+        const c = capture({})
+        await c.go()
+        expect(c.seen[0].key).toBeUndefined()
+        expect(c.seen[0].confirm).toBe(true)
+        expect(c.approvals[0].key).toBe(sessionKey('mcp x/y z'))
+      })
+
+      it('ownsKey only counts on exec', async () => {
+        const c = capture({ ownsKey: true }, { ...REQ, action: 'plugin' })
+        await c.go()
+        expect(c.seen[0].key).toBeUndefined()
+      })
+
+      it('delegate: exactly as before, unsandboxed included', async () => {
+        const c = capture({ delegate: true })
+        await c.go()
+        expect(c.seen[0]).toMatchObject({ key: REQ.key, unsandboxed: true })
+      })
+
+      it('mustAsk beats the key: no session grant offered', async () => {
+        const c = capture({ ownsKey: true }, { ...REQ, mustAsk: true })
+        await c.go()
+        expect(c.approvals[0].key).toBeUndefined()
+      })
+
+      it('allow_session on an owned key opens that key only, on a real gate, at full and in auto', async () => {
+        const b = await boot(cwd, 'auto', { detect: FULL })
+        const runs: string[] = []
+        b.probe.tools!.register({
+          name: 'fmcp', description: '', parameters: {}, ownsKey: true,
+          permission: a => { const { tool, epoch } = a as { tool: string; epoch: string }; return [{ actor: 'tools', action: 'exec', resource: `mcp x/y ${tool}`, key: `mcp x/y ${tool}#${epoch}`, confirm: true }] },
+          run: async a => { runs.push((a as { tool: string }).tool); return { content: 'ok' } },
+        })
+        const first = await answer(b, 1, 'allow_session', b.call('fmcp', { tool: 'z', epoch: 'e1' }))
+        expect(first.ev.key).toBe('mcp x/y z#e1')
+        expect(first.r.isError).toBeUndefined()
+        // 同一个键:不出卡片
+        expect((await b.call('fmcp', { tool: 'z', epoch: 'e1' })).r.isError).toBeUndefined()
+        expect(requested(b.k)).toHaveLength(1)
+        // 别的工具、授权变了之后同一个工具:再问
+        const other = await answer(b, 2, 'deny', b.call('fmcp', { tool: 'w', epoch: 'e1' }))
+        expect(other.r.isError).toBe(true)
+        const epoch = await answer(b, 3, 'deny', b.call('fmcp', { tool: 'z', epoch: 'e2' }))
+        expect(epoch.r.isError).toBe(true)
+        expect(runs).toEqual(['z', 'z'])
+      })
+    })
+
     it('summary and key fall back as before when the tool gives neither', async () => {
       const seen: { summary: string; key?: string }[] = []
       const reg = new ToolsRegistry({ gate: { check: () => 'ask' }, approvals: { request: async r => (seen.push(r), 'deny') }, append: () => {}, log: nullLogger })

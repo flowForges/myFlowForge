@@ -488,6 +488,46 @@ describe('bwrapArgs for a wrapped CLI (04 Task 7)', () => {
       expect(last(a, '--ro-bind', inGit, inGit)).toBeGreaterThan(last(a, '--bind', CG, CG))
     })
 
+    describe('hiddenKeep and hideCwd (09 M4)', () => {
+      const KEPT = `${H}/.nvm/versions/node/v1`
+      const hidden = (over: Partial<BwrapParams> = {}, dirs: string[] = [], files: string[] = []) =>
+        bwrapArgs(params({ hiddenTops: [H], hiddenKeep: [CWD, KEPT], hideDirs: [`${H}/.ssh`, `${KEPT}/.aws`], gitDirs: [], gitProtected: [], ...fs([KEPT, `${KEPT}/.aws`, ...dirs], files), ...over }))
+
+      it('read-only, after the top\'s tmpfs and before the credential hides', () => {
+        const a = hidden()
+        const top = first(a, '--tmpfs', H)
+        const keep = first(a, '--ro-bind', KEPT, KEPT)
+        expect(keep).toBeGreaterThan(top)
+        expect(first(a, '--ro-bind', CWD, CWD)).toBeGreaterThan(top)
+        expect(last(a, '--tmpfs', `${KEPT}/.aws`)).toBeGreaterThan(keep)
+        expect(last(a, '--tmpfs', '/data/ssh')).toBeGreaterThan(keep)
+      })
+
+      it('a path that doesn\'t exist is not mounted', () => {
+        const gone = `${H}/gone`
+        expect(hidden({ hiddenKeep: [gone] })).not.toContain(gone)
+      })
+
+      it('no hiddenKeep: the argv is what it was', () => {
+        expect(bwrapArgs(params({ hiddenKeep: [] }))).toEqual(bwrapArgs(params()))
+      })
+
+      it('every kept path is checked like the others', () => {
+        expect(() => hidden({ hiddenKeep: ['rel/path'] })).toThrow()
+      })
+
+      it('hideCwd: the cwd stays the tmpfs of its top', () => {
+        const a = hidden({ hiddenTops: [H, CWD], hiddenKeep: [KEPT], hideCwd: true, readOnly: true })
+        expect(first(a, '--tmpfs', CWD)).toBeGreaterThan(-1)
+        expect(at(a, '--ro-bind', CWD, CWD)).toEqual([])
+        expect(first(a, '--chdir', CWD)).toBeGreaterThan(-1)
+      })
+
+      it('without hideCwd the cwd comes back as before', () => {
+        expect(first(hidden({ hiddenKeep: [], hiddenTops: [H] }), '--bind', CWD, CWD)).toBeGreaterThan(-1)
+      })
+    })
+
     it('no hiddenTops: the argv is what it was', () => {
       expect(bwrapArgs(params({ hiddenTops: [] }))).toEqual(bwrapArgs(params()))
     })

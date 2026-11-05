@@ -10,6 +10,17 @@ import {
   SecretsBackendSchema,
 } from './models'
 import {
+  GrantsSchema,
+  McpServerNameSchema,
+  PluginConsentSchema,
+  PluginFormatSchema,
+  PluginIdSchema,
+  PluginInstallStateSchema,
+  PluginSettingKeySchema,
+  PluginSourceParamSchema,
+  PluginSourceSchema,
+} from './plugins'
+import {
   ApprovalModeSchema,
   ExecutorChangesSourceSchema,
   ExecutorIsolationSchema,
@@ -56,8 +67,12 @@ export const StatusResultSchema = z.object({
       id: z.string(),
       state: z.enum(['active', 'failed', 'disabled']),
       error: z.string().optional(),
+      // 09:开发插件,什么都能做。08 要一直显示
+      trust: z.literal('dev').optional(),
     }),
   ),
+  // 09:稳定代码,如 dev_crashed。正常时没有该字段
+  problems: z.array(z.string()).optional(),
   secretsBackend: SecretsBackendSchema.optional(),
   // 05:旧后台没有该字段
   sandbox: SandboxStatusSchema.optional(),
@@ -233,6 +248,36 @@ export const TelegramChatsSchema = z.object({
 })
 export type TelegramChats = z.infer<typeof TelegramChatsSchema>
 
+// 09:插件(spec §14)
+export const PluginListResultSchema = z.object({
+  plugins: z.array(z.object({
+    id: z.string(),
+    version: z.string(),
+    format: PluginFormatSchema,
+    enabled: z.boolean(),
+    state: z.string(),
+    problems: z.array(z.string()),
+    source: PluginSourceSchema,
+    integrity: z.string(),
+    installedAt: z.number(),
+  })),
+  dev: z.array(z.object({ id: z.string(), hash: z.string(), trustedAt: z.number() })),
+  problems: z.array(z.string()),
+})
+export type PluginListResult = z.infer<typeof PluginListResultSchema>
+
+export const PluginDetailSchema = z.object({
+  consent: PluginConsentSchema,
+  grants: GrantsSchema,
+  /** value 只有不敏感的才有 */
+  settings: z.array(z.object({ key: z.string(), set: z.boolean(), sensitive: z.boolean(), value: z.string().optional() })),
+  servers: z.array(z.object({ name: McpServerNameSchema, state: z.string(), reason: z.string().optional() })),
+})
+export type PluginDetail = z.infer<typeof PluginDetailSchema>
+
+export const PluginInstallStatusSchema = z.object({ state: PluginInstallStateSchema, error: z.string().optional(), consent: PluginConsentSchema.optional(), consentHash: z.string().optional() })
+export type PluginInstallStatus = z.infer<typeof PluginInstallStatusSchema>
+
 export const WorkerMethods = {
   ...AuthMethods,
   hello: {
@@ -375,6 +420,38 @@ export const WorkerMethods = {
   'channel.telegram.config.set': { params: z.object({ commandId: z.string(), config: z.unknown() }), result: Ok },
   'channel.telegram.chats': { params: Empty, result: TelegramChatsSchema },
   'channel.telegram.worktree.discard': { params: z.object({ commandId: z.string(), worktreeId: z.string() }), result: Ok },
+  // 09。settings.*、install.prepare 故意没有 commandId:kernel.handle 给任何带这个名字的参数写回执,值就进库了。
+  // value 这里只限长度:zod 的 issue 不能有机会带上它
+  'plugins.list': { params: Empty, result: PluginListResultSchema },
+  'plugins.get': { params: z.object({ id: PluginIdSchema }), result: PluginDetailSchema },
+  'plugins.install.prepare': { params: z.object({ source: PluginSourceParamSchema }), result: z.object({ stagingId: z.string() }) },
+  'plugins.upgrade.prepare': { params: z.object({ id: PluginIdSchema, ref: z.string().max(256).optional() }), result: z.object({ stagingId: z.string() }) },
+  'plugins.install.status': { params: z.object({ stagingId: z.string().max(128) }), result: PluginInstallStatusSchema },
+  'plugins.install.confirm': {
+    params: z.object({ commandId: z.string(), stagingId: z.string().max(128), consentHash: z.string().max(128), grants: GrantsSchema, enable: z.boolean() }),
+    result: z.object({ ok: z.boolean(), id: z.string() }),
+  },
+  'plugins.install.cancel': { params: z.object({ stagingId: z.string().max(128) }), result: Ok },
+  'plugins.setEnabled': { params: z.object({ commandId: z.string(), id: PluginIdSchema, enabled: z.boolean() }), result: Ok },
+  'plugins.uninstall': { params: z.object({ commandId: z.string(), id: PluginIdSchema }), result: Ok },
+  'plugins.grants.set': { params: z.object({ commandId: z.string(), id: PluginIdSchema, grants: GrantsSchema }), result: Ok },
+  'plugins.settings.set': { params: z.object({ id: PluginIdSchema, key: PluginSettingKeySchema, value: z.string().max(8192) }), result: Ok },
+  'plugins.settings.clear': { params: z.object({ id: PluginIdSchema, key: PluginSettingKeySchema }), result: Ok },
+  'plugins.commands': { params: Empty, result: z.object({ commands: z.array(z.object({ name: z.string(), plugin: z.string(), description: z.string(), argumentHint: z.string().optional() })) }) },
+  'plugins.command.run': {
+    params: z.object({ commandId: z.string(), sessionId: z.string(), name: z.string().max(256), args: z.string().max(8000) }),
+    result: z.object({ accepted: z.boolean(), turnId: z.string(), followUp: z.boolean().optional() }),
+  },
+  'plugins.mcp.status': {
+    params: z.object({ sessionId: z.string().optional() }),
+    result: z.object({ servers: z.array(z.object({ plugin: z.string(), server: z.string(), sessionId: z.string(), state: z.string(), reason: z.string().optional(), pid: z.number().optional() })) }),
+  },
+  // 字面量确认:08 没法把它做成一个普通开关(§12)
+  'plugins.dev.trust': {
+    params: z.object({ path: z.string().min(1).max(4096), acknowledge: z.literal('runs_with_full_access') }),
+    result: z.object({ ok: z.boolean(), id: z.string(), hash: z.string(), bytes: z.number(), main: z.string(), restartRequired: z.literal(true) }),
+  },
+  'plugins.dev.remove': { params: z.object({ id: PluginIdSchema }), result: z.object({ ok: z.boolean(), restartRequired: z.literal(true) }) },
 } as const
 
 export const ControlMethods = {

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -8,12 +8,13 @@ import { createGit, NO_REPO, pinFromPaths } from '../lib/git/snapshot'
 import { parseRule, type Rule } from '../lib/permissions/rules'
 import { runCli } from '../lib/proc/runCli'
 import type { DetectResult } from '../lib/sandbox/detect'
-import { startProxy } from '../lib/sandbox/net/proxy'
+import { startProxy, type ProxyHandle, type ProxyOptions } from '../lib/sandbox/net/proxy'
 import type { ExecPlanOpts, SandboxService } from '../lib/tools/types'
 import type { PermissionsConfig } from '../protocol/index'
 import { createKernel, type Kernel } from './kernel'
 import type { Plugin } from './pluginHost'
 import { createSandboxService, sessionTmpDir, wipeSessionTmp, type SandboxOpts } from './sandbox'
+import { pluginStoreRootOf } from '../lib/fs/paths'
 
 let root: string
 let home: string
@@ -1502,5 +1503,322 @@ describe('sessions that are not on this machine: the shared git state is read-on
   it('level none: no plan to put it in. The gate asks for every command instead', async () => {
     const { svc } = service({ originOf: () => 'im', detected: { level: 'none', missing: ['sandbox-exec'] } })
     expect((await svc.plan('true', session(), baseEnv)).sandboxed).toBe(false)
+  })
+})
+
+describe('plans without hide or exactHosts (09 Task 1)', () => {
+  /**
+   * no-hide-plans.golden.json 是改动之前(bd8c6925)的代码生成的。唯一允许多出来的是插件存储根(M13):它进持久化清单。
+   * 路径换成 <ROOT>;代理是假的,端口固定。bwrap 的行要看宿主的 /run,Linux 上不比
+   */
+  const GOLDEN = join(__dirname, '../../test/fixtures/plugins/no-hide-plans.golden.json')
+  const PORT = 4242
+  const fixedProxy = (sock: string) => async (_o: ProxyOptions) =>
+    ({ port: PORT, unixPath: sock, closing: false, closed: new Promise<void>(() => {}), touch() {}, close: async () => {} }) as unknown as ProxyHandle
+
+  async function plans(platform: 'darwin' | 'linux'): Promise<Record<string, string[]>> {
+    const auth = join(home, '.qoder', '.auth')
+    const logs = join(home, '.qoder', 'logs')
+    mkdirSync(auth, { recursive: true })
+    mkdirSync(logs)
+    const sock = join(root, 'net.sock')
+    writeFileSync(sock, '')
+    const base: Partial<SandboxOpts> = {
+      platform,
+      env: { HOME: home },
+      execPath: '/opt/mff/mff',
+      uid: 1000,
+      startProxy: fixedProxy(sock),
+      ...(platform === 'linux' && { detected: { level: 'full', missing: [], bwrap: '/usr/bin/bwrap' } }),
+    }
+    const opts: ExecPlanOpts = { allowRead: [auth], allowWrite: [auth, logs], allowHosts: ['*.qoder.sh'], proxyScope: 'run_1', readOnly: false, denyRead: [join(home, 'secret')], denyWrite: [join(repo, 'sub', 'gen')] }
+    const out: Record<string, string[]> = {}
+    const shot = (name: string, p: { args: string[]; release(): void }) => {
+      p.release()
+      out[`${platform} ${name}`] = p.args.map(a => a.split(root).join('<ROOT>'))
+    }
+    shot('shell', await service(base).svc.plan('true', session(), baseEnv))
+    shot('exec', await service(base).svc.planExec('/opt/q/qodercli', ['-p'], session(), baseEnv, opts))
+    shot('exec read-only', await service(base).svc.planExec('/opt/q/qodercli', ['-p'], session(), baseEnv, { ...opts, readOnly: true }))
+    shot('loopback', await service({ ...base, config: () => cfg({}, { allowLoopback: true }) }).svc.plan('true', session(), baseEnv))
+    const top = join(root, 'wt')
+    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@e.invalid', 'commit', '-q', '--allow-empty', '-m', 'i'], { cwd: repo, env: gitTestEnv() })
+    execFileSync('git', ['worktree', 'add', '-q', '--detach', top, 'HEAD'], { cwd: repo, env: gitTestEnv() })
+    const pin = pinFromPaths(top, join(repo, '.git', 'worktrees', 'wt'), join(repo, '.git'))
+    shot('im', await service({ ...base, originOf: () => 'im', repoPin: () => pin }).svc.plan('true', { ...session(), cwd: top }, baseEnv))
+    return out
+  }
+
+  /** 存储根在配置里的每一处(前面的空格一起去掉);bwrap 只挂存在的路径,这里它不存在 */
+  const withoutStore = (args: string[]) => args.map(a => a.replace(/ \((?:subpath|literal) "<ROOT>\/data-plugins"\)/g, ''))
+
+  it.each(['darwin', 'linux'] as const)('%s: byte-identical to before, apart from the store root', async platform => {
+    if (platform === 'linux' && process.platform === 'linux') return
+    const now = await plans(platform)
+    const golden = JSON.parse(readFileSync(GOLDEN, 'utf8')) as Record<string, string[]>
+    for (const [name, args] of Object.entries(now)) expect(withoutStore(args), name).toEqual(golden[name])
+    expect(Object.keys(now).length).toBe(5)
+  })
+})
+
+describe('planExec with hide, tmpDir, exactHosts (09 Task 1, M1, M4, M5, M13)', () => {
+  const lines = (profile: string, head: string) => profile.split('\n').filter(l => l.startsWith(head))
+  const subpath = (x: string) => `(subpath ${q(x)})`
+  const literal = (x: string) => `(literal ${q(x)})`
+  const base = (over: Partial<ExecPlanOpts> = {}): ExecPlanOpts => ({ allowRead: [], allowWrite: [], allowHosts: [], proxyScope: 'mcp_1', readOnly: true, denyRead: [], denyWrite: [], ...over })
+  const LINUX: Partial<SandboxOpts> = { platform: 'linux', detected: { level: 'full', missing: [], bwrap: '/usr/bin/bwrap' }, execPath: '/opt/mff/mff', uid: 1000, env: { HOME: home } }
+  const linux = (): Partial<SandboxOpts> => ({ ...LINUX, env: { HOME: home } })
+  const app = (args: string[], ...want: string[]) => {
+    for (let i = 0; i <= args.length - want.length; i++) if (want.every((w, j) => args[i + j] === w)) return i
+    return -1
+  }
+
+  async function darwin(over: Partial<ExecPlanOpts>, opts: Parameters<typeof service>[0] = {}, s = session('s1', repo)) {
+    const plan = await service(opts).svc.planExec('/opt/m/server', ['--x'], s, baseEnv, base(over))
+    plan.release()
+    return { plan, profile: profileOf(plan.args) }
+  }
+
+  describe('hide on Seatbelt', () => {
+    it('tops are denied for reading, keep comes back after them, ancestors get metadata only', async () => {
+      const code = join(home, 'store', 'p', 'abc')
+      const { profile } = await darwin({ hide: { tops: [home], keep: [repo, code] } })
+      const denied = lines(profile, '(deny file-read* ')[0]
+      const opened = lines(profile, '(allow file-read* ')[0]
+      expect(denied).toContain(subpath(home))
+      expect(opened).toContain(subpath(repo))
+      expect(opened).toContain(subpath(code))
+      expect(profile.indexOf(opened)).toBeGreaterThan(profile.indexOf(denied))
+      const traverse = lines(profile, '(allow file-read-metadata ')[0]
+      // 祖先到隐藏的根(含),不含 keep 自己
+      for (const a of [home, join(home, 'store'), join(home, 'store', 'p')]) expect(traverse).toContain(literal(a))
+      expect(traverse).not.toContain(literal(code))
+      expect(traverse).not.toContain(literal(repo))
+      expect(opened).not.toContain(subpath(home))
+    })
+
+    it('traverse covers keep, allowRead, the tmp dir and the spill dir, up to the top and through the data dir', async () => {
+      const inData = join(dataDir, 'plugin-data', 'p', 'srv')
+      const tmpDir = join(dataDir, 'sessions', 's1', 'mcp', 'h', 'tmp')
+      const spill = join(home, 'spills', 'empty')
+      const { profile } = await darwin({ allowRead: [inData], allowWrite: [inData], tmpDir, hide: { tops: [root], keep: [join(home, 'a', 'b')] } }, {}, { ...session('s1', repo), spillDir: spill })
+      const traverse = lines(profile, '(allow file-read-metadata ')[0]
+      for (const a of [root, home, join(home, 'a'), dataDir, join(dataDir, 'plugin-data'), join(dataDir, 'plugin-data', 'p'), join(dataDir, 'sessions', 's1', 'mcp', 'h'), join(home, 'spills')]) expect(traverse).toContain(literal(a))
+    })
+
+    it('a credential root or the data dir under a kept path stays closed, after the re-allow', async () => {
+      const kept = home
+      const { profile } = await darwin({ hide: { tops: [root], keep: [kept] } })
+      const final = lines(profile, '(deny file-read* ')[1]
+      expect(final).toContain(subpath(join(home, '.ssh')))
+      expect(profile.indexOf(final)).toBeGreaterThan(profile.indexOf(lines(profile, '(allow file-read* ')[0]))
+      const nestedData = await darwin({ hide: { tops: [root], keep: [root] } })
+      expect(lines(nestedData.profile, '(deny file-read* ')[1]).toContain(subpath(dataDir))
+    })
+
+    it('a kept path inside a credential root or the data dir is dropped, spelled through a link too', async () => {
+      symlinkSync(join(home, '.ssh'), join(home, 'nice'))
+      const { profile } = await darwin({ hide: { tops: [home], keep: [join(home, '.ssh', 'k'), join(dataDir, 'x'), join(home, 'nice', 'k')] } })
+      const opened = lines(profile, '(allow file-read* ')[0]
+      expect(opened).not.toContain(join(home, '.ssh', 'k'))
+      expect(opened).not.toContain(join(dataDir, 'x'))
+      expect(opened).not.toContain(join(home, 'nice'))
+    })
+
+    it('without hide an allowRead stays what it was: no extra traverse', async () => {
+      const { profile } = await darwin({ allowRead: [join(home, '.qoder', '.auth')] })
+      expect(lines(profile, '(allow file-read-metadata ')).toEqual([])
+    })
+
+    it('merged with an IM session: both sets of tops, both sets of keep', async () => {
+      const top = join(root, 'wt')
+      execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@e.invalid', 'commit', '-q', '--allow-empty', '-m', 'i'], { cwd: repo, env: gitTestEnv() })
+      execFileSync('git', ['worktree', 'add', '-q', '--detach', top, 'HEAD'], { cwd: repo, env: gitTestEnv() })
+      const pin = pinFromPaths(top, join(repo, '.git', 'worktrees', 'wt'), join(repo, '.git'))
+      const kept = join(root, 'other', 'kept')
+      const { profile } = await darwin({ hide: { tops: [join(root, 'other')], keep: [kept] } }, { originOf: () => 'im', repoPin: () => pin }, { ...session(), cwd: top })
+      const denied = lines(profile, '(deny file-read* ')[0]
+      expect(denied).toContain(subpath(repo))
+      expect(denied).toContain(subpath(join(root, 'other')))
+      const opened = lines(profile, '(allow file-read* ')[0]
+      expect(opened).toContain(subpath(join(repo, '.git')))
+      expect(opened).toContain(subpath(kept))
+    })
+
+    it('a writable cwd under hide brings no git dir outside it', async () => {
+      const top = join(root, 'wt')
+      execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@e.invalid', 'commit', '-q', '--allow-empty', '-m', 'i'], { cwd: repo, env: gitTestEnv() })
+      execFileSync('git', ['worktree', 'add', '-q', '--detach', top, 'HEAD'], { cwd: repo, env: gitTestEnv() })
+      const pin = pinFromPaths(top, join(repo, '.git', 'worktrees', 'wt'), join(repo, '.git'))
+      const { profile } = await darwin({ readOnly: false, hide: { tops: [home], keep: [top] } }, { originOf: () => 'app', repoPin: () => pin }, { ...session(), cwd: top })
+      const writable = lines(profile, '(allow file-write* ')[0]
+      expect(writable).toContain(subpath(top))
+      expect(writable).not.toContain(subpath(join(repo, '.git')))
+    })
+
+    it('rejects a bad path in hide before anything starts', async () => {
+      const started: ProxyOptions[] = []
+      const { svc } = service({ startProxy: async o => { started.push(o); return startProxy(o) } })
+      for (const hide of [{ tops: ['rel'], keep: [] }, { tops: [], keep: ['/a/../b'] }]) {
+        await expect(svc.planExec('/opt/m/server', [], session(), baseEnv, base({ hide }))).rejects.toThrow()
+      }
+      await expect(svc.planExec('/opt/m/server', [], session(), baseEnv, base({ tmpDir: 'rel/tmp' }))).rejects.toThrow()
+      expect(started).toEqual([])
+    })
+  })
+
+  describe('tmpDir', () => {
+    it('replaces TMPDIR and the writable temp dir; the session tmp is not made, not writable, not readable', async () => {
+      const tmpDir = join(dataDir, 'sessions', 's1', 'mcp', 'h', 'tmp')
+      const { plan, profile } = await darwin({ tmpDir })
+      expect(plan.env.TMPDIR).toBe(tmpDir)
+      expect(statSync(tmpDir).mode & 0o777).toBe(0o700)
+      const sessionTmp = sessionTmpDir(dataDir, 's1')
+      expect(existsSync(sessionTmp)).toBe(false)
+      expect(lines(profile, '(allow file-write* ')[0]).toContain(subpath(tmpDir))
+      expect(profile).not.toContain(subpath(sessionTmp))
+    })
+
+    it('a tmpDir that is a link: refused', async () => {
+      const tmpDir = join(root, 'linked')
+      symlinkSync(join(home, '.ssh'), tmpDir)
+      await expect(darwin({ tmpDir })).rejects.toThrow(/not a directory/)
+    })
+
+    it('the startup wipe takes <sid>/mcp along with <sid>/tmp, and nothing else', () => {
+      const mcp = join(dataDir, 'sessions', 's1', 'mcp', 'h', 'tmp')
+      const spill = join(dataDir, 'sessions', 's1', 'spill')
+      for (const d of [mcp, spill, sessionTmpDir(dataDir, 's1')]) mkdirSync(d, { recursive: true })
+      wipeSessionTmp(dataDir)
+      expect(existsSync(join(dataDir, 'sessions', 's1', 'mcp'))).toBe(false)
+      expect(existsSync(sessionTmpDir(dataDir, 's1'))).toBe(false)
+      expect(existsSync(spill)).toBe(true)
+    })
+  })
+
+  describe('exactHosts (M1)', () => {
+    const DEFAULTS = () => cfg({ network: { allow: ['github.com'] } }, { allowLoopback: true })
+
+    it('the allow list holds only the hosts; without it the default list is added', async () => {
+      const seen: ProxyOptions[] = []
+      const { svc } = service({ config: DEFAULTS, startProxy: async o => { seen.push(o); return startProxy(o) } })
+      const a = await svc.planExec('/opt/m/server', [], session(), baseEnv, base({ allowHosts: ['api.example.com'], exactHosts: true }))
+      a.release()
+      const b = await svc.planExec('/opt/m/server', [], session(), baseEnv, base({ allowHosts: ['api.example.com'], proxyScope: 'run_2' }))
+      b.release()
+      expect(seen[0].allow()).toEqual(['api.example.com'])
+      expect(seen[1].allow()).toEqual(['github.com', 'api.example.com'])
+    })
+
+    it('the proxy itself refuses a host on the default list', async () => {
+      const { svc } = service({ config: DEFAULTS, lookup: async () => [{ address: '93.184.216.34', family: 4 }] })
+      const plan = await svc.planExec('/opt/m/server', [], session(), baseEnv, base({ exactHosts: true }))
+      expect(await connectStatus(portOf(plan.env), 'github.com:443')).toMatch(/ 403 /)
+      plan.release()
+    })
+
+    it('loopback stays closed in the profile and the env, whatever the config says', async () => {
+      const on = await darwin({ exactHosts: true }, { config: DEFAULTS })
+      expect(on.profile).not.toContain('localhost:*')
+      const off = await darwin({ proxyScope: 'run_2' }, { config: DEFAULTS })
+      expect(off.profile).toContain('localhost:*')
+    })
+  })
+
+  describe('the store root (M13)', () => {
+    it('is write-denied and can not be moved, even with cwd = home; it stays readable', async () => {
+      const store = pluginStoreRootOf(join(home, '.mff'))
+      const plan = await service({ dataDir: join(home, '.mff') }).svc.plan('true', session('s1', home), baseEnv)
+      plan.release()
+      const profile = profileOf(plan.args)
+      expect(lines(profile, '(deny file-write* ')[0]).toContain(subpath(store))
+      expect(lines(profile, '(deny file-write-unlink ')[0]).toContain(literal(store))
+      for (const l of lines(profile, '(deny file-read* ')) expect(l).not.toContain(store)
+    })
+
+    it('execPolicy lists it among the persistence paths, last', () => {
+      const p = service().svc.execPolicy('s1', repo)
+      expect(p.persistence).toContain(pluginStoreRootOf(dataDir))
+    })
+
+    it('bwrap: mounted back read-only when it exists inside a writable root', async () => {
+      const data = join(home, '.mff')
+      const store = pluginStoreRootOf(data)
+      mkdirSync(data)
+      mkdirSync(store)
+      const plan = await service({ ...linux(), env: { HOME: home }, dataDir: data }).svc.plan('true', session('s1', home), baseEnv)
+      plan.release()
+      expect(app(plan.args, '--ro-bind', store, store)).toBeGreaterThan(app(plan.args, '--bind', home, home))
+    })
+  })
+
+  describe('hide on bwrap', () => {
+    it('tops first, keep read-only after them, credentials hidden after keep', async () => {
+      const kept = join(home, 'kept')
+      const cred = join(home, '.ssh')
+      mkdirSync(kept)
+      const plan = await service(linux()).svc.planExec('/opt/m/server', [], session('s1', repo), baseEnv, base({ hide: { tops: [root], keep: [kept, home] } }))
+      plan.release()
+      const a = plan.args
+      const top = app(a, '--tmpfs', root)
+      expect(top).toBeGreaterThan(-1)
+      expect(app(a, '--ro-bind', kept, kept)).toBeGreaterThan(top)
+      expect(app(a, '--ro-bind', home, home)).toBeGreaterThan(top)
+      expect(app(a, '--tmpfs', cred)).toBeGreaterThan(app(a, '--ro-bind', home, home))
+    })
+
+    it('an allowWrite under a top is bound, because hide asked for it; an IM top still drops one', async () => {
+      const data = join(dataDir, 'plugin-data', 'p', 's')
+      mkdirSync(data, { recursive: true })
+      const plan = await service(linux()).svc.planExec('/opt/m/server', [], session('s1', repo), baseEnv, base({ allowRead: [data], allowWrite: [data], hide: { tops: [root], keep: [repo] } }))
+      plan.release()
+      expect(app(plan.args, '--bind', data, data)).toBeGreaterThan(app(plan.args, '--tmpfs', dataDir))
+    })
+
+    it('a cwd that is hidden is not bound back, and the plan still chdirs into its empty tmpfs', async () => {
+      const plan = await service(linux()).svc.planExec('/opt/m/server', [], session('s1', repo), baseEnv, base({ hide: { tops: [home, repo], keep: [] } }))
+      plan.release()
+      expect(app(plan.args, '--tmpfs', repo)).toBeGreaterThan(-1)
+      expect(app(plan.args, '--ro-bind', repo, repo)).toBe(-1)
+      expect(app(plan.args, '--bind', repo, repo)).toBe(-1)
+      expect(app(plan.args, '--ro-bind', join(repo, '.git'), join(repo, '.git'))).toBe(-1)
+      expect(app(plan.args, '--chdir', repo)).toBeGreaterThan(-1)
+    })
+
+    it('a git dir outside what is kept stays hidden', async () => {
+      const top = join(root, 'wt')
+      execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@e.invalid', 'commit', '-q', '--allow-empty', '-m', 'i'], { cwd: repo, env: gitTestEnv() })
+      execFileSync('git', ['worktree', 'add', '-q', '--detach', top, 'HEAD'], { cwd: repo, env: gitTestEnv() })
+      const pin = pinFromPaths(top, join(repo, '.git', 'worktrees', 'wt'), join(repo, '.git'))
+      const plan = await service({ ...linux(), originOf: () => 'app', repoPin: () => pin }).svc.planExec('/opt/m/server', [], { ...session(), cwd: top }, baseEnv, base({ hide: { tops: [home], keep: [top] } }))
+      plan.release()
+      expect(plan.args.filter(x => x.startsWith(join(repo, '.git')))).toEqual([])
+    })
+
+    it('the relay program at the top of a hidden root still refuses', async () => {
+      const sock = join(root, 'net.sock')
+      writeFileSync(sock, '')
+      const exe = join(home, 'electron')
+      writeFileSync(exe, '')
+      const { svc } = service({
+        ...linux(), execPath: exe,
+        startProxy: async () => ({ port: 1, unixPath: sock, closing: false, closed: new Promise<void>(() => {}), touch() {}, close: async () => {} }) as unknown as ProxyHandle,
+      })
+      await expect(svc.planExec('/opt/m/server', [], session('s1', repo), baseEnv, base({ hide: { tops: [home], keep: [repo] } }))).rejects.toThrow(/hidden checkout/)
+    })
+  })
+
+  describe('execPolicy.untranslatedPaths (M10)', () => {
+    const parsed = (...specs: { effect: 'deny' | 'ask' | 'allow'; rule: string }[]) => specs.map((sp, i) => parseRule(sp, i) as Rule)
+    it('counts path rules only; untranslatedRules still counts the shell ones', () => {
+      const policy = (r: Rule[]) => service({ rules: () => r }).svc.execPolicy('s1', repo)
+      const shell = policy(parsed({ effect: 'deny', rule: 'shell(git push*)' }))
+      expect(shell.untranslatedPaths).toBe(0)
+      expect(shell.untranslatedRules).toBe(1)
+      const path = policy(parsed({ effect: 'deny', rule: 'read(**/x*)' }))
+      expect(path.untranslatedPaths).toBe(1)
+      expect(path.untranslatedRules).toBe(1)
+      expect(policy([]).untranslatedPaths).toBe(0)
+    })
   })
 })

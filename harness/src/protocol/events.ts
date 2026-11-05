@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { AccountViewSchema } from './models'
+import { PluginFormatSchema, PluginInstallStateSchema } from './plugins'
 
 export const EVENT_TYPES = [
   'kernel.started',
@@ -46,6 +47,18 @@ export const EVENT_TYPES = [
   'channel.paired',
   'channel.unpaired',
   'channel.pairing.burned',
+  'plugins.install.state',
+  'plugins.installed',
+  'plugins.upgraded',
+  'plugins.enabled',
+  'plugins.disabled',
+  'plugins.uninstalled',
+  'plugins.grants.updated',
+  'plugins.integrity.failed',
+  'plugins.injected',
+  'plugins.mcp.status',
+  'plugins.dev.trusted',
+  'plugins.dev.loaded',
 ] as const
 
 export const EventTypeSchema = z.enum(EVENT_TYPES)
@@ -177,3 +190,27 @@ export type ChannelUnpairedPayload = z.infer<typeof ChannelUnpairedPayloadSchema
 
 export const ChannelPairingBurnedPayloadSchema = z.object({ channel: ChannelIdSchema })
 export type ChannelPairingBurnedPayload = z.infer<typeof ChannelPairingBurnedPayloadSchema>
+
+// 09:插件(spec §14)。都不带配置值、环境值、MCP 的 stderr
+export const PluginsInstallStatePayloadSchema = z.object({ stagingId: z.string(), state: PluginInstallStateSchema, error: z.string().optional() })
+export type PluginsInstallStatePayload = z.infer<typeof PluginsInstallStatePayloadSchema>
+
+/** plugins.installed、plugins.upgraded */
+export const PluginInstalledPayloadSchema = z.object({ id: z.string(), version: z.string(), integrity: z.string(), format: PluginFormatSchema, sourceKind: z.enum(['path', 'git']) })
+export type PluginInstalledPayload = z.infer<typeof PluginInstalledPayloadSchema>
+
+/** plugins.enabled、disabled、uninstalled、grants.updated、integrity.failed */
+export const PluginIdPayloadSchema = z.object({ id: z.string() })
+export type PluginIdPayload = z.infer<typeof PluginIdPayloadSchema>
+
+/** 带 sessionId。日志里第一个算,所在的轮回滚了也算(M8、M9) */
+export const PluginsInjectedPayloadSchema = z.object({ turnId: z.string(), text: z.string(), skill: z.boolean(), mcp: z.boolean() })
+export type PluginsInjectedPayload = z.infer<typeof PluginsInjectedPayloadSchema>
+
+/** 带 sessionId,状态变化才写。state、reason 是稳定代码 */
+export const PluginsMcpStatusPayloadSchema = z.object({ plugin: z.string(), server: z.string(), state: z.string(), reason: z.string().optional() })
+export type PluginsMcpStatusPayload = z.infer<typeof PluginsMcpStatusPayloadSchema>
+
+/** plugins.dev.trusted、plugins.dev.loaded */
+export const PluginDevPayloadSchema = z.object({ id: z.string(), hash: z.string() })
+export type PluginDevPayload = z.infer<typeof PluginDevPayloadSchema>

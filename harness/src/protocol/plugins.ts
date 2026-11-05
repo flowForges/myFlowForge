@@ -1,0 +1,103 @@
+// 09:插件(spec §5、§7、§8)。同意页的形状是 lib/plugins 和 08 共用的,所以在协议里
+import { z } from 'zod'
+
+/** 插件 id:只有这个形状进得了路径和 secret 键的前缀 */
+export const PLUGIN_ID = /^[a-z0-9][a-z0-9-]{0,63}$/
+export const PluginIdSchema = z.string().regex(PLUGIN_ID)
+
+export const MCP_SERVER_NAME = /^[A-Za-z0-9_-]{1,64}$/
+export const McpServerNameSchema = z.string().regex(MCP_SERVER_NAME)
+
+/** 配置键:userConfig 的键或 `${VAR}` 的名字。secret 键是 <插件 id>/<key>,不能带 `/` */
+export const PluginSettingKeySchema = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/)
+
+export const PluginFormatSchema = z.enum(['native', 'claude'])
+export type PluginFormat = z.infer<typeof PluginFormatSchema>
+
+export const McpCwdSchema = z.enum(['none', 'read', 'write'])
+export type McpCwd = z.infer<typeof McpCwdSchema>
+
+/** 只从 RPC 来,逐服务。闭合结构:写不出路径 */
+export const GrantsSchema = z.strictObject({
+  servers: z.record(McpServerNameSchema, z.strictObject({ network: z.array(z.string().max(253)).max(64), cwd: McpCwdSchema })),
+})
+export type Grants = z.infer<typeof GrantsSchema>
+
+/** 安装来源。ref、url 的形状由拉取前的检查定,错误码是它的 */
+export const PluginSourceParamSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('path'), path: z.string().min(1).max(4096) }),
+  z.object({ kind: z.literal('git'), url: z.string().min(1).max(2048), ref: z.string().max(256).optional(), subpath: z.string().max(4096).optional() }),
+])
+export type PluginSourceParam = z.infer<typeof PluginSourceParamSchema>
+
+export const PluginSourceSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('path'), path: z.string() }),
+  z.object({ kind: z.literal('git'), url: z.string(), ref: z.string().optional(), commit: z.string(), subpath: z.string().optional() }),
+])
+export type PluginSource = z.infer<typeof PluginSourceSchema>
+
+export const PluginWarningSchema = z.enum(['no_manifest', 'unpinned_source', 'source_changed', 'runtime_fetch', 'shell_in_text', 'hidden_chars', 'submodules_skipped', 'hooks_not_run', 'truncated'])
+export type PluginWarning = z.infer<typeof PluginWarningSchema>
+
+const HookEntrySchema = z.object({ event: z.string(), command: z.string() })
+const Names = z.array(z.string())
+
+export const PluginDiffSchema = z.object({
+  fromVersion: z.string(),
+  toVersion: z.string(),
+  sourceChanged: z.boolean(),
+  mcp: z.object({ added: Names, removed: Names, changed: z.array(z.object({ name: z.string(), fields: z.array(z.enum(['command', 'args', 'env', 'declared'])) })) }),
+  skills: z.object({ added: Names, removed: Names, textChanged: Names }),
+  commands: z.object({ added: Names, removed: Names, textChanged: Names }),
+  network: z.object({ added: Names, removed: Names }),
+  notRun: z.object({ hooksAdded: z.array(HookEntrySchema), hooksRemoved: z.array(HookEntrySchema) }),
+  files: z.object({ added: z.number(), removed: z.number(), changed: z.number() }),
+})
+export type PluginDiff = z.infer<typeof PluginDiffSchema>
+
+export const PluginConsentSchema = z.object({
+  id: z.string(),
+  version: z.string(),
+  format: PluginFormatSchema,
+  /** 插件自称的,清理、截断后给;08 要标明是自称 */
+  claimed: z.object({ name: z.string(), description: z.string(), author: z.string().optional(), homepage: z.string().optional() }),
+  source: PluginSourceSchema,
+  integrity: z.string(),
+  files: z.number(),
+  bytes: z.number(),
+  skills: z.array(z.object({ name: z.string(), description: z.string(), modelInvocable: z.boolean(), userInvocable: z.boolean(), files: z.number(), flags: Names, ignored: Names })),
+  commands: z.array(z.object({ name: z.string(), description: z.string(), flags: Names, ignored: Names })),
+  mcp: z.array(z.object({
+    name: z.string(),
+    command: z.string(),
+    /** 符号形式:${PLUGIN_ROOT}、${PLUGIN_DATA}、${PROJECT_DIR} 不展开(M12) */
+    args: Names,
+    /** npx、uvx、bunx:运行时才下代码,钉不住 */
+    fetchesAtRuntime: z.boolean(),
+    /** value 只有 literal 有,打码后 */
+    env: z.array(z.object({ name: z.string(), source: z.enum(['literal', 'config', 'secret']), required: z.boolean(), value: z.string().optional() })),
+    /** Claude Code 格式是 null */
+    declared: z.object({ network: Names, cwd: McpCwdSchema }).nullable(),
+    /** 只是建议,默认不勾 */
+    suggestedHosts: Names,
+    problems: Names,
+  })),
+  config: z.array(z.object({ key: z.string(), title: z.string(), sensitive: z.boolean(), required: z.boolean(), type: z.string() })),
+  notRun: z.object({
+    hooks: z.array(HookEntrySchema),
+    agents: Names,
+    bin: Names,
+    monitors: Names,
+    workflows: Names,
+    lsp: Names,
+    remoteMcp: z.array(z.object({ name: z.string(), type: z.string(), url: z.string() })),
+    main: z.string().optional(),
+    scripts: Names,
+  }),
+  warnings: z.array(PluginWarningSchema),
+  diff: PluginDiffSchema.optional(),
+})
+export type PluginConsent = z.infer<typeof PluginConsentSchema>
+
+export const PluginInstallStateSchema = z.enum(['fetching', 'ready', 'failed'])
+export type PluginInstallState = z.infer<typeof PluginInstallStateSchema>

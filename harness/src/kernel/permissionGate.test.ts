@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { credentialRoots, persistenceRoots, resolveToolPath } from '../lib/fs/paths'
-import { decide, defaultRules, PermissionGate, type DecideEnv, type PermissionRequest } from './permissionGate'
+import { canonicalRoots, credentialRoots, persistenceRoots, pluginStoreRootOf, resolveToolPath } from '../lib/fs/paths'
+import { decide, defaultRules, PermissionGate, persistenceList, type DecideEnv, type PermissionRequest } from './permissionGate'
 import { parseRule, type Rule, type RuleSpec } from '../lib/permissions/rules'
 import type { SandboxStatus } from '../protocol/index'
 import { Sessions, type SessionInfo } from './sessions'
@@ -746,6 +746,103 @@ describe('kernel env snapshot', () => {
     const log = { info() {}, error() {}, warn: (m: string) => { lines.push(m) } }
     k = await createKernel({ sandbox: NO_SANDBOX, dataDir, plugins: [probe], home, env: { GNUPGHOME: join(work, 'gpg') }, log, secrets: { osBackend: false } })
     expect(lines.filter(m => m.includes('covers home or root'))).toEqual([])
+  })
+})
+
+describe('decide: plugin requests (09 §10.4, M13, M19)', () => {
+  const home = '/h'
+  const dataDir = '/h/.myFlowForge/mff-ai'
+  const PARTIAL: SandboxStatus = { level: 'partial', missing: ['loopback'], autoDegraded: false }
+  const base: DecideEnv = { roots: credentialRoots(home, 'linux', {}), persistence: persistenceRoots(home, 'linux'), dataDir, platform: 'linux', home, ...layered }
+  const session = (approvalMode: 'ask' | 'auto'): SessionInfo => ({ sessionId: 's1', cwd: '/h/repo', approvalMode, origin: 'app', audience: 'owner' })
+  const call = (over: Partial<PermissionRequest> = {}): PermissionRequest => ({ actor: 'tools', action: 'exec', resource: 'mcp x/y z', key: 'mcp x/y z#e1', sessionId: 's1', ...over })
+
+  // confirm = 有实际域名 || 级别不是 full
+  const table: ['auto' | 'ask', boolean, SandboxStatus, 'allow' | 'ask'][] = [
+    ['auto', false, FULL, 'allow'],
+    ['ask', false, FULL, 'ask'],
+    ['auto', true, FULL, 'ask'],
+    ['ask', true, FULL, 'ask'],
+    ['auto', false, PARTIAL, 'ask'],
+    ['ask', false, PARTIAL, 'ask'],
+    ['auto', true, PARTIAL, 'ask'],
+    ['ask', true, PARTIAL, 'ask'],
+  ]
+  it.each(table)('%s, hosts %s, %j → %s', (mode, hosts, sandbox, want) => {
+    expect(decide(call({ confirm: hosts || sandbox.level !== 'full' }), session(mode), { ...base, sandbox })).toBe(want)
+  })
+
+  const ruled: [string, RuleSpec, boolean, 'ask' | 'auto', 'allow' | 'ask' | 'deny'][] = [
+    ['deny on the server, no hosts', { effect: 'deny', rule: 'shell(mcp x/*)' }, false, 'auto', 'deny'],
+    ['deny on the server, hosts', { effect: 'deny', rule: 'shell(mcp x/*)' }, true, 'auto', 'deny'],
+    ['ask on the tool', { effect: 'ask', rule: 'shell(mcp x/y z)' }, false, 'auto', 'ask'],
+    ['allow by name, hosts, ask mode', { effect: 'allow', rule: 'shell(mcp x/y *)' }, true, 'ask', 'allow'],
+    ['allow by name, hosts, auto', { effect: 'allow', rule: 'shell(mcp x/y *)' }, true, 'auto', 'allow'],
+    ['allow by name, no hosts, ask mode', { effect: 'allow', rule: 'shell(mcp x/y *)' }, false, 'ask', 'allow'],
+    ['allow shell(mcp *)', { effect: 'allow', rule: 'shell(mcp *)' }, true, 'ask', 'allow'],
+    ['a broad allow, no hosts', { effect: 'allow', rule: 'shell(mc*)' }, false, 'ask', 'allow'],
+    ['a broad allow, hosts: still asks', { effect: 'allow', rule: 'shell(mc*)' }, true, 'auto', 'ask'],
+    ['allow for another tool, hosts', { effect: 'allow', rule: 'shell(mcp x/y other)' }, true, 'ask', 'ask'],
+    ['deny on a shell command: nothing to do with it', { effect: 'deny', rule: 'shell(git push*)' }, false, 'auto', 'allow'],
+  ]
+  it.each(ruled)('%s', (_n, spec, confirm, mode, want) => {
+    expect(decide(call({ confirm }), session(mode), { ...base, rules: rules(spec) })).toBe(want)
+  })
+
+  // parseRule 不收 `*` 开头的 allow(05 §15),这条写不进配置;门这里照样不认它,防的是解析规则将来放宽
+  const STAR: Rule = { effect: 'allow', subject: 'shell', pattern: '*', spec: { effect: 'allow', rule: 'shell(*)' } }
+  it('allow shell(*): can\'t be written; handed to the gate it allows no hosts and still asks with them', () => {
+    expect(parseRule(STAR.spec)).toMatchObject({ reason: 'pattern' })
+    expect(decide(call({ confirm: false }), session('ask'), { ...base, rules: [STAR] })).toBe('allow')
+    expect(decide(call({ confirm: true }), session('auto'), { ...base, rules: [STAR] })).toBe('ask')
+    expect(decide(call({ confirm: true }), session('ask'), { ...base, rules: [STAR] })).toBe('ask')
+  })
+
+  it('a rule by name loses to mustAsk, and to a deny next to it', () => {
+    const named = rules({ effect: 'allow', rule: 'shell(mcp x/y *)' })
+    expect(decide(call({ confirm: true, mustAsk: true }), session('auto'), { ...base, rules: named })).toBe('ask')
+    expect(decide(call({ confirm: true }), session('auto'), { ...base, rules: [...named, ...rules({ effect: 'deny', rule: 'shell(mcp x/y z)' })] })).toBe('deny')
+  })
+
+  it('confirm doesn\'t change a request without it, and an exec without a session stays denied', () => {
+    expect(decide(call(), session('auto'), base)).toBe('allow')
+    expect(decide(call({ confirm: true }), undefined, base)).toBe('deny')
+    expect(decide(call({ confirm: false }), session('auto'), { ...base, rules: [STAR] })).toBe('allow')
+  })
+
+  it('action plugin: allowed with a session, whatever the mode and the rules; denied without', () => {
+    const r = (sessionId?: string): PermissionRequest => ({ actor: 'tools', action: 'plugin', resource: 'mcp list', sessionId })
+    const strict = rules({ effect: 'deny', rule: 'shell(*)' }, { effect: 'deny', rule: 'read(/**)' })
+    expect(decide(r('s1'), session('ask'), base)).toBe('allow')
+    expect(decide(r('s1'), session('auto'), { ...base, rules: strict })).toBe('allow')
+    expect(decide(r(), undefined, base)).toBe('deny')
+    expect(decide(r('gone'), undefined, base)).toBe('deny')
+  })
+
+  describe('the store root', () => {
+    const store = pluginStoreRootOf(dataDir)
+    const atHome: SessionInfo = { ...session('auto'), cwd: home }
+    const env: DecideEnv = { ...base, persistence: persistenceList({ home, dataDir, platform: 'linux', env: {} }) }
+    const r = (action: string, resource: string): PermissionRequest => ({ actor: 'tools', action, resource, sessionId: 's1' })
+
+    it('is <data>-plugins', () => {
+      expect(store).toBe('/h/.myFlowForge/mff-ai-plugins')
+    })
+    it('writes are denied even at cwd = home; reads stay allowed', () => {
+      expect(decide(r('write', `${store}/p/abc/skills/a/SKILL.md`), atHome, env)).toBe('deny')
+      expect(decide(r('write', store), atHome, env)).toBe('deny')
+      expect(decide(r('read', `${store}/p/abc/skills/a/SKILL.md`), atHome, env)).toBe('allow')
+      expect(decide(r('write', `${store}-not/x`), atHome, env)).toBe('allow')
+    })
+    it('a user allow rule can\'t reopen it', () => {
+      expect(decide(r('write', `${store}/p/x`), atHome, { ...env, rules: rules({ effect: 'allow', rule: 'write(/h/**)' }) })).toBe('deny')
+    })
+    it.each(['linux', 'darwin'] as const)('%s: the persistence list only grows by this entry', platform => {
+      const before = canonicalRoots(persistenceRoots(home, platform, {}), { platform })
+      const after = persistenceList({ home, dataDir, platform, env: {} })
+      expect(after.slice(0, before.length)).toEqual(before)
+      expect(after.slice(before.length)).toEqual([store])
+    })
   })
 })
 

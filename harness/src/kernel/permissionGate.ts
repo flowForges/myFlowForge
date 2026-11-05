@@ -1,7 +1,7 @@
 import { realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { imHiddenTops } from '../lib/git/imWorktree'
-import { canonicalRoots, credentialRoots, hasGitSegment, isComparablePath, isCredentialPath, isInside, isRootLike, OUTSIDE, persistenceRoots, PROJECT_CONFIG_DIRS, resolveToolPath, type EnvSnapshot } from '../lib/fs/paths'
+import { canonicalRoots, credentialRoots, hasGitSegment, isComparablePath, isCredentialPath, isInside, isRootLike, OUTSIDE, persistenceRoots, pluginStoreRootOf, PROJECT_CONFIG_DIRS, resolveToolPath, type EnvSnapshot } from '../lib/fs/paths'
 import { evaluate, type MatchCtx, type Rule } from '../lib/permissions/rules'
 import type { PermissionRequest } from '../lib/tools/types'
 import type { ApprovalMode, SandboxStatus } from '../protocol/index'
@@ -87,6 +87,9 @@ export function decide(req: PermissionRequest, s: SessionInfo | undefined, env: 
     if (user === 'deny' || user === 'ask') return user
     // 比会话宽的运行、有规则落实不了的运行:只有人能放行,allow 规则和 allowUnsandboxedAuto 都不算(04 spec §6、C2、C3)
     if (req.mustAsk || (req.unsandboxed && env.sandbox.level !== 'none')) return 'ask'
+    // allow shell(*) 是对沙箱里的 shell 写的,放不开第三方的网络(09 M19)
+    const named = req.confirm ? evaluate(env.rules.filter(r => r.effect === 'allow' && r.pattern.startsWith('mcp ')), { action, resource: resource ?? '' }, ctx(s.cwd ?? '')) : user
+    if (req.confirm && named !== 'allow') return 'ask'
     const remote = s.origin === 'im'
     // 规则是对当面操作写的
     if (user === 'allow' && (!remote || env.sandbox.level === 'full')) return 'allow'
@@ -95,6 +98,8 @@ export function decide(req: PermissionRequest, s: SessionInfo | undefined, env: 
   }
   // 06 spec §8:不进规则语言,不走审批;能看到什么、写到哪由 memory-default 的 policy 按会话定
   if (action === 'memory') return s ? 'allow' : 'deny'
+  // 09 §10.4:mcp 的 list、tools、describe,skill:只读索引,工具自己按视图查过了
+  if (action === 'plugin') return s ? 'allow' : 'deny'
   return 'deny'
 }
 
@@ -125,9 +130,12 @@ export function blacklist(d: Pick<GateDeps, 'home' | 'dataDir' | 'platform' | 'e
   return canonicalRoots([...credentialRoots(d.home, d.platform, d.env), d.dataDir], { platform: d.platform })
 }
 
-/** 持久化文件的原样与 realpath 形态(~/.zshrc 链到 dotfiles 仓库时,仓库里的目标也拒写);每次现算 */
-export function persistenceList(d: Pick<GateDeps, 'home' | 'platform' | 'env'>): string[] {
-  return canonicalRoots(persistenceRoots(d.home, d.platform, d.env), { platform: d.platform })
+/**
+ * 持久化文件的原样与 realpath 形态(~/.zshrc 链到 dotfiles 仓库时,仓库里的目标也拒写);每次现算。
+ * 插件存储根同一份(09 M13):cwd = ~ 的会话改得到插件代码,下次启动服务时没人同意过
+ */
+export function persistenceList(d: Pick<GateDeps, 'home' | 'dataDir' | 'platform' | 'env'>): string[] {
+  return canonicalRoots([...persistenceRoots(d.home, d.platform, d.env), pluginStoreRootOf(d.dataDir)], { platform: d.platform })
 }
 
 export class PermissionGate {

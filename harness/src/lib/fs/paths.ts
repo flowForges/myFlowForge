@@ -276,6 +276,9 @@ const XDG_PERSISTENCE = ['fish', 'git', 'autostart', 'systemd', 'zsh']
  * 持久化文件的位置;env(启动时的快照)另加被挪走的同类文件:
  * `$ZDOTDIR` 下的 zsh 脚本、`$XDG_CONFIG_HOME` 下的 fish / git / autostart / systemd / zsh 脚本、`$GIT_CONFIG_GLOBAL`
  */
+/** 插件代码的存储根(09 §4):在数据目录旁边,不在黑名单里,读得到;只拒写 */
+export const pluginStoreRootOf = (dataDir: string) => `${dataDir}-plugins`
+
 export function persistenceRoots(home: string, platform: NodeJS.Platform, env: EnvSnapshot = {}): string[] {
   const path = pathOf(platform)
   const roots = PERSISTENCE_FILES.map(r => path.join(home, ...r.split('/')))

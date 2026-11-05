@@ -10,6 +10,7 @@ import {
   ContextRebuiltPayloadSchema, EventsRedactedPayloadSchema, MemoryCheckpointPayloadSchema, MemoryConsolidatedPayloadSchema, MemoryDeletedPayloadSchema,
   MemoryInjectedPayloadSchema, MemoryProposalPayloadSchema, MemoryRecommendationPayloadSchema, MemoryUpdatedPayloadSchema, SessionAudienceSchema,
   ChannelPairedPayloadSchema, ChannelPairingBurnedPayloadSchema, ChannelStatusPayloadSchema, ChannelUnpairedPayloadSchema,
+  GrantsSchema, PluginConsentSchema, PluginDevPayloadSchema, PluginDiffSchema, PluginIdPayloadSchema, PluginInstalledPayloadSchema, PluginsInjectedPayloadSchema, PluginsInstallStatePayloadSchema, PluginsMcpStatusPayloadSchema, StatusResultSchema,
 } from './index'
 
 describe('framing', () => {
@@ -536,5 +537,164 @@ describe('channels (07)', () => {
     expect(ApprovalResolvedPayloadSchema.parse({ approvalId: 'a', decision: 'allow', by: 'user' }).via).toBeUndefined()
     expect(ApprovalResolvedPayloadSchema.parse({ approvalId: 'a', decision: 'allow', by: 'user', via: 'x'.repeat(128) }).via).toHaveLength(128)
     expect(ApprovalResolvedPayloadSchema.safeParse({ approvalId: 'a', decision: 'allow', by: 'user', via: 'x'.repeat(129) }).success).toBe(false)
+  })
+})
+
+describe('plugins protocol (09 §14)', () => {
+  const parse = (m: keyof typeof WorkerMethods, p: unknown) => WorkerMethods[m].params.safeParse(p).success
+  const GRANTS = { servers: { search: { network: ['api.example.com'], cwd: 'read' } } }
+  const VALID: [keyof typeof WorkerMethods, object][] = [
+    ['plugins.list', {}],
+    ['plugins.get', { id: 'web-tools' }],
+    ['plugins.install.prepare', { source: { kind: 'path', path: '/p' } }],
+    ['plugins.install.prepare', { source: { kind: 'git', url: 'https://example.com/a.git', ref: 'v1', subpath: 'x' } }],
+    ['plugins.upgrade.prepare', { id: 'a', ref: 'v2' }],
+    ['plugins.upgrade.prepare', { id: 'a' }],
+    ['plugins.install.status', { stagingId: 's' }],
+    ['plugins.install.confirm', { commandId: 'c', stagingId: 's', consentHash: 'h', grants: GRANTS, enable: true }],
+    ['plugins.install.cancel', { stagingId: 's' }],
+    ['plugins.setEnabled', { commandId: 'c', id: 'a', enabled: false }],
+    ['plugins.uninstall', { commandId: 'c', id: 'a' }],
+    ['plugins.grants.set', { commandId: 'c', id: 'a', grants: GRANTS }],
+    ['plugins.settings.set', { id: 'a', key: 'API_KEY', value: 'v' }],
+    ['plugins.settings.clear', { id: 'a', key: 'api-key' }],
+    ['plugins.commands', {}],
+    ['plugins.command.run', { commandId: 'c', sessionId: 's', name: 'a:b', args: '' }],
+    ['plugins.mcp.status', {}],
+    ['plugins.mcp.status', { sessionId: 's' }],
+    ['plugins.dev.trust', { path: '/p', acknowledge: 'runs_with_full_access' }],
+    ['plugins.dev.remove', { id: 'dev-x' }],
+  ]
+  it.each(VALID)('%s accepts %j', (m, p) => {
+    expect(parse(m, p)).toBe(true)
+  })
+
+  const JUNK: [keyof typeof WorkerMethods, unknown][] = [
+    ['plugins.get', {}],
+    ['plugins.get', { id: 5 }],
+    ['plugins.get', { id: '../x' }],
+    ['plugins.get', { id: 'A/b' }],
+    ['plugins.install.prepare', {}],
+    ['plugins.install.prepare', { source: { kind: 'ftp', url: 'x' } }],
+    ['plugins.install.prepare', { source: { kind: 'path' } }],
+    ['plugins.install.prepare', { source: { kind: 'git', ref: 'x' } }],
+    ['plugins.upgrade.prepare', { ref: 'v1' }],
+    ['plugins.install.status', {}],
+    ['plugins.install.confirm', { stagingId: 's', consentHash: 'h', grants: GRANTS, enable: true }],
+    ['plugins.install.confirm', { commandId: 'c', stagingId: 's', grants: GRANTS, enable: true }],
+    ['plugins.install.confirm', { commandId: 'c', stagingId: 's', consentHash: 'h', enable: true }],
+    ['plugins.install.confirm', { commandId: 'c', stagingId: 's', consentHash: 'h', grants: GRANTS }],
+    ['plugins.install.cancel', {}],
+    ['plugins.setEnabled', { commandId: 'c', id: 'a' }],
+    ['plugins.setEnabled', { id: 'a', enabled: true }],
+    ['plugins.uninstall', { id: 'a' }],
+    ['plugins.grants.set', { commandId: 'c', id: 'a' }],
+    ['plugins.settings.set', { id: 'a', key: 'k' }],
+    ['plugins.settings.set', { id: 'a', key: 'b/KEY', value: 'v' }],
+    ['plugins.settings.set', { id: 'a', key: 'k', value: 5 }],
+    ['plugins.settings.clear', { id: 'a', key: 'b/KEY' }],
+    ['plugins.command.run', { commandId: 'c', sessionId: 's', name: 'a:b' }],
+    ['plugins.command.run', { commandId: 'c', sessionId: 's', name: 'a:b', args: 'x'.repeat(8001) }],
+    ['plugins.command.run', { commandId: 'c', name: 'a:b', args: '' }],
+    ['plugins.mcp.status', { sessionId: 5 }],
+    ['plugins.dev.trust', { path: '/p' }],
+    ['plugins.dev.trust', { path: '/p', acknowledge: 'yes' }],
+    ['plugins.dev.trust', { acknowledge: 'runs_with_full_access' }],
+    ['plugins.dev.remove', {}],
+  ]
+  it.each(JUNK)('%s rejects %j', (m, p) => {
+    expect(parse(m, p)).toBe(false)
+  })
+
+  it('grants are a closed shape: no paths, no other keys, a server name is checked', () => {
+    const server = (s: object) => ({ servers: { search: { network: [], cwd: 'read', ...s } } })
+    expect(GrantsSchema.safeParse(GRANTS).success).toBe(true)
+    expect(GrantsSchema.safeParse(server({ cwd: 'root' })).success).toBe(false)
+    expect(GrantsSchema.safeParse(server({ filesystem: ['/'] })).success).toBe(false)
+    expect(GrantsSchema.safeParse({ ...GRANTS, extra: 1 }).success).toBe(false)
+    expect(GrantsSchema.safeParse({ servers: { 'a/b': { network: [], cwd: 'read' } } }).success).toBe(false)
+    expect(GrantsSchema.safeParse({ servers: { search: { cwd: 'read' } } }).success).toBe(false)
+  })
+
+  it('settings.set and install.prepare carry no commandId: a receipt would store the value', () => {
+    const value = 'v'.repeat(10)
+    expect(WorkerMethods['plugins.settings.set'].params.parse({ commandId: 'c', id: 'a', key: 'k', value })).toEqual({ id: 'a', key: 'k', value })
+    expect(WorkerMethods['plugins.install.prepare'].params.parse({ commandId: 'c', source: { kind: 'path', path: '/p' } })).toEqual({ source: { kind: 'path', path: '/p' } })
+  })
+
+  it('a value over the limit is refused and no issue echoes it', () => {
+    const secret = 'sk-' + 'q'.repeat(8200)
+    const huge = WorkerMethods['plugins.settings.set'].params.safeParse({ id: 'a', key: 'k', value: secret })
+    expect(huge.success).toBe(false)
+    expect(JSON.stringify(huge.error?.issues)).not.toContain('qqqq')
+    // 用户把密钥贴到了错的地方
+    const wrongField = WorkerMethods['plugins.settings.set'].params.safeParse({ id: 'a', key: `sk-${'q'.repeat(20)}/x`, value: 'v' })
+    expect(wrongField.success).toBe(false)
+    expect(JSON.stringify(wrongField.error?.issues)).not.toContain('qqqq')
+    expect(WorkerMethods['plugins.settings.set'].params.safeParse({ id: 'a', key: 'k', value: 'x'.repeat(8192) }).success).toBe(true)
+  })
+
+  it('new events are known and their payloads parse', () => {
+    for (const t of ['plugins.install.state', 'plugins.installed', 'plugins.upgraded', 'plugins.enabled', 'plugins.disabled', 'plugins.uninstalled', 'plugins.grants.updated', 'plugins.integrity.failed', 'plugins.injected', 'plugins.mcp.status', 'plugins.dev.trusted', 'plugins.dev.loaded'] as const) {
+      expect(EVENT_TYPES).toContain(t)
+    }
+    expect(PluginsInstallStatePayloadSchema.parse({ stagingId: 's', state: 'failed', error: 'symlink' })).toMatchObject({ error: 'symlink' })
+    expect(PluginsInstallStatePayloadSchema.safeParse({ stagingId: 's', state: 'odd' }).success).toBe(false)
+    expect(PluginInstalledPayloadSchema.safeParse({ id: 'a', version: '1', integrity: 'sha256:x', format: 'claude', sourceKind: 'git' }).success).toBe(true)
+    expect(PluginInstalledPayloadSchema.safeParse({ id: 'a', version: '1', integrity: 'sha256:x', format: 'other', sourceKind: 'git' }).success).toBe(false)
+    expect(PluginIdPayloadSchema.safeParse({ id: 'a' }).success).toBe(true)
+    expect(PluginIdPayloadSchema.safeParse({}).success).toBe(false)
+    expect(PluginsInjectedPayloadSchema.safeParse({ turnId: 't', text: 'x', skill: true, mcp: false }).success).toBe(true)
+    expect(PluginsInjectedPayloadSchema.safeParse({ turnId: 't', text: 'x', skill: true }).success).toBe(false)
+    expect(PluginsMcpStatusPayloadSchema.safeParse({ plugin: 'a', server: 'b', state: 'running' }).success).toBe(true)
+    expect(PluginsMcpStatusPayloadSchema.safeParse({ plugin: 'a', state: 'running' }).success).toBe(false)
+    expect(PluginDevPayloadSchema.safeParse({ id: 'dev-x', hash: 'h' }).success).toBe(true)
+    expect(PluginDevPayloadSchema.safeParse({ id: 'dev-x' }).success).toBe(false)
+  })
+
+  it('no event payload has room for a value, an env or stderr: unknown keys are dropped', () => {
+    expect(PluginsMcpStatusPayloadSchema.parse({ plugin: 'a', server: 'b', state: 's', stderr: 'x', env: {} })).toEqual({ plugin: 'a', server: 'b', state: 's' })
+    expect(PluginIdPayloadSchema.parse({ id: 'a', value: 'x' })).toEqual({ id: 'a' })
+  })
+
+  const CONSENT = {
+    id: 'a', version: '1.0.0', format: 'claude',
+    claimed: { name: 'A', description: 'd' },
+    source: { kind: 'git', url: 'https://example.com/a.git', commit: 'abc' },
+    integrity: 'sha256:x', files: 1, bytes: 2,
+    skills: [{ name: 's', description: 'd', modelInvocable: true, userInvocable: false, files: 1, flags: ['override'], ignored: ['allowed-tools'] }],
+    commands: [{ name: 'c', description: 'd', flags: [], ignored: [] }],
+    mcp: [{ name: 'srv', command: 'node', args: ['${PLUGIN_ROOT}/s.js'], fetchesAtRuntime: false, env: [{ name: 'K', source: 'secret', required: true }], declared: null, suggestedHosts: [], problems: [] }],
+    config: [{ key: 'k', title: 'K', sensitive: true, required: true, type: 'string' }],
+    notRun: { hooks: [{ event: 'SessionStart', command: 'x' }], agents: [], bin: [], monitors: [], workflows: [], lsp: [], remoteMcp: [{ name: 'r', type: 'http', url: 'https://r' }], main: './m.mjs', scripts: [] },
+    warnings: ['no_manifest', 'truncated', 'hooks_not_run'],
+  }
+  const DIFF = {
+    fromVersion: '1', toVersion: '2', sourceChanged: false,
+    mcp: { added: ['a'], removed: [], changed: [{ name: 'b', fields: ['args'] }] },
+    skills: { added: [], removed: [], textChanged: ['s'] },
+    commands: { added: [], removed: [], textChanged: [] },
+    network: { added: [], removed: [] },
+    notRun: { hooksAdded: [{ event: 'e', command: 'c' }], hooksRemoved: [] },
+    files: { added: 1, removed: 0, changed: 0 },
+  }
+  it('the consent shape follows §7.1, the diff §7.2', () => {
+    expect(PluginConsentSchema.safeParse(CONSENT).success).toBe(true)
+    expect(PluginConsentSchema.safeParse({ ...CONSENT, diff: DIFF }).success).toBe(true)
+    expect(PluginDiffSchema.safeParse(DIFF).success).toBe(true)
+    expect(PluginConsentSchema.safeParse({ ...CONSENT, warnings: ['odd'] }).success).toBe(false)
+    expect(PluginConsentSchema.safeParse({ ...CONSENT, format: 'bare' }).success).toBe(false)
+    expect(PluginDiffSchema.safeParse({ ...DIFF, mcp: { ...DIFF.mcp, changed: [{ name: 'b', fields: ['tools'] }] } }).success).toBe(false)
+  })
+
+  it('results: dev.trust says what was trusted; status.plugins[] may say dev', () => {
+    const r = WorkerMethods['plugins.dev.trust'].result
+    expect(r.safeParse({ ok: true, id: 'dev-x', hash: 'h', bytes: 1, main: 'm.mjs', restartRequired: true }).success).toBe(true)
+    expect(r.safeParse({ ok: true, id: 'dev-x', restartRequired: true }).success).toBe(false)
+    const st = { state: 'running', uptimeMs: 0, rssMb: 0, version: 'v', plugins: [{ id: 'dev-x', state: 'active', trust: 'dev' }] }
+    expect(StatusResultSchema.safeParse(st).success).toBe(true)
+    expect(StatusResultSchema.safeParse({ ...st, plugins: [{ id: 'p', state: 'active' }] }).success).toBe(true)
+    expect(StatusResultSchema.safeParse({ ...st, plugins: [{ id: 'dev-x', state: 'active', trust: 'root' }] }).success).toBe(false)
+    expect(PROTOCOL_VERSION).toBe(3)
   })
 })

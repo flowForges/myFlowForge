@@ -1,4 +1,5 @@
 export * from './version'
+export * from './plugins'
 export * from './events'
 export * from './models'
 export * from './rpc'
