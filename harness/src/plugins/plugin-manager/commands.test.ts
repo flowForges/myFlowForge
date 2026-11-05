@@ -167,14 +167,77 @@ describe('plugins.command.run: refusals', () => {
     expect(users(r, sid)).toHaveLength(0)
   })
 
-  it('args past 8000 chars, and an expansion past the budget, are too_large', async () => {
+  it('args of exactly 8000 chars work with a normal body; 8001 is refused by name and nothing is written', async () => {
+    const { r } = await setup()
+    await r.install(plugin())
+    const sid = await r.session()
+    const ok = await run(r, sid, 'demo:hi', 'y'.repeat(8000))
+    expect(ok.accepted).toBe(true)
+    expect(textOf(external(r, sid)[0])).toContain('y'.repeat(8000))
+    const err = await refused(call(r, 'plugins.command.run', { commandId: 'big', sessionId: sid, name: 'demo:hi', args: 'y'.repeat(8001) }))
+    expect(err).not.toBe('no error')
+    expect(users(r, sid)).toHaveLength(1)
+    // 越过 RPC 的校验直接调:稳定代码
+    const d = fakeDeps()
+    await expect(runCommand({ commandId: 'x', sessionId: 's', name: 'demo:hi', args: 'y'.repeat(8001) }, d.deps)).rejects.toThrow('too_large')
+    expect(d.call).not.toHaveBeenCalled()
+  })
+
+  it('an expansion past the budget is too_large', async () => {
     const { r } = await setup()
     await r.install(plugin({ commands: { many: `${'$ARGUMENTS '.repeat(2000)}\n` } }))
     const sid = await r.session()
-    const go = (args: string) => refused(call(r, 'plugins.command.run', { commandId: `x${++n}`, sessionId: sid, name: 'demo:many', args }))
-    expect(await go('y'.repeat(8001))).not.toBe('no error')
-    expect(await go('y'.repeat(8000))).toBe('too_large')
+    expect(await refused(call(r, 'plugins.command.run', { commandId: 'm', sessionId: sid, name: 'demo:many', args: 'y'.repeat(8000) }))).toBe('too_large')
     expect(users(r, sid)).toHaveLength(0)
+  })
+
+  it('a user-invocable skill past 64 KB is too_large, not a truncated prompt; a NUL or non-UTF-8 body is not_text', async () => {
+    const { r } = await setup()
+    await r.install(plugin({
+      skills: { big: `${'x'.repeat(100 * 1024)}`, nul: 'before\0after', ok: 'fine' },
+      extra: { 'skills/bin/SKILL.md': '---\nname: bin\ndescription: d\n---\nok\n' },
+    }))
+    const sid = await r.session()
+    const go = (name: string) => refused(call(r, 'plugins.command.run', { commandId: `s${++n}`, sessionId: sid, name, args: '' }))
+    expect(await go('demo:big')).toBe('too_large')
+    expect(await go('demo:nul')).toBe('not_text')
+    expect(users(r, sid)).toHaveLength(0)
+    expect(await go('demo:ok')).toBe('no error')
+  })
+
+  it('a 60 KB skill body (under the limit) still runs whole', async () => {
+    const { r } = await setup()
+    const body = 'z'.repeat(60 * 1024)
+    await r.install(plugin({ skills: { edge: body } }))
+    const sid = await r.session()
+    await run(r, sid, 'demo:edge')
+    expect(textOf(external(r, sid)[0])).toContain(body)
+    expect(textOf(external(r, sid)[0])).not.toContain('[truncated]')
+  })
+
+  it('malformed names are bad_args: no colon, empty plugin, empty command, over 256 chars; nothing is written', async () => {
+    const { r } = await setup()
+    await r.install(plugin())
+    const sid = await r.session()
+    for (const name of [':x', 'x:', 'x', ':', `demo:${'a'.repeat(300)}`]) {
+      const err = await refused(call(r, 'plugins.command.run', { commandId: `n${++n}`, sessionId: sid, name, args: '' }))
+      expect(err, name.slice(0, 20)).not.toBe('no error')
+    }
+    const d = fakeDeps()
+    for (const name of [':x', 'x:', 'x', ':']) await expect(runCommand({ commandId: 'x', sessionId: 's', name, args: '' }, d.deps)).rejects.toThrow('bad_args')
+    expect(d.call).not.toHaveBeenCalled()
+    expect(users(r, sid)).toHaveLength(0)
+  })
+
+  it('a commandId ending in /prompt is refused: it could collide with a derived inner id', async () => {
+    const { r } = await setup()
+    await r.install(plugin())
+    const sid = await r.session()
+    expect(await refused(call(r, 'plugins.command.run', { commandId: 'abc/prompt', sessionId: sid, name: 'demo:hi', args: '' }))).toBe('bad_args')
+    // 一个客户端先用了同样的 id 发了普通提示:命令不能被它悄悄吞掉
+    await call(r, 'session.prompt', { commandId: 'taken/prompt', sessionId: sid, text: 'plain' })
+    await until(() => ended(r, sid) === 1)
+    expect(users(r, sid)).toHaveLength(1)
   })
 
   it('an unknown session is refused and nothing is written', async () => {
@@ -207,6 +270,18 @@ describe('plugins.command.run: replay', () => {
     const retried = await call(r, 'plugins.command.run', { commandId: 'once', sessionId: sid, name: 'demo:hi', args: 'Ann' })
     expect(retried).toEqual(inner)
     expect(external(r, sid).map(textOf)).toEqual(['inner text'])
+  })
+
+  it('runCommand with an outer step that throws after the inner send, retried with the same id: one prompt in the log', async () => {
+    const d = fakeDeps({ receipts: true })
+    const outer = async () => {
+      await runCommand({ commandId: 'same', sessionId: 's', name: 'demo:hi', args: 'Ann' }, d.deps)
+      throw new Error('outer step failed')
+    }
+    await expect(outer()).rejects.toThrow('outer step failed')
+    const retried = await runCommand({ commandId: 'same', sessionId: 's', name: 'demo:hi', args: 'Ann' }, d.deps)
+    expect(retried).toEqual({ accepted: true, turnId: 't1' })
+    expect(d.sent).toHaveLength(1)
   })
 
   it('the inner call carries `<commandId>/prompt` and external:true, and nothing outside the list', async () => {
@@ -254,7 +329,7 @@ describe('plugins.command.run: a busy or parked turn', () => {
     expect(external(r, sid).map(e => (e.payload as { followUp?: boolean }).followUp)).toEqual([undefined, true])
   })
 
-  it('a running turn answers ERR_BUSY unchanged and leaves no receipt: the same id works later', async () => {
+  it('a running turn answers ERR_BUSY unchanged and leaves no receipt: the same id works once the turn is gone', async () => {
     const hold = holdingLoop(false)
     const { r } = await setup({ after: () => [hold.plugin] })
     await r.install(plugin())
@@ -263,8 +338,22 @@ describe('plugins.command.run: a busy or parked turn', () => {
     const err = await call(r, 'plugins.command.run', { commandId: 'b', sessionId: sid, name: 'demo:hi', args: '2' }).catch(e => e)
     expect(err.code).toBe(ERR_BUSY)
     expect(external(r, sid)).toHaveLength(1)
+    await call(r, 'session.cancel', { commandId: 'cancel', sessionId: sid })
+    const retried = await call(r, 'plugins.command.run', { commandId: 'b', sessionId: sid, name: 'demo:hi', args: '2' })
+    expect(retried.accepted).toBe(true)
+    expect(retried.followUp).toBeUndefined()
+    expect(external(r, sid)).toHaveLength(2)
   })
 })
+
+/** 一直占着这一轮的循环,直到被中止 */
+const holdingNoPark = () =>
+  ({
+    manifest: { id: 'holding-im', version: '1', kernel: '*' },
+    activate: (ctx: import('../../kernel/pluginHost').PluginContext) => {
+      ctx.events.on('session.prompt', async (req: { signal: AbortSignal }) => await new Promise<boolean>(res => req.signal.addEventListener('abort', () => res(true))))
+    },
+  }) as never
 
 describe('plugins.command.run: an IM target narrows first', () => {
   const rigIm = async (spec: Partial<PluginSpec> = {}) => {
@@ -290,6 +379,20 @@ describe('plugins.command.run: an IM target narrows first', () => {
     await call(r, 'approval.respond', { approvalId: (cards(r, sid)[0].payload as { approvalId: string }).approvalId, decision: 'deny' })
     await until(() => ended(r, sid) === 1)
     expect(ran).toEqual([])
+  })
+
+  it('a busy IM session is narrowed before it answers ERR_BUSY: that is the safe direction', async () => {
+    const hold = { plugin: holdingNoPark() }
+    const ran: number[] = []
+    const tool = stubTool('shell', { run: async () => (ran.push(1), { content: 'ran' }) })
+    const { r } = await setup({ level: 'full', before: () => [toolsRegistry, stubPlugin([tool])], after: () => [hold.plugin] })
+    await r.install(plugin())
+    const sid = await r.session({ origin: 'im', approvalMode: 'auto' })
+    await call(r, 'plugins.command.run', { commandId: 'a', sessionId: sid, name: 'demo:hi', args: '' })
+    const err = await call(r, 'plugins.command.run', { commandId: 'b', sessionId: sid, name: 'demo:hi', args: '' }).catch(e => e)
+    expect(err.code).toBe(ERR_BUSY)
+    expect(r.events(sid).filter(e => e.type === 'session.approvalNarrowed')).toHaveLength(1)
+    expect(external(r, sid)).toHaveLength(1)
   })
 
   it('an app session is not narrowed', async () => {
@@ -452,6 +555,8 @@ interface FakeOpts {
   enabled?: boolean
   unreadable?: boolean
   skillNamed?: string
+  /** 像内核的回执:同一个 id 回第一次的结果,不再发 */
+  receipts?: boolean
 }
 /** 只有记录和目录是假的;展开和包裹是真的 */
 function fakeDeps(o: FakeOpts = {}) {
@@ -463,10 +568,16 @@ function fakeDeps(o: FakeOpts = {}) {
   const cmd = { name: 'hi', description: 'say hi', argNames: [], tooLarge: false, body: 'Say $ARGUMENTS', ignored: [], flags: [], hiddenChars: false, bodyHash: 'h' }
   const skill = { name: o.skillNamed ?? 'sk', dir: '', file: 'SKILL.md', description: 'd', modelInvocable: true, userInvocable: true, argNames: [], tooLarge: false }
   const parsed = { commands: [cmd], skills: [skill], servers: [], files: new Set(['SKILL.md']) }
-  const call = vi.fn<(...a: any[]) => Promise<unknown>>(async (..._a: unknown[]) => {
+  const sent: string[] = []
+  const receipts = new Map<string, unknown>()
+  const call = vi.fn<(...a: any[]) => Promise<unknown>>(async (_m: unknown, params: { commandId: string; text: string }) => {
     o.order?.push('call')
     touched.push('call')
-    return { accepted: true, turnId: 't' }
+    if (o.receipts && receipts.has(params.commandId)) return receipts.get(params.commandId)
+    sent.push(params.text)
+    const result = { accepted: true, turnId: `t${sent.length}` }
+    receipts.set(params.commandId, result)
+    return result
   })
   const narrow = vi.fn(o.narrow ?? (() => void o.order?.push('narrow')))
   const deps = {
@@ -476,5 +587,5 @@ function fakeDeps(o: FakeOpts = {}) {
     sessions: { get: () => ({ origin: o.origin ?? 'app' }) },
     log: { warn() {} },
   } as unknown as CommandsDeps
-  return { deps, call, narrow, touched }
+  return { deps, call, narrow, touched, sent }
 }

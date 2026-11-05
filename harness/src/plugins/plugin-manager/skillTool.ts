@@ -60,7 +60,7 @@ function holdsHiddenSkill(skills: ParsedSkill[], file: string): boolean {
   return skills.some(s => !s.modelInvocable && (file === s.file || (s.dir !== '' && file.startsWith(`${s.dir}/`))))
 }
 
-function textOf(bytes: Buffer): string | undefined {
+export function textOf(bytes: Buffer): string | undefined {
   if (bytes.includes(0)) return undefined
   try {
     return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
