@@ -242,6 +242,9 @@ describe('checkGitUrl', () => {
 
   it.each([
     '169.254.169.254',
+    'git.corp',
+    'git.intranet',
+    'localhost.localdomain',
     '10.0.0.1',
     '8.8.8.8',
     '2852039166',
@@ -282,7 +285,7 @@ describe('checkGitUrl', () => {
 })
 
 describe('isInternalHost', () => {
-  it.each(['169.254.169.254', '2852039166', '0xa9.0xfe.0xa9.0xfe', '127.1', '0', 'localhost', 'LocalHost', 'localhost.', 'foo.localhost', 'foo.local.', 'x.internal', 'x.lan', 'x.home.arpa', 'single', '[::1]', '::1', 'fe80::1', '', ' ', 'a b.com', 'a.com/x', 'u@a.com', 'a.com:80', '256.1.1.1'])('%j is internal, or not a host at all', host => {
+  it.each(['169.254.169.254', '2852039166', '0xa9.0xfe.0xa9.0xfe', '127.1', '0', 'localhost', 'LocalHost', 'localhost.', 'foo.localhost', 'foo.local.', 'x.internal', 'x.lan', 'x.home.arpa', 'x.corp', 'a.b.intranet', 'x.private', 'nas.home', '4.3.2.1.in-addr.arpa', 'x.ip6.arpa', 'localhost.localdomain', 'host.localdomain', 'single', '[::1]', '::1', 'fe80::1', '', ' ', 'a b.com', 'a.com/x', 'u@a.com', 'a.com:80', '256.1.1.1'])('%j is internal, or not a host at all', host => {
     expect(isInternalHost(host)).toBe(true)
   })
 

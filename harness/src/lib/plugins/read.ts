@@ -471,6 +471,10 @@ function read(root: string, o: { nameHint: string; reservedIds: Set<string>; ker
     if (s.remote) remote.push({ name: clip(name, 200), type: clip(s.remote.type, 40), url: s.remote.url })
     else servers.push(s)
   }
+  // 只差大小写的名字在不分大小写的磁盘上共用一个数据目录:都不启动
+  const folded = new Map<string, number>()
+  for (const s of servers) folded.set(s.name.toLowerCase(), (folded.get(s.name.toLowerCase()) ?? 0) + 1)
+  for (const s of servers) if ((folded.get(s.name.toLowerCase()) ?? 0) > 1 && !s.problems.includes('name_invalid')) s.problems.push('name_invalid')
   for (const s of servers) {
     if (s.fetchesAtRuntime) warn.add('runtime_fetch')
     for (const k of s.configRefs)

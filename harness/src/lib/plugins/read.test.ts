@@ -310,6 +310,12 @@ describe('readPlugin: the evil fixture runs nothing and lists everything', () =>
     expect(({} as Record<string, unknown>).command).toBeUndefined()
   })
 
+  it('server names that differ only by case collide: all of them get a problem (one data dir on a case-insensitive disk)', () => {
+    const root = make({ 'SKILL.md': SKILL('x'), '.mcp.json': JSON.stringify({ Foo: { command: 'node' }, foo: { command: 'node' }, FOO: { command: 'node' }, bar: { command: 'node' } }) })
+    const p = ok(root)
+    expect(Object.fromEntries(p.servers.map(s => [s.name, s.problems]))).toEqual({ FOO: ['name_invalid'], Foo: ['name_invalid'], bar: [], foo: ['name_invalid'] })
+  })
+
   it('output is stable across runs', () => {
     const files = { 'skills/b/SKILL.md': SKILL('b'), 'skills/a/SKILL.md': SKILL('a'), '.mcp.json': JSON.stringify({ z: { command: 'node' }, y: { command: 'node' } }) }
     expect(JSON.stringify(ok(make(files)))).toBe(JSON.stringify(ok(make(files))))

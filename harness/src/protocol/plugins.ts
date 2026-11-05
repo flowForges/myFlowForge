@@ -39,7 +39,7 @@ export type PluginSource = z.infer<typeof PluginSourceSchema>
 export const PluginWarningSchema = z.enum(['no_manifest', 'unpinned_source', 'source_changed', 'runtime_fetch', 'shell_in_text', 'hidden_chars', 'submodules_skipped', 'hooks_not_run', 'truncated', 'path_dropped', 'name_dropped', 'file_unreadable'])
 export type PluginWarning = z.infer<typeof PluginWarningSchema>
 
-const HookEntrySchema = z.object({ event: z.string(), command: z.string() })
+const HookEntrySchema = z.object({ event: z.string(), command: z.string(), /** 命令里有打码的内容:显示的和运行的不一样 */ masked: z.boolean().optional() })
 const Names = z.array(z.string())
 
 export const PluginDiffSchema = z.object({
@@ -50,8 +50,14 @@ export const PluginDiffSchema = z.object({
   skills: z.object({ added: Names, removed: Names, textChanged: Names }),
   commands: z.object({ added: Names, removed: Names, textChanged: Names }),
   network: z.object({ added: Names, removed: Names }),
-  notRun: z.object({ hooksAdded: z.array(HookEntrySchema), hooksRemoved: z.array(HookEntrySchema) }),
-  files: z.object({ added: z.number(), removed: z.number(), changed: z.number() }),
+  /** 新增的配置键;必填且敏感的单列 */
+  config: z.object({ added: Names, requiredSensitive: Names }),
+  /** added:新出现的不执行项,`<类别>:<名字>` */
+  notRun: z.object({ hooksAdded: z.array(HookEntrySchema), hooksRemoved: z.array(HookEntrySchema), added: Names }),
+  /** 只有一个文件数:同意页没有文件清单,逐文件的增删改说不准。内容变没变看 integrity */
+  files: z.object({ from: z.number(), to: z.number() }),
+  /** 完整性变了就给两头;一样是 null。只改代码的升级靠它显示 */
+  integrity: z.object({ from: z.string(), to: z.string() }).nullable(),
 })
 export type PluginDiff = z.infer<typeof PluginDiffSchema>
 
@@ -72,6 +78,8 @@ export const PluginConsentSchema = z.object({
     command: z.string(),
     /** 符号形式:${PLUGIN_ROOT}、${PLUGIN_DATA}、${PROJECT_DIR} 不展开(M12) */
     args: Names,
+    /** args 里被打码的下标:显示的和运行的不一样 */
+    argsMasked: z.array(z.number()),
     /** npx、uvx、bunx:运行时才下代码,钉不住 */
     fetchesAtRuntime: z.boolean(),
     /** value 只有 literal 有,打码后 */
@@ -96,8 +104,13 @@ export const PluginConsentSchema = z.object({
     scripts: Names,
   }),
   warnings: z.array(PluginWarningSchema),
+  /** 同意页上被截或被剪的描述性部分,和少列了多少。有执行效果的内容永不进这里:放不下就整个拒绝 */
+  truncatedSections: z.array(z.object({ section: z.string(), omitted: z.number() })),
   diff: PluginDiffSchema.optional(),
 })
+/** buildConsent 的拒绝:有执行效果的部分超过预算,不给残缺的同意页 */
+export const PluginConsentErrorSchema = z.enum(['consent_too_large'])
+export type PluginConsentError = z.infer<typeof PluginConsentErrorSchema>
 export type PluginConsent = z.infer<typeof PluginConsentSchema>
 
 export const PluginInstallStateSchema = z.enum(['fetching', 'ready', 'failed'])

@@ -10,7 +10,7 @@ import {
   ContextRebuiltPayloadSchema, EventsRedactedPayloadSchema, MemoryCheckpointPayloadSchema, MemoryConsolidatedPayloadSchema, MemoryDeletedPayloadSchema,
   MemoryInjectedPayloadSchema, MemoryProposalPayloadSchema, MemoryRecommendationPayloadSchema, MemoryUpdatedPayloadSchema, SessionAudienceSchema,
   ChannelPairedPayloadSchema, ChannelPairingBurnedPayloadSchema, ChannelStatusPayloadSchema, ChannelUnpairedPayloadSchema,
-  GrantsSchema, PluginConsentSchema, PluginDevPayloadSchema, PluginDiffSchema, PluginIdPayloadSchema, PluginInstalledPayloadSchema, PluginsInjectedPayloadSchema, PluginsInstallStatePayloadSchema, PluginsMcpStatusPayloadSchema, StatusResultSchema,
+  GrantsSchema, PluginConsentErrorSchema, PluginConsentSchema, PluginDevPayloadSchema, PluginDiffSchema, PluginIdPayloadSchema, PluginInstalledPayloadSchema, PluginsInjectedPayloadSchema, PluginsInstallStatePayloadSchema, PluginsMcpStatusPayloadSchema, StatusResultSchema,
 } from './index'
 
 describe('framing', () => {
@@ -664,10 +664,11 @@ describe('plugins protocol (09 §14)', () => {
     integrity: 'sha256:x', files: 1, bytes: 2,
     skills: [{ name: 's', description: 'd', modelInvocable: true, userInvocable: false, files: 1, flags: ['override'], ignored: ['allowed-tools'] }],
     commands: [{ name: 'c', description: 'd', flags: [], ignored: [] }],
-    mcp: [{ name: 'srv', command: 'node', args: ['${PLUGIN_ROOT}/s.js'], fetchesAtRuntime: false, env: [{ name: 'K', source: 'secret', required: true }], declared: null, suggestedHosts: [], problems: [] }],
+    mcp: [{ name: 'srv', command: 'node', args: ['${PLUGIN_ROOT}/s.js'], argsMasked: [], fetchesAtRuntime: false, env: [{ name: 'K', source: 'secret', required: true }], declared: null, suggestedHosts: [], problems: [] }],
     config: [{ key: 'k', title: 'K', sensitive: true, required: true, type: 'string' }],
     notRun: { hooks: [{ event: 'SessionStart', command: 'x' }], agents: [], bin: [], monitors: [], workflows: [], lsp: [], other: [], remoteMcp: [{ name: 'r', type: 'http', url: 'https://r' }], main: './m.mjs', scripts: [] },
     warnings: ['no_manifest', 'truncated', 'hooks_not_run'],
+    truncatedSections: [{ section: 'skills', omitted: 3 }],
   }
   const DIFF = {
     fromVersion: '1', toVersion: '2', sourceChanged: false,
@@ -675,13 +676,18 @@ describe('plugins protocol (09 §14)', () => {
     skills: { added: [], removed: [], textChanged: ['s'] },
     commands: { added: [], removed: [], textChanged: [] },
     network: { added: [], removed: [] },
-    notRun: { hooksAdded: [{ event: 'e', command: 'c' }], hooksRemoved: [] },
-    files: { added: 1, removed: 0, changed: 0 },
+    config: { added: ['k'], requiredSensitive: ['k'] },
+    notRun: { hooksAdded: [{ event: 'e', command: 'c', masked: true }], hooksRemoved: [], added: ['bin:x'] },
+    files: { from: 1, to: 2 },
+    integrity: { from: 'a', to: 'b' },
   }
   it('the consent shape follows §7.1, the diff §7.2', () => {
     expect(PluginConsentSchema.safeParse(CONSENT).success).toBe(true)
     expect(PluginConsentSchema.safeParse({ ...CONSENT, diff: DIFF }).success).toBe(true)
     expect(PluginDiffSchema.safeParse(DIFF).success).toBe(true)
+    expect(PluginDiffSchema.safeParse({ ...DIFF, integrity: null }).success).toBe(true)
+    expect(PluginConsentSchema.safeParse({ ...CONSENT, truncatedSections: undefined }).success).toBe(false)
+    expect(PluginConsentErrorSchema.safeParse('consent_too_large').success).toBe(true)
     expect(PluginConsentSchema.safeParse({ ...CONSENT, warnings: ['odd'] }).success).toBe(false)
     expect(PluginConsentSchema.safeParse({ ...CONSENT, format: 'bare' }).success).toBe(false)
     expect(PluginDiffSchema.safeParse({ ...DIFF, mcp: { ...DIFF.mcp, changed: [{ name: 'b', fields: ['tools'] }] } }).success).toBe(false)
