@@ -140,7 +140,7 @@ describe('/project: what session.create gets', () => {
     expect(created(r)).toHaveLength(1)
     const path = join(imRoot(r), readdirSync(imRoot(r))[0], `wt_${id}`)
     const { sessionId: _s, repo: pin, ...rest } = s
-    expect(rest).toEqual({ title: 'Telegram · api', cwd: path, approvalMode: 'ask', origin: 'im', audience: 'owner' })
+    expect(rest).toEqual({ title: 'Telegram · api', cwd: path, approvalMode: 'ask', origin: 'im', audience: 'owner', projectTop: repo })
     expect(pin).toMatchObject({ kind: 'repo', top: path, commonDir: join(repo, '.git') })
     expect(r.rawBytes().includes(`tg:555:${id}:project`)).toBe(true)
     expect(chatOf(r)).toMatchObject({ sessionId: s.sessionId, project: 'api', worktreeId: `wt_${id}` })
