@@ -275,7 +275,7 @@ export const PluginDetailSchema = z.object({
 })
 export type PluginDetail = z.infer<typeof PluginDetailSchema>
 
-export const PluginInstallStatusSchema = z.object({ state: PluginInstallStateSchema, error: z.string().optional(), consent: PluginConsentSchema.optional(), consentHash: z.string().optional() })
+export const PluginInstallStatusSchema = z.object({ state: PluginInstallStateSchema, error: z.string().optional(), /** 违规的相对路径,已清理,第三方文字:只给同意页,不进事件和模型 */ path: z.string().optional(), consent: PluginConsentSchema.optional(), consentHash: z.string().optional() })
 export type PluginInstallStatus = z.infer<typeof PluginInstallStatusSchema>
 
 export const WorkerMethods = {
