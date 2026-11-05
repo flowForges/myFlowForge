@@ -580,7 +580,7 @@ describe('createSkillTool, on its own', () => {
     const rec = { id: 'demo', enabled: true, state: 'ok', settings: {}, secretKeys: [], config: [] } as unknown as InstalledRecord
     const tool = createSkillTool({
       store: { get: () => rec, list: () => [rec], plainVersionDir: () => root },
-      catalog: { of: () => ({ skills: [{ name: 's', dir: 'skills/s', file: 'skills/s/SKILL.md', modelInvocable: true } as never], servers: [], files: new Set(['skills/s/SKILL.md']) }), invocable: () => [] },
+      catalog: { of: () => ({ skills: [{ name: 's', dir: 'skills/s', file: 'skills/s/SKILL.md', modelInvocable: true } as never], commands: [], servers: [], files: new Set(['skills/s/SKILL.md']) }), invocable: () => [] },
       commands: { narrowApproval() {} },
       sessions: { get: () => ({ origin: 'app' }) as never },
       history: () => pinned,

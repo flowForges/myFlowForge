@@ -18,7 +18,7 @@ const NONE: PluginView = { skill: false, mcp: false }
 const CACHE_MAX = 64
 
 /** files:完整性走过的那份清单。skill read 的 file 必须逐字是其中一个,大小写和 Unicode 折叠的变体、后来放进来的都不算 */
-type Parsed = Pick<ParsedPlugin, 'skills' | 'servers'> & { files: ReadonlySet<string> }
+type Parsed = Pick<ParsedPlugin, 'skills' | 'servers' | 'commands'> & { files: ReadonlySet<string> }
 
 /** 记录的代码读成技能和服务。版本目录按内容取名,所以按完整性缓存;读不了就是没有,只记日志 */
 export class SkillCatalog {
@@ -40,7 +40,7 @@ export class SkillCatalog {
       this.log.warn('plugin not readable', { id: rec.id })
       return undefined
     }
-    const parsed: Parsed = { skills: read.plugin.skills, servers: read.plugin.servers, files: new Set(walked.files.map(f => f.path)) }
+    const parsed: Parsed = { skills: read.plugin.skills, commands: read.plugin.commands, servers: read.plugin.servers, files: new Set(walked.files.map(f => f.path)) }
     if (this.cache.size >= CACHE_MAX) this.cache.clear()
     this.cache.set(rec.integrity, parsed)
     return parsed

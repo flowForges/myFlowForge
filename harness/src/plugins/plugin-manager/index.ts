@@ -15,6 +15,7 @@ import type { Sessions } from '../../kernel/sessions'
 import { createPluginsService, SkillCatalog } from './context'
 import { fail, Installer } from './installer'
 import { manifest } from './manifest'
+import { listCommands, runCommand } from './commands'
 import { createSkillTool } from './skillTool'
 import { PluginStore, type InstalledRecord } from './store'
 
@@ -202,6 +203,9 @@ export function createPluginManager(o: PluginManagerOpts = {}): Plugin {
           servers: serverRows(rec),
         }
       })
+
+      on('plugins.commands', () => ({ commands: listCommands({ store, catalog }) }))
+      on('plugins.command.run', p => runCommand(p, { store, catalog, commands, sessions, log: ctx.log }))
 
       on('plugins.install.prepare', p => installer.prepare(p.source))
       on('plugins.upgrade.prepare', p => installer.prepareUpgrade(p.id, p.ref))
