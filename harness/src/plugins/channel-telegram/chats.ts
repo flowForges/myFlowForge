@@ -11,6 +11,7 @@ import type { ModelsService } from '../../lib/models/types'
 import type { SessionCommands } from '../../lib/tools/types'
 import { ERR_BUSY, ERR_DRAINING, ModelRefSchema, type ApprovalMode, type KernelEvent, type ModelRef, type TelegramChats } from '../../protocol/index'
 import type { ApiTimers } from './api'
+import type { Cards } from './cards'
 import type { DmInbound } from './inbound'
 import { codeOf } from './poller'
 import { failureLine, renderPlain, renderTurn, type Chunk } from './render'
@@ -183,6 +184,8 @@ export interface ChatsOpts {
   staleMs(): number
   /** 落盘;false = 没存上,问题已经记下了 */
   save(): boolean
+  /** 审批卡片。不给 = 这个聊天的审批只能在 app 里答 */
+  cards?: Pick<Cards, 'onRequested' | 'onResolved'>
 }
 
 export type NewSessionResult = { ok: true; sessionId: string } | { ok: false; reason: 'busy' | 'no_model' | 'coding_only' }
@@ -292,7 +295,13 @@ export class Chats {
   // —— onAppend 这条路:在别人的写入路径上同步跑,不做 I/O
 
   onEvent(e: KernelEvent): void {
-    if (this.disposed || !e.sessionId || !RENDERED.has(e.type)) return
+    if (this.disposed) return
+    // 卡片按 approvalId 认,不看路由:切走或撤销之后结果也要到那张卡
+    if (e.type === 'approval.resolved') {
+      this.o.cards?.onResolved(e)
+      return
+    }
+    if (!e.sessionId || !RENDERED.has(e.type)) return
     const chatId = this.routes.get(e.sessionId)
     if (chatId === undefined) return
     const rec = this.peek(chatId)
@@ -300,6 +309,16 @@ export class Chats {
     const p = (e.payload ?? {}) as { turnId?: unknown; followUp?: unknown; reason?: unknown }
     if (typeof p.turnId !== 'string') return
     const run = this.runnerOf(chatId)
+    if (e.type === 'approval.requested') {
+      // 卡片要排在已经写出来的字后面:这个聊天的定时器先到,定时器按先来后到走
+      if (run.live?.turnId === p.turnId) {
+        run.live.events.push(e)
+        run.live.dirty = true
+        this.schedule(chatId, run, 0)
+      }
+      this.o.cards?.onRequested(e, chatId)
+      return
+    }
     if (e.type === 'message.user' && p.followUp !== true) this.beginTurn(rec, run, p.turnId, e.sessionId)
     const live = run.live
     if (live?.turnId !== p.turnId) return
@@ -687,6 +706,11 @@ export class Chats {
     if (parts.length === 0 || run.debounce !== undefined) return
     run.paste = { ids: parts.map(q => q.updateId), size: parts.reduce((n, q) => n + q.text.length, 0), refused: false }
     this.armDebounce(chatId, run, true)
+  }
+
+  /** 渠道开着、有令牌 */
+  isRunning(): boolean {
+    return this.running
   }
 
   /** 渠道关了或令牌没了:队列留着,什么都不发。发送器里排着的也不要了,delivery 开着,重新开的时候补 */

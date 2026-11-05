@@ -14,7 +14,9 @@ const LIST_MAX = 1200
 const PATH_MAX = 1000
 /** 通知里 changed、violations、raw-log、worktree 每行转义后的上限:四行再坏也给 stderr 和 final 留够地方 */
 const LINE_MAX = 1200
-const CLIP_MARK = '…[clipped]…'
+export const CLIP_MARK = '…[clipped]…'
+/** tools-registry 从中间截过的审批摘要带这个记号;卡片看到它就不给批准 */
+export const SUMMARY_CLIP_MARK = '[已截断]'
 
 export interface Diagnostic {
   id: string

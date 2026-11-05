@@ -11,6 +11,7 @@ import type { PermissionGate } from '../../kernel/permissionGate'
 import type { Plugin } from '../../kernel/pluginHost'
 import { OUTSIDE } from '../../lib/fs/paths'
 import { sessionKey } from '../../lib/tools/commandKey'
+import { SUMMARY_CLIP_MARK } from '../../lib/tools/diagnostics'
 import { redact } from '../../lib/tools/redact'
 import type { SandboxStatus } from '../../protocol/index'
 import type { PermissionRequest, SandboxService, Tool, ToolContext, ToolResult, ToolsService } from '../../lib/tools/types'
@@ -50,7 +51,7 @@ const message = (e: unknown): string => {
 /** 截成至多 max 个字符,保留开头与结尾 */
 const clip = (s: string, max: number): string => {
   if (s.length <= max) return s
-  const mark = '\n…[已截断]…\n'
+  const mark = `\n…${SUMMARY_CLIP_MARK}…\n`
   const half = Math.floor((max - mark.length) / 2)
   return s.slice(0, half) + mark + s.slice(-half)
 }

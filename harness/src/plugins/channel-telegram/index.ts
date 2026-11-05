@@ -2,6 +2,7 @@
 // 通往会话的路只有 handleUpdate 里的一条,每条消息现查 isPaired。令牌只在这里的闭包和 api.ts 里,日志和错误只有稳定代码
 import { join } from 'node:path'
 import { z } from 'zod'
+import type { Approvals } from '../../kernel/approvals'
 import type { Plugin, PluginContext } from '../../kernel/pluginHost'
 import { RpcError } from '../../kernel/rpcError'
 import type { Sessions } from '../../kernel/sessions'
@@ -11,6 +12,7 @@ import type { SandboxService, SessionCommands } from '../../lib/tools/types'
 import { type ChannelState, type WorkerMethodName } from '../../protocol/index'
 import type { TelegramConfig, TelegramStatus } from '../../protocol/rpc'
 import { createApi, REAL_TIMERS, TelegramError, type ApiTimers } from './api'
+import { Cards } from './cards'
 import { Chats } from './chats'
 import { classify, isExternal, type DmInbound, type Inbound } from './inbound'
 import { manifest } from './manifest'
@@ -27,7 +29,6 @@ const PAIRED_LINE = '配对成功。这里的对话和你的记忆内容会经�
 const INVALID_LINE = '配对码无效或已过期'
 const ALREADY_PAIRED_LINE = '已配对'
 const NO_ATTACHMENTS_LINE = '暂不支持附件,发文字吧'
-const STALE_BUTTON_LINE = '已失效'
 const STATUS_STABLE_MS = 30_000
 const LEAVE_WINDOW_MS = 3_600_000
 const LEAVES_PER_WINDOW = 30
@@ -100,7 +101,8 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
       const commands = ctx.services.get<SessionCommands>('sessionCommands')
       const sandbox = ctx.services.get<SandboxService>('sandbox')
       const sessions = ctx.services.get<Sessions>('sessions')
-      if (!commands || !sandbox || !sessions) throw new Error('channel-telegram: kernel services missing')
+      const approvals = ctx.services.get<Approvals>('approvals')
+      if (!commands || !sandbox || !sessions || !approvals) throw new Error('channel-telegram: kernel services missing')
 
       // ctx.dataDir 是这个插件自己的目录:TelegramState 要把上一层改成 0700
       const state = TelegramState.open(join(ctx.dataDir, 'state.json'), ctx.log)
@@ -176,8 +178,21 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
         const masked = scrub(text).text
         return token ? masked.split(token).join('***') : masked
       }
+      const cards: Cards = new Cards({
+        state,
+        sender,
+        approvals,
+        sandbox,
+        isPaired: (accountId, chatId) => isPaired(accountId, chatId),
+        active: (): boolean => chats.isRunning(),
+        mask,
+        timers,
+        save: saveNow,
+        log: ctx.log,
+      })
       const chats = new Chats({
         state,
+        cards,
         commands,
         sessions,
         models: () => ctx.services.get<ModelsService>('models'),
@@ -297,7 +312,7 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
               state.data.dropped.unpaired++
               return
             }
-            sender.fire('answerCallbackQuery', { callback_query_id: i.callbackId, text: STALE_BUTTON_LINE })
+            cards.onCallback(i)
             return
           case 'attachment':
             if (!isPaired(i.accountId, i.chatId)) {
@@ -363,6 +378,7 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
           setState(off)
         } else {
           chats.resume()
+          cards.resume()
           poller.start()
         }
       }
@@ -378,7 +394,10 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
       const adopt = (bot: TelegramBot) => {
         const before = state.data.bot?.id
         // 旧机器人的轮要在聊天映射清掉之前取消:配对没了就是撤销
-        if (before !== undefined && before !== bot.id) chats.revokeAll()
+        if (before !== undefined && before !== bot.id) {
+          chats.revokeAll()
+          cards.forget()
+        }
         if (!state.adoptBot(bot)) return
         if (before !== undefined && before !== bot.id) {
           pairing.cancel()
@@ -503,9 +522,11 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
         const at = pairings.findIndex(p => p.accountId === params.accountId)
         if (at >= 0) {
           pairings.splice(at, 1)
-          // 私聊的 chat id 就是账号 id;这一轮取消,排着的不再发给他。名单已经改了:上面的事件一条都到不了他
+          // 私聊的 chat id 就是账号 id;这一轮取消,排着的不再发给他。名单已经改了:上面的事件一条都到不了他。
+          // 发送器清空在前:卡片最后那次改动不能被它清掉
           chats.revoke(params.accountId)
           sender.drop(params.accountId)
+          cards.expireAll()
           ctx.append({ type: 'channel.unpaired', payload: { channel: 'telegram', accountId: params.accountId, by: 'app' } })
         } else if (!state.problems.includes(SAVE_FAILED)) {
           return { ok: true }
@@ -561,6 +582,7 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
         await poller.stop()
         // 关内核时轮已经停了:终态在这里交给发送器。发不出去的 delivery 还开着,下次启动补
         chats.dispose()
+        cards.dispose()
         await sender.flush(FLUSH_MS)
         sender.close()
         saveNow()
