@@ -21,7 +21,7 @@ import { listCommands, runCommand } from './commands'
 import { declaredOf, McpHost } from './mcpHost'
 import { createMcpTool, type McpToolDeps } from './mcpTool'
 import { createSkillTool } from './skillTool'
-import { PluginStore, type InstalledRecord } from './store'
+import { isSet, PluginStore, type InstalledRecord } from './store'
 
 export interface PluginManagerOpts {
   /** 只给测试。配置、环境变量、RPC 都改不了 */
@@ -57,21 +57,13 @@ const LOCKED_BACKENDS = new Set(['unavailable', 'unreadable'])
 const PROTO_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
 const canon = (g: Grants) => JSON.stringify(Object.entries(g.servers).sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, v]) => [k, [...v.network].sort(), v.cwd]))
 
-const isSet = (rec: InstalledRecord, key: string) => Object.hasOwn(rec.settings, key) || rec.secretKeys.includes(key)
 const without = <T,>(xs: T[], x: T) => xs.filter(v => v !== x)
 
+/** plugins.get 的服务行:和 status 同一个函数,跨会话 */
 function serverRows(rec: InstalledRecord, host: McpHost) {
   return rec.consent.mcp
     .filter(m => MCP_SERVER_NAME.test(m.name))
-    .map(m => {
-      const refs = rec.servers.find(s => s.name === m.name)?.configRefs ?? []
-      const missing = rec.config.some(c => c.required && refs.includes(c.key) && !isSet(rec, c.key))
-      if (m.problems.length > 0) return { name: m.name, state: 'problem', reason: m.problems[0] }
-      if (rec.state !== 'ok') return { name: m.name, state: 'integrity_failed' }
-      if (!rec.enabled) return { name: m.name, state: 'disabled' }
-      if (missing) return { name: m.name, state: 'needs_config', reason: 'needs_config' }
-      return { name: m.name, ...host.stateAcross(rec, m.name) }
-    })
+    .map(m => ({ name: m.name, ...host.serverState(rec, { name: m.name, problems: m.problems, configRefs: rec.servers.find(s => s.name === m.name)?.configRefs ?? [] }) }))
 }
 
 export function createPluginManager(o: PluginManagerOpts = {}): Plugin {

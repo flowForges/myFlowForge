@@ -13,7 +13,7 @@ import { parseRule, type Rule } from '../../lib/permissions/rules'
 import { MCP_RESULT_PREFACE } from '../../lib/plugins/wrap'
 import { redact } from '../../lib/tools/redact'
 import type { Tool, ToolContext } from '../../lib/tools/types'
-import type { KernelEvent } from '../../protocol/index'
+import type { KernelEvent, McpReason } from '../../protocol/index'
 import { McpError } from '../../lib/mcp/client'
 import { McpHostError } from './mcpHost'
 import { createMcpTool, MCP_DESCRIPTION } from './mcpTool'
@@ -922,7 +922,7 @@ const bodyLines = (text: string) => text.split('\n').slice(2, -1)
 
 const CTX: ToolContext = { sessionId: 's1', turnId: 't1', callId: 'c1', cwd: '/w', spillDir: '/w/s', signal: new AbortController().signal }
 
-async function toolOnly(o: { network: string[]; level?: 'full' | 'partial' }, more: { view?: boolean; inspectError?: string; inspectRaw?: Error; runError?: Error } = {}) {
+async function toolOnly(o: { network: string[]; level?: 'full' | 'partial' }, more: { view?: boolean; inspectError?: McpReason; inspectRaw?: Error; runError?: Error } = {}) {
   const state = {
     running: false,
     epoch: 'ep123456',

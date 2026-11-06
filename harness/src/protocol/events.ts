@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { AccountViewSchema } from './models'
-import { PluginFormatSchema, PluginInstallStateSchema } from './plugins'
+import { McpReasonSchema, McpStateSchema, PluginFormatSchema, PluginInstallStateSchema } from './plugins'
 
 export const EVENT_TYPES = [
   'kernel.started',
@@ -209,7 +209,7 @@ export const PluginsInjectedPayloadSchema = z.object({ turnId: z.string(), text:
 export type PluginsInjectedPayload = z.infer<typeof PluginsInjectedPayloadSchema>
 
 /** 带 sessionId,状态变化才写。state、reason 是稳定代码 */
-export const PluginsMcpStatusPayloadSchema = z.object({ plugin: z.string(), server: z.string(), state: z.string(), reason: z.string().optional() })
+export const PluginsMcpStatusPayloadSchema = z.object({ plugin: z.string(), server: z.string(), state: McpStateSchema, reason: McpReasonSchema.optional() })
 export type PluginsMcpStatusPayload = z.infer<typeof PluginsMcpStatusPayloadSchema>
 
 /** plugins.dev.trusted、plugins.dev.loaded */

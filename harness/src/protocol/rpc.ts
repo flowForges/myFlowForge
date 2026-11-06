@@ -11,7 +11,9 @@ import {
 } from './models'
 import {
   GrantsSchema,
+  McpReasonSchema,
   McpServerNameSchema,
+  McpStateSchema,
   PluginConsentSchema,
   PluginFormatSchema,
   PluginIdSchema,
@@ -271,7 +273,7 @@ export const PluginDetailSchema = z.object({
   grants: GrantsSchema,
   /** value 只有不敏感的才有 */
   settings: z.array(z.object({ key: z.string(), set: z.boolean(), sensitive: z.boolean(), value: z.string().optional() })),
-  servers: z.array(z.object({ name: McpServerNameSchema, state: z.string(), reason: z.string().optional() })),
+  servers: z.array(z.object({ name: McpServerNameSchema, state: McpStateSchema, reason: McpReasonSchema.optional() })),
 })
 export type PluginDetail = z.infer<typeof PluginDetailSchema>
 
@@ -446,7 +448,7 @@ export const WorkerMethods = {
   },
   'plugins.mcp.status': {
     params: z.object({ sessionId: z.string().optional() }),
-    result: z.object({ servers: z.array(z.object({ plugin: z.string(), server: z.string(), sessionId: z.string(), state: z.string(), reason: z.string().optional(), pid: z.number().optional() })) }),
+    result: z.object({ servers: z.array(z.object({ plugin: z.string(), server: z.string(), sessionId: z.string(), state: McpStateSchema, reason: McpReasonSchema.optional(), pid: z.number().optional() })) }),
   },
   // 字面量确认:08 没法把它做成一个普通开关(§12)
   'plugins.dev.trust': {

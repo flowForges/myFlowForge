@@ -21,10 +21,10 @@ import { killLadder } from '../../lib/proc/tree'
 import { realSpelling, within } from '../../lib/sandbox/paths'
 import { shellEnv } from '../../lib/tools/shellEnv'
 import type { SandboxService, ShellPlan } from '../../lib/tools/types'
-import type { KernelEvent, SessionOrigin } from '../../protocol/index'
-import { MCP_SERVER_NAME } from '../../protocol/index'
+import type { KernelEvent, McpReason, McpState, SessionOrigin } from '../../protocol/index'
+import { MCP_SERVER_NAME, McpReasonSchema } from '../../protocol/index'
 import { usable, type SkillCatalog } from './context'
-import type { InstalledRecord, PluginStore } from './store'
+import { needsConfig, type InstalledRecord, type PluginStore } from './store'
 
 export const IDLE_MS = 600_000
 export const MAX_PER_SESSION = 4
@@ -40,14 +40,14 @@ const CLIENT_INFO = { name: 'mff-ai', version: HARNESS_VERSION }
 
 export class McpHostError extends Error {
   constructor(
-    readonly code: string,
-    readonly reason?: string,
+    readonly code: McpReason,
+    readonly reason?: McpReason,
   ) {
     super(reason === undefined ? code : `${code}: ${reason}`)
     this.name = 'McpHostError'
   }
 }
-const refuse = (code: string, reason?: string) => new McpHostError(code, reason)
+const refuse = (code: McpReason, reason?: McpReason) => new McpHostError(code, reason)
 
 export function declaredOf(rec: Pick<InstalledRecord, 'consent'>): Record<string, Declared | null> {
   return Object.fromEntries(rec.consent.mcp.map(m => [m.name, m.declared]))
@@ -188,14 +188,20 @@ export interface ServerInfo {
   untranslatedPaths: number
 }
 
-export interface ServerRow {
+export interface ServerState {
+  state: McpState
+  reason?: McpReason
+  pid?: number
+}
+
+export interface ServerRow extends ServerState {
   plugin: string
   server: string
   sessionId: string
-  state: string
-  reason?: string
-  pid?: number
 }
+
+/** 拒绝了不写事件的:是我们自己让它停的,或者等的人走了 */
+const QUIET_REFUSALS: ReadonlySet<McpReason> = new Set(['server_stopped', 'cancelled'])
 
 interface Entry {
   key: string
@@ -221,6 +227,8 @@ interface Entry {
   gone: Promise<void>
   onGone: () => void
   stopping?: Promise<void>
+  /** 起来之后出的问题:停的那一条事件带着它 */
+  failure?: McpReason
   idle?: unknown
 }
 
@@ -246,7 +254,6 @@ export interface McpHostOpts {
   onIntegrityFailed(rec: InstalledRecord): void
 }
 
-const isSet = (rec: InstalledRecord, key: string) => Object.hasOwn(rec.settings, key) || rec.secretKeys.includes(key)
 const bareVar = /^([A-Za-z_][A-Za-z0-9_]{0,63})(?::?[-=?+].*)?$/s
 const configRef = /^user_config\.([A-Za-z_][A-Za-z0-9_]{0,63})$/
 const REF = /\$\{([^}]*)\}/g
@@ -255,9 +262,9 @@ export class McpHost {
   private readonly entries = new Map<string, Entry>()
   private readonly failures = new Map<string, number[]>()
   /** 10 分钟内失败到顶:到插件重启或授权变化 */
-  private readonly sticky = new Map<string, string>()
+  private readonly sticky = new Map<string, McpReason>()
   /** 不算失败但状态要说的(程序不在):再试一次还会再查 */
-  private readonly notes = new Map<string, string>()
+  private readonly notes = new Map<string, McpReason>()
   /** (会话、服务)→ 工具 → 第一次见到的说明和 schema 的哈希。工具名是服务给的,所以是 Map */
   private readonly seen = new Map<string, Map<string, string>>()
   private readonly lastStatus = new Map<string, string>()
@@ -305,7 +312,7 @@ export class McpHost {
     const srv = this.serverOf(rec, server)
     if (srv.problems.length > 0) throw refuse('server_problem', srv.problems[0])
     if (this.sandboxBlocked(sessionId)) throw refuse('needs_sandbox')
-    if (rec.config.some(c => c.required && srv.configRefs.includes(c.key) && !isSet(rec, c.key))) throw refuse('needs_config')
+    if (needsConfig(rec, srv.configRefs)) throw refuse('needs_config')
     const failed = this.sticky.get(this.keyOf(sessionId, plugin, server))
     if (failed !== undefined) throw refuse('server_failed', failed)
     const g = this.grantOf(rec, server)
@@ -333,40 +340,40 @@ export class McpHost {
 
   // ---------- 状态 ----------
 
-  private rowOf(rec: InstalledRecord, srv: ParsedServer, sessionId: string): ServerRow {
-    const base = { plugin: rec.id, server: srv.name, sessionId }
-    const key = this.keyOf(sessionId, rec.id, srv.name)
-    const e = this.entries.get(key)
-    if (e) return { ...base, state: e.state, ...(e.pid !== undefined && { pid: e.pid }) }
-    if (srv.problems.length > 0) return { ...base, state: 'problem', reason: srv.problems[0] }
-    const stuck = this.sticky.get(key) ?? this.notes.get(key)
-    if (stuck !== undefined) return { ...base, state: 'server_failed', reason: stuck }
-    if (this.sandboxBlocked(sessionId)) return { ...base, state: 'needs_sandbox' }
-    if (rec.config.some(c => c.required && srv.configRefs.includes(c.key) && !isSet(rec, c.key))) return { ...base, state: 'needs_config' }
-    return { ...base, state: 'stopped' }
+  /**
+   * 一个服务现在的状态,plugins.get(不给会话:跨会话)和 status / mcp list(给会话)共用。
+   * 有进程的就是进程的状态;否则按清单问题、完整性、启用、失败到顶、配置、沙箱的顺序,第一个说了算
+   */
+  serverState(rec: InstalledRecord, srv: { name: string; problems: readonly string[]; configRefs: readonly string[] }, sessionId?: string): ServerState {
+    const key = sessionId === undefined ? undefined : this.keyOf(sessionId, rec.id, srv.name)
+    const suffix = `\0${rec.id}/${srv.name}`
+    const mine = (k: string) => (key === undefined ? k.endsWith(suffix) : k === key)
+    const e = [...this.entries.values()].find(x => mine(x.key))
+    if (e) return { state: e.state, ...(key !== undefined && e.pid !== undefined && { pid: e.pid }) }
+    // 同意页存的问题是字符串:认不出的不外传
+    if (srv.problems.length > 0) return { state: 'problem', reason: McpReasonSchema.safeParse(srv.problems[0]).data ?? 'server_problem' }
+    if (rec.state !== 'ok') return { state: 'integrity_failed' }
+    if (!rec.enabled) return { state: 'disabled' }
+    for (const from of [this.sticky, this.notes]) for (const [k, reason] of from) if (mine(k)) return { state: 'server_failed', reason }
+    // 缺配置是这个插件的事,用户填了就好;沙箱不够是整台机器的事,排在后面
+    if (needsConfig(rec, srv.configRefs)) return { state: 'needs_config' }
+    if (this.sandboxBlocked(sessionId)) return { state: 'needs_sandbox' }
+    return { state: 'stopped' }
   }
 
   /** 给了会话:这个会话看到的每个启用的服务。没给:活着的和失败的 */
   status(sessionId?: string): ServerRow[] {
     const recs = this.o.store.list().filter(usable)
-    if (sessionId !== undefined) return recs.flatMap(rec => (this.o.catalog.of(rec)?.servers ?? []).filter(s => MCP_SERVER_NAME.test(s.name)).map(s => this.rowOf(rec, s, sessionId)))
+    if (sessionId !== undefined) return recs.flatMap(rec => (this.o.catalog.of(rec)?.servers ?? []).filter(s => MCP_SERVER_NAME.test(s.name)).map(s => ({ plugin: rec.id, server: s.name, sessionId, ...this.serverState(rec, s, sessionId) })))
     const rows: ServerRow[] = [...this.entries.values()].map(e => ({ plugin: e.plugin, server: e.server, sessionId: e.sessionId, state: e.state, ...(e.pid !== undefined && { pid: e.pid }) }))
-    for (const [from, state] of [[this.sticky, 'server_failed'], [this.notes, 'server_failed']] as const)
+    for (const from of [this.sticky, this.notes])
       for (const [key, reason] of from) {
         if (this.entries.has(key)) continue
         const [sid, ref] = key.split('\0')
         const [plugin, server] = ref.split('/')
-        if (!rows.some(r => r.plugin === plugin && r.server === server && r.sessionId === sid)) rows.push({ plugin, server, sessionId: sid, state, reason })
+        if (!rows.some(r => r.plugin === plugin && r.server === server && r.sessionId === sid)) rows.push({ plugin, server, sessionId: sid, state: 'server_failed', reason })
       }
     return rows
-  }
-
-  /** plugins.get:跨会话的一行。有在跑的就是 running */
-  stateAcross(rec: InstalledRecord, server: string): { state: string; reason?: string } {
-    const suffix = `\0${rec.id}/${server}`
-    for (const e of this.entries.values()) if (e.key.endsWith(suffix)) return { state: e.state }
-    for (const from of [this.sticky, this.notes]) for (const [key, reason] of from) if (key.endsWith(suffix)) return { state: 'server_failed', reason }
-    return this.sandboxBlocked() ? { state: 'needs_sandbox' } : { state: 'stopped' }
   }
 
   /** mcp 的 list:现在启用的服务及状态,什么都不启动 */
@@ -376,7 +383,7 @@ export class McpHost {
       .sort()
   }
 
-  private emit(sessionId: string, plugin: string, server: string, state: string, reason?: string, force = false): void {
+  private emit(sessionId: string, plugin: string, server: string, state: McpState, reason?: McpReason, force = false): void {
     if (this.closed) return
     const key = this.keyOf(sessionId, plugin, server)
     const line = `${state}|${reason ?? ''}`
@@ -389,7 +396,7 @@ export class McpHost {
     }
   }
 
-  private countFailure(e: Entry, code: string): void {
+  private countFailure(e: Entry, code: McpReason): void {
     const now = this.o.now()
     const recent = (this.failures.get(e.key) ?? []).filter(t => now - t < FAILURE_WINDOW_MS)
     recent.push(now)
@@ -455,6 +462,11 @@ export class McpHost {
     this.entries.set(key, e)
     e.ready = this.launch(e).catch(async err => {
       if (err instanceof McpHostError && err.code === 'data_dir_unsafe') this.noteEarlyFailure(e, err.code)
+      // 没走到 spawn 的拒绝:08 只能从事件里知道为什么(final review I-6)。到顶的已经报过 server_failed,程序不在也是
+      if (e.pid === undefined && !this.sticky.has(key)) {
+        const code: McpReason = err instanceof McpHostError ? (err.code === 'server_problem' && err.reason !== undefined ? err.reason : err.code) : 'spawn_failed'
+        if (!QUIET_REFUSALS.has(code) && code !== 'server_failed') this.emit(sessionId, plugin, server, 'refused', code)
+      }
       await this.abandon(e)
       throw err
     })
@@ -579,7 +591,7 @@ export class McpHost {
     const consented = rec.consent.mcp.find(m => m.name === server)
     if (!consented || !sameConsentedServer(srv, consented)) throw refuse('consent_mismatch')
     if (srv.problems.length > 0) throw refuse('server_problem', srv.problems[0])
-    if (rec.config.some(c => c.required && srv.configRefs.includes(c.key) && !isSet(rec, c.key))) throw refuse('needs_config')
+    if (needsConfig(rec, srv.configRefs)) throw refuse('needs_config')
 
     const store = pluginStoreRootOf(o.dataDir)
     const tmpReal = realSpelling(tmpdir())
@@ -708,7 +720,7 @@ export class McpHost {
   }
 
   /** 没有进程可收尾的失败:算一次,到顶了这里就要报 */
-  private noteEarlyFailure(e: Entry, code: string): void {
+  private noteEarlyFailure(e: Entry, code: McpReason): void {
     this.countFailure(e, code)
     if (this.sticky.has(e.key)) this.emit(e.sessionId, e.plugin, e.server, 'server_failed', code)
   }
@@ -733,9 +745,12 @@ export class McpHost {
   }
 
   /** failure:没人要它停,是它出了问题,算一次失败 */
-  private stop(e: Entry, failure?: string): Promise<void> {
+  private stop(e: Entry, failure?: McpReason): Promise<void> {
     if (e.stopping) return e.stopping
-    if (failure !== undefined) this.countFailure(e, failure)
+    if (failure !== undefined) {
+      e.failure = failure
+      this.countFailure(e, failure)
+    }
     e.state = 'stopping'
     if (e.idle !== undefined) this.o.timers.clearTimeout(e.idle)
     e.stopping = (async () => {
@@ -792,7 +807,7 @@ export class McpHost {
     const failed = this.sticky.get(e.key)
     if (e.pid !== undefined) {
       if (failed !== undefined) this.emit(e.sessionId, e.plugin, e.server, 'server_failed', failed)
-      else this.emit(e.sessionId, e.plugin, e.server, 'stopped')
+      else this.emit(e.sessionId, e.plugin, e.server, 'stopped', e.failure)
     }
     e.onGone()
   }

@@ -107,7 +107,8 @@ describe('plugins.list and plugins.get', () => {
       { key: 'region', set: false, sensitive: false },
       { key: 'token', set: false, sensitive: true },
     ])
-    expect(got.servers).toEqual([{ name: 'srv', state: 'needs_config', reason: 'needs_config' }])
+    // state 已经说了,reason 不重复(plugins.get 和 status 是同一个函数)
+    expect(got.servers).toEqual([{ name: 'srv', state: 'needs_config' }])
     expect(await refused(call(r, 'plugins.get', { id: 'nope' }))).toBe('plugin_not_installed')
   })
 

@@ -49,6 +49,13 @@ const RecordSchema = z
 
 export type InstalledRecord = z.infer<typeof RecordSchema>
 
+/** 这个配置键有值:不敏感的在 settings,敏感的只有键名在 secretKeys */
+export const isSet = (rec: Pick<InstalledRecord, 'settings' | 'secretKeys'>, key: string): boolean => Object.hasOwn(rec.settings, key) || rec.secretKeys.includes(key)
+
+/** 服务引用的必填配置有没填的 */
+export const needsConfig = (rec: Pick<InstalledRecord, 'config' | 'settings' | 'secretKeys'>, configRefs: readonly string[]): boolean =>
+  rec.config.some(c => c.required && configRefs.includes(c.key) && !isSet(rec, c.key))
+
 const FileSchema = z.object({ version: z.literal(1), plugins: z.array(RecordSchema) }).refine(f => new Set(f.plugins.map(p => p.id)).size === f.plugins.length)
 
 const lstatOf = (p: string): Stats | undefined => {

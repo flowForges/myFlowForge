@@ -182,6 +182,7 @@ describe('refused before any spawn', () => {
   it('a session at the home directory: cwd_too_broad', async () => {
     const m = await setup({ y: fake().entry() }, { sessionCwd: x => x.r.home })
     expect((await m.mcp(m.sid, { action: 'tools', server: 'x/y' })).text).toBe('cwd_too_broad')
+    expect(statusEvents(m.r, m.sid)).toContainEqual({ plugin: 'x', server: 'y', state: 'refused', reason: 'cwd_too_broad' })
     expect(m.spawns).toEqual([])
     expect(m.sandbox!.plans).toEqual([])
   })
@@ -189,6 +190,7 @@ describe('refused before any spawn', () => {
   it('a session above the home directory: cwd_too_broad, also for cwd:none', async () => {
     const m = await setup({ y: fake().entry() }, { sessionCwd: x => dirname(x.r.home), grants: { y: { network: [], cwd: 'none' } } })
     expect((await m.mcp(m.sid, { action: 'tools', server: 'x/y' })).text).toBe('cwd_too_broad')
+    expect(statusEvents(m.r, m.sid)).toContainEqual({ plugin: 'x', server: 'y', state: 'refused', reason: 'cwd_too_broad' })
     expect(m.spawns).toEqual([])
   })
 
@@ -230,6 +232,7 @@ describe('refused before any spawn', () => {
   it('a planExec that throws is sandbox_unavailable, never unsandboxed', async () => {
     const m = await setup({ y: fake().entry() }, { stub: { planError: true } })
     expect((await m.mcp(m.sid, { action: 'tools', server: 'x/y' })).text).toBe('sandbox_unavailable')
+    expect(statusEvents(m.r, m.sid)).toContainEqual({ plugin: 'x', server: 'y', state: 'refused', reason: 'sandbox_unavailable' })
     expect(m.spawns).toEqual([])
   })
 
@@ -319,6 +322,7 @@ describe('the problems table: never spawned', () => {
     const sid = await m.r.session({ approvalMode: 'auto' })
     await m.r.turn(sid, 'pin')
     expect((await m.mcp(sid, { action: 'tools', server: 'x/y' })).text).toBe('bad_command')
+    expect(statusEvents(m.r, sid)).toContainEqual({ plugin: 'x', server: 'y', state: 'refused', reason: 'bad_command' })
     expect(m.spawns).toEqual([])
   })
 
@@ -330,6 +334,7 @@ describe('the problems table: never spawned', () => {
     const sid = await m.r.session({ approvalMode: 'auto' })
     await m.r.turn(sid, 'pin')
     expect((await m.mcp(sid, { action: 'tools', server: 'x/y' })).text).toBe('bad_command')
+    expect(statusEvents(m.r, sid)).toContainEqual({ plugin: 'x', server: 'y', state: 'refused', reason: 'bad_command' })
     expect(m.spawns).toEqual([])
   })
 })
@@ -472,6 +477,7 @@ describe('programs', () => {
     const sid = await m.r.session({ approvalMode: 'auto' })
     await m.r.turn(sid, 'pin')
     for (let i = 0; i < 4; i++) expect((await m.mcp(sid, { action: 'tools', server: 'x/y' })).text).toBe('runtime_too_broad')
+    expect(statusEvents(m.r, sid)).toContainEqual({ plugin: 'x', server: 'y', state: 'refused', reason: 'runtime_too_broad' })
     expect(m.spawns).toEqual([])
     expect(m.sandbox!.plans).toEqual([])
     expect(m.host().failureCount(sid, 'x', 'y')).toBe(0)
@@ -500,6 +506,7 @@ describe('programs', () => {
     const sid = await m.r.session({ approvalMode: 'auto' })
     await m.r.turn(sid, 'pin')
     expect((await m.mcp(sid, { action: 'tools', server: 'x/y' })).text).toBe('keep_too_broad')
+    expect(statusEvents(m.r, sid)).toContainEqual({ plugin: 'x', server: 'y', state: 'refused', reason: 'keep_too_broad' })
     expect(m.spawns).toEqual([])
   })
 
@@ -513,7 +520,9 @@ describe('programs', () => {
     const sid = await m.r.session({ approvalMode: 'auto' })
     await m.r.turn(sid, 'pin')
     expect((await m.mcp(sid, { action: 'tools', server: 'x/y' })).text).toBe('bad_command')
+    expect(statusEvents(m.r, sid)).toContainEqual({ plugin: 'x', server: 'y', state: 'refused', reason: 'bad_command' })
     expect((await m.mcp(sid, { action: 'tools', server: 'x/z' })).text).toBe('bad_command')
+    expect(statusEvents(m.r, sid)).toContainEqual({ plugin: 'x', server: 'z', state: 'refused', reason: 'bad_command' })
     expect(m.spawns).toEqual([])
   })
 
@@ -666,6 +675,7 @@ describe('env: exactly the whitelist plus what was declared', () => {
     const sid = await m.r.session({ approvalMode: 'auto' })
     await m.r.turn(sid, 'pin')
     expect((await m.mcp(sid, { action: 'tools', server: 'x/y' })).text).toBe('secrets_unavailable')
+    expect(statusEvents(m.r, sid)).toContainEqual({ plugin: 'x', server: 'y', state: 'refused', reason: 'secrets_unavailable' })
     expect(m.spawns).toEqual([])
   })
 
@@ -742,6 +752,7 @@ describe('only the record that was consented to', () => {
     const sid = await m.r.session({ approvalMode: 'auto' })
     await m.r.turn(sid, 'pin')
     expect((await m.mcp(sid, { action: 'tools', server: 'x/y' })).text).toBe('consent_mismatch')
+    expect(statusEvents(m.r, sid)).toContainEqual({ plugin: 'x', server: 'y', state: 'refused', reason: 'consent_mismatch' })
     expect(m.spawns).toEqual([])
   })
 
@@ -851,7 +862,8 @@ describe('protocol hostility: a stable code, the process gone, the turn goes on'
     clock.advance(DEFAULT_INIT_MS)
     expect((await run).text).toBe('init_timeout')
     await until(() => m.live().length === 0, 6000)
-    expect(statusEvents(m.r, m.sid).map(s => s.state)).toContain('stopped')
+    // 起来过的失败:停的那一条带着代码,08 看得到为什么
+    expect(statusEvents(m.r, m.sid)).toContainEqual({ plugin: 'x', server: 'y', state: 'stopped', reason: 'init_timeout' })
   }, 20_000)
 
   it('a bad version in the answer to initialize: protocol_error and killed', async () => {

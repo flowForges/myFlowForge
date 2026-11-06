@@ -650,12 +650,17 @@ describe('plugins protocol (09 §14)', () => {
     expect(PluginsInjectedPayloadSchema.safeParse({ turnId: 't', text: 'x', skill: true }).success).toBe(false)
     expect(PluginsMcpStatusPayloadSchema.safeParse({ plugin: 'a', server: 'b', state: 'running' }).success).toBe(true)
     expect(PluginsMcpStatusPayloadSchema.safeParse({ plugin: 'a', state: 'running' }).success).toBe(false)
+    // state 和 reason 是稳定代码:08 按它们分支,第三方的文字进不来
+    for (const reason of ['runtime_too_broad', 'keep_too_broad', 'cwd_too_broad', 'bad_command', 'consent_mismatch', 'sandbox_unavailable', 'secrets_unavailable', 'integrity_failed', 'init_timeout', 'program_not_found', 'tools_changed', 'dangerous_env'])
+      expect(PluginsMcpStatusPayloadSchema.safeParse({ plugin: 'a', server: 'b', state: 'refused', reason }).success).toBe(true)
+    expect(PluginsMcpStatusPayloadSchema.safeParse({ plugin: 'a', server: 'b', state: 'whatever' }).success).toBe(false)
+    expect(PluginsMcpStatusPayloadSchema.safeParse({ plugin: 'a', server: 'b', state: 'refused', reason: 'ENOENT: /Users/x' }).success).toBe(false)
     expect(PluginDevPayloadSchema.safeParse({ id: 'dev-x', hash: 'h' }).success).toBe(true)
     expect(PluginDevPayloadSchema.safeParse({ id: 'dev-x' }).success).toBe(false)
   })
 
   it('no event payload has room for a value, an env or stderr: unknown keys are dropped', () => {
-    expect(PluginsMcpStatusPayloadSchema.parse({ plugin: 'a', server: 'b', state: 's', stderr: 'x', env: {} })).toEqual({ plugin: 'a', server: 'b', state: 's' })
+    expect(PluginsMcpStatusPayloadSchema.parse({ plugin: 'a', server: 'b', state: 'stopped', stderr: 'x', env: {} })).toEqual({ plugin: 'a', server: 'b', state: 'stopped' })
     expect(PluginIdPayloadSchema.parse({ id: 'a', value: 'x' })).toEqual({ id: 'a' })
   })
 

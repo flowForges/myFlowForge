@@ -14,6 +14,24 @@ export const PluginSettingKeySchema = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/)
 export const PluginFormatSchema = z.enum(['native', 'claude'])
 export type PluginFormat = z.infer<typeof PluginFormatSchema>
 
+/** plugins.mcp.status、plugins.get、plugins.mcp.status RPC 的 state。refused:没起就拒了,reason 说为什么 */
+export const McpStateSchema = z.enum(['starting', 'running', 'stopping', 'stopped', 'refused', 'problem', 'server_failed', 'needs_sandbox', 'needs_config', 'integrity_failed', 'disabled'])
+export type McpState = z.infer<typeof McpStateSchema>
+
+/** 稳定代码。08 按它们分支:没有路径、没有第三方的文字 */
+export const McpReasonSchema = z.enum([
+  // 清单里的问题(从不启动)
+  'arg_env_ref', 'dangerous_env', 'runtime_unsupported', 'bad_command', 'command_outside_root', 'name_invalid',
+  // 起之前的拒绝
+  'runtime_too_broad', 'keep_too_broad', 'cwd_too_broad', 'consent_mismatch', 'sandbox_unavailable', 'secrets_unavailable',
+  'integrity_failed', 'data_dir_unsafe', 'needs_config', 'needs_sandbox', 'grants_invalid', 'grants_changed', 'plugin_unreadable',
+  'plugin_disabled', 'plugin_not_installed', 'server_not_found', 'server_problem', 'no_session', 'too_many_servers', 'spawn_failed',
+  'program_not_found', 'server_failed', 'server_not_running', 'server_stopped',
+  // 起来之后
+  'init_timeout', 'call_timeout', 'protocol_error', 'server_exited', 'cancelled', 'too_many_tools', 'tools_changed',
+])
+export type McpReason = z.infer<typeof McpReasonSchema>
+
 export const McpCwdSchema = z.enum(['none', 'read', 'write'])
 export type McpCwd = z.infer<typeof McpCwdSchema>
 
