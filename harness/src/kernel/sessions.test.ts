@@ -159,6 +159,57 @@ describe('Sessions service', () => {
   })
 })
 
+describe('Sessions: title, createdAt, updatedAt, deleted (08 §4.1)', () => {
+  const ev = (seq: number, ts: number, type: KernelEvent['type'], sessionId: string | undefined, payload: unknown): KernelEvent => ({ seq, ts, type, sessionId, payload })
+
+  it('title is the last rename, else the created one, else 新会话; erased renames and junk are ignored', () => {
+    const s = new Sessions(dir)
+    s.load([
+      ev(1, 10, 'session.created', 'a', { title: '原名' }),
+      ev(2, 11, 'session.created', 'b', {}),
+      ev(3, 12, 'session.created', 'c', { title: '' }),
+      ev(4, 13, 'session.renamed', 'a', { title: '一' }),
+      ev(5, 14, 'session.renamed', 'a', { title: '二' }),
+      ev(6, 15, 'session.renamed', 'a', { erased: true }),
+      ev(7, 16, 'session.renamed', 'b', { title: 3 }),
+      ev(8, 17, 'session.renamed', 'ghost', { title: 'x' }),
+    ])
+    expect(s.meta('a')?.title).toBe('二')
+    expect(s.meta('b')?.title).toBe('新会话')
+    expect(s.meta('c')?.title).toBe('新会话')
+    expect(s.meta('ghost')).toBeUndefined()
+  })
+
+  it('createdAt is the created ts; updatedAt the latest event of the session that is not a checkpoint', () => {
+    const s = new Sessions(dir)
+    s.load([
+      ev(1, 10, 'session.created', 'a', {}),
+      ev(2, 20, 'message.user', 'a', { text: 'x' }),
+      ev(3, 30, 'memory.checkpoint', 'a', {}),
+      ev(4, 40, 'turn.started', 'b', {}),
+    ])
+    expect(s.meta('a')).toMatchObject({ createdAt: 10, updatedAt: 20, deleted: false })
+    s.observe(ev(5, 50, 'turn.ended', 'a', {}))
+    expect(s.meta('a')?.updatedAt).toBe(50)
+  })
+
+  it('session.deleted marks it; list() leaves it out; get() keeps answering for the cleanup sweeps, with the same shape', () => {
+    const s = new Sessions(dir)
+    s.load([ev(1, 1, 'session.created', 'a', { cwd: '/w' }), ev(2, 2, 'session.created', 'b', {}), ev(3, 3, 'session.deleted', 'a', {})])
+    expect(s.isDeleted('a')).toBe(true)
+    expect(s.isDeleted('b')).toBe(false)
+    expect(s.isDeleted('nope')).toBe(false)
+    expect(s.list().map(i => i.sessionId)).toEqual(['b'])
+    expect(s.deletedIds()).toEqual(['a'])
+    expect(s.get('a')).toEqual({ sessionId: 'a', approvalMode: 'ask', origin: 'app', audience: 'owner', cwd: '/w', repo: { kind: 'none' } })
+    // 抹除之后的 session.created 只剩结构字段:重启照样认得
+    const r = new Sessions(dir)
+    r.load([ev(1, 1, 'session.created', 'a', { cwd: '/w', erased: true }), ev(3, 3, 'session.deleted', 'a', { erased: true })])
+    expect(r.isDeleted('a')).toBe(true)
+    expect(r.meta('a')?.title).toBe('新会话')
+  })
+})
+
 describe('session audience (06 spec §9)', () => {
   it.each([
     [{}, 'owner'],

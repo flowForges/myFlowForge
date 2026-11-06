@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { chmodSync, closeSync, existsSync, mkdirSync, openSync, realpathSync, statSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, realpathSync, rmSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -7,6 +7,7 @@ import {
   ERR_DRAINING,
   WorkerMethods,
   type KernelEvent,
+  type SessionSummary,
   type SnapshotResult,
   type StatusResult,
   type WorkerMethodName,
@@ -93,6 +94,12 @@ const ERR_METHOD_NOT_FOUND = -32601
 const ERR_INVALID_PARAMS = -32602
 const ERR_INTERNAL = -32603
 const CANCEL_GRACE_MS = 1000
+/** session.state 的默认页和开着的轮最多往回取多少(08 §4.2) */
+const STATE_LIMIT = 300
+const STATE_MAX = 5000
+const TITLE_MAX = 120
+/** 改名去掉的:C0、DEL、C1 和双向控制符 */
+const TITLE_CONTROLS = /[\u0000-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g
 const APPROVAL_TIMEOUT_MS = 600_000
 /** 启动时等 git 删崩溃留下的 worktree 的上限;没删完的接着删,不挡启动 */
 const RECOVERY_WAIT_MS = 3_000
@@ -110,6 +117,8 @@ type Turn = {
   followUps: FollowUp[]
   /** 放开当前这次 park;每次 park 换一个,放开时摘掉它的 abort 监听 */
   wake?: () => void
+  /** 开这一轮的 message.user 的 seq:session.state 从这里往后取(08 R8) */
+  firstSeq: number
 }
 
 /** 插件能经 sessionCommands 调的全部方法(07 §4) */
@@ -164,6 +173,23 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   const sessions = new Sessions(opts.dataDir)
   sessions.load(eventLog.scan())
   eventLog.onAppend(e => sessions.observe(e)) // 事务提交后才通知:回滚的 session.created 不会进来
+  /** 删掉的会话的落盘输出(08 §4.3)。id 不合 SAFE_ID 就不动文件系统 */
+  const removeSessionDir = (id: string) => {
+    let d: string
+    try {
+      d = sessions.sessionDir(id)
+    } catch {
+      log.warn('deleted session has an unsafe id; its directory is left alone')
+      return
+    }
+    try {
+      if (existsSync(d)) rmSync(d, { recursive: true, force: true })
+    } catch (err) {
+      log.warn('removing a deleted session directory failed', { error: err instanceof Error ? err.message : String(err) })
+    }
+  }
+  for (const id of sessions.deletedIds()) removeSessionDir(id) // 崩在中途也收得干净
+  eventLog.onAppend(e => { if (e.type === 'session.deleted' && e.sessionId !== undefined) removeSessionDir(e.sessionId) })
   const turns = new Map<string, Turn>() // turnId -> 进行中的 turn
   const activeBySession = new Map<string, string>() // sessionId -> turnId(每会话最多一个)
   /**
@@ -302,9 +328,9 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
     take: () => turn.followUps.splice(0),
   })
 
-  const dispatchPrompt = (sessionId: string, turnId: string, text: string) => {
+  const dispatchPrompt = (sessionId: string, turnId: string, text: string, firstSeq: number) => {
     const controller = new AbortController()
-    const turn: Turn = { turnId, sessionId, controller, ended: false, settled: Promise.resolve(), parked: false, followUps: [] }
+    const turn: Turn = { turnId, sessionId, controller, ended: false, settled: Promise.resolve(), parked: false, followUps: [], firstSeq }
     turns.set(turnId, turn)
     activeBySession.set(sessionId, turnId) // 先登记:处理者可能同步写完终态事件
     turn.settled = (async () => {
@@ -404,6 +430,41 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
     return { status: status(), sessions: eventLog.sessionSummaries(), lastSeq: eventLog.lastSeq() }
   }
 
+  /** 新方法(08 §4)对未知和删掉的会话一样回答 */
+  const liveSession = (id: string) => {
+    const info = sessions.get(id)
+    if (!info || sessions.isDeleted(id)) throw new RpcError(ERR_INVALID_PARAMS, 'unknown session')
+    return info
+  }
+  /** 只拒删掉的:没建过的 id 维持原来的行为(评审修订) */
+  const refuseDeleted = (id: string) => {
+    if (sessions.isDeleted(id)) throw new RpcError(ERR_INVALID_PARAMS, 'unknown session')
+  }
+  const openTurn = (sessionId: string): Turn | undefined => {
+    const id = activeBySession.get(sessionId)
+    const t = id === undefined ? undefined : turns.get(id)
+    return t && !t.ended ? t : undefined
+  }
+  function summaryOf(id: string): SessionSummary {
+    const info = sessions.get(id)!
+    const meta = sessions.meta(id)!
+    const t = openTurn(id)
+    return {
+      id,
+      title: meta.title,
+      origin: info.origin,
+      audience: info.audience,
+      ...(info.cwd !== undefined && { cwd: info.cwd }),
+      ...(info.model && { model: info.model }),
+      approvalMode: info.approvalMode,
+      ...(info.toolset && { toolset: info.toolset }),
+      createdAt: meta.createdAt,
+      updatedAt: meta.updatedAt,
+      ...(t && { open: { turnId: t.turnId, parked: t.parked } }),
+      pendingApprovals: approvals.pendingIds(id).length,
+    }
+  }
+
   const kernel: Kernel = {
     events: eventLog,
     status,
@@ -426,6 +487,38 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
           return snapshot()
         case 'events.tail':
           return { events: eventLog.tail(p.limit).map(toWire) }
+        case 'session.list':
+          // 最近有动静的在前;同一时刻按建立顺序
+          return { sessions: sessions.list().map(i => summaryOf(i.sessionId)).sort((a, b) => b.updatedAt - a.updatedAt) }
+        case 'session.state': {
+          liveSession(p.sessionId)
+          const lastSeq = eventLog.lastSeq() // 全同步:这之后的事件 seq 都更大
+          const t = openTurn(p.sessionId)
+          let page = eventLog.bySessionPage(p.sessionId, { limit: p.limit ?? STATE_LIMIT })
+          // 挂起很久、写了几千条进度的轮:卡片和停止按钮也要回得来
+          if (t && (page.events.length === 0 || page.events[0].seq > t.firstSeq)) page = eventLog.bySessionPage(p.sessionId, { fromSeq: t.firstSeq, limit: STATE_MAX })
+          return {
+            session: summaryOf(p.sessionId),
+            events: page.events.map(toWire),
+            hasMore: page.hasMore,
+            lastSeq,
+            ...(t && { open: { turnId: t.turnId, parked: t.parked, approvalIds: approvals.pendingIds(p.sessionId, t.turnId) } }),
+          }
+        }
+        case 'session.events': {
+          liveSession(p.sessionId)
+          const page = eventLog.bySessionPage(p.sessionId, { beforeSeq: p.beforeSeq, limit: p.limit })
+          return { events: page.events.map(toWire), hasMore: page.hasMore }
+        }
+        case 'session.rename':
+          return command(name, p.commandId, () => {
+            liveSession(p.sessionId)
+            const title = (p.title as string).replace(TITLE_CONTROLS, '').trim()
+            const n = [...title].length
+            if (n < 1 || n > TITLE_MAX) throw new RpcError(ERR_INVALID_PARAMS, 'invalid title')
+            append({ type: 'session.renamed', sessionId: p.sessionId, payload: { title } })
+            return { result: { ok: true } }
+          }).result
         case 'session.create': {
           const checked = () => (p.cwd === undefined ? undefined : validateCwd(p.cwd, { home, dataDir: opts.dataDir, platform: process.platform, env: envSnapshot }))
           // 在任何工具跑之前定下这个会话的仓库,之后不再找(final review C-1)。重放不查。事务里不能等 git,所以在外面
@@ -457,6 +550,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
         }
         case 'session.prompt':
           return command<{ accepted: boolean; turnId: string; followUp?: boolean }>(name, p.commandId, () => {
+            refuseDeleted(p.sessionId)
             const external = p.external === true ? { external: true } : {} // 没有时载荷逐字节不变
             const activeId = activeBySession.get(p.sessionId)
             if (activeId) {
@@ -467,9 +561,9 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
               return { result: { accepted: true, turnId: t.turnId, followUp: true }, after: () => { t.parked = false; t.followUps.push({ text: p.text, ts: e.ts }); t.wake?.() } }
             }
             const turnId = randomUUID()
-            append({ type: 'message.user', sessionId: p.sessionId, payload: { turnId, text: p.text, ...external } })
+            const first = append({ type: 'message.user', sessionId: p.sessionId, payload: { turnId, text: p.text, ...external } })
             // 提交之后才交给循环插件
-            return { result: { accepted: true, turnId }, after: () => dispatchPrompt(p.sessionId, turnId, p.text) }
+            return { result: { accepted: true, turnId }, after: () => dispatchPrompt(p.sessionId, turnId, p.text, first.seq) }
           }).result
         case 'permissions.get': {
           if (p.sessionId !== undefined && !sessions.get(p.sessionId)) throw new RpcError(ERR_INVALID_PARAMS, 'unknown session')
@@ -489,7 +583,10 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
         case 'approval.respond':
           return { ok: approvals.respond(p.approvalId, p.decision) }
         case 'session.cancel': {
-          const r = command(name, p.commandId, () => ({ result: { ok: true } }), { allowDraining: true })
+          const r = command(name, p.commandId, () => {
+            refuseDeleted(p.sessionId)
+            return { result: { ok: true } }
+          }, { allowDraining: true })
           if (!r.replayed) await cancel(p.sessionId) // 重放不产生副作用
           return r.result
         }
@@ -556,6 +653,14 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
     narrowApproval: sessionId => {
       const s = sessions.get(sessionId)
       if (s?.origin === 'im' && s.approvalMode === 'auto') append({ type: 'session.approvalNarrowed', sessionId, payload: { approvalMode: 'ask' } })
+    },
+    markDeleted: sessionId => {
+      if (!sessions.get(sessionId)) throw new RpcError(ERR_INVALID_PARAMS, 'unknown session')
+      if (sessions.isDeleted(sessionId)) return
+      // 检查和写入之间没有 await:新的一轮插不进来
+      if (activeBySession.has(sessionId)) throw new RpcError(ERR_BUSY, 'turn in progress')
+      if ((services.get<BackgroundRuns>('executors')?.liveFor?.(sessionId) ?? 0) > 0) throw new RpcError(ERR_BUSY, 'runs in progress')
+      append({ type: 'session.deleted', sessionId, payload: {} })
     },
   }
   services.provide('sessionCommands', sessionCommands)

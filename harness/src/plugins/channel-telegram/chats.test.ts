@@ -930,6 +930,7 @@ describe('Chats with fake services', () => {
         holdsCredentialRoot: () => false,
         home: '/nonexistent-home',
         narrowApproval: () => {},
+        markDeleted: () => {},
       },
       sessions: { get: (id: string) => (known.has(id) ? { sessionId: id, approvalMode: 'ask', origin: 'im', audience: 'owner' } : undefined) } as never,
       models: () => ({ catalog: () => ({ presets: [], models: {}, default: { accountId: 'a', modelId: 'm' } }), accounts: () => [] }) as never,

@@ -34,6 +34,8 @@ export interface PluginContext {
      * 这期间整个工作进程同步阻塞,所以先向监管要时间,要不到就不做。then:同一段时间里要做的别的阻塞活,extraBytes 是它的体量
      */
     purge(o?: { then?(): void; extraBytes?: number }): Promise<void>
+    /** 删会话:整会话抹除(见 EventLog.eraseSession);权限同 redact。会话还没有 session.deleted 就抛错。返回改了几条 */
+    eraseSession(sessionId: string): number
   }
   effect(dispose: () => void | Promise<void>): void
   /** 注册工作进程 RPC 方法:参数先由内核按 WorkerMethods 校验;随插件停用自动注销 */
@@ -89,7 +91,7 @@ export interface PluginHostDeps {
   rpc: RpcRegistry
   append(e: Omit<KernelEvent, 'seq' | 'ts'>): KernelEvent
   history?(sessionId: string): KernelEvent[]
-  eventLog?: Pick<EventLog, 'after' | 'onAppend' | 'redact' | 'purge' | 'sizeBytes'>
+  eventLog?: Pick<EventLog, 'after' | 'onAppend' | 'redact' | 'purge' | 'sizeBytes' | 'eraseSession'>
   holdWatchdog?: (ms: number) => Promise<void>
   log: Logger
   dataDir: string
@@ -175,6 +177,11 @@ export class PluginHost {
             const log = this.deps.eventLog
             if (!log || !EVENT_REDACTORS.includes(id)) throw new Error(`plugin ${id} may not redact events`)
             return log.redact(edits, id)
+          },
+          eraseSession: sessionId => {
+            const log = this.deps.eventLog
+            if (!log || !EVENT_REDACTORS.includes(id)) throw new Error(`plugin ${id} may not redact events`)
+            return log.eraseSession(sessionId, id)
           },
           purge: async o => {
             const log = this.deps.eventLog

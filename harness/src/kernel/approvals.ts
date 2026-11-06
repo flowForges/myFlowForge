@@ -104,6 +104,13 @@ export class Approvals {
     return true
   }
 
+  /** 08 §4.1、§4.2:还在等的审批 id,属于这个会话(给了 turnId 就只要这一轮的) */
+  pendingIds(sessionId: string, turnId?: string): string[] {
+    const out: string[] = []
+    for (const [id, p] of this.pending) if (p.req.sessionId === sessionId && (turnId === undefined || p.req.turnId === turnId)) out.push(id)
+    return out
+  }
+
   /** 内核停止:全部待决拒绝(by cancel),之后的请求也直接拒绝 */
   cancelAll(): void {
     this.closed = true

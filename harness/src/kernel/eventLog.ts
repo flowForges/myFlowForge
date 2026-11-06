@@ -8,9 +8,13 @@ export function openDb(file: string): DatabaseSync {
   db.exec(`CREATE TABLE IF NOT EXISTS events(
     seq INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, type TEXT, session_id TEXT, payload TEXT);
   CREATE TABLE IF NOT EXISTS receipts(
-    command_id TEXT PRIMARY KEY, method TEXT, result TEXT, ts INTEGER);`)
+    command_id TEXT PRIMARY KEY, method TEXT, result TEXT, ts INTEGER);
+  CREATE INDEX IF NOT EXISTS events_session ON events(session_id, seq);`) // 08 R9:老库第一次打开时建
   return db
 }
+
+/** 一个会话的一页,新的在前:session_id、seq 上界(不含)、seq 下界(含)、条数 */
+export const SESSION_PAGE_SQL = 'SELECT * FROM events INDEXED BY events_session WHERE session_id = ? AND seq < ? AND seq >= ? ORDER BY seq DESC LIMIT ?'
 
 type Written = { log: EventLog; event: KernelEvent }
 
@@ -126,6 +130,26 @@ function redactPayload(type: string, p: Record<string, unknown>, edit: RedactEdi
 
 const SCAN_PAGE = 500
 
+/** 抹除后每条事件还留的:id 字段。session.created 另留结构字段(08 §4.3 第 4 步) */
+const ERASE_KEEP = ['turnId', 'runId', 'approvalId', 'callId'] as const
+const ERASE_KEEP_CREATED = ['cwd', 'repo', 'origin', 'audience', 'projectTop', 'approvalMode', 'toolset', 'model'] as const
+
+function erasedPayload(type: string, raw: string): string | undefined {
+  let p: unknown
+  try {
+    p = JSON.parse(raw)
+  } catch {
+    p = undefined
+  }
+  const old = p && typeof p === 'object' && !Array.isArray(p) ? (p as Record<string, unknown>) : {}
+  if (old.erased === true) return undefined // 抹过的:重做是空操作
+  const next: Record<string, unknown> = {}
+  for (const k of ERASE_KEEP) if (typeof old[k] === 'string') next[k] = old[k]
+  if (type === 'session.created') for (const k of ERASE_KEEP_CREATED) if (old[k] !== undefined) next[k] = old[k]
+  next.erased = true
+  return JSON.stringify(next)
+}
+
 export class EventLog {
   private listeners = new Set<(e: KernelEvent) => void>()
   private outbox: KernelEvent[] = []
@@ -139,6 +163,10 @@ export class EventLog {
   private updateStmt
   private createdStmt
   private latestStmt
+  private pageStmt
+  private olderStmt
+  private deletedStmt
+  private isDeletedStmt
 
   constructor(
     private db: DatabaseSync,
@@ -154,6 +182,10 @@ export class EventLog {
     this.createdStmt = db.prepare("SELECT session_id AS id, ts, json_extract(payload, '$.title') AS title FROM events WHERE type = 'session.created' AND session_id IS NOT NULL ORDER BY seq")
     // SQLite 保证:只有一个 MAX 时,裸列取自那一行
     this.latestStmt = db.prepare("SELECT session_id AS id, MAX(seq) AS seq, ts FROM events WHERE session_id IS NOT NULL AND type != 'memory.checkpoint' GROUP BY session_id")
+    this.pageStmt = db.prepare(SESSION_PAGE_SQL)
+    this.olderStmt = db.prepare('SELECT 1 AS x FROM events INDEXED BY events_session WHERE session_id = ? AND seq < ? LIMIT 1')
+    this.deletedStmt = db.prepare("SELECT DISTINCT session_id AS id FROM events WHERE type = 'session.deleted' AND session_id IS NOT NULL")
+    this.isDeletedStmt = db.prepare("SELECT 1 AS x FROM events INDEXED BY events_session WHERE session_id = ? AND type = 'session.deleted' LIMIT 1")
   }
 
   append(e: Omit<KernelEvent, 'seq' | 'ts'>): KernelEvent {
@@ -211,14 +243,27 @@ export class EventLog {
   sessionSummaries(): { id: string; title: string; updatedAt: number }[] {
     const created = this.createdStmt.all() as { id: string; ts: number; title: unknown }[]
     const latest = new Map((this.latestStmt.all() as { id: string; ts: number }[]).map(r => [r.id, r.ts]))
+    const deleted = new Set((this.deletedStmt.all() as { id: string }[]).map(r => r.id))
     const out = new Map<string, { id: string; title: string; updatedAt: number }>()
-    for (const c of created) out.set(c.id, { id: c.id, title: typeof c.title === 'string' && c.title !== '' ? c.title : '新会话', updatedAt: latest.get(c.id) ?? c.ts })
+    for (const c of created) if (!deleted.has(c.id)) out.set(c.id, { id: c.id, title: typeof c.title === 'string' && c.title !== '' ? c.title : '新会话', updatedAt: latest.get(c.id) ?? c.ts })
     return [...out.values()]
   }
 
   /** 某会话的全部事件(seq 升序) */
   bySession(sessionId: string): KernelEvent[] {
     return (this.sessionStmt.all(sessionId) as Row[]).map(toEvent)
+  }
+
+  /**
+   * 某会话的一页(08 §4.2),seq 升序:beforeSeq 之前(不含)、fromSeq 起(含)最新的 limit 条。
+   * hasMore:比这一页最老的那条还早的,这个会话还有
+   */
+  bySessionPage(sessionId: string, o: { beforeSeq?: number; limit: number; fromSeq?: number }): { events: KernelEvent[]; hasMore: boolean } {
+    const before = o.beforeSeq ?? Number.MAX_SAFE_INTEGER
+    const from = o.fromSeq ?? 0
+    const rows = (this.pageStmt.all(sessionId, before, from, o.limit) as Row[]).reverse()
+    const oldest = rows.length ? rows[0].seq : Math.min(before, Math.max(from, 1))
+    return { events: rows.map(toEvent), hasMore: this.olderStmt.get(sessionId, oldest) !== undefined }
   }
 
   tail(limit: number): KernelEvent[] {
@@ -258,6 +303,28 @@ export class EventLog {
     })
     this.checkpoint() // 没有改动也做:上一次可能提交了却没清掉,重试要补上
     return seqs.size
+  }
+
+  /**
+   * 整会话抹除(08 §4.3 第 4 步):这个会话的每一条事件(不论类型)只留 seq、ts、type、session_id,
+   * 载荷只剩 id 字段和 erased:true;session.created 另留结构字段,title 抹掉。前提是已有 session.deleted,否则抛错。
+   * 一个事务;抹过的跳过,所以重做是空操作。有改动才写一条 events.redacted {by, seqs: [], session}。返回改了几条
+   */
+  eraseSession(sessionId: string, by: string): number {
+    if (this.isDeletedStmt.get(sessionId) === undefined) throw new Error('eraseSession: session is not deleted')
+    this.db.exec('PRAGMA secure_delete=ON')
+    let changed = 0
+    transaction(this.db, () => {
+      for (const row of this.sessionStmt.all(sessionId) as Row[]) {
+        const next = erasedPayload(row.type, row.payload)
+        if (next === undefined) continue
+        this.updateStmt.run(next, row.seq)
+        changed++
+      }
+      if (changed > 0) this.append({ type: 'events.redacted', payload: { by, seqs: [], session: sessionId } })
+    })
+    this.checkpoint()
+    return changed
   }
 
   /**

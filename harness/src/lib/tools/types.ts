@@ -104,6 +104,10 @@ export interface BackgroundRuns {
   abandon(turnId: string, reason?: string): Promise<void>
   /** 所有轮;内核关闭时在 killLive 之前调,不再接受新运行 */
   abandonAll?(reason?: string): Promise<void>
+  /** 08 §4.3:这个会话还活着(排队 + 运行中)的委派运行数;删会话时内核同步查 */
+  liveFor?(sessionId: string): number
+  /** 08 §4.3(R2):还在盘上、有改动、没合并过的保留 worktree */
+  unmergedFor?(sessionId: string): Promise<{ runId: string; files: number }[]>
 }
 
 /** 工具在 permission / run 里用自己的 zod 校验参数;不合格 → 抛错(tools 服务把消息作为 isError 交给模型) */
@@ -212,4 +216,9 @@ export interface SessionCommands {
   readonly home: string
   /** IM 会话的 auto 收回成 ask,写进事件,重启后也算(07 §8.3)。只认 origin:'im';不是 auto 的什么都不做 */
   narrowApproval(sessionId: string): void
+  /**
+   * 08 §4.3 第 2 步(R3):删会话的墓碑。同步:有开着的轮或活着的委派运行 → RpcError(-32003),否则写 session.deleted {}。
+   * 已删的再调是空操作;未知会话 → RpcError(-32602)。之后 prompt、cancel、rename 对它回 unknown session
+   */
+  markDeleted(sessionId: string): void
 }

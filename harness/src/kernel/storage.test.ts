@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, readdirSync, writeFileSync, existsSync, readFileSy
 import { DatabaseSync } from 'node:sqlite'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { openDb, transaction, EventLog, REDACTED } from './eventLog'
+import { openDb, transaction, EventLog, REDACTED, SESSION_PAGE_SQL } from './eventLog'
 import { MemoryConfigSchema, parseMemoryConfig } from '../lib/memory/types'
 import { KernelConfigSchema } from './config'
 import { AssistantPartSchema, type EventType } from '../protocol/index'
@@ -582,5 +582,83 @@ describe('memory config (06)', () => {
   })
   it('the kernel keeps the section as it is, even when broken', () => {
     expect(KernelConfigSchema.parse({ memory: { nightly: 'garbage' } }).memory).toEqual({ nightly: 'garbage' })
+  })
+})
+
+describe('session index and paging (08 §4.2, R9)', () => {
+  const indexes = (db: DatabaseSync) => (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'events'").all() as { name: string }[]).map(r => r.name)
+
+  it('openDb creates events_session; a database made before it gains it and keeps its rows', () => {
+    const file = join(mk(), 'old.db')
+    const old = new DatabaseSync(file)
+    old.exec(`CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, type TEXT, session_id TEXT, payload TEXT);
+      CREATE TABLE receipts(command_id TEXT PRIMARY KEY, method TEXT, result TEXT, ts INTEGER);`)
+    old.prepare('INSERT INTO events(ts, type, session_id, payload) VALUES (1, ?, ?, ?)').run('session.created', 's', '{}')
+    expect(indexes(old)).not.toContain('events_session')
+    old.close()
+    const db = openDb(file)
+    expect(indexes(db)).toContain('events_session')
+    expect(new EventLog(db).bySession('s').map(e => e.type)).toEqual(['session.created'])
+    db.close()
+    const again = openDb(file) // 再开一次不报错
+    expect(indexes(again).filter(n => n === 'events_session')).toHaveLength(1)
+    again.close()
+  })
+
+  it('the page query uses events_session', () => {
+    const db = openDb(join(mk(), 'k.db'))
+    const log = new EventLog(db)
+    for (let i = 0; i < 50; i++) log.append({ type: 'turn.started', sessionId: i % 2 ? 'a' : 'b', payload: {} })
+    const plan = (db.prepare(`EXPLAIN QUERY PLAN ${SESSION_PAGE_SQL}`).all('a', 40, 0, 10) as { detail: string }[]).map(r => r.detail).join(' | ')
+    expect(plan).toContain('events_session')
+    const bySession = (db.prepare("EXPLAIN QUERY PLAN SELECT * FROM events WHERE session_id = ? ORDER BY seq").all('a') as { detail: string }[]).map(r => r.detail).join(' | ')
+    expect(bySession).toContain('events_session')
+  })
+
+  it('bySessionPage walks back without gaps or duplicates, only that session, ascending', () => {
+    const log = new EventLog(openDb(join(mk(), 'k.db')))
+    const mine: number[] = []
+    for (let i = 0; i < 60; i++) {
+      const e = log.append({ type: 'turn.started', sessionId: i % 3 ? 'a' : 'b', payload: { i } })
+      if (e.sessionId === 'a') mine.push(e.seq)
+    }
+    const got: number[] = []
+    let page = log.bySessionPage('a', { limit: 7 })
+    const pages = [page]
+    while (page.hasMore) {
+      page = log.bySessionPage('a', { beforeSeq: page.events[0].seq, limit: 7 })
+      pages.push(page)
+    }
+    for (const p of [...pages].reverse()) {
+      expect(p.events.map(e => e.seq)).toEqual([...p.events.map(e => e.seq)].sort((x, y) => x - y))
+      expect(p.events.every(e => e.sessionId === 'a')).toBe(true)
+      got.push(...p.events.map(e => e.seq))
+    }
+    expect(got).toEqual(mine)
+    expect(pages.at(-1)!.hasMore).toBe(false)
+    expect(log.bySessionPage('nope', { limit: 5 })).toEqual({ events: [], hasMore: false })
+  })
+
+  it('fromSeq: everything from there on, up to limit newest; hasMore says older rows exist', () => {
+    const log = new EventLog(openDb(join(mk(), 'k.db')))
+    const seqs = Array.from({ length: 20 }, () => log.append({ type: 'turn.started', sessionId: 's', payload: {} }).seq)
+    const p = log.bySessionPage('s', { fromSeq: seqs[5], limit: 100 })
+    expect(p.events.map(e => e.seq)).toEqual(seqs.slice(5))
+    expect(p.hasMore).toBe(true)
+    const all = log.bySessionPage('s', { fromSeq: seqs[0], limit: 100 })
+    expect(all.hasMore).toBe(false)
+    const capped = log.bySessionPage('s', { fromSeq: seqs[0], limit: 4 })
+    expect(capped.events.map(e => e.seq)).toEqual(seqs.slice(16))
+    expect(capped.hasMore).toBe(true)
+  })
+
+  it('sessionSummaries leaves out deleted sessions; the shape stays', () => {
+    const log = new EventLog(openDb(join(mk(), 'k.db')))
+    log.append({ type: 'session.created', sessionId: 'a', payload: { title: 'A' } })
+    log.append({ type: 'session.created', sessionId: 'b', payload: { title: 'B' } })
+    log.append({ type: 'session.deleted', sessionId: 'a', payload: {} })
+    const s = log.sessionSummaries()
+    expect(s.map(x => x.id)).toEqual(['b'])
+    expect(Object.keys(s[0]).sort()).toEqual(['id', 'title', 'updatedAt'])
   })
 })
