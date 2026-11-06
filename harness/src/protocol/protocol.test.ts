@@ -922,6 +922,48 @@ describe('client per-call timeout (spec §4.6)', () => {
   })
 })
 
+describe('client per-call timeout is validated', () => {
+  let tmp: string | undefined
+  afterEach(() => { if (tmp) rmSync(tmp, { recursive: true, force: true }); tmp = undefined })
+
+  it('0, Infinity, NaN, a negative and 2^31 are refused before anything is sent', async () => {
+    tmp = mkdtempSync(join(tmpdir(), 'mffai-clv-'))
+    const addr = process.platform === 'win32' ? `\\\\.\\pipe\\mffai-clv-${process.pid}-${Date.now()}` : join(tmp, 'w.sock')
+    const token = 'tok'
+    const seen: string[] = []
+    const socks = new Set<net.Socket>()
+    const server = net.createServer(sock => {
+      socks.add(sock)
+      sock.setEncoding('utf8')
+      const dec = new Decoder()
+      let clientNonce = ''
+      const serverNonce = newNonce()
+      sock.on('data', (chunk: string) => {
+        for (const m of dec.push(chunk) as Array<{ id: number; method: string; params: Record<string, string> }>) {
+          const reply = (r: unknown) => sock.write(frame({ jsonrpc: '2.0', id: m.id, result: r }))
+          if (m.method === 'auth.challenge') { clientNonce = m.params.clientNonce; reply({ serverNonce, proof: serverProof(token, clientNonce, serverNonce) }) }
+          else if (m.method === 'auth.verify') reply({ ok: true })
+          else { seen.push(m.method); reply({ ok: true }) }
+        }
+      })
+      sock.on('error', () => {})
+    })
+    await new Promise<void>(r => server.listen(addr, r))
+    const c = await connectClient({ addr, token, timeoutMs: 1000 })
+    try {
+      for (const bad of [0, Infinity, NaN, -5, 2 ** 31, 1.5]) await expect(c.call('status', {}, { timeoutMs: bad })).rejects.toThrow('invalid timeoutMs')
+      expect(seen).toEqual([])
+      await expect(c.call('status', {}, { timeoutMs: 2 ** 31 - 1 })).resolves.toEqual({ ok: true })
+      await expect(c.call('status', {}, {})).resolves.toEqual({ ok: true })
+      expect(seen).toEqual(['status', 'status'])
+    } finally {
+      c.close()
+      for (const s of socks) s.destroy()
+      await new Promise<void>(r => server.close(() => r()))
+    }
+  })
+})
+
 describe('@mffai/protocol/browser (spec 评审修订 R14)', () => {
   const PROTO = dirname(new URL(import.meta.url).pathname)
   const REPO = resolve(PROTO, '..', '..', '..')

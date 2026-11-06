@@ -652,12 +652,12 @@ describe('session index and paging (08 §4.2, R9)', () => {
     expect(capped.hasMore).toBe(true)
   })
 
-  it('sessionSummaries leaves out deleted sessions; the shape stays', () => {
+  it('sessionSummaries leaves out the sessions it is told are deleted; the shape stays', () => {
     const log = new EventLog(openDb(join(mk(), 'k.db')))
     log.append({ type: 'session.created', sessionId: 'a', payload: { title: 'A' } })
     log.append({ type: 'session.created', sessionId: 'b', payload: { title: 'B' } })
-    log.append({ type: 'session.deleted', sessionId: 'a', payload: {} })
-    const s = log.sessionSummaries()
+    // 删掉的由调用方给(内核的 Sessions 已经知道),不再扫一遍全表
+    const s = log.sessionSummaries(['a'])
     expect(s.map(x => x.id)).toEqual(['b'])
     expect(Object.keys(s[0]).sort()).toEqual(['id', 'title', 'updatedAt'])
   })

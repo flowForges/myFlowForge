@@ -99,7 +99,12 @@ const STATE_LIMIT = 300
 const STATE_MAX = 5000
 const TITLE_MAX = 120
 /** 改名去掉的:C0、DEL、C1 和双向控制符 */
-const TITLE_CONTROLS = /[\u0000-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g
+const TITLE_CONTROLS = /[\u0000-\u001F\u007F-\u009F\u061C\u200B-\u200F\u2028\u2029\u202A-\u202E\u2066-\u2069\uFEFF]/g
+const cleanTitle = (raw: string) => raw.replace(TITLE_CONTROLS, '').trim()
+/** 前 n 个码点(不劈开代理对) */
+const firstCodePoints = (s: string, n: number) => [...s].slice(0, n).join('')
+/** 别处的插件方法拿这个会话做事之前先拒掉删掉的;session.delete 本身要能重做(08 §4.3) */
+const DELETED_PASS = new Set<string>(['session.delete'])
 const APPROVAL_TIMEOUT_MS = 600_000
 /** 启动时等 git 删崩溃留下的 worktree 的上限;没删完的接着删,不挡启动 */
 const RECOVERY_WAIT_MS = 3_000
@@ -427,7 +432,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
   }
 
   function snapshot(): SnapshotResult {
-    return { status: status(), sessions: eventLog.sessionSummaries(), lastSeq: eventLog.lastSeq() }
+    return { status: status(), sessions: eventLog.sessionSummaries(sessions.deletedIds()), lastSeq: eventLog.lastSeq() }
   }
 
   /** 新方法(08 §4)对未知和删掉的会话一样回答 */
@@ -513,7 +518,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
         case 'session.rename':
           return command(name, p.commandId, () => {
             liveSession(p.sessionId)
-            const title = (p.title as string).replace(TITLE_CONTROLS, '').trim()
+            const title = cleanTitle(p.title as string)
             const n = [...title].length
             if (n < 1 || n > TITLE_MAX) throw new RpcError(ERR_INVALID_PARAMS, 'invalid title')
             append({ type: 'session.renamed', sessionId: p.sessionId, payload: { title } })
@@ -534,8 +539,10 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
           return command(name, p.commandId, () => {
             const cwd = checked()
             const sessionId = randomUUID()
+            // 和改名同样清洗;标题来自程序(IM 的聊天名等),超长截掉而不是拒绝。什么都不剩就不写
+            const title = p.title === undefined ? undefined : firstCodePoints(cleanTitle(p.title), TITLE_MAX) || undefined
             const payload = {
-              title: p.title,
+              title,
               ...(p.model && { model: p.model }),
               ...(cwd && { cwd, repo }),
               approvalMode: p.approvalMode ?? 'ask',
@@ -594,6 +601,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
           // 插件注册的方法;auth / hello / events.subscribe 属于传输层,不会走到这里
           const handler = rpc.get(name)
           if (!handler) throw new RpcError(ERR_METHOD_NOT_FOUND, `method not handled: ${method}`)
+          if (typeof p.sessionId === 'string' && !DELETED_PASS.has(name)) refuseDeleted(p.sessionId)
           const run = async () => {
             try {
               return await handler(p)

@@ -208,6 +208,13 @@ describe('Sessions: title, createdAt, updatedAt, deleted (08 §4.1)', () => {
     expect(r.isDeleted('a')).toBe(true)
     expect(r.meta('a')?.title).toBe('新会话')
   })
+
+  it('a second session.created for a deleted id does not bring it back', () => {
+    const s = new Sessions(dir)
+    s.load([ev(1, 1, 'session.created', 'a', {}), ev(2, 2, 'session.deleted', 'a', {}), ev(3, 3, 'session.created', 'a', { title: '复活' })])
+    expect(s.isDeleted('a')).toBe(true)
+    expect(s.list()).toEqual([])
+  })
 })
 
 describe('session audience (06 spec §9)', () => {

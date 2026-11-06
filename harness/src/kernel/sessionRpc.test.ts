@@ -16,9 +16,12 @@ let kernels: Kernel[] = []
 let ctx: PluginContext
 /** 测试设定:某会话还有几个活着的委派运行 */
 const live = new Map<string, number>()
+/** 插件方法实际收到的调用(默认分支的拒绝测试用) */
+const handled: string[] = []
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'mffai-srpc-'))
   live.clear()
+  handled.length = 0
 })
 afterEach(async () => {
   for (const k of kernels) await k.close().catch(() => {})
@@ -39,7 +42,26 @@ const parker: Plugin = {
       active: () => 0, pending: () => 0, take: () => [], wait: async () => {}, abandon: async () => {},
       liveFor: (sid: string) => live.get(sid) ?? 0,
     })
+    for (const method of ['turn.changes', 'executor.cancel', 'session.delete'] as const) {
+      c.rpc.register(method, async params => {
+        handled.push(method)
+        return method === 'turn.changes' ? { files: [] } : method === 'session.delete' ? { ok: true, redacted: 0, notes: [] } : { ok: true }
+      })
+    }
     c.events.on('session.prompt', async ({ sessionId, turnId, text, signal, inbox }: Req) => {
+      if (text === 'linger') {
+        // 终态写了,处理者还没回来:还在 activeBySession 里,但不算开着
+        c.append({ type: 'turn.ended', sessionId, payload: { turnId } })
+        await new Promise<void>(r => signal.addEventListener('abort', () => r(), { once: true }))
+        return true
+      }
+      if (text === 'two approvals') {
+        const approvals = c.services.get<Approvals>('approvals')!
+        approvals.request({ sessionId, turnId, callId: 'mine', tool: 'shell', summary: 'a', signal }).catch(() => {})
+        approvals.request({ sessionId, turnId: 'older-turn', callId: 'stale', tool: 'shell', summary: 'b', signal }).catch(() => {})
+        while (!signal.aborted) await inbox.park()
+        return true
+      }
       const m = /^park (\d+)$/.exec(text)
       if (m) {
         c.append({ type: 'turn.started', sessionId, payload: { turnId } })
@@ -313,3 +335,56 @@ describe('Turn.firstSeq (R8)', () => {
     expect((s.events[0].payload as { turnId: string; followUp?: boolean })).toEqual({ turnId, text: 'park 400' })
   })
 })
+
+describe('review fixes', () => {
+  it('open.approvalIds lists only this turn\'s approvals; pendingApprovals counts the session\'s', async () => {
+    const k = await boot()
+    const { sessionId } = await create(k)
+    const { turnId } = await prompt(k, sessionId, 'two approvals')
+    await waitFor(() => all(k, sessionId).filter(e => e.type === 'approval.requested').length === 2)
+    const mine = all(k, sessionId).find(e => e.type === 'approval.requested' && (e.payload as { callId: string }).callId === 'mine')!
+    const s = await state(k, sessionId)
+    expect(s.open).toEqual({ turnId, parked: true, approvalIds: [(mine.payload as { approvalId: string }).approvalId] })
+    expect(s.session.pendingApprovals).toBe(2)
+  })
+
+  it('a turn that wrote its terminal event is not open, even while its handler is still running', async () => {
+    const k = await boot()
+    const { sessionId } = await create(k)
+    await prompt(k, sessionId, 'linger')
+    await waitFor(() => all(k, sessionId).some(e => e.type === 'turn.ended'))
+    expect((await list(k))[0]).not.toHaveProperty('open')
+    expect((await state(k, sessionId)).open).toBeUndefined()
+  })
+
+  it('plugin methods with a deleted sessionId are refused before the handler runs; session.delete still gets through to finish its work', async () => {
+    const k = await boot()
+    const { sessionId } = await create(k)
+    cmds().markDeleted(sessionId)
+    await expect(k.handle('turn.changes', { sessionId, turnId: 't' })).rejects.toMatchObject({ code: -32602, message: 'unknown session' })
+    expect(await codeOf(k.handle('executor.cancel', { commandId: 'xc', sessionId, runId: 'r' }))).toBe(-32602)
+    expect(handled).toEqual([])
+    expect(await k.handle('session.delete', { commandId: 'del', sessionId })).toEqual({ ok: true, redacted: 0, notes: [] })
+    // 没建过的 id 照旧交给插件
+    expect(await k.handle('turn.changes', { sessionId: 'never-made', turnId: 't' })).toEqual({ files: [] })
+    expect(handled).toEqual(['session.delete', 'turn.changes'])
+  })
+
+  it('session.create titles are cleaned like renames and cut to 120; nothing left means no title', async () => {
+    const k = await boot()
+    const a = await create(k, { title: ' \u202Eab\u2028c\u2029\u200Bd\u200C\u200De\uFEFF\u0007 ' })
+    const b = await create(k, { title: '字'.repeat(130) })
+    const c = await create(k, { title: '\u200B\uFEFF' })
+    const payload = (sid: string) => all(k, sid)[0].payload as { title?: string }
+    expect(payload(a.sessionId).title).toBe('abcde')
+    expect(payload(b.sessionId).title).toBe('字'.repeat(120))
+    expect(payload(c.sessionId)).not.toHaveProperty('title')
+    const titles = new Map((await list(k)).map(r => [r.id, r.title]))
+    expect(titles.get(c.sessionId)).toBe('新会话')
+    expect(await codeOf(create(k, { title: 'x'.repeat(4097) }))).toBe(-32602)
+    await k.handle('session.rename', { commandId: 'r', sessionId: a.sessionId, title: 'x\u2028y\uFEFF\u200D' })
+    expect(titles.size).toBe(3)
+    expect((await list(k)).find(r => r.id === a.sessionId)!.title).toBe('xy')
+  })
+})
+

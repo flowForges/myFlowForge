@@ -50,6 +50,12 @@ describe('RpcRegistry', () => {
     for (const m of ['auth.challenge', 'auth.verify', 'hello', 'status', 'snapshot', 'events.tail', 'events.subscribe', 'session.create', 'session.prompt', 'session.cancel'])
       expect(() => r.register('a', m as WorkerMethodName, async () => 1)).toThrow(/reserved/)
   })
+  it('session.delete is the one session.* a plugin may register (08 §4.3: memory-default owns the delete pipeline)', () => {
+    const r = new RpcRegistry()
+    expect(() => r.register('memory-default', 'session.delete', async () => 1)).not.toThrow()
+    for (const m of ['session.list', 'session.state', 'session.events', 'session.rename'])
+      expect(() => r.register('a', m as WorkerMethodName, async () => 1)).toThrow(/reserved/)
+  })
   it('permissions.* is reserved', () => {
     const r = new RpcRegistry()
     for (const m of ['permissions.get', 'permissions.set']) expect(() => r.register('a', m as WorkerMethodName, async () => 1)).toThrow(/reserved/)

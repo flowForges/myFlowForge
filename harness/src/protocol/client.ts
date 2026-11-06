@@ -35,6 +35,8 @@ export interface ClientOpts {
   timeoutMs?: number
 }
 
+const MAX_TIMER_MS = 2 ** 31 - 1
+
 type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void; timer?: ReturnType<typeof setTimeout> }
 
 interface Conn {
@@ -106,7 +108,12 @@ async function openConn(opts: ClientOpts, onNotify: (m: Record<string, any>) => 
       sock.write(encodeFrame({ jsonrpc: '2.0', id, method, params }))
     })
 
-  const call = (method: string, params: unknown = {}, o?: CallOpts) => send(method, params, o?.timeoutMs ?? opts.timeoutMs)
+  const call = (method: string, params: unknown = {}, o?: CallOpts) => {
+    const ms = o?.timeoutMs
+    // setTimeout 超过 2^31-1 会当成 1 ms,NaN、0、负数也是立刻超时
+    if (ms !== undefined && !(Number.isInteger(ms) && ms >= 1 && ms <= MAX_TIMER_MS)) return Promise.reject(new RangeError('invalid timeoutMs'))
+    return send(method, params, ms ?? opts.timeoutMs)
+  }
 
   try {
     const clientNonce = newNonce()

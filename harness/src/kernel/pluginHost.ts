@@ -34,8 +34,11 @@ export interface PluginContext {
      * 这期间整个工作进程同步阻塞,所以先向监管要时间,要不到就不做。then:同一段时间里要做的别的阻塞活,extraBytes 是它的体量
      */
     purge(o?: { then?(): void; extraBytes?: number }): Promise<void>
-    /** 删会话:整会话抹除(见 EventLog.eraseSession);权限同 redact。会话还没有 session.deleted 就抛错。返回改了几条 */
-    eraseSession(sessionId: string): number
+    /**
+     * 删会话:整会话抹除(见 EventLog.eraseSession);权限同 redact。会话还没有 session.deleted 就 reject。返回改了几条。
+     * 同步阻塞整个工作进程,所以和 purge 一样先向监管要时间
+     */
+    eraseSession(sessionId: string): Promise<number>
   }
   effect(dispose: () => void | Promise<void>): void
   /** 注册工作进程 RPC 方法:参数先由内核按 WorkerMethods 校验;随插件停用自动注销 */
@@ -178,10 +181,16 @@ export class PluginHost {
             if (!log || !EVENT_REDACTORS.includes(id)) throw new Error(`plugin ${id} may not redact events`)
             return log.redact(edits, id)
           },
-          eraseSession: sessionId => {
+          eraseSession: async sessionId => {
             const log = this.deps.eventLog
             if (!log || !EVENT_REDACTORS.includes(id)) throw new Error(`plugin ${id} may not redact events`)
-            return log.eraseSession(sessionId, id)
+            const hold = this.deps.holdWatchdog
+            await hold?.(purgeHoldMs(log.sizeBytes()))
+            try {
+              return log.eraseSession(sessionId, id)
+            } finally {
+              await hold?.(0)
+            }
           },
           purge: async o => {
             const log = this.deps.eventLog

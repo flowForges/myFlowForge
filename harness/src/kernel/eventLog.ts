@@ -165,8 +165,8 @@ export class EventLog {
   private latestStmt
   private pageStmt
   private olderStmt
-  private deletedStmt
   private isDeletedStmt
+  private erasePageStmt
 
   constructor(
     private db: DatabaseSync,
@@ -184,7 +184,7 @@ export class EventLog {
     this.latestStmt = db.prepare("SELECT session_id AS id, MAX(seq) AS seq, ts FROM events WHERE session_id IS NOT NULL AND type != 'memory.checkpoint' GROUP BY session_id")
     this.pageStmt = db.prepare(SESSION_PAGE_SQL)
     this.olderStmt = db.prepare('SELECT 1 AS x FROM events INDEXED BY events_session WHERE session_id = ? AND seq < ? LIMIT 1')
-    this.deletedStmt = db.prepare("SELECT DISTINCT session_id AS id FROM events WHERE type = 'session.deleted' AND session_id IS NOT NULL")
+    this.erasePageStmt = db.prepare('SELECT seq, type, payload FROM events INDEXED BY events_session WHERE session_id = ? AND seq > ? ORDER BY seq LIMIT ?')
     this.isDeletedStmt = db.prepare("SELECT 1 AS x FROM events INDEXED BY events_session WHERE session_id = ? AND type = 'session.deleted' LIMIT 1")
   }
 
@@ -239,11 +239,11 @@ export class EventLog {
     }
   }
 
-  /** snapshot 用:不读别的载荷。标题只在 session.created 里;后台写的检查点不算会话有动静 */
-  sessionSummaries(): { id: string; title: string; updatedAt: number }[] {
+  /** snapshot 用:不读别的载荷。标题只在 session.created 里;后台写的检查点不算会话有动静。deleted 由内核的 Sessions 给 */
+  sessionSummaries(deletedIds: Iterable<string> = []): { id: string; title: string; updatedAt: number }[] {
     const created = this.createdStmt.all() as { id: string; ts: number; title: unknown }[]
     const latest = new Map((this.latestStmt.all() as { id: string; ts: number }[]).map(r => [r.id, r.ts]))
-    const deleted = new Set((this.deletedStmt.all() as { id: string }[]).map(r => r.id))
+    const deleted = new Set(deletedIds)
     const out = new Map<string, { id: string; title: string; updatedAt: number }>()
     for (const c of created) if (!deleted.has(c.id)) out.set(c.id, { id: c.id, title: typeof c.title === 'string' && c.title !== '' ? c.title : '新会话', updatedAt: latest.get(c.id) ?? c.ts })
     return [...out.values()]
@@ -308,18 +308,27 @@ export class EventLog {
   /**
    * 整会话抹除(08 §4.3 第 4 步):这个会话的每一条事件(不论类型)只留 seq、ts、type、session_id,
    * 载荷只剩 id 字段和 erased:true;session.created 另留结构字段,title 抹掉。前提是已有 session.deleted,否则抛错。
-   * 一个事务;抹过的跳过,所以重做是空操作。有改动才写一条 events.redacted {by, seqs: [], session}。返回改了几条
+   * 一个事务;抹过的跳过,所以重做是空操作。有改动才写一条 events.redacted {by, seqs: [], session}。返回改了几条。
+   * 按 seq 分页走(一次最多 pageSize 条在内存里):大会话有几万条。同步跑,阻塞的时间要先向监管要,见 PluginContext.events.eraseSession
    */
-  eraseSession(sessionId: string, by: string): number {
+  eraseSession(sessionId: string, by: string, o: { pageSize?: number; onPage?: (rows: number) => void } = {}): number {
     if (this.isDeletedStmt.get(sessionId) === undefined) throw new Error('eraseSession: session is not deleted')
+    const pageSize = o.pageSize ?? SCAN_PAGE
     this.db.exec('PRAGMA secure_delete=ON')
     let changed = 0
     transaction(this.db, () => {
-      for (const row of this.sessionStmt.all(sessionId) as Row[]) {
-        const next = erasedPayload(row.type, row.payload)
-        if (next === undefined) continue
-        this.updateStmt.run(next, row.seq)
-        changed++
+      // 键集分页:只改 payload,不碰索引列,下一页从上一页最后的 seq 接着取
+      for (let cursor = 0; ; ) {
+        const rows = this.erasePageStmt.all(sessionId, cursor, pageSize) as Pick<Row, 'seq' | 'type' | 'payload'>[]
+        if (rows.length === 0) break
+        o.onPage?.(rows.length)
+        for (const row of rows) {
+          const next = erasedPayload(row.type, row.payload)
+          if (next === undefined) continue
+          this.updateStmt.run(next, row.seq)
+          changed++
+        }
+        cursor = rows[rows.length - 1].seq
       }
       if (changed > 0) this.append({ type: 'events.redacted', payload: { by, seqs: [], session: sessionId } })
     })

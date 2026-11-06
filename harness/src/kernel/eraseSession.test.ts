@@ -5,6 +5,8 @@ import { DatabaseSync } from 'node:sqlite'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createKernel, type Kernel } from './kernel'
+import { EventLog, openDb } from './eventLog'
+import { purgeHoldMs } from './pluginHost'
 import type { Plugin, PluginContext } from './pluginHost'
 import type { SessionCommands } from '../lib/tools/types'
 import { NO_SANDBOX } from '../../test/sandboxStub'
@@ -23,8 +25,8 @@ afterEach(async () => {
 const redactor: Plugin = { manifest: { id: 'memory-default', version: '0', kernel: '^0.1.0' }, activate: c => { red = c } }
 const outsider: Plugin = { manifest: { id: 'outsider', version: '0', kernel: '^0.1.0' }, activate: c => { other = c } }
 
-async function boot(): Promise<Kernel> {
-  const k = await createKernel({ sandbox: NO_SANDBOX, dataDir: dir, plugins: [redactor, outsider], secrets: { osBackend: false } })
+async function boot(holdWatchdog?: (ms: number) => Promise<void>): Promise<Kernel> {
+  const k = await createKernel({ sandbox: NO_SANDBOX, dataDir: dir, plugins: [redactor, outsider], secrets: { osBackend: false }, ...(holdWatchdog && { holdWatchdog }) })
   kernels.push(k)
   return k
 }
@@ -63,7 +65,7 @@ describe('EventLog.eraseSession (08 §4.3, R3)', () => {
   it('is refused until the session has a tombstone', async () => {
     const k = await boot()
     await seed(k, 'gone', MARK)
-    expect(() => red.events.eraseSession('gone')).toThrow()
+    await expect(red.events.eraseSession('gone')).rejects.toThrow()
     expect(() => k.events.eraseSession('gone', 'x')).toThrow()
     expect(rawRows('gone').some(r => r.payload.includes(MARK))).toBe(true)
   })
@@ -76,7 +78,7 @@ describe('EventLog.eraseSession (08 §4.3, R3)', () => {
     const before = rawRows('gone')
     const keptBefore = rawRows('kept')
     red.services.get<SessionCommands>('sessionCommands')!.markDeleted('gone')
-    const n = red.events.eraseSession('gone')
+    const n = await red.events.eraseSession('gone')
     expect(n).toBe(before.length + 1) // 加上墓碑本身
     await red.events.purge()
 
@@ -105,23 +107,60 @@ describe('EventLog.eraseSession (08 §4.3, R3)', () => {
     const k = await boot()
     await seed(k, 'gone', MARK)
     red.services.get<SessionCommands>('sessionCommands')!.markDeleted('gone')
-    expect(red.events.eraseSession('gone')).toBeGreaterThan(0)
+    expect(await red.events.eraseSession('gone')).toBeGreaterThan(0)
     const snap = rawRows('gone')
-    expect(red.events.eraseSession('gone')).toBe(0)
+    expect(await red.events.eraseSession('gone')).toBe(0)
     expect(rawRows('gone')).toEqual(snap)
     expect(k.events.after(0).filter(e => e.type === 'events.redacted')).toHaveLength(1)
     await k.close()
     kernels = []
     const k2 = await boot()
     expect(((await k2.handle('session.list', {})) as { sessions: { id: string }[] }).sessions.map(s => s.id)).not.toContain('gone')
-    expect(red.events.eraseSession('gone')).toBe(0)
+    expect(await red.events.eraseSession('gone')).toBe(0)
   })
 
   it('a plugin that is not an event redactor may not call it', async () => {
     const k = await boot()
     await seed(k, 'gone', MARK)
     red.services.get<SessionCommands>('sessionCommands')!.markDeleted('gone')
-    expect(() => other.events.eraseSession('gone')).toThrow(/may not/)
+    await expect(other.events.eraseSession('gone')).rejects.toThrow(/may not/)
     expect(rawRows('gone').some(r => r.payload.includes(MARK))).toBe(true)
+  })
+
+  it('takes a watchdog hold sized like purge before it blocks, and gives it back after (review: SIGKILL after 3 missed pings)', async () => {
+    const holds: { ms: number; erased: boolean }[] = []
+    const erasedNow = () => rawRows('gone').every(r => JSON.parse(r.payload).erased === true)
+    const k = await boot(async ms => { holds.push({ ms, erased: erasedNow() }) })
+    await seed(k, 'gone', MARK)
+    red.services.get<SessionCommands>('sessionCommands')!.markDeleted('gone')
+    const size = k.events.sizeBytes()
+    await red.events.eraseSession('gone')
+    expect(holds).toEqual([{ ms: purgeHoldMs(size), erased: false }, { ms: 0, erased: true }])
+  })
+
+  it('the hold is given back even when the erase throws', async () => {
+    const holds: number[] = []
+    const k = await boot(async ms => { holds.push(ms) })
+    await seed(k, 'gone', MARK)
+    await expect(red.events.eraseSession('gone')).rejects.toThrow() // 没有墓碑
+    // 每一次要到的都还回去了
+    expect(holds.filter(ms => ms > 0).length).toBe(holds.filter(ms => ms === 0).length)
+  })
+})
+
+describe('EventLog.eraseSession walks the session in pages', () => {
+  it('never holds more than one page of rows, and still erases every row', () => {
+    const log = new EventLog(openDb(join(dir, 'k.db')))
+    log.append({ type: 'session.created', sessionId: 's', payload: { title: 'x' } })
+    for (let i = 0; i < 53; i++) log.append({ type: 'message.user', sessionId: 's', payload: { turnId: `t${i}`, text: 'y'.repeat(100) } })
+    log.append({ type: 'message.user', sessionId: 'other', payload: { turnId: 'o', text: 'keep' } })
+    log.append({ type: 'session.deleted', sessionId: 's', payload: {} })
+    const pages: number[] = []
+    expect(log.eraseSession('s', 'memory-default', { pageSize: 10, onPage: n => pages.push(n) })).toBe(55)
+    expect(Math.max(...pages)).toBeLessThanOrEqual(10)
+    expect(pages.reduce((a, b) => a + b, 0)).toBe(55)
+    expect(log.bySession('s').every(e => (e.payload as { erased?: boolean }).erased === true)).toBe(true)
+    expect(log.bySession('other')[0].payload).toEqual({ turnId: 'o', text: 'keep' })
+    expect(log.eraseSession('s', 'memory-default', { pageSize: 10 })).toBe(0)
   })
 })

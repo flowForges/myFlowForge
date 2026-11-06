@@ -328,7 +328,8 @@ export const WorkerMethods = {
   'session.create': {
     params: z.object({
       commandId: z.string(),
-      title: z.string().optional(),
+      // 内核清洗后截到 120 字
+      title: z.string().max(4096).optional(),
       model: ModelRefSchema.optional(),
       cwd: z.string().optional(),
       approvalMode: ApprovalModeSchema.optional(),
