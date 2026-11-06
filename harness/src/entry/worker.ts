@@ -11,7 +11,7 @@ import { sweepStaleNetDirs } from '../lib/sandbox/net/proxy'
 import { HARNESS_VERSION } from '../kernel/version'
 import { dataDir, ensureToken, runtimePaths } from '../protocol/index'
 import { createFileLogger } from '../supervisor/fileLog'
-import { loadDevPlugins, type DevLoad } from './devPlugins'
+import { cleanStop, loadDevPlugins } from './devPlugins'
 import { createWatchdogHold } from './watchdogHold'
 
 
@@ -22,7 +22,6 @@ export async function runWorker(): Promise<void> {
   const log = createFileLogger(paths.logs, 'worker')
   let kernel: Kernel | undefined
   let server: { close(): Promise<void> } | undefined
-  let dev: DevLoad | undefined
   let stopping = false
   let startup: Promise<void> = Promise.resolve()
 
@@ -39,8 +38,8 @@ export async function runWorker(): Promise<void> {
     } catch (err) {
       log.error('worker stop failed', { error: String(err) })
     }
-    // 走到这里就不是崩溃:启动 30 s 内的正常停机不能变成假的 dev_crashed。停不下来被杀的,标记留着
-    dev?.markLoaded()
+    // 走到这里就不是崩溃,正常停机不能变成假的 dev_crashed。只看路径:不等 dev 赋值。停不下来被杀的,标记留着
+    cleanStop(join(dir, 'run'), log)
     process.exit(0)
   }
 
@@ -64,7 +63,7 @@ export async function runWorker(): Promise<void> {
       if (swept.length) log.info('stale proxy socket dirs removed', { count: swept.length })
     }
     // 开发插件排在内置之后,载的是用户批过的副本(09 spec §12)。模块顶层的代码这一步就跑了
-    dev = await loadDevPlugins({ dataDir: dir, runDir: join(dir, 'run'), log })
+    const dev = await loadDevPlugins({ dataDir: dir, runDir: join(dir, 'run'), log })
     // MFFAI_SECRETS_PLAINTEXT=1:端到端测试用,不碰系统钥匙串
     const secrets = { osBackend: process.env.MFFAI_SECRETS_PLAINTEXT !== '1' }
     // 启动时整个事件日志同步读好几遍(约 30 ms/MB),这期间回不了 ping:日志大了会被当成卡死,杀了又起,再也起不来
@@ -91,6 +90,5 @@ export async function runWorker(): Promise<void> {
   if (stopping) return
   log.info('worker ready', { pid: process.pid, addr: paths.workerAddr })
   process.send?.({ t: 'ready' })
-  dev?.armMarkLoaded()
   await createWatchdogHold()(0)
 }

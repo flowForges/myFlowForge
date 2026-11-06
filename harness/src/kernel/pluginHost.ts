@@ -61,6 +61,8 @@ export const CONFIG_SECTIONS: Record<string, (keyof KernelConfig)[]> = { 'models
 
 /** 能就地改事件日志的插件:日志只追加的唯一例外(06 spec §16) */
 export const EVENT_REDACTORS: readonly string[] = ['memory-default']
+/** loadDevPlugins 的替身抛的稳定代码 */
+const DEV_CODE = /^dev_[a-z_]{1,40}$/
 
 export interface PluginConfigAccess {
   get(): KernelConfig
@@ -205,7 +207,10 @@ export class PluginHost {
       await p.activate(ctx)
       append({ type: 'plugin.activated', payload: { id } })
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
+      const raw = err instanceof Error ? err.message : String(err)
+      // 开发插件:只报稳定代码。导入器和它自己的报错里有路径和原话(final review)
+      const dev = this.deps.devIds?.includes(id) === true
+      const message = dev ? (DEV_CODE.test(raw) ? raw : 'dev_activate_failed') : raw
       entry.state = 'failed'
       entry.error = message
       log.error(`plugin ${id} failed`, { error: message })

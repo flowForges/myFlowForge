@@ -6,9 +6,9 @@ import { pathToFileURL } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createKernel, type Kernel } from '../kernel/kernel'
 import type { Plugin, PluginContext } from '../kernel/pluginHost'
-import { readDevIndex, trustDevPlugin } from '../lib/plugins/devStore'
+import { readDevIndex, removeDevPlugin, trustDevPlugin } from '../lib/plugins/devStore'
 import { NO_SANDBOX } from '../../test/sandboxStub'
-import { DEV_LOADED_AFTER_MS, loadDevPlugins } from './devPlugins'
+import { cleanStop, loadDevPlugins } from './devPlugins'
 
 let tmp = ''
 let dataDir = ''
@@ -21,6 +21,9 @@ const log = {
   error: (m: string, d?: unknown) => void logged.push({ level: 'error', m, d }),
 }
 const marker = () => join(runDir, 'dev-loading')
+const crashed = () => join(runDir, 'dev-crashed')
+const DATA_URL = 'data:text/javascript;base64,'
+const textOf = (url: string) => (url.startsWith(DATA_URL) ? Buffer.from(url.slice(DATA_URL.length), 'base64').toString('utf8') : '')
 const sha = (b: string) => createHash('sha256').update(b).digest('hex')
 
 const moduleText = (id: string, body = '') => `${body}\nexport default { manifest: { id: ${JSON.stringify(id)}, version: '1.0.0', kernel: '^0.1.0' }, activate(ctx) { ctx.log.info('active') } }\n`
@@ -36,12 +39,12 @@ function trusted(id = 'dev-x', text = moduleText(id)) {
   return { dir, ...r, file: readDevIndex(dataDir).find(e => e.id === id)!.file }
 }
 const goodPlugin = (id: string, activate: Plugin['activate'] = () => {}) => ({ default: { manifest: { id, version: '1.0.0', kernel: '^0.1.0' }, activate } })
-/** 按 URL 给假模块;记下导入过什么 */
+/** 按 data: URL 里的字节给假模块(按里面写的 id);记下导入过什么 */
 function importerOf(mods: Record<string, () => unknown>) {
   const urls: string[] = []
   const importer = vi.fn(async (url: string) => {
     urls.push(url)
-    for (const [id, make] of Object.entries(mods)) if (url.includes(`/${id}/`)) return make()
+    for (const [id, make] of Object.entries(mods)) if (textOf(url).includes(JSON.stringify(id))) return make()
     throw new Error(`no module for ${url}`)
   })
   return { importer, urls }
@@ -76,16 +79,18 @@ describe('loadDevPlugins: what gets imported', () => {
     expect(dev.skipped).toBeUndefined()
     expect(importer).not.toHaveBeenCalled()
     expect(readdirSync(dataDir)).toEqual([])
-    dev.markLoaded()
+    cleanStop(runDir, log)
     expect(readdirSync(dataDir)).toEqual([])
   })
 
-  it('imports the approved copy by file URL, never the source', async () => {
+  it('imports the hashed bytes of the approved copy as a data: URL, never a file path', async () => {
     const t = trusted()
     const { importer, urls } = importerOf({ 'dev-x': () => goodPlugin('dev-x') })
     const dev = await load(importer)
-    expect(urls).toEqual([pathToFileURL(t.file).href])
-    expect(urls[0]).not.toContain(t.dir)
+    expect(urls).toHaveLength(1)
+    expect(urls[0].startsWith(DATA_URL)).toBe(true)
+    expect(textOf(urls[0])).toBe(readFileSync(t.file, 'utf8'))
+    expect(urls[0]).not.toContain(pathToFileURL(t.file).href)
     expect(dev.plugins.map(p => p.manifest.id)).toEqual(['dev-x'])
   })
 
@@ -93,10 +98,10 @@ describe('loadDevPlugins: what gets imported', () => {
     const t = trusted()
     writeFileSync(join(t.dir, 'p.mjs'), 'export default "edited"')
     const first = importerOf({ 'dev-x': () => goodPlugin('dev-x') })
-    const dev = await load(first.importer)
-    expect(first.urls).toEqual([pathToFileURL(t.file).href])
+    await load(first.importer)
+    expect(first.urls.map(textOf)).toEqual([moduleText('dev-x')])
     expect(readFileSync(t.file, 'utf8')).toBe(moduleText('dev-x'))
-    dev.markLoaded()
+    cleanStop(runDir, log)
 
     const edited = moduleText('dev-x', '// edited')
     writeFileSync(join(t.dir, 'p.mjs'), edited)
@@ -104,7 +109,8 @@ describe('loadDevPlugins: what gets imported', () => {
     expect(again).toMatchObject({ ok: true, hash: sha(edited) })
     const second = importerOf({ 'dev-x': () => goodPlugin('dev-x') })
     await load(second.importer)
-    expect(second.urls[0]).toContain(`entry-${sha(edited).slice(0, 12)}.mjs`)
+    expect(second.urls.map(textOf)).toEqual([edited])
+    expect(t.file).not.toBe(readDevIndex(dataDir).find(e => e.id === 'dev-x')!.file)
   })
 
   it('a copy changed on disk is not imported; it shows as failed', async () => {
@@ -113,9 +119,9 @@ describe('loadDevPlugins: what gets imported', () => {
     const { importer } = importerOf({ 'dev-x': () => goodPlugin('dev-x') })
     const dev = await load(importer)
     expect(importer).not.toHaveBeenCalled()
-    expect(logged.some(l => l.level === 'warn' && JSON.stringify(l.d).includes('hash_mismatch'))).toBe(true)
+    expect(logged.some(l => l.level === 'warn' && JSON.stringify(l.d).includes('dev_hash_mismatch'))).toBe(true)
     expect(dev.plugins.map(p => p.manifest.id)).toEqual(['dev-x'])
-    await expect(dev.plugins[0].activate({} as PluginContext)).rejects.toThrow('hash_mismatch')
+    await expect(dev.plugins[0].activate({} as PluginContext)).rejects.toThrow(/^dev_hash_mismatch$/)
   })
 
   it.each([
@@ -127,26 +133,26 @@ describe('loadDevPlugins: what gets imported', () => {
     const { importer } = importerOf({ 'dev-x': () => goodPlugin('dev-x') })
     const dev = await load(importer)
     expect(importer).not.toHaveBeenCalled()
-    await expect(dev.plugins[0].activate({} as PluginContext)).rejects.toThrow('hash_mismatch')
+    await expect(dev.plugins[0].activate({} as PluginContext)).rejects.toThrow(/^dev_hash_mismatch$/)
   })
 
   it.each([
-    ['another id', () => goodPlugin('dev-other')],
-    ['a built-in id', () => goodPlugin('memory-default')],
-    ['no default', () => ({})],
-    ['a default that is not an object', () => ({ default: 'x' })],
-    ['no manifest', () => ({ default: { activate() {} } })],
-    ['no activate', () => ({ default: { manifest: { id: 'dev-x', version: '1.0.0', kernel: '^0.1.0' } } })],
-    ['activate that is not a function', () => ({ default: { manifest: { id: 'dev-x', version: '1.0.0', kernel: '^0.1.0' }, activate: 1 } })],
-    ['a default getter that throws', () => ({ get default() { throw new Error('boom') } })],
-  ] as [string, () => unknown][])('a module with %s becomes a failing plugin under its own id', async (_, make) => {
+    ['another id', () => goodPlugin('dev-other'), 'dev_manifest_mismatch'],
+    ['a built-in id', () => goodPlugin('memory-default'), 'dev_manifest_mismatch'],
+    ['no default', () => ({}), 'dev_manifest_mismatch'],
+    ['a default that is not an object', () => ({ default: 'x' }), 'dev_manifest_mismatch'],
+    ['no manifest', () => ({ default: { activate() {} } }), 'dev_manifest_mismatch'],
+    ['no activate', () => ({ default: { manifest: { id: 'dev-x', version: '1.0.0', kernel: '^0.1.0' } } }), 'dev_no_activate'],
+    ['activate that is not a function', () => ({ default: { manifest: { id: 'dev-x', version: '1.0.0', kernel: '^0.1.0' }, activate: 1 } }), 'dev_no_activate'],
+    ['a default getter that throws', () => ({ get default() { throw new Error('boom') } }), 'dev_import_failed'],
+  ] as [string, () => unknown, string][])('a module with %s becomes a failing plugin under its own id, with a stable code', async (_, make, code) => {
     trusted()
     const dev = await load(importerOf({ 'dev-x': make }).importer)
     expect(dev.plugins.map(p => p.manifest.id)).toEqual(['dev-x'])
     // ctx 是能用的:失败只能来自那个替身,不是来自缺了 append
     const appended: unknown[] = []
     const ctx = { append: (e: unknown) => (appended.push(e), {}), log } as unknown as PluginContext
-    await expect(Promise.resolve().then(() => dev.plugins[0].activate(ctx))).rejects.toThrow()
+    await expect(Promise.resolve().then(() => dev.plugins[0].activate(ctx))).rejects.toThrow(new RegExp(`^${code}$`))
     expect(appended).toEqual([])
   })
 
@@ -162,63 +168,96 @@ describe('loadDevPlugins: what gets imported', () => {
     }).importer)
     expect(dev.plugins.map(p => p.manifest.id)).toEqual(['dev-a', 'dev-b', 'dev-c'])
     const err = await Promise.resolve().then(() => dev.plugins[0].activate({} as PluginContext)).catch(e => (e as Error).message)
-    expect(err).toContain('failed with')
-    expect(err).not.toContain(secret)
+    // 稳定代码,没有导入器的原话(那里面有路径)
+    expect(err).toBe('dev_import_failed')
     expect(JSON.stringify(logged)).not.toContain(secret)
-    await expect(Promise.resolve().then(() => dev.plugins[1].activate({} as PluginContext))).rejects.toThrow()
+    expect(JSON.stringify(logged)).not.toContain('failed with')
+    await expect(Promise.resolve().then(() => dev.plugins[1].activate({} as PluginContext))).rejects.toThrow(/^dev_import_failed$/)
   })
 })
 
-describe('loadDevPlugins: the marker', () => {
-  it('is on disk before the import starts, stays after it, goes at markLoaded', async () => {
+describe('loadDevPlugins: the crash marker', () => {
+  it('is on disk before the import starts, stays after it, goes only at a clean stop', async () => {
     trusted()
     let during = false
-    const dev = await load(async () => {
+    await load(async () => {
       during = existsSync(marker())
       return goodPlugin('dev-x')
     })
     expect(during).toBe(true)
     expect(existsSync(marker())).toBe(true)
-    dev.markLoaded()
+    cleanStop(runDir, log)
     expect(existsSync(marker())).toBe(false)
-    dev.markLoaded() // 第二次没事
+    cleanStop(runDir, log) // 第二次没事
   })
 
-  it('crash, skip, stop, load: the whole flow', async () => {
-    trusted()
-    const crash = importerOf({ 'dev-x': () => goodPlugin('dev-x') })
-    await load(crash.importer) // 这个进程在 30 s 内崩了:没人删标记
+  it('crash, skip, and the skip is sticky across clean stops until a new trust', async () => {
+    const t = trusted()
+    await load(importerOf({ 'dev-x': () => goodPlugin('dev-x') }).importer) // 这个进程崩了:没人删标记
     expect(existsSync(marker())).toBe(true)
 
-    const skip = importerOf({ 'dev-x': () => goodPlugin('dev-x') })
-    const skipped = await load(skip.importer)
-    expect(skipped.skipped).toBe('dev_crashed')
-    expect(skipped.plugins).toEqual([])
-    expect(skip.importer).not.toHaveBeenCalled()
-    expect(existsSync(marker())).toBe(true) // 这次还没活过 30 s,再崩还跳过
+    for (let i = 0; i < 3; i++) {
+      const skip = importerOf({ 'dev-x': () => goodPlugin('dev-x') })
+      const skipped = await load(skip.importer)
+      expect(skipped.skipped).toBe('dev_crashed')
+      expect(skipped.plugins).toEqual([])
+      expect(skip.importer).not.toHaveBeenCalled()
+      cleanStop(runDir, log) // 跳过的这次正常停了:还是跳过,不来回
+    }
+    expect(existsSync(crashed())).toBe(true)
 
-    skipped.markLoaded() // 活够了,或者正常停了
+    trustDevPlugin({ dataDir, path: t.dir, reservedIds: new Set() })
+    expect(existsSync(crashed())).toBe(false)
     const next = importerOf({ 'dev-x': () => goodPlugin('dev-x') })
     const loaded = await load(next.importer)
     expect(loaded.skipped).toBeUndefined()
     expect(next.importer).toHaveBeenCalledTimes(1)
-    expect(loaded.plugins.map(p => p.manifest.id)).toEqual(['dev-x'])
   })
 
-  it('a clean stop inside the 30 s, which calls markLoaded, means the next start loads', async () => {
+  it('plugins.dev.remove also lifts the skip, for the plugins left', async () => {
+    trusted('dev-a')
+    trusted('dev-b')
+    await load(importerOf({ 'dev-a': () => goodPlugin('dev-a'), 'dev-b': () => goodPlugin('dev-b') }).importer)
+    expect((await load(importerOf({}).importer)).skipped).toBe('dev_crashed')
+    removeDevPlugin({ dataDir, id: 'dev-a' })
+    const left = importerOf({ 'dev-b': () => goodPlugin('dev-b') })
+    const dev = await load(left.importer)
+    expect(dev.skipped).toBeUndefined()
+    expect(dev.plugins.map(p => p.manifest.id)).toEqual(['dev-b'])
+  })
+
+  it('a crash long after loading still counts: no timer removes the marker', async () => {
     trusted()
-    ;(await load(importerOf({ 'dev-x': () => goodPlugin('dev-x') }).importer)).markLoaded()
+    const armed: unknown[] = []
+    const spy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void, ms?: number) => (armed.push(ms), 0)) as never)
+    try {
+      const dev = await load(importerOf({ 'dev-x': () => goodPlugin('dev-x') }).importer)
+      expect(Object.keys(dev).sort()).toEqual(['plugins'])
+    } finally {
+      spy.mockRestore()
+    }
+    expect(armed).toEqual([])
+    expect(existsSync(marker())).toBe(true)
+    expect((await load(importerOf({}).importer)).skipped).toBe('dev_crashed')
+  })
+
+  it('a clean stop, which needs nothing from the load, means the next start loads', async () => {
+    trusted()
+    await load(importerOf({ 'dev-x': () => goodPlugin('dev-x') }).importer)
+    cleanStop(runDir, log)
     const next = await load(importerOf({ 'dev-x': () => goodPlugin('dev-x') }).importer)
     expect(next.skipped).toBeUndefined()
     expect(next.plugins).toHaveLength(1)
   })
 
-  it('a stale marker with nothing trusted is no crash: nothing to skip, and it is cleared', async () => {
+  it('a stale marker or skip with nothing trusted is no crash: nothing to skip, and both are cleared', async () => {
     mkdirSync(runDir)
     writeFileSync(marker(), '')
+    writeFileSync(crashed(), '')
     const dev = await load(importerOf({}).importer)
     expect(dev.skipped).toBeUndefined()
     expect(existsSync(marker())).toBe(false)
+    expect(existsSync(crashed())).toBe(false)
   })
 
   it('a dangling link as the marker still counts as there', async () => {
@@ -237,39 +276,7 @@ describe('loadDevPlugins: the marker', () => {
     const dev = await load(importer)
     expect(importer).not.toHaveBeenCalled()
     expect(dev.plugins.map(p => p.manifest.id)).toEqual(['dev-x'])
-    await expect(dev.plugins[0].activate({} as PluginContext)).rejects.toThrow('dev_guard_unavailable')
-  })
-
-  it('armMarkLoaded removes it 30 s later on the injected timer, and markLoaded cancels the wait', async () => {
-    expect(DEV_LOADED_AFTER_MS).toBe(30_000)
-    trusted()
-    const fired: { fn: () => void; ms: number }[] = []
-    const cleared: unknown[] = []
-    const timers = { setTimeout: (fn: () => void, ms: number) => { fired.push({ fn, ms }); return fired.length }, clearTimeout: (h: unknown) => void cleared.push(h) }
-    const dev = await load(importerOf({ 'dev-x': () => goodPlugin('dev-x') }).importer, { timers })
-    expect(fired).toEqual([]) // 激活之后才开始算,不是加载时
-    dev.armMarkLoaded()
-    expect(fired.map(f => f.ms)).toEqual([30_000])
-    expect(existsSync(marker())).toBe(true)
-    fired[0].fn()
-    expect(existsSync(marker())).toBe(false)
-
-    const second = await load(importerOf({ 'dev-x': () => goodPlugin('dev-x') }).importer, { timers })
-    second.armMarkLoaded()
-    second.markLoaded()
-    expect(cleared).toEqual([2])
-  })
-
-  it('a skipped start arms the same way, so one good run later the plugins come back', async () => {
-    trusted()
-    mkdirSync(runDir)
-    writeFileSync(marker(), '')
-    const fired: (() => void)[] = []
-    const dev = await load(importerOf({}).importer, { timers: { setTimeout: (fn: () => void) => (fired.push(fn), 1), clearTimeout: () => {} } })
-    expect(dev.skipped).toBe('dev_crashed')
-    dev.armMarkLoaded()
-    fired[0]()
-    expect(existsSync(marker())).toBe(false)
+    await expect(dev.plugins[0].activate({} as PluginContext)).rejects.toThrow(/^dev_guard_unavailable$/)
   })
 })
 
@@ -289,7 +296,32 @@ describe('the real importer', () => {
     trusted('dev-bare', `import x from 'no-such-package-anywhere'\nexport default { manifest: { id: 'dev-bare', version: '1.0.0', kernel: '^0.1.0' }, activate() { return x } }\n`)
     const dev = await loadDevPlugins({ dataDir, runDir, log })
     expect(dev.plugins.map(p => p.manifest.id)).toEqual(['dev-bare', 'dev-rel'])
-    for (const p of dev.plugins) await expect(Promise.resolve().then(() => p.activate({} as PluginContext))).rejects.toThrow()
+    for (const p of dev.plugins) await expect(Promise.resolve().then(() => p.activate({} as PluginContext))).rejects.toThrow(/^dev_import_failed$/)
+  })
+
+  it('I-2: a bare import of a package planted in a node_modules above the copy does not load', async () => {
+    // 文件 URL 的裸导入往上逐级找 node_modules:cwd = ~ 的会话写得到 ~/node_modules
+    const planted = join(tmp, 'node_modules', 'planted')
+    mkdirSync(planted, { recursive: true })
+    const ran = join(tmp, 'planted-ran')
+    writeFileSync(join(planted, 'package.json'), JSON.stringify({ name: 'planted', type: 'module', main: 'index.js' }))
+    writeFileSync(join(planted, 'index.js'), `import { writeFileSync } from 'node:fs'\nwriteFileSync(${JSON.stringify(ran)}, 'ran')\nexport default 1\n`)
+    trusted('dev-p', `import x from 'planted'\nexport default { manifest: { id: 'dev-p', version: '1.0.0', kernel: '^0.1.0' }, activate() { return x } }\n`)
+    const dev = await loadDevPlugins({ dataDir, runDir, log })
+    await expect(Promise.resolve().then(() => dev.plugins[0].activate({} as PluginContext))).rejects.toThrow(/^dev_import_failed$/)
+    expect(existsSync(ran)).toBe(false)
+  })
+
+  it('I-2: the copy edited between the hash check and the import: the checked bytes load', async () => {
+    const t = trusted('dev-e', `export default { manifest: { id: 'dev-e', version: '1.0.0', kernel: '^0.1.0', which: 'approved' }, activate() {} }\n`)
+    const dev = await loadDevPlugins({
+      dataDir, runDir, log,
+      importer: u => {
+        writeFileSync(t.file, `export default { manifest: { id: 'dev-e', version: '1.0.0', kernel: '^0.1.0', which: 'swapped' }, activate() {} }\n`)
+        return import(/* @vite-ignore */ u)
+      },
+    })
+    expect((dev.plugins[0].manifest as unknown as { which: string }).which).toBe('approved')
   })
 })
 
@@ -322,12 +354,13 @@ describe('through a kernel', () => {
     const after: Plugin = { manifest: { id: 'after', version: '1.0.0', kernel: '^0.1.0' }, activate() {} }
     const k = await kernelWith([builtin, ...dev.plugins, after], { ids: dev.plugins.map(p => p.manifest.id) })
     const by = Object.fromEntries(k.status().plugins.map(p => [p.id, p]))
-    expect(by['dev-a']).toMatchObject({ state: 'failed', trust: 'dev', error: expect.stringContaining('helper.mjs') })
-    expect(by['dev-b']).toMatchObject({ state: 'failed', trust: 'dev', error: 'activate exploded' })
+    // 稳定代码:导入器和 activate 的原话里有路径
+    expect(by['dev-a']).toMatchObject({ state: 'failed', trust: 'dev', error: 'dev_import_failed' })
+    expect(by['dev-b']).toMatchObject({ state: 'failed', trust: 'dev', error: 'dev_activate_failed' })
     expect(by['dev-c']).toMatchObject({ state: 'active', trust: 'dev' })
     expect(by.builtin).toEqual({ id: 'builtin', state: 'active' })
     expect(by.after).toEqual({ id: 'after', state: 'active' })
-    expect(eventsOf(k, 'plugin.failed').map(e => (e.payload as { id: string }).id)).toEqual(['dev-a', 'dev-b'])
+    expect(eventsOf(k, 'plugin.failed').map(e => e.payload)).toEqual([{ id: 'dev-a', error: 'dev_import_failed' }, { id: 'dev-b', error: 'dev_activate_failed' }])
     expect(eventsOf(k, 'plugins.dev.loaded').map(e => (e.payload as { id: string }).id)).toEqual(['dev-c'])
   })
 

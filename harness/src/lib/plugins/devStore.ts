@@ -29,6 +29,21 @@ const indexFile = (dataDir: string) => join(devRoot(dataDir), 'index.json')
 const copyName = (hash: string) => `entry-${hash.slice(0, 12)}.mjs`
 const sha256 = (b: Buffer) => createHash('sha256').update(b).digest('hex')
 
+/** 载开发插件的这次启动还没正常停:在就是上次崩了。工作进程的 run 目录里 */
+export const DEV_LOADING = 'dev-loading'
+/** 崩过一次就一直跳过,直到再确认或移除一个开发插件(final review):否则崩、跳、载、崩来回转 */
+export const DEV_CRASHED = 'dev-crashed'
+export const devRunDir = (dataDir: string) => join(dataDir, 'run')
+
+/** 再确认、移除之后下次启动再试。删不掉只是还跳过,不算失败 */
+function liftDevSkip(dataDir: string): void {
+  try {
+    rmSync(join(devRunDir(dataDir), DEV_CRASHED), { force: true, recursive: true })
+  } catch {
+    // run 不是目录:那条路本来就不载
+  }
+}
+
 type Once = { ok: true; bytes: Buffer } | { ok: false; why: 'missing' | 'symlink' | 'not_file' | 'too_large' }
 
 /**
@@ -182,6 +197,7 @@ export function trustDevPlugin(o: {
   } catch {
     return refuse('store_error')
   }
+  liftDevSkip(o.dataDir)
   return { ok: true, id, hash, bytes: read.bytes.length, main }
 }
 
@@ -190,6 +206,7 @@ export function removeDevPlugin(o: { dataDir: string; id: string }): boolean {
   if (!DEV_ID_RE.test(o.id)) return true
   const entries = readDevIndex(o.dataDir)
   if (entries.some(e => e.id === o.id)) writeIndex(o.dataDir, entries.filter(e => e.id !== o.id))
+  liftDevSkip(o.dataDir)
   return removeTree(join(devRoot(o.dataDir), o.id))
 }
 
