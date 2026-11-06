@@ -311,6 +311,32 @@ describe.skipIf(!usable)('an MCP server under real Seatbelt', () => {
       denied(await at.probe('x2/y', 'probe_read', { path: join(root, '.npmrc') }))
     }, 90_000)
 
+    it.each([
+      ['a known uv python', '.local/share/uv/python/cpython-3.12/bin', true],
+      ['~/secretdir', 'secretdir', false],
+    ])('uv venv whose pyvenv.cfg home is %s', async (_, homeRel, kept) => {
+      const m = await rig({ layout: 'production' })
+      const venv = join(m.r.home, '.local', 'share', 'uv', 'tools', 'ruff')
+      program(join(venv, 'bin', 'rt'))
+      const base = join(m.r.home, homeRel)
+      const baseRoot = kept ? dirname(base) : base
+      put(join(venv, 'pyvenv.cfg'), `home = ${base}\nversion = 3.12.1\n`)
+      put(join(baseRoot, 'lib', 'python3.12', 'os.py'), 'base stdlib')
+      put(join(baseRoot, 'bin', 'python3'), 'interpreter')
+      put(join(baseRoot, 'secret.txt'), 'private')
+      put(join(baseRoot, 'pip.conf'), 'index-url = https://user:token@example.invalid/simple')
+      const s = await startOn(m, join(venv, 'bin'))
+      expect(await s.probe('x/y', 'probe_read', { path: join(venv, 'pyvenv.cfg') })).toMatchObject({ ok: true })
+      for (const f of ['lib/python3.12/os.py', 'bin/python3']) {
+        const r = await s.probe('x/y', 'probe_read', { path: join(baseRoot, f) })
+        if (kept) expect(r).toMatchObject({ ok: true })
+        else denied(r)
+      }
+      // 放回的只有 bin、lib:别的、配置都读不到
+      denied(await s.probe('x/y', 'probe_read', { path: join(baseRoot, 'secret.txt') }))
+      denied(await s.probe('x/y', 'probe_read', { path: join(baseRoot, 'pip.conf') }))
+    }, 60_000)
+
     it('containment holds with the data dir and the store inside home', async () => {
       const m = await rig({ layout: 'production' })
       put(join(m.r.home, 'notes.txt'), 'private')

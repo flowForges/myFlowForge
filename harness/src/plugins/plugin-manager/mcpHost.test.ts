@@ -259,6 +259,15 @@ describe('refused before any spawn', () => {
     expect(m.spawns.length).toBe(1)
   })
 
+  it('m-2: missing sandbox and missing config together: the row and the call both say needs_sandbox, and plugins.get too', async () => {
+    const f = fake()
+    const m = await setup({ y: f.entry({ env: { TOKEN: '${user_config.tok}' } }) }, { stub: { level: 'none', missing: ['platform'] }, config: { permissions: { allowUnsandboxedAuto: true } }, spec: { manifest: { userConfig: { tok: { title: 't', sensitive: true, required: true } } } } })
+    expect((await m.mcp(m.sid, { action: 'tools', server: 'x/y' })).text).toBe('needs_sandbox')
+    expect((await statusOf(m.r, m.sid))[0]).toMatchObject({ server: 'y', state: 'needs_sandbox' })
+    expect((await call(m.r, 'plugins.get', { id: 'x' })).servers).toEqual([{ name: 'y', state: 'needs_sandbox' }])
+    expect(m.spawns).toEqual([])
+  })
+
   it('a plan that came back unsandboxed at full: not spawned, released, needs_sandbox', async () => {
     const m = await setup({ y: fake().entry() }, { stub: { sandboxed: false } })
     expect((await m.mcp(m.sid, { action: 'tools', server: 'x/y' })).text).toBe('needs_sandbox')
@@ -424,6 +433,34 @@ describe('programs', () => {
       // 根本身、etc、上面的目录都不在:nvm 的 etc/npmrc、pyenv 的 pip.conf 里是令牌(final review I-1)
       expect(kept.filter(k => !parts.some(part => within(k, join(root, part))))).toEqual([])
       expect(runtimeWalls(real, home, true).sort()).toEqual([join(root, '.npmrc'), join(root, 'etc'), join(root, 'pip.conf')])
+    })
+
+    describe('a venv whose base interpreter is a known runtime in home', () => {
+      const venv = '/h/.local/share/uv/tools/ruff'
+      const base = '/h/.local/share/uv/python/cpython-3.12'
+      const io = (home: string, real: (p: string) => string = p => p) => ({
+        read: (p: string) => (p === `${venv}/pyvenv.cfg` ? `home = ${home}\nversion = 3.12.1\n` : undefined),
+        real,
+      })
+      it('pyvenv.cfg home on a known layout: that layout keeps its bin and lib, and its config is walled', () => {
+        const kept = runtimeRoots(`${venv}/bin/ruff`, home, true, [], undefined, io(`${base}/bin`))
+        expect(kept).toEqual(expect.arrayContaining([`${base}/bin`, `${base}/lib`]))
+        expect(kept.filter(k => within(k, base))).toEqual([`${base}/bin`, `${base}/lib`])
+        expect(runtimeWalls(`${venv}/bin/ruff`, home, true, io(`${base}/bin`))).toEqual(expect.arrayContaining([`${base}/etc`, `${base}/pip.conf`, `${base}/.npmrc`]))
+      })
+      it('matched on the real path: a link spelled like a layout that really points elsewhere keeps nothing', () => {
+        const kept = runtimeRoots(`${venv}/bin/ruff`, home, true, [], undefined, io(`${base}/bin`, () => '/h/secretdir/bin'))
+        expect(kept.filter(k => !within(k, venv))).toEqual([])
+      })
+      it.each(['/h/secretdir', '/h/secretdir/bin', 'relative/bin', '/h'])('home = %s: nothing from it is kept', h => {
+        const kept = runtimeRoots(`${venv}/bin/ruff`, home, true, [], undefined, io(h))
+        expect(kept.filter(k => !within(k, venv))).toEqual([])
+        expect(runtimeWalls(`${venv}/bin/ruff`, home, true, io(h)).filter(w => !within(w, venv))).toEqual([])
+      })
+      it('only venv layouts read pyvenv.cfg', () => {
+        const read = (p: string) => (p === '/h/.nvm/versions/node/v20/pyvenv.cfg' ? `home = ${base}/bin\n` : undefined)
+        expect(runtimeRoots('/h/.nvm/versions/node/v20/bin/node', home, true, [], undefined, { read, real: p => p })).toEqual(['/h/.nvm/versions/node/v20/bin', '/h/.nvm/versions/node/v20/lib'])
+      })
     })
 
     it('walls only for a known layout reached through PATH', () => {
@@ -737,6 +774,9 @@ describe('only the record that was consented to', () => {
     const sid = await m.r.session({ approvalMode: 'auto' })
     await m.r.turn(sid, 'pin')
     expect((await m.mcp(sid, { action: 'tools', server: 'x/y' })).text).toBe('grants_invalid')
+    // m-3:查的时候就拒的也写一条,同样的再来不重复写
+    expect((await m.mcp(sid, { action: 'tools', server: 'x/y' })).text).toBe('grants_invalid')
+    expect(statusEvents(m.r, sid)).toEqual([{ plugin: 'x', server: 'y', state: 'refused', reason: 'grants_invalid' }])
     expect(m.spawns).toEqual([])
     expect(m.sandbox!.plans).toEqual([])
   })
@@ -1009,6 +1049,9 @@ describe('lifecycle', () => {
     await until(() => dirs.every(d => d.calls('tools/call').length === 1))
     expect(m.live().length).toBe(MAX_PER_SESSION)
     await expect(m.host().client(m.sid, 'x', 'last')).rejects.toMatchObject({ code: 'too_many_servers' })
+    await expect(m.host().client(m.sid, 'x', 'last')).rejects.toMatchObject({ code: 'too_many_servers' })
+    // m-3:一次状态变化一条,不是每次调用一条
+    expect(statusEvents(m.r, m.sid).filter(s => s.server === 'last')).toEqual([{ plugin: 'x', server: 'last', state: 'refused', reason: 'too_many_servers' }])
     expect(m.pids.length).toBe(MAX_PER_SESSION)
     for (const r of await Promise.all(inFlight)) expect(r.isError).toBe(false)
     // 不忙了:这回能收最久没用的

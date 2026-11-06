@@ -3,7 +3,7 @@
 // 停进程走 killLadder,登记走 pgids:kernel.close 的 killLive 和崩溃后的 reapOrphans 都认得
 import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { accessSync, constants as fsConstants, lstatSync, mkdirSync, realpathSync, statSync } from 'node:fs'
+import { accessSync, constants as fsConstants, lstatSync, mkdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import type { Logger } from '../../kernel/log'
@@ -126,10 +126,50 @@ function knownRuntime(real: string, home: string): { root: string; keep: string[
   return { root, keep: hit.keep.map(k => join(root, k)) }
 }
 
+/** 读 pyvenv.cfg、取真实路径;测试注入 */
+export interface VenvIo {
+  read(path: string): string | undefined
+  real(path: string): string
+}
+const realVenvIo: VenvIo = {
+  read: p => {
+    try {
+      // 只要 home 那一行:不大
+      const st = lstatSync(p)
+      return st.isFile() && st.size <= 64 * 1024 ? readFileSync(p, 'utf8') : undefined
+    } catch {
+      return undefined
+    }
+  },
+  real: p => realpathSync.native(p),
+}
+
+/**
+ * 认得的运行时,加上 venv 的基础解释器(uv tools、pipx 的 venv 指着 ~/.local/share/uv/python/<v>):
+ * pyvenv.cfg 的 home 取真实路径后也落在认得的布局里,才把那个布局的 bin、lib 放回。home 的别的地方一概不放
+ */
+function knownRuntimes(real: string, home: string, io: VenvIo): { root: string; keep: string[] }[] {
+  const known = knownRuntime(real, home)
+  if (!known) return []
+  if (!known.keep.some(k => k.endsWith('/pyvenv.cfg'))) return [known]
+  const text = io.read(join(known.root, 'pyvenv.cfg'))
+  const value = text === undefined ? undefined : /^[ \t]*home[ \t]*=[ \t]*(.*?)[ \t]*$/m.exec(text)?.[1]
+  if (value === undefined || !isAbsolute(value)) return [known]
+  let base: string
+  try {
+    base = io.real(value)
+  } catch {
+    return [known]
+  }
+  // home 是基础解释器所在的目录(<根>/bin):按"它里面的一个程序"去认布局
+  const under = knownRuntime(join(base, 'python'), home)
+  return under && under.root !== known.root && !within(under.root, known.root) ? [known, under] : [known]
+}
+
 /** 认得的运行时根里的配置文件:计划里放进 denyRead,排在所有放回之后 */
-export function runtimeWalls(realProgram: string, home: string, viaPath: boolean): string[] {
-  const known = viaPath ? knownRuntime(realProgram, home) : undefined
-  return known ? RUNTIME_WALLS.map(w => join(known.root, w)) : []
+export function runtimeWalls(realProgram: string, home: string, viaPath: boolean, io: VenvIo = realVenvIo): string[] {
+  if (!viaPath) return []
+  return knownRuntimes(realProgram, home, io).flatMap(k => RUNTIME_WALLS.map(w => join(k.root, w)))
 }
 
 /**
@@ -138,7 +178,7 @@ export function runtimeWalls(realProgram: string, home: string, viaPath: boolean
  * 那个目录就是家目录或它的直接子目录 → runtime_too_broad。真实路径落在认得的布局里才放回它的 bin、lib 这几块。
  * 家目录外本来读得到;在隐藏的根里的上两级,等于根本身或更高的放回去就白隐藏了
  */
-export function runtimeRoots(realProgram: string, home: string, viaPath: boolean, tops: string[] = [], hit: string = realProgram): string[] {
+export function runtimeRoots(realProgram: string, home: string, viaPath: boolean, tops: string[] = [], hit: string = realProgram, io: VenvIo = realVenvIo): string[] {
   if (!viaPath) return []
   const out = new Set<string>()
   for (const p of [hit, realProgram]) {
@@ -151,7 +191,7 @@ export function runtimeRoots(realProgram: string, home: string, viaPath: boolean
     const root = dirname(dir)
     if (tops.some(t => root !== t && within(root, t))) out.add(root)
   }
-  for (const k of knownRuntime(realProgram, home)?.keep ?? []) out.add(k)
+  for (const k of knownRuntimes(realProgram, home, io)) for (const part of k.keep) out.add(part)
   return [...out]
 }
 
@@ -200,8 +240,11 @@ export interface ServerRow extends ServerState {
   sessionId: string
 }
 
-/** 拒绝了不写事件的:是我们自己让它停的,或者等的人走了 */
-const QUIET_REFUSALS: ReadonlySet<McpReason> = new Set(['server_stopped', 'cancelled'])
+/**
+ * 拒绝了不写事件的:是我们自己让它停的,或者等的人走了;到顶的已经报过 server_failed;
+ * 没装、没这个服务的名字是模型给的,写进事件就能用编出来的名字刷日志
+ */
+const QUIET_REFUSALS: ReadonlySet<McpReason> = new Set(['server_stopped', 'cancelled', 'server_failed', 'plugin_not_installed', 'server_not_found'])
 
 interface Entry {
   key: string
@@ -304,8 +347,20 @@ export class McpHost {
     return { network: [...g.network].sort(), cwd: g.cwd }
   }
 
-  /** 视图之后的查询:启用 → 服务状态。都是稳定代码 */
+  /**
+   * 视图之后的查询:启用 → 服务状态。都是稳定代码。门(permission)每次调用都先问这里:
+   * 拒了就写一条 refused(m-3),emit 只在状态变了时写,同样的拒绝再来不重复
+   */
   inspect(sessionId: string, plugin: string, server: string): ServerInfo {
+    try {
+      return this.inspectNow(sessionId, plugin, server)
+    } catch (err) {
+      this.reportRefusal(sessionId, plugin, server, err)
+      throw err
+    }
+  }
+
+  private inspectNow(sessionId: string, plugin: string, server: string): ServerInfo {
     const rec = this.o.store.get(plugin)
     if (!rec) throw refuse('plugin_not_installed')
     if (!usable(rec)) throw refuse('plugin_disabled')
@@ -342,7 +397,7 @@ export class McpHost {
 
   /**
    * 一个服务现在的状态,plugins.get(不给会话:跨会话)和 status / mcp list(给会话)共用。
-   * 有进程的就是进程的状态;否则按清单问题、完整性、启用、失败到顶、配置、沙箱的顺序,第一个说了算
+   * 有进程的就是进程的状态;否则按清单问题、完整性、启用、失败到顶、沙箱、配置的顺序,第一个说了算
    */
   serverState(rec: InstalledRecord, srv: { name: string; problems: readonly string[]; configRefs: readonly string[] }, sessionId?: string): ServerState {
     const key = sessionId === undefined ? undefined : this.keyOf(sessionId, rec.id, srv.name)
@@ -355,9 +410,9 @@ export class McpHost {
     if (rec.state !== 'ok') return { state: 'integrity_failed' }
     if (!rec.enabled) return { state: 'disabled' }
     for (const from of [this.sticky, this.notes]) for (const [k, reason] of from) if (mine(k)) return { state: 'server_failed', reason }
-    // 缺配置是这个插件的事,用户填了就好;沙箱不够是整台机器的事,排在后面
-    if (needsConfig(rec, srv.configRefs)) return { state: 'needs_config' }
+    // 和 inspect 同序(m-2):这台机器跑不了它,就不先找用户要配置和密钥
     if (this.sandboxBlocked(sessionId)) return { state: 'needs_sandbox' }
+    if (needsConfig(rec, srv.configRefs)) return { state: 'needs_config' }
     return { state: 'stopped' }
   }
 
@@ -438,9 +493,16 @@ export class McpHost {
         continue
       }
       if (!mayStart) throw refuse('server_not_running')
-      this.inspect(sessionId, plugin, server)
-      // 查和占之间没有 await:并发的启动不会一起挤过上限
-      const room = this.victim(sessionId)
+      let room: ReturnType<McpHost['victim']>
+      try {
+        this.inspect(sessionId, plugin, server)
+        // 查和占之间没有 await:并发的启动不会一起挤过上限
+        room = this.victim(sessionId)
+      } catch (err) {
+        // m-3:还没到 begin 的拒绝也让 08 看得到。emit 只在状态变了时写,每次调用不重复
+        this.reportRefusal(sessionId, plugin, server, err)
+        throw err
+      }
       if (room?.wait) {
         await room.wait
         continue
@@ -463,15 +525,17 @@ export class McpHost {
     e.ready = this.launch(e).catch(async err => {
       if (err instanceof McpHostError && err.code === 'data_dir_unsafe') this.noteEarlyFailure(e, err.code)
       // 没走到 spawn 的拒绝:08 只能从事件里知道为什么(final review I-6)。到顶的已经报过 server_failed,程序不在也是
-      if (e.pid === undefined && !this.sticky.has(key)) {
-        const code: McpReason = err instanceof McpHostError ? (err.code === 'server_problem' && err.reason !== undefined ? err.reason : err.code) : 'spawn_failed'
-        if (!QUIET_REFUSALS.has(code) && code !== 'server_failed') this.emit(sessionId, plugin, server, 'refused', code)
-      }
+      if (e.pid === undefined && !this.sticky.has(key)) this.reportRefusal(sessionId, plugin, server, err)
       await this.abandon(e)
       throw err
     })
     e.ready.catch(() => {}) // 等它的调用方各自处理;没人等时不算未处理
     return e
+  }
+
+  private reportRefusal(sessionId: string, plugin: string, server: string, err: unknown): void {
+    const code: McpReason = err instanceof McpHostError ? (err.code === 'server_problem' && err.reason !== undefined ? err.reason : err.code) : 'spawn_failed'
+    if (!QUIET_REFUSALS.has(code)) this.emit(sessionId, plugin, server, 'refused', code)
   }
 
   /** 没走到运行的启动:还没进程就直接收尾 */

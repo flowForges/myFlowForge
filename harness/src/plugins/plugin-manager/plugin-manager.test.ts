@@ -22,8 +22,8 @@ afterEach(async () => {
   rmSync(tmp, { recursive: true, force: true })
 })
 
-const rig = async (o: PluginManagerOpts = {}) => {
-  const r = await pluginKernel(withManager(o))
+const rig = async (o: PluginManagerOpts = {}, level?: 'none' | 'full') => {
+  const r = await pluginKernel({ ...withManager(o), ...(level && { level }) })
   rigs.push(r)
   return r
 }
@@ -92,7 +92,8 @@ const buildPluginFor = (sub: string, id: string) => buildPlugin(join(tmp, sub), 
 
 describe('plugins.list and plugins.get', () => {
   it('list carries the display fields; get answers consent, grants, settings and servers', async () => {
-    const r = await rig({ now: () => 1234 })
+    // 沙箱够:否则 needs_sandbox 排在缺配置前面(m-2)
+    const r = await rig({ now: () => 1234 }, 'full')
     const path = configured()
     await install(r, path)
     const { plugins } = await call(r, 'plugins.list')
@@ -291,12 +292,12 @@ describe('plugins.settings', () => {
   })
 
   it('required config set: the server stops needing config', async () => {
-    const r = await rig()
+    const r = await rig({}, 'full')
     await install(r, configured())
     await call(r, 'plugins.settings.set', { id: 'demo', key: 'token', value: 'v' })
     expect((await call(r, 'plugins.get', { id: 'demo' })).servers[0].state).toBe('needs_config')
     await call(r, 'plugins.settings.set', { id: 'demo', key: 'RAW_KEY', value: 'v' })
-    expect((await call(r, 'plugins.get', { id: 'demo' })).servers[0]).toEqual({ name: 'srv', state: 'needs_sandbox' })
+    expect((await call(r, 'plugins.get', { id: 'demo' })).servers[0]).toEqual({ name: 'srv', state: 'stopped' })
     await call(r, 'plugins.settings.clear', { id: 'demo', key: 'RAW_KEY' })
     expect((await call(r, 'plugins.get', { id: 'demo' })).servers[0].state).toBe('needs_config')
   })
