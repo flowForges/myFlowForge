@@ -71,7 +71,9 @@ async function boot(o: BootOpts = {}): Promise<H> {
     models,
     ...(o.memory && { config: { memory: o.memory } }),
     plugins: () => {
-      memory = createMemoryDefault({ nightly: false, now: clock.now, flushMs: 0 })
+      // 追赶的预算是真时间(200 ms):机器忙时十几万字的积压追不完,prepare 就不发请求,用例看到 0 次(09 Task 11 抓到的偶发失败)。
+      // 这里测的不是追赶,预算给足;追不上的路径在 context、tools、rpc 的 catchUpMs: 0 用例里
+      memory = createMemoryDefault({ nightly: false, now: clock.now, flushMs: 0, catchUpMs: 60_000 })
       return [memory, probe]
     },
   })
