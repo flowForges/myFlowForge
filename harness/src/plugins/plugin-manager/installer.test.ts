@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { alive, call, confirm, eventsOf, gatedSpawn, prepare, refused, settled, snapshot, spySpawn, storeOf, until, withManager } from '../../../test/managerRig'
 import { buildPlugin, buildRepo, pluginKernel, type PluginRig, type PluginSpec } from '../../../test/pluginRig'
 import { nullLogger } from '../../kernel/log'
+import { reapOrphans } from '../../lib/proc/pgids'
 import type { PluginManagerOpts } from './index'
 import { Installer } from './installer'
 import { PluginStore } from './store'
@@ -304,6 +305,25 @@ describe('prepare runs in the background', () => {
     expect(local.state).toBe('ready')
     expect(local.consent!.source.kind).toBe('path')
     expect(local.consent!.warnings).toContain('unpinned_source')
+  })
+
+  // Review Focus 4:工作进程在 git fetch 中途被杀,新工作进程启动时 reapOrphans 按登记文件收掉 git 的组
+  it('a worker killed during git fetch: the git group is on record, and reapOrphans on the next start takes it', async () => {
+    const gate = join(tmp, 'gate')
+    const pids: number[] = []
+    const r = await rig({ spawn: gatedSpawn(gate, pids) })
+    await call(r, 'plugins.install.prepare', { source: { kind: 'git', url: repoOf(simple()).url } })
+    await until(() => pids.length > 0)
+    pidsToKill.push(...pids)
+    const registry = join(r.dataDir, 'run', 'shell-pgids')
+    await until(() => existsSync(registry) && readFileSync(registry, 'utf8').includes(String(pids[0])))
+    // 崩溃那一刻的登记文件:内核关闭时会把它清掉,所以先拷一份
+    const copy = join(tmp, 'pgids-after-crash')
+    writeFileSync(copy, readFileSync(registry), { mode: 0o600 })
+    expect(alive(pids[0])).toBe(true)
+    const res = reapOrphans(copy, { platform: process.platform })
+    expect(res.killed).toContain(pids[0])
+    await until(() => !alive(pids[0]), 3000)
   })
 
   it('a local source also answers before the copy happens', async () => {
