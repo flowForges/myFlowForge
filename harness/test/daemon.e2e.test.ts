@@ -637,6 +637,72 @@ describe.skipIf(!E2E)('built daemon e2e', () => {
     }, 120_000)
   })
 
+  describe('dev plugins', () => {
+    const dev = async (d: { paths: ReturnType<typeof runtimePaths>; tokenOf(): string }) => connectClient({ addr: d.paths.workerAddr, token: d.tokenOf(), timeoutMs: 5000 })
+    const statusOf = async (d: Parameters<typeof dev>[0]) => {
+      const w = await dev(d)
+      try { return await w.call('status') } finally { w.close() }
+    }
+    const trust = async (d: Parameters<typeof dev>[0], dir: string, id: string, text: string) => {
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, 'mff-plugin.json'), JSON.stringify({ id, version: '1.0.0', main: 'p.mjs' }))
+      writeFileSync(join(dir, 'p.mjs'), text)
+      const w = await dev(d)
+      try { return await w.call('plugins.dev.trust', { path: dir, acknowledge: 'runs_with_full_access' }) } finally { w.close() }
+    }
+    const moduleOf = (id: string, activate: string) => `export default { manifest: { id: ${JSON.stringify(id)}, version: '1.0.0', kernel: '^0.1.0' }, activate(ctx) { ${activate} } }\n`
+
+    it('dev round: the import survives the bundle, status says dev, a clean stop inside 30 s is not a crash', async () => {
+      const d = await startDaemon()
+      const ran = join(d.home, 'ran')
+      const src = join(d.home, 'proj')
+      await trust(d, src, 'dev-x', `import { writeFileSync } from 'node:fs'\n${moduleOf('dev-x', `writeFileSync(${JSON.stringify(ran)}, 'ran')`)}`)
+      expect(existsSync(ran)).toBe(false) // 确认不跑它
+      await d.shutdown()
+
+      const d2 = await startDaemon({ reuse: { home: d.home, data: d.data } })
+      expect(readFileSync(ran, 'utf8')).toBe('ran')
+      const st = await statusOf(d2)
+      expect(st.plugins.find(p => p.id === 'dev-x')).toEqual({ id: 'dev-x', state: 'active', trust: 'dev' })
+      expect(st.plugins.find(p => p.id === 'plugin-manager')).toEqual({ id: 'plugin-manager', state: 'active' })
+      expect(st).not.toHaveProperty('problems')
+      expect(existsSync(join(d.data, 'run', 'dev-loading'))).toBe(true)
+      await d2.shutdown()
+      expect(existsSync(join(d.data, 'run', 'dev-loading'))).toBe(false)
+
+      rmSync(ran)
+      const d3 = await startDaemon({ reuse: { home: d.home, data: d.data } })
+      expect(existsSync(ran)).toBe(true)
+      expect(await statusOf(d3)).not.toHaveProperty('problems')
+      await d3.shutdown()
+    }, 180_000)
+
+    it('crash round: process.exit at activate, the next worker skips it and RPC answers, remove works, the next start is clean', async () => {
+      const d = await startDaemon()
+      await trust(d, join(d.home, 'proj'), 'dev-exit', moduleOf('dev-exit', 'process.exit(1)'))
+      await d.shutdown()
+
+      const d2 = await startDaemon({ reuse: { home: d.home, data: d.data } })
+      await waitFor(async () => {
+        try { return (await statusOf(d2)).problems?.includes('dev_crashed') ?? false } catch { return false }
+      }, 30_000, 'dev_crashed in status')
+      const st = await statusOf(d2)
+      expect(st.plugins.some(p => p.id === 'dev-exit')).toBe(false)
+      const w = await dev(d2)
+      try {
+        expect((await w.call('plugins.list')).dev.map(e => e.id)).toEqual(['dev-exit'])
+        expect(await w.call('plugins.dev.remove', { id: 'dev-exit' })).toEqual({ ok: true, restartRequired: true })
+      } finally { w.close() }
+      await d2.shutdown()
+
+      const d3 = await startDaemon({ reuse: { home: d.home, data: d.data } })
+      const clean = await statusOf(d3)
+      expect(clean).not.toHaveProperty('problems')
+      expect(clean.plugins.some(p => p.id === 'dev-exit')).toBe(false)
+      await d3.shutdown()
+    }, 180_000)
+  })
+
   describe('memory', () => {
     const NOTE = '包管理器用 pnpm'
     type Body = { messages: unknown[]; tools?: unknown }
