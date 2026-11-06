@@ -1,7 +1,7 @@
 // 真跑 sandbox-exec(07 spec §8.2,Review Focus 3):IM 会话的 shell 改不了用户的分支,app 会话不受影响。
 // 测试进程自己在沙箱里时不能嵌套 → 整个文件跳过(探测只跑一次)
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -52,6 +52,9 @@ async function run(sessionId: string, cwd: string, command: string): Promise<{ c
   return collect(plan, cwd)
 }
 
+/** xcrun 的壳没命中共享缓存、写新缓存被沙箱拒时打的那一行(见文件末尾那条用例);只去掉这一行,别的输出原样比 */
+const XCRUN_DENIED = /^[\w.-]+: error: couldn't create cache file '[^'\n]*\/xcrun_db-[A-Za-z0-9]+' \(errno=Operation not permitted\)\n/gm
+
 async function collect(plan: { file: string; args: string[]; env: NodeJS.ProcessEnv; release(): void }, cwd: string): Promise<{ code: number | null; out: string }> {
   try {
     return await new Promise((resolve, reject) => {
@@ -60,7 +63,7 @@ async function collect(plan: { file: string; args: string[]; env: NodeJS.Process
       c.stdout.on('data', d => (out += d))
       c.stderr.on('data', d => (out += d))
       c.on('error', reject)
-      c.on('close', code => resolve({ code, out }))
+      c.on('close', code => resolve({ code, out: out.replace(XCRUN_DENIED, '') }))
     })
   } finally {
     plan.release()
@@ -207,6 +210,22 @@ describe.skipIf(!usable)('Seatbelt, IM session and the checkout it came from (§
     expect(policy.denyRead).toContain(repo)
     expect(policy.keepRead).toContain(join(repo, '.git'))
     expect(svc.execPolicy('app', repo, 'codex').denyRead).not.toContain(repo)
+  })
+
+  // 09 Task 11 抓到的偶发失败:/usr/bin/git 是 xcrun 的壳。共享的 xcrun_db 在用户临时目录里,别的进程随时在重写;
+  // 沙箱里的壳没命中就想写一份新的,被拒,往 stderr 打一行,退出码还是 0。写不进去是对的:能写这份缓存就能替没沙箱的进程改工具路径
+  it('xcrun shim: a cache miss in the sandbox cannot write the shared cache, and its one line is all that differs', async () => {
+    const userTmp = realpathSync(execFileSync('/usr/bin/getconf', ['DARWIN_USER_TEMP_DIR'], { encoding: 'utf8' }).trim())
+    const caches = () => readdirSync(userTmp).filter(n => n.startsWith('xcrun_db')).sort()
+    const before = caches()
+    const opts = { allowRead: [], allowWrite: [], allowHosts: [], proxyScope: 'x1', readOnly: false, denyRead: [], denyWrite: [] }
+    // 没见过的 TOOLCHAINS:缓存里一定没有这个键
+    const missEnv = { ...env(), TOOLCHAINS: `mffai-miss-${process.pid}-${Date.now()}` }
+    const plan = await svc.planExec('/usr/bin/git', ['--version'], { sessionId: 'im', cwd: wtCwd, spillDir: join(data, 'sessions', 'im', 'spill') }, missEnv, opts)
+    const r = await collect(plan, wtCwd)
+    expect(r.code).toBe(0)
+    expect(r.out).toMatch(/^git version \S+.*\n$/)
+    expect(caches()).toEqual(before)
   })
 
   it('a project that is itself a linked worktree: that checkout and the main one are both hidden, git works', async () => {
