@@ -69,7 +69,7 @@ function serverRows(rec: InstalledRecord, host: McpHost) {
 export function createPluginManager(o: PluginManagerOpts = {}): Plugin {
   return {
     manifest,
-    activate(ctx: PluginContext) {
+    async activate(ctx: PluginContext) {
       const commands = ctx.services.get<SessionCommands>('sessionCommands')
       if (!commands) throw new Error('sessionCommands service missing')
       const tools = ctx.services.get<ToolsService>('tools')
@@ -140,9 +140,10 @@ export function createPluginManager(o: PluginManagerOpts = {}): Plugin {
       })
       ctx.effect(() => installer.close())
 
-      // 启动:已启用的都重算(§13)。不符的这次就关掉,不等谁来用
+      // 启动:已启用的都重算(§13)。不符的这次就关掉,不等谁来用。分片算:5000 个文件、50 MB 的插件同步要半秒多,
+      // 期间回不了 ping。算完才给出 plugins 服务,第一轮之前每一个都查过
       for (const rec of store.list()) {
-        if (rec.enabled && !store.verify(rec)) {
+        if (rec.enabled && !(await store.verifySliced(rec))) {
           ctx.log.warn('plugin failed its integrity check', { id: rec.id })
           failIntegrity(rec)
         }

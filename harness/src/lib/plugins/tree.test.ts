@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, chownSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { copyTree, integrityOf, TREE_LIMITS, TreeError, walkTree } from './tree'
+import { copyTree, integrityOf, integrityOfSliced, TREE_LIMITS, TreeError, walkTree } from './tree'
 
 const dirs: string[] = []
 afterEach(() => {
@@ -233,6 +233,21 @@ describe('walkTree', () => {
 })
 
 describe('integrityOf', () => {
+  it('the sliced form gives the same value and lets the event loop run between slices', async () => {
+    const files: Record<string, string> = {}
+    for (let i = 0; i < 40; i++) files[`d${i % 4}/f${i}.txt`] = 'x'.repeat(200_000 + i)
+    const root = make(files)
+    const { files: list } = walked(root)
+    let ticks = 0
+    const timer = setInterval(() => ticks++, 0)
+    try {
+      expect(await integrityOfSliced(root, list, 0)).toBe(integrityOf(root, list))
+    } finally {
+      clearInterval(timer)
+    }
+    expect(ticks).toBeGreaterThan(0)
+  })
+
   it('has the sha256 shape and is stable', () => {
     const root = make({ 'a.txt': 'a' })
     expect(integrity(root)).toMatch(/^sha256:[0-9a-f]{64}$/)

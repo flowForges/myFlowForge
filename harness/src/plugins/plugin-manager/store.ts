@@ -10,7 +10,7 @@ import type { Logger } from '../../kernel/log'
 import { pluginStoreRootOf } from '../../lib/fs/paths'
 import { removeTree } from '../../lib/fs/removeTree'
 import { USER_CONFIG_KEY_RE } from '../../lib/plugins/manifest'
-import { integrityOf, walkTree } from '../../lib/plugins/tree'
+import { integrityOf, integrityOfSliced, walkTree } from '../../lib/plugins/tree'
 import { GrantsSchema, MCP_SERVER_NAME, PLUGIN_ID, PluginConsentSchema, PluginFormatSchema, PluginSourceSchema } from '../../protocol/index'
 
 const INTEGRITY = /^sha256:[0-9a-f]{64}$/
@@ -83,6 +83,16 @@ export function treeMatches(dir: string, integrity: string): boolean {
   try {
     const w = walkTree(dir)
     return w.ok && !holdsGit(dir) && integrityOf(dir, w.files) === integrity
+  } catch {
+    return false
+  }
+}
+
+/** 一样的判断,哈希分片算、中间让出事件循环:启动时每个启用的插件都算一遍 */
+export async function treeMatchesSliced(dir: string, integrity: string): Promise<boolean> {
+  try {
+    const w = walkTree(dir)
+    return w.ok && !holdsGit(dir) && (await integrityOfSliced(dir, w.files)) === integrity
   } catch {
     return false
   }
@@ -484,12 +494,22 @@ export class PluginStore {
 
   /** 磁盘上的代码还是同意的那一份。每一层都不能是链接 */
   verify(rec: Pick<InstalledRecord, 'id' | 'integrity'>): boolean {
+    const dir = this.checkedDir(rec)
+    return dir !== undefined && treeMatches(dir, rec.integrity)
+  }
+
+  /** 一样,分片算:启动时用,不让工作进程一次卡住半秒 */
+  async verifySliced(rec: Pick<InstalledRecord, 'id' | 'integrity'>): Promise<boolean> {
+    const dir = this.checkedDir(rec)
+    return dir !== undefined && (await treeMatchesSliced(dir, rec.integrity))
+  }
+
+  private checkedDir(rec: Pick<InstalledRecord, 'id' | 'integrity'>): string | undefined {
     try {
       const dir = this.versionDir(rec)
-      if (!this.isDir(this.root) || !this.isDir(this.codeDir(rec.id)) || !this.isDir(dir)) return false
-      return treeMatches(dir, rec.integrity)
+      return this.isDir(this.root) && this.isDir(this.codeDir(rec.id)) && this.isDir(dir) ? dir : undefined
     } catch {
-      return false
+      return undefined
     }
   }
 }

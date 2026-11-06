@@ -188,20 +188,50 @@ export function readPlain(root: string, rel: string, max: number): PlainRead {
 }
 
 /** `sha256:<hex>`:排序后的 (路径, 是否可执行, 内容 sha256)。可执行位和内容取自同一个 fd,不看传进来的 exec。链接换进来 → TreeError */
-export function integrityOf(root: string, files: readonly TreeFile[]): string {
+/** 同一份算法:每读一块让出一次控制,最后返回结果。同步、分片两种跑法共用,算出来不可能不一样 */
+function* integritySteps(root: string, files: readonly TreeFile[]): Generator<void, string> {
   const all = createHash('sha256')
   const buf = Buffer.allocUnsafe(CHUNK)
   for (const path of files.map(f => f.path).sort(order)) {
     const { fd, st } = openPlain(root, path)
     try {
       const one = createHash('sha256')
-      for (let n = readSync(fd, buf); n > 0; n = readSync(fd, buf)) one.update(buf.subarray(0, n))
+      for (let n = readSync(fd, buf); n > 0; n = readSync(fd, buf)) {
+        one.update(buf.subarray(0, n))
+        yield
+      }
       all.update(`${JSON.stringify([path, (st.mode & 0o111) !== 0, one.digest('hex')])}\n`)
     } finally {
       closeSync(fd)
     }
+    yield
   }
   return `sha256:${all.digest('hex')}`
+}
+
+export function integrityOf(root: string, files: readonly TreeFile[]): string {
+  const steps = integritySteps(root, files)
+  for (;;) {
+    const r = steps.next()
+    if (r.done) return r.value
+  }
+}
+
+/**
+ * 一样的值,每 sliceMs 让一次事件循环(启动时一个 5000 个文件、50 MB 的插件同步算要 550 ms 左右,工作进程这期间回不了 ping)。
+ * 打开的文件在让出期间不关:两次读之间换掉的文件读到的还是打开的那一份
+ */
+export async function integrityOfSliced(root: string, files: readonly TreeFile[], sliceMs = 20): Promise<string> {
+  const steps = integritySteps(root, files)
+  let since = performance.now()
+  for (;;) {
+    const r = steps.next()
+    if (r.done) return r.value
+    if (performance.now() - since >= sliceMs) {
+      await new Promise<void>(res => setImmediate(res))
+      since = performance.now()
+    }
+  }
 }
 
 export interface CopyOpts {
