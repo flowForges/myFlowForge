@@ -15,6 +15,11 @@ export interface LadderOpts extends Omit<ProcDeps, 'seed' | 'refreshMs' | 'listM
   owned?: () => boolean
   /** 组长调用时已不在:组里得有其中一个才算自己的 */
   anchors?: Member[]
+  /**
+   * 梯子开始前读到的后代(如关 stdin 之前读的):组长一退,自成一会话的子进程就被收养,之后的表里走不到它。
+   * 和走到的一样对待:每张表都比启动时间,对不上就丢,也从它们往下走
+   */
+  tree?: Member[]
   sleep?: (ms: number) => Promise<void>
   now?: () => number
 }
@@ -58,6 +63,7 @@ export async function killLadder(pid: number, o: LadderOpts): Promise<LadderResu
     members: o.anchors ?? [],
   }
   const known = new Map<number, string>()
+  for (const m of o.tree ?? []) known.set(m.pid, m.start)
   let first = true
 
   /** 读一张表、更新快照。返回这一步能用的表,以及这个组这一步算不算自己的 */

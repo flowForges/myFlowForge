@@ -12,7 +12,7 @@ import { buildPlugin, type PluginSpec } from '../../../test/pluginRig'
 import { wipeSessionTmp } from '../../kernel/sandbox'
 import { DEFAULT_CALL_MS, DEFAULT_INIT_MS } from '../../lib/mcp/client'
 import { MAX_LINE } from '../../lib/mcp/stdio'
-import { pgidFile, reapOrphans } from '../../lib/proc/pgids'
+import { pgidFile, procTable, reapOrphans } from '../../lib/proc/pgids'
 import toolsRegistry from '../tools-registry'
 import { heldTop, IDLE_MS, tempTops, MAX_PER_SESSION, MAX_SERVERS, resolveProgram, runtimeRoots } from './mcpHost'
 
@@ -1475,6 +1475,25 @@ describe('shutting down', () => {
     await call(m.r, 'plugins.setEnabled', { commandId: 'off', id: 'x', enabled: false })
     await until(() => !alive(spawned), 6000)
   }, 20_000)
+
+  // 09 Task 11 抓到的偶发失败:服务关了 stdin 就退,先于梯子读第一张进程表时,自成一会话的子进程已被收养、走不到了。
+  // 树要在关 stdin 之前读;这里连停几次,任何一次走丢都算失败
+  it('the tree is read before stdin closes: with a table read slow enough for the server to exit meanwhile, its own-session child is still taken', async () => {
+    const f = fake()
+    // 每次读表前先等 400 ms:读表时服务早就因 EOF 退了,能不能找到子进程只看关 stdin 之前读没读过
+    const wait = new Int32Array(new SharedArrayBuffer(4))
+    const m = await setup({ y: f.entry() }, { manager: { mcpProcTable: () => (Atomics.wait(wait, 0, 0, 400), procTable()) } })
+    for (let i = 0; i < 2; i++) {
+      if (i > 0) {
+        await call(m.r, 'plugins.setEnabled', { commandId: `on-${i}`, id: 'x', enabled: true })
+      }
+      const { spawned } = jsonOf((await m.mcp(m.sid, { action: 'call', server: 'x/y', tool: 'probe_children', arguments: { spawn: true } })).text)
+      stray.push(spawned)
+      expect(alive(spawned)).toBe(true)
+      await call(m.r, 'plugins.setEnabled', { commandId: `off-${i}`, id: 'x', enabled: false })
+      await until(() => !alive(spawned), 6000)
+    }
+  }, 90_000)
 
   it('a group member the leader left behind is taken when the leader crashes', async () => {
     const dir = dirFor()

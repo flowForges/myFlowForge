@@ -169,6 +169,28 @@ describe('killLadder order', () => {
     await killLadder(4242, { ...s.opts, owned: () => false })
     expect(signals(s.log)).toContain('3000 6000 SIGTERM')
   })
+
+  // 09 Task 11 抓到的:MCP 服务关了 stdin 就退,比梯子的第一张表还快;自成一会话的子进程被 launchd 收养,ppid 链断了
+  it('a tree read before the ladder: the leader is already gone, its own-session child is still taken', async () => {
+    const s = scripted({ procTable: () => [row(6100, 1, 'C', 6100)], alive: () => false })
+    const res = await killLadder(4242, { ...s.opts, tree: [{ pid: 6100, start: 'C' }] })
+    expect(signals(s.log).filter(l => l.includes(' 6100 ')).map(l => l.split(' ')[2])).toEqual(['SIGTERM', 'SIGKILL'])
+    expect(signals(s.log).filter(l => l.includes('-4242'))).toEqual([])
+    expect(res.gone).toBe(false)
+  })
+
+  it('the tree seed is checked against the table like any walked pid: a reused pid is left alone, and its children are not walked', async () => {
+    const s = scripted({ procTable: () => [row(6100, 1, 'OTHER', 6100), row(6200, 6100)], alive: () => false })
+    const res = await killLadder(4242, { ...s.opts, tree: [{ pid: 6100, start: 'C' }] })
+    expect(signals(s.log)).toEqual([])
+    expect(res.gone).toBe(true)
+  })
+
+  it('a seeded pid that is walked from: its children are taken too', async () => {
+    const s = scripted({ procTable: () => [row(6100, 1, 'C', 6100), row(6200, 6100, 'D', 6100)], alive: () => false })
+    await killLadder(4242, { ...s.opts, tree: [{ pid: 6100, start: 'C' }] })
+    expect(signals(s.log)).toEqual(expect.arrayContaining([expect.stringMatching(/ 6200 SIGTERM$/), expect.stringMatching(/ 6200 SIGKILL$/)]))
+  })
 })
 
 describe('killLadder never signals what it cannot verify', () => {

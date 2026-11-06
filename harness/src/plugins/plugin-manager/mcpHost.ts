@@ -16,7 +16,7 @@ import { scrub } from '../../lib/memory/scrub'
 import { effectiveGrants, escapeDisplay, sameConsentedServer, type Declared } from '../../lib/plugins/consent'
 import { readPlugin } from '../../lib/plugins/read'
 import type { Cwd, ParsedServer } from '../../lib/plugins/types'
-import { groupExists, groupMembers, type PgidRegistry } from '../../lib/proc/pgids'
+import { groupExists, groupMembers, procTable, treeMembers, type Member, type PgidRegistry, type ProcRow } from '../../lib/proc/pgids'
 import { killLadder } from '../../lib/proc/tree'
 import { realSpelling, within } from '../../lib/sandbox/paths'
 import { shellEnv } from '../../lib/tools/shellEnv'
@@ -217,6 +217,8 @@ export interface McpHostOpts {
   secrets: { get(k: string): Promise<string | undefined> }
   pgids?: Pick<PgidRegistry, 'add' | 'settle'>
   spawn?: typeof nodeSpawn
+  /** 停服务时读的进程表;默认真的 ps / /proc。只有测试注入 */
+  procTable?: () => ProcRow[]
   now: () => number
   timers: McpTimers
   log: Pick<Logger, 'warn'>
@@ -721,25 +723,30 @@ export class McpHost {
     e.state = 'stopping'
     if (e.idle !== undefined) this.o.timers.clearTimeout(e.idle)
     e.stopping = (async () => {
+      const pid = e.pid
+      // 关 stdin 之前先读一次树:服务一见 EOF 就退,自成一会话的子进程随即被收养,之后的表里从它走不到
+      const tree = pid !== undefined && !e.exited ? this.treeOf(pid) : []
       try {
         // 关 stdin(服务应该自己走),并把在等答复的都拒掉
         e.client?.close()
       } catch {
         // 关的时候流已经没了
       }
-      const pid = e.pid
       if (pid !== undefined) {
+        const deps = { fast: true, log: this.o.log, tree, ...(this.o.procTable && { procTable: this.o.procTable }) }
         try {
           if (!e.exited) {
-            const { gone } = await killLadder(pid, { fast: true, alive: () => groupExists(pid, liveKill), owned: () => !e.exited, log: this.o.log })
+            const { gone } = await killLadder(pid, { ...deps, alive: () => groupExists(pid, liveKill), owned: () => !e.exited })
             // 还登记着:kernel.close 的 killLive 和崩溃后的 reapOrphans 还会再收
             if (!gone) this.o.log.warn('mcp server still alive after the ladder', { pid })
           }
           else if (groupExists(pid, liveKill)) {
             // 组长崩了,组员还在:能认出来的才杀
             const anchors = groupMembers(pid).filter(m => m.pid !== pid)
-            if (anchors.length > 0) await killLadder(pid, { fast: true, alive: () => groupExists(pid, liveKill), anchors, log: this.o.log })
+            if (anchors.length > 0 || tree.length > 0) await killLadder(pid, { ...deps, alive: () => groupExists(pid, liveKill), anchors })
           }
+          // 组长在读树和这里之间退了,组也没了:只剩树里读到的
+          else if (tree.length > 0) await killLadder(pid, { ...deps, alive: () => false, anchors: [] })
         } catch (err) {
           this.o.log.warn('mcp server not stopped', { error: err instanceof Error ? err.name : 'unknown' })
         }
@@ -748,6 +755,15 @@ export class McpHost {
       this.finalize(e)
     })()
     return e.stopping
+  }
+
+  /** 组长下面的进程(不含它自己),启动时间出自同一张表。读不了就是空:梯子照旧从组走 */
+  private treeOf(pid: number): Member[] {
+    try {
+      return treeMembers((this.o.procTable ?? (() => procTable()))(), [pid]).filter(m => m.pid !== pid)
+    } catch {
+      return []
+    }
   }
 
   private finalize(e: Entry): void {

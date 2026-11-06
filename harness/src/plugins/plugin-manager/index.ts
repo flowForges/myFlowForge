@@ -9,7 +9,7 @@ import { readDevIndex, removeDevPlugin, trustDevPlugin } from '../../lib/plugins
 import { scrub } from '../../lib/memory/scrub'
 import type { FetchTimers } from '../../lib/plugins/fetchGit'
 import { USER_CONFIG_KEY_RE } from '../../lib/plugins/manifest'
-import type { PgidRegistry } from '../../lib/proc/pgids'
+import type { PgidRegistry, ProcRow } from '../../lib/proc/pgids'
 import { loginShellPath } from '../../lib/tools/shellEnv'
 import type { SandboxService, SessionCommands, ToolsService } from '../../lib/tools/types'
 import { MCP_SERVER_NAME, type Grants, type WorkerParams } from '../../protocol/index'
@@ -44,6 +44,8 @@ export interface PluginManagerOpts {
   mcpSecrets?: (real: { get(k: string): Promise<string | undefined> }) => { get(k: string): Promise<string | undefined> }
   /** 只给测试:拿到宿主 */
   onMcpHost?: (host: McpHost) => void
+  /** 只给测试:宿主停服务时读进程表的那一下(能让它慢,排出关 stdin 和读表的先后) */
+  mcpProcTable?: () => ProcRow[]
 }
 
 const defaultTimers: FetchTimers = {
@@ -111,6 +113,7 @@ export function createPluginManager(o: PluginManagerOpts = {}): Plugin {
         secrets: o.mcpSecrets ? o.mcpSecrets(ctx.secrets) : ctx.secrets,
         ...(pgids && { pgids }),
         ...(o.spawn && { spawn: o.spawn }),
+        ...(o.mcpProcTable && { procTable: o.mcpProcTable }),
         now,
         timers,
         log: ctx.log,
