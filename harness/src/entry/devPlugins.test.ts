@@ -143,7 +143,11 @@ describe('loadDevPlugins: what gets imported', () => {
     trusted()
     const dev = await load(importerOf({ 'dev-x': make }).importer)
     expect(dev.plugins.map(p => p.manifest.id)).toEqual(['dev-x'])
-    await expect(Promise.resolve().then(() => dev.plugins[0].activate({} as PluginContext))).rejects.toThrow()
+    // ctx 是能用的:失败只能来自那个替身,不是来自缺了 append
+    const appended: unknown[] = []
+    const ctx = { append: (e: unknown) => (appended.push(e), {}), log } as unknown as PluginContext
+    await expect(Promise.resolve().then(() => dev.plugins[0].activate(ctx))).rejects.toThrow()
+    expect(appended).toEqual([])
   })
 
   it('an import that throws, even something odd, is a failing plugin, with no secret in the message', async () => {
