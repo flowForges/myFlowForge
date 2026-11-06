@@ -283,6 +283,23 @@ describe('PgidRegistry', () => {
     expect(readFileSync(file, 'utf8')).toBe('')
   })
 
+  it.skipIf(!posix)('killLive takes a child started from a SIGTERM handler: a second snapshot before SIGKILL, inside the same grace', async () => {
+    const reg = newReg(file)
+    // 收到 SIGTERM 才起一个自成一会话、也不理 SIGTERM 的子进程,自己接着活:第一张快照里没有它
+    const script = `const { spawn } = require('node:child_process'); process.on('SIGTERM', () => { const c = spawn('/bin/sh', ['-c', "trap '' TERM; while :; do sleep 1; done"], { detached: true, stdio: 'ignore' }); require('node:fs').writeFileSync('pid', String(c.pid)); c.unref() }); setInterval(() => {}, 1000)`
+    const c = spawn(process.execPath, ['-e', script], { cwd: root, detached: true, stdio: 'ignore' })
+    children.push({ c, detached: true })
+    reg.add(c.pid!)
+    await new Promise(res => setTimeout(res, 300)) // 处理函数装好
+    const t0 = Date.now()
+    const killing = killLive(reg, 400)
+    const pid = await grandkid()
+    grandkids.push({ pid, start: startTime(pid)! })
+    await killing
+    expect(Date.now() - t0).toBeLessThan(2000)
+    expect(await waitFor(() => !alive(pid), 1000)).toBe(true)
+  })
+
   it('signal() refuses groups it never recorded', () => {
     const sent: unknown[] = []
     const reg = newReg(file, 'linux', { kill: (...a) => sent.push(a), startTime: () => 'S', ownPgid: () => 4242 })

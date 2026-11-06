@@ -530,11 +530,13 @@ export class PgidRegistry {
   }
 
   /** 这些组和它们的后代(自成一组的组信号碰不到)。组长一死 ppid 链就断,所以要在发信号之前读 */
-  tree(pgids: number[]): Member[] {
-    if (!pgids.length) return []
+  /** also:上一张快照里的进程,启动时间还对得上的也当根(它们可能已经自成一组,组信号碰不到) */
+  tree(pgids: number[], also: Member[] = []): Member[] {
+    if (!pgids.length && !also.length) return []
     try {
       const rows = this.r.procTable()
-      return treeMembers(rows, [...pgids, ...rows.filter(x => pgids.includes(x.pgid)).map(x => x.pid)])
+      const still = also.filter(m => rows.some(x => x.pid === m.pid && x.start === m.start)).map(m => m.pid)
+      return treeMembers(rows, [...pgids, ...rows.filter(x => pgids.includes(x.pgid)).map(x => x.pid), ...still])
     } catch (err) {
       this.r.log.warn('process tree snapshot failed', { error: String(err) })
       return []
@@ -702,9 +704,12 @@ export async function killLive(registry: PgidRegistry, graceMs = 1000): Promise<
     registry.signalTree(tree, 'SIGTERM')
     const end = Date.now() + graceMs
     while (Date.now() < end && (sent.some(g => registry.exists(g)) || registry.treeAlive(tree))) await new Promise(res => setTimeout(res, 25))
+    // SIGKILL 之前再读一张:SIGTERM 的处理函数里起的、自成一会话的子进程不在第一张里(final review)。同一个宽限期,不多等
+    const later = registry.tree(sent.filter(g => registry.exists(g)), tree)
     // SIGTERM 时已认过组;宽限期内组退净又被别人重建需要 pid 绕一圈,不再重认(组长可能正是被 SIGTERM 杀掉的)
     for (const g of sent) if (registry.exists(g)) registry.signal(g, 'SIGKILL')
-    if (registry.treeAlive(tree)) registry.signalTree(tree, 'SIGKILL')
+    const all = [...tree, ...later.filter(m => !tree.some(t => t.pid === m.pid && t.start === m.start))]
+    if (registry.treeAlive(all)) registry.signalTree(all, 'SIGKILL')
   }
   registry.clear()
 }
