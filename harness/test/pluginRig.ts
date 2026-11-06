@@ -1,6 +1,6 @@
 // 插件测试夹具(09):插件目录和本地仓库都建在临时目录里,内核是真的,模型是假的。
 // 不读 ~/.claude,不上网:真实的形状都手写在用例里。plugin-manager 由用例经 manager 给(Task 5 之前没有它)
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
@@ -158,6 +158,23 @@ const walk = (dir: string): string[] =>
 
 const pause = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
 
+/**
+ * 删测试的临时根。服务(或用例自己)可能锁过里面的东西:uchg、uappnd、ACL、000。删不掉先全部松开再删,
+ * 失败的一次也不在系统临时目录里留下锁住的目录。只在测试自己建的根里用
+ */
+export function removeTestRoot(root: string): void {
+  try {
+    rmSync(root, { recursive: true, force: true })
+    return
+  } catch {
+    // 下面松开再删
+  }
+  // 一层的锁挡住下一层的松开(000 挡 chflags 往下走,deny list 挡 chmod 往下走):轮几遍
+  const steps: [string, string[]][] = [['/bin/chmod', ['-R', 'u+rwx', root]], ...(process.platform === 'darwin' ? ([['/bin/chmod', ['-R', '-N', root]], ['/usr/bin/chflags', ['-R', 'nouchg,nouappnd', root]]] as [string, string[]][]) : [])]
+  for (let round = 0; round < 4; round++) for (const [bin, args] of steps) spawnSync(bin, args, { stdio: 'ignore', timeout: 30_000 })
+  rmSync(root, { recursive: true, force: true })
+}
+
 export async function pluginKernel(opts: PluginKernelOpts = {}): Promise<PluginRig> {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'mffai-plugins-')))
   const home = join(root, 'home')
@@ -201,7 +218,7 @@ export async function pluginKernel(opts: PluginKernelOpts = {}): Promise<PluginR
   try {
     kernel = await open()
   } catch (err) {
-    rmSync(root, { recursive: true, force: true })
+    removeTestRoot(root)
     throw err
   }
 
@@ -294,7 +311,7 @@ export async function pluginKernel(opts: PluginKernelOpts = {}): Promise<PluginR
       } catch {
         /* 用例中途失败时可能已经关过 */
       }
-      rmSync(root, { recursive: true, force: true })
+      removeTestRoot(root)
     },
   }
   return rig

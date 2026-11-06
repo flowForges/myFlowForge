@@ -11,7 +11,7 @@ import { alive, call, storeOf, stubPlugin, until } from '../../../test/managerRi
 import { calling, say } from '../../../test/memoryRig'
 import { mcpRig, statusOf, type McpRig, type McpRigOpts } from '../../../test/mcpRig'
 import { startFakeUpstream, type FakeServer } from '../../../test/fakeUpstream'
-import { buildPlugin, FAKE_MCP, type PluginSpec } from '../../../test/pluginRig'
+import { buildPlugin, FAKE_MCP, removeTestRoot, type PluginSpec } from '../../../test/pluginRig'
 import { createGit } from '../../lib/git/snapshot'
 import { createToolsCoding } from '../tools-coding'
 import toolsRegistry from '../tools-registry'
@@ -37,7 +37,7 @@ beforeEach(() => {
 })
 afterEach(async () => {
   for (const m of rigs.splice(0)) await m.dispose()
-  rmSync(tmp, { recursive: true, force: true })
+  removeTestRoot(tmp)
 })
 
 let n = 0
@@ -648,6 +648,43 @@ else:
     expect(await s.probe('x/y', 'probe_write', { path: join(m.r.cwd, 'in.txt'), text: 'in' })).toEqual({ ok: true })
     expect(m.pids.length).toBe(2)
   }, 60_000)
+
+  describe('I-3: what the server locks from inside the sandbox, uninstall still removes', () => {
+    const unlock = (p: string) => {
+      for (const [bin, args] of [['/usr/bin/chflags', ['-R', 'nouchg,nouappnd', p]], ['/bin/chmod', ['-R', '-N', p]]] as const) {
+        try {
+          execFileSync(bin, args, { stdio: 'ignore' })
+        } catch {
+          // 已经没了
+        }
+      }
+    }
+    it.each([
+      ['an ACL that denies delete', (d: string) => [['/bin/chmod', '+a', 'everyone deny delete', join(d, 'k', 'f')], ['/bin/chmod', '+a', 'everyone deny delete,delete_child', join(d, 'k')], ['/bin/chmod', '+a', 'everyone deny delete,delete_child', d]], 'deny delete'],
+      ['chflags uchg', (d: string) => [['/usr/bin/chflags', 'uchg', join(d, 'k', 'f')], ['/usr/bin/chflags', 'uchg', join(d, 'k')]], 'uchg'],
+    ] as [string, (d: string) => string[][], string][])('%s', async (_, locks, mark) => {
+      const m = await rig()
+      const s = await started(m)
+      const data = s.data()
+      try {
+        expect(await s.probe('x/y', 'probe_write', { path: join(data, 'k-made'), text: 'x' })).toEqual({ ok: true })
+        mkdirSync(join(data, 'k'))
+        writeFileSync(join(data, 'k', 'f'), 'old state')
+        for (const cmd of locks(data)) {
+          const { exec } = await s.probe('x/y', 'probe_children', { exec: cmd })
+          expect(exec.status).toBe(0)
+        }
+        // 锁真的落了:沙箱外删也删不掉
+        expect(execFileSync('/bin/ls', ['-lOde', join(data, 'k', 'f')], { encoding: 'utf8' })).toContain(mark)
+        expect(() => rmSync(join(data, 'k'), { recursive: true, force: true })).toThrow()
+        expect(existsSync(join(data, 'k', 'f'))).toBe(true)
+        expect(await call(m.r, 'plugins.uninstall', { commandId: 'u', id: 'x' })).toEqual({ ok: true })
+        expect(existsSync(join(m.r.dataDir, 'plugin-data', 'x'))).toBe(false)
+      } finally {
+        unlock(join(m.r.dataDir, 'plugin-data'))
+      }
+    }, 60_000)
+  })
 
   it('kernel.close leaves no pid', async () => {
     const m = await rig()

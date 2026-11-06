@@ -8,11 +8,15 @@ import { removeTree } from './removeTree'
 
 const darwin = process.platform === 'darwin'
 const flagged = (p: string) => execFileSync('/bin/ls', ['-ldO', p], { encoding: 'utf8' })
+const acl = (p: string) => execFileSync('/bin/ls', ['-lde', p], { encoding: 'utf8' })
+/** 失败的一次也不留锁住的东西:标志和 ACL 都清,一个不行接着下一个 */
 const noFlags = (p: string) => {
-  try {
-    execFileSync('/usr/bin/chflags', ['-R', 'nouchg,nouappnd', p], { stdio: 'ignore' })
-  } catch {
-    /* 已经没了 */
+  for (const [bin, args] of [['/usr/bin/chflags', ['-R', 'nouchg,nouappnd', p]], ['/bin/chmod', ['-R', '-N', p]]] as const) {
+    try {
+      execFileSync(bin, args, { stdio: 'ignore' })
+    } catch {
+      /* 已经没了 */
+    }
   }
 }
 
@@ -57,6 +61,40 @@ describe('removeTree', () => {
     execFileSync('/usr/bin/chflags', ['uchg', join(top, 'k')])
     expect(removeTree(top)).toBe(true)
     expect(existsSync(top)).toBe(false)
+  })
+
+  it.skipIf(!darwin)('I-3: ACLs that deny delete, list or delete_child, on files, directories and the top', () => {
+    const top = join(tmp, 'top')
+    mkdirSync(join(top, 'k', 'in'), { recursive: true })
+    writeFileSync(join(top, 'k', 'f'), 'x')
+    writeFileSync(join(top, 'k', 'in', 'g'), 'x')
+    execFileSync('/bin/chmod', ['+a', 'everyone deny delete', join(top, 'k', 'f')])
+    execFileSync('/bin/chmod', ['+a', 'everyone deny delete,delete_child,list,search,add_file', join(top, 'k', 'in')])
+    execFileSync('/bin/chmod', ['+a', 'everyone deny delete,delete_child', join(top, 'k')])
+    execFileSync('/bin/chmod', ['+a', 'everyone deny delete,delete_child', top])
+    // 对照:不清 ACL 就删不掉
+    expect(() => rmSync(top, { recursive: true, force: true })).toThrow()
+    expect(existsSync(join(top, 'k', 'f'))).toBe(true)
+    expect(removeTree(top)).toBe(true)
+    expect(existsSync(top)).toBe(false)
+  })
+
+  it.skipIf(!darwin)('I-3: a link in the tree keeps the ACL of its target', () => {
+    const outside = join(tmp, 'outside')
+    mkdirSync(outside)
+    writeFileSync(join(outside, 'keep'), 'x')
+    execFileSync('/bin/chmod', ['+a', 'everyone deny delete', join(outside, 'keep')])
+    execFileSync('/bin/chmod', ['+a', 'everyone deny delete', outside])
+    const top = join(tmp, 'top')
+    mkdirSync(join(top, 'k'), { recursive: true })
+    writeFileSync(join(top, 'k', 'f'), 'x')
+    execFileSync('/bin/chmod', ['+a', 'everyone deny delete', join(top, 'k', 'f')])
+    symlinkSync(outside, join(top, 'k', 'dir-link'))
+    symlinkSync(join(outside, 'keep'), join(top, 'k', 'file-link'))
+    const before = acl(outside) + acl(join(outside, 'keep'))
+    expect(before).toContain('deny delete')
+    expect(removeTree(top)).toBe(true)
+    expect(acl(outside) + acl(join(outside, 'keep'))).toBe(before)
   })
 
   it('a link in the tree: the target keeps its mode, flags and contents', () => {

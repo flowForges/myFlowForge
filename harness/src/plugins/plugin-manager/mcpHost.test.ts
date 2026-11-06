@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { alive, call, confirm, eventsOf, installedFile, prepare, refused, snapshot, storeOf, stubPlugin, until } from '../../../test/managerRig'
 import { fakeClock } from '../../../test/memoryRig'
 import { fakeOutside, mcpRig, statusEvents, statusOf, type McpRig, type McpRigOpts } from '../../../test/mcpRig'
-import { buildPlugin, type PluginSpec } from '../../../test/pluginRig'
+import { buildPlugin, removeTestRoot, type PluginSpec } from '../../../test/pluginRig'
 import { wipeSessionTmp } from '../../kernel/sandbox'
 import { DEFAULT_CALL_MS, DEFAULT_INIT_MS } from '../../lib/mcp/client'
 import { MAX_LINE } from '../../lib/mcp/stdio'
@@ -33,7 +33,7 @@ afterEach(async () => {
     }
     await until(() => !alive(p), 3000)
   }
-  rmSync(tmp, { recursive: true, force: true })
+  removeTestRoot(tmp)
 })
 
 let n = 0
