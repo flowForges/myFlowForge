@@ -30,7 +30,7 @@ import { isInside, overbroadRelocations, snapshotEnv } from '../lib/fs/paths'
 import { killLive, pgidFile, PgidRegistry, type PgidEntry } from '../lib/proc/pgids'
 import { createSandboxService } from './sandbox'
 import { detectSandbox, type DetectResult } from '../lib/sandbox/detect'
-import { upstreamFromEnv, type LookupFn, type Upstream } from '../lib/sandbox/net/proxy'
+import { upstreamFromEnv, type LookupFn, type ProxyHandle, type ProxyOptions, type Upstream } from '../lib/sandbox/net/proxy'
 import { createGit, NO_REPO, pinRepo, type Git, type RepoPin } from '../lib/git/snapshot'
 import { imWorktreeRootOf } from '../lib/git/imWorktree'
 import { worktreeRootOf } from '../lib/git/worktree'
@@ -82,6 +82,8 @@ export interface KernelOpts {
     idleMs?: number
     /** 查 gitDir 用的 git(测试注入隔离的环境) */
     git?: Git
+    /** 只给测试:代理怎么起(端口复用的用例) */
+    startProxy?: (o: ProxyOptions) => Promise<ProxyHandle>
   }
   /** 哪些插件是开发模式载进来的,以及这次是否跳过了它们(entry/devPlugins.ts)。内核没有别的办法知道 */
   devPlugins?: { ids: string[]; skipped?: 'dev_crashed' }
@@ -220,6 +222,7 @@ export async function createKernel(opts: KernelOpts): Promise<Kernel> {
     upstream,
     lookup: so.lookup,
     idleMs: so.idleMs,
+    ...(so.startProxy && { startProxy: so.startProxy }),
     repoPin: sid => sessions.get(sid)?.repo,
     originOf: sid => sessions.get(sid)?.origin,
     projectTopOf: sid => sessions.get(sid)?.projectTop,

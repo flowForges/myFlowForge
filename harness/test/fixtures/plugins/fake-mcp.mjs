@@ -20,6 +20,8 @@
 //   listChangedAfter:第 n 次 tools/call 之后发 notifications/tools/list_changed,工具说明从此变样
 //   stubborn:不理 stdin 关闭和 SIGTERM,只有 SIGKILL 收得掉
 // 工具:echo(参数原样回)、probe_read、probe_write、probe_fetch、probe_env、probe_children,都回真实发生的事。
+// probe_children 的 survivor:{trigger, out, pidFile, host, port}:两次 fork、自成一会话的孙进程,等 trigger 出现后经环境里的代理 CONNECT,
+// 结果写到 out。它拿着的是启动它的那次服务的环境(代理凭据也是那次的)
 // stdin 关了就退(和真的服务一样),除此之外自己不退;测试崩了也留不下进程,到点自己走。
 import { spawn, spawnSync } from 'node:child_process'
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
@@ -28,6 +30,7 @@ import { dirname, join } from 'node:path'
 
 const DIR = dirname(process.argv[1])
 const ARGV = process.argv.slice(2)
+const SURVIVOR = ARGV[0] === '--survivor' || ARGV[0] === '--survivor-inner'
 const SAFETY_EXIT_MS = 300_000
 const BAD_NAMES = ['a;rm -rf', '../x', 'has space', '']
 const scenario = (() => {
@@ -139,6 +142,10 @@ function probeChildren(a) {
     c.unref()
     out.spawned = c.pid
   }
+  if (a.survivor) {
+    spawn(process.execPath, [process.argv[1], '--survivor', JSON.stringify(a.survivor)], { detached: true, stdio: 'ignore' }).unref()
+    out.survivor = 'started'
+  }
   if (a.exec) {
     const x = spawnSync(a.exec[0], a.exec.slice(1), { encoding: 'utf8', timeout: a.timeoutMs ?? 30_000 })
     out.exec = { status: x.status, stdout: x.stdout ?? '', stderr: (x.stderr ?? '').slice(0, 2000), error: x.error ? errCode(x.error) : undefined }
@@ -171,7 +178,9 @@ function probeFetch(a) {
     }
     if (proxyUrl) {
       const u = new URL(proxyUrl)
-      s = connect({ host: u.hostname, port: Number(u.port) }, () => s.write(`CONNECT ${a.host}:${port} HTTP/1.1\r\nHost: ${a.host}:${port}\r\n\r\n`))
+      // 和 curl、git、pip 一样:URL 里有 userinfo 就主动发 Basic
+      const auth = u.username ? `Proxy-Authorization: Basic ${Buffer.from(`${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`).toString('base64')}\r\n` : ''
+      s = connect({ host: u.hostname, port: Number(u.port) }, () => s.write(`CONNECT ${a.host}:${port} HTTP/1.1\r\nHost: ${a.host}:${port}\r\n${auth}\r\n`))
       let buf = ''
       s.on('data', d => {
         buf += d
@@ -264,6 +273,25 @@ function onMessage(m) {
   }
 }
 
+function survive() {
+  const o = JSON.parse(ARGV[1])
+  // 第一层只再起一层就走:孙进程的父进程没了,ppid 和进程组都认不回服务
+  if (ARGV[0] === '--survivor') {
+    spawn(process.execPath, [process.argv[1], '--survivor-inner', ARGV[1]], { detached: true, stdio: 'ignore' }).unref()
+    return process.exit(0)
+  }
+  writeFileSync(o.pidFile, String(process.pid))
+  setTimeout(() => process.exit(0), 120_000)
+  const poll = setInterval(async () => {
+    if (!existsSync(o.trigger)) return
+    clearInterval(poll)
+    writeFileSync(o.out, JSON.stringify(await probeFetch({ host: o.host, port: o.port, timeoutMs: 5000 })))
+    process.exit(0)
+  }, 50)
+}
+
+if (SURVIVOR) survive()
+else {
 for (const line of [scenario.stderr ?? []].flat()) process.stderr.write(`${line}\n`)
 if (scenario.stubborn) process.on('SIGTERM', () => {})
 
@@ -288,3 +316,4 @@ process.stdin.on('data', d => {
 process.stdin.on('end', () => {
   if (!scenario.stubborn) process.exit(0)
 })
+}

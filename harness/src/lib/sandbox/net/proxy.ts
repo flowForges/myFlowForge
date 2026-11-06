@@ -2,6 +2,7 @@
 // 会话网络代理(spec §11):CONNECT 隧道 + 绝对形式的 HTTP 转发,只放白名单里的主机;可经上游 HTTP 代理(一律 CONNECT)。
 // 每一步(解析、直连、上游 CONNECT、NO_PROXY、拒绝事件)只用 checkHost 返回的规范主机名,不用请求原文;
 // 直连时解析一次、检查每个地址、连的就是检查过的那个 IP(不二次解析,挡 DNS rebinding)
+import { timingSafeEqual } from 'node:crypto'
 import { lookup as dnsLookup } from 'node:dns/promises'
 import { lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer as createHttpServer, request as httpRequest, type IncomingMessage, type ServerResponse } from 'node:http'
@@ -50,6 +51,13 @@ export interface ProxyOptions {
   idleMs?: number
   /** 本机网卡地址;默认读 os.networkInterfaces()(5 s 缓存) */
   localAddrs?: () => string[]
+  /**
+   * `user:password`:每个请求都要带一个且只有一个对得上的 `Proxy-Authorization: Basic`,否则 407,什么都不解析、不转发(final review I-4)。
+   * 一次启动一个:上次启动留下的进程拿着旧的,端口被新代理复用时也进不来
+   */
+  auth?: string
+  /** 只给测试:在这个端口上听(端口复用) */
+  port?: number
 }
 
 export interface ProxyHandle {
@@ -65,12 +73,23 @@ export interface ProxyHandle {
   readonly closing: boolean
 }
 
-const STATUS_TEXT: Record<number, string> = { 400: 'Bad Request', 403: 'Forbidden', 502: 'Bad Gateway', 503: 'Service Unavailable' }
+const STATUS_TEXT: Record<number, string> = { 400: 'Bad Request', 403: 'Forbidden', 407: 'Proxy Authentication Required', 502: 'Bad Gateway', 503: 'Service Unavailable' }
 const bodyFor = (status: number) => (status === 403 ? 'denied' : '')
 
 function rawResponse(status: number): string {
   const body = bodyFor(status)
-  return `HTTP/1.1 ${status} ${STATUS_TEXT[status]}\r\nContent-Type: text/plain\r\nContent-Length: ${body.length}\r\nConnection: close\r\n\r\n${body}`
+  return `HTTP/1.1 ${status} ${STATUS_TEXT[status]}\r\n${status === 407 ? `${CHALLENGE}\r\n` : ''}Content-Type: text/plain\r\nContent-Length: ${body.length}\r\nConnection: close\r\n\r\n${body}`
+}
+
+const CHALLENGE = 'Proxy-Authenticate: Basic realm="mff"'
+
+/** 原始头里恰好一个 Proxy-Authorization,而且就是这个值。Node 合并重复头时只留第一个,所以看 rawHeaders */
+function authorized(raw: string[], want: Buffer): boolean {
+  const got: string[] = []
+  for (let i = 0; i < raw.length; i += 2) if (raw[i].toLowerCase() === 'proxy-authorization') got.push(raw[i + 1])
+  if (got.length !== 1) return false
+  const b = Buffer.from(got[0].trim(), 'latin1')
+  return b.length === want.length && timingSafeEqual(b, want)
 }
 
 class ProxyError extends Error {
@@ -230,6 +249,9 @@ export async function startProxy(o: ProxyOptions): Promise<ProxyHandle> {
   const lookup = o.lookup ?? defaultLookup
   const dial = o.dial ?? ((host: string, port: number) => connect({ host, port }))
   const localAddrs = o.localAddrs ?? interfaceAddrs
+  const wantAuth = o.auth === undefined ? undefined : Buffer.from(`Basic ${Buffer.from(o.auth, 'utf8').toString('base64')}`, 'latin1')
+  /** 不对的凭据不记拒绝事件:主机是没认证的客户端说的 */
+  const unauthorized = (req: IncomingMessage) => wantAuth !== undefined && !authorized(req.rawHeaders, wantAuth)
 
   const clients = new Set<Socket>() // 计入上限的客户端连接
   const others = new Set<Socket>() // 出站连接
@@ -352,6 +374,7 @@ export async function startProxy(o: ProxyOptions): Promise<ProxyHandle> {
     // 每个客户端连接只处理一个请求
     if (served.has(sock)) return
     served.add(sock)
+    if (unauthorized(req)) return refuse(sock, 407)
     try {
       const t = parseAuthority(req.url ?? '')
       if (!t) throw bad()
@@ -379,8 +402,9 @@ export async function startProxy(o: ProxyOptions): Promise<ProxyHandle> {
       }
       const body = bodyFor(status)
       release(sock)
-      res.writeHead(status, { 'Content-Type': 'text/plain', 'Content-Length': body.length }).end(body)
+      res.writeHead(status, { ...(status === 407 && { 'Proxy-Authenticate': 'Basic realm="mff"' }), 'Content-Type': 'text/plain', 'Content-Length': body.length }).end(body)
     }
+    if (unauthorized(req)) return fail(407)
     let remote: Socket
     let host: string
     let target: { host: string; port: number; path: string } | undefined
@@ -506,7 +530,7 @@ export async function startProxy(o: ProxyOptions): Promise<ProxyHandle> {
   try {
     const tcp = createNetServer(onConnection)
     servers.push(tcp)
-    await listen(tcp, 0, '127.0.0.1')
+    await listen(tcp, o.port ?? 0, '127.0.0.1')
     if (o.unixSocket) {
       // mkdtemp 建的目录是 0700、名字不可预测,父目录是 1777 的 /tmp 也安全;套接字文件不 chmod
       unixDir = mkdtempSync(join(o.unixSocket.parent ?? tmpdir(), 'mffai-net-'))

@@ -5,6 +5,7 @@
 // - cwd / 临时目录等自身路径坏了照样抛错:plan reject,调用方让命令失败,绝不退回无沙箱执行;
 // - 代理每会话一个,按需启动;命令在跑(plan 之后、release 之前)时保持不关,之后按空闲关闭。
 //   04:委派的运行各有一个(键 `sessionId\0scope`),多出它自己的主机,release 时立刻关。
+import { randomBytes } from 'node:crypto'
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync, type Dirent } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, posix } from 'node:path'
@@ -115,8 +116,8 @@ export interface SandboxOpts {
 }
 
 interface SessionProxy {
-  /** 有 = 一次运行的代理:只给这次运行的主机,release 时立刻关 */
-  scoped?: { allowHosts: string[]; exact?: boolean }
+  /** 有 = 一次运行的代理:只给这次运行的主机,release 时立刻关。auth:隐藏运行(MCP)这次启动的代理凭据 */
+  scoped?: { allowHosts: string[]; exact?: boolean; auth?: string }
   handle?: ProxyHandle
   /** 本会话最近一次启动代理失败(级别按会话算,review M3) */
   failed: boolean
@@ -376,6 +377,7 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
       lookup: o.lookup,
       onDeny: d => onDeny(sessionId, e, d),
       idleMs,
+      ...(e.scoped?.auth !== undefined && { auth: e.scoped.auth }),
       ...(platform === 'linux' && { unixSocket: { parent: socketParent(writable) } }),
     }).then(
       h => {
@@ -536,7 +538,10 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
     const key = x.proxyScope === undefined ? s.sessionId : `${s.sessionId}\0${x.proxyScope}`
     // 同一 tick 里查和占,并发的两个计划只有一个过:第二个的主机名单不会悄悄变成第一个的
     if (x.proxyScope !== undefined && proxies.get(key)?.holds) throw new Error('sandbox: proxy scope is in use')
-    const e = usesProxy() ? entryFor(key, x.proxyScope === undefined ? undefined : { allowHosts: x.allowHosts, ...(x.exactHosts && { exact: true }) }) : undefined
+    // 隐藏运行的代理要这次启动的凭据(final review I-4):上次启动留下的进程拿着旧的,端口复用了也进不来。
+    // shell 和委派运行不加:凭据会出现在每条命令的环境里,不认代理认证的工具会坏
+    const scoped = x.proxyScope === undefined ? undefined : { allowHosts: x.allowHosts, ...(x.exactHosts && { exact: true }), ...(x.hide && { auth: `mff:${randomBytes(24).toString('hex')}` }) }
+    const e = usesProxy() ? entryFor(key, scoped) : undefined
     const release = e ? hold(key, s.sessionId, e) : () => {}
     try {
       const proxy = e ? await proxyFor(key, s.sessionId, e, writableWith(grantWrite())) : undefined
@@ -590,7 +595,7 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
           ...(x.hide && { noNamedIpc: true }),
         })
         const { file, args } = sandboxExecArgs(profile, command)
-        return { file, args, env: sandboxEnv(env, { tmp, proxyPort: proxy?.port, level, allowLoopback }), sandboxed: true, level, release, ...(e?.failed && { networkLost: true as const }) }
+        return { file, args, env: sandboxEnv(env, { tmp, proxyPort: proxy?.port, proxyAuth: e?.scoped?.auth, level, allowLoopback }), sandboxed: true, level, release, ...(e?.failed && { networkLost: true as const }) }
       }
 
       // linux(bwrap)
@@ -647,7 +652,7 @@ export function createSandboxService(o: SandboxOpts): SandboxService {
       return {
         file: o.detected.bwrap ?? '/usr/bin/bwrap',
         args,
-        env: sandboxEnv(env, { tmp, proxyPort: relay ? RELAY_PORT : undefined, level, allowLoopback: false }),
+        env: sandboxEnv(env, { tmp, proxyPort: relay ? RELAY_PORT : undefined, proxyAuth: e?.scoped?.auth, level, allowLoopback: false }),
         sandboxed: true,
         level,
         release,

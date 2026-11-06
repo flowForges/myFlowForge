@@ -170,6 +170,12 @@ describe('loginShellPath', () => {
 })
 
 describe('sandboxEnv (spec §10, R8)', () => {
+  it('proxyAuth goes into the userinfo of every proxy variable; without it the URL has none', () => {
+    const env = sandboxEnv({}, { tmp: '/t', proxyPort: 4242, proxyAuth: 'mff:' + 'c'.repeat(48), level: 'full', allowLoopback: false })
+    for (const k of ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']) expect(env[k]).toBe(`http://mff:${'c'.repeat(48)}@127.0.0.1:4242`)
+    expect(sandboxEnv({}, { tmp: '/t', proxyPort: 4242, level: 'full', allowLoopback: false }).HTTP_PROXY).toBe('http://127.0.0.1:4242')
+  })
+
   const base = {
     PATH: '/usr/bin', HOME: '/h', TMPDIR: '/var/folders/x', MFFAI: '1',
     HTTPS_PROXY: 'http://alice:s3cret@corp:8080', http_proxy: 'http://bob:pw@corp:8080', ALL_PROXY: 'socks5://u:p@x:1080',

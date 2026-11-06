@@ -72,6 +72,8 @@ export interface SandboxEnvOpts {
   tmp: string
   /** 子进程看到的代理端口(macOS = 会话代理端口;Linux = 命名空间里中转的端口);没有 → 不设任何代理变量(网络全断) */
   proxyPort?: number
+  /** `user:password`,进代理 URL 的 userinfo:curl、git、node、python、go 都从这里发 Proxy-Authorization。只有隐藏运行(MCP)有 */
+  proxyAuth?: string
   level: 'full' | 'partial'
   /** macOS R6:本地测试服务器直连(NO_PROXY 列回环);调用方只在 darwin 上传 true */
   allowLoopback: boolean
@@ -85,7 +87,7 @@ export function sandboxEnv(base: NodeJS.ProcessEnv, o: SandboxEnvOpts): NodeJS.P
   const over: Record<string, string> = { TMPDIR: o.tmp, MFFAI_SANDBOX: o.level }
   for (const k of CACHE_VARS) over[k] = `${o.tmp}/${CACHE_DIRS[k]}`
   if (o.proxyPort !== undefined) {
-    const url = `http://127.0.0.1:${o.proxyPort}`
+    const url = `http://${o.proxyAuth === undefined ? '' : `${o.proxyAuth}@`}127.0.0.1:${o.proxyPort}`
     for (const k of PROXY_NAMES) over[k] = over[k.toLowerCase()] = url
     over.NO_PROXY = over.no_proxy = o.allowLoopback ? LOOPBACK_NO_PROXY : ''
     over.NODE_USE_ENV_PROXY = '1'

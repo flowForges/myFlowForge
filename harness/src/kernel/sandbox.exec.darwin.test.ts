@@ -689,6 +689,24 @@ describe.skipIf(!usable)('planExec with hide, real sandbox-exec (09 Task 1, M1, 
     expect(await cat(join(box, 'systmp', 'other-program'))).toMatchObject({ out: '', code: 1 })
   })
 
+  it('I-4: each hide plan carries its own proxy credential in all six variables; a scoped run without hide and a shell plan carry none', async () => {
+    const a = await serve('/usr/bin/true', [])
+    const b = await serve('/usr/bin/true', [])
+    const url = (env: NodeJS.ProcessEnv) => new URL(env.HTTP_PROXY!)
+    expect(url(a.env).username).toBe('mff')
+    expect(url(a.env).password).toMatch(/^[0-9a-f]{48}$/)
+    expect(url(b.env).password).not.toBe(url(a.env).password)
+    for (const k of ['HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']) expect(a.env[k]).toBe(a.env.HTTP_PROXY)
+    const run = await sbx.planExec('/usr/bin/true', [], { sessionId: 's1', cwd, spillDir: spill }, { PATH: '/usr/bin:/bin' }, { allowRead: [], allowWrite: [], allowHosts: [], proxyScope: `run_${++n}`, readOnly: true, denyRead: [], denyWrite: [] })
+    const shell = await sbx.plan('true', { sessionId: 's1', cwd, spillDir: spill }, { PATH: '/usr/bin:/bin' })
+    try {
+      for (const p of [run, shell]) expect(p.env.HTTP_PROXY).toBe(`http://127.0.0.1:${url(p.env).port}`)
+    } finally {
+      run.release()
+      shell.release()
+    }
+  })
+
   it('a credential dir under a kept dir stays unreadable; its neighbour reads', async () => {
     const o = { hide: { tops: [h], keep: [cwd, join(h, '.config')] } }
     expect((await cat(join(h, '.config', 'tool', 'ok'), o)).out).toBe('TOOL-OK')

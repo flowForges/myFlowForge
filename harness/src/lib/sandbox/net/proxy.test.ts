@@ -148,6 +148,58 @@ function upstreamAt(u: FakeServer, env: Record<string, string> = {}): Upstream {
 
 const NPM = ['registry.npmjs.org']
 
+describe('startProxy — a per-start credential (final review I-4)', () => {
+  const basic = (cred: string) => `Proxy-Authorization: Basic ${Buffer.from(cred).toString('base64')}\r\n`
+  const cred = 'mff:' + 'a'.repeat(32)
+
+  it.each([
+    ['no credential', ''],
+    ['an old credential', basic('mff:' + 'b'.repeat(32))],
+    ['the right password under another user', basic('other:' + 'a'.repeat(32))],
+    ['another scheme', `Proxy-Authorization: Bearer ${'a'.repeat(32)}\r\n`],
+    ['the credential twice, one of them wrong', basic(cred) + basic('mff:x')],
+  ])('CONNECT with %s: 407, nothing resolved, dialled or sent upstream, no deny event', async (_, extra) => {
+    const up = await fake('upstream')
+    const { lookup, calls } = fakeLookup({ 'registry.npmjs.org': [PUBLIC] })
+    const p = await proxy({ allow: () => NPM, upstream: upstreamAt(up), lookup, auth: cred, onDeny: () => {} })
+    const r = await connectReq(p.port, 'registry.npmjs.org:443', undefined, extra)
+    expect(r.status).toBe(407)
+    expect(r.head).toContain('Proxy-Authenticate: Basic')
+    expect(up.connects).toEqual([])
+    expect(calls).toEqual([])
+    expect(p.denies).toEqual([])
+  })
+
+  it('a plain request without it: 407 and the origin sees nothing', async () => {
+    const origin = await fake('origin')
+    const { dial, calls } = fakeDial(origin)
+    const { lookup } = fakeLookup({ 'registry.npmjs.org': [PUBLIC] })
+    const p = await proxy({ allow: () => NPM, upstream: undefined, lookup, dial, auth: cred, onDeny: () => {} })
+    const r = await send(p.port, 'GET http://registry.npmjs.org/x HTTP/1.1\r\nHost: registry.npmjs.org\r\n\r\n')
+    expect(r.status).toBe(407)
+    expect(calls).toEqual([])
+  })
+
+  it('the right credential: CONNECT and a plain request go through, and the header is not forwarded', async () => {
+    const up = await fake('upstream')
+    const { lookup } = fakeLookup({ 'registry.npmjs.org': [PUBLIC] })
+    const p = await proxy({ allow: () => NPM, upstream: upstreamAt(up), lookup, auth: cred, onDeny: () => {} })
+    const r = await connectReq(p.port, 'registry.npmjs.org:443', undefined, basic(cred))
+    expect(r.status).toBe(200)
+    expect(up.connects.map(c => c.line)).toEqual(['CONNECT registry.npmjs.org:443 HTTP/1.1'])
+    expect(JSON.stringify(up.connects)).not.toContain(Buffer.from(cred).toString('base64'))
+    // 主机不在名单上照样是 403:凭据只是多一道,不是放行
+    expect((await connectReq(p.port, 'evil.example:443', undefined, basic(cred))).status).toBe(403)
+  })
+
+  it('without auth nothing changes: no header needed', async () => {
+    const up = await fake('upstream')
+    const { lookup } = fakeLookup({ 'registry.npmjs.org': [PUBLIC] })
+    const p = await proxy({ allow: () => NPM, upstream: upstreamAt(up), lookup, onDeny: () => {} })
+    expect((await connectReq(p.port, 'registry.npmjs.org:443')).status).toBe(200)
+  })
+})
+
 describe('startProxy — with an upstream (Review Focus 2)', () => {
   it('a host not on the list → 403 "denied" and the upstream records nothing', async () => {
     const up = await fake('upstream')

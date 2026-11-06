@@ -13,6 +13,7 @@ import { mcpRig, statusOf, type McpRig, type McpRigOpts } from '../../../test/mc
 import { startFakeUpstream, type FakeServer } from '../../../test/fakeUpstream'
 import { buildPlugin, FAKE_MCP, removeTestRoot, type PluginSpec } from '../../../test/pluginRig'
 import { createGit } from '../../lib/git/snapshot'
+import { startProxy, type ProxyHandle, type ProxyOptions } from '../../lib/sandbox/net/proxy'
 import { createToolsCoding } from '../tools-coding'
 import toolsRegistry from '../tools-registry'
 
@@ -57,7 +58,7 @@ const jsonOf = (text: string) => {
   return JSON.parse(lines.slice(2, -1).join('\n'))
 }
 
-async function rig(o: McpRigOpts = {}) {
+async function rig(o: McpRigOpts & { startProxy?: (p: ProxyOptions) => Promise<ProxyHandle> } = {}) {
   const gitBase = { PATH: '/usr/bin:/bin', HOME: tmp, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' }
   const m = await mcpRig({
     stub: false,
@@ -68,6 +69,7 @@ async function rig(o: McpRigOpts = {}) {
         upstream: { url: new URL(`http://127.0.0.1:${upstream.port}`), noProxy: () => false },
         lookup: async () => [{ address: '93.184.216.34', family: 4 as const }],
         git: createGit({ base: gitBase }),
+        ...(o.startProxy && { startProxy: o.startProxy }),
       },
       ...o.kernel,
     },
@@ -685,6 +687,43 @@ else:
       }
     }, 60_000)
   })
+
+  it('I-4: a double-forked survivor holding the last start\'s credential gets 407 from a new proxy on the same port', async () => {
+    // 端口复用是真的会发生的事,这里把它定下来:第二个代理听在第一个的端口上
+    const ports: number[] = []
+    const m = await rig({
+      startProxy: async p => {
+        const h = await startProxy({ ...p, ...(ports.length > 0 && { port: ports[0] }) })
+        ports.push(h.port)
+        return h
+      },
+    })
+    const s = await started(m, 'x', { y: SERVER }, { y: { network: ['granted.example'], cwd: 'read' } })
+    const data = s.data()
+    const files = { trigger: join(data, 'go'), out: join(data, 'survivor.json'), pidFile: join(data, 'survivor.pid') }
+    let survivor: number | undefined
+    try {
+      expect(await s.probe('x/y', 'probe_fetch', { host: 'granted.example', port: 443 })).toMatchObject({ ok: true, status: 200 })
+      expect((await s.probe('x/y', 'probe_children', { survivor: { ...files, host: 'granted.example', port: 443 } })).survivor).toBe('started')
+      await until(() => existsSync(files.pidFile), 10_000)
+      survivor = Number(readFileSync(files.pidFile, 'utf8'))
+      expect(m.pids).not.toContain(survivor)
+      await call(m.r, 'plugins.setEnabled', { commandId: 'off', id: 'x', enabled: false })
+      await call(m.r, 'plugins.setEnabled', { commandId: 'on', id: 'x', enabled: true })
+      // 已接受的残余:两次 fork 的孙进程活过停止
+      expect(alive(survivor)).toBe(true)
+      const before = upstream.connects.length
+      expect(await s.probe('x/y', 'probe_fetch', { host: 'granted.example', port: 443 })).toMatchObject({ ok: true, status: 200 })
+      expect(ports).toEqual([ports[0], ports[0]])
+      writeFileSync(files.trigger, '')
+      await until(() => existsSync(files.out), 15_000)
+      expect(JSON.parse(readFileSync(files.out, 'utf8'))).toMatchObject({ ok: false, status: 407, via: 'proxy' })
+      // 上游只见过新服务自己的那一次
+      expect(upstream.connects.slice(before).map(c => c.line)).toEqual(['CONNECT granted.example:443 HTTP/1.1'])
+    } finally {
+      if (survivor !== undefined && alive(survivor)) process.kill(survivor, 'SIGKILL')
+    }
+  }, 90_000)
 
   it('kernel.close leaves no pid', async () => {
     const m = await rig()
