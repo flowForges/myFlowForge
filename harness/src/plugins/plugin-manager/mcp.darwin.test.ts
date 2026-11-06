@@ -1,6 +1,6 @@
 // 真 Seatbelt(09 Review Focus 4):临时 home,假服务在插件根里,经 probe_* 回报真实发生的事。
 // 每条"读不到"都带能成功的对照,否则什么都干不了也会通过。测试进程自己在沙箱里时不能嵌套 → 整个文件跳过
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { chmodSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:net'
@@ -636,6 +636,69 @@ else:
       } finally {
         outside('unlink', name)
       }
+    }, 120_000)
+  })
+
+  describe('I-5: notify_set_state does not carry data between servers', () => {
+    // 状态只在有人登记着这个名字时才在:写的一方要一直拿着,读的一方同时去读
+    const PY = `
+import ctypes, sys, time
+lib = ctypes.CDLL('/usr/lib/libSystem.dylib')
+lib.notify_register_check.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_int)]
+lib.notify_set_state.argtypes = [ctypes.c_int, ctypes.c_uint64]
+lib.notify_get_state.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_uint64)]
+op, name = sys.argv[1], sys.argv[2].encode()
+tok = ctypes.c_int()
+rc = lib.notify_register_check(name, ctypes.byref(tok))
+if rc != 0:
+    print('refused', rc, flush=True); sys.exit(0)
+if op == 'set':
+    rc = lib.notify_set_state(tok, int(sys.argv[3])); print('set' if rc == 0 else 'refused', rc, flush=True)
+    if rc == 0: time.sleep(float(sys.argv[4]))
+else:
+    st = ctypes.c_uint64(); rc = lib.notify_get_state(tok, ctypes.byref(st)); print(('got %d' % st.value) if rc == 0 else 'refused', rc, flush=True)
+`
+    const inside = async (s: Started, server: string, script: string, ...a: string[]) => {
+      const { exec } = await s.probe(server, 'probe_children', { exec: ['/usr/bin/python3', script, ...a], timeoutMs: 45_000 })
+      expect(exec.status).toBe(0) // python 真的跑起来了
+      return String(exec.stdout).trim()
+    }
+    /** 沙箱外拿着这个名字的写方;读到它的第一行才返回 */
+    const holder = async (script: string, name: string, value: string) => {
+      const c = spawn('/usr/bin/python3', [script, 'set', name, value, '30'], { env: { PATH: '/usr/bin:/bin', HOME: tmp }, stdio: ['ignore', 'pipe', 'ignore'] })
+      const first = await new Promise<string>(res => c.stdout!.once('data', d => res(String(d).trim())))
+      return { first, stop: () => c.kill('SIGKILL') }
+    }
+
+    it('a state set outside is unreadable inside, and a server cannot set one for another; outside both work', async () => {
+      const name = `com.mff.test.${process.pid}.${++n}`
+      const m = await rig()
+      const s = await started(m, 'x', { quiet: SERVER, net: SERVER }, { net: { network: ['granted.example'], cwd: 'read' } })
+      for (const server of ['x/quiet', 'x/net']) await s.m.mcp(s.sid, { action: 'tools', server })
+      const script = join(s.data('net'), 'notify.py')
+      writeFileSync(script, PY)
+      const quietScript = join(s.data('quiet'), 'notify.py')
+      writeFileSync(quietScript, PY)
+      const h = await holder(script, name, '4242')
+      try {
+        expect(h.first).toMatch(/^set/)
+        // 对照:沙箱外另一个进程读得到
+        expect(execFileSync('/usr/bin/python3', [script, 'get', name], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin', HOME: tmp } }).trim()).toMatch(/^got 4242/)
+        expect(await inside(s, 'x/net', script, 'get', name)).toMatch(/^refused/)
+        expect(await inside(s, 'x/quiet', quietScript, 'set', name, '777', '0')).toMatch(/^refused/)
+      } finally {
+        h.stop()
+      }
+    }, 120_000)
+
+    it('node, python3 and a /usr/bin shim still start and run under it', async () => {
+      const m = await rig()
+      const s = await started(m)
+      const run = async (cmd: string[]) => (await s.probe('x/y', 'probe_children', { exec: cmd, timeoutMs: 45_000 })).exec
+      expect(await run([process.execPath, '-e', 'console.log(require("os").cpus().length > 0, new Date().getFullYear() > 2000)'])).toMatchObject({ status: 0, stdout: 'true true\n' })
+      expect(await run(['/usr/bin/python3', '-c', 'import json, ssl, subprocess; print(json.dumps([1]))'])).toMatchObject({ status: 0, stdout: '[1]\n' })
+      expect(await run(['/usr/bin/git', '--version'])).toMatchObject({ status: 0, stdout: expect.stringMatching(/^git version /) })
+      expect(await run(['/bin/sh', '-c', 'date +%Y >/dev/null && /usr/bin/env true && echo ok'])).toMatchObject({ status: 0, stdout: 'ok\n' })
     }, 120_000)
   })
 

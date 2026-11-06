@@ -43,7 +43,10 @@ export interface SeatbeltParams {
   proxyPort?: number
   /** R6:放行本机回环的出站 / 监听 / 入站 */
   allowLoopback?: boolean
-  /** 隐藏运行(09 I4):不放 python 的命名 IPC。名字是全局的,没网的服务写、有网的读,就绕过了逐服务的授权 */
+  /**
+   * 隐藏运行(09 I4):不放 python 的命名 IPC,也不放 notifyd(final review I-5:notify_set_state 是同一种全局名字的通道)。
+   * 名字是全局的,没网的服务写、有网的读,就绕过了逐服务的授权
+   */
   noNamedIpc?: boolean
 }
 
@@ -71,6 +74,8 @@ const MACH_SERVICES = [
   'com.apple.bsd.dirhelper',
   'com.apple.trustd.agent',
 ]
+
+const NOTIFY_SERVICE = 'com.apple.system.notification_center'
 
 // /dev/tty 可写但不给 ioctl(TIOCSTI 能往父终端注入按键);调用方以 detached:true(setsid)起进程,本来就没有控制终端
 const WRITABLE_DEVICES = ['/dev/null', '/dev/stdout', '/dev/stderr', '/dev/tty', '/dev/dtracehelper']
@@ -154,7 +159,7 @@ export function seatbeltProfile(p: SeatbeltParams): string {
 
     // 系统
     `(allow sysctl-read ${SYSCTL_PREFIXES.map(n => `(sysctl-name-prefix ${str(n)})`).join(' ')} ${SYSCTL_NAMES.map(n => `(sysctl-name ${str(n)})`).join(' ')})`,
-    `(allow mach-lookup ${MACH_SERVICES.map(n => `(global-name ${str(n)})`).join(' ')})`,
+    `(allow mach-lookup ${MACH_SERVICES.filter(n => !(p.noNamedIpc && n === NOTIFY_SERVICE)).map(n => `(global-name ${str(n)})`).join(' ')})`,
     `(allow ipc-posix-shm ${[...(p.noNamedIpc ? [] : SHM_PREFIXES.map(n => `(ipc-posix-name-prefix ${str(n)})`)), ...SHM_NAMES.map(n => `(ipc-posix-name ${str(n)})`)].join(' ')})`,
     ...(p.noNamedIpc ? [] : [`(allow ipc-posix-sem ${SEM_PREFIXES.map(n => `(ipc-posix-name-prefix ${str(n)})`).join(' ')})`]),
     `(allow file-ioctl ${filters('literal', IOCTL_DEVICES)})`,
