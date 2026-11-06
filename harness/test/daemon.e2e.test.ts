@@ -52,14 +52,14 @@ describe.skipIf(!E2E)('built daemon e2e', () => {
   const electron = () => process.env.ELECTRON_BIN ?? (createRequire(import.meta.url)('electron') as string)
 
   /** 起构建产物的监管进程(临时 HOME / 数据目录 / 全局 git 配置,去掉代理变量),等到 worker running。`extraEnv` 在去掉代理变量之后再加;`config` 换掉默认种子 */
-  async function startDaemon(o: { extraEnv?: NodeJS.ProcessEnv; config?: object; reuse?: { home: string; data: string } } = {}) {
+  async function startDaemon(o: { extraEnv?: NodeJS.ProcessEnv; config?: object; reuse?: { home: string; data: string }; readyMs?: number } = {}) {
     expect(existsSync(DAEMON) && existsSync(ACP)).toBe(true)
     // reuse:同一份数据目录再起一次(登录项那一轮);目录已登记过清理,配置和全局 git 配置也已写好
     const home = o.reuse?.home ?? mkdtempSync(join(tmpdir(), 'mffai-e2e-home-'))
     const data = o.reuse?.data ?? mkdtempSync(join(tmpdir(), 'mffai-e2e-data-'))
     const gitConfig = join(home, 'gitconfig')
     if (!o.reuse) {
-      temps.push(home, data, `${data}-worktrees`)
+      temps.push(home, data, `${data}-worktrees`, `${data}-plugins`)
       // PATH 是真的:探测不能跑到机器上真的 codex、qodercli
       writeFileSync(join(data, 'config.json'), JSON.stringify(o.config ?? { executors: { disabled: ['codex', 'qoder'] } }))
       writeFileSync(gitConfig, '')
@@ -86,7 +86,7 @@ describe.skipIf(!E2E)('built daemon e2e', () => {
         const c = await ctl()
         try { const s = await c.call('status'); workerPid = s.workerPid ?? 0; return s.state === 'running' } finally { c.close() }
       } catch { return false }
-    }, 10_000, 'control status running')
+    }, o.readyMs ?? 10_000, 'control status running')
     // 只记 >0 的 pid:alive(0) / kill(0) 会指向 vitest 自己的进程组
     for (const pid of [sup.pid, workerPid]) if (pid && pid > 0) pids.push(pid)
     const shutdown = async () => {
@@ -700,6 +700,124 @@ describe.skipIf(!E2E)('built daemon e2e', () => {
       expect(clean).not.toHaveProperty('problems')
       expect(clean.plugins.some(p => p.id === 'dev-exit')).toBe(false)
       await d3.shutdown()
+    }, 180_000)
+
+    // activate 永远不返回:没有 ready,监管在启动超时(30 s)杀掉工作进程;下一个跳过它,报 dev_crashed
+    it('hang round: activate never returns, the supervisor kills the worker at the startup timeout, the next one skips it', async () => {
+      const d = await startDaemon()
+      await trust(d, join(d.home, 'proj'), 'dev-hang', moduleOf('dev-hang', 'return new Promise(() => {})'))
+      await d.shutdown()
+
+      const at = Date.now()
+      const d2 = await startDaemon({ reuse: { home: d.home, data: d.data }, readyMs: 90_000 })
+      // 等到 running 的已经是第二个工作进程:第一个没到 ready
+      expect(Date.now() - at).toBeGreaterThanOrEqual(25_000)
+      const st = await statusOf(d2)
+      expect(st.problems).toEqual(['dev_crashed'])
+      expect(st.plugins.some(p => p.id === 'dev-hang')).toBe(false)
+      expect(st.plugins.find(p => p.id === 'plugin-manager')).toEqual({ id: 'plugin-manager', state: 'active' })
+      const w = await dev(d2)
+      try {
+        expect((await w.call('plugins.list')).dev.map(e => e.id)).toEqual(['dev-hang'])
+        expect(await w.call('plugins.dev.remove', { id: 'dev-hang' })).toEqual({ ok: true, restartRequired: true })
+      } finally { w.close() }
+      await d2.shutdown()
+
+      const d3 = await startDaemon({ reuse: { home: d.home, data: d.data } })
+      expect(await statusOf(d3)).not.toHaveProperty('problems')
+      await d3.shutdown()
+    }, 240_000)
+  })
+
+  // 09 声明式插件:构建产物里没有 allowFileProtocol,按路径装。假服务经根里的 sh 启动器用 Electron 的 Node 跑:
+  // ELECTRON_RUN_AS_NODE 在 dangerous_env 里(ELECTRON_*),不能写进声明的 env
+  describe('declarative plugins', () => {
+    const worker = async (d: { paths: ReturnType<typeof runtimePaths>; tokenOf(): string }) => {
+      const w = await connectClient({ addr: d.paths.workerAddr, token: d.tokenOf(), timeoutMs: 10_000 })
+      expect((await w.call('hello', { clientVersion: '0.0.0', protocolVersion: PROTOCOL_VERSION })).compatible).toBe(true)
+      return w
+    }
+    const pgrep = (pattern: string) => {
+      try { return execFileSync('pgrep', ['-f', pattern]).toString().trim().split('\n').filter(Boolean).map(Number) } catch { return [] }
+    }
+
+    it('idle round: no plugins, no <data>-plugins, plugin-manager active', async () => {
+      const d = await startDaemon()
+      const w = await worker(d)
+      try {
+        const st = await w.call('status')
+        expect(st.plugins.find(p => p.id === 'plugin-manager')).toEqual({ id: 'plugin-manager', state: 'active' })
+        expect(await w.call('plugins.list')).toEqual({ plugins: [], dev: [], problems: [] })
+      } finally { w.close() }
+      expect(existsSync(`${d.data}-plugins`)).toBe(false)
+      await d.shutdown()
+      expect(existsSync(`${d.data}-plugins`)).toBe(false)
+    }, 120_000)
+
+    it.skipIf(!sandboxed)('install round: by RPC from a path, a session reaches the server through a real sandboxed child, nothing left after stop', async () => {
+      // 剧本到请求来时才取:那时临时 home 已经有了
+      let homeDir = ''
+      const script = [
+        () => toolCall('c1', 'mcp', { action: 'call', server: 'fx/y', tool: 'echo', arguments: { from: 'bundle' } }),
+        () => toolCall('c2', 'mcp', { action: 'call', server: 'fx/y', tool: 'probe_read', arguments: { path: join(homeDir, 'notes.txt') } }),
+      ]
+      const fake = await startFakeOpenai({ script })
+      closers.push(() => fake.close())
+      const d = await startDaemon()
+      homeDir = d.home
+      writeFileSync(join(d.home, 'notes.txt'), 'private notes')
+
+      const src = mkdtempSync(join(tmpdir(), 'mffai-e2e-plugin-'))
+      temps.push(src)
+      const root = join(src, 'fx')
+      mkdirSync(join(root, '.claude-plugin'), { recursive: true })
+      writeFileSync(join(root, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'fx', version: '1.0.0' }))
+      writeFileSync(join(root, '.mcp.json'), JSON.stringify({ mcpServers: { y: { command: 'sh', args: ['${CLAUDE_PLUGIN_ROOT}/launch.sh', '${CLAUDE_PLUGIN_ROOT}/fake-mcp.mjs'] } } }))
+      writeFileSync(join(root, 'launch.sh'), `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec ${JSON.stringify(electron())} "$1"\n`)
+      copyFileSync(join(__dirname, 'fixtures', 'plugins', 'fake-mcp.mjs'), join(root, 'fake-mcp.mjs'))
+      writeFileSync(join(root, 'scenario.json'), '{}')
+      const cwd = mkdtempSync(join(tmpdir(), 'mffai-e2e-cwd-'))
+      temps.push(cwd)
+
+      const w = await worker(d)
+      const events: KernelEvent[] = []
+      w.onEvent(e => events.push(e))
+      await w.call('events.subscribe', { after: 0 })
+      const store = `${d.data}-plugins`
+      try {
+        expect((await w.call('status')).sandbox?.level).toBe('full')
+        const { stagingId } = await w.call('plugins.install.prepare', { source: { kind: 'path', path: root } })
+        let st = await w.call('plugins.install.status', { stagingId })
+        await waitFor(async () => (st = await w.call('plugins.install.status', { stagingId })).state !== 'fetching', 20_000, 'staging settled')
+        expect(st.state, String(st.error)).toBe('ready')
+        expect(st.consent?.mcp.map(s => [s.name, s.command, s.problems])).toEqual([['y', 'sh', []]])
+        expect(await w.call('plugins.install.confirm', { commandId: 'e2e-ci', stagingId, consentHash: st.consentHash!, grants: { servers: {} }, enable: true })).toMatchObject({ ok: true })
+
+        const acc = await w.call('models.addAccount', { commandId: 'e2e-pl-add', presetId: 'custom-openai', baseUrl: fake.base, apiKey: 'sk-e2e-plugins-0123456789' })
+        await waitFor(async () => ((await w.call('models.accounts')).accounts.find(a => a.id === acc.id)?.models ?? []).some(m => m.id === FAKE_MODEL), 10_000, 'model list')
+        await w.call('models.setDefault', { accountId: acc.id, modelId: FAKE_MODEL })
+        const { sessionId } = await w.call('session.create', { commandId: 'e2e-pl', cwd, approvalMode: 'auto' })
+        await w.call('session.prompt', { commandId: 'e2e-pl-p', sessionId, text: 'use the server' })
+        const mine = () => events.filter(e => e.sessionId === sessionId)
+        await waitFor(() => mine().some(e => e.type === 'turn.ended' || e.type === 'turn.failed'), 60_000, 'turn end')
+        const end = mine().find(e => e.type === 'turn.ended' || e.type === 'turn.failed')!
+        expect(end.type, JSON.stringify(end.payload)).toBe('turn.ended')
+        // 没网的服务在 auto + full 下不问
+        expect(mine().filter(e => e.type === 'approval.requested')).toEqual([])
+        const ended = mine().filter(e => e.type === 'tool.ended').map(e => e.payload as { name?: string; content?: string })
+        expect(ended.map(e => e.name)).toEqual(['mcp', 'mcp'])
+        expect(ended[0].content?.split('\n')[0]).toBe('<mcp-result server="fx/y" tool="echo">')
+        expect(ended[0].content).toContain('"from":"bundle"')
+        // 真沙箱:临时 home 里的文件读不到
+        expect(ended[1].content).toMatch(/"ok":false/)
+        expect(ended[1].content).toMatch(/EPERM|EACCES/)
+        expect(ended[1].content).not.toContain('private notes')
+        // 对照:停之前进程在,命令行里是存储里的路径
+        expect(pgrep(store).length).toBeGreaterThan(0)
+        expect((await w.call('plugins.mcp.status', {})).servers.map(s => [s.plugin, s.server, s.state])).toEqual([['fx', 'y', 'running']])
+      } finally { w.close() }
+      await d.shutdown()
+      await waitFor(() => pgrep(store).length === 0, 10_000, 'no server process after stop')
     }, 180_000)
   })
 
