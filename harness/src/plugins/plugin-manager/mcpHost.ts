@@ -93,33 +93,49 @@ export function resolveProgram(command: string, root: string, path: string): str
   return locate(command, root, path)?.real
 }
 
-/** 家目录下认得的运行时布局,只认真实路径:整棵放回。不在表里的只放回程序自己的目录,跑不起来是看得见的,表从实测里长 */
-const HOME_RUNTIMES: readonly string[][] = [
-  ['.nvm', 'versions', 'node', '*'],
-  ['.fnm', 'node-versions', '*'],
-  ['.volta', 'tools', 'image', 'node', '*'],
-  ['.asdf', 'installs', '*', '*'],
-  ['.local', 'share', 'mise', 'installs', '*', '*'],
-  ['.pyenv', 'versions', '*'],
-  ['.rbenv', 'versions', '*'],
-  ['.local', 'share', 'uv', 'tools', '*'],
-  ['.local', 'share', 'uv', 'python', '*'],
-  ['.local', 'pipx', 'venvs', '*'],
-  ['.bun', 'install', 'global'],
+/**
+ * 家目录下认得的运行时布局,只认真实路径。整棵不放回(final review I-1):nvm、asdf、fnm、volta 的 etc/npmrc,pyenv、uv 的 pip.conf
+ * 都在根里,装着登录令牌。只放回跑起来要的那几块;venv 的 python 启动要读 pyvenv.cfg,bun 的全局包只有 node_modules。
+ * 不在表里的只放回程序自己的目录,跑不起来是看得见的,表从实测里长
+ */
+const BIN_LIB = ['bin', 'lib']
+const VENV = ['bin', 'lib', 'pyvenv.cfg']
+const HOME_RUNTIMES: readonly { at: string[]; keep: string[] }[] = [
+  { at: ['.nvm', 'versions', 'node', '*'], keep: BIN_LIB },
+  { at: ['.fnm', 'node-versions', '*', 'installation'], keep: BIN_LIB },
+  { at: ['.volta', 'tools', 'image', 'node', '*'], keep: BIN_LIB },
+  { at: ['.asdf', 'installs', '*', '*'], keep: BIN_LIB },
+  { at: ['.local', 'share', 'mise', 'installs', '*', '*'], keep: BIN_LIB },
+  { at: ['.pyenv', 'versions', '*'], keep: BIN_LIB },
+  { at: ['.rbenv', 'versions', '*'], keep: BIN_LIB },
+  { at: ['.local', 'share', 'uv', 'tools', '*'], keep: VENV },
+  { at: ['.local', 'share', 'uv', 'python', '*'], keep: BIN_LIB },
+  { at: ['.local', 'pipx', 'venvs', '*'], keep: VENV },
+  { at: ['.bun', 'install', 'global'], keep: ['node_modules'] },
 ]
+/** 认得的根里另外再拒一次的:放回的路径(cwd、程序自己的目录)盖到它们时也读不到。第二道墙 */
+const RUNTIME_WALLS = ['etc', 'pip.conf', '.npmrc']
 
-function knownRuntime(real: string, home: string): string | undefined {
+function knownRuntime(real: string, home: string): { root: string; keep: string[] } | undefined {
   if (!within(real, home) || real === home) return undefined
   const segs = real.slice(home.length + 1).split('/')
   // 程序要在根的里面:根本身不算
-  const hit = HOME_RUNTIMES.find(l => segs.length > l.length && l.every((p, i) => p === '*' || p === segs[i]))
-  return hit && join(home, ...segs.slice(0, hit.length))
+  const hit = HOME_RUNTIMES.find(l => segs.length > l.at.length && l.at.every((p, i) => p === '*' || p === segs[i]))
+  if (!hit) return undefined
+  const root = join(home, ...segs.slice(0, hit.at.length))
+  return { root, keep: hit.keep.map(k => join(root, k)) }
+}
+
+/** 认得的运行时根里的配置文件:计划里放进 denyRead,排在所有放回之后 */
+export function runtimeWalls(realProgram: string, home: string, viaPath: boolean): string[] {
+  const known = viaPath ? knownRuntime(realProgram, home) : undefined
+  return known ? RUNTIME_WALLS.map(w => join(known.root, w)) : []
 }
 
 /**
  * 只有纯名字经 PATH 解析的程序才放回东西(M15):插件写的绝对路径不算,否则它能自己点要放开家目录的哪一块。
  * 家目录里只放回程序自己的目录(C1):上两级的 ~/Library、~/.cargo、~/.local 里全是别人的登录态。
- * 那个目录就是家目录或它的直接子目录 → runtime_too_broad。真实路径落在认得的布局里才放回整棵。
+ * 那个目录就是家目录或它的直接子目录 → runtime_too_broad。真实路径落在认得的布局里才放回它的 bin、lib 这几块。
  * 家目录外本来读得到;在隐藏的根里的上两级,等于根本身或更高的放回去就白隐藏了
  */
 export function runtimeRoots(realProgram: string, home: string, viaPath: boolean, tops: string[] = [], hit: string = realProgram): string[] {
@@ -135,8 +151,7 @@ export function runtimeRoots(realProgram: string, home: string, viaPath: boolean
     const root = dirname(dir)
     if (tops.some(t => root !== t && within(root, t))) out.add(root)
   }
-  const known = knownRuntime(realProgram, home)
-  if (known) out.add(known)
+  for (const k of knownRuntime(realProgram, home)?.keep ?? []) out.add(k)
   return [...out]
 }
 
@@ -591,6 +606,7 @@ export class McpHost {
     if (srv.command.startsWith('/') && inTop(located.real)) throw refuse('bad_command')
     if (located.viaPath && (within(located.real, realSpelling(store)) || within(located.real, realSpelling(o.dataDir)))) throw refuse('bad_command')
     const roots = runtimeRoots(located.real, realHome, located.viaPath, realTops, located.hit)
+    const walls = runtimeWalls(located.real, realHome, located.viaPath)
     if (roots.some(k => heldTop(k, baseTops, o.dataDir))) throw refuse('keep_too_broad')
 
     const data = this.plainDataDir(plugin, server)
@@ -623,7 +639,7 @@ export class McpHost {
         exactHosts: true,
         proxyScope: `mcp_${sha(`${plugin}/${server}/${++this.starts}`).slice(0, 12)}`,
         readOnly: g.cwd !== 'write',
-        denyRead: policy.ruleDenyRead,
+        denyRead: [...policy.ruleDenyRead, ...walls],
         denyWrite: policy.ruleDenyWrite,
         hide: { tops: g.cwd === 'none' ? [...baseTops, cwd] : baseTops, keep: [...new Set([...(g.cwd === 'none' ? [] : [cwd]), root, ...roots])] },
         tmpDir: tmp,

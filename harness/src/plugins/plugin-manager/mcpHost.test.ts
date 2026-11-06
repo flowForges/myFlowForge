@@ -13,8 +13,9 @@ import { wipeSessionTmp } from '../../kernel/sandbox'
 import { DEFAULT_CALL_MS, DEFAULT_INIT_MS } from '../../lib/mcp/client'
 import { MAX_LINE } from '../../lib/mcp/stdio'
 import { pgidFile, procTable, reapOrphans } from '../../lib/proc/pgids'
+import { within } from '../../lib/sandbox/paths'
 import toolsRegistry from '../tools-registry'
-import { heldTop, IDLE_MS, tempTops, MAX_PER_SESSION, MAX_SERVERS, resolveProgram, runtimeRoots } from './mcpHost'
+import { heldTop, IDLE_MS, tempTops, MAX_PER_SESSION, MAX_SERVERS, resolveProgram, runtimeRoots, runtimeWalls } from './mcpHost'
 
 let tmp: string
 const rigs: McpRig[] = []
@@ -400,20 +401,30 @@ describe('programs', () => {
     })
 
     it.each([
-      ['/h/.nvm/versions/node/v20/lib/node_modules/npm/bin/npx-cli.js', '/h/.nvm/versions/node/v20'],
-      ['/h/.nvm/versions/node/v20/bin/node', '/h/.nvm/versions/node/v20'],
-      ['/h/.fnm/node-versions/v20/installation/bin/node', '/h/.fnm/node-versions/v20'],
-      ['/h/.volta/tools/image/node/20.1/bin/node', '/h/.volta/tools/image/node/20.1'],
-      ['/h/.asdf/installs/nodejs/20/bin/node', '/h/.asdf/installs/nodejs/20'],
-      ['/h/.local/share/mise/installs/python/3.12/bin/python', '/h/.local/share/mise/installs/python/3.12'],
-      ['/h/.pyenv/versions/3.12/bin/python', '/h/.pyenv/versions/3.12'],
-      ['/h/.rbenv/versions/3.3/bin/ruby', '/h/.rbenv/versions/3.3'],
-      ['/h/.local/share/uv/tools/ruff/bin/ruff', '/h/.local/share/uv/tools/ruff'],
-      ['/h/.local/share/uv/python/cpython-3.12/bin/python3', '/h/.local/share/uv/python/cpython-3.12'],
-      ['/h/.local/pipx/venvs/black/bin/black', '/h/.local/pipx/venvs/black'],
-      ['/h/.bun/install/global/node_modules/x/cli.js', '/h/.bun/install/global'],
-    ])('known layout, on the real path: %s → %s', (real, root) => {
-      expect(runtimeRoots(real, home, true)).toContain(root)
+      ['/h/.nvm/versions/node/v20/lib/node_modules/npm/bin/npx-cli.js', '/h/.nvm/versions/node/v20', ['bin', 'lib']],
+      ['/h/.nvm/versions/node/v20/bin/node', '/h/.nvm/versions/node/v20', ['bin', 'lib']],
+      ['/h/.fnm/node-versions/v20/installation/bin/node', '/h/.fnm/node-versions/v20/installation', ['bin', 'lib']],
+      ['/h/.volta/tools/image/node/20.1/bin/node', '/h/.volta/tools/image/node/20.1', ['bin', 'lib']],
+      ['/h/.asdf/installs/nodejs/20/bin/node', '/h/.asdf/installs/nodejs/20', ['bin', 'lib']],
+      ['/h/.local/share/mise/installs/python/3.12/bin/python', '/h/.local/share/mise/installs/python/3.12', ['bin', 'lib']],
+      ['/h/.pyenv/versions/3.12/bin/python', '/h/.pyenv/versions/3.12', ['bin', 'lib']],
+      ['/h/.rbenv/versions/3.3/bin/ruby', '/h/.rbenv/versions/3.3', ['bin', 'lib']],
+      ['/h/.local/share/uv/tools/ruff/bin/ruff', '/h/.local/share/uv/tools/ruff', ['bin', 'lib', 'pyvenv.cfg']],
+      ['/h/.local/share/uv/python/cpython-3.12/bin/python3', '/h/.local/share/uv/python/cpython-3.12', ['bin', 'lib']],
+      ['/h/.local/pipx/venvs/black/bin/black', '/h/.local/pipx/venvs/black', ['bin', 'lib', 'pyvenv.cfg']],
+      ['/h/.bun/install/global/node_modules/x/cli.js', '/h/.bun/install/global', ['node_modules']],
+    ])('known layout, on the real path: %s keeps parts of %s, never the root, and walls off its config', (real, root, parts) => {
+      const kept = runtimeRoots(real, home, true)
+      for (const part of parts) expect(kept).toContain(join(root, part))
+      // 根本身、etc、上面的目录都不在:nvm 的 etc/npmrc、pyenv 的 pip.conf 里是令牌(final review I-1)
+      expect(kept.filter(k => !parts.some(part => within(k, join(root, part))))).toEqual([])
+      expect(runtimeWalls(real, home, true).sort()).toEqual([join(root, '.npmrc'), join(root, 'etc'), join(root, 'pip.conf')])
+    })
+
+    it('walls only for a known layout reached through PATH', () => {
+      expect(runtimeWalls('/h/.cargo/bin/x', home, true)).toEqual([])
+      expect(runtimeWalls('/h/.nvm/versions/node/v20/bin/node', home, false)).toEqual([])
+      expect(runtimeWalls('/usr/local/bin/node', home, true)).toEqual([])
     })
 
     it.each([

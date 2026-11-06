@@ -2,7 +2,7 @@
 // 每条"读不到"都带能成功的对照,否则什么都干不了也会通过。测试进程自己在沙箱里时不能嵌套 → 整个文件跳过
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -256,26 +256,58 @@ describe.skipIf(!usable)('an MCP server under real Seatbelt', () => {
     }, 60_000)
 
     it.each([
-      ['.nvm/versions/node/v20', '.nvm/versions/node/v18'],
-      ['.fnm/node-versions/v20', '.fnm/node-versions/v18'],
-      ['.volta/tools/image/node/20.1', '.volta/tools/image/node/18.1'],
-      ['.asdf/installs/nodejs/20', '.asdf/installs/python/3.12'],
-      ['.local/share/mise/installs/python/3.12', '.local/share/mise/installs/python/3.11'],
-      ['.pyenv/versions/3.12', '.pyenv/versions/3.11'],
-      ['.rbenv/versions/3.3', '.rbenv/versions/3.2'],
-      ['.local/share/uv/tools/ruff', '.local/share/uv/tools/black'],
-      ['.local/share/uv/python/cpython-3.12', '.local/share/uv/python/cpython-3.11'],
-      ['.local/pipx/venvs/black', '.local/pipx/venvs/ruff'],
-      ['.bun/install/global', '.bun/install/cache'],
-    ])('known layout %s: the whole runtime reads, its neighbour %s does not', async (root, neighbour) => {
+      ['.nvm/versions/node/v20', '.nvm/versions/node/v18', 'lib'],
+      ['.fnm/node-versions/v20/installation', '.fnm/node-versions/v18/installation', 'lib'],
+      ['.volta/tools/image/node/20.1', '.volta/tools/image/node/18.1', 'lib'],
+      ['.asdf/installs/nodejs/20', '.asdf/installs/python/3.12', 'lib'],
+      ['.local/share/mise/installs/python/3.12', '.local/share/mise/installs/python/3.11', 'lib'],
+      ['.pyenv/versions/3.12', '.pyenv/versions/3.11', 'lib'],
+      ['.rbenv/versions/3.3', '.rbenv/versions/3.2', 'lib'],
+      ['.local/share/uv/tools/ruff', '.local/share/uv/tools/black', 'lib'],
+      ['.local/share/uv/python/cpython-3.12', '.local/share/uv/python/cpython-3.11', 'lib'],
+      ['.local/pipx/venvs/black', '.local/pipx/venvs/ruff', 'lib'],
+      ['.bun/install/global', '.bun/install/cache', 'node_modules'],
+    ])('known layout %s: its neighbour %s and its config do not read, its %s does', async (root, neighbour, part) => {
       const m = await rig({ layout: 'production' })
       program(join(m.r.home, root, 'bin', 'rt'))
-      put(join(m.r.home, root, 'lib', 'module.js'), 'runtime file')
-      put(join(m.r.home, neighbour, 'lib', 'module.js'), 'not this one')
+      put(join(m.r.home, root, part, 'module.js'), 'runtime file')
+      put(join(m.r.home, neighbour, part, 'module.js'), 'not this one')
+      const token = '//registry.npmjs.org/:_authToken=npm_' + 'x'.repeat(36)
+      for (const f of ['etc/npmrc', '.npmrc', 'pip.conf', 'share/secret', 'include/secret']) put(join(m.r.home, root, f), token)
       const s = await startOn(m, join(m.r.home, root, 'bin'))
-      expect(await s.probe('x/y', 'probe_read', { path: join(m.r.home, root, 'lib', 'module.js') })).toMatchObject({ ok: true, text: 'runtime file' })
-      denied(await s.probe('x/y', 'probe_read', { path: join(m.r.home, neighbour, 'lib', 'module.js') }))
+      expect(await s.probe('x/y', 'probe_read', { path: join(m.r.home, root, part, 'module.js') })).toMatchObject({ ok: true, text: 'runtime file' })
+      denied(await s.probe('x/y', 'probe_read', { path: join(m.r.home, neighbour, part, 'module.js') }))
+      for (const f of ['etc/npmrc', '.npmrc', 'pip.conf', 'share/secret', 'include/secret']) denied(await s.probe('x/y', 'probe_read', { path: join(m.r.home, root, f) }))
     }, 60_000)
+
+    it('I-1: a copied node in an nvm layout starts and runs node -e; its etc/npmrc token is unreadable, even with cwd at the runtime root', async () => {
+      const m = await rig({ layout: 'production' })
+      const root = join(m.r.home, '.nvm', 'versions', 'node', 'v20')
+      mkdirSync(join(root, 'bin'), { recursive: true })
+      copyFileSync(process.execPath, join(root, 'bin', 'node'), constants.COPYFILE_FICLONE)
+      chmodSync(join(root, 'bin', 'node'), 0o755)
+      // Homebrew 的 node 从 @loader_path/../lib 载 libnode:lib 读不到它就起不来
+      const libs = join(dirname(process.execPath), '..', 'lib')
+      mkdirSync(join(root, 'lib'), { recursive: true })
+      for (const f of existsSync(libs) ? readdirSync(libs).filter(f => f.endsWith('.dylib')) : []) copyFileSync(join(libs, f), join(root, 'lib', f), constants.COPYFILE_FICLONE)
+      const token = '//registry.npmjs.org/:_authToken=npm_' + 'y'.repeat(36)
+      put(join(root, 'etc', 'npmrc'), token)
+      put(join(root, '.npmrc'), token)
+      m.r.env.PATH = `${join(root, 'bin')}:/usr/bin:/bin`
+      const s = await started(m, 'x', { y: { command: 'node', args: ['${CLAUDE_PLUGIN_ROOT}/fake-mcp.mjs'] } })
+      const self = join(root, 'bin', 'node')
+      // 打码会盖住临时目录里像令牌的段:路径让子进程自己比
+      const { exec } = await s.probe('x/y', 'probe_children', { exec: [self, '-e', `console.log(process.execPath === ${JSON.stringify(self)} ? 'ran here' : 'elsewhere')`] })
+      expect(exec.status).toBe(0)
+      expect(String(exec.stdout).trim()).toBe('ran here')
+      denied(await s.probe('x/y', 'probe_read', { path: join(root, 'etc', 'npmrc') }))
+      denied(await s.probe('x/y', 'probe_read', { path: join(root, '.npmrc') }))
+      // 第二道墙:cwd 就是运行时根,整棵放回了,配置照样读不到
+      const at = await started(m, 'x2', { y: { command: 'node', args: ['${CLAUDE_PLUGIN_ROOT}/fake-mcp.mjs'] } }, {}, root)
+      expect(await at.probe('x2/y', 'probe_read', { path: join(root, 'bin', 'node') })).toMatchObject({ ok: true })
+      denied(await at.probe('x2/y', 'probe_read', { path: join(root, 'etc', 'npmrc') }))
+      denied(await at.probe('x2/y', 'probe_read', { path: join(root, '.npmrc') }))
+    }, 90_000)
 
     it('containment holds with the data dir and the store inside home', async () => {
       const m = await rig({ layout: 'production' })
