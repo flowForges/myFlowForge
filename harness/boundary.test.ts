@@ -49,7 +49,7 @@ describe('harness 边界', () => {
     const bad: string[] = []
     for (const f of walk(APP_SRC))
       for (const s of specifiers(f))
-        if ((s.includes('harness/') || s.includes('@mffai/')) && s !== '@mffai/protocol') bad.push(`${relative(REPO, f)} -> ${s}`)
+        if ((s.includes('harness/') || s.includes('@mffai/')) && s !== '@mffai/protocol' && s !== '@mffai/protocol/browser') bad.push(`${relative(REPO, f)} -> ${s}`)
     expect(bad).toEqual([])
   })
 

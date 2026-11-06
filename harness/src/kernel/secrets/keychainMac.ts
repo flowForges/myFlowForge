@@ -1,11 +1,12 @@
 import { randomBytes } from 'node:crypto'
+import { SECRETS_SERVICE } from '../../protocol/paths'
 import type { Logger } from '../log'
 import { KeyUnreadableError, failure, type ExecResult } from './exec'
 import type { MasterKeyBackend } from './secretStore'
 
 type Run = (cmd: string, args: string[], stdin?: string) => Promise<ExecResult>
 
-export const SERVICE = 'myflowforge-mffai'
+export const SERVICE = SECRETS_SERVICE
 export const PROBE_ACCOUNT = 'mffai-probe'
 
 /** `security -i` 一行一条命令:换行会注入第二条命令,直接拒绝 */

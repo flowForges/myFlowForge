@@ -1,7 +1,8 @@
-import { createHash, randomBytes } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 import { existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import type { SecretsBackend } from '../../protocol/index'
+import { secretsAccountOf } from '../../protocol/paths'
 import { nullLogger, type Logger } from '../log'
 import { dpapiBackend } from './dpapiWin'
 import { decryptMap, encryptMap } from './encryptedFile'
@@ -40,7 +41,6 @@ export interface OpenSecretStoreOpts {
 const ENC = 'credentials.enc'
 const PLAIN = 'credentials.json'
 
-const sha8 = (s: string) => createHash('sha256').update(s).digest('hex').slice(0, 8)
 const kind = (err: unknown) => (err instanceof Error ? err.message : 'error')
 
 /** 打开凭据存储:启动时探测一次主密钥后端并固定;从不抛错(后端或文件系统故障 → unavailable) */
@@ -63,7 +63,7 @@ async function open(opts: OpenSecretStoreOpts, log: Logger, stage: { backend: st
   const encPath = join(dir, ENC)
   const plainPath = join(dir, PLAIN)
   const run = withTimeout(opts.exec ?? realExec, opts.timeoutMs ?? 5000)
-  const account = sha8(dir)
+  const account = secretsAccountOf(dir)
   const platform = opts.platform ?? process.platform
 
   let os: MasterKeyBackend | undefined

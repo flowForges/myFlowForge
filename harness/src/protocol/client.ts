@@ -11,8 +11,13 @@ import type {
   WorkerResult,
 } from './rpc'
 
+export interface CallOpts {
+  /** 只管这一次:覆盖连接的期限(08 §4.6)。删除要 VACUUM、合并要跑 git,5 s 不够 */
+  timeoutMs?: number
+}
+
 export interface MffaiClient {
-  call<M extends WorkerMethodName>(method: M, params?: WorkerParams<M>): Promise<WorkerResult<M>>
+  call<M extends WorkerMethodName>(method: M, params?: WorkerParams<M>, opts?: CallOpts): Promise<WorkerResult<M>>
   onEvent(cb: (e: KernelEvent) => void): () => void
   onClose(cb: () => void): () => void
   close(): void
@@ -33,7 +38,7 @@ export interface ClientOpts {
 type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void; timer?: ReturnType<typeof setTimeout> }
 
 interface Conn {
-  call(method: string, params?: unknown): Promise<any>
+  call(method: string, params?: unknown, o?: CallOpts): Promise<any>
   onClose(cb: () => void): () => void
   close(): void
 }
@@ -101,7 +106,7 @@ async function openConn(opts: ClientOpts, onNotify: (m: Record<string, any>) => 
       sock.write(encodeFrame({ jsonrpc: '2.0', id, method, params }))
     })
 
-  const call = (method: string, params: unknown = {}) => send(method, params, opts.timeoutMs)
+  const call = (method: string, params: unknown = {}, o?: CallOpts) => send(method, params, o?.timeoutMs ?? opts.timeoutMs)
 
   try {
     const clientNonce = newNonce()

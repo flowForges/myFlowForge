@@ -27,7 +27,7 @@ export default defineConfig({
   renderer: {
     root: 'src/renderer',
     plugins: [react()],
-    resolve: { alias: { '@shared': resolve('src/shared'), '@mffai/protocol': resolve('harness/src/protocol/index.ts') } },
+    resolve: { alias: { '@shared': resolve('src/shared'), '@mffai/protocol/browser': resolve('harness/src/protocol/browser.ts'), '@mffai/protocol': resolve('harness/src/protocol/index.ts') } },
     build: { outDir: 'out/renderer', rollupOptions: { input: { index: resolve('src/renderer/index.html'), pet: resolve('src/renderer/pet.html') } } }
   }
 })

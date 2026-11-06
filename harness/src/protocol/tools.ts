@@ -78,6 +78,20 @@ export type TurnRolledBackPayload = z.infer<typeof TurnRolledBackPayloadSchema>
 export const FileChangeSchema = z.object({ path: z.string(), status: z.enum(['A', 'M', 'D', 'T']) })
 export type FileChange = z.infer<typeof FileChangeSchema>
 
+// 08 §4.4:逐文件 diff。DiffLine 和 app 的 @shared DiffLine 同形
+export const DiffLineSchema = z.object({ kind: z.enum(['add', 'del', 'ctx']), ln: z.number(), text: z.string() })
+export type DiffLine = z.infer<typeof DiffLineSchema>
+/** 上限 2000 行、256 KB,超了 truncated;二进制只给 binary:true */
+export const FileDiffSchema = z.object({ path: z.string(), status: FileChangeSchema.shape.status, lines: z.array(DiffLineSchema), binary: z.boolean(), truncated: z.boolean() })
+export type FileDiff = z.infer<typeof FileDiffSchema>
+
+// 08 §4.5:合并被拒的原因(-32602 的 data)。restored:git apply 写到一半失败后有没有还原
+export const MergeRefusalReasonSchema = z.enum(['dirty', 'conflict', 'unsafe_path', 'nothing', 'not_git', 'unsafe_repo'])
+export type MergeRefusalReason = z.infer<typeof MergeRefusalReasonSchema>
+export const MergeRefusalSchema = z.object({ reason: MergeRefusalReasonSchema, paths: z.array(z.string()).optional(), restored: z.boolean().optional() })
+export type MergeRefusal = z.infer<typeof MergeRefusalSchema>
+export const MergeResultSchema = z.object({ ok: z.literal(true), files: z.number() })
+
 /** message.assistant.parts:模型层 Part 去掉 image */
 export const AssistantPartSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('text'), text: z.string() }),
@@ -125,6 +139,25 @@ export const ExecutorRunReasonSchema = z.enum([
   'kill_failed',
 ])
 export type ExecutorRunReason = z.infer<typeof ExecutorRunReasonSchema>
+
+// 08 §4.4:executor.runs 的一行。活着的、本次启动以来结束的、根目录下还在的 worktree
+export const RunRowSchema = z.object({
+  runId: z.string(),
+  sessionId: z.string(),
+  turnId: z.string(),
+  executor: z.string(),
+  phase: z.enum(['queued', 'running', 'ended']),
+  status: ExecutorRunStatusSchema.optional(),
+  reason: ExecutorRunReasonSchema.optional(),
+  queuedAt: z.number(),
+  ms: z.number().optional(),
+  readOnly: z.boolean(),
+  isolation: ExecutorIsolationSchema,
+  /** bytes:超过 5 万项不给 */
+  worktree: z.object({ path: z.string(), present: z.boolean(), bytes: z.number().optional(), merged: z.boolean().optional() }).optional(),
+  changed: z.number().optional(),
+})
+export type RunRow = z.infer<typeof RunRowSchema>
 
 /** 改动清单的来源:快照 diff、CLI 自报,或都没有 */
 export const ExecutorChangesSourceSchema = z.enum(['git', 'cli', 'none'])

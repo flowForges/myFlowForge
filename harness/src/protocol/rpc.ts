@@ -27,6 +27,9 @@ import {
   ExecutorChangesSourceSchema,
   ExecutorIsolationSchema,
   FileChangeSchema,
+  FileDiffSchema,
+  MergeResultSchema,
+  RunRowSchema,
   SessionAudienceSchema,
   SessionOriginSchema,
   ToolsetSchema,
@@ -36,6 +39,10 @@ import {
 export const ERR_DRAINING = -32001
 export const ERR_UNAUTHORIZED = -32002
 export const ERR_BUSY = -32003
+// 08 §5.2:app 宿主放进信封的码,工作进程从不发
+export const ERR_APP_DISABLED = -32000
+export const ERR_APP_TIMEOUT = -32010
+export const ERR_APP_GONE = -32011
 
 const Ok = z.object({ ok: z.boolean() })
 const Empty = z.object({})
@@ -89,6 +96,28 @@ export const SnapshotResultSchema = z.object({
   lastSeq: z.number(),
 })
 export type SnapshotResult = z.infer<typeof SnapshotResultSchema>
+
+// 08 §4.1:会话列表的一行。approvalMode 是收窄之后的;open 和 pendingApprovals 来自内核内存
+export const SessionSummarySchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  origin: SessionOriginSchema,
+  audience: SessionAudienceSchema,
+  cwd: z.string().optional(),
+  model: ModelRefSchema.optional(),
+  approvalMode: ApprovalModeSchema,
+  toolset: ToolsetSchema.optional(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  open: z.object({ turnId: z.string(), parked: z.boolean() }).optional(),
+  pendingApprovals: z.number(),
+})
+export type SessionSummary = z.infer<typeof SessionSummarySchema>
+
+/** session.state 的 open:approvalIds 是 Approvals 里属于这一轮的 */
+export const SessionOpenStateSchema = z.object({ turnId: z.string(), parked: z.boolean(), approvalIds: z.array(z.string()) })
+
+const EventPage = z.object({ events: z.array(KernelEventSchema), hasMore: z.boolean() })
 
 // 05:权限配置段(spec §4、§6)
 export const RuleSpecSchema = z.object({
@@ -246,7 +275,7 @@ export type TelegramStatus = z.infer<typeof TelegramStatusSchema>
 
 export const TelegramChatsSchema = z.object({
   chats: z.array(z.object({ chatId: z.string(), accountId: z.string(), sessionId: z.string(), project: z.string().optional(), model: ModelRefSchema.optional(), queued: z.number(), running: z.boolean() })),
-  worktrees: z.array(z.object({ id: z.string(), project: z.string(), path: z.string(), sessionIds: z.array(z.string()), createdAt: z.number(), usedByChat: z.string().optional() })),
+  worktrees: z.array(z.object({ id: z.string(), project: z.string(), path: z.string(), sessionIds: z.array(z.string()), createdAt: z.number(), usedByChat: z.string().optional(), bytes: z.number().optional(), merged: z.boolean().optional() })),
 })
 export type TelegramChats = z.infer<typeof TelegramChatsSchema>
 
@@ -321,6 +350,24 @@ export const WorkerMethods = {
     params: z.object({ commandId: z.string(), sessionId: z.string() }),
     result: Ok,
   },
+  // 08 §4.1–4.3。list / state / events 只读,排空时照常回答;未知或已删的会话 -32602 unknown session
+  'session.list': { params: Empty, result: z.object({ sessions: z.array(SessionSummarySchema) }) },
+  'session.state': {
+    params: z.object({ sessionId: z.string(), limit: z.number().int().min(1).max(1000).optional() }),
+    // events 经 toWire,seq 升序;有开着的轮时至少从它的 message.user 起(最多 5000 条)。lastSeq 是整个日志的,实时事件 seq <= 它的丢掉
+    result: EventPage.extend({ session: SessionSummarySchema, lastSeq: z.number(), open: SessionOpenStateSchema.optional() }),
+  },
+  'session.events': {
+    params: z.object({ sessionId: z.string(), beforeSeq: z.number().int(), limit: z.number().int().min(1).max(1000) }),
+    result: EventPage,
+  },
+  // title 去控制字符和首尾空白后 1..120 字,否则 -32602(内核查,这里只限长度)
+  'session.rename': { params: z.object({ commandId: z.string(), sessionId: z.string(), title: z.string().max(4096) }), result: Ok },
+  // memory-default 注册。有改动没合并的保留 worktree、又没带 discardUnmerged → -32602,data { reason:'unmerged', runs }
+  'session.delete': {
+    params: z.object({ commandId: z.string(), sessionId: z.string(), discardUnmerged: z.boolean().optional() }),
+    result: z.object({ ok: z.boolean(), redacted: z.number(), notes: z.array(z.string()) }),
+  },
   'approval.respond': {
     params: z.object({ approvalId: z.string(), decision: z.enum(['allow', 'allow_session', 'deny']) }),
     result: Ok,
@@ -346,6 +393,8 @@ export const WorkerMethods = {
     params: z.object({ sessionId: z.string(), turnId: z.string() }),
     result: z.object({ files: z.array(FileChangeSchema) }),
   },
+  // 08 §4.4:path 必须在这一轮的改动清单里,否则 -32602
+  'turn.diff': { params: z.object({ sessionId: z.string(), turnId: z.string(), path: z.string() }), result: FileDiffSchema },
   'models.catalog': { params: Empty, result: CatalogViewSchema },
   'models.accounts': {
     params: Empty,
@@ -360,6 +409,9 @@ export const WorkerMethods = {
       baseUrl: z.string().optional(),
       protocol: AccountProtocolSchema.optional(),
       restrictionAck: z.boolean().optional(),
+      // 08 §4.7:只对模型清单为空的预设;restriction 只对自定义预设,别的带了 → -32602(插件查)
+      modelIds: z.array(z.string().regex(/^[A-Za-z0-9._:/-]{1,128}$/)).max(50).optional(),
+      restriction: z.enum(['coding-tools-only', 'none']).optional(),
     }),
     result: AccountViewSchema,
   },
@@ -383,6 +435,11 @@ export const WorkerMethods = {
     result: z.object({ files: z.array(FileChangeSchema), source: ExecutorChangesSourceSchema, concurrent: z.boolean().optional() }),
   },
   'executor.worktree.discard': { params: z.object({ commandId: z.string(), sessionId: z.string(), runId: z.string() }), result: Ok },
+  // 08 §4.4、§4.5。diff 的 path 是 executor.changes 回的(redact 过的)那个
+  'executor.diff': { params: z.object({ sessionId: z.string(), runId: z.string(), path: z.string() }), result: FileDiffSchema },
+  'executor.runs': { params: z.object({ limit: z.number().int().min(1).max(200).optional() }), result: z.object({ runs: z.array(RunRowSchema) }) },
+  // 拒绝:-32602,data 是 MergeRefusalSchema;运行没结束 -32003
+  'executor.worktree.merge': { params: z.object({ commandId: z.string(), sessionId: z.string(), runId: z.string() }), result: MergeResultSchema },
   'memory.list': { params: z.object({ layer: MemoryLayerSchema.optional(), limit: z.number().int().min(1).optional(), before: z.number().optional() }), result: MemoryItems },
   'memory.get': { params: z.object({ id: MemoryIdSchema }), result: MemoryItemSchema.extend({ evidence: z.array(z.string()).optional() }) },
   'memory.search': {
@@ -392,6 +449,11 @@ export const WorkerMethods = {
   'memory.update': { params: z.object({ commandId: z.string(), id: MemoryIdSchema, text: z.string() }), result: z.object({ ok: z.boolean(), masked: z.number() }) },
   // sources:用户自己的原话,还留在对话记录里(08 列给用户,逐条删);r_ 派生的草稿行、候选、提议(已一起删)和还引用它的核心条目(n_,可删)
   'memory.delete': { params: z.object({ commandId: z.string(), id: MemoryIdSchema }), result: z.object({ ok: z.boolean(), redacted: z.number(), sources: z.array(z.string()) }) },
+  // 08 §4.3:一次 VACUUM。gone:查不到的 id,就是已经没了,不报错
+  'memory.deleteMany': {
+    params: z.object({ commandId: z.string(), ids: z.array(MemoryIdSchema).min(1).max(200) }),
+    result: z.object({ ok: z.boolean(), redacted: z.number(), sources: z.array(z.string()), gone: z.array(z.string()) }),
+  },
   'memory.file.get': { params: z.object({ file: MemoryFileSchema }), result: z.object({ content: z.string(), hash: z.string(), cap: z.number() }) },
   'memory.file.set': {
     params: z.object({ commandId: z.string(), file: MemoryFileSchema, content: z.string(), expectedHash: z.string() }),
@@ -422,6 +484,10 @@ export const WorkerMethods = {
   'channel.telegram.config.set': { params: z.object({ commandId: z.string(), config: z.unknown() }), result: Ok },
   'channel.telegram.chats': { params: Empty, result: TelegramChatsSchema },
   'channel.telegram.worktree.discard': { params: z.object({ commandId: z.string(), worktreeId: z.string() }), result: Ok },
+  // 08 §4.4、§4.5:现拍快照对建 worktree 时记下的 base
+  'channel.telegram.worktree.changes': { params: z.object({ worktreeId: z.string() }), result: z.object({ files: z.array(FileChangeSchema) }) },
+  'channel.telegram.worktree.diff': { params: z.object({ worktreeId: z.string(), path: z.string() }), result: FileDiffSchema },
+  'channel.telegram.worktree.merge': { params: z.object({ commandId: z.string(), worktreeId: z.string() }), result: MergeResultSchema },
   // 09。settings.*、install.prepare 故意没有 commandId:kernel.handle 给任何带这个名字的参数写回执,值就进库了。
   // value 这里只限长度:zod 的 issue 不能有机会带上它
   'plugins.list': { params: Empty, result: PluginListResultSchema },

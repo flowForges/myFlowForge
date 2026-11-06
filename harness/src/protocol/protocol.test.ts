@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import {
   AccountUpdatedPayloadSchema, ChatgptEndedPayloadSchema, ControlMethods, EVENT_TYPES, FrameDecoder, MAX_FRAME_BYTES, PROTOCOL_VERSION, QuotaSchema,
   TurnUsagePayloadSchema, WorkerMethods, encodeFrame,
@@ -12,6 +12,17 @@ import {
   ChannelPairedPayloadSchema, ChannelPairingBurnedPayloadSchema, ChannelStatusPayloadSchema, ChannelUnpairedPayloadSchema,
   GrantsSchema, PluginConsentErrorSchema, PluginConsentSchema, PluginDevPayloadSchema, PluginDiffSchema, PluginIdPayloadSchema, PluginInstalledPayloadSchema, PluginsInjectedPayloadSchema, PluginsInstallStatePayloadSchema, PluginsMcpStatusPayloadSchema, StatusResultSchema,
 } from './index'
+import {
+  ChannelWorktreeMergedPayloadSchema, DiffLineSchema, ERR_APP_DISABLED, ERR_APP_GONE, ERR_APP_TIMEOUT, ExecutorWorktreeMergedPayloadSchema, FileDiffSchema,
+  KernelEventSchema, MergeRefusalSchema, RunRowSchema, SessionDeletedPayloadSchema, SessionRenamedPayloadSchema, SessionSummarySchema,
+  clientProof, connectClient, encodeFrame as frame, isNonce, serverProof, newNonce, FrameDecoder as Decoder,
+  type MffaiAlert, type MffaiState,
+} from './index'
+import net from 'node:net'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
+import { importsOf } from '../../test/codeScan'
 
 describe('framing', () => {
   it('round-trips', () => {
@@ -709,5 +720,260 @@ describe('plugins protocol (09 §14)', () => {
     expect(StatusResultSchema.safeParse({ ...st, plugins: [{ id: 'p', state: 'active' }] }).success).toBe(true)
     expect(StatusResultSchema.safeParse({ ...st, plugins: [{ id: 'dev-x', state: 'active', trust: 'root' }] }).success).toBe(false)
     expect(PROTOCOL_VERSION).toBe(3)
+  })
+})
+
+describe('08 protocol (spec §4)', () => {
+  const params = (m: keyof typeof WorkerMethods, v: unknown) => WorkerMethods[m].params.safeParse(v).success
+  const result = (m: keyof typeof WorkerMethods, v: unknown) => WorkerMethods[m].result.safeParse(v).success
+  const summary = {
+    id: 's', title: '新会话', origin: 'app', audience: 'owner', approvalMode: 'ask', createdAt: 1, updatedAt: 2, pendingApprovals: 0,
+  }
+  const diff = { path: 'a.ts', status: 'M', lines: [{ kind: 'add', ln: 1, text: 'x' }, { kind: 'ctx', ln: 2, text: 'y' }], binary: false, truncated: false }
+
+  it('every new method exists and accepts sensible params', () => {
+    const VALID: [keyof typeof WorkerMethods, object][] = [
+      ['session.list', {}],
+      ['session.state', { sessionId: 's' }],
+      ['session.state', { sessionId: 's', limit: 1000 }],
+      ['session.events', { sessionId: 's', beforeSeq: 10, limit: 1 }],
+      ['session.rename', { commandId: 'c', sessionId: 's', title: 't' }],
+      ['session.delete', { commandId: 'c', sessionId: 's' }],
+      ['session.delete', { commandId: 'c', sessionId: 's', discardUnmerged: true }],
+      ['memory.deleteMany', { commandId: 'c', ids: ['n_a', 'h_b', 'r_1'] }],
+      ['turn.diff', { sessionId: 's', turnId: 't', path: 'a.ts' }],
+      ['executor.diff', { sessionId: 's', runId: 'r', path: 'a.ts' }],
+      ['executor.runs', {}],
+      ['executor.runs', { limit: 200 }],
+      ['executor.worktree.merge', { commandId: 'c', sessionId: 's', runId: 'r' }],
+      ['channel.telegram.worktree.changes', { worktreeId: 'w' }],
+      ['channel.telegram.worktree.diff', { worktreeId: 'w', path: 'a.ts' }],
+      ['channel.telegram.worktree.merge', { commandId: 'c', worktreeId: 'w' }],
+      ['models.addAccount', { commandId: 'c', presetId: 'custom', modelIds: ['m-1', 'org/m:2'], restriction: 'coding-tools-only' }],
+      ['models.addAccount', { commandId: 'c', presetId: 'custom', restriction: 'none' }],
+    ]
+    for (const [m, v] of VALID) expect([m, params(m, v)]).toEqual([m, true])
+  })
+
+  it('every new method rejects junk params', () => {
+    const JUNK: [keyof typeof WorkerMethods, unknown][] = [
+      ['session.state', {}],
+      ['session.state', { sessionId: 1 }],
+      ['session.state', { sessionId: 's', limit: 0 }],
+      ['session.state', { sessionId: 's', limit: 1001 }],
+      ['session.state', { sessionId: 's', limit: 1.5 }],
+      ['session.events', { sessionId: 's', limit: 10 }],
+      ['session.events', { sessionId: 's', beforeSeq: 'x', limit: 10 }],
+      ['session.events', { sessionId: 's', beforeSeq: 10 }],
+      ['session.events', { sessionId: 's', beforeSeq: 10, limit: 0 }],
+      ['session.events', { sessionId: 's', beforeSeq: 10, limit: 1001 }],
+      ['session.rename', { sessionId: 's', title: 't' }],
+      ['session.rename', { commandId: 'c', sessionId: 's', title: 3 }],
+      ['session.rename', { commandId: 'c', title: 't' }],
+      ['session.delete', { sessionId: 's' }],
+      ['session.delete', { commandId: 'c', sessionId: 's', discardUnmerged: 'yes' }],
+      ['memory.deleteMany', { commandId: 'c', ids: [] }],
+      ['memory.deleteMany', { commandId: 'c', ids: Array.from({ length: 201 }, (_, i) => `n_${i}`) }],
+      ['memory.deleteMany', { commandId: 'c', ids: ['x'] }],
+      ['memory.deleteMany', { ids: ['n_a'] }],
+      ['turn.diff', { sessionId: 's', turnId: 't' }],
+      ['executor.diff', { sessionId: 's', path: 'a' }],
+      ['executor.runs', { limit: 0 }],
+      ['executor.runs', { limit: 201 }],
+      ['executor.worktree.merge', { sessionId: 's', runId: 'r' }],
+      ['channel.telegram.worktree.changes', {}],
+      ['channel.telegram.worktree.diff', { worktreeId: 'w' }],
+      ['channel.telegram.worktree.merge', { worktreeId: 'w' }],
+      ['models.addAccount', { commandId: 'c', presetId: 'custom', modelIds: Array.from({ length: 51 }, (_, i) => `m${i}`) }],
+      ['models.addAccount', { commandId: 'c', presetId: 'custom', modelIds: ['m'.repeat(129)] }],
+      ['models.addAccount', { commandId: 'c', presetId: 'custom', restriction: 'some' }],
+    ]
+    for (const [m, v] of JUNK) expect([m, params(m, v)]).toEqual([m, false])
+  })
+
+  it('session.create still accepts origin, audience and projectTop: the app host strips them, not the schema', () => {
+    const p = WorkerMethods['session.create'].params.parse({ commandId: 'c', origin: 'im', audience: 'group', projectTop: '/x' })
+    expect(p).toMatchObject({ origin: 'im', audience: 'group', projectTop: '/x' })
+  })
+
+  it('SessionSummary and session.list / session.state / session.events results', () => {
+    expect(SessionSummarySchema.safeParse(summary).success).toBe(true)
+    const full = { ...summary, cwd: '/w', model: { accountId: 'a', modelId: 'm' }, toolset: 'patch', open: { turnId: 't', parked: true }, pendingApprovals: 2 }
+    expect(SessionSummarySchema.safeParse(full).success).toBe(true)
+    expect(SessionSummarySchema.safeParse({ ...summary, origin: 'web' }).success).toBe(false)
+    expect(SessionSummarySchema.safeParse({ ...summary, open: { turnId: 't' } }).success).toBe(false)
+    const { pendingApprovals: _p, ...noCount } = summary
+    expect(SessionSummarySchema.safeParse(noCount).success).toBe(false)
+    expect(result('session.list', { sessions: [summary, full] })).toBe(true)
+    const ev = { seq: 1, ts: 1, type: 'session.created', sessionId: 's', payload: {} }
+    expect(result('session.state', { session: summary, events: [ev], hasMore: false, lastSeq: 1 })).toBe(true)
+    expect(result('session.state', { session: summary, events: [ev], hasMore: true, lastSeq: 9, open: { turnId: 't', parked: false, approvalIds: ['a'] } })).toBe(true)
+    expect(result('session.state', { session: summary, events: [ev], hasMore: false, lastSeq: 1, open: { turnId: 't', parked: false } })).toBe(false)
+    expect(result('session.events', { events: [ev], hasMore: false })).toBe(true)
+    expect(result('session.events', { events: [{ ...ev, type: 'nope' }], hasMore: false })).toBe(false)
+    expect(result('session.rename', { ok: true })).toBe(true)
+    expect(result('session.delete', { ok: true, redacted: 3, notes: ['n_a'] })).toBe(true)
+    expect(result('memory.deleteMany', { ok: true, redacted: 1, sources: [], gone: ['n_x'] })).toBe(true)
+  })
+
+  it('diffs, the run list and merges', () => {
+    expect(DiffLineSchema.safeParse({ kind: 'del', ln: 3, text: '' }).success).toBe(true)
+    expect(DiffLineSchema.safeParse({ kind: 'mod', ln: 3, text: '' }).success).toBe(false)
+    expect(FileDiffSchema.safeParse(diff).success).toBe(true)
+    expect(FileDiffSchema.safeParse({ ...diff, status: 'X' }).success).toBe(false)
+    for (const m of ['turn.diff', 'executor.diff', 'channel.telegram.worktree.diff'] as const) expect(result(m, diff)).toBe(true)
+    expect(result('channel.telegram.worktree.changes', { files: [{ path: 'a', status: 'A' }] })).toBe(true)
+    const row = { runId: 'r', sessionId: 's', turnId: 't', executor: 'codex', phase: 'ended', status: 'ok', queuedAt: 1, ms: 2, readOnly: false, isolation: 'own', worktree: { path: '/w', present: true, bytes: 10, merged: false }, changed: 2 }
+    expect(RunRowSchema.safeParse(row).success).toBe(true)
+    expect(RunRowSchema.safeParse({ runId: 'r', sessionId: 's', turnId: 't', executor: 'codex', phase: 'queued', queuedAt: 1, readOnly: true, isolation: 'none' }).success).toBe(true)
+    expect(RunRowSchema.safeParse({ ...row, phase: 'paused' }).success).toBe(false)
+    expect(RunRowSchema.safeParse({ ...row, status: 'weird' }).success).toBe(false)
+    expect(result('executor.runs', { runs: [row] })).toBe(true)
+    for (const m of ['executor.worktree.merge', 'channel.telegram.worktree.merge'] as const) {
+      expect(result(m, { ok: true, files: 2 })).toBe(true)
+      expect(result(m, { ok: false, files: 2 })).toBe(false)
+    }
+    for (const reason of ['dirty', 'conflict', 'unsafe_path', 'nothing', 'not_git', 'unsafe_repo']) expect(MergeRefusalSchema.safeParse({ reason, paths: ['a'] }).success).toBe(true)
+    expect(MergeRefusalSchema.safeParse({ reason: 'conflict', restored: true }).success).toBe(true)
+    expect(MergeRefusalSchema.safeParse({ reason: 'oops' }).success).toBe(false)
+    const chats = WorkerMethods['channel.telegram.chats'].result
+    const wt = { id: 'wt_1', project: 'api', path: '/x', sessionIds: ['s'], createdAt: 1 }
+    expect(chats.safeParse({ chats: [], worktrees: [{ ...wt, bytes: 10, merged: true }] }).success).toBe(true)
+    expect(chats.safeParse({ chats: [], worktrees: [wt] }).success).toBe(true)
+    expect(chats.safeParse({ chats: [], worktrees: [{ ...wt, bytes: 'big' }] }).success).toBe(false)
+  })
+
+  it('new events and their payloads; events.redacted can name a whole session', () => {
+    for (const t of ['session.renamed', 'session.deleted', 'executor.worktree.merged', 'channel.worktree.merged'] as const) {
+      expect(EVENT_TYPES).toContain(t)
+      expect(KernelEventSchema.safeParse({ seq: 1, ts: 1, type: t, payload: { anything: 1 } }).success).toBe(true) // 载荷宽松
+    }
+    expect(SessionRenamedPayloadSchema.safeParse({ title: 'x' }).success).toBe(true)
+    expect(SessionRenamedPayloadSchema.safeParse({}).success).toBe(false)
+    expect(SessionDeletedPayloadSchema.safeParse({}).success).toBe(true)
+    expect(ExecutorWorktreeMergedPayloadSchema.safeParse({ runId: 'r', files: 1 }).success).toBe(true)
+    expect(ExecutorWorktreeMergedPayloadSchema.safeParse({ runId: 'r' }).success).toBe(false)
+    expect(ChannelWorktreeMergedPayloadSchema.safeParse({ worktreeId: 'w', files: 1 }).success).toBe(true)
+    expect(ChannelWorktreeMergedPayloadSchema.safeParse({ files: 1 }).success).toBe(false)
+    expect(EventsRedactedPayloadSchema.safeParse({ by: 'memory-default', seqs: [], session: 's' }).success).toBe(true)
+    expect(EventsRedactedPayloadSchema.safeParse({ by: 'memory-default', seqs: [1] }).success).toBe(true)
+    expect(EventsRedactedPayloadSchema.safeParse({ by: 'memory-default', seqs: [], session: 3 }).success).toBe(false)
+    expect(PROTOCOL_VERSION).toBe(3)
+  })
+
+  it('app-host error codes are fixed and distinct from the worker codes', () => {
+    expect([ERR_APP_DISABLED, ERR_APP_TIMEOUT, ERR_APP_GONE]).toEqual([-32000, -32010, -32011])
+    // 类型层:MffaiState 的新字段都可选,MffaiAlert 有 reset
+    const s: MffaiState = { enabled: true, autostart: false, running: true, op: 'ensure', proxyStale: true, dataExists: true, roots: { data: '/d', worktrees: '/d-worktrees', imWorktrees: '/d-im-worktrees', plugins: '/d-plugins', keychain: 'abcd1234' } }
+    const a: MffaiAlert = { kind: 'reset' }
+    expect([s.op, a.kind]).toEqual(['ensure', 'reset'])
+  })
+})
+
+describe('client per-call timeout (spec §4.6)', () => {
+  let tmp: string | undefined
+  afterEach(() => { if (tmp) rmSync(tmp, { recursive: true, force: true }); tmp = undefined })
+
+  /** 握手照常,status 50 ms 后才回 */
+  async function slowServer(token: string) {
+    tmp = mkdtempSync(join(tmpdir(), 'mffai-cl-'))
+    const addr = process.platform === 'win32' ? `\\\\.\\pipe\\mffai-cl-${process.pid}-${Date.now()}` : join(tmp, 'w.sock')
+    const socks = new Set<net.Socket>()
+    const server = net.createServer(sock => {
+      socks.add(sock)
+      sock.setEncoding('utf8')
+      const dec = new Decoder()
+      let clientNonce = ''
+      const serverNonce = newNonce()
+      sock.on('data', (chunk: string) => {
+        for (const m of dec.push(chunk) as Array<{ id: number; method: string; params: Record<string, string> }>) {
+          const reply = (r: unknown) => sock.write(frame({ jsonrpc: '2.0', id: m.id, result: r }))
+          if (m.method === 'auth.challenge') {
+            clientNonce = m.params.clientNonce
+            expect(isNonce(clientNonce)).toBe(true)
+            reply({ serverNonce, proof: serverProof(token, clientNonce, serverNonce) })
+          } else if (m.method === 'auth.verify') reply({ ok: m.params.proof === clientProof(token, serverNonce, clientNonce) })
+          else setTimeout(() => { if (!sock.destroyed) reply({ late: true }) }, 50)
+        }
+      })
+      sock.on('error', () => {})
+    })
+    await new Promise<void>(r => server.listen(addr, r))
+    return { addr, close: () => { for (const s of socks) s.destroy(); return new Promise<void>(r => server.close(() => r())) } }
+  }
+
+  it('timeoutMs on one call overrides the connection default, both ways', async () => {
+    const token = 'tok'
+    const s = await slowServer(token)
+    const c = await connectClient({ addr: s.addr, token, timeoutMs: 1000 })
+    try {
+      await expect(c.call('status', {}, { timeoutMs: 10 })).rejects.toThrow('timeout')
+      await expect(c.call('status', {})).resolves.toEqual({ late: true })
+      const tight = await connectClient({ addr: s.addr, token, timeoutMs: 30 })
+      try {
+        // 连接默认更紧时,单次放宽也算
+        await expect(tight.call('status', {})).rejects.toThrow('timeout')
+        await expect(tight.call('status', {}, { timeoutMs: 1000 })).resolves.toEqual({ late: true })
+      } finally { tight.close() }
+    } finally {
+      c.close()
+      await s.close()
+    }
+  })
+})
+
+describe('@mffai/protocol/browser (spec 评审修订 R14)', () => {
+  const PROTO = dirname(new URL(import.meta.url).pathname)
+  const REPO = resolve(PROTO, '..', '..', '..')
+  const ALLOWED = new Set(['version', 'plugins', 'events', 'models', 'rpc', 'tools', 'appState'])
+
+  it('reaches only zod and the seven zod-only modules, transitively; nothing from node:', () => {
+    const seen = new Set<string>()
+    const bad: string[] = []
+    const visit = (name: string) => {
+      if (seen.has(name)) return
+      seen.add(name)
+      const text = readFileSync(join(PROTO, `${name}.ts`), 'utf8')
+      if (/['"]node:/.test(text)) bad.push(`${name}: node:`)
+      for (const s of importsOf(text, `${name}.ts`)) {
+        if (s === 'zod') continue
+        const m = /^\.\/([A-Za-z]+)$/.exec(s)
+        if (!m || !ALLOWED.has(m[1])) { bad.push(`${name} -> ${s}`); continue }
+        visit(m[1])
+      }
+    }
+    visit('browser')
+    expect(bad).toEqual([])
+    expect([...seen].filter(n => n !== 'browser').sort()).toEqual([...ALLOWED].sort())
+  })
+
+  it('exports what the renderer needs as values', async () => {
+    const b = await import('./browser')
+    expect(b.WorkerMethods).toBe(WorkerMethods)
+    expect(b.KernelEventSchema).toBe(KernelEventSchema)
+    expect(b.ERR_APP_TIMEOUT).toBe(-32010)
+    expect(b.PROTOCOL_VERSION).toBe(3)
+    expect('connectClient' in b).toBe(false)
+    expect('dataRoots' in b).toBe(false)
+  })
+
+  it('the alias is listed before the bare one in the renderer build, vitest and tsconfig.web', () => {
+    const before = (text: string) => {
+      const a = text.indexOf("'@mffai/protocol/browser'")
+      const bare = text.indexOf("'@mffai/protocol'")
+      return a >= 0 && bare >= 0 && a < bare
+    }
+    const vite = readFileSync(join(REPO, 'electron.vite.config.ts'), 'utf8')
+    const renderer = vite.slice(vite.indexOf('renderer:'))
+    expect(before(renderer)).toBe(true)
+    expect(renderer).toContain("resolve('harness/src/protocol/browser.ts')")
+    const vitest = readFileSync(join(REPO, 'vitest.config.ts'), 'utf8')
+    expect(before(vitest)).toBe(true)
+    expect(vitest).toContain("resolve('harness/src/protocol/browser.ts')")
+    const paths = JSON.parse(readFileSync(join(REPO, 'tsconfig.web.json'), 'utf8')).compilerOptions.paths as Record<string, string[]>
+    const keys = Object.keys(paths)
+    expect(keys.indexOf('@mffai/protocol/browser')).toBeGreaterThanOrEqual(0)
+    expect(keys.indexOf('@mffai/protocol/browser')).toBeLessThan(keys.indexOf('@mffai/protocol'))
+    expect(paths['@mffai/protocol/browser']).toEqual(['harness/src/protocol/browser.ts'])
   })
 })

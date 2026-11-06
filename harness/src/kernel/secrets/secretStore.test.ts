@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openSecretStore, scopedSecrets } from './secretStore'
 import { securityQuote } from './keychainMac'
+import { secretsAccountOf } from '../../protocol/paths'
 import type { Logger } from '../log'
 import type { Exec } from './exec'
 import { fakeSecurity, type Call } from './fakeExec.test-util'
@@ -57,6 +58,14 @@ describe('SecretStore on macOS keychain (injected exec)', () => {
     const accts = new Set(finds.map(f => f.args[f.args.indexOf('-a') + 1]))
     expect(accts.has('mffai-probe')).toBe(true)
     expect([...accts].some(a => /^[0-9a-f]{8}$/.test(a))).toBe(true)
+  })
+
+  it('the account is exactly secretsAccountOf(dataDir) from the protocol (08 §4.6: the app wipes by it)', async () => {
+    const sec = fakeSecurity()
+    await openSecretStore({ dataDir: dir, platform: 'darwin', exec: sec.exec })
+    const accts = new Set(sec.calls.filter(c => c.args[0] === 'find-generic-password').map(f => f.args[f.args.indexOf('-a') + 1]))
+    accts.delete('mffai-probe')
+    expect([...accts]).toEqual([secretsAccountOf(dir)])
   })
 
   it('security hangs on the master key (prompt / locked) → unavailable within the timeout, data kept', async () => {

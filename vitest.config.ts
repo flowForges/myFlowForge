@@ -4,7 +4,7 @@ import { resolve } from 'node:path'
 
 export default defineConfig({
   plugins: [react()],
-  resolve: { alias: { '@shared': resolve('src/shared'), '@mffai/protocol': resolve('harness/src/protocol/index.ts') } },
+  resolve: { alias: { '@shared': resolve('src/shared'), '@mffai/protocol/browser': resolve('harness/src/protocol/browser.ts'), '@mffai/protocol': resolve('harness/src/protocol/index.ts') } },
   test: {
     globals: true,
     setupFiles: ['./vitest.setup.ts'],

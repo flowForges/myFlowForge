@@ -11,6 +11,19 @@ export function dataDir(home: string = homedir()): string {
 
 const sha8 = (s: string) => createHash('sha256').update(s).digest('hex').slice(0, 8)
 
+/** 钥匙串 / Secret Service 里的服务名(kernel/secrets 用同一个) */
+export const SECRETS_SERVICE = 'myflowforge-mffai'
+
+/** 主密钥在钥匙串里的账号:数据目录的 sha8。app 的删除全部数据按它删 */
+export function secretsAccountOf(dataDir: string): string {
+  return sha8(dataDir)
+}
+
+/** 数据目录和它的三个兄弟目录(和 lib 的 worktreeRootOf、imWorktreeRootOf、pluginStoreRootOf 一致,测试钉住) */
+export function dataRoots(dataDir: string): { data: string; worktrees: string; imWorktrees: string; plugins: string } {
+  return { data: dataDir, worktrees: `${dataDir}-worktrees`, imWorktrees: `${dataDir}-im-worktrees`, plugins: `${dataDir}-plugins` }
+}
+
 export interface RuntimePaths {
   workerAddr: string
   controlAddr: string

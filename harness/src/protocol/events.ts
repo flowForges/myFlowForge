@@ -60,6 +60,10 @@ export const EVENT_TYPES = [
   'plugins.dev.trusted',
   'plugins.dev.loaded',
   'plugins.store.discarded',
+  'session.renamed',
+  'session.deleted',
+  'executor.worktree.merged',
+  'channel.worktree.merged',
 ] as const
 
 export const EventTypeSchema = z.enum(EVENT_TYPES)
@@ -141,7 +145,8 @@ export type ContextRebuiltPayload = z.infer<typeof ContextRebuiltPayloadSchema>
 export const MemoryDeletedPayloadSchema = z.object({ id: z.string(), rawSeqs: z.array(z.number()) })
 export type MemoryDeletedPayload = z.infer<typeof MemoryDeletedPayloadSchema>
 
-export const EventsRedactedPayloadSchema = z.object({ by: z.string(), seqs: z.array(z.number()) })
+/** session:整会话抹除(08 §4.3),这时 seqs 是空的:大会话会有几万条 */
+export const EventsRedactedPayloadSchema = z.object({ by: z.string(), seqs: z.array(z.number()), session: z.string().optional() })
 export type EventsRedactedPayload = z.infer<typeof EventsRedactedPayloadSchema>
 
 export const MemoryUpdatedPayloadSchema = z.object({ id: z.string().optional(), file: z.string().optional(), op: z.string(), source: z.string() })
@@ -215,3 +220,17 @@ export type PluginsMcpStatusPayload = z.infer<typeof PluginsMcpStatusPayloadSche
 /** plugins.dev.trusted、plugins.dev.loaded */
 export const PluginDevPayloadSchema = z.object({ id: z.string(), hash: z.string() })
 export type PluginDevPayload = z.infer<typeof PluginDevPayloadSchema>
+
+// 08 §4.3、§4.5。都带 sessionId(channel.worktree.merged 除外:IM worktree 不属于一个会话)
+export const SessionRenamedPayloadSchema = z.object({ title: z.string() })
+export type SessionRenamedPayload = z.infer<typeof SessionRenamedPayloadSchema>
+
+/** 墓碑:从这一条起会话不再列出、不再收消息;之后整会话抹除 */
+export const SessionDeletedPayloadSchema = z.object({})
+export type SessionDeletedPayload = z.infer<typeof SessionDeletedPayloadSchema>
+
+export const ExecutorWorktreeMergedPayloadSchema = z.object({ runId: z.string(), files: z.number() })
+export type ExecutorWorktreeMergedPayload = z.infer<typeof ExecutorWorktreeMergedPayloadSchema>
+
+export const ChannelWorktreeMergedPayloadSchema = z.object({ worktreeId: z.string(), files: z.number() })
+export type ChannelWorktreeMergedPayload = z.infer<typeof ChannelWorktreeMergedPayloadSchema>
