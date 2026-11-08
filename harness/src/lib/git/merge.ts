@@ -26,14 +26,32 @@ export interface MergeOpts {
   exclude: string[]
   tmpDir: string
   gitOpts: GitOpts
+  /** 补丁边读边截的上限,默认 128 MB:超了抛错,什么都不写 */
+  maxPatchBytes?: number
 }
 
 interface Entry {
   oldMode: string
   newMode: string
   oldSha: string
+  /** 补丁之后的 blob:还原时只动还等于它的文件 */
+  newSha: string
   status: string
   path: string
+}
+
+const MAX_PATCH = 128 << 20
+
+/** 同一个检出同一时间只有一次合并:另一次的还原会把这一次写下的当成自己的(review I1) */
+const locks = new Map<string, Promise<unknown>>()
+function exclusive<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const run = (locks.get(key) ?? Promise.resolve()).then(fn, fn)
+  const tail = run.catch(() => {})
+  locks.set(key, tail)
+  void tail.then(() => {
+    if (locks.get(key) === tail) locks.delete(key)
+  })
+  return run
 }
 
 const CHUNK = 200
@@ -56,13 +74,27 @@ const APPLY = ['-c', 'core.protectHFS=true', '-c', 'core.protectNTFS=true', '-c'
 /** HFS+ 忽略的码位:`.g‌it` 在 macOS 上就是 `.git` */
 const HFS_IGNORABLE = /[‌-‏‪-‮⁪-⁯﻿]/g
 
-/** 比较用的段:去掉 HFS 忽略的码位、大小写折叠、去掉末尾的点和空格(APFS、NTFS 不分大小写,NTFS 不认段尾的点和空格) */
-const fold = (seg: string) => seg.replace(HFS_IGNORABLE, '').toLowerCase().replace(/[. ]+$/, '')
+/**
+ * 比较用的段:NFC(APFS、HFS+ 不分 NFC / NFD,review I3)、去掉 HFS 忽略的码位、大小写折叠、去掉末尾的点和空格(APFS、NTFS 不分大小写,NTFS 不认段尾的点和空格)。
+ * `.`、`..` 折叠后是空串,badSegment 拒绝
+ */
+const fold = (seg: string) => seg.normalize('NFC').replace(HFS_IGNORABLE, '').toLowerCase().replace(/[. ]+$/, '')
 const foldPath = (p: string) => p.split('/').map(fold)
 
 /** 用户的 git(和 git-lfs)之后会读的文件 */
 const GIT_NAMES = new Set(['.git', '.gitattributes', '.gitmodules', '.lfsconfig'])
-const badSegment = (s: string) => GIT_NAMES.has(s) || /^git~\d+$/.test(s)
+const badSegment = (s: string) => s === '' || GIT_NAMES.has(s) || /^git~\d+$/.test(s)
+
+/** 按 NFC 再比:realpath 给的是磁盘上的拼法,补丁里的可能是另一种 */
+const within = (child: string, parent: string) => isInside(child.normalize('NFC'), parent.normalize('NFC'), process.platform)
+
+const realOrUndefined = (p: string) => {
+  try {
+    return realpathSync.native(p)
+  } catch {
+    return undefined
+  }
+}
 
 const under = (path: string[], dir: string[]) => dir.length <= path.length && dir.every((s, i) => s === path[i])
 
@@ -77,8 +109,8 @@ function parseRaw(b: Buffer): Entry[] {
   const parts = splitZ(b)
   const out: Entry[] = []
   for (let i = 0; i + 1 < parts.length; i += 2) {
-    const [oldMode, newMode, oldSha, , status] = parts[i].replace(/^:/, '').split(' ')
-    out.push({ oldMode, newMode, oldSha, status: status?.[0] ?? '?', path: parts[i + 1] })
+    const [oldMode, newMode, oldSha, newSha, status] = parts[i].replace(/^:/, '').split(' ')
+    out.push({ oldMode, newMode, oldSha, newSha, status: status?.[0] ?? '?', path: parts[i + 1] })
   }
   return out
 }
@@ -96,6 +128,7 @@ const scope = (prefix: string) => (prefix ? `:(top,literal)${prefix}` : ':/')
 
 /** 第 1、2 步:base..end 的改动,去掉 exclude(在临时索引里把它们放回 base 的样子),再出补丁 */
 async function buildPatch(o: MergeOpts): Promise<{ entries: Entry[]; patch: Buffer } | undefined> {
+  const maxBytes = o.maxPatchBytes ?? MAX_PATCH
   const { from } = o
   return guarded(pinnedGit(o.git, from.pin), o.tmpDir, async (g, dir) => {
     const top = from.pin.top
@@ -117,45 +150,63 @@ async function buildPatch(o: MergeOpts): Promise<{ entries: Entry[]; patch: Buff
     }
     const entries = excluded.length > 0 ? parseRaw(await raw(tree)) : all
     if (entries.length === 0) return undefined
-    const patch = await ok(g, [...PATCH_CONFIG, 'diff', '--binary', '--full-index', ...DIFF_FLAGS, '--src-prefix=a/', '--dst-prefix=b/', base, tree, '--', spec], { cwd: top, binary: true })
-    return { entries, patch }
+    const r = await g([...PATCH_CONFIG, 'diff', '--binary', '--full-index', ...DIFF_FLAGS, '--src-prefix=a/', '--dst-prefix=b/', base, tree, '--', spec], { cwd: top, binary: true, maxBytes })
+    if (r.truncated) throw new Error('patch too large')
+    if (r.code !== 0) throw new Error(`git diff failed (${r.code}): ${r.stderr.split('\n')[0]}`)
+    return { entries, patch: r.stdout }
   })
 }
 
 /** 检出的 core.hooksPath 落在树内时,它相对树根的段(折叠过);不在树内 → undefined。各级配置都算:全局的相对路径对每个仓库都是树内 */
-async function hooksDir(g: Git, pin: PinnedRepo): Promise<string[][]> {
+async function hooksDir(g: Git, pin: PinnedRepo): Promise<{ segs: string[][]; reals: string[] }> {
   const r = await g(['config', '--get-all', 'core.hooksPath'], { cwd: pin.top })
-  if (r.code !== 0) return []
+  const reals: string[] = []
+  if (r.code !== 0) return { segs: [], reals }
   const out: string[][] = []
   for (const value of r.stdout.toString().split('\n').filter(Boolean)) {
     const expanded = value === '~' || value.startsWith('~/') ? join(homedir(), value.slice(1)) : value
     const abs = isAbsolute(expanded) ? resolve(expanded) : resolve(pin.top, expanded)
     const candidates = [abs]
-    try {
-      candidates.push(realpathSync.native(abs))
-    } catch {
-      // 不在:按字面算
-    }
+    const real = realOrUndefined(abs)
+    if (real !== undefined) candidates.push(real)
     for (const c of candidates) {
-      if (!isInside(c, pin.top, process.platform)) continue
+      if (!within(c, pin.top)) continue
       const rel = relative(pin.top, c)
       out.push(rel === '' ? [] : rel.split(sep).map(fold))
+      if (c === real) reals.push(real)
     }
   }
-  return out
+  return { segs: out, reals }
+}
+
+/**
+ * 补丁路径最深的已有祖先(或它自己)realpath 之后落在哪:钩子目录、子模块里,出了树、进了 .git,或解析不了(悬空的链接)都算不安全。
+ * 段比较拦不住树里提交过的链接(hk → .githooks)
+ */
+function resolvesUnsafe(top: string, rel: string, dirs: string[]): boolean {
+  let d = join(top, ...rel.split('/'))
+  while (!lexists(d)) d = dirname(d)
+  if (samePath(d, top)) return false
+  const real = realOrUndefined(d)
+  if (real === undefined || !within(real, top) || hasGitSegment(real, process.platform)) return true
+  return dirs.some(h => within(real, h))
 }
 
 /** 第 3 步:任何一条不安全,整个拒绝 */
 async function unsafePaths(g: Git, plain: Git, to: PinnedRepo, entries: Entry[], patch: Buffer): Promise<string[]> {
   const hooks = await hooksDir(plain, to)
-  const gitlinks = splitZ(await ok(g, ['ls-files', '-s', '-z'], { cwd: to.top }))
+  const linkPaths = splitZ(await ok(g, ['ls-files', '-s', '-z'], { cwd: to.top }))
     .filter(l => l.startsWith('160000 '))
-    .map(l => foldPath(l.slice(l.indexOf('\t') + 1)))
+    .map(l => l.slice(l.indexOf('\t') + 1))
+  const gitlinks = linkPaths.map(foldPath)
+  const realDirs = [...hooks.reals, ...linkPaths.map(l => realOrUndefined(join(to.top, ...l.split('/')))).filter((x): x is string => x !== undefined)]
   const bad = entries
     .filter(e => {
+      const raw = e.path.split('/')
+      if (raw.some(s => s === '' || s === '.' || s === '..')) return true
       const segs = foldPath(e.path)
       const linkish = e.status !== 'D' && (e.newMode === '120000' || e.newMode === '160000')
-      return linkish || segs.some(badSegment) || hooks.some(h => under(segs, h)) || gitlinks.some(l => under(segs, l))
+      return linkish || segs.some(badSegment) || hooks.segs.some(h => under(segs, h)) || gitlinks.some(l => under(segs, l)) || resolvesUnsafe(to.top, e.path, realDirs)
     })
     .map(e => e.path)
   if (bad.length === 0 && patchModes(patch)) return entries.map(e => e.path)
@@ -169,6 +220,9 @@ async function dirtyPaths(g: Git, to: PinnedRepo, paths: string[]): Promise<stri
   for (let i = 0; i < paths.length; i += CHUNK) {
     const args = ['status', '--porcelain', '-z', '--untracked-files=all', '--no-renames', '--ignore-submodules=all', '--', ...paths.slice(i, i + CHUNK)]
     for (const item of splitZ(await ok(g, args, { cwd: to.top, env }))) out.push(item.slice(3))
+    // assume-unchanged(小写)、skip-worktree(S)的本地改动 status 看不见(review I2):一律算脏
+    const tags = ['ls-files', '-v', '-z', '--full-name', '--', ...paths.slice(i, i + CHUNK)]
+    for (const item of splitZ(await ok(g, tags, { cwd: to.top, env }))) if (item[0] !== 'H') out.push(item.slice(2))
   }
   return [...new Set(out)]
 }
@@ -201,24 +255,64 @@ function missingDirs(top: string, created: string[]): string[] {
   return [...dirs].sort((a, b) => b.length - a.length)
 }
 
-/** 第 5 步失败之后:已跟踪的 checkout 回索引里的样子(第 4 步保证它们等于索引),新建的删掉。返回还原不了的路径 */
-async function restore(g: Git, to: PinnedRepo, tracked: string[], created: string[], dirs: string[]): Promise<string[]> {
+/** 这些文件现在的 blob(不跑过滤器);不是普通文件的(链接、目录)、不在的不出现 */
+async function blobs(g: Git, top: string, rels: string[]): Promise<Map<string, string>> {
+  const m = new Map<string, string>()
+  const files = rels.filter(rel => {
+    const p = inside(top, rel)
+    try {
+      return p !== undefined && lstatSync(p).isFile()
+    } catch {
+      return false
+    }
+  })
+  for (let i = 0; i < files.length; i += CHUNK) {
+    const chunk = files.slice(i, i + CHUNK)
+    const r = await g(['hash-object', '--no-filters', '--', ...chunk], { cwd: top }).catch(() => ({ code: -1, stdout: Buffer.alloc(0) }))
+    if (r.code !== 0) continue
+    const shas = r.stdout.toString().split('\n').filter(Boolean)
+    chunk.forEach((rel, j) => shas[j] && m.set(rel, shas[j]))
+  }
+  return m
+}
+
+/**
+ * 第 5 步失败之后(review I1):只动还等于补丁结果的。已跟踪的:等于补丁之后的 blob → checkout 回索引(第 4 步保证索引就是之前);
+ * 删除的:不在了 → checkout;还是原来的 → 不用动。新建的:等于补丁的 blob → 删掉。别的都是别人写的,不碰,报出来。
+ * git apply 写一半和写完了都是退出码 1,分不出来:全靠逐个比字节
+ */
+async function restore(g: Git, to: PinnedRepo, entries: Entry[], dirs: string[]): Promise<string[]> {
   const failed: string[] = []
+  const now = await blobs(g, to.top, entries.map(e => e.path))
+  const present = (rel: string) => {
+    const p = inside(to.top, rel)
+    return p === undefined || lexists(p)
+  }
+  const checkout: string[] = []
+  const remove: string[] = []
+  for (const e of entries) {
+    const sha = now.get(e.path)
+    const exists = present(e.path)
+    if (ZERO.test(e.oldMode)) {
+      if (!exists) continue
+      if (sha === e.newSha) remove.push(e.path)
+      else failed.push(e.path)
+    } else if (e.status === 'D') {
+      if (!exists) checkout.push(e.path)
+      else if (sha !== e.oldSha) failed.push(e.path)
+    } else if (sha === e.newSha) checkout.push(e.path)
+    else if (sha !== e.oldSha || !exists) failed.push(e.path)
+  }
   const env = { GIT_LITERAL_PATHSPECS: '1' }
-  for (let i = 0; i < tracked.length; i += CHUNK) {
-    const chunk = tracked.slice(i, i + CHUNK)
+  for (let i = 0; i < checkout.length; i += CHUNK) {
+    const chunk = checkout.slice(i, i + CHUNK)
     const r = await g(['-c', 'submodule.recurse=false', 'checkout', '--', ...chunk], { cwd: to.top, env }).catch(() => ({ code: -1 }))
     if (r.code !== 0) failed.push(...chunk)
   }
-  for (const rel of created) {
+  for (const rel of remove) {
     const p = inside(to.top, rel)
-    if (p === undefined) {
-      failed.push(rel)
-      continue
-    }
     try {
-      if (!lexists(p)) continue
-      if (lstatSync(p).isDirectory()) throw new Error('is a directory')
+      if (p === undefined) throw new Error('outside')
       removeLeaf(p)
     } catch {
       failed.push(rel)
@@ -235,7 +329,11 @@ async function restore(g: Git, to: PinnedRepo, tracked: string[], created: strin
 }
 
 /** spec §4.5 第 1–6 步 */
-export async function mergeInto(o: MergeOpts): Promise<MergeOutcome> {
+export function mergeInto(o: MergeOpts): Promise<MergeOutcome> {
+  return exclusive(`${o.to.pin.commonDir}\0${o.to.pin.top}`, () => mergeNow(o))
+}
+
+async function mergeNow(o: MergeOpts): Promise<MergeOutcome> {
   const { to } = o
   if (!pinIntact(o.from.pin) || !pinIntact(to.pin)) return refuse('unsafe_repo')
   return guarded(pinnedGit(o.git, to.pin), o.tmpDir, async g => {
@@ -254,14 +352,12 @@ export async function mergeInto(o: MergeOpts): Promise<MergeOutcome> {
       const merged = await g([...APPLY, '--check', '-R', '-'], { cwd: to.pin.top, input: patch })
       return merged.code === 0 ? refuse('conflict') : refuse('dirty', dirty)
     }
-    const created = entries.filter(e => ZERO.test(e.oldMode)).map(e => e.path)
-    const tracked = entries.filter(e => !ZERO.test(e.oldMode)).map(e => e.path)
-    const dirs = missingDirs(to.pin.top, created)
+    const dirs = missingDirs(to.pin.top, entries.filter(e => ZERO.test(e.oldMode)).map(e => e.path))
     const check = await g([...APPLY, '--check', '-'], { cwd: to.pin.top, input: patch })
     if (check.code !== 0) return refuse('conflict')
     const applied = await g([...APPLY, '-'], { cwd: to.pin.top, input: patch }).catch(() => ({ code: -1 }))
     if (applied.code === 0) return { ok: true, files: entries.length }
-    const failed = await restore(g, to.pin, tracked, created, dirs)
+    const failed = await restore(g, to.pin, entries, dirs)
     return failed.length === 0 ? { ok: false, reason: 'conflict', restored: true } : { ok: false, reason: 'conflict', restored: false, paths: failed }
   })
 }

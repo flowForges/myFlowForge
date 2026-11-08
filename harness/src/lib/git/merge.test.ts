@@ -422,8 +422,9 @@ describe('mergeInto: a failure halfway through git apply (R4)', () => {
       const extra = also?.(args)
       if (extra) return { ...extra, stdout: Buffer.alloc(0), stderr: 'fatal: injected' }
       if (args.includes('apply') && !args.includes('--check')) {
-        w(R('made/new.txt'), 'half\n')
-        w(R('a.txt'), 'half written\n')
+        // git apply 写的是整个文件:写到的那些就是补丁的结果
+        w(R('made/new.txt'), 'n\n')
+        w(R('a.txt'), 'theirs\n')
         return { code: 1, stdout: Buffer.alloc(0), stderr: 'error: injected' }
       }
       return real(args, o)
@@ -447,5 +448,127 @@ describe('mergeInto: a failure halfway through git apply (R4)', () => {
     expect(r).toMatchObject({ ok: false, reason: 'conflict', restored: false })
     expect((r as { paths: string[] }).paths).toContain('a.txt')
     expect(existsSync(R('made/new.txt'))).toBe(false)
+  })
+})
+
+describe('review fixes (Task 2 review)', () => {
+  const files = () => digest().filter(l => !l.startsWith('index:'))
+
+  it('I1: two merges into one checkout never interleave: the second makes no git call while the first is applying', async () => {
+    const p = await prepare({ edit: () => w(W('n.txt'), 'n\n') })
+    const real = git()
+    let release!: () => void
+    const held = new Promise<void>(r => (release = r))
+    let reached = false
+    const a: Git = async (args, o) => {
+      if (args.includes('apply') && !args.includes('--check')) {
+        reached = true
+        await held
+      }
+      return real(args, o)
+    }
+    const bCalls: string[][] = []
+    const b: Git = (args, o) => (bCalls.push(args), real(args, o))
+    const run = (g: Git) => mergeInto({ git: g, from: { pin: p.fromPin, dir: wt, baseRef: p.baseRef, endRef: p.endRef }, to: { pin: p.toPin, dir: repo }, exclude: [], tmpDir: tmp, gitOpts: {} })
+    const first = run(a)
+    await expect.poll(() => reached, { timeout: 10_000, interval: 5 }).toBe(true)
+    const second = run(b)
+    await new Promise(r => setTimeout(r, 300))
+    expect(bCalls).toEqual([])
+    release()
+    expect(await first).toEqual({ ok: true, files: 1 })
+    expect(await second).toMatchObject({ ok: false, reason: 'conflict' })
+  })
+
+  it('I1: a failed apply restores only what still equals the patch; another writer\'s edit and file stay, restored:false with their paths', async () => {
+    w(R('d.txt'), 'd\n')
+    w(R('y.txt'), 'y\n')
+    ug(['add', '-A'])
+    ug(['commit', '-qm', 'more'])
+    const p = await prepare({
+      edit: () => {
+        w(W('a.txt'), 'theirs a\n')
+        w(W('y.txt'), 'theirs y\n')
+        w(W('z.txt'), 'theirs z\n')
+        w(W('made/new.txt'), 'theirs new\n')
+        unlinkSync(W('d.txt'))
+      },
+    })
+    const before = readFileSync(R('a.txt'))
+    const real = git()
+    const failing: Git = async (args, o) => {
+      if (args.includes('apply') && !args.includes('--check')) {
+        // git apply wrote some of it, then someone else wrote y.txt and z.txt
+        w(R('a.txt'), 'theirs a\n')
+        w(R('made/new.txt'), 'theirs new\n')
+        unlinkSync(R('d.txt'))
+        w(R('y.txt'), 'someone else\n')
+        w(R('z.txt'), 'someone else z\n')
+        return { code: 1, stdout: Buffer.alloc(0), stderr: 'error: injected' }
+      }
+      return real(args, o)
+    }
+    const r = await merge({ git: failing }, p)
+    expect(r).toMatchObject({ ok: false, reason: 'conflict', restored: false })
+    expect([...(r as { paths: string[] }).paths].sort()).toEqual(['y.txt', 'z.txt'])
+    expect(readFileSync(R('a.txt')).equals(before)).toBe(true)
+    expect(readFileSync(R('d.txt'), 'utf8')).toBe('d\n')
+    expect(existsSync(R('made'))).toBe(false)
+    expect(readFileSync(R('y.txt'), 'utf8')).toBe('someone else\n')
+    expect(readFileSync(R('z.txt'), 'utf8')).toBe('someone else z\n')
+  })
+
+  it.each([['assume-unchanged', '--assume-unchanged'], ['skip-worktree', '--skip-worktree']])('I2: a %s path is dirty, and it is left alone', async (_n, flag) => {
+    ug(['update-index', flag, 'b.txt'])
+    w(R('b.txt'), 'hidden local edit\n')
+    const p = await prepare({ edit: () => w(W('b.txt'), 'theirs\n') })
+    const before = files()
+    expect(await merge({}, p)).toMatchObject({ ok: false, reason: 'dirty', paths: ['b.txt'] })
+    expect(files()).toEqual(before)
+    expect(readFileSync(R('b.txt'), 'utf8')).toBe('hidden local edit\n')
+  })
+
+  it('I3: an NFD spelling of an in-tree hooksPath is unsafe_path', async () => {
+    ug(['config', 'core.hooksPath', 'hooks-é'])
+    const path = 'hooks-é/pre-commit'
+    const p = await prepare({ end: b => craft(b, [{ path, mode: '100755', content: '#!/bin/sh\n' }]) })
+    const before = files()
+    expect(await merge({}, p)).toMatchObject({ ok: false, reason: 'unsafe_path', paths: [path] })
+    expect(files()).toEqual(before)
+  })
+
+  it('I3: a path whose existing parent resolves into the hooks dir (a committed link) is unsafe_path', async () => {
+    mkdirSync(R('.githooks'))
+    w(R('.githooks/keep'), 'k\n')
+    symlinkSync('.githooks', R('hk'))
+    ug(['add', '-A'])
+    ug(['commit', '-qm', 'hooks link'])
+    ug(['config', 'core.hooksPath', '.githooks'])
+    const p = await prepare({ end: b => craft(b, [{ path: 'hk/pre-commit', mode: '100755', content: '#!/bin/sh\n' }]) })
+    expect(await merge({}, p)).toMatchObject({ ok: false, reason: 'unsafe_path', paths: ['hk/pre-commit'] })
+    expect(existsSync(R('.githooks/pre-commit'))).toBe(false)
+  })
+
+  it('I3: an NFD spelling under a gitlink of the checkout is unsafe_path', async () => {
+    ug(['update-index', '--add', '--cacheinfo', `160000,${head()},lib-é`])
+    ug(['commit', '-qm', 'gitlink'])
+    const path = 'lib-é/x.txt'
+    const p = await prepare({ end: b => craft(b, [{ path, mode: '100644', content: 'x\n' }]) })
+    expect(await merge({}, p)).toMatchObject({ ok: false, reason: 'unsafe_path', paths: [path] })
+  })
+
+  it.each(['../evil.txt', 'd/./x.txt'])('M2: a %s tree entry is unsafe_path, not an error', async path => {
+    const p = await prepare({ end: b => craft(b, [{ path, mode: '100644', content: 'x\n' }]) })
+    const before = files()
+    expect(await merge({}, p)).toMatchObject({ ok: false, reason: 'unsafe_path', paths: [path] })
+    expect(files()).toEqual(before)
+    expect(existsSync(join(root, 'evil.txt'))).toBe(false)
+  })
+
+  it('M5: the patch is capped while it is read; past the cap nothing is written', async () => {
+    const p = await prepare({ edit: () => w(W('big.txt'), 'x'.repeat(4096)) })
+    const before = files()
+    await expect(mergeInto({ git: git(), from: { pin: p.fromPin, dir: wt, baseRef: p.baseRef, endRef: p.endRef }, to: { pin: p.toPin, dir: repo }, exclude: [], tmpDir: tmp, gitOpts: {}, maxPatchBytes: 1000 })).rejects.toThrow(/too large/)
+    expect(files()).toEqual(before)
   })
 })
