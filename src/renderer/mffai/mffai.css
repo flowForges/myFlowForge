@@ -206,3 +206,7 @@
 .mffai-cserver:last-child { border-bottom: none; }
 .mffai-args, .mffai-symbolic { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .mffai-arg { display: inline-flex; gap: 3px; align-items: center; }
+.mffai-check { display: inline-flex; gap: 4px; align-items: center; }
+.mffai-mcp { border-collapse: collapse; font-size: 12.5px; }
+.mffai-mcp th { color: var(--faint); font-weight: normal; padding: 2px 12px 2px 0; text-align: left; }
+.mffai-mcp td { padding: 3px 12px 3px 0; vertical-align: middle; }
