@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import type { KernelEvent } from '@mffai/protocol'
 import { emptyView, reduce } from './reduce'
-import { defuseImages, toMessages, TRUNCATED_MARK } from './toMessages'
+import { toMessages, TRUNCATED_MARK } from './toMessages'
 import { ev, resetSeq } from '../test/events'
 
 const S = 's1'
@@ -67,11 +67,5 @@ describe('toMessages', () => {
   it('groups carry each turn with its messages', () => {
     const v = fold([user('t1'), say('t1', 1, 'x'), e('turn.ended', { turnId: 't1' }), user('t2'), e('turn.ended', { turnId: 't2' })])
     expect(toMessages(v, 'app').groups.map((g) => [g.turnId, g.messages.length])).toEqual([['t1', 2], ['t2', 1]])
-  })
-
-  it('remote images in model text become links (no fetch without a click); fenced code is left alone', () => {
-    const v = fold([user(), say('t1', 1, 'see ![chart](https://evil.example/x.png?d=1) and ![local](./a.png)'), e('turn.ended', { turnId: 't1' })])
-    expect(toMessages(v, 'app').messages[1].text).toBe('see [chart](https://evil.example/x.png?d=1) and ![local](./a.png)')
-    expect(defuseImages('```\n![x](http://a/b)\n```\n![y](HTTP://c/d)')).toBe('```\n![x](http://a/b)\n```\n[y](HTTP://c/d)')
   })
 })

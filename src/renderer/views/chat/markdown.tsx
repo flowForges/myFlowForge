@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import { CodeBlock, TableBlock, QuoteBlock } from './blocks'
 import { MdLink } from './MdLink'
 import { OpenFileCtx } from './openFile'
+import { UntrustedMdCtx, isLoadableUntrusted, isRemoteSrc } from './untrusted'
 import { renderHtmlFragment, newFragmentScan, feedFragment, BLOCK_TAGS } from './htmlFragment'
 import { Lightbox } from '../../components/Lightbox'
 
@@ -21,6 +22,15 @@ const ABS_SRC = /^(https?:|data:|forge-)/i
 //  修法:回落到 `OpenFileCtx.bases`(会话 worktree → 工作区根)—— 那正是对话里**文件链接**
 //  已经在用的同一套基准,不另造一套。文档预览仍优先用它自己那份 base(相对图按文档所在目录解析)。
 function MdImage({ src, alt }: { src: string; alt: string }): ReactNode {
+  // 不可信的作者(mff-ai):远程图不加载,改成链接;其余不能加载的只给占位符。可信时(默认)走下面原来的路径
+  const untrusted = useContext(UntrustedMdCtx)
+  if (untrusted && !isLoadableUntrusted(src)) {
+    return isRemoteSrc(src) ? <MdLink href={src}>{alt || src}</MdLink> : <span className="md-img-err" title={src}>🖼 {alt || src}</span>
+  }
+  return <MdImageLoad src={src} alt={alt} />
+}
+
+function MdImageLoad({ src, alt }: { src: string; alt: string }): ReactNode {
   const docBase = useContext(MdImageBaseCtx)
   const opener = useContext(OpenFileCtx)
   const bases = useMemo(

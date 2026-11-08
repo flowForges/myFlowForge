@@ -83,3 +83,11 @@ describe('对话气泡里的 markdown 图片', () => {
     expect(screen.getByAltText('架构图')).toBeTruthy()
   })
 })
+
+describe('MdImagePolicyCtx (mff-ai)', () => {
+  it('default: a remote image still loads directly, links carry no host chip (other callers unchanged)', () => {
+    const { container } = render(<Markdown text={'![a](https://x.example/a.png) [t](https://y.example/)'} />)
+    expect(container.querySelector('img.md-img')?.getAttribute('src')).toBe('https://x.example/a.png')
+    expect(container.querySelector('.md-link-host')).toBeNull()
+  })
+})

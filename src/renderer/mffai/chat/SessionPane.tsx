@@ -1,9 +1,11 @@
 // 选中的会话(08 §8):每一轮的消息(app 的 Message)、尾巴、审批卡片和运行卡片(按首次出现的顺序),下面是输入框。
-// 模型、工具、CLI 的文字都是第三方的:只经 Message / Markdown 当文字渲染,内嵌 HTML 在这里一律关掉。
+// 模型、工具、CLI 的文字都是第三方的:只经 Message / Markdown 当文字渲染,内嵌 HTML 在这里一律关掉,
+// 远程图不加载(UntrustedMdCtx:改成链接,旁边是主机名)。
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { RunRow, SessionSummary } from '@mffai/protocol'
 import { Message } from '../../views/chat/Message'
 import { ChatHtmlCtx } from '../../views/chat/markdown'
+import { UntrustedMdCtx } from '../../views/chat/untrusted'
 import { useStickToBottom } from '../../components/useStickToBottom'
 import { call, isUnsupported, toCallError } from '../rpc'
 import { useMffaiEvent } from '../events'
@@ -90,6 +92,7 @@ export function SessionPane({ sessionId, summary, imName, onSend, onCommand, onS
 
   return (
     <ChatHtmlCtx.Provider value={false}>
+    <UntrustedMdCtx.Provider value={true}>
       <div className="mffai-chat-body" ref={stick.ref} onScroll={onScroll}>
         {view?.hasMore && <button className="txt-btn mffai-older" onClick={loadOlder}>更早</button>}
         {error === 'gone' && <Chip tone="bad">已删除</Chip>}
@@ -116,6 +119,7 @@ export function SessionPane({ sessionId, summary, imName, onSend, onCommand, onS
         onCommand={onCommand}
         onStop={onStop}
       />
+    </UntrustedMdCtx.Provider>
     </ChatHtmlCtx.Provider>
   )
 }

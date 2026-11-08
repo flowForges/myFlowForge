@@ -9,21 +9,6 @@ export const TRUNCATED_MARK = '\n… 已截断'
 
 const iso = (ms: number) => new Date(ms).toISOString()
 
-const REMOTE_IMAGE = /!\[([^\]]*)\]\((https?:[^)\s]*)\)/gi
-
-/**
- * 模型写的 `![x](https://…)` 改成链接:app 的 Markdown 对绝对地址的图直接加载,模型文字(可能被注入)就能不经点击
- * 把读到的东西拼进地址发出去。链接要点了才经系统浏览器打开。围栏代码块里的原样留着
- */
-export function defuseImages(text: string): string {
-  if (!/!\[/.test(text)) return text
-  let fenced = false
-  return text.split('\n').map((line) => {
-    if (/^\s*(```|~~~)/.test(line)) { fenced = !fenced; return line }
-    return fenced ? line : line.replace(REMOTE_IMAGE, '[$1]($2)')
-  }).join('\n')
-}
-
 export interface MessageGroup { turnId: string; messages: ChatMessage[] }
 
 function turnMessages(v: SessionView, t: TurnView, origin: SessionOrigin): { messages: ChatMessage[]; streaming?: string } {
@@ -37,7 +22,7 @@ function turnMessages(v: SessionView, t: TurnView, origin: SessionOrigin): { mes
   })
   for (const s of t.steps) {
     if (!s.text && !s.reasoning && !s.tools.length) continue
-    const m: ChatMessage = { id: s.key, who: 'ai', text: defuseImages(s.text), ts: iso(s.ts) }
+    const m: ChatMessage = { id: s.key, who: 'ai', text: s.text, ts: iso(s.ts) }
     if (s.reasoning) m.think = { label: '思考', steps: [s.reasoning] }
     if (s.tools.length) {
       m.tools = s.tools.map(({ truncated, ...tool }): ToolActivity => (truncated ? { ...tool, output: `${tool.output ?? ''}${TRUNCATED_MARK}` } : tool))

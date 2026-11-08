@@ -4,6 +4,7 @@ import { CopyButton } from './blocks'
 import { classifyHref } from '@shared/fileRef'
 import { OpenFileCtx, OPEN_FILE_MSG } from './openFile'
 import type { OpenFileResult } from './openFile'
+import { UntrustedMdCtx, hostOf } from './untrusted'
 
 // 对话正文里的链接。
 //
@@ -28,6 +29,8 @@ export function MdLink({ href, children }: { href: string; children: ReactNode }
   // 相对路径经 new URL(href, 'file:///') 解析后是 'file:',自然落到「不可外开」那一侧。
   const external = kind === 'external' && /^https?:$/i.test(protocolOf(href))
   const opener = useContext(OpenFileCtx)
+  // 不可信的作者:文字和地址不同的外链,旁边显示真正去的主机名(文字可以冒充别的地址)
+  const host = useContext(UntrustedMdCtx) && !(typeof children === 'string' && children === href) ? hostOf(href) : undefined
   const canOpenFile = kind === 'path' && !!opener
   const [err, setErr] = useState<Exclude<OpenFileResult, 'ok'> | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -57,6 +60,7 @@ export function MdLink({ href, children }: { href: string; children: ReactNode }
       {/* 复制只对真能访问的地址给 —— 相对路径复制出去也没人能用。
           按钮常驻占位、hover 才显形(见 chat.css):hover 时才撑开宽度会让整段文字跳一下。 */}
       {external ? <CopyButton className="md-link-copy" title="复制链接" text={() => href} /> : null}
+      {host ? <span className="md-link-host">{host}</span> : null}
       {err ? <span className="md-link-err">{OPEN_FILE_MSG[err]}</span> : null}
     </span>
   )
