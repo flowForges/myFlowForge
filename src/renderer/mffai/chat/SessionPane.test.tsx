@@ -168,6 +168,29 @@ describe('SessionPane (through ChatPage)', () => {
     delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView
   })
 
+  it('route.runId not on screen yet: pages back until its card is there, then scrolls to it', async () => {
+    const old = [
+      ev('message.user', { turnId: 't0', text: 'older' }, { sessionId: S, seq: 1 }),
+      ev('executor.run.started', { runId: 'r9', turnId: 't0', executor: 'codex', cwd: '/w', isolation: 'own' }, { sessionId: S, seq: 2 }),
+      ev('turn.ended', { turnId: 't0' }, { sessionId: S, seq: 3 }),
+    ]
+    setup()
+    const evs = parkedTurn().map((x) => ({ ...x, seq: x.seq + 100 }))
+    f.script({ 'session.state': { session: summary(S), events: evs, hasMore: true, lastSeq: evs.at(-1)!.seq, open: { turnId: 't1', parked: true, approvalIds: ['p1'] } } })
+    // 第一页往回取到的是空的(还有更早的),第二页才有 r9
+    let pages = 0
+    f.script({ 'session.events': () => (++pages === 1 ? { events: [], hasMore: true } : { events: old, hasMore: false }) as never })
+    const spy = vi.fn()
+    Element.prototype.scrollIntoView = spy
+    route.set({ page: 'chat', sessionId: S, runId: 'r9' })
+    render(<ChatPage />)
+    await waitFor(() => expect(card('r9')).toBeTruthy())
+    await waitFor(() => expect(spy).toHaveBeenCalled())
+    expect(spy.mock.contexts[0]).toBe(card('r9'))
+    expect(f.callsOf('session.events')).toHaveLength(2)
+    delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView
+  })
+
   it('更早 pages back with session.events', async () => {
     setup({ 'session.events': { events: [ev('message.user', { turnId: 't0', text: 'way back' }, { sessionId: S, seq: 1 })], hasMore: false } })
     const evs = parkedTurn()

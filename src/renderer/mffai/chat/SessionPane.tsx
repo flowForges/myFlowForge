@@ -23,6 +23,9 @@ import { useSession } from './useSession'
  * 结束了、留着 worktree 的运行:worktree 还在不在、合并过没有,要问 executor.runs。它不按会话查,也没有分页,
  * 只有 limit(最多 200):取最多的一页,按会话筛;查不到的运行卡片不给合并、丢弃
  */
+/** 找 route.runId 的卡片时最多往回翻几页(每页 300 条) */
+const MAX_SEARCH_PAGES = 50
+
 function useRunRows(sessionId: string, view: SessionView | null): { rows: Map<string, RunRow>; refresh: () => void } {
   const [rows, setRows] = useState<Map<string, RunRow>>(new Map())
   const need = useMemo(() => (view?.turns ?? []).flatMap((t) => [...t.runs.values()])
@@ -72,16 +75,20 @@ export function SessionPane({ sessionId, summary, imName, onSend, onCommand, onS
   const { rows, refresh } = useRunRows(sessionId, view)
   const stick = useStickToBottom(view)
 
-  // 去合并:滚到那张运行卡片,每个 runId 一次
+  // 去合并:滚到那张运行卡片,每个 runId 一次。卡片还不在(运行在更早的页里)就往回翻,直到找到或没有更早的
   const scrolled = useRef<string | undefined>(undefined)
+  const searched = useRef(0)
   useEffect(() => {
     const runId = r.runId
     if (!runId || scrolled.current === runId || r.sessionId !== sessionId) return
     const el = document.getElementById(`mffai-run-${runId}`)
-    if (!el) return
+    if (!el) {
+      if (view?.hasMore && searched.current < MAX_SEARCH_PAGES) { searched.current++; loadOlder() }
+      return
+    }
     scrolled.current = runId
     el.scrollIntoView?.({ block: 'center' })
-  }, [r.runId, r.sessionId, sessionId, view])
+  }, [r.runId, r.sessionId, sessionId, view, loadOlder])
 
   const onScroll = () => {
     stick.onScroll()
