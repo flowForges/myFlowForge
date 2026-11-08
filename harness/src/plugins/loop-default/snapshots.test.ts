@@ -828,3 +828,55 @@ describe('turn.diff (08 §4.4)', () => {
     expect(JSON.stringify(d)).not.toContain('SECRETLINE')
   })
 })
+
+describe('08 §4.3: a deleted session leaves no snapshot refs', () => {
+  const probe = () => {
+    const p: { commands?: import('../../lib/tools/types').SessionCommands; plugin: Plugin } = {
+      plugin: { manifest: { id: 'probe', version: '0', kernel: '^0.1.0' }, activate: ctx => { p.commands = ctx.services.get('sessionCommands') } },
+    }
+    return p
+  }
+
+  it('on session.deleted refs/mffai/snapshots/<id>/ goes and another session keeps its refs', async () => {
+    initRepo()
+    const p = probe()
+    const k = await boot([], () => oneTool('write', { path: 'n.txt', content: 'n\n' }), undefined, [p.plugin])
+    const gone = await create(k, CLAUDE)
+    const kept = await create(k, CLAUDE)
+    await turn(k, gone, 'one')
+    await turn(k, kept, 'two')
+    expect(hidden().filter(r => r.includes(`/${gone}/`)).length).toBe(2)
+    p.commands!.markDeleted(gone)
+    await waitFor(() => !hidden().some(r => r.includes(`/${gone}/`)))
+    expect(hidden().filter(r => r.startsWith(`refs/mffai/snapshots/${kept}/`))).toHaveLength(2)
+  })
+
+  it('at start every deleted session is swept in one for-each-ref per repo, leftovers included', async () => {
+    initRepo()
+    const p = probe()
+    const k = await boot([], () => oneTool('write', { path: 'n.txt', content: 'n\n' }), undefined, [p.plugin])
+    const a = await create(k, CLAUDE)
+    const b = await create(k, CLAUDE)
+    const kept = await create(k, CLAUDE)
+    await turn(k, kept, 'kept')
+    await k.close()
+    kernels = kernels.filter(x => x !== k)
+    // 崩在删除和清理之间:墓碑在,引用还在
+    const head = ug(['rev-parse', 'HEAD']).trim()
+    for (const sid of [a, b]) ug(['update-ref', `refs/mffai/snapshots/${sid}/t_x-start`, head])
+    const log = await import('../../kernel/eventLog')
+    const db = log.openDb(join(dataDir, 'db', 'events.sqlite'))
+    const events = new log.EventLog(db)
+    for (const sid of [a, b]) events.append({ type: 'session.deleted', sessionId: sid, payload: {} })
+    db.close()
+    const argv: string[][] = []
+    const spy = (real: Git): Git => (args, o) => {
+      argv.push(args)
+      return real(args, o)
+    }
+    await boot([], () => () => say('hi'), spy)
+    await waitFor(() => !hidden().some(r => r.includes(`/${a}/`) || r.includes(`/${b}/`)))
+    expect(hidden().filter(r => r.startsWith(`refs/mffai/snapshots/${kept}/`))).toHaveLength(2)
+    expect(argv.filter(x => x.includes('for-each-ref'))).toHaveLength(1)
+  })
+})

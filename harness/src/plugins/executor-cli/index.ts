@@ -327,8 +327,29 @@ export function createExecutorCli(opts: ExecutorCliOpts = {}): Plugin {
           stop()
           return manager.abandonAll(reason)
         },
+        liveFor: sid => manager.liveFor(sid),
+        unmergedFor: sid => manager.unmergedFor(sid),
       }
       ctx.services.provide('executors', service)
+
+      // 08 §4.3:删掉的会话不留 worktree 和运行引用。事件那一刻清,每次启动再扫一遍(崩在中途也收得干净)。
+      // onAppend 在别人的写入路径上:git 放到下一拍
+      const cleanups = new Set<Promise<void>>()
+      const track = (p: Promise<void>) => {
+        const t = p.catch(e => ctx.log.warn('deleted session cleanup failed', { error: e instanceof Error ? redact(e.message) : 'unknown' })).finally(() => cleanups.delete(t))
+        cleanups.add(t)
+      }
+      // 手搭的上下文(只测停用的用例)没有 onAppend、deletedIds:那里没有会话可删
+      ctx.events.onAppend?.(e => {
+        if (e.type !== 'session.deleted' || !e.sessionId || disposed) return
+        const sid = e.sessionId
+        setImmediate(() => {
+          if (!disposed) track(manager.forgetSession(sid))
+        })
+      })
+      setImmediate(() => {
+        if (!disposed) track(manager.sweepDeleted(sessions.deletedIds?.() ?? []))
+      })
 
       const wire = (a: Adapter): ExecutorListResult['executors'][number] => {
         const info = infos.get(a.id)!
@@ -374,7 +395,7 @@ export function createExecutorCli(opts: ExecutorCliOpts = {}): Plugin {
         registered.clear()
         let timer: NodeJS.Timeout | undefined
         await Promise.race([
-          manager.abandonAll('kernel_stopping'),
+          Promise.all([manager.abandonAll('kernel_stopping'), ...cleanups]),
           new Promise<void>(res => {
             timer = setTimeout(res, DISPOSE_WAIT_MS)
           }),

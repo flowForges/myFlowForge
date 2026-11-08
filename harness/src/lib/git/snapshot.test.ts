@@ -1192,3 +1192,33 @@ describe('fileDiff (08 §4.4)', () => {
     await expect(git_.fileDiff(join(repo, 'sub'), a, head(), 'ab.txt', g, { pin: await pinRepo(repo, g), tmpDir: tmp })).rejects.toThrow(/not changed/)
   })
 })
+
+describe('dropRefs (08 §4.3)', () => {
+  it('drops every ref under the given prefixes, matched by whole path segment, and nothing else', async () => {
+    initRepo()
+    write(R('a.txt'), 'a\n')
+    ug(['add', '.'])
+    commit('init')
+    const head = ug(['rev-parse', 'HEAD']).trim()
+    for (const r of ['refs/mffai/snapshots/s1/t1-start', 'refs/mffai/snapshots/s1/t2-end', 'refs/mffai/runs/s1/run_1-start', 'refs/mffai/snapshots/s12/t1-start', 'refs/mffai/snapshots/s2/t1-start', 'refs/heads/keep'])
+      ug(['update-ref', r, head])
+    const g = git()
+    const pin = await pinRepo(repo, g)
+    expect(await git_.dropRefs(['refs/mffai/snapshots/s1', 'refs/mffai/runs/s1/'], g, { pin })).toBe(3)
+    expect(hidden().sort()).toEqual(['refs/mffai/snapshots/s12/t1-start', 'refs/mffai/snapshots/s2/t1-start'])
+    expect(ug(['for-each-ref', '--format=%(refname)', 'refs/heads/keep']).trim()).toBe('refs/heads/keep')
+    expect(await git_.dropRefs(['refs/mffai/snapshots/s1'], g, { pin })).toBe(0)
+    expect(await git_.dropRefs([], g, { pin })).toBe(0)
+  })
+
+  it('a prefix outside refs/mffai/ is refused before git runs', async () => {
+    initRepo()
+    const calls: string[][] = []
+    const real = git()
+    const spy: Git = (args, o) => (calls.push(args), real(args, o))
+    const pin = await pinRepo(repo, real)
+    for (const bad of ['refs/heads', 'refs/mffai/../heads', 'refs/mffaix/s1', ''])
+      await expect(git_.dropRefs([bad], spy, { pin })).rejects.toThrow('not an mffai ref prefix')
+    expect(calls).toEqual([])
+  })
+})

@@ -1,7 +1,7 @@
 // 运行管理(04 spec §9、§10、§12):排队、上限、生命周期、节流事件、原始日志、改动与通知。
 // 一条规矩:运行离开 active 只有 leave() 一个出口,而 leave() 一定留下通知并叫醒 wait,否则这一轮就永远挂着
 import { randomBytes } from 'node:crypto'
-import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeSync } from 'node:fs'
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { homedir, tmpdir, userInfo } from 'node:os'
 import { isAbsolute, join, relative, resolve } from 'node:path'
@@ -12,7 +12,7 @@ import { isInside, resolveToolPath } from '../../lib/fs/paths'
 import { validateNetworkEntry } from '../../lib/sandbox/net/domains'
 import { dirSize } from '../../lib/fs/dirSize'
 import { mergeInto } from '../../lib/git/merge'
-import { changes as gitChanges, fileDiff, NO_REPO, pinIntact, pinRepo, pruneRefs, refExists, repoPrefix, takeSnapshot, type Git, type PinnedRepo, type RepoPin } from '../../lib/git/snapshot'
+import { changes as gitChanges, dropRefs, fileDiff, NO_REPO, pinIntact, pinRepo, pruneRefs, refExists, repoPrefix, takeSnapshot, type Git, type PinnedRepo, type RepoPin } from '../../lib/git/snapshot'
 import { imWorktreeRootOf, isImCwd } from '../../lib/git/imWorktree'
 import { addWorktree, removeInWorktree, removeWorktree, reserveWorktree, rootConflict, userGitState, worktreePin } from '../../lib/git/worktree'
 import type { PgidRegistry } from '../../lib/proc/pgids'
@@ -542,7 +542,10 @@ function openTurn(events: KernelEvent[]): boolean {
   return open.size > 0
 }
 
-const runRef = (sessionId: string, runId: string, phase: 'start' | 'end') => `refs/mffai/runs/${sessionId}/${runId}-${phase}`
+const runRefBase = (sessionId: string) => `refs/mffai/runs/${sessionId}`
+const runRef = (sessionId: string, runId: string, phase: 'start' | 'end') => `${runRefBase(sessionId)}/${runId}-${phase}`
+/** 和内核 Sessions 同一个规则:会话 id 要能直接当一段路径 */
+const SAFE_SESSION_ID = /^[A-Za-z0-9_-]+$/
 
 export class RunManager implements BackgroundRuns {
   private live = new Map<string, Run>()
@@ -1503,6 +1506,102 @@ export class RunManager implements BackgroundRuns {
       for (const runId of safeList(dir)) if (isDir(join(dir, runId))) out.push({ sessionId, runId, path: join(dir, runId) })
     }
     return out
+  }
+
+  /** <根>/<会话>/ 下的运行目录。会话 id 不是一段安全的路径 → 空 */
+  private worktreesOf(sessionId: string): { runId: string; path: string; dir: string }[] {
+    const { worktreeRoot } = this.deps
+    if (!worktreeRoot || !SAFE_SESSION_ID.test(sessionId)) return []
+    let dir: string
+    try {
+      if (!lstatSync(worktreeRoot).isDirectory()) return []
+      dir = join(realpathSync(worktreeRoot), sessionId)
+    } catch {
+      return []
+    }
+    if (!isDir(dir)) return []
+    return safeList(dir).filter(runId => isDir(join(dir, runId))).map(runId => ({ runId, path: join(dir, runId), dir }))
+  }
+
+  private isMerged(sessionId: string, runId: string, history: KernelEvent[]): boolean {
+    return this.mergedLocal.has(`${sessionId}/${runId}`) || history.some(e => e.type === 'executor.worktree.merged' && (e.payload as { runId?: string } | undefined)?.runId === runId)
+  }
+
+  /** 08 §4.3:这个会话排队和在跑的运行数。删会话时内核同步查 */
+  liveFor(sessionId: string): number {
+    let n = 0
+    for (const run of this.live.values()) if (run.s.sessionId === sessionId) n++
+    return n
+  }
+
+  /**
+   * 08 §4.3(R2):还在盘上、有改动、没合并过的保留 worktree,每个一次 changes。
+   * 事件里没有的目录不是我们的运行,不列;活着的不列(删会话那一步本来就拒)
+   */
+  async unmergedFor(sessionId: string): Promise<{ runId: string; files: number }[]> {
+    const out: { runId: string; files: number }[] = []
+    let history: KernelEvent[] | undefined
+    for (const { runId } of this.worktreesOf(sessionId)) {
+      if (this.live.has(runId)) continue
+      history ??= this.deps.history(sessionId)
+      if (this.isMerged(sessionId, runId, history)) continue
+      let files: number
+      try {
+        files = (await this.changes(sessionId, runId)).files.length
+      } catch {
+        continue // unknown run
+      }
+      if (files > 0) out.push({ runId, files })
+    }
+    return out
+  }
+
+  /**
+   * 会话删了(08 §4.3):它的保留 worktree(removeWorktree,根内检查)、refs/mffai/runs/<id>/ 和内存里的行都清掉。
+   * 原始日志在 <数据目录>/sessions/<id>/ 下,内核删。重做是空操作;git 失败只告警,下次启动再扫
+   */
+  async forgetSession(sessionId: string): Promise<void> {
+    await this.sweepDeleted([sessionId])
+  }
+
+  /** 启动时:已删的会话一起扫,同一个仓库只跑一次 for-each-ref */
+  async sweepDeleted(sessionIds: string[]): Promise<void> {
+    const ids = [...new Set(sessionIds)].filter(id => SAFE_SESSION_ID.test(id))
+    if (ids.length === 0) return
+    const gone = new Set(ids)
+    this.endedRows = this.endedRows.filter(r => !gone.has(r.sessionId))
+    for (const set of [this.mergedLocal, this.endTaken]) for (const key of [...set]) if (gone.has(key.slice(0, key.indexOf('/')))) set.delete(key)
+    const { git, tmpDir, worktreeRoot } = this.deps
+    for (const id of ids) {
+      const runs = this.worktreesOf(id)
+      for (const { runId, path } of runs) {
+        if (this.live.has(runId)) continue
+        try {
+          await removeWorktree(this.pinOf(id), path, git, { tmpDir, root: worktreeRoot! })
+        } catch (e) {
+          this.log.warn('worktree of a deleted session not removed', { runId, error: e instanceof Error ? redact(e.message) : 'unknown' })
+        }
+      }
+      // 会话目录里不是运行的东西(链接、文件)也是我们的:rm 不跟链接
+      const dir = runs[0]?.dir
+      if (dir && !runs.some(r => this.live.has(r.runId))) rmSync(dir, { recursive: true, force: true })
+    }
+    const byRepo = new Map<string, { pin: RepoPin; ids: string[] }>()
+    for (const id of ids) {
+      const pin = this.pinOf(id)
+      if (pin.kind !== 'repo') continue
+      const key = `${pin.top}\0${pin.commonDir}`
+      const group = byRepo.get(key) ?? { pin, ids: [] }
+      group.ids.push(id)
+      byRepo.set(key, group)
+    }
+    for (const { pin, ids: group } of byRepo.values()) {
+      try {
+        await dropRefs(group.map(runRefBase), git, { pin, tmpDir })
+      } catch (e) {
+        this.log.warn('run refs of a deleted session not removed', { error: e instanceof Error ? redact(e.message) : 'unknown' })
+      }
+    }
   }
 
   /** 上一次启动留下的运行:queued 事件里没有的不列(不是我们的) */

@@ -689,6 +689,22 @@ export async function refExists(ref: string, git: Git, opts: { pin: RepoPin; tmp
   return inRepo(git, opts, async (g, pin) => (await g(['rev-parse', '-q', '--verify', ref], { cwd: pin.top })).code === 0)
 }
 
+/**
+ * 删会话(08 §4.3):这些前缀下的引用全删。前缀再多也只有一次 for-each-ref、一次 update-ref,
+ * 启动时扫所有已删的会话也不会一个会话一次 git。前缀只能是 refs/mffai/ 下面的
+ */
+export async function dropRefs(prefixes: string[], git: Git, opts: { pin: RepoPin; tmpDir?: string }): Promise<number> {
+  const bases = [...new Set(prefixes.map(p => p.replace(/\/+$/, '') + '/'))]
+  if (bases.some(b => !b.startsWith('refs/mffai/') || b.includes('..'))) throw new Error('dropRefs: not an mffai ref prefix')
+  if (bases.length === 0) return 0
+  return inRepo(git, opts, async (g, { top }) => {
+    const out = await run(g, ['for-each-ref', '--format=%(refname)', ...bases], { cwd: top })
+    const refs = out.toString().split('\n').filter(Boolean)
+    if (refs.length) await run(g, ['update-ref', '--stdin'], { cwd: top, input: Buffer.from(refs.map(r => `delete ${r}\n`).join('')) })
+    return refs.length
+  })
+}
+
 /** 一个会话(prefixRef 下)只留最近 keepTurns 轮的引用;按提交时间从新到旧,同一轮的 start / end / pre-rollback 算一轮 */
 export async function pruneRefs(prefixRef: string, keepTurns: number, git: Git, opts: { pin: RepoPin; tmpDir?: string }): Promise<void> {
   return inRepo(git, opts, async (g, { top }) => {

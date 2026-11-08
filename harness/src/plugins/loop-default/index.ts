@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import type { Plugin } from '../../kernel/pluginHost'
 import { RpcError } from '../../kernel/rpcError'
 import type { Sessions } from '../../kernel/sessions'
-import { createGit, NO_REPO, type Git } from '../../lib/git/snapshot'
+import { createGit, dropRefs, NO_REPO, refBase, type Git, type RepoPin } from '../../lib/git/snapshot'
 import type { MemoryService } from '../../lib/memory/types'
 import type { ModelsService } from '../../lib/models/types'
 import { redact } from '../../lib/tools/redact'
@@ -61,6 +61,43 @@ export function createLoopDefault(opts: LoopDefaultOpts = {}): Plugin {
       }
       ctx.effect(async () => {
         await Promise.all([...locks.values()]) // 停用前等进行中的回滚写完事件
+      })
+
+      // 08 §4.3:删掉的会话不留快照引用(refs/mffai/snapshots/<id>/)。事件那一刻删,每次启动再扫一遍;
+      // 同一个仓库的一起删,一次 for-each-ref。排在这个会话的回滚后面:回滚写的 pre-rollback 也要删
+      let disposed = false
+      const sweeps = new Set<Promise<void>>()
+      const dropSnapshots = async (ids: string[]) => {
+        const byRepo = new Map<string, { pin: RepoPin; ids: string[] }>()
+        for (const id of ids) {
+          const pin = sessions.get(id)?.repo
+          if (pin?.kind !== 'repo') continue
+          const key = `${pin.top}\0${pin.commonDir}`
+          const group = byRepo.get(key) ?? { pin, ids: [] }
+          group.ids.push(id)
+          byRepo.set(key, group)
+        }
+        for (const { pin, ids: group } of byRepo.values()) {
+          await dropRefs(group.map(refBase), snap.git, { pin, tmpDir }).catch(err => ctx.log.warn('snapshot refs of a deleted session not removed', { error: err instanceof Error ? err.message : String(err) }))
+        }
+      }
+      const sweep = (ids: string[]) => {
+        const p = Promise.all(ids.map(id => locks.get(id) ?? Promise.resolve()))
+          .then(() => (disposed ? undefined : dropSnapshots(ids)))
+          .finally(() => sweeps.delete(p))
+        sweeps.add(p)
+      }
+      ctx.events.onAppend(e => {
+        // 在别人的写入路径上:git 放到下一拍
+        if (e.type === 'session.deleted' && e.sessionId) {
+          const sid = e.sessionId
+          setImmediate(() => !disposed && sweep([sid]))
+        }
+      })
+      setImmediate(() => !disposed && sweep(sessions.deletedIds()))
+      ctx.effect(async () => {
+        disposed = true
+        await Promise.all([...sweeps])
       })
 
       ctx.events.on('session.prompt', async ({ sessionId, turnId, text, signal, inbox }: PromptReq) => {
