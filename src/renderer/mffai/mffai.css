@@ -118,3 +118,33 @@
 .mffai-slash .slash-cmd { font-family: var(--mono, monospace); font-size: 12.5px; font-weight: 600; color: var(--accent); }
 .mffai-slash .slash-tag { margin-left: auto; padding: 1px 5px; border-radius: 4px; background: var(--surface-2); color: var(--faint); font-size: 10.5px; }
 .mffai-confirm-row > .set-btn { flex: 0 0 auto; height: 22px; padding: 0 8px; font-size: 12px; }
+/* 对话:一轮(Task 7) */
+.mffai-chat-body { display: flex; flex-direction: column; gap: 8px; padding-right: 4px; }
+.mffai-chat-body .mffai-older { align-self: center; }
+.mffai-chat-body .mffai-card { max-width: 760px; padding: 10px 12px; gap: 6px; font-family: inherit; color: var(--fg); }
+.mffai-chat-body .mffai-card-head, .mffai-chat-body .mffai-card-row, .mffai-chat-body .mffai-card-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.mffai-chat-body .mffai-card-actions .mffai-primary { margin-top: 0; }
+.mffai-summary { margin: 0; padding: 8px 10px; border-radius: 6px; background: var(--bg-2); font-family: var(--mono, monospace); font-size: 12px; white-space: pre-wrap; word-break: break-all; max-height: 360px; overflow: auto; }
+.mffai-approval-done { display: flex; flex-direction: row; align-items: center; gap: 8px; max-width: 760px; padding: 4px 10px; font-size: 12.5px; }
+.mffai-summary-line { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono, monospace); color: var(--faint); }
+.mffai-tail { display: flex; flex-direction: column; gap: 6px; max-width: 760px; }
+.mffai-tail-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; }
+.mffai-tail-pop { position: relative; }
+.mffai-memlist { position: absolute; top: calc(100% + 4px); left: 0; z-index: 40; display: flex; flex-direction: column; min-width: 280px; max-width: 480px; margin: 0; padding: 4px; list-style: none; border: 1px solid var(--border-2); border-radius: 8px; background: var(--bg-2); box-shadow: var(--shadow); }
+.mffai-memitem { display: flex; gap: 8px; align-items: center; width: 100%; padding: 6px 8px; border-radius: 6px; text-align: left; font-size: 12.5px; color: var(--fg-2); }
+.mffai-memitem:hover { background: var(--surface); }
+.mffai-divider { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--faint); }
+.mffai-divider::before, .mffai-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+.mffai-progress { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; font-size: 12px; }
+.mffai-progress-row { display: flex; gap: 6px; min-width: 0; }
+.mffai-progress-icon { flex: 0 0 14px; color: var(--faint); }
+.mffai-progress-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono, monospace); }
+.mffai-violations { margin: 0; padding-left: 18px; font-size: 12px; font-family: var(--mono, monospace); }
+.mffai-refusal .mffai-path { padding: 1px 6px; border-radius: 4px; background: var(--bg-2); }
+.mffai-changes { display: flex; flex-direction: column; gap: 6px; }
+.mffai-files { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.mffai-file-btn { display: flex; gap: 8px; align-items: center; width: 100%; padding: 2px 6px; border-radius: 5px; text-align: left; color: var(--fg-2); }
+.mffai-file-btn:hover, .mffai-file.on .mffai-file-btn { background: var(--surface); }
+.mffai-st { flex: 0 0 14px; font-family: var(--mono, monospace); font-size: 12px; color: var(--faint); }
+.mffai-st.st-A { color: var(--accent); }
+.mffai-st.st-D { color: var(--del, #e5484d); }
