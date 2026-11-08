@@ -107,8 +107,8 @@ export function DevMode({ dev, problems, onChanged }: { dev: readonly Dev[]; pro
       )}
       {needsRestart && <div className="mffai-actions"><RestartButton /></div>}
       {confirming !== null && (
-        <Confirm title="以完全访问权限运行" rows={[['目录', <PText key="p" text={confirming} mono />]]}
-          requireTyped={basename(confirming)} confirmLabel="以完全访问权限运行" danger busy={busy}
+        <Confirm title="以完全访问权限运行" rows={[['目录', <PText key="p" text={confirming} mono />], ['目录名', <PText key="n" text={basename(confirming)} mono />]]}
+          requireTyped={basename(confirming)} typedLabel="输入目录名" confirmLabel="以完全访问权限运行" danger busy={busy}
           onCancel={() => setConfirming(null)} onConfirm={() => trust(confirming)}>
           <FailChip failure={failure} />
         </Confirm>

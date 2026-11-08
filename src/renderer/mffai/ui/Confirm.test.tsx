@@ -32,6 +32,7 @@ describe('Confirm', () => {
     const btn = screen.getByRole('button', { name: '信任' }) as HTMLButtonElement
     const input = screen.getByRole('textbox')
     expect(input.getAttribute('placeholder')).toBeNull()
+    expect(input.getAttribute('aria-label')).not.toContain('plugin.json')
     expect(btn.disabled).toBe(true)
     for (const near of ['plugin.jso', 'plugin.json ', ' plugin.json', 'Plugin.json', 'plugin.jsonx']) {
       fireEvent.change(input, { target: { value: near } })

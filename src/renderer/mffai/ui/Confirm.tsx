@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 
 // 自己的确认框,只复用 .confirm-* 样式:shell/ActionConfirm 带一段说明文字,这里只有"项:值"行(08 §6.4)。
-export function Confirm({ title, rows, keep, confirmLabel, danger, busy, requireTyped, onCancel, onConfirm, children }: {
+export function Confirm({ title, rows, keep, confirmLabel, danger, busy, requireTyped, typedLabel = '逐字输入', onCancel, onConfirm, children }: {
   title: string
   /** 项、值,可选第三格放这一行的按钮(如 `去合并`) */
   rows: readonly (readonly [string, ReactNode, ReactNode?])[]
@@ -10,15 +10,17 @@ export function Confirm({ title, rows, keep, confirmLabel, danger, busy, require
   confirmLabel: string
   danger?: boolean
   busy?: boolean
-  /** 要逐字输入这段文字,确认按钮才可用 */
+  /** 要逐字输入这段文字(两边都按 NFC 比),确认按钮才可用 */
   requireTyped?: string
+  /** 输入框的无障碍名:不能是答案本身 */
+  typedLabel?: string
   onCancel: () => void
   onConfirm: () => void
   /** 行下面的状态块(`失败`、`不支持`) */
   children?: ReactNode
 }) {
   const [typed, setTyped] = useState('')
-  const blocked = busy || (requireTyped !== undefined && typed !== requireTyped)
+  const blocked = busy || (requireTyped !== undefined && typed.normalize('NFC') !== requireTyped.normalize('NFC'))
   const all: readonly (readonly [string, ReactNode, ReactNode?])[] = [...rows, ...(keep ?? []).map((k) => ['保留', k] as const)]
   return (
     <div className="confirm-overlay on" onClick={onCancel}>
@@ -33,7 +35,7 @@ export function Confirm({ title, rows, keep, confirmLabel, danger, busy, require
         )}
         {children}
         {requireTyped !== undefined && (
-          <input className="mffai-typed" aria-label={requireTyped} value={typed} onChange={(e) => setTyped(e.target.value)} />
+          <input className="mffai-typed" aria-label={typedLabel} value={typed} onChange={(e) => setTyped(e.target.value)} />
         )}
         <div className="confirm-actions">
           <button className="confirm-cancel" onClick={onCancel}>取消</button>

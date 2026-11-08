@@ -41,6 +41,9 @@ describe('DevMode', () => {
     const dlg = screen.getByRole('dialog')
     expect(dlg).toHaveAccessibleName('以完全访问权限运行')
     expect(dlg).toHaveTextContent('/work/dev-zed')
+    const nameRow = [...dlg.querySelectorAll('.mffai-confirm-row')].find((r) => r.querySelector('.mffai-k')?.textContent === '目录名')!
+    expect(nameRow.querySelector('.mffai-ptext')!.textContent).toBe('dev-zed')
+    expect(within(dlg).getByRole('textbox').getAttribute('aria-label')).not.toContain('dev-zed')
     expect(findHints()).toEqual([])
     const go = within(dlg).getByRole('button', { name: '以完全访问权限运行' }) as HTMLButtonElement
     const typed = within(dlg).getByRole('textbox')
@@ -57,6 +60,21 @@ describe('DevMode', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: '重启后台' })) })
     expect(f.mffai.restart).toHaveBeenCalledTimes(1)
+  })
+
+  it('the typed name and the folder name are compared after NFC', async () => {
+    const f = installFakeForge({ calls: { 'plugins.dev.trust': TRUST } })
+    const nfd = 'cafe\u0301'
+    const nfc = 'caf\u00e9'
+    render(<DevMode dev={[]} problems={[]} onChanged={() => {}} />)
+    fireEvent.change(screen.getByLabelText('开发插件目录'), { target: { value: `/w/${nfd}` } })
+    fireEvent.click(screen.getByRole('button', { name: '信任' }))
+    const dlg = screen.getByRole('dialog')
+    fireEvent.change(within(dlg).getByRole('textbox'), { target: { value: nfc } })
+    const go = within(dlg).getByRole('button', { name: '以完全访问权限运行' }) as HTMLButtonElement
+    expect(go.disabled).toBe(false)
+    await act(async () => { fireEvent.click(go) })
+    expect(f.callsOf('plugins.dev.trust')).toEqual([{ path: `/w/${nfd}`, acknowledge: 'runs_with_full_access' }])
   })
 
   it('a refused trust shows its code in the dialog', async () => {
