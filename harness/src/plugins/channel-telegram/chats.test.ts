@@ -1376,3 +1376,80 @@ describe('Chats with fake services', () => {
   })
 })
 
+
+describe('08 §4.3: a deleted session is unbound', () => {
+  const withMemory = () => ({ plugins: () => [createMemoryDefault({ nightly: false })] })
+  const currentSession = (r: TelegramRig) => chatOf(r).sessionId as string | undefined
+
+  it('the chat is unbound at once; the next message opens a new session and runs there', async () => {
+    const r = await rig(withMemory())
+    await handled(r, r.dm('first'))
+    await flow(r)
+    const old = currentSession(r)!
+    expect(old).toBeDefined()
+    expect(await r.k.handle('session.delete', { commandId: 'del-1', sessionId: old })).toMatchObject({ ok: true })
+    await flow(r, 100)
+    expect(currentSession(r)).toBeUndefined()
+    expect(((await r.k.handle('channel.telegram.chats', {})) as { chats: unknown[] }).chats).toEqual([])
+    await handled(r, r.dm('second'))
+    await flow(r)
+    const fresh = currentSession(r)!
+    expect(fresh).toBeDefined()
+    expect(fresh).not.toBe(old)
+    expect(created(r)).toHaveLength(2)
+    const user = events(r, 'message.user').filter(e => e.sessionId === fresh).map(e => (e.payload as { text: string }).text)
+    expect(user).toEqual(['second'])
+    expect(texts(r).at(-1)).toBe('ok')
+  })
+
+  it('a message racing the unbind still goes to a new session, never to the deleted one', async () => {
+    const r = await rig(withMemory())
+    await handled(r, r.dm('first'))
+    await flow(r)
+    const old = currentSession(r)!
+    // 墓碑直接写:解绑排在下一拍,消息先到
+    const p = r.k.handle('session.delete', { commandId: 'del-race', sessionId: old })
+    const id = r.dm('second')
+    await p
+    await handled(r, id)
+    await flow(r)
+    expect(currentSession(r)).not.toBe(old)
+    expect(events(r, 'message.user').filter(e => e.sessionId === old)).toHaveLength(1)
+    // 删掉的那一条只剩骨架
+    expect(users(r).map(u => u.text)).toEqual([undefined, 'second'])
+    expect(events(r, 'message.user').find(e => e.sessionId === old)!.payload).toMatchObject({ erased: true })
+  })
+
+  it('at activation a chat bound to a session deleted while the plugin was down is unbound', async () => {
+    const r = await rig(withMemory())
+    await handled(r, r.dm('first'))
+    await flow(r)
+    const old = currentSession(r)!
+    // 后台崩在墓碑之后、解绑落盘之前:状态文件里还绑着
+    const before = onDisk(r)
+    await r.k.handle('session.delete', { commandId: 'del-2', sessionId: old })
+    writeFileSync(stateFile(r), JSON.stringify(before))
+    await r.restart({ kill: true })
+    await online(r)
+    await flow(r, 100)
+    expect(currentSession(r)).toBeUndefined()
+    await handled(r, r.dm('after restart'))
+    await flow(r)
+    expect(currentSession(r)).not.toBe(old)
+    expect(created(r)).toHaveLength(2)
+  })
+
+  it('a project session with no turn: deleting it unbinds the chat and its unused IM worktree goes, like /project off', async () => {
+    const kit = projectKit()
+    const r = await rig({ project: kit, plugins: () => [createMemoryDefault({ nightly: false }), toolsRegistry, createLoopDefault({ git: kit.git })] })
+    await enterProject(r)
+    const sid = currentSession(r)!
+    const worktreeId = chatOf(r).worktreeId as string
+    const listed = () => ((r.k.handle('channel.telegram.chats', {}) as Promise<{ worktrees: { id: string }[] }>))
+    expect((await listed()).worktrees.map(w => w.id)).toEqual([worktreeId])
+    await r.k.handle('session.delete', { commandId: 'del-p', sessionId: sid })
+    await expect.poll(async () => (await listed()).worktrees.map(w => w.id), { timeout: 15_000, interval: 20 }).toEqual([])
+    expect(chatOf(r)).not.toHaveProperty('project')
+    expect(chatOf(r)).not.toHaveProperty('worktreeId')
+  })
+})

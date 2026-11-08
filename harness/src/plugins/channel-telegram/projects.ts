@@ -519,6 +519,11 @@ export class Projects {
     })
   }
 
+  /** 当前会话被删了(08 §4.3),聊天已经解绑:worktree 和 /project off 一样,没人用过才删 */
+  sessionDeleted(chatId: string, worktreeId: string, sessionId: string): Promise<void> {
+    return this.exclusive(chatId, () => this.leftBehind(worktreeId, sessionId))
+  }
+
   /**
    * 离开时:要有证据说它没人用过才删,其余留着等 08 或 RPC(不自动删有内容的,04 同一裁定)。
    * 证据:记录说 sessionIds 是全的,刚离开的会话在里面,每个会话都查得到且没有 message.user。拿不准就留着,列表里看得到

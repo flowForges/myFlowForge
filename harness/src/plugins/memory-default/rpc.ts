@@ -1,5 +1,6 @@
 // memory.* RPC(06 spec §16)。这里只有 app 进得来(带 token),看得到全部范围,含群聊笔记。
-// memory.delete 真的删:六步依次做,每步可重做;失败不留回执,记下的文本留到做完,重试才找得到要清的东西
+// memory.delete 真的删:六步依次做,每步可重做;失败不留回执,记下的文本留到做完,重试才找得到要清的东西。
+// session.delete(08 §4.3)也在这里:同一条流水线,外加内核的墓碑和整会话抹除
 import { readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { z } from 'zod'
@@ -11,6 +12,7 @@ import { scanInjection } from '../../lib/memory/scan'
 import { scrub } from '../../lib/memory/scrub'
 import { coreBlock, dataText, recallBlock, updateBlock } from '../../lib/memory/wrap'
 import { clip } from '../../lib/tools/diagnostics'
+import type { BackgroundRuns, SessionCommands } from '../../lib/tools/types'
 import type { KernelEvent } from '../../protocol/events'
 import type { MemoryHealth, MemoryItem, MemoryLayer, WorkerMethodName } from '../../protocol/rpc'
 import { MEMORY_ID, WorkerMethods } from '../../protocol/rpc'
@@ -43,7 +45,7 @@ const SQLITE_FULL = 13
 const SPILL_MARK = '[已截断,完整输出:'
 
 /** 测试用:每一步开始之前,抛错 = 这一步失败 */
-export type PurgeStep = 'deleted' | 'raw' | 'tombstone' | 'redact' | 'purge'
+export type PurgeStep = 'deleted' | 'raw' | 'tombstone' | 'redact' | 'erase' | 'purge'
 
 export interface LiveMemory {
   store: Store
@@ -123,6 +125,19 @@ interface PendingPurge {
   sources?: string[]
   /** 从删掉的原始行提取出来的:已经一起删了的,和核心文件里还引用它们的 */
   derived?: string[]
+  /** 删会话(08 §4.3):id 是 session:<id> */
+  kind?: 'session'
+  sessionId?: string
+  /** 这个会话能点名的 r_ id(原始层还在的和事件里有的),第一次就记下 */
+  rawIds?: string[]
+  /** 原始层里这些行的文本:别的会话的召回、搜索结果按它换。做完就清 */
+  rawTexts?: [number, string][]
+  /** 还引用这个会话原话的核心条目,raw 那一步之前收集 */
+  notes?: string[]
+  rawDone?: boolean
+  redactDone?: boolean
+  erased?: boolean
+  erasedRows?: number
 }
 
 const notFound = () => new RpcError(INVALID_PARAMS, 'not found')
@@ -320,6 +335,10 @@ export function registerMemoryRpc(d: MemoryRpcDeps): { stop(): Promise<void> } {
         return { ok: true, redacted, sources }
       }),
     )
+    // 08 §4.3:逐个删,一次落盘(一次 VACUUM)。查不到的就是已经没了,放进 gone,不报错
+    register('memory.deleteMany', (_m, { ids }) => exclusive(() => purger.deleteMany(ids)))
+    // 08 §4.3:真的删一个会话。和别的删除排在一起
+    register('session.delete', (_m, { sessionId, discardUnmerged }) => exclusive(() => purger.deleteSession(sessionId, discardUnmerged === true)))
     register('memory.file.set', (m, { file, content, expectedHash }) =>
       exclusive(async () => {
         alive()
@@ -357,7 +376,7 @@ export function registerMemoryRpc(d: MemoryRpcDeps): { stop(): Promise<void> } {
       })
     })
   } else {
-    for (const method of ['memory.delete', 'memory.file.set', 'memory.proposals.decide'] as const) register(method, () => undefined)
+    for (const method of ['memory.delete', 'memory.deleteMany', 'session.delete', 'memory.file.set', 'memory.proposals.decide'] as const) register(method, () => undefined)
   }
 
   return {
@@ -450,17 +469,26 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
   async function sweep(p: PendingPurge, resumed: boolean): Promise<{ edits: RedactEdit[]; spills: string[]; quotedBy: number[] }> {
     // 什么都不是的 r_(session.created 的 seq)不算点名
     const ownSeq = RAW_ID.test(p.id) && p.rawSeqs.includes(Number(p.id.slice(2))) ? Number(p.id.slice(2)) : undefined
-    const long = p.text !== undefined && codePoints(p.text) >= LITERAL_MIN
+    /**
+     * 删会话:会话本身整个抹掉,这里只管别的会话里的副本:召回块、记忆工具的结果、记忆写入的调用、看过它的摘要。
+     * 别的会话里用户自己的话、工具输出、助手回复不按这个会话的原话去扫(那是成千条文本对整个日志)
+     */
+    const whole = p.kind === 'session'
+    const texts = whole ? (p.rawTexts ?? []).map(([, t]) => t) : p.text !== undefined ? [p.text] : []
+    const longTexts = texts.filter(t => codePoints(t) >= LITERAL_MIN)
+    const long = longTexts.length > 0
     const data = p.text !== undefined ? dataText(p.text) : undefined
+    const datas = longTexts.map(dataText)
     // 正文里是原样(思考、参数),块和结果里是 dataText 转义过的
-    const needles = long ? [...new Set([p.text as string, data as string])] : []
+    const needles = [...new Set([...longTexts, ...datas])]
+    const ownSession = new Set<number>()
     // 编辑器能在注释里写任何 id:不是条目形状的不拿来匹配,否则 id=id 会命中每一条搜索结果
     const ids = [...new Set([...p.removedIds, ...p.rawSeqs.map(s => `r_${s}`)])].filter(i => MEMORY_ID.test(i))
     const idPattern = ids.length > 0 ? new RegExp(`(?<![A-Za-z0-9_-])(?:${ids.map(regexEscape).join('|')})(?![A-Za-z0-9_-])`) : undefined
     const named = (s: string) => idPattern?.test(s) ?? false
     const quoted = (s: string) => needles.some(n => s.includes(n))
     // 写下这条的那一步范围够小,短文本也按针换:"短文本不扫"防的是清空所有提到它的记录
-    const stepNeedles = p.text ? [...new Set([p.text, data as string])] : []
+    const stepNeedles = !whole && p.text ? [...new Set([p.text, data as string])] : []
     const stepQuoted = (s: string) => stepNeedles.some(n => s.includes(n))
     const spills = new Set<string>()
     /** 同范围里逐字含它、这里不换的行:用户的话、别的步骤里助手的回复。放进 sources 让用户决定 */
@@ -516,6 +544,7 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
     }
 
     const visit = (e: KernelEvent) => {
+      if (whole && e.sessionId === p.sessionId) ownSession.add(e.seq)
       if (e.seq === ownSeq) {
         add({ seq: e.seq })
         if (e.sessionId !== undefined) saw.add(e.sessionId)
@@ -530,7 +559,7 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
           const run = (e.payload as { runId?: unknown }).runId
           if (typeof run === 'string') progress.set(run, [...(progress.get(run) ?? []), e.seq])
           const text = textField(e)
-          if (text !== undefined && text !== REDACTED && inScope(session)) for (const needle of needles) if (text.includes(needle)) add({ seq: e.seq, needle })
+          if (!whole && text !== undefined && text !== REDACTED && inScope(session)) for (const needle of needles) if (text.includes(needle)) add({ seq: e.seq, needle })
           return
         }
         case 'memory.deleted': {
@@ -565,14 +594,14 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
           const parts = (e.payload as { parts?: { type?: string; id?: string; args?: unknown }[] }).parts ?? []
           for (const part of parts) {
             if (part.type !== 'tool_call' || part.id === undefined) continue
-            const quotes = typeof part.args === 'string' && inScope(session) && argsQuote(part.args)
+            const quotes = !whole && typeof part.args === 'string' && inScope(session) && argsQuote(part.args)
             t.calls.set(part.id, { ...t.calls.get(part.id), assistant: e.seq, step: n, quotes })
             if (quotes) {
               add({ seq: e.seq, callId: part.id })
               noteSaw(session)
             }
           }
-          if (inScope(session) && quoted(namedText(e) ?? '')) {
+          if (!whole && inScope(session) && quoted(namedText(e) ?? '')) {
             quotedBy.add(e.seq)
             noteSaw(session)
           }
@@ -585,7 +614,7 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
           const q = e.payload as { callId?: string; argsPreview?: unknown }
           if (t && q.callId !== undefined) t.calls.set(q.callId, { ...t.calls.get(q.callId), started: e.seq })
           // 预览被截过,可能只剩半句:args 里有就算
-          const previewQuotes = typeof q.argsPreview === 'string' && inScope(session) && quoted(q.argsPreview)
+          const previewQuotes = !whole && typeof q.argsPreview === 'string' && inScope(session) && quoted(q.argsPreview)
           if (previewQuotes || (q.callId !== undefined && t?.calls.get(q.callId)?.quotes)) {
             add({ seq: e.seq })
             noteSaw(session)
@@ -615,7 +644,7 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
               add({ seq: e.seq })
               if (session !== undefined) saw.add(session)
             }
-          } else if (inScope(session)) {
+          } else if (!whole && inScope(session)) {
             // 别的工具的输出(read、shell):只换引用的地方,其余是用户的记录。落盘的全文整个文件删,标记留着
             const spilled = q.name !== undefined && findSpill(e, callId, q.name, quoted)
             for (const needle of needles) if (content.includes(needle)) add({ seq: e.seq, needle })
@@ -625,13 +654,13 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
         }
         case 'executor.notice': {
           const text = textField(e)
-          if (text === undefined || text === REDACTED || !inScope(session)) return
+          if (whole || text === undefined || text === REDACTED || !inScope(session)) return
           for (const needle of needles) if (text.includes(needle)) add({ seq: e.seq, needle })
           if (quoted(text)) noteSaw(session)
           return
         }
         case 'message.user': {
-          if (inScope(session) && quoted(textField(e) ?? '')) {
+          if (!whole && inScope(session) && quoted(textField(e) ?? '')) {
             quotedBy.add(e.seq)
             noteSaw(session)
           }
@@ -644,15 +673,18 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
           const literal = inScope(session) && needles.some(n => (q.text as string).includes(n))
           if (!byId && !literal) return
           if (session !== undefined) saw.add(session)
-          // 短文本只能整段:pnpm 会连带别的行,notes 会碰到标签。摘录里没有全文时也是整段
-          const usable = long && data !== undefined && q.text.includes(data) && !FRAMES.includes(data)
-          add(usable ? { seq: e.seq, needle: data } : { seq: e.seq })
+          // 短文本只能整段:pnpm 会连带别的行,notes 会碰到标签。摘录里没有全文时也是整段。
+          // 删会话时按 id 点到的块也整段:不知道是哪一行的原话
+          const hits = datas.filter(x => (q.text as string).includes(x) && !FRAMES.includes(x))
+          const usable = hits.length > 0 && !(whole && byId)
+          if (usable) for (const needle of hits) add({ seq: e.seq, needle })
+          else add({ seq: e.seq })
           return
         }
         case 'memory.checkpoint': {
           const text = textField(e)
           if (text === undefined || text === REDACTED) return
-          checkpoints.push({ seq: e.seq, ...(session !== undefined && { sessionId: session }), literal: data !== undefined && long && text.includes(data) })
+          checkpoints.push({ seq: e.seq, ...(session !== undefined && { sessionId: session }), literal: long && datas.some(x => text.includes(x)) })
           return
         }
       }
@@ -671,7 +703,8 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
     for (const run of namedRuns) for (const seq of progress.get(run) ?? []) add({ seq })
     // 摘要可能转述,定位不了:看过的会话整份作废,退回折叠
     for (const c of checkpoints) if (c.literal || (c.sessionId !== undefined && saw.has(c.sessionId))) add({ seq: c.seq })
-    return { edits: [...edits.values()], spills: [...spills], quotedBy: [...quotedBy] }
+    // 删会话:它自己的事件下一步整个抹掉,这里不换
+    return { edits: [...edits.values()].filter(x => !ownSession.has(x.seq)), spills: [...spills], quotedBy: [...quotedBy] }
   }
 
   /** 第 1 到 5 步。进度留着,等 finish 清盘 */
@@ -775,6 +808,128 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
     })
   }
 
+  /** 记一笔"这之后有删除":摘要的模型调用在删除期间回来,写下来之前按它作废(checkpoints.ts stale) */
+  const noteDelete = () => store.setMeta('lastDeleteSeq', String(lastSeqOf((seq, limit) => ctx.events.after(seq, limit))))
+
+  /**
+   * session.delete(08 §4.3)。1 未合并检查 → 2 内核墓碑(同步:忙就 -32003)→ 3 这个会话的原始行按 r_ 的规则清 → 4 整会话抹除 → 5 一次落盘。
+   * 进度在 purge:session:<id>,墓碑之前就写下,所以 deleteInFlight 从这一刻起为真;3–5 可重做,resumeAll 接着做
+   */
+  async function deleteSession(sessionId: string, discard: boolean): Promise<{ ok: true; redacted: number; notes: string[] }> {
+    alive()
+    const id = `session:${sessionId}`
+    let p = load(id)
+    if (p && !sessions.isDeleted(sessionId)) {
+      // 上次记下了、墓碑没写成:那次删除没发生,从头来
+      forgetRecord(id)
+      p = undefined
+    }
+    if (!p) {
+      if (!sessions.get(sessionId)) throw new RpcError(INVALID_PARAMS, 'unknown session')
+      if (sessions.isDeleted(sessionId)) return { ok: true, redacted: 0, notes: [] } // 早就删完了
+      const commands = ctx.services.get<SessionCommands>('sessionCommands')
+      if (!commands) throw new RpcError(INTERNAL, 'session commands unavailable')
+      // 第 1 步:列出来的才丢(R2)。确认框可能是旧的,这里重新查
+      const runs = (await ctx.services.get<BackgroundRuns>('executors')?.unmergedFor?.(sessionId)) ?? []
+      alive()
+      if (runs.length > 0 && !discard) throw new RpcError(INVALID_PARAMS, 'unmerged', { reason: 'unmerged', runs })
+      // 第 2 步:进度先落,再立墓碑,中间没有 await。墓碑写不成(忙、未知)就把进度撤掉,什么都没动
+      p = { id, kind: 'session', sessionId, evidence: [], removedIds: [], rawSeqs: [] }
+      save(p)
+      try {
+        commands.markDeleted(sessionId)
+      } catch (err) {
+        forgetRecord(id)
+        throw err
+      }
+      noteDelete()
+    }
+    const result = await removeSession(p)
+    await finish([id])
+    return { ok: true, ...result }
+  }
+
+  /** 第 3、4 步。进度留着,等 finish 清盘 */
+  async function removeSession(p: PendingPurge): Promise<{ redacted: number; notes: string[] }> {
+    const sessionId = p.sessionId as string
+    const resumed = p.rawDone === true || p.tombstoneSeq !== undefined
+    await settled() // 这个会话的每一条都进了原始层,才知道要删哪些行
+    alive()
+    if (p.swept !== true) {
+      if (p.rawDone !== true) {
+        step('raw')
+        if (p.rawIds === undefined) {
+          const rows = store.rawOfSession(sessionId)
+          const seqs = new Set(rows.map(r => r.seq))
+          for (const e of ctx.events.history(sessionId)) if (NAMEABLE.has(e.type)) seqs.add(e.seq)
+          p.rawSeqs = [...seqs].sort((a, b) => a - b)
+          p.rawIds = p.rawSeqs.map(seq => `r_${seq}`)
+          p.rawTexts = rows.map(r => [r.seq, r.text])
+          p.scope = rows[0]?.scope ?? scopeOf(sessions.get(sessionId)).read[0] ?? `session:${sessionId}`
+          save(p)
+        }
+        files.removeBadCopies()
+        // 草稿行、候选、等回答的提议一起删;核心文件里引用它的不动,列给用户(notes)
+        files.removeDerived(p.rawIds, ({ notes, others, kept }) => {
+          p.removedIds = [...new Set([...p.removedIds, ...notes])]
+          p.derived = [...new Set([...(p.derived ?? []), ...notes, ...others])]
+          p.notes = [...new Set([...(p.notes ?? []), ...kept.filter(k => k.startsWith('n_'))])]
+          save(p)
+        })
+        p.notes ??= []
+        store.deleteRaw(p.rawSeqs)
+        p.rawDone = true
+        save(p)
+      }
+      if (p.tombstoneSeq === undefined) tombstone(p)
+      if (p.redactDone !== true) {
+        // 别的会话里的副本:召回块、记忆工具的结果、看过它的摘要
+        const { edits, spills } = await sweep(p, resumed)
+        alive()
+        p.spills = [...new Set([...(p.spills ?? []), ...spills])]
+        if (p.spills.length > 0) save(p)
+        step('redact')
+        p.redacted = ctx.events.redact(edits)
+        p.redactDone = true
+        save(p)
+        for (const file of p.spills) rmSync(file, { force: true })
+      }
+      if (p.erased !== true) {
+        step('erase')
+        p.erasedRows = await ctx.events.eraseSession(sessionId)
+        p.erased = true
+        save(p)
+      }
+      p.swept = true
+    }
+    // 文本从进度里拿掉,否则它自己就留在库里
+    delete p.rawTexts
+    save(p)
+    return { redacted: (p.redacted ?? 0) + (p.erasedRows ?? 0), notes: p.notes ?? [] }
+  }
+
+  /** memory.deleteMany:逐个走 1–5 步,最后一次落盘。查不到的进 gone */
+  async function deleteMany(ids: string[]): Promise<{ ok: true; redacted: number; sources: string[]; gone: string[] }> {
+    const gone: string[] = []
+    const done: string[] = []
+    const sources = new Set<string>()
+    let redacted = 0
+    for (const id of [...new Set(ids)]) {
+      alive()
+      try {
+        const r = await removeEntry(id)
+        redacted += r.redacted
+        for (const src of r.sources) sources.add(src)
+        done.push(id)
+      } catch (err) {
+        if (err instanceof RpcError && err.code === INVALID_PARAMS && err.message === 'not found') gone.push(id)
+        else throw err
+      }
+    }
+    await finish(done)
+    return { ok: true, redacted, sources: [...sources].filter(src => !done.includes(src)), gone }
+  }
+
   /** 有上限:一次启动最多这么多条,每条最多试 MAX_RESUMES 次,之后只报在 health 里,等客户端重试 */
   async function resumeAll(): Promise<void> {
     const due = pendingRecords().filter(p => (p.resumes ?? 0) < MAX_RESUMES).slice(0, RESUME_BATCH)
@@ -785,7 +940,14 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
     for (const p of due) {
       alive()
       try {
-        await removeEntry(p.id)
+        if (p.kind === 'session') {
+          // 墓碑没写成的那次删除没发生:记录撤掉,不替用户删
+          if (!sessions.isDeleted(p.sessionId as string)) {
+            forgetRecord(p.id)
+            continue
+          }
+          await removeSession(load(p.id) ?? p)
+        } else await removeEntry(p.id)
         done.push(p.id)
       } catch (err) {
         if (err instanceof RpcError && err.message === 'memory is closing') throw err
@@ -793,6 +955,10 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
       }
     }
     await finish(done)
+  }
+
+  function forgetRecord(id: string): void {
+    store.deleteMeta(keyOf(id))
   }
 
   async function purgeEntry(id: string): Promise<{ redacted: number; sources: string[] }> {
@@ -803,6 +969,8 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
 
   return {
     purgeEntry,
+    deleteSession,
+    deleteMany,
     removeEntry,
     finish,
     resumeAll,

@@ -676,6 +676,22 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
         saveNow()
       })
 
+      // 08 §4.3:删掉的会话不再绑着聊天。事件那一刻解绑(onAppend 在别人的写入路径上:放到下一拍),
+      // 激活时把后台关着、或崩在中途时删掉的也解开
+      const unbindDeleted = (sessionId: string) => {
+        for (const { chatId, worktreeId } of chats.unbindDeleted(sessionId)) {
+          if (worktreeId !== undefined) void projects.sessionDeleted(chatId, worktreeId, sessionId).catch(err => ctx.log.warn('telegram worktree check failed', { code: codeOf(err) }))
+        }
+      }
+      ctx.events.onAppend(e => {
+        if (e.type !== 'session.deleted' || !e.sessionId || lifetime.signal.aborted) return
+        const sid = e.sessionId
+        setImmediate(() => {
+          if (!lifetime.signal.aborted) unbindDeleted(sid)
+        })
+      })
+      for (const sid of sessions.deletedIds()) unbindDeleted(sid)
+
       try {
         projects.reconcile()
       } catch (err) {

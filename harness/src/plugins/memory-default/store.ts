@@ -223,6 +223,11 @@ export class Store {
     })
   }
 
+  /** 一个会话的原始层行(删会话用,08 §4.3)。没有 session_id 的索引:只在用户删会话时扫一次 */
+  rawOfSession(sessionId: string): { seq: number; text: string; scope: string }[] {
+    return this.db.prepare('SELECT seq, text, scope FROM raw WHERE session_id = ? ORDER BY seq').all(sessionId) as { seq: number; text: string; scope: string }[]
+  }
+
   /** 同范围内逐字含这段文本的行。instr 比字节:LIKE 不分大小写,也不是"逐字" */
   rawSeqsHolding(text: string, scope: string): number[] {
     return (this.db.prepare('SELECT seq FROM raw WHERE scope = ? AND instr(text, ?) > 0').all(scope, text) as { seq: number }[]).map(r => r.seq)

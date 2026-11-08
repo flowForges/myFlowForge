@@ -178,7 +178,8 @@ interface Runner {
 export interface ChatsOpts {
   state: Pick<TelegramState, 'data' | 'advance'>
   commands: SessionCommands
-  sessions: Pick<Sessions, 'get'>
+  /** isDeleted:删掉的会话 get 照样答(08 §4.3),绑着它的聊天要开新会话。只测单元的用例可以不给 */
+  sessions: Pick<Sessions, 'get'> & Partial<Pick<Sessions, 'isDeleted'>>
   /** 用时现取 */
   models(): ModelsService | undefined
   sender: Pick<Sender, 'sync' | 'send' | 'typing' | 'drop' | 'dropAll'>
@@ -726,7 +727,7 @@ export class Chats {
   }
 
   private async ensureSession(chatId: string, rec: ChatRecord, updateId: number): Promise<string> {
-    if (rec.sessionId !== undefined && this.o.sessions.get(rec.sessionId)) return rec.sessionId
+    if (rec.sessionId !== undefined && this.o.sessions.get(rec.sessionId) && !this.o.sessions.isDeleted?.(rec.sessionId)) return rec.sessionId
     delete rec.project
     delete rec.worktreeId
     const { sessionId } = await createImSession(this.o.commands, {
@@ -1004,6 +1005,33 @@ export class Chats {
     delete rec.project
     delete rec.worktreeId
     this.o.save()
+  }
+
+  /**
+   * 会话删了(08 §4.3):绑着它的聊天回纯对话,下一条消息开新会话;没发完的这个会话的内容不再发。
+   * 返回解绑的聊天和它当时用的 worktree:worktree 按 /project off 的规则处理(没人用过才删)。重做是空操作
+   */
+  unbindDeleted(sessionId: string): { chatId: string; worktreeId?: string }[] {
+    const out: { chatId: string; worktreeId?: string }[] = []
+    for (const chatId of Object.keys(this.o.state.data.chats)) {
+      const rec = this.peek(chatId)
+      if (!rec) continue
+      const ofIt = (d: TurnDelivery) => d.sessionId === sessionId
+      if (rec.delivery && ofIt(rec.delivery)) delete rec.delivery
+      if (rec.undone) {
+        rec.undone = rec.undone.filter(d => !ofIt(d))
+        if (rec.undone.length === 0) delete rec.undone
+      }
+      if (rec.sessionId !== sessionId) continue
+      out.push({ chatId, ...(rec.worktreeId !== undefined && { worktreeId: rec.worktreeId }) })
+      delete rec.sessionId
+      delete rec.project
+      delete rec.worktreeId
+    }
+    if (this.routes.get(sessionId) !== undefined) this.routes.delete(sessionId)
+    this.recount()
+    if (out.length > 0) this.o.save()
+    return out
   }
 
   /** 下次 /new 或 /project 起用(§7.1):session.created.model 不可变 */
