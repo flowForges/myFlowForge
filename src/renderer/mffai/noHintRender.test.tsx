@@ -23,6 +23,7 @@ import { NewSession } from './chat/NewSession'
 import { RunCard } from './chat/RunCard'
 import { TurnTail } from './chat/TurnTail'
 import { ApprovalCard } from './chat/ApprovalCard'
+import TasksPage from './tasks/TasksPage'
 import { perms, runRow, summary } from './test/sessions'
 import { fail, installFakeForge, RUNNING_STATE, type CallTable, type FakeForge } from './test/fakeForge'
 import { ev, resetSeq, userMsg } from './test/events'
@@ -270,6 +271,47 @@ const ROWS: Row[] = [
       expect(findHints()).toEqual([])
       await act(async () => { fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '回滚本轮' })) })
       await waitFor(() => expect(screen.getAllByText('失败')).toHaveLength(2))
+    },
+  },
+  {
+    name: 'tasks: three groups, 已合并, N / 20, merge/discard confirms, IM worktree changes, and 不支持',
+    mount: async (f) => {
+      f.script({
+        'executor.runs': { runs: [
+          runRow('rr', 's1', { phase: 'running', worktree: undefined, changed: undefined }),
+          runRow('rq', 's1', { phase: 'queued', worktree: undefined, changed: undefined }),
+          runRow('re', 's1', { worktree: { path: '/wt/re', present: true, bytes: 4096 }, changed: 2 }),
+          runRow('rm', 's1', { worktree: { path: '/wt/rm', present: true, merged: true }, changed: 1 }),
+        ] },
+        'channel.telegram.chats': { chats: [], worktrees: [
+          { id: 'w1', project: 'proj', path: '/im/w1', sessionIds: [], createdAt: Date.now(), bytes: 1024, usedByChat: '7' },
+        ] },
+        'session.list': { sessions: [summary('s1', { title: '一号', cwd: '/repo' })] },
+        'channel.telegram.worktree.changes': { files: [{ path: 'a.ts', status: 'M' }] },
+        'channel.telegram.worktree.diff': { path: 'a.ts', status: 'M', binary: false, truncated: false, lines: [{ kind: 'add', ln: 1, text: 'x' }] },
+      })
+      render(<TasksPage />)
+      await screen.findByText('proj')
+      const reRow = document.querySelector('[data-run="re"]') as HTMLElement
+      fireEvent.click(within(reRow).getByRole('button', { name: '合并' }))
+      await screen.findByRole('dialog')
+      expect(findHints()).toEqual([])
+      fireEvent.click(screen.getByRole('button', { name: '取消' }))
+      const wtRow = (await screen.findByText('proj')).closest('[data-worktree]') as HTMLElement
+      fireEvent.click(within(wtRow).getByRole('button', { name: '改动' }))
+      await within(wtRow).findByText('a.ts')
+      fireEvent.click(within(wtRow).getByRole('button', { name: '丢弃' }))
+      await screen.findByRole('dialog')
+      expect(findHints()).toEqual([])
+      fireEvent.click(screen.getByRole('button', { name: '取消' }))
+    },
+  },
+  {
+    name: 'tasks: executor.runs and channel.telegram.chats both unsupported',
+    mount: async (f) => {
+      f.script({ 'executor.runs': () => fail(-32601), 'channel.telegram.chats': () => fail(-32601) })
+      render(<TasksPage />)
+      await waitFor(() => expect(screen.getAllByText('不支持')).toHaveLength(2))
     },
   },
   {
