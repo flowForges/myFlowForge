@@ -26,6 +26,7 @@ import { ApprovalCard } from './chat/ApprovalCard'
 import TasksPage from './tasks/TasksPage'
 import ConnectionsPage from './conn/ConnectionsPage'
 import PermissionsPage from './perm/PermissionsPage'
+import MemoryPage from './memory/MemoryPage'
 import { perms, runRow, summary } from './test/sessions'
 import { fail, installFakeForge, RUNNING_STATE, type CallTable, type FakeForge } from './test/fakeForge'
 import { ev, resetSeq, userMsg } from './test/events'
@@ -413,6 +414,77 @@ const ROWS: Row[] = [
       expect(row).toBeInTheDocument()
       await act(async () => { f.emit(ev('permissions.updated', { rules: 1, network: 1 })) })
       await screen.findByRole('button', { name: '已在别处修改 · 重新载入' })
+    },
+  },
+  {
+    name: 'memory: profile editor, a replace proposal gone full, batch delete with sources, habits, changes expand, health consolidate',
+    mount: async (f) => {
+      f.script({
+        'memory.health': {
+          dbBytes: 2048, rawRows: 10, noteRows: 4, cursorLag: 1, pendingProposals: 1,
+          lastConsolidation: '2026-11-01T00:00:00.000Z', budget: { tokens: 100, usd: 1, tokensLimit: 1000, usdLimit: 10 },
+          problems: ['delete_stuck:n_z', 'file_over_cap:MEMORY.md (12000>10000)'],
+        },
+        'memory.file.get': (p: { file: string }) => ({ content: p.file === 'USER.md' ? 'about me' : '', hash: `h-${p.file}`, cap: 2000 }),
+        'memory.list': (p: { layer?: string }) => p.layer === 'topic'
+          ? { items: [{ id: 'n_t', layer: 'topic', text: 'topic note', file: 'topics/work.md' }] }
+          : { items: [{ id: 'n_a', layer: 'user', text: 'an item', source: 'extract', flags: ['pii'], ts: 1700000000000 }] },
+        'memory.get': (p: { id: string }) => ({ id: p.id, layer: 'raw', text: `quote of ${p.id}` }),
+        'memory.proposals.list': { items: [{
+          id: 'p1', target: 'USER.md', op: 'replace', text: 'proposed text', replaces: 'n_old',
+          evidence: ['r_1'], source: 'model', flags: ['pii'], status: 'pending', createdAt: 1,
+        }] },
+        'memory.proposals.decide': () => fail(-32602, 'full'),
+        'memory.habits.list': { items: [{ id: 'h1', kind: 'routine', weekday: 2, hour: 9, cwd: '/repo', status: 'detected' }] },
+        'memory.habits.decide': { ok: true },
+        'memory.changes': { items: [{ ts: 1700000000000, id: 'n_a', file: 'MEMORY.md', op: 'update', before: 'old', after: 'new', source: 'user' }] },
+        'memory.delete': { ok: true, redacted: 1, sources: ['r_1'] },
+        'memory.deleteMany': { ok: true, redacted: 1, sources: ['r_2'], gone: [] },
+        'memory.consolidate': () => new Promise(() => {}),
+      })
+      render(<MemoryPage />)
+      await screen.findByLabelText('USER.md')
+      expect(findHints()).toEqual([])
+
+      fireEvent.click(screen.getByRole('tab', { name: '待确认' }))
+      await screen.findByText('quote of r_1')
+      fireEvent.click(screen.getByRole('button', { name: '批准' }))
+      fireEvent.click(await screen.findByRole('button', { name: '去编辑' }))
+      await screen.findByLabelText('USER.md')
+      expect(findHints()).toEqual([])
+
+      fireEvent.click(screen.getByRole('tab', { name: '条目' }))
+      fireEvent.click(await screen.findByLabelText('选择 n_a'))
+      fireEvent.click(screen.getByRole('button', { name: '删除所选 1' }))
+      const sources = await screen.findByRole('dialog')
+      expect(findHints()).toEqual([])
+      fireEvent.click(within(sources).getByRole('button', { name: '关闭' }))
+
+      fireEvent.click(screen.getByRole('tab', { name: '习惯' }))
+      fireEvent.click(await screen.findByRole('button', { name: '确认' }))
+      expect(findHints()).toEqual([])
+
+      fireEvent.click(screen.getByRole('tab', { name: '变更' }))
+      fireEvent.click(await screen.findByRole('button'))
+      await screen.findByText('old')
+      expect(findHints()).toEqual([])
+
+      fireEvent.click(screen.getByRole('tab', { name: '状态' }))
+      await screen.findByText('删除卡住')
+      fireEvent.click(screen.getByRole('button', { name: '立即整理' }))
+      expect(findHints()).toEqual([])
+    },
+  },
+  {
+    name: 'memory: plugin not running shows 记忆不可用 with its status error',
+    mount: async (f) => {
+      f.script({
+        'memory.health': () => fail(-32601),
+        status: { state: 'running', uptimeMs: 1, rssMb: 1, version: '0.1.0', plugins: [{ id: 'memory-default', state: 'failed', error: 'sessions service missing' }] },
+      })
+      render(<MemoryPage />)
+      await screen.findByText('记忆不可用')
+      await screen.findByText('sessions service missing')
     },
   },
   {
