@@ -38,4 +38,13 @@ describe('App mff-ai', () => {
     fireEvent.click(row)
     expect(await screen.findByText('启用')).toBeInTheDocument()
   })
+
+  it('a reset alert creates no notification (R11: pages refetch, the bell stays quiet)', async () => {
+    const { container } = render(<App />)
+    act(() => alertCb({ kind: 'reset' }))
+    act(() => alertCb({ kind: 'restarting' }))
+    fireEvent.click(container.querySelector('.tb-bell')!)
+    await screen.findByText('重启中')
+    expect(container.ownerDocument.querySelectorAll('.ni-t').length).toBe(1)
+  })
 })

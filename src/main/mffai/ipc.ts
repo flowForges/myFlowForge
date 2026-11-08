@@ -1,6 +1,15 @@
-import { dataDir, type MffaiState } from '@mffai/protocol'
+import { execFile } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { lstatSync } from 'node:fs'
+import { rm } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { connectControlClient, dataDir, runtimePaths, type MffaiState } from '@mffai/protocol'
 import { CH } from '../ipc/channels'
 import type { Settings } from '../config/schema'
+import type { CallEnvelope } from './callEnvelope'
+import { controlCall } from './client'
+import { isCallable, takesCommandId } from './methods'
+import { rootsOf, wipeData, type WipeDeps } from './wipe'
 
 type HostModule = typeof import('./host')
 type AddAccountInput = import('./host').AddAccountInput
@@ -22,6 +31,17 @@ export interface MffaiIpcDeps {
   loadHost?: () => Promise<HostModule>
   /** 用系统浏览器打开链接(index.ts 注入 shell.openExternal;mffai 目录不 import electron) */
   openExternal: (url: string) => void
+  /**
+   * 08 §5.1(评审修订 R1):带发送方判断的注册。index.ts 传入 `e.sender === 主窗口.webContents`;
+   * mffai:call、mffai:wipe 只经它注册。没给 → 这两条经 handle 注册,一律当别的窗口
+   */
+  handleFrom?: (ch: string, fn: (fromMain: boolean, ...a: unknown[]) => unknown) => void
+  /** 路径在不在(按 lstat,悬空链接也算);默认 lstatSync。停用状态的 dataExists 和删除全部数据用 */
+  exists?: (p: string) => boolean
+  /** 删除全部数据的副作用,测试注入;默认真的控制口 / fs.rm / execFile */
+  wipe?: Partial<Pick<WipeDeps, 'controlAlive' | 'rm' | 'exists' | 'run' | 'platform' | 'home'>>
+  /** 只记方法名、错误码和路径 */
+  log?: (msg: string) => void
 }
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
@@ -45,6 +65,32 @@ function promptOpts(v: unknown): PromptOpts | undefined {
   return Object.keys(out).length ? out : undefined
 }
 
+const lexists = (p: string): boolean => {
+  try { lstatSync(p); return true } catch { return false }
+}
+
+/** 默认的命令执行:不经 shell,10 s 上限,回退出码;起不来(ENOENT)→ reject */
+const runCmd = (cmd: string, args: string[]): Promise<number> =>
+  new Promise((resolve, reject) => {
+    execFile(cmd, args, { timeout: 10_000, windowsHide: true }, (err) => {
+      if (!err) return resolve(0)
+      const code = (err as NodeJS.ErrnoException & { code?: unknown }).code
+      if (typeof code === 'number') resolve(code)
+      else reject(err)
+    })
+  })
+
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  !!v && typeof v === 'object' && !Array.isArray(v) && [Object.prototype, null].includes(Object.getPrototypeOf(v))
+
+/** app 只建 app 会话、只发用户本人的话(08 §5.1);其余原样转,校验交给后台的 zod */
+const SCRUB: Partial<Record<string, readonly string[]>> = {
+  'session.create': ['origin', 'audience', 'projectTop'],
+  'session.prompt': ['external'],
+}
+
+const fail = (code: number, message: string): CallEnvelope => ({ ok: false, error: { code, message } })
+
 const DECISIONS: readonly unknown[] = ['allow', 'allow_session', 'deny'] satisfies ApprovalDecision[]
 
 /** 只挑添加账号认得的字段(commandId 由宿主生成);其余校验交给工作进程 */
@@ -63,12 +109,19 @@ export function registerMffaiIpc(deps: MffaiIpcDeps): void {
   const save = (patch: Partial<Settings['mffai']>) =>
     deps.saveSettings({ mffai: { ...deps.readSettings().mffai, ...patch } })
 
+  const log = deps.log ?? (() => {})
+  const exists = deps.exists ?? lexists
+  const mffaiDir = () => process.env.MFFAI_DATA_DIR || dataDir()
+
   // 未启用:只读设置,host 永远不加载
   const enabled = () => deps.readSettings().mffai.enabled
   const disabledState = (): MffaiState => {
     const { enabled, autostart } = deps.readSettings().mffai
-    return { enabled, autostart, running: false, dataDir: process.env.MFFAI_DATA_DIR || dataDir() }
+    const dir = mffaiDir()
+    return { enabled, autostart, running: false, dataDir: dir, dataExists: exists(dir), roots: rootsOf(dir) }
   }
+  /** 删除全部数据进行中:这期间不许启用(评审修订 R7) */
+  let wiping = false
   /** 启用时才加载 host 做 fn,否则直接回未启用状态 */
   const whenEnabled = (fn: (h: HostModule) => Promise<unknown>) => async (): Promise<MffaiState> => {
     if (!enabled()) return disabledState()
@@ -82,6 +135,7 @@ export function registerMffaiIpc(deps: MffaiIpcDeps): void {
     return (await loadHost()).getState()
   })
   deps.handle(CH.mffaiEnable, async () => {
+    if (wiping) throw new Error('wiping')
     save({ enabled: true })
     const h = await loadHost()
     await h.enable() // 与 onSettings 触发的那次共用同一个进行中的 promise
@@ -143,6 +197,56 @@ export function registerMffaiIpc(deps: MffaiIpcDeps): void {
   deps.handle(CH.mffaiChatgptBegin, requireEnabled((h) => h.chatgptBegin(deps.openExternal)))
   deps.handle(CH.mffaiChatgptCancel, requireEnabled((h, flowId) => h.chatgptCancel(str(flowId))))
   deps.handle(CH.mffaiOpenExternal, requireEnabled((h, url) => h.openExternal(str(url), deps.openExternal)))
+
+  // —— 08:只收主窗口的两条 ——
+  const handleFrom = deps.handleFrom ?? ((ch, fn) => deps.handle(ch, (...a) => fn(false, ...a)))
+
+  handleFrom(CH.mffaiCall, async (fromMain, method, params): Promise<CallEnvelope> => {
+    if (!fromMain) return fail(-32601, 'method not found')
+    if (!enabled()) return fail(-32000, 'disabled') // 和 requireEnabled 同一条:不加载 host
+    if (!isCallable(method)) return fail(-32601, 'method not found')
+    if (params !== undefined && !isPlainObject(params)) return fail(-32602, 'invalid params')
+    const p: Record<string, unknown> = { ...(params ?? {}) }
+    for (const k of SCRUB[method] ?? []) delete p[k]
+    if (takesCommandId(method) && typeof p.commandId !== 'string') p.commandId = randomUUID()
+    try {
+      return await (await loadHost()).call(method, p)
+    } catch {
+      log(`mffai call ${method} failed: -32603`)
+      return fail(-32603, 'internal error')
+    }
+  })
+
+  handleFrom(CH.mffaiWipe, async (fromMain): Promise<{ ok: boolean; removed?: string[]; reason?: string }> => {
+    if (!fromMain) return { ok: false, reason: 'sender' }
+    if (wiping) return { ok: false, reason: 'wiping' }
+    wiping = true
+    try {
+      const dir = mffaiDir()
+      const w = deps.wipe ?? {}
+      const r = await wipeData({
+        dataDir: dir,
+        enabled: enabled(), // 标记置上之后再读:之后的启用都会被挡住
+        platform: w.platform ?? process.platform,
+        home: w.home ?? homedir(),
+        envDataDir: process.env.MFFAI_DATA_DIR || undefined,
+        // 控制口答得上(旧协议后台答 unauthorized 也算)= 后台在跑。★绝不为此拉起后台
+        controlAlive: w.controlAlive ?? (() => controlCall(connectControlClient, runtimePaths(dir), 'status')
+          .then(() => true, (err) => (err as Error)?.message === 'unauthorized')),
+        rm: w.rm ?? ((p) => rm(p, { recursive: true, force: true })),
+        exists: w.exists ?? exists,
+        run: w.run ?? runCmd,
+      })
+      if (r.ok) log(`mffai wipe removed: ${r.removed.join(', ')}`)
+      return r
+    } catch (err) {
+      const path = (err as NodeJS.ErrnoException)?.path
+      log(`mffai wipe failed${typeof path === 'string' ? `: ${path}` : ''}`)
+      return { ok: false, reason: 'failed' }
+    } finally {
+      wiping = false
+    }
+  })
 }
 
 type MffaiSetting = Settings['mffai']

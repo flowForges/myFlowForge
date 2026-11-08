@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { CH } from '../main/ipc/channels'
+import { unwrapCall } from '../main/mffai/callEnvelope'
 import type { AskAnswers, ChatEvent, ChangesEvent, ChatGateSnapshot, ChatQueueEvent, SetupEvent, UpdateInfo, UpdateEvent } from '@shared/types'
 import type { PluginSnapshot } from '@shared/plugins'
 import type { CouncilConfig, CouncilSeat, CouncilState } from '@shared/council'
@@ -572,6 +573,14 @@ const api = {
       cancel: (flowId: string): Promise<{ ok: true }> => ipcRenderer.invoke(CH.mffaiChatgptCancel, flowId),
     },
     openExternal: (url: string): Promise<void> => ipcRenderer.invoke(CH.mffaiOpenExternal, url),
+    /**
+     * 08 §5.1 通用通道。失败抛 { name:'MffaiCallError', code, message, data } 普通对象
+     * (contextBridge 会丢掉 Error 的自定义属性);渲染层 rpc.ts 把它包成 MffaiCallError
+     */
+    call: <M extends import('@mffai/protocol').WorkerMethodName>(method: M, params?: import('@mffai/protocol').WorkerParams<M>): Promise<import('@mffai/protocol').WorkerResult<M>> =>
+      ipcRenderer.invoke(CH.mffaiCall, method, params ?? {}).then(unwrapCall) as Promise<import('@mffai/protocol').WorkerResult<M>>,
+    /** 删除全部数据:只在停用、后台不在时做,不拉起后台(08 §12.5) */
+    wipe: (): Promise<{ ok: boolean; removed?: string[]; reason?: string }> => ipcRenderer.invoke(CH.mffaiWipe),
     onEvent: (cb: (e: import('@mffai/protocol').KernelEvent) => void): (() => void) => {
       const listener = (_: unknown, e: import('@mffai/protocol').KernelEvent) => cb(e)
       ipcRenderer.on(CH.mffaiEvent, listener)

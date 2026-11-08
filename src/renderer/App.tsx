@@ -520,6 +520,7 @@ export function App() {
   // mff-ai 后台告警 → 铃铛通知(点击跳 mff-ai 页)
   useEffect(() => {
     const off = window.forge.mffai?.onAlert?.((a) => {
+      if (a.kind === 'reset') return // 页面自己重取(评审修订 R11),铃铛不为它出通知
       const text = a.kind === 'tripped' ? '已熔断' : a.kind === 'incompatible' ? '版本不兼容' : '重启中'
       setNotifs(ns => [{ ic: 'warn', cls: 'ni-warn', t: `<b>mff-ai</b> ${sanitize(text)}`, m: '', unread: true, view: 'mffai' }, ...ns])
     })

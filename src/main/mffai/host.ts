@@ -8,7 +8,6 @@ import {
   PROTOCOL_VERSION,
   dataDir as defaultDataDir,
   runtimePaths,
-  WorkerMethods,
   type WorkerMethodName,
   type ControlMethodName,
   type ControlParams,
@@ -24,6 +23,7 @@ import { controlCall, readSupervisorJson, type ConnectControl, type ConnectWorke
 import type { CallEnvelope } from './callEnvelope'
 import { createWorkerConnection, isOldProtocol } from './connection'
 import { spawnDaemon, type SpawnFn } from './spawn'
+import { isCallable, LONG_CALL_MS } from './methods'
 import { rootsOf } from './wipe'
 
 // app 主进程里的 mff-ai 宿主。★只经 index.ts / ipc.ts 动态 import:未启用时永不加载。
@@ -83,27 +83,7 @@ function allowedUrl(url: unknown, prefix: string): string | undefined {
 const EXTERNAL_PREFIXES = ['https://chatgpt.com/', 'https://t.me/']
 
 export type { CallEnvelope } from './callEnvelope'
-
-/** 不走 mffai:call 的方法:传输层的握手和订阅,以及要开浏览器的 ChatGPT 登录(走现有通道) */
-export const CALL_EXCLUDED: ReadonlySet<string> = new Set(['auth.challenge', 'auth.verify', 'hello', 'events.subscribe', 'auth.chatgpt.begin'])
-
-const LONG_MS = 120_000
-const LONGEST_MS = 600_000
-const LONG_NAMED = [
-  'turn.rollback', 'turn.diff', 'channel.telegram.setToken', 'memory.delete', 'memory.deleteMany', 'memory.file.set',
-  'memory.proposals.decide', 'session.delete', 'plugins.install.confirm', 'plugins.uninstall', 'plugins.upgrade.prepare',
-  'plugins.store.discard', 'models.addAccount', 'models.testAccount', 'permissions.set',
-]
-const isLong = (m: string) => LONG_NAMED.includes(m) || (m.startsWith('executor.') && m !== 'executor.list') ||
-  m.startsWith('channel.telegram.worktree.') || m.startsWith('plugins.dev.')
-/**
- * 长调用的期限(08 §5.1)。session.delete / memory.deleteMany 要扫整个日志再 VACUUM,
- * 超时后页面用同一个 commandId 重试,回执去重。其余用连接默认的 5 s
- */
-export const LONG_CALL_MS: Readonly<Record<string, number>> = Object.freeze(Object.fromEntries([
-  ...Object.keys(WorkerMethods).filter(isLong).map((m) => [m, LONG_MS] as const),
-  ['memory.consolidate', LONGEST_MS] as const,
-]))
+export { CALL_EXCLUDED, LONG_CALL_MS } from './methods'
 
 /** worker 的错误 → 信封。timeout / connection closed 是客户端自己的,映射成 app 的码 */
 function callFailure(err: unknown): CallEnvelope & { ok: false } {
@@ -369,7 +349,7 @@ export function createMffaiHost(deps: HostDeps) {
    * ★绝不记参数和结果:失败只记方法名和错误码
    */
   async function call(method: WorkerMethodName, params: Record<string, unknown>): Promise<CallEnvelope> {
-    if (CALL_EXCLUDED.has(method) || !Object.hasOwn(WorkerMethods, method)) {
+    if (!isCallable(method)) {
       return { ok: false, error: { code: -32601, message: 'method not found' } }
     }
     const w = conn.current()

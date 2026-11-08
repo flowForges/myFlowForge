@@ -460,6 +460,9 @@ export const CH = {
   mffaiCancel: 'mffai:session:cancel',
   mffaiPermissionsGet: 'mffai:permissions:get',
   mffaiPermissionsSet: 'mffai:permissions:set',
+  // 08 §5.1:一条带白名单的通用通道,只收主窗口;删除全部数据(只在停用时,不加载 host)
+  mffaiCall: 'mffai:call',
+  mffaiWipe: 'mffai:wipe',
   mffaiEvent: 'mffai:event',   // main → renderer
   mffaiAlert: 'mffai:alert',   // main → renderer
 } as const
