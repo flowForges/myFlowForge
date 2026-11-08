@@ -34,6 +34,8 @@ export interface MemoryDefaultOpts {
   onConsolidateStep?(step: ConsolidateStep): void
   /** 测试用:memory.delete 每一步之前调,抛错 = 这一步失败 */
   onPurgeStep?(step: PurgeStep): void
+  /** 测试用:删会话时原始行一片删多少 */
+  rawDeleteSlice?: number
 }
 
 export interface MemoryDefaultPlugin extends Plugin {
@@ -180,7 +182,7 @@ export function createMemoryDefault(opts: MemoryDefaultOpts = {}): MemoryDefault
         noteContext: req => checkpoints?.note(req),
       }
       ctx.services.provide<MemoryService>('memory', service)
-      const rpc = registerMemoryRpc({ ctx, sessions, live, problems, dbFile: join(ctx.dataDir, 'memory.sqlite'), now, setRoutine, ...(consolidator && { consolidate: () => consolidator.manual() }), ...(opts.onPurgeStep && { onPurgeStep: opts.onPurgeStep }) })
+      const rpc = registerMemoryRpc({ ctx, sessions, live, problems, dbFile: join(ctx.dataDir, 'memory.sqlite'), now, setRoutine, ...(consolidator && { consolidate: () => consolidator.manual() }), ...(opts.onPurgeStep && { onPurgeStep: opts.onPurgeStep }), ...(opts.rawDeleteSlice !== undefined && { rawDeleteSlice: opts.rawDeleteSlice }) })
       // 后登记先释放:库关之前等扫到一半的删除停下
       ctx.effect(() => rpc.stop())
 

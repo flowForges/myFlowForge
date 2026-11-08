@@ -108,6 +108,8 @@ export interface BackgroundRuns {
   liveFor?(sessionId: string): number
   /** 08 §4.3(R2):还在盘上、有改动、没合并过的保留 worktree */
   unmergedFor?(sessionId: string): Promise<{ runId: string; files: number }[]>
+  /** 08 §4.3(评审 I1):这个会话盘上的保留 worktree(运行 id),同步。删会话立墓碑之前再看一次,查的时候多出来的不能悄悄丢 */
+  retainedFor?(sessionId: string): string[]
 }
 
 /** 工具在 permission / run 里用自己的 zod 校验参数;不合格 → 抛错(tools 服务把消息作为 isError 交给模型) */

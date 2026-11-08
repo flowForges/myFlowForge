@@ -5,7 +5,7 @@ import { readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { z } from 'zod'
 import { jsonHolds, REDACTED, type RedactEdit } from '../../kernel/eventLog'
-import type { PluginContext } from '../../kernel/pluginHost'
+import { purgeHoldMs, type PluginContext } from '../../kernel/pluginHost'
 import { RpcError } from '../../kernel/rpcError'
 import type { Sessions } from '../../kernel/sessions'
 import { scanInjection } from '../../lib/memory/scan'
@@ -15,7 +15,7 @@ import { clip } from '../../lib/tools/diagnostics'
 import type { BackgroundRuns, SessionCommands } from '../../lib/tools/types'
 import type { KernelEvent } from '../../protocol/events'
 import type { MemoryHealth, MemoryItem, MemoryLayer, WorkerMethodName } from '../../protocol/rpc'
-import { MEMORY_ID, WorkerMethods } from '../../protocol/rpc'
+import { ERR_BUSY, MEMORY_ID, WorkerMethods } from '../../protocol/rpc'
 import type { Background } from './background'
 import { consolidateProblems, type Summary } from './consolidate'
 import type { MemoryFiles } from './files'
@@ -43,6 +43,8 @@ const MAX_RESUMES = 3
 const RESUME_BATCH = 16
 const SQLITE_FULL = 13
 const SPILL_MARK = '[已截断,完整输出:'
+/** 删会话的原始行一片删多少:FTS 三元组的删除每行几毫秒,片之间让出事件循环(评审 I3) */
+const RAW_SLICE = 100
 
 /** 测试用:每一步开始之前,抛错 = 这一步失败 */
 export type PurgeStep = 'deleted' | 'raw' | 'tombstone' | 'redact' | 'erase' | 'purge'
@@ -68,6 +70,8 @@ export interface MemoryRpcDeps {
   /** 写 config.json 的 memory 段,并更新插件自己那份 */
   setRoutine(routine: boolean): void
   onPurgeStep?(step: PurgeStep): void
+  /** 删会话时原始行一片删多少;默认 RAW_SLICE */
+  rawDeleteSlice?: number
 }
 
 /** 错误信息里有路径,给 health 的只留代码 */
@@ -340,7 +344,7 @@ export function registerMemoryRpc(d: MemoryRpcDeps): { stop(): Promise<void> } {
     // 08 §4.3:逐个删,一次落盘(一次 VACUUM)。查不到的就是已经没了,放进 gone,不报错
     register('memory.deleteMany', (_m, { ids }) => exclusive(() => purger.deleteMany(ids)))
     // 08 §4.3:真的删一个会话。和别的删除排在一起
-    register('session.delete', (_m, { sessionId, discardUnmerged }) => exclusive(() => purger.deleteSession(sessionId, discardUnmerged === true)))
+    register('session.delete', (_m, { sessionId, discardUnmerged }) => exclusive(() => purger.deleteSession(sessionId, discardUnmerged ?? [])))
     register('memory.file.set', (m, { file, content, expectedHash }) =>
       exclusive(async () => {
         alive()
@@ -817,7 +821,7 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
    * session.delete(08 §4.3)。1 未合并检查 → 2 内核墓碑(同步:忙就 -32003)→ 3 这个会话的原始行按 r_ 的规则清 → 4 整会话抹除 → 5 一次落盘。
    * 进度在 purge:session:<id>,墓碑之前就写下,所以 deleteInFlight 从这一刻起为真;3–5 可重做,resumeAll 接着做
    */
-  async function deleteSession(sessionId: string, discard: boolean): Promise<{ ok: true; redacted: number; notes: string[] }> {
+  async function deleteSession(sessionId: string, discard: string[]): Promise<{ ok: true; redacted: number; notes: string[] }> {
     alive()
     const id = `session:${sessionId}`
     let p = load(id)
@@ -831,10 +835,18 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
       if (sessions.isDeleted(sessionId)) return { ok: true, redacted: 0, notes: [] } // 早就删完了
       const commands = ctx.services.get<SessionCommands>('sessionCommands')
       if (!commands) throw new RpcError(INTERNAL, 'session commands unavailable')
-      // 第 1 步:列出来的才丢(R2)。确认框可能是旧的,这里重新查
-      const runs = (await ctx.services.get<BackgroundRuns>('executors')?.unmergedFor?.(sessionId)) ?? []
+      const executors = ctx.services.get<BackgroundRuns>('executors')
+      // 活着的运行查到一半会结束,它的改动就不在查过的那批里(评审 I1):一上来就忙
+      if ((executors?.liveFor?.(sessionId) ?? 0) > 0) throw new RpcError(ERR_BUSY, 'runs in progress')
+      // 第 1 步:列出来的才丢(R2、评审 I2):discardUnmerged 要点名每一个。确认框可能是旧的,这里重新查
+      const checked = executors?.retainedFor?.(sessionId) ?? []
+      const runs = (await executors?.unmergedFor?.(sessionId)) ?? []
       alive()
-      if (runs.length > 0 && !discard) throw new RpcError(INVALID_PARAMS, 'unmerged', { reason: 'unmerged', runs })
+      const named = new Set(discard)
+      if (runs.some(r => !named.has(r.runId))) throw new RpcError(INVALID_PARAMS, 'unmerged', { reason: 'unmerged', runs })
+      // 查的时候冒出来的 worktree 没人看过:不丢,让用户再看一次
+      const seen = new Set([...checked, ...runs.map(r => r.runId)])
+      if ((executors?.retainedFor?.(sessionId) ?? []).some(runId => !seen.has(runId))) throw new RpcError(ERR_BUSY, 'worktrees changed')
       // 第 2 步:进度先落,再立墓碑,中间没有 await。墓碑写不成(忙、未知)就把进度撤掉,什么都没动
       p = { id, kind: 'session', sessionId, evidence: [], removedIds: [], rawSeqs: [] }
       save(p)
@@ -891,7 +903,18 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
           save(p)
         })
         p.notes ??= []
-        store.deleteRaw(p.rawSeqs)
+        // 一片一片删,片之间让出事件循环;整段先向监管要时间(评审 I3)。重做时已删的行删了也是空操作
+        const slice = d.rawDeleteSlice ?? RAW_SLICE
+        const seqs = p.rawSeqs
+        await ctx.events.withHold(purgeHoldMs(statSync(d.dbFile, { throwIfNoEntry: false })?.size ?? 0), async () => {
+          for (let i = 0; i < seqs.length; i += slice) {
+            if (i > 0) {
+              await nextTick()
+              alive()
+            }
+            store.deleteRaw(seqs.slice(i, i + slice))
+          }
+        })
         p.rawDone = true
         save(p)
       }

@@ -119,6 +119,18 @@ describe('EventLog.eraseSession (08 §4.3, R3)', () => {
     expect(await red.events.eraseSession('gone')).toBe(0)
   })
 
+  it('withHold (review I3): a redactor gets the hold before its work and gives it back after, also when the work throws; an outsider may not', async () => {
+    const holds: number[] = []
+    await boot(async ms => void holds.push(ms))
+    let inside = -1
+    expect(await red.events.withHold(5000, async () => ((inside = holds.length), 7))).toBe(7)
+    expect(inside).toBe(1)
+    await expect(red.events.withHold(4000, async () => { throw new Error('boom') })).rejects.toThrow('boom')
+    expect(holds).toEqual([5000, 0, 4000, 0])
+    await expect(other.events.withHold(1, async () => 1)).rejects.toThrow(/may not/)
+    expect(holds).toHaveLength(4)
+  })
+
   it('a plugin that is not an event redactor may not call it', async () => {
     const k = await boot()
     await seed(k, 'gone', MARK)

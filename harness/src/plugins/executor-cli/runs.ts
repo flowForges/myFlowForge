@@ -543,7 +543,7 @@ function openTurn(events: KernelEvent[]): boolean {
 }
 
 const runRefBase = (sessionId: string) => `refs/mffai/runs/${sessionId}`
-const runRef = (sessionId: string, runId: string, phase: 'start' | 'end') => `${runRefBase(sessionId)}/${runId}-${phase}`
+const runRef = (sessionId: string, runId: string, phase: 'start' | 'end' | 'check') => `${runRefBase(sessionId)}/${runId}-${phase}`
 /** 和内核 Sessions 同一个规则:会话 id 要能直接当一段路径 */
 const SAFE_SESSION_ID = /^[A-Za-z0-9_-]+$/
 
@@ -1377,7 +1377,7 @@ export class RunManager implements BackgroundRuns {
    * mode 'changes':在跑的、在地的(检出之后还在变)每次现拍;没结束的 worktree 运行这次启动只拍一张(review M3)。
    * 'view'(diff、merge):有就用,和界面列出来的是同一张
    */
-  private async changeSet(sessionId: string, runId: string, mode: 'changes' | 'view' = 'view'): Promise<
+  private async changeSet(sessionId: string, runId: string, mode: 'changes' | 'view' | 'unmerged' = 'view'): Promise<
     | { kind: 'reported'; result: { files: FileChange[]; source: ExecutorChangesSource; concurrent?: boolean } }
     | { kind: 'git'; files: FileChange[]; cwd: string; startRef: string; endRef: string; pin: PinnedRepo; started: { cwd: string; worktree?: string; executor?: string }; concurrent: { concurrent?: true } }
   > {
@@ -1401,7 +1401,7 @@ export class RunManager implements BackgroundRuns {
     if (!started) return reported()
     const { cwd } = started
     const startRef = runRef(sessionId, runId, 'start')
-    const endRef = runRef(sessionId, runId, 'end')
+    const endRef = runRef(sessionId, runId, mode === 'unmerged' ? 'check' : 'end')
     try {
       const session = this.pinOf(sessionId)
       const pin = started.worktree ? worktreePin(session, started.worktree, cwd) : session
@@ -1412,11 +1412,11 @@ export class RunManager implements BackgroundRuns {
       const finished = ended !== undefined && ended.status !== 'interrupted' && ended.changed?.source === 'git'
       const key = `${sessionId}/${runId}`
       const fresh = mode === 'changes' && (this.live.has(runId) || !started.worktree)
-      const reuse = finished || (!fresh && this.endTaken.has(key))
+      const reuse = mode !== 'unmerged' && (finished || (!fresh && this.endTaken.has(key)))
       if (!reuse || !(await exists(endRef))) {
         const end = await takeSnapshot(cwd, endRef, git, this.gitOpts(pin))
         if (!end.ref) return reported()
-        if (!finished) this.endTaken.add(key)
+        if (!finished && mode !== 'unmerged') this.endTaken.add(key)
       }
       const files = await gitChanges(cwd, startRef, endRef, git, this.gitOpts(pin))
       const denied = this.deniedForChanges(sessionId, started)
@@ -1527,6 +1527,11 @@ export class RunManager implements BackgroundRuns {
     return this.mergedLocal.has(`${sessionId}/${runId}`) || history.some(e => e.type === 'executor.worktree.merged' && (e.payload as { runId?: string } | undefined)?.runId === runId)
   }
 
+  /** 08 §4.3(评审 I1):盘上的保留 worktree,同步 */
+  retainedFor(sessionId: string): string[] {
+    return this.worktreesOf(sessionId).map(w => w.runId)
+  }
+
   /** 08 §4.3:这个会话排队和在跑的运行数。删会话时内核同步查 */
   liveFor(sessionId: string): number {
     let n = 0
@@ -1547,7 +1552,9 @@ export class RunManager implements BackgroundRuns {
       if (this.isMerged(sessionId, runId, history)) continue
       let files: number
       try {
-        files = (await this.changes(sessionId, runId)).files.length
+        // 现拍(评审 M1):结束之后用户在 worktree 里改的也算。拍到 -check,不动合并用的 -end
+        const set = await this.changeSet(sessionId, runId, 'unmerged')
+        files = set.kind === 'git' ? set.files.length : set.result.files.length
       } catch {
         continue // unknown run
       }

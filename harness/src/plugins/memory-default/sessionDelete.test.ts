@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EventLog, REDACTED } from '../../kernel/eventLog'
 import type { Kernel } from '../../kernel/kernel'
 import type { Plugin, PluginContext } from '../../kernel/pluginHost'
+import type { BackgroundRuns } from '../../lib/tools/types'
 import type { KernelEvent } from '../../protocol/events'
 import { ERR_BUSY } from '../../protocol/rpc'
 import { calling, fakeModels, memoryKernel, say, type MemoryRig } from '../../../test/memoryRig'
@@ -314,6 +315,40 @@ describe('session.delete removes what memory_write wrote in it (review C1)', () 
   })
 })
 
+describe('the raw step does not block the worker (review I3)', () => {
+  it('rows go in slices with a turn of the event loop between them, inside a watchdog hold; rawOfSession uses an index', async () => {
+    const holds: number[] = []
+    let ctx!: PluginContext
+    let memory!: MemoryDefaultPlugin
+    const probe: Plugin = { manifest: { id: 'probe', version: '0', kernel: '^0.1.0' }, activate: c => { ctx = c } }
+    rig = await memoryKernel({
+      models: fakeModels(),
+      kernel: { holdWatchdog: async ms => void holds.push(ms) },
+      plugins: () => [toolsRegistry, (memory = createMemoryDefault({ nightly: false, rawDeleteSlice: 4 })), createLoopDefault(), probe],
+    })
+    const sid = ((await rig.k.handle('session.create', { commandId: 'c', cwd: rig.cwd })) as { sessionId: string }).sessionId
+    for (let i = 0; i < 10; i++) ctx.append({ type: 'message.user', sessionId: sid, payload: { turnId: `t${i}`, text: `第 ${i} 条足够长的原始记录内容在这里` } })
+    memory.flushNow()
+    const store = memory.inspect().store
+    const plan = store.db.prepare('EXPLAIN QUERY PLAN SELECT seq, text, scope FROM raw WHERE session_id = ? ORDER BY seq').all('x') as { detail: string }[]
+    expect(plan.map(r => r.detail).join(' ')).toContain('raw_session')
+    const slices: number[] = []
+    const real = store.deleteRaw.bind(store)
+    vi.spyOn(store, 'deleteRaw').mockImplementation(seqs => {
+      slices.push(seqs.length)
+      real(seqs)
+    })
+    holds.length = 0
+    await rig.k.handle('session.delete', { commandId: 'd', sessionId: sid })
+    expect(slices).toEqual([4, 4, 2])
+    // 每段要来的时间,最后都还回去(0)
+    expect(holds.length).toBeGreaterThanOrEqual(2)
+    expect(holds[0]).toBeGreaterThan(0)
+    expect(holds.at(-1)).toBe(0)
+    expect(store.rawOfSession(sid)).toEqual([])
+  })
+})
+
 describe('memory.deleteMany', () => {
   it('3 ids, one unknown: one VACUUM, gone holds the unknown id, the others are gone', async () => {
     const h = await memBoot()
@@ -371,10 +406,13 @@ describe('session.delete with real git, a delegate run and a retained worktree (
               : (async function* () { yield { type: 'done' as const, reason: 'error' as const, error: { kind: 'bad_request' as const, message: M.fail, retryable: false } } })()
   const ASK_ECHO = [{ effect: 'ask' as const, rule: 'shell(echo*)' }]
 
-  async function full(o: { memory?: MemoryDefaultOpts; script?: typeof script } = {}) {
+  let services: PluginContext['services'] | undefined
+  const executorsOf = () => services!.get<BackgroundRuns>('executors')!
+  const probe: Plugin = { manifest: { id: 'probe', version: '0', kernel: '^0.1.0' }, activate: ctx => { services = ctx.services } }
+  async function full(o: { memory?: MemoryDefaultOpts; script?: typeof script; writes?: Record<string, string> } = {}) {
     writeFileSync(join(execCwd, 'notes.txt'), `${M.tool}\n`)
-    const f = fake({ lines: runLines, writeFiles: { 'a.txt': 'changed by the run\n' } })
-    const { k } = await execBoot(f, { script: o.script ?? script, rules: ASK_ECHO, extra: [memPlugin(o.memory)] })
+    const f = fake({ lines: runLines, writeFiles: o.writes ?? { 'a.txt': 'changed by the run\n' } })
+    const { k } = await execBoot(f, { script: o.script ?? script, rules: ASK_ECHO, extra: [memPlugin(o.memory), probe] })
     await detected(k)
     return k
   }
@@ -418,7 +456,13 @@ describe('session.delete with real git, a delegate run and a retained worktree (
     expect(memory.inspect().store.metaWithPrefix('purge:')).toEqual([])
     expect(((await k.handle('session.list', {})) as { sessions: { id: string }[] }).sessions.map(s => s.id)).toContain(sid)
 
-    const result = (await k.handle('session.delete', { commandId: 'd2', sessionId: sid, discardUnmerged: true })) as { ok: boolean; notes: string[] }
+    // 评审 I2:只丢列出来的。空的、少一个的都不行
+    for (const [i, discardUnmerged] of [[], ['run_other']].entries()) {
+      const again = await k.handle('session.delete', { commandId: `d-list-${i}`, sessionId: sid, discardUnmerged }).catch(e => e)
+      expect(again).toMatchObject({ code: -32602, data: { reason: 'unmerged', runs: [{ runId, files: 1 }] } })
+    }
+    expect(k.events.after(0, ALL).length).toBe(before)
+    const result = (await k.handle('session.delete', { commandId: 'd2', sessionId: sid, discardUnmerged: [runId, 'run_extra'] })) as { ok: boolean; notes: string[] }
     expect(result.ok).toBe(true)
     const hay = dbBytes(eventsDb(execData), memoryDb(execData))
     for (const m of MARKERS) expect(hay.includes(m), m).toBe(false)
@@ -435,6 +479,48 @@ describe('session.delete with real git, a delegate run and a retained worktree (
     expect(((await k.handle('memory.search', { query: 'MKuser7q' })) as { items: unknown[] }).items).toEqual([])
     expect(((await k.handle('session.list', {})) as { sessions: { id: string }[] }).sessions.map(s => s.id)).not.toContain(sid)
     await expect(k.handle('session.prompt', { commandId: 'p-after', sessionId: sid, text: 'hi' })).rejects.toMatchObject({ code: -32602 })
+    // 评审 M2:墓碑之后合并也是 unknown session
+    await expect(k.handle('executor.worktree.merge', { commandId: 'm-after', sessionId: sid, runId })).rejects.toMatchObject({ code: -32602, message: 'unknown session' })
+  })
+
+  it('review I1: a live run → -32003 before the unmerged check; a worktree that turns up during the check → -32003, nothing deleted', async () => {
+    const k = await full()
+    const { sid, runId, worktree } = await seed(k)
+    const executors = executorsOf()
+    // 有活着的运行:一上来就忙,不去查 worktree
+    const live = vi.spyOn(executors, 'liveFor').mockReturnValue(1)
+    const unmerged = vi.spyOn(executors, 'unmergedFor')
+    await expect(k.handle('session.delete', { commandId: 'i1-a', sessionId: sid, discardUnmerged: [runId] })).rejects.toMatchObject({ code: ERR_BUSY })
+    expect(unmerged).not.toHaveBeenCalled()
+    live.mockRestore()
+    // 查的时候又结束了一个运行:它的 worktree 不在查过的那批里
+    const extra = join(`${execData}-worktrees`, sid, 'run_late')
+    unmerged.mockImplementation(async () => {
+      mkdirSync(extra, { recursive: true })
+      return [{ runId, files: 1 }]
+    })
+    const before = k.events.after(0, ALL).length
+    await expect(k.handle('session.delete', { commandId: 'i1-b', sessionId: sid, discardUnmerged: [runId] })).rejects.toMatchObject({ code: ERR_BUSY })
+    expect(k.events.after(0, ALL).length).toBe(before)
+    expect(memory.inspect().store.metaWithPrefix('purge:')).toEqual([])
+    expect(existsSync(worktree)).toBe(true)
+    rmSync(extra, { recursive: true, force: true })
+    unmerged.mockRestore()
+    expect(await k.handle('session.delete', { commandId: 'i1-c', sessionId: sid, discardUnmerged: [runId] })).toMatchObject({ ok: true })
+  })
+
+  it('review M1: a finished run with no changes whose worktree the user edited afterwards counts as unmerged', async () => {
+    const k = await full({ writes: {}, script: n => (n === 1 ? delegate({ prompt: 'look' }) : say('done')) })
+    const sid = await execCreate(k, { origin: 'schedule' })
+    await execPrompt(k, sid, 'go')
+    await waitFor(() => ofType(k, sid, 'approval.requested').length === 1)
+    await k.handle('approval.respond', { approvalId: pay<{ approvalId: string }>(ofType(k, sid, 'approval.requested')[0]).approvalId, decision: 'allow' })
+    await waitFor(() => terminal(k, sid).length === 1, 30_000)
+    const { runId, worktree } = pay<{ runId: string; worktree: string }>(ofType(k, sid, 'executor.run.ended')[0])
+    const executors = executorsOf()
+    expect(existsSync(worktree)).toBe(true)
+    writeFileSync(join(worktree, 'a.txt'), 'edited by the user afterwards\n')
+    expect(await executors.unmergedFor!(sid)).toEqual([{ runId, files: 1 }])
   })
 
   it('a session.prompt racing the delete: never both succeed', async () => {
@@ -454,7 +540,7 @@ describe('session.delete with real git, a delegate run and a retained worktree (
 
   it('killed after the tombstone: the start sweeps remove the spill dir, the worktree and every ref, and resumeAll erases the session', async () => {
     const k = await full()
-    const { sid, worktree } = await seed(k)
+    const { sid, worktree, runId } = await seed(k)
     // 崩在墓碑之后:这一刻的数据目录、worktree 根、git 的 worktree 登记和我们的引用存下来,关内核之后放回去。
     // .git 本身不换:换了 inode,钉住的仓库就不认了
     const image = join(execData, '..', 'image')
@@ -471,7 +557,7 @@ describe('session.delete with real git, a delegate run and a retained worktree (
     }
     const hooked = memory
     vi.spyOn(hooked.inspect().store, 'rawOfSession').mockImplementation(() => take() as never)
-    expect(await k.handle('session.delete', { commandId: 'kill', sessionId: sid, discardUnmerged: true }).catch((e: { code?: number }) => e.code)).toBe(-32603)
+    expect(await k.handle('session.delete', { commandId: 'kill', sessionId: sid, discardUnmerged: [runId] }).catch((e: { code?: number }) => e.code)).toBe(-32603)
     await k.close()
     execKernels.length = 0
     for (const [to, from] of dirs) {

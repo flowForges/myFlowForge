@@ -329,6 +329,7 @@ export function createExecutorCli(opts: ExecutorCliOpts = {}): Plugin {
         },
         liveFor: sid => manager.liveFor(sid),
         unmergedFor: sid => manager.unmergedFor(sid),
+        retainedFor: sid => manager.retainedFor(sid),
       }
       ctx.services.provide('executors', service)
 

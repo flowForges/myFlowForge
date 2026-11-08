@@ -364,9 +364,9 @@ export const WorkerMethods = {
   },
   // title 去控制字符和首尾空白后 1..120 字,否则 -32602(内核查,这里只限长度)
   'session.rename': { params: z.object({ commandId: z.string(), sessionId: z.string(), title: z.string().max(4096) }), result: Ok },
-  // memory-default 注册。有改动没合并的保留 worktree、又没带 discardUnmerged → -32602,data { reason:'unmerged', runs }
+  // memory-default 注册。有改动没合并的保留 worktree 不全在 discardUnmerged(运行 id)里 → -32602,data { reason:'unmerged', runs }
   'session.delete': {
-    params: z.object({ commandId: z.string(), sessionId: z.string(), discardUnmerged: z.boolean().optional() }),
+    params: z.object({ commandId: z.string(), sessionId: z.string(), discardUnmerged: z.array(z.string().max(128)).max(100).optional() }),
     result: z.object({ ok: z.boolean(), redacted: z.number(), notes: z.array(z.string()) }),
   },
   'approval.respond': {

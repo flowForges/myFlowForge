@@ -39,6 +39,8 @@ export interface PluginContext {
      * 同步阻塞整个工作进程,所以和 purge 一样先向监管要时间
      */
     eraseSession(sessionId: string): Promise<number>
+    /** 一段同步为主、按片让出的删除活(评审 I3):先向监管要 ms,做完还回去。权限同 redact */
+    withHold<T>(ms: number, fn: () => Promise<T>): Promise<T>
   }
   effect(dispose: () => void | Promise<void>): void
   /** 注册工作进程 RPC 方法:参数先由内核按 WorkerMethods 校验;随插件停用自动注销 */
@@ -188,6 +190,16 @@ export class PluginHost {
             await hold?.(purgeHoldMs(log.sizeBytes()))
             try {
               return log.eraseSession(sessionId, id)
+            } finally {
+              await hold?.(0)
+            }
+          },
+          withHold: async (ms, fn) => {
+            if (!EVENT_REDACTORS.includes(id)) throw new Error(`plugin ${id} may not redact events`)
+            const hold = this.deps.holdWatchdog
+            await hold?.(ms)
+            try {
+              return await fn()
             } finally {
               await hold?.(0)
             }

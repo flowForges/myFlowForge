@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS raw(
   seq INTEGER PRIMARY KEY, ts INTEGER NOT NULL, session_id TEXT NOT NULL, turn_id TEXT, role TEXT NOT NULL, tool TEXT,
   origin TEXT NOT NULL, scope TEXT NOT NULL, account_id TEXT, text TEXT NOT NULL, rolled_back INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS raw_turn ON raw(turn_id);
+CREATE INDEX IF NOT EXISTS raw_session ON raw(session_id);
 CREATE VIRTUAL TABLE IF NOT EXISTS raw_fts USING fts5(text, content='raw', content_rowid='seq', tokenize='trigram');
 CREATE TRIGGER IF NOT EXISTS raw_ai AFTER INSERT ON raw BEGIN
   INSERT INTO raw_fts(rowid, text) VALUES (new.seq, new.text);
@@ -223,7 +224,7 @@ export class Store {
     })
   }
 
-  /** 一个会话的原始层行(删会话用,08 §4.3)。没有 session_id 的索引:只在用户删会话时扫一次 */
+  /** 一个会话的原始层行(删会话用,08 §4.3),走 raw_session 索引 */
   rawOfSession(sessionId: string): { seq: number; text: string; scope: string }[] {
     return this.db.prepare('SELECT seq, text, scope FROM raw WHERE session_id = ? ORDER BY seq').all(sessionId) as { seq: number; text: string; scope: string }[]
   }
