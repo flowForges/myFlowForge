@@ -7,14 +7,16 @@ import { z } from 'zod'
 import type { Logger } from '../../kernel/log'
 import { RpcError } from '../../kernel/rpcError'
 import type { Sessions } from '../../kernel/sessions'
+import { dirSize } from '../../lib/fs/dirSize'
 import { isInside } from '../../lib/fs/paths'
 import { lexists, samePath } from '../../lib/fs/safeFs'
 import { createImWorktree, imWorktreeRootOf, removeImWorktree, type ImWorktreeError } from '../../lib/git/imWorktree'
-import { pinIntact, pinRepo, pruneRefs, refBase, type Git, type RepoPin } from '../../lib/git/snapshot'
-import { worktreePin } from '../../lib/git/worktree'
+import { mergeInto } from '../../lib/git/merge'
+import { changes as gitChanges, fileDiff, guarded, pinIntact, pinnedGit, pinRepo, pruneRefs, refBase, takeSnapshot, type Git, type PinnedRepo, type RepoPin } from '../../lib/git/snapshot'
+import { worktreePin, worktreeRootOf } from '../../lib/git/worktree'
 import { denyReadCopies, treePolicy } from '../../lib/tools/treePolicy'
 import type { SandboxService, SessionCommands } from '../../lib/tools/types'
-import { ERR_BUSY, type ApprovalMode, type KernelEvent, type TelegramChats } from '../../protocol/index'
+import { ERR_BUSY, type ApprovalMode, type FileChange, type FileDiff, type KernelEvent, type TelegramChats } from '../../protocol/index'
 import type { TelegramConfig } from '../../protocol/rpc'
 import type { Chats, NewSessionResult, SessionTarget } from './chats'
 import { codeOf } from './poller'
@@ -33,6 +35,10 @@ const WorktreeSchema = z.object({
   createdAt: z.number(),
   /** sessionIds 是全的:和聊天映射同一次落盘写下的。没有这个就不能说它没人用过 */
   opened: z.boolean().optional(),
+  /** 08 §4.5:建 worktree 时检出的提交,合并的 base。旧记录没有,用 merge-base */
+  base: z.string().optional(),
+  /** 合并过一次 */
+  merged: z.boolean().optional(),
 })
 type Worktree = z.infer<typeof WorktreeSchema>
 
@@ -72,7 +78,26 @@ export interface ProjectsOpts {
   notify(chatId: string, text: string): void
   now(): number
   log: Logger
+  /** channel.worktree.merged */
+  append(e: Omit<KernelEvent, 'seq' | 'ts'>): unknown
 }
+
+/** 08:worktree 的现拍快照放这里,丢弃时一起删(R13) */
+const SHA = /^[0-9a-f]{40,64}$/
+const viewRef = (id: string) => `refs/mffai/im/${id}-view`
+
+interface View {
+  record: Worktree
+  project: PinnedRepo
+  pin: PinnedRepo
+  base: string
+  end: string
+  deny: string[]
+  roots: string[]
+}
+
+const refusal = (reason: string, extra: { paths?: string[]; restored?: boolean } = {}) =>
+  new RpcError(-32602, reason, { reason, ...(extra.paths && { paths: extra.paths }), ...(extra.restored !== undefined && { restored: extra.restored }) })
 
 const groupOf = (chatId: string) => `c${createHash('sha256').update(chatId).digest('hex').slice(0, 16)}`
 
@@ -227,9 +252,16 @@ export class Projects {
     const out: TelegramChats['worktrees'] = []
     for (const w of this.records.values()) {
       const usedByChat = this.o.chats.chatUsing(w.id)
-      out.push({ id: w.id, project: w.project, path: w.path, sessionIds: [...w.sessionIds], createdAt: w.createdAt, ...(usedByChat !== undefined && { usedByChat }) })
+      const bytes = dirSize(w.path)
+      out.push({
+        id: w.id, project: w.project, path: w.path, sessionIds: [...w.sessionIds], createdAt: w.createdAt, ...(usedByChat !== undefined && { usedByChat }),
+        ...(bytes !== undefined && { bytes }), merged: w.merged === true,
+      })
     }
-    for (const orphan of this.orphans.values()) out.push({ id: orphan.id, project: '', path: orphan.path, sessionIds: [], createdAt: orphan.createdAt })
+    for (const orphan of this.orphans.values()) {
+      const bytes = dirSize(orphan.path)
+      out.push({ id: orphan.id, project: '', path: orphan.path, sessionIds: [], createdAt: orphan.createdAt, ...(bytes !== undefined && { bytes }) })
+    }
     return out
   }
 
@@ -272,7 +304,9 @@ export class Projects {
       }
       const { worktreeId: previous, sessionId: previousSession } = chats.status(chatId)
       // 先记下来:之后崩溃,这是个列得出来、重投认得出来的 worktree。opened 还没有,不算"没人用过"
-      const record: Worktree = this.records.get(id) ?? { id, project: name, projectPath: realProject, top: made.top, path: made.path, cwd: made.cwd, sessionIds: [], createdAt: this.o.now() }
+      const record: Worktree = this.records.get(id) ?? {
+        id, project: name, projectPath: realProject, top: made.top, path: made.path, cwd: made.cwd, sessionIds: [], createdAt: this.o.now(), ...(made.base && { base: made.base }),
+      }
       this.store(record)
       this.o.save()
       const target: SessionTarget = { project: name, worktreeId: id, cwd: made.cwd, projectTop: made.top, approvalMode: this.approvalModeOf(project.auto) }
@@ -339,6 +373,111 @@ export class Projects {
     })
   }
 
+  /** 08 §4.4:现拍的快照对 base 的改动(未跟踪的也算),`deny read` 副本不算 */
+  async changes(worktreeId: string): Promise<FileChange[]> {
+    const v = await this.view(worktreeId)
+    return this.changedIn(v)
+  }
+
+  /** 08 §4.4:path 必须在 changes 的清单里,否则 -32602,不跑 diff */
+  async diff(worktreeId: string, path: string): Promise<FileDiff> {
+    const v = await this.view(worktreeId)
+    const files = await this.changedIn(v)
+    if (!files.some(f => f.path === path)) throw new RpcError(-32602, 'path not in the change list')
+    try {
+      return await fileDiff(v.record.cwd, v.base, v.end, path, this.o.git, { pin: v.pin, tmpDir: this.o.tmpDir, writableRoots: v.roots })
+    } catch (err) {
+      this.o.log.warn('telegram worktree diff failed', { code: codeOf(err) })
+      throw new RpcError(-32603, 'diff failed')
+    }
+  }
+
+  /**
+   * 08 §4.5:现拍的快照合进项目的检出(重新 pinRepo,对上记录的 top)。这棵 worktree 上有开着的轮 → ERR_BUSY;
+   * 拒绝 → -32602,data = { reason, paths?, restored? }
+   */
+  merge(worktreeId: string): Promise<{ ok: true; files: number }> {
+    return this.exclusive(this.o.chats.chatUsing(worktreeId) ?? `worktree:${worktreeId}`, async () => {
+      const record = this.records.get(worktreeId)
+      if (!record) throw new RpcError(-32602, 'unknown_worktree')
+      if (this.busy(worktreeId, record.sessionIds)) throw new RpcError(ERR_BUSY, 'turn in progress')
+      const v = await this.view(worktreeId)
+      let outcome: Awaited<ReturnType<typeof mergeInto>>
+      try {
+        outcome = await mergeInto({
+          git: this.o.git,
+          from: { pin: v.pin, dir: record.cwd, baseRef: v.base, endRef: v.end },
+          to: { pin: v.project, dir: record.projectPath },
+          exclude: v.deny,
+          tmpDir: this.o.tmpDir,
+          gitOpts: { writableRoots: v.roots },
+        })
+      } catch (err) {
+        this.o.log.warn('telegram worktree merge failed', { code: codeOf(err) })
+        throw new RpcError(-32603, 'merge failed')
+      }
+      if (!outcome.ok) throw refusal(outcome.reason, outcome)
+      this.o.append({ type: 'channel.worktree.merged', payload: { worktreeId, files: outcome.files } })
+      record.merged = true
+      this.o.state.data.worktrees[worktreeId] = record
+      this.o.save()
+      return { ok: true, files: outcome.files }
+    })
+  }
+
+  private busy(worktreeId: string, sessionIds: string[]): boolean {
+    const usedBy = this.o.chats.chatUsing(worktreeId) ?? this.o.chats.chatOnSession(sessionIds)
+    return sessionIds.some(s => hasOpenTurn(this.o.history(s))) || (usedBy !== undefined && this.o.chats.isOpen(usedBy))
+  }
+
+  private async changedIn(v: View): Promise<FileChange[]> {
+    try {
+      const files = await gitChanges(v.record.cwd, v.base, v.end, this.o.git, { pin: v.pin, tmpDir: this.o.tmpDir, writableRoots: v.roots })
+      return files.filter(f => !v.deny.some(d => isInside(join(v.record.path, ...f.path.split('/')), d, process.platform)))
+    } catch (err) {
+      this.o.log.warn('telegram worktree changes failed', { code: codeOf(err) })
+      throw new RpcError(-32603, 'changes failed')
+    }
+  }
+
+  /**
+   * 项目的检出重新钉一次(对上记录的 top),worktree 的钉子从它推;worktree 现拍到 -view;
+   * base 是记录的,旧记录用 merge-base <worktree HEAD> <检出 HEAD>
+   */
+  private async view(worktreeId: string): Promise<View> {
+    const { git, tmpDir, dataDir } = this.o
+    const record = this.records.get(worktreeId)
+    if (!record || !ID_NAME.test(worktreeId)) throw new RpcError(-32602, 'unknown_worktree')
+    if (!lexists(record.path)) throw refusal('nothing')
+    const project = await pinRepo(record.projectPath, git, { tmpDir, untrusted: [dataDir, imWorktreeRootOf(dataDir), this.qoderDir()] })
+    if (project.kind !== 'repo') throw refusal('not_git')
+    if (record.top !== undefined && !samePath(project.top, record.top)) throw refusal('unsafe_repo')
+    const pin = worktreePin(project, record.path, record.cwd)
+    if (!pin) throw refusal('unsafe_repo')
+    const roots = [dataDir, imWorktreeRootOf(dataDir), worktreeRootOf(dataDir), this.o.systemTmp, this.qoderDir(), tmpDir]
+    const snap = await takeSnapshot(record.cwd, viewRef(worktreeId), git, { pin, tmpDir, writableRoots: roots })
+    if (!snap.ref) throw refusal(snap.reason === 'unsafe_filter' || snap.reason === 'unsafe_repo' ? 'unsafe_repo' : 'nothing')
+    // 读不懂的 base 当没有:不能让一个坏字段把记录变成孤儿,也不能把它当引用名交给 git
+    const base = (record.base !== undefined && SHA.test(record.base) ? record.base : undefined) ?? (await this.legacyBase(pin, project))
+    if (!base) throw refusal('nothing')
+    return { record, project, pin, base, end: viewRef(worktreeId), deny: this.denyCopies(record), roots }
+  }
+
+  private async legacyBase(pin: PinnedRepo, project: PinnedRepo): Promise<string | undefined> {
+    const { git, tmpDir } = this.o
+    const projectHead = await guarded(pinnedGit(git, project), tmpDir, g => g(['rev-parse', '-q', '--verify', 'HEAD^{commit}'], { cwd: project.top }))
+    if (projectHead.code !== 0) return undefined
+    const r = await guarded(pinnedGit(git, pin), tmpDir, g => g(['merge-base', 'HEAD', projectHead.stdout.toString().trim()], { cwd: pin.top }))
+    const sha = r.stdout.toString().trim()
+    return r.code === 0 && SHA.test(sha) ? sha : undefined
+  }
+
+  /** 和建 worktree 时删掉的同一份(§8.1) */
+  private denyCopies(record: Worktree): string[] {
+    const top = record.top ?? record.projectPath
+    return denyReadCopies(treePolicy(cwd => this.o.sandbox.execPolicy('', cwd), record.projectPath, join(record.path, relative(top, record.projectPath)), { session: top, run: record.path }), record.path)
+  }
+
   /** channel.telegram.worktree.discard。开着轮 → ERR_BUSY;当前聊天用着的退回纯对话 */
   discard(worktreeId: string): Promise<void> {
     return this.exclusive(this.o.chats.chatUsing(worktreeId) ?? `worktree:${worktreeId}`, async () => {
@@ -348,7 +487,7 @@ export class Projects {
       const path = (record ?? orphan)!.path
       const sessionIds = record ? record.sessionIds : this.sessionsIn(path)
       const usedBy = this.o.chats.chatUsing(worktreeId) ?? this.o.chats.chatOnSession(sessionIds)
-      if (sessionIds.some(s => hasOpenTurn(this.o.history(s))) || (usedBy !== undefined && this.o.chats.isOpen(usedBy))) throw new RpcError(ERR_BUSY, 'turn in progress')
+      if (this.busy(worktreeId, sessionIds)) throw new RpcError(ERR_BUSY, 'turn in progress')
       // 先离开:删的时候到的消息不能再发进这个会话。删失败了记录还在,可以再丢弃一次
       if (usedBy !== undefined) this.o.chats.leave(usedBy)
       await this.remove(worktreeId, path, sessionIds, record?.projectPath)
@@ -395,6 +534,11 @@ export class Projects {
           this.o.log.warn('telegram snapshot prune failed', { code: codeOf(err) })
         }
       }
+    }
+    if (pin?.kind === 'repo' && pinIntact(pin) && ID_NAME.test(id)) {
+      // R13:-view 快照留着就是用户仓库里一个无主的引用
+      const r = await guarded(pinnedGit(git, pin), tmpDir, g => g(['update-ref', '-d', viewRef(id)], { cwd: pin.top })).catch(() => ({ code: -1 }))
+      if (r.code !== 0) this.o.log.warn('telegram view ref not removed', { id })
     }
     await removeImWorktree({ dataDir, path, pin, git, tmpDir })
     this.forget(id)

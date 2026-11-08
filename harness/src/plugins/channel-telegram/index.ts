@@ -248,6 +248,7 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
         },
         now,
         log: ctx.log,
+        append: e => ctx.append(e),
       })
 
       // —— 配对
@@ -619,6 +620,9 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
         await projects.discard(params.worktreeId)
         return { ok: true }
       })
+      register('channel.telegram.worktree.changes', async (params: { worktreeId: string }) => ({ files: await projects.changes(params.worktreeId) }))
+      register('channel.telegram.worktree.diff', (params: { worktreeId: string; path: string }) => projects.diff(params.worktreeId, params.path))
+      register('channel.telegram.worktree.merge', (params: { worktreeId: string }) => projects.merge(params.worktreeId))
 
       register('channel.telegram.config.get', async () => structuredClone(config))
 
