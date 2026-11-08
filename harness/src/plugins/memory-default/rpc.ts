@@ -134,6 +134,8 @@ interface PendingPurge {
   rawTexts?: [number, string][]
   /** 还引用这个会话原话的核心条目,raw 那一步之前收集 */
   notes?: string[]
+  /** 这个会话的轮:memory_write 写下的按它找(评审 C1) */
+  turnIds?: string[]
   rawDone?: boolean
   redactDone?: boolean
   erased?: boolean
@@ -868,7 +870,19 @@ function createPurger(d: MemoryRpcDeps, m: LiveMemory, alive: () => void) {
           p.scope = rows[0]?.scope ?? scopeOf(sessions.get(sessionId)).read[0] ?? `session:${sessionId}`
           save(p)
         }
+        if (p.turnIds === undefined) {
+          p.turnIds = [...new Set(ctx.events.history(sessionId).flatMap(e => (typeof turnOf(e) === 'string' ? [turnOf(e) as string] : [])))]
+          save(p)
+        }
         files.removeBadCopies()
+        // 这些轮里 memory_write 写的(草稿、提议):按 turn_id,和回滚一样。文本记下,召回过它们的块按 id 和原文换掉(评审 C1)
+        files.removeTurns(p.turnIds, ({ ids, texts }) => {
+          p.removedIds = [...new Set([...p.removedIds, ...ids])]
+          p.rawTexts = [...(p.rawTexts ?? []), ...texts.filter(t => !(p.rawTexts ?? []).some(([, x]) => x === t)).map((t): [number, string] => [0, t])]
+          p.derived = [...new Set([...(p.derived ?? []), ...ids])]
+          save(p)
+        })
+        for (const t of (p.rawTexts ?? []).filter(([seq]) => seq === 0).map(([, t]) => t)) forget(store, t)
         // 草稿行、候选、等回答的提议一起删;核心文件里引用它的不动,列给用户(notes)
         files.removeDerived(p.rawIds, ({ notes, others, kept }) => {
           p.removedIds = [...new Set([...p.removedIds, ...notes])]

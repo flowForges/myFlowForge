@@ -516,6 +516,39 @@ export class MemoryFiles {
     if (rows.length > 0 || proposals > 0) this.updated({ op: 'rollback', source: 'rollback' })
   }
 
+  /**
+   * 删会话(08 §4.3,评审 C1):这些轮里 memory_write 写下的东西一起走,和回滚同一个依据(turn_id),不靠证据:
+   * 草稿行(带 turn=、可能没有 ev=)、会话笔记、这些轮的提议(批准了的除外:它已经是核心条目,用户自己删)、
+   * 同文的候选,以及它们的变更记录。found 在动手之前调,给 id 和文本:重试时行已经没了。重做是空操作
+   */
+  removeTurns(turnIds: string[], found: (d: { ids: string[]; texts: string[] }) => void): void {
+    if (turnIds.length === 0) return
+    this.reconcile('all')
+    const turns = new Set(turnIds)
+    const { db } = this.store
+    const marks = turnIds.map(() => '?').join(', ')
+    const rows = db.prepare(`SELECT id, file, text FROM notes WHERE turn_id IN (${marks})`).all(...turnIds) as { id: string; file: string | null; text: string }[]
+    const proposals = db.prepare(`SELECT id, text FROM proposals WHERE turn_id IN (${marks}) AND status != 'approved'`).all(...turnIds) as { id: string; text: string }[]
+    const diary = this.list('all').filter(f => f.startsWith('diary/')).map(f => ({ file: f, ...this.locate(f, e => e.turn !== undefined && turns.has(e.turn)) })).filter(d => d.hits.length > 0)
+    const texts = [...new Set([...rows.map(r => r.text), ...proposals.map(r => r.text), ...diary.flatMap(d => d.hits.map(e => e.text))])].filter(t => t !== '')
+    const ids = [...new Set([...rows.map(r => r.id), ...proposals.map(r => r.id), ...diary.flatMap(d => d.hits.map(e => e.id))])]
+    found({ ids, texts })
+    if (ids.length === 0 && texts.length === 0) return
+    for (const d of diary) this.save(d.file, withoutLines(d.doc, new Set(d.hits.map(e => e.line))))
+    const said = new Set(texts.map(normalize))
+    const candidates = (db.prepare('SELECT id, norm FROM candidates').all() as { id: string; norm: string }[]).filter(c => said.has(c.norm)).map(c => c.id)
+    this.reindex(diary.map(d => d.file), () => {
+      for (const r of rows) if (!r.file) this.store.deleteNote(r.id)
+      const dropProposal = db.prepare('DELETE FROM proposals WHERE id = ?')
+      for (const r of proposals) dropProposal.run(r.id)
+      const dropCandidate = db.prepare('DELETE FROM candidates WHERE id = ?')
+      for (const c of candidates) dropCandidate.run(c)
+      this.blankChanges(new Set(ids))
+      for (const t of texts) this.blankChanges(new Set(), t)
+    })
+    this.updated({ op: 'remove', source: 'user' })
+  }
+
   /** 先写归档再去原行:中间崩溃两边都有,重做时认得出 */
   supersede(id: string, byId: string): void {
     if (!ID.test(byId)) throw badEntry()

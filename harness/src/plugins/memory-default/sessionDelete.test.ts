@@ -1,6 +1,6 @@
 // 08 §4.3 删会话(Review Focus 4)和 memory.deleteMany。前半是 06 的记忆夹具(假模型、非 git 目录),
 // 后半是真 git + 假 CLI(executorRig):保留的 worktree、快照引用、启动时的清扫
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -273,6 +273,46 @@ describe('session.delete through the memory pipeline (Review Focus 4, memory rig
 })
 
 const ofTypeAll = (h: H, type: string) => h.events().filter(e => e.type === type)
+
+describe('session.delete removes what memory_write wrote in it (review C1)', () => {
+  const DRAFT = 'MKdraft9z 草稿区里记下的一条内容足够长'
+  const DURABLE = 'MKdurable9z 要长期记住的一条内容足够长'
+  const SHORT = 'MKshort9z'
+  /** 第一轮:草稿、durable 的提议、一条短草稿;第二轮在另一个会话里写一条不相干的 */
+  const writes = (n: number) =>
+    n === 1 ? calling('w1', 'memory_write', { text: DRAFT })
+      : n === 2 ? calling('w2', 'memory_write', { text: DURABLE, durable: true })
+        : n === 3 ? calling('w3', 'memory_write', { text: SHORT })
+          : n === 5 ? calling('w4', 'memory_write', { text: 'MKkeep9z 另一个会话里的草稿内容足够长' })
+            : say('ok')
+
+  it('the diary lines, the pending proposal and their change records are gone from the files, memory.sqlite and the proposals list; another session keeps its draft', async () => {
+    const h = await memBoot({}, writes)
+    const a = await h.session()
+    await h.prompt(a, '记一下这些')
+    const b = await h.session()
+    await h.prompt(b, '也记一下')
+    h.memory().flushNow()
+    const pending = async () => (await h.handle<{ items: { text: string }[] }>('memory.proposals.list', { status: 'pending' })).items.map(i => i.text)
+    expect(await pending()).toContain(DURABLE)
+    const diary = () => {
+      const dir = join(h.files, 'diary')
+      return existsSync(dir) ? readdirSync(dir).map(f => readFileSync(join(dir, f), 'utf8')).join('\n') : ''
+    }
+    expect(diary()).toContain(DRAFT)
+
+    await del(h, a)
+    expect(await pending()).not.toContain(DURABLE)
+    expect(diary()).not.toContain(DRAFT)
+    expect(diary()).not.toContain(SHORT)
+    expect(diary()).toContain('MKkeep9z')
+    const hay = dbBytes(eventsDb(h.r.dataDir), memoryDb(h.r.dataDir))
+    for (const m of ['MKdraft9z', 'MKdurable9z', 'MKshort9z']) expect(hay.includes(m), m).toBe(false)
+    expect(hay.includes('MKkeep9z')).toBe(true)
+    expect((await h.handle<{ items: unknown[] }>('memory.search', { query: 'MKdraft9z' })).items).toEqual([])
+    expect((await health(h)).problems).toEqual([])
+  })
+})
 
 describe('memory.deleteMany', () => {
   it('3 ids, one unknown: one VACUUM, gone holds the unknown id, the others are gone', async () => {
