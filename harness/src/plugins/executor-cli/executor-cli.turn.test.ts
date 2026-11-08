@@ -179,6 +179,27 @@ describe('turn end to end', () => {
     expect(sh('worktree', 'list')).not.toContain(end.worktree)
   })
 
+  it('08 through the kernel: executor.runs, executor.diff, executor.worktree.merge; a refusal keeps its data', async () => {
+    const f = fake({ lines: CODEX_OK, writeFiles: { 'a.txt': 'changed\n' } })
+    const { k } = await boot(f, { script: n => (n === 1 ? delegate() : say('done')) })
+    await detected(k)
+    const sid = await create(k, { origin: 'schedule' })
+    await turn(k, sid)
+    const { runId, worktree } = pay<{ runId: string; worktree: string }>(ofType(k, sid, 'executor.run.ended')[0])
+    const { runs } = (await k.handle('executor.runs', {})) as { runs: { runId: string; worktree?: { present: boolean; merged?: boolean } }[] }
+    expect(runs).toMatchObject([{ runId, worktree: { path: worktree, present: true, merged: false } }])
+    expect(await k.handle('executor.diff', { sessionId: sid, runId, path: 'a.txt' })).toMatchObject({ path: 'a.txt', lines: [{ kind: 'del', text: 'a' }, { kind: 'add', text: 'changed' }] })
+    writeFileSync(join(cwd, 'a.txt'), 'mine\n')
+    await expect(k.handle('executor.worktree.merge', { commandId: 'm1', sessionId: sid, runId })).rejects.toMatchObject({ code: -32602, data: { reason: 'dirty', paths: ['a.txt'] } })
+    writeFileSync(join(cwd, 'a.txt'), 'a\n')
+    expect(await k.handle('executor.worktree.merge', { commandId: 'm2', sessionId: sid, runId })).toEqual({ ok: true, files: 1 })
+    expect(readFileSync(join(cwd, 'a.txt'), 'utf8')).toBe('changed\n')
+    expect(ofType(k, sid, 'executor.worktree.merged').map(e => pay(e))).toEqual([{ runId, files: 1 }])
+    // 同一个 commandId 重试:回执回答,不再合一次
+    expect(await k.handle('executor.worktree.merge', { commandId: 'm2', sessionId: sid, runId })).toEqual({ ok: true, files: 1 })
+    expect(ofType(k, sid, 'executor.worktree.merged')).toHaveLength(1)
+  })
+
   it('an acp session writes in place like app: its new origin changes memory, not delegation', async () => {
     const f = fake({ lines: CODEX_OK, writeFiles: { 'a.txt': 'changed\n' } })
     const { k } = await boot(f, { script: n => (n === 1 ? delegate() : say('done')) })

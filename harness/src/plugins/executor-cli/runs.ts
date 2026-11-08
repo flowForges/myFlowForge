@@ -1,7 +1,7 @@
 // 运行管理(04 spec §9、§10、§12):排队、上限、生命周期、节流事件、原始日志、改动与通知。
 // 一条规矩:运行离开 active 只有 leave() 一个出口,而 leave() 一定留下通知并叫醒 wait,否则这一轮就永远挂着
 import { randomBytes } from 'node:crypto'
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeSync } from 'node:fs'
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { homedir, tmpdir, userInfo } from 'node:os'
 import { isAbsolute, join, relative, resolve } from 'node:path'
@@ -10,7 +10,9 @@ import type { Logger } from '../../kernel/log'
 import { RpcError } from '../../kernel/rpcError'
 import { isInside, resolveToolPath } from '../../lib/fs/paths'
 import { validateNetworkEntry } from '../../lib/sandbox/net/domains'
-import { changes as gitChanges, NO_REPO, pruneRefs, refExists, repoPrefix, takeSnapshot, type Git, type RepoPin } from '../../lib/git/snapshot'
+import { dirSize } from '../../lib/fs/dirSize'
+import { mergeInto } from '../../lib/git/merge'
+import { changes as gitChanges, fileDiff, NO_REPO, pinIntact, pinRepo, pruneRefs, refExists, repoPrefix, takeSnapshot, type Git, type PinnedRepo, type RepoPin } from '../../lib/git/snapshot'
 import { imWorktreeRootOf, isImCwd } from '../../lib/git/imWorktree'
 import { addWorktree, removeInWorktree, removeWorktree, reserveWorktree, rootConflict, userGitState, worktreePin } from '../../lib/git/worktree'
 import type { PgidRegistry } from '../../lib/proc/pgids'
@@ -20,7 +22,7 @@ import { shellEnv } from '../../lib/tools/shellEnv'
 import type { BackgroundRuns, ExecPolicy, RunNotice, SandboxService } from '../../lib/tools/types'
 import type { KernelEvent } from '../../protocol/index'
 import { ERR_BUSY } from '../../protocol/rpc'
-import type { ExecutorChangesSource, ExecutorIsolation, ExecutorRunReason, ExecutorRunStatus, FileChange } from '../../protocol/tools'
+import type { ExecutorChangesSource, ExecutorIsolation, ExecutorRunReason, ExecutorRunStatus, FileChange, FileDiff, RunRow } from '../../protocol/tools'
 import { foldEvent, type Adapter, type Outcome, type RunEvent, type RunState } from './adapters/types'
 import { binaryChanged, binaryDirs, isolationOf, trustedPath, type ExecutorInfo } from './detect'
 import { cleanText, clip, noticeText } from './diagnostics'
@@ -147,6 +149,8 @@ export interface RunManagerDeps {
 }
 
 const KEEP_RUNS = 50
+/** executor.runs:本次启动以来结束的,内存里留这么多 */
+const ENDED_RING = 200
 const REDETECT_WAIT_MS = 60_000
 const REPORTED_PATH_MAX = 4096
 const SUMMARY_MAX = 300
@@ -427,6 +431,8 @@ interface Run {
   adapter: Adapter
   s: SubmitInput
   seq: number
+  /** executor.run.queued 的时间戳 */
+  queuedAt: number
   phase: 'queued' | 'running'
   abort: AbortController
   /** 内核关闭:走短梯,不拍结束快照,状态写 interrupted */
@@ -505,6 +511,21 @@ const RECHECK_WIDER = 'Not started: the CLI program changed, and its re-check ca
 
 const inRoots = (file: string, roots: string[], platform = process.platform) => roots.some(r => isInside(file, r, platform))
 
+const isDir = (p: string) => {
+  try {
+    return lstatSync(p).isDirectory()
+  } catch {
+    return false
+  }
+}
+const safeList = (dir: string) => {
+  try {
+    return readdirSync(dir)
+  } catch {
+    return []
+  }
+}
+
 const runRef = (sessionId: string, runId: string, phase: 'start' | 'end') => `refs/mffai/runs/${sessionId}/${runId}-${phase}`
 
 export class RunManager implements BackgroundRuns {
@@ -521,6 +542,10 @@ export class RunManager implements BackgroundRuns {
   private stopped = false
   /** 日志出错不能挡住收尾 */
   private log: Logger
+  /** executor.runs:本次启动以来结束的,新的在后 */
+  private endedRows: RunRow[] = []
+  /** 同一个会话的合并排队:两次合并不能交错着写同一个检出 */
+  private merges = new Map<string, Promise<unknown>>()
 
   constructor(private deps: RunManagerDeps) {
     const quiet = (fn: Logger['warn']): Logger['warn'] => (msg, data) => {
@@ -548,11 +573,12 @@ export class RunManager implements BackgroundRuns {
   }
 
   /** 写事件出错(内核已关库)不能挡住运行的收尾 */
-  private write(type: string, sessionId: string, payload: unknown): void {
+  private write(type: string, sessionId: string, payload: unknown): KernelEvent | undefined {
     try {
-      this.deps.append({ type, sessionId, payload } as Omit<KernelEvent, 'seq' | 'ts'>)
+      return this.deps.append({ type, sessionId, payload } as Omit<KernelEvent, 'seq' | 'ts'>)
     } catch (e) {
       this.log.warn('run event not recorded', { type, error: e instanceof Error ? redact(e.message) : 'unknown' })
+      return undefined
     }
   }
 
@@ -568,7 +594,7 @@ export class RunManager implements BackgroundRuns {
 
     const runId = this.deps.newId?.() ?? `run_${randomBytes(8).toString('hex')}`
     const run: Run = {
-      runId, adapter, s, inPlace: runsInPlace(s.origin, s.cwd, this.deps.dataDir), seq: this.seq++, phase: 'queued', abort: new AbortController(), stopping: false,
+      runId, adapter, s, inPlace: runsInPlace(s.origin, s.cwd, this.deps.dataDir), seq: this.seq++, queuedAt: this.now(), phase: 'queued', abort: new AbortController(), stopping: false,
       isolation: s.isolation, redactor: new RunRedactor(), cwd: s.cwd, writer: false, concurrent: false, spawned: false,
       state: { code: null, signal: null, completed: false, sawResult: false, errors: [], timedOut: false, stalled: false, cancelled: false },
       files: new Set(), stderrTail: '', droppedLines: 0,
@@ -579,11 +605,12 @@ export class RunManager implements BackgroundRuns {
     this.queue.push(run)
     this.queue.sort((a, b) => Number(b.inPlace) - Number(a.inPlace) || a.seq - b.seq)
     const position = this.queue.indexOf(run)
-    this.write('executor.run.queued', s.sessionId, {
+    const queued = this.write('executor.run.queued', s.sessionId, {
       runId, turnId: s.turnId, callId: s.callId, executor: adapter.id,
       summary: `${adapter.id}: ${clip(redact(s.prompt), SUMMARY_MAX)}`,
       readOnly: s.readOnly, isolation: s.isolation, position,
     })
+    if (typeof queued?.ts === 'number') run.queuedAt = queued.ts
     this.dispatch()
     // 名额满时队列可能是空的、position 是 0:起没起来只看 dispatch 之后的状态
     return { runId, position: this.queue.indexOf(run), queued: run.phase === 'queued' }
@@ -1186,6 +1213,13 @@ export class RunManager implements BackgroundRuns {
       ...(run.nativeId && { nativeId: run.nativeId }),
       ...(dropped > 0 && { droppedProgress: dropped }),
     })
+    this.endedRows.push({
+      runId, sessionId: s.sessionId, turnId: s.turnId, executor: adapter.id, phase: 'ended', status: outcome.status,
+      ...(outcome.reason && { reason: outcome.reason }),
+      queuedAt: run.queuedAt, ms, readOnly: s.readOnly, isolation: run.isolation, changed: changed.files.length,
+      ...(run.worktree && { worktree: { path: run.worktree.path, present: true } }),
+    })
+    if (this.endedRows.length > ENDED_RING) this.endedRows.splice(0, this.endedRows.length - ENDED_RING)
     if (attempt.uncounted) {
       const t = this.turn(s.turnId)
       t.submitted = Math.max(0, t.submitted - 1)
@@ -1303,6 +1337,19 @@ export class RunManager implements BackgroundRuns {
 
   /** 全部从事件和引用名推出来,重启后也能用。runId 不属于这个会话 → -32602 */
   async changes(sessionId: string, runId: string): Promise<{ files: FileChange[]; source: ExecutorChangesSource; concurrent?: boolean }> {
+    const set = await this.changeSet(sessionId, runId)
+    if (set.kind === 'reported') return set.result
+    return { files: set.files.map(f => ({ ...f, path: redact(f.path) })), source: 'git', ...set.concurrent }
+  }
+
+  /**
+   * changes、diff、merge 共用:两张快照之间的改动(真实路径,`deny read` 副本已去掉)和算它用的引用、钉子。
+   * 算不了 → run.ended 记下的(reported)
+   */
+  private async changeSet(sessionId: string, runId: string): Promise<
+    | { kind: 'reported'; result: { files: FileChange[]; source: ExecutorChangesSource; concurrent?: boolean } }
+    | { kind: 'git'; files: FileChange[]; cwd: string; startRef: string; endRef: string; pin: PinnedRepo; started: { cwd: string; worktree?: string; executor?: string }; concurrent: { concurrent?: true } }
+  > {
     const { git, tmpDir } = this.deps
     const { log } = this
     const events = this.deps.history(sessionId)
@@ -1313,12 +1360,12 @@ export class RunManager implements BackgroundRuns {
     if (!find('executor.run.queued')) throw new RpcError(-32602, 'unknown run')
     const started = find<{ cwd: string; worktree?: string; executor?: string }>('executor.run.started')
     const ended = find<{ status?: string; changed?: { files: string[]; source: ExecutorChangesSource; concurrent?: boolean } }>('executor.run.ended')
-    const concurrent = ended?.changed?.concurrent ? { concurrent: true } : {}
+    const concurrent: { concurrent?: true } = ended?.changed?.concurrent ? { concurrent: true } : {}
     /** 算不了就报 run.ended 记下的。没有状态,一律按改过算 */
     const reported = () => {
       const files = ended?.changed?.files ?? []
       const source: ExecutorChangesSource = files.length > 0 ? ended!.changed!.source : 'none'
-      return { files: files.map(path => ({ path, status: 'M' as const })), source, ...concurrent }
+      return { kind: 'reported' as const, result: { files: files.map(path => ({ path, status: 'M' as const })), source, ...concurrent } }
     }
     if (!started) return reported()
     const { cwd } = started
@@ -1327,7 +1374,7 @@ export class RunManager implements BackgroundRuns {
     try {
       const session = this.pinOf(sessionId)
       const pin = started.worktree ? worktreePin(session, started.worktree, cwd) : session
-      if (!pin) return reported()
+      if (!pin || pin.kind !== 'repo') return reported()
       const exists = (ref: string) => refExists(ref, git, { pin, tmpDir })
       if (!(await exists(startRef))) return reported()
       // 只有 finish 拍的结束快照算数。还在跑、中断的(内核关闭和崩溃都不拍)要现拍:这里之前写下的 -end 早就过时了
@@ -1338,11 +1385,168 @@ export class RunManager implements BackgroundRuns {
       }
       const files = await gitChanges(cwd, startRef, endRef, git, this.gitOpts(pin))
       const denied = this.deniedForChanges(sessionId, started)
-      return { files: files.filter(f => !inRoots(join(started.worktree ?? cwd, f.path), denied)).map(f => ({ ...f, path: redact(f.path) })), source: 'git', ...concurrent }
+      return { kind: 'git', files: files.filter(f => !inRoots(join(started.worktree ?? cwd, f.path), denied)), cwd, startRef, endRef, pin, started, concurrent }
     } catch (e) {
       log.warn('executor.changes failed', { runId, error: e instanceof Error ? redact(e.message) : 'unknown' })
       return reported()
     }
+  }
+
+  /**
+   * executor.diff(08 §4.4、R10):path 是 executor.changes 回的、redact 过的那个。拿去和改动清单里每一项 redact 之后的样子比,
+   * 对上了再用真实路径跑 diff;对不上、或两项 redact 后撞成同一个 → -32602,不跑 diff
+   */
+  async diff(sessionId: string, runId: string, path: string): Promise<FileDiff> {
+    const set = await this.changeSet(sessionId, runId)
+    if (set.kind !== 'git') throw new RpcError(-32602, 'no snapshot diff for this run')
+    const hits = set.files.filter(f => redact(f.path) === path)
+    if (hits.length === 0) throw new RpcError(-32602, 'path not in the change list')
+    if (hits.length > 1) throw new RpcError(-32602, 'ambiguous path')
+    try {
+      const d = await fileDiff(set.cwd, set.startRef, set.endRef, hits[0].path, this.deps.git, this.gitOpts(set.pin))
+      return { ...d, path }
+    } catch (e) {
+      this.log.warn('executor.diff failed', { runId, error: e instanceof Error ? redact(e.message) : 'unknown' })
+      throw new RpcError(-32603, 'diff failed')
+    }
+  }
+
+  /**
+   * executor.runs(08 §4.4):活着的、本次启动以来结束的(环形 200)、根目录下还在的 worktree(配上该会话的事件)。新的在前
+   */
+  runs(limit = 100): RunRow[] {
+    const rows = new Map<string, RunRow>()
+    for (const run of this.live.values()) {
+      const { s } = run
+      rows.set(run.runId, {
+        runId: run.runId, sessionId: s.sessionId, turnId: s.turnId, executor: run.adapter.id, phase: run.phase, queuedAt: run.queuedAt,
+        readOnly: s.readOnly, isolation: run.isolation, ...(run.worktree && { worktree: { path: run.worktree.path, present: true } }),
+      })
+    }
+    for (const row of [...this.endedRows].reverse()) if (!rows.has(row.runId)) rows.set(row.runId, { ...row })
+    for (const { sessionId, runId, path } of this.scanWorktrees()) {
+      if (rows.has(runId)) continue
+      const row = this.rowFromHistory(sessionId, runId, path)
+      if (row) rows.set(runId, row)
+    }
+    const histories = new Map<string, KernelEvent[]>()
+    const historyOf = (sid: string) => {
+      if (!histories.has(sid)) histories.set(sid, this.deps.history(sid))
+      return histories.get(sid)!
+    }
+    const out = [...rows.values()].map(row => {
+      if (!row.worktree) return row
+      const present = isDir(row.worktree.path)
+      const bytes = present && row.phase === 'ended' ? dirSize(row.worktree.path) : undefined
+      const merged = historyOf(row.sessionId).some(e => e.type === 'executor.worktree.merged' && (e.payload as { runId?: string } | undefined)?.runId === row.runId)
+      return { ...row, worktree: { path: row.worktree.path, present, ...(bytes !== undefined && { bytes }), merged } }
+    })
+    return out.sort((a, b) => b.queuedAt - a.queuedAt).slice(0, limit)
+  }
+
+  /** <根>/<会话>/<运行>:只认目录,链接不跟 */
+  private scanWorktrees(): { sessionId: string; runId: string; path: string }[] {
+    const { worktreeRoot } = this.deps
+    if (!worktreeRoot) return []
+    let root: string
+    try {
+      if (!lstatSync(worktreeRoot).isDirectory()) return []
+      root = realpathSync(worktreeRoot)
+    } catch {
+      return []
+    }
+    const out: { sessionId: string; runId: string; path: string }[] = []
+    for (const sessionId of safeList(root)) {
+      const dir = join(root, sessionId)
+      if (!isDir(dir)) continue
+      for (const runId of safeList(dir)) if (isDir(join(dir, runId))) out.push({ sessionId, runId, path: join(dir, runId) })
+    }
+    return out
+  }
+
+  /** 上一次启动留下的运行:queued 事件里没有的不列(不是我们的) */
+  private rowFromHistory(sessionId: string, runId: string, path: string): RunRow | undefined {
+    const of = <T>(type: string) =>
+      this.deps.history(sessionId).find(e => e.type === type && (e.payload as { runId?: string } | undefined)?.runId === runId) as (KernelEvent & { payload: T }) | undefined
+    const queued = of<{ turnId: string; executor: string; readOnly: boolean; isolation: ExecutorIsolation }>('executor.run.queued')
+    if (!queued) return undefined
+    const started = of<{ isolation?: ExecutorIsolation; worktree?: string }>('executor.run.started')?.payload
+    const ended = of<{ status?: ExecutorRunStatus; reason?: ExecutorRunReason; ms?: number; changed?: { files?: string[] }; worktree?: string }>('executor.run.ended')?.payload
+    const q = queued.payload
+    return {
+      runId, sessionId, turnId: q.turnId, executor: q.executor, phase: 'ended',
+      ...(ended?.status && { status: ended.status }), ...(ended?.reason && { reason: ended.reason }),
+      queuedAt: queued.ts, ...(typeof ended?.ms === 'number' && { ms: ended.ms }),
+      readOnly: q.readOnly, isolation: started?.isolation ?? q.isolation,
+      worktree: { path: started?.worktree ?? ended?.worktree ?? path, present: true },
+      ...(Array.isArray(ended?.changed?.files) && { changed: ended.changed.files.length }),
+    }
+  }
+
+  /**
+   * executor.worktree.merge(08 §4.5):base / end 是运行的 -start / -end 快照,to 是会话钉住的仓库(重新 pinRepo 核对身份),
+   * 去掉 `deny read` 的副本。成功写 executor.worktree.merged;拒绝 → -32602,data = { reason, paths?, restored? }
+   */
+  async merge(sessionId: string, runId: string): Promise<{ ok: true; files: number }> {
+    const live = this.live.get(runId)
+    if (live?.s.sessionId === sessionId) throw new RpcError(ERR_BUSY, 'run in progress')
+    const prev = this.merges.get(sessionId) ?? Promise.resolve()
+    const run = prev.then(() => this.mergeNow(sessionId, runId), () => this.mergeNow(sessionId, runId))
+    const tail = run.catch(() => {})
+    this.merges.set(sessionId, tail)
+    void tail.then(() => {
+      if (this.merges.get(sessionId) === tail) this.merges.delete(sessionId)
+    })
+    return run
+  }
+
+  private async mergeNow(sessionId: string, runId: string): Promise<{ ok: true; files: number }> {
+    const { git, tmpDir } = this.deps
+    const refuse = (reason: string, extra: { paths?: string[]; restored?: boolean } = {}) =>
+      new RpcError(-32602, reason, { reason, ...(extra.paths && { paths: extra.paths }), ...(extra.restored !== undefined && { restored: extra.restored }) })
+    if (this.live.get(runId)?.s.sessionId === sessionId) throw new RpcError(ERR_BUSY, 'run in progress')
+    const events = this.deps.history(sessionId)
+    const payload = (type: string) => events.find(e => e.type === type && (e.payload as { runId?: string } | undefined)?.runId === runId)?.payload as { cwd?: string; worktree?: string } | undefined
+    if (!payload('executor.run.queued')) throw new RpcError(-32602, 'unknown run')
+    const started = payload('executor.run.started')
+    if (!started?.worktree || typeof started.cwd !== 'string') throw refuse('nothing')
+    const session = this.pinOf(sessionId)
+    const sessionCwd = this.deps.sessions.get(sessionId)?.cwd
+    if (session.kind !== 'repo' || sessionCwd === undefined) throw refuse('not_git')
+    if (!(await this.samePin(session, sessionCwd))) throw refuse('unsafe_repo')
+    if (!isDir(started.worktree)) throw refuse('nothing')
+    const from = worktreePin(session, started.worktree, started.cwd)
+    if (!from) throw refuse('unsafe_repo')
+    const set = await this.changeSet(sessionId, runId)
+    if (set.kind !== 'git') throw refuse('nothing')
+    let outcome: Awaited<ReturnType<typeof mergeInto>>
+    try {
+      outcome = await mergeInto({
+        git,
+        from: { pin: from, dir: set.cwd, baseRef: set.startRef, endRef: set.endRef },
+        to: { pin: session, dir: sessionCwd },
+        exclude: this.deniedForChanges(sessionId, set.started),
+        tmpDir: tmpDir ?? realpathSync(tmpdir()),
+        gitOpts: { writableRoots: this.gitOpts(session).writableRoots },
+      })
+    } catch (e) {
+      this.log.warn('worktree merge failed', { runId, error: e instanceof Error ? redact(e.message) : 'unknown' })
+      throw new RpcError(-32603, 'merge failed')
+    }
+    if (!outcome.ok) throw refuse(outcome.reason, outcome)
+    this.write('executor.worktree.merged', sessionId, { runId, files: outcome.files })
+    return { ok: true, files: outcome.files }
+  }
+
+  /** 钉子还完整,而且现在从会话目录找到的还是它(同一组身份) */
+  private async samePin(pin: PinnedRepo, cwd: string): Promise<boolean> {
+    if (!pinIntact(pin)) return false
+    const { worktreeRoot, dataDir, tmpDir, git } = this.deps
+    const untrusted = [...(worktreeRoot ? [worktreeRoot] : []), ...(dataDir !== undefined ? [dataDir, imWorktreeRootOf(dataDir)] : [])]
+    const now = await pinRepo(cwd, git, { tmpDir, untrusted })
+    if (now.kind !== 'repo') return false
+    const same = (a: { dev: number; ino: number }, b: { dev: number; ino: number }) => a.dev === b.dev && a.ino === b.ino
+    return now.top === pin.top && now.gitDir === pin.gitDir && now.commonDir === pin.commonDir && same(now.ids.top, pin.ids.top) && same(now.ids.gitDir, pin.ids.gitDir) && same(now.ids.commonDir, pin.ids.commonDir)
   }
 
   /** run.ended 里已经滤掉了;这里按现在的规则再算一遍,重启后 Run 不在了 */

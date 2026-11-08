@@ -86,6 +86,13 @@ function activateUnsupported(ctx: PluginContext, adapters: Adapter[]): void {
   ctx.rpc.register('executor.changes', async () => {
     throw new RpcError(-32602, 'unknown run')
   })
+  ctx.rpc.register('executor.diff', async () => {
+    throw new RpcError(-32602, 'unknown run')
+  })
+  ctx.rpc.register('executor.runs', async () => ({ runs: [] }))
+  ctx.rpc.register('executor.worktree.merge', async () => {
+    throw new RpcError(-32602, 'unknown run')
+  })
 }
 
 export function createExecutorCli(opts: ExecutorCliOpts = {}): Plugin {
@@ -346,6 +353,18 @@ export function createExecutorCli(opts: ExecutorCliOpts = {}): Plugin {
       ctx.rpc.register('executor.worktree.discard', async params => {
         const { sessionId, runId } = params as WorkerParams<'executor.worktree.discard'>
         return manager.discard(sessionId, runId)
+      })
+      ctx.rpc.register('executor.diff', async params => {
+        const { sessionId, runId, path } = params as WorkerParams<'executor.diff'>
+        return manager.diff(sessionId, runId, path)
+      })
+      ctx.rpc.register('executor.runs', async params => {
+        const { limit } = params as WorkerParams<'executor.runs'>
+        return { runs: manager.runs(limit) }
+      })
+      ctx.rpc.register('executor.worktree.merge', async params => {
+        const { sessionId, runId } = params as WorkerParams<'executor.worktree.merge'>
+        return manager.merge(sessionId, runId)
       })
 
       // 最后注册、最先释放:先挡住还在路上的探测结果

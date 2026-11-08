@@ -3545,3 +3545,166 @@ describe('an IM session whose cwd is already a worktree (07 spec §8.2)', () => 
     expect(fake.calls()).toEqual([])
   })
 })
+
+describe('08: executor.diff, executor.runs, executor.worktree.merge', () => {
+  usesGit()
+  const wtRoot = () => join(root, 'wt')
+  const wtPath = (run: string, sid = SID) => join(wtRoot(), sid, run)
+  const ug = (args: string[], cwd = repo) => execFileSync('git', args, { cwd, env: gitBase, stdio: ['ignore', 'pipe', 'ignore'] }).toString()
+  const isolatedGit = () => createGit({ base: gitBase, extraEnv: { GIT_CONFIG_GLOBAL: join(home, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1' } })
+  let ids = 0
+  const rigWith = (fake: FakeCli, o: Options = {}) => setup([fake], { git: isolatedGit(), ...o, deps: { worktreeRoot: wtRoot(), newId: () => `run_${++ids}`, tmpDir: join(root, 'snaptmp'), ...o.deps } })
+  const sched = (over: Partial<SubmitInput> = {}): Partial<SubmitInput> => ({ origin: 'schedule', ...over })
+  const refusal = (e: unknown) => (e as { code: number; data?: unknown })
+  const merged = (rig: Rig) => rig.of('executor.worktree.merged').map(e => e.payload)
+  beforeEach(() => mkdirSync(join(root, 'snaptmp'), { recursive: true }))
+
+  describe('executor.diff', () => {
+    it('a changed file: its lines between the run snapshots', async () => {
+      const rig = rigWith(installFake({ writeFiles: { 'a.txt': 'a2\n' }, lines: CODEX_OK }))
+      const { runId } = await one(rig, sched())
+      expect(await rig.manager.diff(SID, runId, 'a.txt')).toEqual({
+        path: 'a.txt', status: 'M', binary: false, truncated: false,
+        lines: [{ kind: 'del', ln: 1, text: 'a' }, { kind: 'add', ln: 1, text: 'a2' }],
+      })
+    })
+
+    it('a path whose redact form differs: the redacted form is accepted and diffs the real file', async () => {
+      const real = `${SECRET}.txt`
+      const rig = rigWith(installFake({ writeFiles: { [real]: 'k\n' }, lines: CODEX_OK }))
+      const { runId } = await one(rig, sched())
+      const { files } = await rig.manager.changes(SID, runId)
+      expect(files).toEqual([{ path: '***.txt', status: 'A' }])
+      const d = await rig.manager.diff(SID, runId, '***.txt')
+      expect(d).toMatchObject({ path: '***.txt', status: 'A', lines: [{ kind: 'add', ln: 1, text: 'k' }] })
+      expect(JSON.stringify(d)).not.toContain(SECRET)
+      await expect(rig.manager.diff(SID, runId, real)).rejects.toMatchObject({ code: -32602 })
+    })
+
+    it('two paths that redact to the same form: -32602', async () => {
+      const rig = rigWith(installFake({ writeFiles: { 'sk-aaaaaaaaaaaaaaaaaaaa.txt': 'a\n', 'sk-bbbbbbbbbbbbbbbbbbbb.txt': 'b\n' }, lines: CODEX_OK }))
+      const { runId } = await one(rig, sched())
+      await expect(rig.manager.diff(SID, runId, '***.txt')).rejects.toMatchObject({ code: -32602 })
+    })
+
+    it('a path not in the change list: -32602, and git never reads it (argv spy)', async () => {
+      const argv: string[][] = []
+      const real = isolatedGit()
+      const spy: Git = (args, o) => (argv.push(args), real(args, o))
+      const rig = rigWith(installFake({ writeFiles: { 'a.txt': 'a2\n' }, lines: CODEX_OK }), { git: spy })
+      const { runId } = await one(rig, sched())
+      argv.length = 0
+      for (const path of ['b.txt', '../x', '.git/config']) await expect(rig.manager.diff(SID, runId, path)).rejects.toMatchObject({ code: -32602 })
+      expect(argv.some(a => a.some(x => /b\.txt|\.\.\/x|\.git\/config/.test(x)))).toBe(false)
+      expect(argv.some(a => a.includes('-U3') || a.includes('--numstat'))).toBe(false)
+      await expect(rig.manager.diff(SID, 'run_nope', 'a.txt')).rejects.toMatchObject({ code: -32602 })
+    })
+  })
+
+  describe('executor.runs', () => {
+    it('a running run, then the ended one with its worktree, bytes and merged', async () => {
+      const go = installFake({ writeFiles: { 'n.txt': 'n\n' }, lines: CODEX_OK, sleep: 1500 })
+      const rig = rigWith(go)
+      const runId = submit(rig, sched())
+      await expect.poll(() => rig.manager.runs().find(r => r.runId === runId)?.phase, { timeout: 10_000, interval: 10 }).toBe('running')
+      const live = rig.manager.runs().find(r => r.runId === runId)!
+      expect(live).toMatchObject({ sessionId: SID, turnId: 't1', executor: 'codex', readOnly: false, isolation: 'own' })
+      expect(typeof live.queuedAt).toBe('number')
+      await drain(rig)
+      const [row] = rig.manager.runs()
+      expect(row).toMatchObject({ runId, phase: 'ended', status: 'ok', changed: 1, worktree: { path: wtPath(runId), present: true, merged: false } })
+      expect(row.worktree!.bytes).toBeGreaterThan(0)
+      await rig.manager.merge(SID, runId)
+      expect(rig.manager.runs()[0].worktree).toMatchObject({ present: true, merged: true })
+    })
+
+    it('after a restart: a retained worktree is listed from the root and the history, present, with its bytes', async () => {
+      const fake = installFake({ writeFiles: { 'n.txt': 'n\n' }, lines: CODEX_OK })
+      const first = rigWith(fake)
+      const { runId } = await one(first, sched())
+      const restarted = rigWith(fake, { deps: { history: () => first.events as never } })
+      const rows = restarted.manager.runs()
+      expect(rows).toHaveLength(1)
+      expect(rows[0]).toMatchObject({ runId, sessionId: SID, turnId: 't1', executor: 'codex', phase: 'ended', status: 'ok', changed: 1, readOnly: false, worktree: { path: wtPath(runId), present: true, merged: false } })
+      expect(rows[0].worktree!.bytes).toBeGreaterThan(0)
+      // 目录里不是运行的、链接、没有事件的:不列
+      mkdirSync(join(wtRoot(), SID, 'run_stray'))
+      symlinkSync(root, join(wtRoot(), SID, 'run_link'))
+      expect(restarted.manager.runs().map(r => r.runId)).toEqual([runId])
+    })
+
+    it('discarded: present false; limit', async () => {
+      const fake = installFake({ writeFiles: { 'n.txt': 'n\n' }, lines: CODEX_OK })
+      const rig = rigWith(fake)
+      const a = (await one(rig, sched())).runId
+      const b = (await one(rig, sched())).runId
+      await rig.manager.discard(SID, a)
+      const rows = rig.manager.runs()
+      expect(rows.map(r => r.runId)).toEqual([b, a])
+      expect(rows[1].worktree).toMatchObject({ present: false })
+      expect(rows[1].worktree!.bytes).toBeUndefined()
+      expect(rig.manager.runs(1).map(r => r.runId)).toEqual([b])
+    })
+  })
+
+  describe('executor.worktree.merge', () => {
+    it('merged into the session checkout as uncommitted changes; executor.worktree.merged once; again → conflict', async () => {
+      const rig = rigWith(installFake({ writeFiles: { 'a.txt': 'a2\n', 'new.txt': 'n\n' }, deleteFiles: ['b.txt'], lines: CODEX_OK }))
+      const { runId } = await one(rig, sched())
+      expect(await rig.manager.merge(SID, runId)).toEqual({ ok: true, files: 3 })
+      expect(readFileSync(join(repo, 'a.txt'), 'utf8')).toBe('a2\n')
+      expect(readFileSync(join(repo, 'new.txt'), 'utf8')).toBe('n\n')
+      expect(existsSync(join(repo, 'b.txt'))).toBe(false)
+      expect(ug(['diff', '--cached', '--name-only'])).toBe('')
+      expect(merged(rig)).toEqual([{ runId, files: 3 }])
+      const again = await rig.manager.merge(SID, runId).catch(e => e)
+      expect(refusal(again)).toMatchObject({ code: -32602, data: { reason: 'conflict' } })
+      expect(merged(rig)).toHaveLength(1)
+    })
+
+    it('a deny-read copy the run lost (.env.local): the checkout keeps it', async () => {
+      writeFileSync(join(repo, '.env.local'), 'TOKEN=1\n')
+      const policy = (cwd: string) => ({ ...POLICY, ruleDenyRead: [join(cwd, '.env.local')] })
+      const rig = rigWith(installFake({ writeFiles: { 'n.txt': 'n\n' }, lines: CODEX_OK }), { policy })
+      const { runId } = await one(rig, sched())
+      expect(existsSync(join(wtPath(runId), '.env.local'))).toBe(false)
+      expect(await rig.manager.merge(SID, runId)).toEqual({ ok: true, files: 1 })
+      expect(readFileSync(join(repo, '.env.local'), 'utf8')).toBe('TOKEN=1\n')
+    })
+
+    it('a refusal carries reason and paths: dirty', async () => {
+      const rig = rigWith(installFake({ writeFiles: { 'a.txt': 'a2\n' }, lines: CODEX_OK }))
+      const { runId } = await one(rig, sched())
+      writeFileSync(join(repo, 'a.txt'), 'mine\n')
+      const e = await rig.manager.merge(SID, runId).catch(x => x)
+      expect(refusal(e)).toMatchObject({ code: -32602, message: 'dirty', data: { reason: 'dirty', paths: ['a.txt'] } })
+      expect(readFileSync(join(repo, 'a.txt'), 'utf8')).toBe('mine\n')
+      expect(merged(rig)).toEqual([])
+    })
+
+    it('a run still in progress: -32003', async () => {
+      const rig = rigWith(installFake({ writeFiles: { 'n.txt': 'n\n' }, lines: CODEX_OK, sleep: 1500 }))
+      const runId = submit(rig, sched())
+      await expect(rig.manager.merge(SID, runId)).rejects.toMatchObject({ code: ERR_BUSY })
+      await drain(rig)
+      expect(existsSync(join(repo, 'n.txt'))).toBe(false)
+    })
+
+    it('the session repo was swapped since it was pinned: unsafe_repo', async () => {
+      const rig = rigWith(installFake({ writeFiles: { 'n.txt': 'n\n' }, lines: CODEX_OK }))
+      const { runId } = await one(rig, sched())
+      execFileSync('mv', [join(repo, '.git'), join(root, 'old-git')])
+      execFileSync('cp', ['-R', join(root, 'old-git'), join(repo, '.git')])
+      const e = await rig.manager.merge(SID, runId).catch(x => x)
+      expect(refusal(e)).toMatchObject({ code: -32602, data: { reason: 'unsafe_repo' } })
+      expect(existsSync(join(repo, 'n.txt'))).toBe(false)
+    })
+
+    it('an in-place run has no worktree: nothing; an unknown run: -32602', async () => {
+      const rig = rigWith(installFake({ writeFiles: { 'n.txt': 'n\n' }, lines: CODEX_OK }))
+      const { runId } = await one(rig)
+      expect(refusal(await rig.manager.merge(SID, runId).catch(x => x))).toMatchObject({ code: -32602, data: { reason: 'nothing' } })
+      expect(refusal(await rig.manager.merge(SID, 'run_nope').catch(x => x))).toMatchObject({ code: -32602 })
+    })
+  })
+})
