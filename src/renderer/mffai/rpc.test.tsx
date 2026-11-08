@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { call, cmd, isUnsupported, MffaiCallError } from './rpc'
+import { call, cmd, isUnsupported, MffaiCallError, retryable } from './rpc'
 
 let callFn: ReturnType<typeof vi.fn>
 
@@ -72,5 +72,20 @@ describe('rpc', () => {
     const a = cmd(), b = cmd()
     expect(a).toMatch(/^[0-9a-f-]{36}$/)
     expect(a).not.toBe(b)
+  })
+})
+
+describe('retryable', () => {
+  it('the same key gets the same commandId until done; another key or done gives a fresh one', () => {
+    const r = retryable()
+    const a = r.id('s1\0x')
+    expect(r.id('s1\0x')).toBe(a)
+    const b = r.id('s1\0y')
+    expect(b).not.toBe(a)
+    expect(r.id('s1\0y')).toBe(b)
+    r.done('s1\0x')
+    expect(r.id('s1\0y')).toBe(b)
+    r.done('s1\0y')
+    expect(r.id('s1\0y')).not.toBe(b)
   })
 })

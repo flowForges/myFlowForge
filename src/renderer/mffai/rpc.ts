@@ -16,6 +16,21 @@ export class MffaiCallError extends Error {
 /** 一次操作的 commandId:超时后用同一个重试才有回执重放 */
 export const cmd = (): string => crypto.randomUUID()
 
+/**
+ * 同一个操作(key 相同:同一会话、同样的参数)失败后重试,用同一个 commandId,超时后的重试才有回执重放;
+ * 成功后 done(key) 换新的。key 变了(参数改了)就是另一个操作
+ */
+export function retryable(): { id(key: string): string; done(key: string): void } {
+  let cur: { key: string; id: string } | undefined
+  return {
+    id(key) {
+      if (cur?.key !== key) cur = { key, id: cmd() }
+      return cur.id
+    },
+    done(key) { if (cur?.key === key) cur = undefined },
+  }
+}
+
 const ERR_INTERNAL = -32603
 const ERR_METHOD_NOT_FOUND = -32601
 
