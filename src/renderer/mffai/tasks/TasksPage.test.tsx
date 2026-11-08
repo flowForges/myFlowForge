@@ -111,11 +111,12 @@ describe('TasksPage', () => {
     expect(f.callsOf('executor.worktree.discard')).toEqual([{ commandId: expect.any(String), sessionId: 's1', runId: 're' }])
   })
 
-  it('IM worktree group: 改动 opens channel.telegram.worktree.changes/diff; 合并 names the project and sends channel.telegram.worktree.merge', async () => {
+  it('IM worktree group: 改动 opens channel.telegram.worktree.changes/diff; 合并 names the real checkout path (not the project label) and sends channel.telegram.worktree.merge', async () => {
     f = installFakeForge({ calls: {
       'executor.runs': { runs: [] },
       'channel.telegram.chats': { chats: [], worktrees: [{ id: 'w1', project: 'proj', path: '/im/w1', sessionIds: [], createdAt: 1 }] },
       'session.list': { sessions: [] },
+      'channel.telegram.config.get': { enabled: true, staleMinutes: 10, projects: [{ name: 'proj', path: '/checkout/proj', auto: false }] },
       'channel.telegram.worktree.changes': { files: [{ path: 'a.ts', status: 'M' }] },
       'channel.telegram.worktree.diff': { path: 'a.ts', status: 'M', binary: false, truncated: false, lines: [{ kind: 'add', ln: 1, text: 'NEW' }] },
       'channel.telegram.worktree.merge': { ok: true, files: 1 },
@@ -126,11 +127,30 @@ describe('TasksPage', () => {
     fireEvent.click(await within(row).findByText('a.ts'))
     await within(row).findByText('NEW')
 
-    fireEvent.click(within(row).getByRole('button', { name: '合并' }))
-    expect(dialog()).toHaveAccessibleName('合并到 proj')
+    fireEvent.click(await within(row).findByRole('button', { name: '合并' }))
+    expect(dialog()).toHaveAccessibleName('合并到 /checkout/proj')
+    expect(rows()).toEqual([['项目', 'proj'], ['worktree', '/im/w1']])
     await act(async () => { fireEvent.click(within(dialog()).getByRole('button', { name: '合并' })) })
     expect(f.callsOf('channel.telegram.worktree.merge')).toEqual([{ commandId: expect.any(String), worktreeId: 'w1' }])
     await within(row).findByText('已合并')
+  })
+
+  it('an IM worktree whose project is not in channel.telegram.config.get has no 合并 button (merge disabled, not a label fallback)', async () => {
+    f = installFakeForge({ calls: {
+      'executor.runs': { runs: [] },
+      'channel.telegram.chats': { chats: [], worktrees: [
+        { id: 'w1', project: 'gone', path: '/im/w1', sessionIds: [], createdAt: 1 },
+        { id: 'w2', project: '', path: '/im/w2', sessionIds: [], createdAt: 1 },
+      ] },
+      'session.list': { sessions: [] },
+      'channel.telegram.config.get': { enabled: true, staleMinutes: 10, projects: [{ name: 'other', path: '/checkout/other', auto: false }] },
+    } })
+    render(<TasksPage />)
+    const row1 = (await screen.findByText('gone')).closest('[data-worktree]') as HTMLElement
+    await waitFor(() => expect(within(row1).queryByRole('button', { name: '合并' })).toBeNull())
+    expect(within(row1).getByRole('button', { name: '丢弃' })).not.toBeNull()
+    const row2 = document.querySelector('[data-worktree="w2"]') as HTMLElement
+    expect(within(row2).queryByRole('button', { name: '合并' })).toBeNull()
   })
 
   it('discard confirm for an IM worktree counts sessions whose cwd is inside it (boundary on /), not a sibling with a longer name', async () => {

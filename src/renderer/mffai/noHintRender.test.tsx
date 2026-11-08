@@ -287,6 +287,7 @@ const ROWS: Row[] = [
           { id: 'w1', project: 'proj', path: '/im/w1', sessionIds: [], createdAt: Date.now(), bytes: 1024, usedByChat: '7' },
         ] },
         'session.list': { sessions: [summary('s1', { title: '一号', cwd: '/repo' })] },
+        'channel.telegram.config.get': { enabled: true, staleMinutes: 10, projects: [{ name: 'proj', path: '/checkout/proj', auto: false }] },
         'channel.telegram.worktree.changes': { files: [{ path: 'a.ts', status: 'M' }] },
         'channel.telegram.worktree.diff': { path: 'a.ts', status: 'M', binary: false, truncated: false, lines: [{ kind: 'add', ln: 1, text: 'x' }] },
       })
@@ -298,6 +299,10 @@ const ROWS: Row[] = [
       expect(findHints()).toEqual([])
       fireEvent.click(screen.getByRole('button', { name: '取消' }))
       const wtRow = (await screen.findByText('proj')).closest('[data-worktree]') as HTMLElement
+      fireEvent.click(await within(wtRow).findByRole('button', { name: '合并' }))
+      await screen.findByRole('dialog')
+      expect(findHints()).toEqual([])
+      fireEvent.click(screen.getByRole('button', { name: '取消' }))
       fireEvent.click(within(wtRow).getByRole('button', { name: '改动' }))
       await within(wtRow).findByText('a.ts')
       fireEvent.click(within(wtRow).getByRole('button', { name: '丢弃' }))

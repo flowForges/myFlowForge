@@ -108,6 +108,8 @@ interface Tasks {
   worktrees: TelegramChats['worktrees'] | null
   imUnsupported: boolean
   sessions: Map<string, SessionSummary>
+  /** 项目名 → 真实检出路径(channel.telegram.config.get);IM worktree 合并要给用户看写进哪里,不能只报项目名 */
+  projectPaths: Map<string, string>
   reload(): void
 }
 
@@ -118,6 +120,7 @@ function useTasks(): Tasks {
   const [worktrees, setWorktrees] = useState<TelegramChats['worktrees'] | null>(null)
   const [imUnsupported, setImUnsupported] = useState(false)
   const [sessions, setSessions] = useState<Map<string, SessionSummary>>(() => new Map())
+  const [projectPaths, setProjectPaths] = useState<Map<string, string>>(() => new Map())
   const gen = useRef(0)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const alive = useRef(true)
@@ -148,6 +151,10 @@ function useTasks(): Tasks {
       (r) => { if (alive.current && g === gen.current) setSessions(new Map(r.sessions.map((s) => [s.id, s]))) },
       () => {},
     )
+    void call('channel.telegram.config.get').then(
+      (r) => { if (alive.current && g === gen.current) setProjectPaths(new Map(r.projects.map((p) => [p.name, p.path]))) },
+      (e) => { if (alive.current && g === gen.current && !isUnsupported(e)) console.error('mffai channel.telegram.config.get', e) },
+    )
   }, [])
 
   useEffect(() => {
@@ -166,7 +173,7 @@ function useTasks(): Tasks {
     reload()
   })
 
-  return { runs, runsUnsupported, worktrees, imUnsupported, sessions, reload }
+  return { runs, runsUnsupported, worktrees, imUnsupported, sessions, projectPaths, reload }
 }
 
 function phaseChip(row: RunRow) {
@@ -231,13 +238,20 @@ function TaskRunRow({ row, session, onChanged }: { row: RunRow; session?: Sessio
   )
 }
 
-function ImWorktreeRow({ wt, sessions, onChanged }: { wt: TelegramChats['worktrees'][number]; sessions: Map<string, SessionSummary>; onChanged: () => void }) {
+function ImWorktreeRow({ wt, sessions, projectPaths, onChanged }: {
+  wt: TelegramChats['worktrees'][number]
+  sessions: Map<string, SessionSummary>
+  /** 项目名 → 真实检出路径;没查到就不给合并(宁可不给,也不拿项目名糊弄用户写进哪里) */
+  projectPaths: Map<string, string>
+  onChanged: () => void
+}) {
   const a = useWorktreeActions(wt.id)
   const [confirm, setConfirm] = useState<Action | null>(null)
   const [changes, setChanges] = useState(false)
 
+  const checkout = wt.project ? projectPaths.get(wt.project) : undefined
   const merged = a.merged ?? (wt.merged ? { files: 0 } : null)
-  const canMerge = !a.discarded && !merged
+  const canMerge = !a.discarded && !merged && !!checkout
   const canDiscard = !a.discarded
   const underCount = countSessionsUnder(sessions, wt.path)
 
@@ -275,8 +289,8 @@ function ImWorktreeRow({ wt, sessions, onChanged }: { wt: TelegramChats['worktre
           diff={(p) => call('channel.telegram.worktree.diff', { worktreeId: wt.id, path: p })}
         />
       )}
-      {confirm === 'merge' && (
-        <Confirm title={wt.project ? `合并到 ${wt.project}` : '合并'} rows={[['worktree', wt.path]]} confirmLabel="合并"
+      {confirm === 'merge' && checkout && (
+        <Confirm title={`合并到 ${checkout}`} rows={[['项目', wt.project], ['worktree', wt.path]]} confirmLabel="合并"
           onCancel={() => setConfirm(null)} onConfirm={() => void act('merge')} />
       )}
       {confirm === 'discard' && (
@@ -294,7 +308,7 @@ const RUN_GROUPS: readonly { phase: RunRow['phase']; title: string }[] = [
 ]
 
 export default function TasksPage() {
-  const { runs, runsUnsupported, worktrees, imUnsupported, sessions, reload } = useTasks()
+  const { runs, runsUnsupported, worktrees, imUnsupported, sessions, projectPaths, reload } = useTasks()
 
   return (
     <div className="mffai-pane mffai-tasks">
@@ -323,7 +337,7 @@ export default function TasksPage() {
           {!imUnsupported && <span className="mffai-count">{`${worktrees?.length ?? 0} / ${MAX_WORKTREES}`}</span>}
         </div>
         {imUnsupported ? <Chip>不支持</Chip> : worktrees?.map((wt) => (
-          <ImWorktreeRow key={wt.id} wt={wt} sessions={sessions} onChanged={reload} />
+          <ImWorktreeRow key={wt.id} wt={wt} sessions={sessions} projectPaths={projectPaths} onChanged={reload} />
         ))}
       </div>
     </div>
