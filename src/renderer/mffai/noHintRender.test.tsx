@@ -24,6 +24,7 @@ import { RunCard } from './chat/RunCard'
 import { TurnTail } from './chat/TurnTail'
 import { ApprovalCard } from './chat/ApprovalCard'
 import TasksPage from './tasks/TasksPage'
+import ConnectionsPage from './conn/ConnectionsPage'
 import { perms, runRow, summary } from './test/sessions'
 import { fail, installFakeForge, RUNNING_STATE, type CallTable, type FakeForge } from './test/fakeForge'
 import { ev, resetSeq, userMsg } from './test/events'
@@ -317,6 +318,40 @@ const ROWS: Row[] = [
       f.script({ 'executor.runs': () => fail(-32601), 'channel.telegram.chats': () => fail(-32601) })
       render(<TasksPage />)
       await waitFor(() => expect(screen.getAllByText('不支持')).toHaveLength(2))
+    },
+  },
+  {
+    name: 'conn: model select + 重新登录 + custom preset fields, executor rows with missing codes, Telegram placeholder',
+    mount: async (f) => {
+      const m = (id: string, name: string) => ({ id, name, context: 1, output: 1, image: false, reasoning: 'none', toolCall: true })
+      f.mffai.models.catalog.mockResolvedValue({
+        presets: [
+          { id: 'p-gpt', label: 'ChatGPT', billing: 'subscription', restriction: 'none', auth: 'chatgpt-oauth', protocols: [], docsUrl: '' },
+          { id: 'custom-x', label: '自定义', billing: 'metered', restriction: 'none', auth: 'api-key', protocols: [], docsUrl: '' },
+        ],
+        models: { 'p-gpt': [m('m1', 'M1'), m('m2', 'M2')] },
+        default: { accountId: 'g1', modelId: 'm2' },
+      })
+      f.mffai.models.accounts.mockResolvedValue({ accounts: [{ id: 'g1', presetId: 'p-gpt', label: 'gpt', state: 'needs_login' }], secretsBackend: 'unavailable' })
+      f.mffai.chatgpt.begin.mockResolvedValue({ flowId: 'f1', authUrl: 'http://x' })
+      f.script({ 'executor.list': { executors: [
+        { id: 'claude', installed: true, version: '1.0.0', auth: 'ok', isolation: 'own', missing: [] },
+        { id: 'codex', installed: false, auth: 'missing', isolation: 'none', missing: ['codex_selftest'] },
+      ] } })
+      render(<ConnectionsPage />)
+      await screen.findByText('gpt')
+      fireEvent.change(screen.getByRole('combobox'), { target: { value: 'm1' } })
+      fireEvent.click(screen.getByText('重新登录'))
+      await waitFor(() => expect(f.mffai.chatgpt.begin).toHaveBeenCalled())
+      fireEvent.click(screen.getByText('添加账号'))
+      fireEvent.change(screen.getAllByRole('combobox').at(-1)!, { target: { value: 'custom-x' } })
+      await screen.findByLabelText('模型 id')
+      expect(findHints()).toEqual([])
+      fireEvent.click(screen.getByRole('tab', { name: '执行器' }))
+      await screen.findByText('claude')
+      await screen.findByText('codex_selftest')
+      fireEvent.click(screen.getByRole('tab', { name: 'Telegram' }))
+      await screen.findByText('占位')
     },
   },
   {
