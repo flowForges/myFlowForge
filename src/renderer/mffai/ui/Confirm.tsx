@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 
 // 自己的确认框,只复用 .confirm-* 样式:shell/ActionConfirm 带一段说明文字,这里只有"项:值"行(08 §6.4)。
-export function Confirm({ title, rows, keep, confirmLabel, danger, busy, requireTyped, onCancel, onConfirm }: {
+export function Confirm({ title, rows, keep, confirmLabel, danger, busy, requireTyped, onCancel, onConfirm, children }: {
   title: string
-  rows: readonly (readonly [string, string])[]
+  /** 项、值,可选第三格放这一行的按钮(如 `去合并`) */
+  rows: readonly (readonly [string, ReactNode, ReactNode?])[]
   /** 不删、留着的东西,每条一行 `保留` */
   keep?: readonly string[]
   confirmLabel: string
@@ -13,21 +14,24 @@ export function Confirm({ title, rows, keep, confirmLabel, danger, busy, require
   requireTyped?: string
   onCancel: () => void
   onConfirm: () => void
+  /** 行下面的状态块(`失败`、`不支持`) */
+  children?: ReactNode
 }) {
   const [typed, setTyped] = useState('')
   const blocked = busy || (requireTyped !== undefined && typed !== requireTyped)
-  const all = [...rows, ...(keep ?? []).map((k) => ['保留', k] as const)]
+  const all: readonly (readonly [string, ReactNode, ReactNode?])[] = [...rows, ...(keep ?? []).map((k) => ['保留', k] as const)]
   return (
     <div className="confirm-overlay on" onClick={onCancel}>
       <div className="confirm-card mffai-confirm" role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}>
         <div className="confirm-title">{title}</div>
         {all.length > 0 && (
           <div className="mffai-confirm-rows">
-            {all.map(([k, v], i) => (
-              <div key={i} className="mffai-confirm-row"><span className="mffai-k">{k}</span><span className="mffai-v">{v}</span></div>
+            {all.map(([k, v, action], i) => (
+              <div key={i} className="mffai-confirm-row"><span className="mffai-k">{k}</span><span className="mffai-v">{v}</span>{action}</div>
             ))}
           </div>
         )}
+        {children}
         {requireTyped !== undefined && (
           <input className="mffai-typed" aria-label={requireTyped} value={typed} onChange={(e) => setTyped(e.target.value)} />
         )}
