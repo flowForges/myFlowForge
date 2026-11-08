@@ -14,7 +14,7 @@ export type SessionError = 'gone' | 'unsupported' | 'failed'
 
 interface Cache {
   view: SessionView
-  /** 视图里每一条原始事件,seq 升序:往上翻时整份重算,被抹的 seq 靠它认 */
+  /** 视图里每一条原始事件,seq 升序:往上翻时整份重算,被抹的 seq 靠它认。实时事件原地追加,不每条拷一份 */
   events: KernelEvent[]
   session: SessionSummary
 }
@@ -38,8 +38,9 @@ export function useSession(sessionId: string): {
 } {
   const [cache, setCache] = useState<Cache | null>(null)
   const [error, setError] = useState<SessionError | null>(null)
+  /** 最新的缓存,同步更新:同一批里到的几条事件一条接一条地 reduce */
   const ref = useRef<Cache | null>(null)
-  ref.current = cache
+  const commit = useCallback((c: Cache | null) => { ref.current = c; setCache(c) }, [])
   /** session.state 在路上时到的实时事件:答回来之后按 seq 补上 */
   const pending = useRef<KernelEvent[] | null>(null)
   const gen = useRef(0)
@@ -59,39 +60,42 @@ export function useSession(sessionId: string): {
         }
         pending.current = null
         setError(null)
-        setCache({ view, events, session: r.session })
+        commit({ view, events, session: r.session })
       },
       (e) => {
         if (my !== gen.current) return
         pending.current = null
         const c = toCallError(e)
         if (!isUnsupported(c)) console.error('mffai session.state', c)
+        // 会话没了:缓存里的原话也不能再显示
+        if (c.code === ERR_INVALID) commit(null)
         setError(c.code === ERR_INVALID ? 'gone' : isUnsupported(c) ? 'unsupported' : 'failed')
       },
     )
-  }, [sessionId])
+  }, [sessionId, commit])
 
   useEffect(() => {
-    setCache(null)
+    commit(null)
     setError(null)
     reload()
     return () => { gen.current++ }
-  }, [reload])
+  }, [reload, commit])
 
   useMffaiEvent({ sessionId }, (e) => {
     if (pending.current) { pending.current.push(e); return }
-    setCache((c) => {
-      if (!c) return c
-      const view = reduce(c.view, e)
-      return view === c.view ? c : { ...c, view, events: [...c.events, e] }
-    })
+    const c = ref.current
+    if (!c) return
+    const view = reduce(c.view, e)
+    if (view === c.view) return
+    c.events.push(e)
+    commit({ ...c, view })
   })
 
   useMffaiEvent({ types: ['events.redacted'] }, (e) => {
     const p = (e.payload ?? {}) as { seqs?: unknown; session?: unknown }
     if (p.session === sessionId) {
       gen.current++
-      setCache(null)
+      commit(null)
       if (route.get().sessionId === sessionId) route.set({ page: 'chat' })
       return
     }
@@ -109,17 +113,15 @@ export function useSession(sessionId: string): {
     const my = gen.current
     void call('session.events', { sessionId, beforeSeq: c.view.firstSeq, limit: PAGE }).then(
       (r) => {
-        if (my !== gen.current) return
-        setCache((cur) => {
-          if (!cur) return cur
-          const first = cur.events[0]?.seq ?? Infinity
-          const events = [...r.events.filter((x) => x.seq < first), ...cur.events]
-          return { ...cur, events, view: rebuild(cur, events, r.hasMore) }
-        })
+        const cur = ref.current
+        if (my !== gen.current || !cur) return
+        const first = cur.events[0]?.seq ?? Infinity
+        const events = [...r.events.filter((x) => x.seq < first), ...cur.events]
+        commit({ ...cur, events, view: rebuild(cur, events, r.hasMore) })
       },
       (e) => console.error('mffai session.events', toCallError(e)),
     ).finally(() => { older.current = false })
-  }, [sessionId])
+  }, [sessionId, commit])
 
   return { view: cache?.view ?? null, session: cache?.session, loadOlder, reload, error }
 }

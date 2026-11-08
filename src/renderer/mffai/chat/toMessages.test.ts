@@ -68,4 +68,15 @@ describe('toMessages', () => {
     const v = fold([user('t1'), say('t1', 1, 'x'), e('turn.ended', { turnId: 't1' }), user('t2'), e('turn.ended', { turnId: 't2' })])
     expect(toMessages(v, 'app').groups.map((g) => [g.turnId, g.messages.length])).toEqual([['t1', 2], ['t2', 1]])
   })
+
+  it('a finished turn keeps its message objects across a delta in the open turn (memo(Message) holds)', () => {
+    let v = fold([user('t1', 'a'), say('t1', 1, 'done'), e('turn.ended', { turnId: 't1' }), user('t2', 'b'), e('message.assistant.delta', { turnId: 't2', step: 1, text: 'x' })])
+    const r1 = toMessages(v, 'app')
+    v = reduce(v, e('message.assistant.delta', { turnId: 't2', step: 1, text: 'y' }))
+    const r2 = toMessages(v, 'app')
+    expect(r2.groups[0].messages).toHaveLength(2)
+    r2.groups[0].messages.forEach((m, i) => expect(m).toBe(r1.groups[0].messages[i]))
+    expect(r2.groups[1].messages[1].text).toBe('xy')
+    expect(r2.groups[1].messages[0]).toBe(r1.groups[1].messages[0])
+  })
 })

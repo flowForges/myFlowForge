@@ -11,23 +11,42 @@ const iso = (ms: number) => new Date(ms).toISOString()
 
 export interface MessageGroup { turnId: string; messages: ChatMessage[] }
 
+/**
+ * 每条用户行、每一步各自缓存成 ChatMessage:reduce 只换掉变了的那一步 / 那一轮,别的对象原样留着,
+ * 于是没变的消息对象不变,memo(Message) 不重渲染(流式时每个 delta 一次)
+ */
+const memo = new WeakMap<object, { key: string; msg: ChatMessage }>()
+function cached(src: object, key: string, make: () => ChatMessage): ChatMessage {
+  const hit = memo.get(src)
+  if (hit && hit.key === key) return hit.msg
+  const msg = make()
+  memo.set(src, { key, msg })
+  return msg
+}
+
 function turnMessages(v: SessionView, t: TurnView, origin: SessionOrigin): { messages: ChatMessage[]; streaming?: string } {
   const via = (external: boolean) => (external ? '转发' : origin === 'im' ? 'Telegram' : undefined)
   const items: { seq: number; msg: ChatMessage }[] = []
   t.users.forEach((u, i) => {
-    const m: ChatMessage = { id: `${t.turnId}:u${i}`, who: 'user', text: u.text, ts: iso(u.ts) }
     const w = via(u.external)
-    if (w) m.via = w
-    items.push({ seq: u.seq, msg: m })
+    const msg = cached(u, `${t.turnId}|${i}|${w ?? ''}`, () => {
+      const m: ChatMessage = { id: `${t.turnId}:u${i}`, who: 'user', text: u.text, ts: iso(u.ts) }
+      if (w) m.via = w
+      return m
+    })
+    items.push({ seq: u.seq, msg })
   })
   for (const s of t.steps) {
     if (!s.text && !s.reasoning && !s.tools.length) continue
-    const m: ChatMessage = { id: s.key, who: 'ai', text: s.text, ts: iso(s.ts) }
-    if (s.reasoning) m.think = { label: '思考', steps: [s.reasoning] }
-    if (s.tools.length) {
-      m.tools = s.tools.map(({ truncated, ...tool }): ToolActivity => (truncated ? { ...tool, output: `${tool.output ?? ''}${TRUNCATED_MARK}` } : tool))
-    }
-    items.push({ seq: s.seq, msg: m })
+    const msg = cached(s, s.key, () => {
+      const m: ChatMessage = { id: s.key, who: 'ai', text: s.text, ts: iso(s.ts) }
+      if (s.reasoning) m.think = { label: '思考', steps: [s.reasoning] }
+      if (s.tools.length) {
+        m.tools = s.tools.map(({ truncated, ...tool }): ToolActivity => (truncated ? { ...tool, output: `${tool.output ?? ''}${TRUNCATED_MARK}` } : tool))
+      }
+      return m
+    })
+    items.push({ seq: s.seq, msg })
   }
   items.sort((a, b) => a.seq - b.seq)
   const messages = items.map((x) => x.msg)
@@ -35,7 +54,7 @@ function turnMessages(v: SessionView, t: TurnView, origin: SessionOrigin): { mes
   if (!live) return { messages }
   const last = messages.at(-1)
   if (last?.who === 'ai') return { messages, streaming: last.id }
-  const pending: ChatMessage = { id: `${t.turnId}:live`, who: 'ai', text: '', ts: last?.ts ?? '' }
+  const pending = cached(t.users, `${t.turnId}:live|${last?.ts ?? ''}`, () => ({ id: `${t.turnId}:live`, who: 'ai', text: '', ts: last?.ts ?? '' }))
   return { messages: [...messages, pending], streaming: pending.id }
 }
 

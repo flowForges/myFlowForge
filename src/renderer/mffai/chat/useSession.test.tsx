@@ -104,4 +104,15 @@ describe('useSession', () => {
     render(<Probe />)
     await waitFor(() => expect(screen.getByTestId('probe').dataset.error).toBe('gone'))
   })
+
+  it('a reload that answers unknown session drops the cached text', async () => {
+    let gone = false
+    f = installFakeForge({ calls: { 'session.state': () => (gone ? fail(-32602, 'unknown session') : state([e('message.user', { turnId: 't1', text: 'secret words' })])) as never } })
+    render(<Probe />)
+    await waitFor(() => expect(text()).toBe('U:secret words'))
+    gone = true
+    await act(async () => { f.alert({ kind: 'reset' } as never) })
+    await waitFor(() => expect(screen.getByTestId('probe').dataset.error).toBe('gone'))
+    expect(text()).toBe('')
+  })
 })
