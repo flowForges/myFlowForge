@@ -27,6 +27,9 @@ import TasksPage from './tasks/TasksPage'
 import ConnectionsPage from './conn/ConnectionsPage'
 import PermissionsPage from './perm/PermissionsPage'
 import MemoryPage from './memory/MemoryPage'
+import PluginsPage from './plugins/PluginsPage'
+import { Staging } from './plugins/Install'
+import { detailOf, FULL_CONSENT, listRow, pluginList } from './test/plugins'
 import { perms, runRow, summary } from './test/sessions'
 import { fail, installFakeForge, RUNNING_STATE, type CallTable, type FakeForge } from './test/fakeForge'
 import { ev, resetSeq, userMsg } from './test/events'
@@ -485,6 +488,86 @@ const ROWS: Row[] = [
       render(<MemoryPage />)
       await screen.findByText('记忆不可用')
       await screen.findByText('sessions service missing')
+    },
+  },
+  {
+    name: 'plugins: list with problems and store_recovered confirm, dev group with 已跳过, MCP table states, a refused enable',
+    mount: async (f) => {
+      f.script({
+        'plugins.list': pluginList({
+          plugins: [listRow('zed-tools', { source: { kind: 'git', url: 'https://example.com/z.git', commit: 'c0ffee' } }), listRow('broken', { enabled: false, state: 'integrity_failed', problems: ['integrity_failed'] })],
+          dev: [{ id: 'dev-a', hash: 'h', trustedAt: 1 }],
+          problems: ['store_recovered', 'store_odd'],
+        }),
+        status: { ...(richCalls().status as object), problems: ['dev_crashed'] } as never,
+        'plugins.mcp.status': { servers: [
+          { plugin: 'zed-tools', server: 'a', sessionId: 's1', state: 'refused', reason: 'cwd_too_broad' },
+          { plugin: 'zed-tools', server: 'b', sessionId: 's1', state: 'stopped', reason: 'init_timeout' },
+          { plugin: 'zed-tools', server: 'c', sessionId: 's1', state: 'stopped' },
+          { plugin: 'zed-tools', server: 'd', sessionId: 's1', state: 'weird' as never },
+        ] },
+        'plugins.setEnabled': () => fail(-32602, 'integrity_failed'),
+      })
+      render(<PluginsPage />)
+      await screen.findByText('已跳过')
+      await screen.findByText('未启动')
+      await act(async () => { fireEvent.click(screen.getByRole('switch', { name: '启用 broken' })) })
+      fireEvent.click(screen.getByRole('button', { name: '丢弃遗留' }))
+      await screen.findByRole('dialog')
+    },
+  },
+  {
+    name: 'plugins: detail with grants, settings, servers, the uninstall confirm',
+    mount: async (f) => {
+      f.script({
+        'plugins.list': pluginList({ plugins: [listRow('zed-tools')] }),
+        'plugins.get': detailOf(FULL_CONSENT, {
+          settings: [{ key: 'API_TOKEN', set: true, sensitive: true }, { key: 'region', set: true, sensitive: false, value: 'eu' }],
+          servers: [{ name: 'fs-server', state: 'refused', reason: 'cwd_too_broad' }],
+        }),
+        'plugins.mcp.status': { servers: [] },
+      })
+      render(<PluginsPage />)
+      fireEvent.click(await screen.findByRole('button', { name: '详情' }))
+      await screen.findByRole('button', { name: '保存授权' })
+      expect(findHints()).toEqual([])
+      fireEvent.click(screen.getByRole('button', { name: '卸载' }))
+      await screen.findByRole('dialog')
+    },
+  },
+  {
+    name: 'plugins: install form, then the whole consent with diff and grants',
+    mount: async (f) => {
+      f.script({
+        'plugins.list': pluginList(),
+        'plugins.mcp.status': { servers: [] },
+        'plugins.install.prepare': () => fail(-32602, 'bad_path'),
+      })
+      render(<PluginsPage />)
+      fireEvent.click(await screen.findByRole('button', { name: '添加' }))
+      fireEvent.click(screen.getByRole('tab', { name: 'git' }))
+      fireEvent.change(screen.getByLabelText('地址'), { target: { value: 'https://x/y.git' } })
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: '读取' })) })
+      await screen.findByText('bad_path')
+      expect(findHints()).toEqual([])
+      f.script({ 'plugins.install.status': { state: 'ready', consent: FULL_CONSENT, consentHash: 'h' } })
+      render(<Staging stagingId="st" onClose={() => {}} onInstalled={() => {}} />)
+      await screen.findByRole('button', { name: '安装并启用' })
+    },
+  },
+  {
+    name: 'plugins: a failed staging with a path, a fetching staging, the dev trust confirm',
+    mount: async (f) => {
+      f.script({ 'plugins.install.status': (p: { stagingId: string }) => (p.stagingId === 'a' ? { state: 'failed', error: 'symlink', path: 'x/y' } : { state: 'fetching' }) })
+      render(<><Staging stagingId="a" onClose={() => {}} onInstalled={() => {}} /><Staging stagingId="b" onClose={() => {}} onInstalled={() => {}} /></>)
+      await screen.findByText('symlink')
+      await screen.findByText('读取中')
+      expect(findHints()).toEqual([])
+      f.script({ 'plugins.list': pluginList(), 'plugins.mcp.status': { servers: [] } })
+      render(<PluginsPage />)
+      fireEvent.change(await screen.findByLabelText('开发插件目录'), { target: { value: '/w/dev-x' } })
+      fireEvent.click(screen.getByRole('button', { name: '信任' }))
+      await screen.findByRole('dialog')
     },
   },
   {
