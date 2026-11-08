@@ -1,0 +1,41 @@
+import { useState } from 'react'
+
+// 自己的确认框,只复用 .confirm-* 样式:shell/ActionConfirm 带一段说明文字,这里只有"项:值"行(08 §6.4)。
+export function Confirm({ title, rows, keep, confirmLabel, danger, busy, requireTyped, onCancel, onConfirm }: {
+  title: string
+  rows: readonly (readonly [string, string])[]
+  /** 不删、留着的东西,每条一行 `保留` */
+  keep?: readonly string[]
+  confirmLabel: string
+  danger?: boolean
+  busy?: boolean
+  /** 要逐字输入这段文字,确认按钮才可用 */
+  requireTyped?: string
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  const [typed, setTyped] = useState('')
+  const blocked = busy || (requireTyped !== undefined && typed !== requireTyped)
+  const all = [...rows, ...(keep ?? []).map((k) => ['保留', k] as const)]
+  return (
+    <div className="confirm-overlay on" onClick={onCancel}>
+      <div className="confirm-card mffai-confirm" role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}>
+        <div className="confirm-title">{title}</div>
+        {all.length > 0 && (
+          <div className="mffai-confirm-rows">
+            {all.map(([k, v], i) => (
+              <div key={i} className="mffai-confirm-row"><span className="mffai-k">{k}</span><span className="mffai-v">{v}</span></div>
+            ))}
+          </div>
+        )}
+        {requireTyped !== undefined && (
+          <input className="mffai-typed" aria-label={requireTyped} value={typed} onChange={(e) => setTyped(e.target.value)} />
+        )}
+        <div className="confirm-actions">
+          <button className="confirm-cancel" onClick={onCancel}>取消</button>
+          <button className={danger ? 'confirm-danger' : 'confirm-ok'} disabled={blocked} onClick={() => { if (!blocked) onConfirm() }}>{confirmLabel}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
