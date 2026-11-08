@@ -386,25 +386,28 @@ const ROWS: Row[] = [
     },
   },
   {
-    name: 'perm: rules with a tag, defaults, network list, switches, invalid-rule error, and the reload-on-conflict button',
+    name: 'perm: rules with a tag, defaults, network list, switches, invalid-rule and network errors, load-time errors, and the reload-on-conflict button',
     mount: async (f) => {
       f.script({
         'permissions.get': {
           config: {
-            rules: [{ effect: 'ask', rule: 'shell:*', match: ['ls'], noMatch: [] }],
-            network: { allow: ['example.com'] },
+            rules: [{ effect: 'ask', rule: 'shell(git log)', match: ['git log'], noMatch: [] }],
+            network: { allow: ['example.com', 'bad entry'] },
             sandbox: { enabled: true, allowLoopback: false },
             allowUnsandboxedAuto: false,
           },
           defaults: ['shell:read'],
-          errors: [],
+          errors: [{ index: 0, rule: 'read(bad', reason: 'syntax' }],
           sandbox: { level: 'partial', missing: ['proxy'], autoDegraded: false },
         },
-        'permissions.set': () => fail(-32602, 'invalid rules', [{ index: 0, rule: 'shell:*', reason: 'pattern', case: 'ls -la' }]),
+        'permissions.set': () => fail(-32602, 'invalid rules', [
+          { index: 0, rule: 'shell(write)', reason: 'pattern', case: 'ls -la' },
+          { index: 1, rule: 'bad entry', reason: 'network' },
+        ]),
       })
       render(<PermissionsPage />)
       const row = await screen.findByText('example.com')
-      fireEvent.change(screen.getByLabelText('规则'), { target: { value: 'shell:write' } })
+      fireEvent.change(screen.getByLabelText('规则'), { target: { value: 'shell(write)' } })
       await act(async () => { fireEvent.click(screen.getByRole('button', { name: '保存' })) })
       await screen.findByText('pattern')
       expect(row).toBeInTheDocument()

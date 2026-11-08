@@ -1,10 +1,12 @@
-// 权限页(08 §11、Review Focus 7):本地草稿(规则、联网名单、三个开关),规则增删移和 match/noMatch 标签,
-// 默认规则只读,沙箱级别和 missing 代码块,会话选择器重取 permissions.get,保存发整份配置且 ref 守卫双发,
-// invalid rules 按 index 标红对应行其余不动,脏草稿收到 permissions.updated 换成「已在别处修改 · 重新载入」,
-// -32601 → 不支持。
+// 权限页(08 §11、Review Focus 7、评审修订):本地草稿(规则、联网名单、三个开关)是全局的——会话选择器只
+// 重取它实际管的默认规则和沙箱状态(kernel.ts 575-579:config 不按会话),从不碰草稿,也配一个序号守卫
+// (快速切换只认最后一次)。规则按稳定 id 操作和标错,不按下标。联网名单的 reason:'network' 错误按下标标在
+// 联网名单上,不落到规则行。保存前把每个标签框里还没点「添加」的文字强制收进来。保存中所有控件锁住,
+// 这条保存自己产生的 permissions.updated 不理会(不闪烁「已在别处修改」);重置按同一条脏检查。
+// permissions.get 在加载时丢掉的条目(errors)作为代码块显示,带原文。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import type { PermissionsConfig, SandboxStatus } from '@mffai/protocol'
+import type { PermissionsConfig, RuleSpec, SandboxStatus } from '@mffai/protocol'
 import PermissionsPage from './PermissionsPage'
 import { UNSANDBOXED_AUTO_LABEL } from '../ui/AutoSwitch'
 import { fail, installFakeForge, type CallTable, type FakeForge } from '../test/fakeForge'
@@ -14,7 +16,7 @@ import { summary } from '../test/sessions'
 let f: FakeForge
 
 const baseConfig = (patch: Partial<PermissionsConfig> = {}): PermissionsConfig => ({
-  rules: [{ effect: 'ask', rule: 'shell:*', match: ['ls'], noMatch: [] }],
+  rules: [{ effect: 'ask', rule: 'shell(git status)', match: ['git status'], noMatch: [] }],
   network: { allow: ['example.com'] },
   sandbox: { enabled: true, allowLoopback: false },
   allowUnsandboxedAuto: false,
@@ -23,8 +25,10 @@ const baseConfig = (patch: Partial<PermissionsConfig> = {}): PermissionsConfig =
 const getResult = (
   configPatch: Partial<PermissionsConfig> = {},
   sandbox: SandboxStatus = { level: 'partial', missing: ['proxy'], autoDegraded: false },
-) => ({ config: baseConfig(configPatch), defaults: ['shell:read'], errors: [], sandbox })
+  loadErrors: { index: number; rule: string; reason: 'syntax' | 'subject' | 'pattern' | 'test_failed' | 'network'; case?: string }[] = [],
+) => ({ config: baseConfig(configPatch), defaults: ['shell:read'], errors: loadErrors, sandbox })
 
+const rule = (text: string, patch: Partial<RuleSpec> = {}): RuleSpec => ({ effect: 'ask', rule: text, match: [], noMatch: [], ...patch })
 const rows = () => [...document.querySelectorAll('[data-rule]')] as HTMLElement[]
 
 async function mount(calls: CallTable = { 'permissions.get': getResult() }) {
@@ -43,7 +47,7 @@ describe('PermissionsPage', () => {
   it('loads the draft: rule row, network tag, switches and sandbox chips', async () => {
     await mount()
     expect(rows()).toHaveLength(1)
-    expect(within(rows()[0]).getByLabelText<HTMLInputElement>('规则').value).toBe('shell:*')
+    expect(within(rows()[0]).getByLabelText<HTMLInputElement>('规则').value).toBe('shell(git status)')
     expect(screen.getByText('example.com')).toBeInTheDocument()
     expect(screen.getByText('shell:read')).toBeInTheDocument()
     expect(screen.getByText('proxy')).toBeInTheDocument()
@@ -65,6 +69,21 @@ describe('PermissionsPage', () => {
     expect(within(defaults).queryByRole('textbox')).toBeNull()
   })
 
+  it('shows errors dropped at load (permissions.get().errors) as chips with their entry text', async () => {
+    await mount({ 'permissions.get': getResult({}, undefined, [{ index: 0, rule: 'shell(bad', reason: 'syntax' }]) })
+    expect(screen.getByText('syntax')).toBeInTheDocument()
+    expect(screen.getByText('shell(bad')).toBeInTheDocument()
+  })
+
+  it('places the session selector inside the 默认规则/sandbox block; the editable section is titled 全局规则', async () => {
+    await mount()
+    const heads = [...document.querySelectorAll('.mffai-grouphead')].map((h) => h.textContent)
+    expect(heads).toContain('默认规则')
+    expect(heads).toContain('全局规则')
+    const defaultsBlock = screen.getByTestId('mffai-perm-defaults').closest('.mffai-group') as HTMLElement
+    expect(within(defaultsBlock).getByLabelText('会话')).toBeInTheDocument()
+  })
+
   it('the three switches: 沙箱, 允许本机回环, and allowUnsandboxedAuto with the sanctioned label verbatim', async () => {
     await mount()
     expect(await screen.findByText(UNSANDBOXED_AUTO_LABEL)).toBeInTheDocument()
@@ -76,6 +95,14 @@ describe('PermissionsPage', () => {
     expect(screen.getByRole('button', { name: '保存' })).not.toBeDisabled()
   })
 
+  it('turning allowUnsandboxedAuto on sends it in the saved config', async () => {
+    await mount({ 'permissions.get': getResult(), 'permissions.set': { ok: true } })
+    fireEvent.click(screen.getByRole('switch', { name: UNSANDBOXED_AUTO_LABEL }))
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '保存' })) })
+    const sent = f.callsOf('permissions.set') as { config: PermissionsConfig }[]
+    expect(sent[0].config.allowUnsandboxedAuto).toBe(true)
+  })
+
   it('the network allow list is an editable tag input', async () => {
     await mount()
     const input = screen.getByLabelText('联网名单')
@@ -85,14 +112,24 @@ describe('PermissionsPage', () => {
     expect(screen.getByRole('button', { name: '保存' })).not.toBeDisabled()
   })
 
+  it('typed-but-not-added tag text (no blur, no Enter) is still committed before save', async () => {
+    await mount({ 'permissions.get': getResult(), 'permissions.set': { ok: true } })
+    // 单独打字不算脏(没点添加、没失焦),所以先用别的编辑让保存可点——这才是会真正触发保存的场景
+    fireEvent.click(screen.getByRole('switch', { name: '允许本机回环' }))
+    fireEvent.change(screen.getByLabelText('联网名单'), { target: { value: 'pending.test' } })
+    const save = screen.getByRole('button', { name: '保存' })
+    expect(save).not.toBeDisabled()
+    await act(async () => { fireEvent.click(save) })
+    const sent = f.callsOf('permissions.set') as { config: PermissionsConfig }[]
+    expect(sent[0].config.network.allow).toContain('pending.test')
+    expect(sent[0].config.sandbox.allowLoopback).toBe(true)
+  })
+
   it('add, move and delete rule rows; match/noMatch tags edit inside a row', async () => {
-    await mount({ 'permissions.get': getResult({ rules: [
-      { effect: 'ask', rule: 'a', match: ['x'], noMatch: [] },
-      { effect: 'deny', rule: 'b', match: [], noMatch: [] },
-    ] }) })
+    await mount({ 'permissions.get': getResult({ rules: [rule('shell(a)', { match: ['a'] }), rule('shell(b)', { effect: 'deny' })] }) })
     expect(rows()).toHaveLength(2)
     fireEvent.click(within(rows()[0]).getByRole('button', { name: '下移' }))
-    expect(within(rows()[0]).getByLabelText<HTMLInputElement>('规则').value).toBe('b')
+    expect(within(rows()[0]).getByLabelText<HTMLInputElement>('规则').value).toBe('shell(b)')
     const noMatch = within(rows()[1]).getByLabelText('不应匹配')
     fireEvent.change(noMatch, { target: { value: 'y' } })
     fireEvent.keyDown(noMatch, { key: 'Enter' })
@@ -109,18 +146,32 @@ describe('PermissionsPage', () => {
     const save = screen.getByRole('button', { name: '保存' })
     expect(save).toBeDisabled()
     fireEvent.click(screen.getByRole('switch', { name: '允许本机回环' }))
-    fireEvent.change(within(rows()[0]).getByLabelText('规则'), { target: { value: 'shell:read' } })
+    fireEvent.change(within(rows()[0]).getByLabelText('规则'), { target: { value: 'shell(git log)' } })
     expect(save).not.toBeDisabled()
     await act(async () => { fireEvent.click(save) })
     const sent = f.callsOf('permissions.set') as { commandId: string; config: PermissionsConfig }[]
     expect(sent).toHaveLength(1)
     expect(sent[0].config).toEqual(baseConfig({
       sandbox: { enabled: true, allowLoopback: true },
-      rules: [{ effect: 'ask', rule: 'shell:read', match: ['ls'], noMatch: [] }],
+      rules: [rule('shell(git log)', { match: ['git status'] })],
     }))
     expect(typeof sent[0].commandId).toBe('string')
     // 成功后重取:草稿变干净
     await waitFor(() => expect(save).toBeDisabled())
+  })
+
+  it('inputs are locked while the save is in flight', async () => {
+    let resolveSet: ((v: { ok: boolean }) => void) | undefined
+    await mount({ 'permissions.get': getResult(), 'permissions.set': () => new Promise((resolve) => { resolveSet = resolve }) })
+    fireEvent.change(within(rows()[0]).getByLabelText('规则'), { target: { value: 'shell(git log)' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    expect(within(rows()[0]).getByLabelText('规则')).toBeDisabled()
+    expect(within(rows()[0]).getByLabelText('应匹配')).toBeDisabled()
+    expect(screen.getByRole('switch', { name: '沙箱' })).toBeDisabled()
+    expect(screen.getByLabelText('联网名单')).toBeDisabled()
+    expect(screen.getByRole('button', { name: '添加规则' })).toBeDisabled()
+    await act(async () => { resolveSet!({ ok: true }) })
+    await waitFor(() => expect(screen.getByRole('button', { name: '保存' })).toBeDisabled())
   })
 
   it('two clicks in one frame save once (ref guard against double submit)', async () => {
@@ -131,24 +182,46 @@ describe('PermissionsPage', () => {
     expect(f.callsOf('permissions.set')).toHaveLength(1)
   })
 
-  it('invalid rules: errors land on the right row by index; the other row keeps its text; field-level errors show too', async () => {
+  it('invalid rules: errors land on the right row by id; the other row keeps its text; field-level errors show too', async () => {
     await mount({
-      'permissions.get': getResult({ rules: [
-        { effect: 'ask', rule: 'a', match: [], noMatch: [] },
-        { effect: 'ask', rule: 'b', match: [], noMatch: [] },
-      ] }),
+      'permissions.get': getResult({ rules: [rule('shell(a)'), rule('shell(b)')] }),
       'permissions.set': () => fail(-32602, 'invalid rules', [
-        { index: 1, rule: 'b', reason: 'pattern', case: 'x' },
-        { index: -1, rule: 'network.allow', reason: 'network' },
+        { index: 1, rule: 'shell(b)', reason: 'pattern', case: 'x' },
+        { index: -1, rule: 'network.allow', reason: 'syntax' },
       ]),
     })
-    fireEvent.change(within(rows()[0]).getByLabelText('规则'), { target: { value: 'a2' } })
+    fireEvent.change(within(rows()[0]).getByLabelText('规则'), { target: { value: 'shell(a2)' } })
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: '保存' })) })
     expect(within(rows()[0]).queryByText('pattern')).toBeNull()
-    expect(within(rows()[0]).getByLabelText<HTMLInputElement>('规则').value).toBe('a2')
+    expect(within(rows()[0]).getByLabelText<HTMLInputElement>('规则').value).toBe('shell(a2)')
     expect(within(rows()[1]).getByText('pattern')).toBeInTheDocument()
     expect(within(rows()[1]).getByText('x')).toBeInTheDocument()
-    expect(screen.getByText('network')).toBeInTheDocument()
+    expect(screen.getByText('syntax')).toBeInTheDocument()
+  })
+
+  it('after moving a rule, a failed save marks the moved rule by id, not whatever now sits at its old position', async () => {
+    await mount({ 'permissions.get': getResult({ rules: [rule('shell(a)'), rule('shell(b)')] }) })
+    fireEvent.click(within(rows()[1]).getByRole('button', { name: '上移' }))
+    expect(within(rows()[0]).getByLabelText<HTMLInputElement>('规则').value).toBe('shell(b)')
+    f.script({ 'permissions.set': () => fail(-32602, 'invalid rules', [{ index: 0, rule: 'shell(b)', reason: 'pattern' }]) })
+    fireEvent.change(within(rows()[1]).getByLabelText('规则'), { target: { value: 'shell(a2)' } })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '保存' })) })
+    expect(within(rows()[0]).getByText('pattern')).toBeInTheDocument()
+    expect(within(rows()[1]).queryByText('pattern')).toBeNull()
+  })
+
+  it('a network-list error (reason:network) marks the network tag by index; it is not a rule-row error', async () => {
+    await mount({
+      'permissions.get': getResult({ network: { allow: ['good.com', 'bad entry'] } }),
+      'permissions.set': () => fail(-32602, 'invalid rules', [{ index: 1, rule: 'bad entry', reason: 'network' }]),
+    })
+    fireEvent.change(within(rows()[0]).getByLabelText('规则'), { target: { value: 'shell(x)' } })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '保存' })) })
+    expect(within(rows()[0]).queryByText('network')).toBeNull()
+    const bad = screen.getByText('bad entry').closest('.mffai-tag') as HTMLElement
+    const good = screen.getByText('good.com').closest('.mffai-tag') as HTMLElement
+    expect(within(bad).getByText('network')).toBeInTheDocument()
+    expect(within(good).queryByText('network')).toBeNull()
   })
 
   it('a generic save failure keeps the draft dirty; retry reuses the same commandId', async () => {
@@ -184,6 +257,47 @@ describe('PermissionsPage', () => {
     await waitFor(() => expect(f.callsOf('permissions.get').at(-1)).toEqual({ sessionId: 's1' }))
   })
 
+  it('changing the session only refreshes defaults/sandbox; the global draft (and its dirty edit) is untouched', async () => {
+    await mount({
+      'session.list': { sessions: [summary('s1', { title: '一号' })] },
+      'permissions.get': (p: { sessionId?: string }) =>
+        p.sessionId === 's1' ? getResult({}, { level: 'full', missing: [], autoDegraded: false }) : getResult(),
+    })
+    fireEvent.change(within(rows()[0]).getByLabelText('规则'), { target: { value: 'shell(dirty)' } })
+    const select = screen.getByLabelText<HTMLSelectElement>('会话')
+    await waitFor(() => expect(within(select).getAllByRole('option')).toHaveLength(2))
+    fireEvent.change(select, { target: { value: 's1' } })
+    await screen.findByText('完整')
+    expect(within(rows()[0]).getByLabelText<HTMLInputElement>('规则').value).toBe('shell(dirty)')
+    expect(screen.getByRole('button', { name: '保存' })).not.toBeDisabled()
+    expect(screen.queryByRole('button', { name: '已在别处修改 · 重新载入' })).toBeNull()
+  })
+
+  it('a sequence guard on the session-scoped reload: switching A then B fast shows B, not a late A', async () => {
+    const resolvers: Record<string, (v: ReturnType<typeof getResult>) => void> = {}
+    f = installFakeForge({
+      calls: {
+        'session.list': { sessions: [summary('a', { title: 'A' }), summary('b', { title: 'B' })] },
+        'permissions.get': (p: { sessionId?: string }) => {
+          const sid = p.sessionId ?? ''
+          return new Promise((resolve) => { resolvers[sid] = resolve })
+        },
+      },
+    })
+    render(<PermissionsPage />)
+    resolvers['']?.(getResult())
+    await screen.findByRole('button', { name: '保存' })
+    const select = await screen.findByLabelText<HTMLSelectElement>('会话')
+    await waitFor(() => expect(within(select).getAllByRole('option')).toHaveLength(3))
+    fireEvent.change(select, { target: { value: 'a' } })
+    fireEvent.change(select, { target: { value: 'b' } })
+    await act(async () => { resolvers.b(getResult({}, { level: 'full', missing: [], autoDegraded: false })) })
+    await screen.findByText('完整')
+    await act(async () => { resolvers.a(getResult({}, { level: 'none', missing: ['proxy'], autoDegraded: true })) })
+    expect(screen.queryByText('未隔离')).toBeNull()
+    expect(screen.getByText('完整')).toBeInTheDocument()
+  })
+
   it('a dirty draft ignores permissions.updated and shows the reload button instead of overwriting', async () => {
     await mount()
     fireEvent.change(within(rows()[0]).getByLabelText('规则'), { target: { value: 'changed' } })
@@ -204,5 +318,30 @@ describe('PermissionsPage', () => {
     act(() => { f.emit(ev('permissions.updated', { rules: 0, network: 1 })) })
     await waitFor(() => expect(rows()).toHaveLength(0))
     expect(screen.queryByText('已在别处修改 · 重新载入')).toBeNull()
+  })
+
+  it('ignores its own permissions.updated while its save is still in flight: 已在别处修改 never flashes', async () => {
+    let resolveSet: ((v: { ok: boolean }) => void) | undefined
+    await mount({ 'permissions.get': getResult(), 'permissions.set': () => new Promise((resolve) => { resolveSet = resolve }) })
+    fireEvent.change(within(rows()[0]).getByLabelText('规则'), { target: { value: 'shell(x)' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    act(() => { f.emit(ev('permissions.updated', { rules: 1, network: 1 })) })
+    expect(screen.queryByRole('button', { name: '已在别处修改 · 重新载入' })).toBeNull()
+    await act(async () => { resolveSet!({ ok: true }) })
+    expect(screen.queryByRole('button', { name: '已在别处修改 · 重新载入' })).toBeNull()
+  })
+
+  it('a dirty draft also ignores a reset (same dirty check as permissions.updated)', async () => {
+    await mount()
+    fireEvent.change(within(rows()[0]).getByLabelText('规则'), { target: { value: 'changed' } })
+    act(() => { f.alert({ kind: 'reset' }) })
+    await screen.findByRole('button', { name: '已在别处修改 · 重新载入' })
+  })
+
+  it('a clean draft reloads fully on a reset', async () => {
+    await mount()
+    f.script({ 'permissions.get': getResult({ rules: [] }) })
+    act(() => { f.alert({ kind: 'reset' }) })
+    await waitFor(() => expect(rows()).toHaveLength(0))
   })
 })
