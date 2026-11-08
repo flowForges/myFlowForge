@@ -89,6 +89,26 @@ describe('Staging', () => {
     expect(findHints()).toEqual([])
   })
 
+  it('an upgrade starts from the current grants within the new declaration', async () => {
+    const f = installFakeForge({ calls: { 'plugins.install.status': READY, 'plugins.install.confirm': { ok: true, id: 'zed-tools' } } })
+    const current = { servers: {
+      'fs-server': { network: ['api.declared.example', 'gone.example'], cwd: 'none' as const },
+      'net-server': { network: ['typed.example'], cwd: 'write' as const },
+    } }
+    render(<Staging stagingId="st1" current={current} onClose={() => {}} onInstalled={() => {}} />)
+    const kept = await screen.findByLabelText('fs-server api.declared.example') as HTMLInputElement
+    expect(kept.checked).toBe(true)
+    const fs = document.querySelector('[data-grants="fs-server"]') as HTMLElement
+    expect((fs.querySelector('input[type=radio]:checked') as HTMLInputElement).parentElement).toHaveTextContent('不给')
+    expect(document.body.textContent).not.toContain('gone.example')
+    expect(screen.getByText('typed.example')).toBeInTheDocument()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '安装' })) })
+    expect((f.callsOf('plugins.install.confirm') as any[])[0].grants).toEqual({ servers: {
+      'fs-server': { network: ['api.declared.example'], cwd: 'none' },
+      'net-server': { network: ['typed.example'], cwd: 'write' },
+    } })
+  })
+
   it('取消 sends install.cancel and closes', async () => {
     const f = installFakeForge({ calls: { 'plugins.install.cancel': { ok: true } } })
     const { onClose } = await ready(f)

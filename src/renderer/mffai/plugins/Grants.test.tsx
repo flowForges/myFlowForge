@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { useState } from 'react'
 import type { Grants as GrantsT, PluginConsent } from '@mffai/protocol'
-import { Grants, initialGrants } from './Grants'
+import { Grants, initialGrants, upgradeGrants } from './Grants'
 import { FULL_CONSENT } from '../test/plugins'
 import { findHints } from '../test/noHint'
 
@@ -35,7 +35,55 @@ describe('initialGrants', () => {
   })
 })
 
+describe('upgradeGrants', () => {
+  it('keeps current grants within the new declaration: cwd capped, undeclared hosts dropped, hand-typed hosts kept without a declaration', () => {
+    const cur = { servers: {
+      'fs-server': { network: ['api.declared.example', 'gone.example'], cwd: 'none' as const },
+      'net-server': { network: ['typed.example'], cwd: 'write' as const },
+    } }
+    expect(upgradeGrants(FULL_CONSENT.mcp, cur)).toEqual({ servers: {
+      'fs-server': { network: ['api.declared.example'], cwd: 'none' },
+      'net-server': { network: ['typed.example'], cwd: 'write' },
+    } })
+    const wide = { servers: { 'fs-server': { network: [], cwd: 'write' as const } } }
+    expect(upgradeGrants(FULL_CONSENT.mcp, wide).servers['fs-server'].cwd).toBe('read')
+    // 新服务从默认开始
+    expect(upgradeGrants(FULL_CONSENT.mcp, { servers: {} }).servers['net-server']).toEqual({ network: [], cwd: 'read' })
+  })
+
+  it('a wildcard declaration covers its subdomains', () => {
+    const mcp = [{ ...FULL_CONSENT.mcp[0], declared: { network: ['*.example.org'], cwd: 'read' as const } }]
+    const cur = { servers: { 'fs-server': { network: ['a.example.org', 'example.com'], cwd: 'read' as const } } }
+    expect(upgradeGrants(mcp, cur).servers['fs-server'].network).toEqual(['a.example.org'])
+    const g = upgradeGrants(mcp, cur)
+    render(<Grants mcp={mcp} value={g} onChange={() => {}} />)
+    expect((screen.getByLabelText('fs-server a.example.org') as HTMLInputElement).checked).toBe(true)
+  })
+})
+
 describe('Grants', () => {
+  it('其他域名 only for servers without a declaration (native plugins can only narrow)', () => {
+    render(<Harness onChange={() => {}} />)
+    expect(within(box('fs-server')).queryByLabelText('其他域名 fs-server')).toBeNull()
+    expect(within(box('net-server')).getByLabelText('其他域名 net-server')).toBeInTheDocument()
+  })
+
+  it('name_invalid servers and prototype names are never granted, and nothing touches Object.prototype', () => {
+    const mcp = [
+      { ...FULL_CONSENT.mcp[1], name: 'okname', problems: ['name_invalid'] },
+      { ...FULL_CONSENT.mcp[1], name: '__proto__', problems: [] },
+      { ...FULL_CONSENT.mcp[1], name: 'constructor', problems: [] },
+      FULL_CONSENT.mcp[1],
+    ]
+    const g = initialGrants(mcp, { servers: JSON.parse('{"__proto__": {"network": ["x.example"], "cwd": "write"}}') })
+    expect(Object.keys(g.servers)).toEqual(['net-server'])
+    expect(({} as Record<string, unknown>).network).toBeUndefined()
+    expect(Object.getPrototypeOf(g.servers)).toBeNull()
+    render(<Grants mcp={mcp} value={g} onChange={() => {}} />)
+    expect(box('okname')).toBeNull()
+    expect(box('__proto__')).toBeNull()
+  })
+
   it('suggested and declared hosts are checkboxes, none checked by default', () => {
     render(<Harness onChange={() => {}} />)
     const boxes = [...document.querySelectorAll('input[type=checkbox]')] as HTMLInputElement[]

@@ -11,13 +11,15 @@ import { CodeChip } from '../ui/CodeChip'
 import { PathField } from '../ui/PathField'
 import { PText } from '../ui/PText'
 import { Consent } from './Consent'
-import { Grants, initialGrants } from './Grants'
+import { Grants, initialGrants, upgradeGrants } from './Grants'
 import { FailChip, failureOf, useAction, type Failure } from './action'
 
 const POLL_MS = 1000
 
-export function Staging({ stagingId, onClose, onInstalled }: {
+export function Staging({ stagingId, current, onClose, onInstalled }: {
   stagingId: string
+  /** 升级:当前的授权。起点是它和新声明的交集(后台对发来的服务整份替换,不能从默认开始) */
+  current?: GrantsT
   onClose: () => void
   onInstalled: (id: string, enabled: boolean) => void
 }) {
@@ -29,6 +31,8 @@ export function Staging({ stagingId, onClose, onInstalled }: {
   /** 确认了或取消了:卸载时不再取消 */
   const settled = useRef(false)
 
+  const currentRef = useRef(current)
+  currentRef.current = current
   const fetchStatus = useCallback(() => {
     void call('plugins.install.status', { stagingId }).then(
       (s) => {
@@ -37,7 +41,8 @@ export function Staging({ stagingId, onClose, onInstalled }: {
         setStatusFailure(null)
         if (s.state === 'ready' && s.consent) {
           const mcp = s.consent.mcp
-          setGrants((g) => g ?? initialGrants(mcp))
+          const cur = currentRef.current
+          setGrants((g) => g ?? (cur ? upgradeGrants(mcp, cur) : initialGrants(mcp)))
         }
       },
       (e) => { if (alive.current) setStatusFailure(failureOf('plugins.install.status', e)) },
