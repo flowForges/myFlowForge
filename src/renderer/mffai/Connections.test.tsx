@@ -170,6 +170,28 @@ describe('Connections', () => {
     fireEvent.click(screen.getByText('重新登录'))
     await waitFor(() => expect(mffai.chatgpt.begin).toHaveBeenCalled())
   })
+  // auth.chatgpt.begin 不带账号 id,重登的是第一个坏掉的账号:按钮只有一个,在账号列表上面,不在某一行里
+  it('two needs_login ChatGPT accounts: one 重新登录, above the account list, not inside a row', async () => {
+    accounts = [...accounts,
+      { id: 'a4', presetId: 'p-gpt', label: 'gpt-broken', state: 'needs_login' },
+      { id: 'a5', presetId: 'p-gpt', label: 'gpt-broken-2', state: 'needs_login' }]
+    await openConnections()
+    await screen.findByText('gpt-broken-2')
+    const btns = screen.getAllByRole('button', { name: '重新登录' })
+    expect(btns).toHaveLength(1)
+    expect(btns[0].closest('.mffai-row')).toBeNull()
+    const firstRow = screen.getByText('acc1').closest('.mffai-row')!
+    expect(btns[0].compareDocumentPosition(firstRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    fireEvent.click(btns[0])
+    await waitFor(() => expect(mffai.chatgpt.begin).toHaveBeenCalledTimes(1))
+  })
+
+  it('no needs_login ChatGPT account: no 重新登录', async () => {
+    accounts = [...accounts, { id: 'a4', presetId: 'p-gpt', label: 'gpt-ok', state: 'ok' }]
+    await openConnections()
+    await screen.findByText('gpt-ok')
+    expect(screen.queryByRole('button', { name: '重新登录' })).toBeNull()
+  })
 })
 
 describe('ModelPicker in debug panel', () => {

@@ -25,6 +25,7 @@ import { TurnTail } from './chat/TurnTail'
 import { ApprovalCard } from './chat/ApprovalCard'
 import TasksPage from './tasks/TasksPage'
 import ConnectionsPage from './conn/ConnectionsPage'
+import { Executors } from './conn/Executors'
 import PermissionsPage from './perm/PermissionsPage'
 import MemoryPage from './memory/MemoryPage'
 import PluginsPage from './plugins/PluginsPage'
@@ -408,6 +409,14 @@ const ROWS: Row[] = [
       fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '取消' }))
       fireEvent.click(screen.getByRole('button', { name: '清除令牌' }))
       await screen.findByRole('dialog')
+    },
+  },
+  {
+    name: 'conn: executors unsupported',
+    mount: async (f) => {
+      f.script({ 'executor.list': () => fail(-32601) })
+      render(<Executors />)
+      await screen.findByText('不支持')
     },
   },
   {

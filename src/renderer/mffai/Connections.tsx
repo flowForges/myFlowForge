@@ -20,8 +20,6 @@ function AccountRow({ account, preset, models, defaultModelId, isDefault, onChan
   const [failed, setFailed] = useState(false)
   // 02 Task 13:默认模型下拉不再固定用第一个模型;默认账号拿目录的默认模型,其余账号退到自己清单的第一个
   const [modelId, setModelId] = useState(() => (isDefault && defaultModelId) || models[0]?.id || '')
-  const [loggingIn, setLoggingIn] = useState(false)
-  const loginRef = useRef(false)
   const m = window.forge.mffai.models
   useEffect(() => {
     let alive = true
@@ -39,16 +37,6 @@ function AccountRow({ account, preset, models, defaultModelId, isDefault, onChan
   }
   // 账号自己标的限制(自定义预设)比预设的优先(08 §4.7,和后台 restrictionOf 同一条规则)
   const restricted = (account.restriction ?? preset?.restriction) === 'coding-tools-only'
-  const canRelogin = preset?.auth === 'chatgpt-oauth' && account.state === 'needs_login'
-  const relogin = () => {
-    if (loginRef.current) return
-    loginRef.current = true
-    setFailed(false)
-    setLoggingIn(true)
-    void window.forge.mffai.chatgpt.begin()
-      .catch((e) => { console.error('mffai', e); setFailed(true) })
-      .finally(() => { loginRef.current = false; setLoggingIn(false) })
-  }
   return (
     <div className="mffai-row">
       <span>{account.label}</span>
@@ -64,7 +52,28 @@ function AccountRow({ account, preset, models, defaultModelId, isDefault, onChan
         </select>
       ) : models[0] && <span className="mffai-model">{models[0].name}</span>}
       <button className="set-btn" disabled={isDefault || !modelId} onClick={() => act(m.setDefault(account.id, modelId), true)}>设为默认</button>
-      {canRelogin && <button className="set-btn" disabled={loggingIn} onClick={relogin}>重新登录</button>}
+      {failed && <span className="mffai-fail">失败</span>}
+    </div>
+  )
+}
+
+/** auth.chatgpt.begin 不带账号 id,重登的是第一个坏掉的 ChatGPT 账号:只给一个按钮,在账号列表上面 */
+function Relogin() {
+  const [loggingIn, setLoggingIn] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const loginRef = useRef(false)
+  const relogin = () => {
+    if (loginRef.current) return
+    loginRef.current = true
+    setFailed(false)
+    setLoggingIn(true)
+    void window.forge.mffai.chatgpt.begin()
+      .catch((e) => { console.error('mffai', e); setFailed(true) })
+      .finally(() => { loginRef.current = false; setLoggingIn(false) })
+  }
+  return (
+    <div className="mffai-actions">
+      <button className="set-btn" disabled={loggingIn} onClick={relogin}>重新登录</button>
       {failed && <span className="mffai-fail">失败</span>}
     </div>
   )
@@ -72,10 +81,12 @@ function AccountRow({ account, preset, models, defaultModelId, isDefault, onChan
 
 export function Connections() {
   const { catalog, accounts, backend, reload } = useModels()
+  const needsLogin = accounts.some((a) => a.state === 'needs_login' && catalog?.presets.find((p) => p.id === a.presetId)?.auth === 'chatgpt-oauth')
   return (
     <div className="mffai-conn">
       {backend === 'plaintext-file' && <span className="mffai-badge">明文存储</span>}
       {(backend === 'unavailable' || backend === 'unreadable') && <span className="mffai-badge">钥匙串不可用</span>}
+      {needsLogin && <Relogin />}
       {accounts.map((a) => {
         const isDefault = catalog?.default?.accountId === a.id
         return (

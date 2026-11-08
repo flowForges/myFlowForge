@@ -1,10 +1,11 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ExecutorListResult } from '@mffai/protocol'
 import { Executors } from './Executors'
 import { fail, installFakeForge, type FakeForge } from '../test/fakeForge'
 
 let f: FakeForge
+afterEach(() => vi.restoreAllMocks())
 
 describe('Executors', () => {
   it('lists each executor: install/version, auth, isolation, missing codes', async () => {
@@ -74,5 +75,29 @@ describe('Executors', () => {
     await screen.findByText('失败')
     expect(screen.getByText('claude')).toBeInTheDocument()
     await waitFor(() => expect((screen.getByText('刷新') as HTMLButtonElement).disabled).toBe(false))
+  })
+  it('executor.list answering -32601 shows 不支持, no 刷新 and no console.error', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    f = installFakeForge({ calls: { 'executor.list': () => fail(-32601, 'method not found') } })
+    render(<Executors />)
+    expect(await screen.findByText('不支持')).toBeInTheDocument()
+    expect(screen.queryByText('失败')).toBeNull()
+    expect(screen.queryByText('刷新')).toBeNull()
+    expect(err).not.toHaveBeenCalled()
+  })
+
+  it('executor.refresh answering -32601 shows 不支持 (not 失败), keeps the rows, no console.error', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    f = installFakeForge({ calls: {
+      'executor.list': { executors: [{ id: 'claude', installed: true, version: '1.0.0', auth: 'ok', isolation: 'own', missing: [] }] },
+      'executor.refresh': () => fail(-32601, 'method not found'),
+    } })
+    render(<Executors />)
+    await screen.findByText('claude')
+    await act(async () => { fireEvent.click(screen.getByText('刷新')) })
+    expect(await screen.findByText('不支持')).toBeInTheDocument()
+    expect(screen.queryByText('失败')).toBeNull()
+    expect(screen.getByText('claude')).toBeInTheDocument()
+    expect(err).not.toHaveBeenCalled()
   })
 })

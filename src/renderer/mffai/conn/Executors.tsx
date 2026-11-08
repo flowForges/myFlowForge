@@ -1,7 +1,7 @@
-// 连接 · 执行器(08 §10.2):executor.list,手动刷新(executor.refresh)。
+// 连接 · 执行器(08 §10.2):executor.list,手动刷新(executor.refresh)。旧后台没有这两个方法(-32601):不支持。
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ExecutorListResult } from '@mffai/protocol'
-import { call, cmd, toCallError } from '../rpc'
+import { call, cmd, isUnsupported, toCallError } from '../rpc'
 import { Chip } from '../ui/Chip'
 import { CodeChip } from '../ui/CodeChip'
 import { label } from '../labels'
@@ -28,6 +28,7 @@ function ExecutorItem({ e }: { e: ExecutorRow }) {
 export function Executors() {
   const [rows, setRows] = useState<ExecutorRow[] | null>(null)
   const [failed, setFailed] = useState(false)
+  const [unsupported, setUnsupported] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const inflight = useRef(false)
   const alive = useRef(true)
@@ -35,7 +36,12 @@ export function Executors() {
   const load = useCallback(() => {
     void call('executor.list').then(
       (r) => { if (alive.current) { setRows(r.executors); setFailed(false) } },
-      (e) => { if (!alive.current) return; console.error('mffai executor.list', toCallError(e)); setFailed(true) },
+      (e) => {
+        if (!alive.current) return
+        if (isUnsupported(e)) { setUnsupported(true); return }
+        console.error('mffai executor.list', toCallError(e))
+        setFailed(true)
+      },
     )
   }, [])
 
@@ -52,14 +58,20 @@ export function Executors() {
     setFailed(false)
     void call('executor.refresh', { commandId: cmd() }).then(
       (r) => { if (alive.current) setRows(r.executors) },
-      (e) => { if (!alive.current) return; console.error('mffai executor.refresh', toCallError(e)); setFailed(true) },
+      (e) => {
+        if (!alive.current) return
+        if (isUnsupported(e)) { setUnsupported(true); return }
+        console.error('mffai executor.refresh', toCallError(e))
+        setFailed(true)
+      },
     ).finally(() => { inflight.current = false; setRefreshing(false) })
   }
 
   return (
     <div className="mffai-conn mffai-conn-exec">
       <div className="mffai-actions">
-        <button className="set-btn" disabled={refreshing} onClick={refresh}>刷新</button>
+        {!unsupported && <button className="set-btn" disabled={refreshing} onClick={refresh}>刷新</button>}
+        {unsupported && <Chip>不支持</Chip>}
         {refreshing && <Chip tone="warn">刷新中</Chip>}
         {failed && <span className="mffai-fail">失败</span>}
       </div>
