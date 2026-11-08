@@ -51,6 +51,8 @@ describe('no explanatory text under src/renderer/mffai', () => {
     ['a CJK placeholder in an expression', 'Plant.tsx', `export const C = () => <input placeholder={'路径'} />\n`, 'placeholder'],
     ['a dangerouslySetInnerHTML', 'Plant.tsx', `export const C = ({ h }: { h: string }) => <div dangerouslySetInnerHTML={{ __html: h }} />\n`, 'dangerouslySetInnerHTML'],
     ['a dangerouslySetInnerHTML via spread props', 'plant.ts', `export const p = { dangerouslySetInnerHTML: { __html: '' } }\n`, 'dangerouslySetInnerHTML'],
+    ['a dangerouslySetInnerHTML as a computed key', 'plant.ts', `export const p = { ['dangerouslySetInnerHTML']: { __html: '' } }\n`, 'dangerouslySetInnerHTML'],
+    ['a dangerouslySetInnerHTML as a computed template key', 'Plant.tsx', 'export const C = () => <div {...{ [`dangerouslySetInnerHTML`]: { __html: "" } }} />\n', 'dangerouslySetInnerHTML'],
     ['，in a short literal', 'plant.ts', `export const x = '好，'\n`, 'punctuation'],
     ['a nested folder', 'deep/Plant.tsx', `export const x = '${'一二三四五六七八九十一二三四五'}'\n`, 'cjk-length'],
   ]

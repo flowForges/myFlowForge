@@ -54,7 +54,11 @@ const stringOf = (n: ts.Node | undefined): string | undefined => {
 }
 
 const nameOf = (n: ts.Node): string | undefined =>
-  ts.isIdentifier(n) || ts.isStringLiteral(n) ? n.text : ts.isJsxNamespacedName(n) ? n.name.text : undefined
+  ts.isIdentifier(n) || ts.isStringLiteral(n) ? n.text
+    : ts.isJsxNamespacedName(n) ? n.name.text
+    // { ['dangerouslySetInnerHTML']: … }:计算属性名是字符串字面量时按它的值算
+    : ts.isComputedPropertyName(n) ? stringOf(n.expression)
+    : undefined
 
 /** 说明文字:超长汉字、句子标点、汉字 placeholder、dangerouslySetInnerHTML */
 export function scanHintText(file: string, text: string): Violation[] {

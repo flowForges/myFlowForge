@@ -42,6 +42,18 @@ describe('rpc', () => {
     expect(isUnsupported(e)).toBe(true)
   })
 
+  it('a bare string, null and undefined rejection each become -32603', async () => {
+    for (const [r, msg] of [['plain text', 'plain text'], [null, ''], [undefined, '']] as const) {
+      callFn.mockReset()
+      callFn.mockRejectedValue(r)
+      const e = await call('status').catch((x) => x)
+      expect(e, String(r)).toBeInstanceOf(MffaiCallError)
+      expect(e.code).toBe(-32603)
+      expect(e.message).toBe(msg)
+      expect(e.data).toBeUndefined()
+    }
+  })
+
   it('a missing preload method rejects as MffaiCallError, never throws synchronously', async () => {
     ;(window as any).forge = { mffai: {} }
     const p = call('status')
