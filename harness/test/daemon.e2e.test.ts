@@ -1153,5 +1153,47 @@ describe.skipIf(!E2E)('built daemon e2e', () => {
       conn.w.close()
       await d.shutdown()
     }, 120_000)
+
+    // 08 Task 14 Step 3:界面用到的会话方法在打包产物里走一遍;删了就是没了,按字节看数据目录
+    it('session round (08): create, prompt, list, rename, state, delete; afterwards the marker is in no byte of the data dir', async () => {
+      const MARK = ['会话', '标记', '-', 'q7z'].join('')
+      const fake = await startFakeOpenai({ script: [] })
+      closers.push(() => fake.close())
+      const { d, conn, cwd } = await boot(fake)
+      const { sessionId } = await conn.w.call('session.create', { commandId: 'e2e-ui-create', cwd, approvalMode: 'auto', title: `标题 ${MARK}` })
+      await say(conn, sessionId, `第一句 ${MARK}`)
+
+      const listed = (await conn.w.call('session.list')).sessions.find(s => s.id === sessionId)
+      expect(listed).toMatchObject({ id: sessionId, cwd: realpathSync(cwd), title: `标题 ${MARK}`, origin: 'app' })
+      expect(listed!.open).toBeUndefined()
+      expect(await conn.w.call('session.rename', { commandId: 'e2e-ui-rename', sessionId, title: `改名 ${MARK}` })).toMatchObject({ ok: true })
+      expect((await conn.w.call('session.list')).sessions.find(s => s.id === sessionId)?.title).toBe(`改名 ${MARK}`)
+
+      const st = await conn.w.call('session.state', { sessionId })
+      expect(st.session.id).toBe(sessionId)
+      expect(st.open).toBeUndefined()
+      const types = st.events.map(e => e.type)
+      for (const t of ['session.created', 'message.user', 'turn.ended', 'session.renamed'] as const) expect(types, t).toContain(t)
+      expect(st.events.every(e => e.sessionId === sessionId)).toBe(true)
+      expect(JSON.stringify(st.events.find(e => e.type === 'message.user')!.payload)).toContain(MARK)
+      expect(st.lastSeq).toBeGreaterThanOrEqual(st.events.at(-1)!.seq)
+      expect(holding(d.data, MARK).length).toBeGreaterThan(0)
+
+      const del = await conn.w.call('session.delete', { commandId: 'e2e-ui-delete', sessionId })
+      expect(del.ok).toBe(true)
+      expect(del.redacted).toBeGreaterThan(0)
+      expect((await conn.w.call('session.list')).sessions.map(s => s.id)).not.toContain(sessionId)
+      await expect(conn.w.call('session.state', { sessionId })).rejects.toMatchObject({ code: -32602 })
+      expect(conn.events.filter(e => e.type === 'session.deleted' && e.sessionId === sessionId)).toHaveLength(1)
+
+      // events.sqlite 先 checkpoint 再读字节;整个数据目录(库、WAL、memory.sqlite、日志、会话目录)也都没有
+      const db = new DatabaseSync(join(d.data, 'db', 'events.sqlite'))
+      try { db.exec('PRAGMA wal_checkpoint(TRUNCATE)') } finally { db.close() }
+      expect(readFileSync(join(d.data, 'db', 'events.sqlite')).includes(Buffer.from(MARK))).toBe(false)
+      expect(holding(d.data, MARK)).toEqual([])
+      expect((await conn.w.call('memory.search', { query: MARK, layer: 'raw' })).items).toEqual([])
+      conn.w.close()
+      await d.shutdown()
+    }, 120_000)
   })
 })
