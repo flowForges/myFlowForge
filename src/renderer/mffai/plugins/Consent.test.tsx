@@ -12,7 +12,8 @@ const NOT_VERBATIM = new Set(['suggestedHosts', 'argsMasked', 'cwd', 'modelInvoc
 function leaves(v: unknown, key = ''): string[] {
   if (NOT_VERBATIM.has(key)) return []
   if (typeof v === 'string') return v.split(PLACEHOLDER).filter((s, i) => i % 2 === 0 && s !== '')
-  if (typeof v === 'number') return [String(v)]
+  // 数字单独按行断言(substring 太容易碰巧对上)
+  if (typeof v === 'number') return []
   if (Array.isArray(v)) return v.flatMap((x) => leaves(x, key))
   if (v && typeof v === 'object') return Object.entries(v).flatMap(([k, x]) => leaves(x, k))
   return []
@@ -31,6 +32,15 @@ describe('Consent', () => {
     const text = document.body.textContent!
     for (const s of leaves(FULL_CONSENT)) expect(text, s).toContain(s)
     expect(findHints()).toEqual([])
+  })
+
+  it('every number sits in its own row', () => {
+    render(<Consent consent={FULL_CONSENT} />)
+    expect(section('head').querySelector('.mffai-count')!.textContent).toBe('文件 37 · 40960 字节')
+    expect(section('skills').querySelector('[data-skill="0"] .mffai-count')!.textContent).toBe('文件 4')
+    expect([...section('truncated').querySelectorAll('.mffai-chip')].map((c) => c.textContent)).toEqual(['skills 省略 12 项', 'commands 省略 3 项'])
+    const files = [...section('diff').querySelectorAll('.mffai-crow')].find((r) => r.querySelector('.mffai-k')?.textContent === '文件数')!
+    expect(files.querySelector('.mffai-count')!.textContent).toBe('30 → 37')
   })
 
   it('header: id, version, format, source and integrity monospace, files and size', () => {
