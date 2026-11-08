@@ -65,7 +65,7 @@ export function MffaiComposer({ session, imName, onSend, onCommand, onStop, canS
 }) {
   const commands = usePluginCommands()
   const [text, setText] = useState('')
-  const [sending, setSending] = useState(false)
+  const inflight = useRef(false)
   const [err, setErr] = useState<'busy' | 'failed' | null>(null)
   const [active, setActive] = useState(0)
   const [dismissed, setDismissed] = useState(false)
@@ -91,10 +91,10 @@ export function MffaiComposer({ session, imName, onSend, onCommand, onStop, canS
 
   const send = async () => {
     const t = text.trim()
-    if (!t || sending || readOnly) return
+    if (!t || inflight.current || readOnly) return
     const m = COMMAND.exec(t)
     const cmd = m && commands.find((c) => c.name === m[1])
-    setSending(true)
+    inflight.current = true
     setErr(null)
     setText('')
     try {
@@ -106,7 +106,7 @@ export function MffaiComposer({ session, imName, onSend, onCommand, onStop, canS
       setText((cur) => (cur ? `${t}\n${cur}` : t))
       setErr(toCallError(e).code === ERR_BUSY ? 'busy' : 'failed')
     } finally {
-      if (alive.current) setSending(false)
+      inflight.current = false
     }
   }
 

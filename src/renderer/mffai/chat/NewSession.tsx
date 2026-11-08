@@ -25,6 +25,7 @@ export function NewSession({ onCreated, initial }: { onCreated: (sessionId: stri
   const [auto, setAuto] = useState(false)
   const [mustAsk, setMustAsk] = useState(false)
   const [busy, setBusy] = useState(false)
+  const inflight = useRef(false)
   const [failed, setFailed] = useState(false)
   const retry = useRef(retryable()).current
   const alive = useRef(true)
@@ -41,12 +42,13 @@ export function NewSession({ onCreated, initial }: { onCreated: (sessionId: stri
   const noAccounts = !!catalog && accounts.length === 0
 
   const start = async () => {
-    if (!model || busy) return
+    if (!model || inflight.current) return
     const params = {
       model,
       ...(dir && { cwd: dir, approvalMode: auto ? ('auto' as const) : ('ask' as const), ...(toolset && { toolset }) }),
     }
     const key = JSON.stringify(params)
+    inflight.current = true
     setBusy(true)
     setFailed(false)
     try {
@@ -57,6 +59,7 @@ export function NewSession({ onCreated, initial }: { onCreated: (sessionId: stri
       console.error('mffai session.create', e)
       if (alive.current) setFailed(true)
     } finally {
+      inflight.current = false
       if (alive.current) setBusy(false)
     }
   }

@@ -10,6 +10,7 @@ const TEXT_MAX = 160
 function Item({ id, onGone }: { id: string; onGone: () => void }) {
   const [text, setText] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const inflight = useRef(false)
   const [failed, setFailed] = useState(false)
   const retry = useRef(retryable()).current
   const alive = useRef(true)
@@ -19,6 +20,8 @@ function Item({ id, onGone }: { id: string; onGone: () => void }) {
     return () => { alive.current = false }
   }, [id])
   const del = async () => {
+    if (inflight.current) return
+    inflight.current = true
     setBusy(true)
     setFailed(false)
     try {
@@ -31,6 +34,7 @@ function Item({ id, onGone }: { id: string; onGone: () => void }) {
       console.error('mffai memory.delete', c)
       if (alive.current) setFailed(true)
     } finally {
+      inflight.current = false
       if (alive.current) setBusy(false)
     }
   }

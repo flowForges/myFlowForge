@@ -33,6 +33,7 @@ export function DeleteSession({ session, onClose, onDeleted }: {
   const [runs, setRuns] = useState<RunRow[] | null>(null)
   const [unmerged, setUnmerged] = useState<Unmerged[]>([])
   const [busy, setBusy] = useState(false)
+  const inflight = useRef(false)
   const [err, setErr] = useState<'unsupported' | 'failed' | null>(null)
   const retry = useRef(retryable()).current
   const alive = useRef(true)
@@ -56,8 +57,9 @@ export function DeleteSession({ session, onClose, onDeleted }: {
   const ids = unmerged.map((u) => u.runId)
 
   const confirm = async () => {
-    if (busy || runs === null) return
-    const key = `${session.id}\u0000${ids.join(',')}`
+    if (inflight.current || runs === null) return
+    const key = JSON.stringify([session.id, ids])
+    inflight.current = true
     setBusy(true)
     setErr(null)
     try {
@@ -73,6 +75,7 @@ export function DeleteSession({ session, onClose, onDeleted }: {
       else if (isUnsupported(c) || (c.code === ERR_INTERNAL && c.message === 'memory is unavailable')) setErr('unsupported')
       else { console.error('mffai session.delete', c); setErr('failed') }
     } finally {
+      inflight.current = false
       if (alive.current) setBusy(false)
     }
   }

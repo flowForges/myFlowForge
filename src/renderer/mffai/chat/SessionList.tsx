@@ -1,6 +1,6 @@
 // 会话列表(08 §7.1、§7.2):来源图标、标题、相对时间、待批红点、运行中、挂起、群聊、Telegram 名字;
 // 双击标题或行菜单改名,行菜单删除(有开着的轮时灰掉,块上已经是 运行中)。
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { SessionOrigin, SessionSummary } from '@mffai/protocol'
 import { fmtRelTime } from '@shared/relTime'
 import { ThinkSpinner } from '../../views/chat/Spinners'
@@ -39,12 +39,16 @@ function Row({ s, on, imName, onSelect, onRename, onDelete, menuOpen, setMenu }:
   const [editing, setEditing] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
   const [saving, setSaving] = useState(false)
+  const inflight = useRef(false)
   const begin = () => { setMenu(false); setFailed(false); setEditing(s.title) }
   const save = async () => {
     const t = (editing ?? '').trim()
+    if (inflight.current) return
     if (!t || t === s.title) { setEditing(null); return }
+    inflight.current = true
     setSaving(true)
     const ok = await onRename(t).catch(() => false)
+    inflight.current = false
     setSaving(false)
     if (ok) { setEditing(null); setFailed(false) } else setFailed(true)
   }
