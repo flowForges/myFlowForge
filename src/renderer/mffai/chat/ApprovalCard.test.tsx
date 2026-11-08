@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { ApprovalCard } from './ApprovalCard'
 import type { ApprovalItem } from './reduce'
@@ -78,5 +80,33 @@ describe('ApprovalCard', () => {
     }
     render(<ApprovalCard sessionId="s1" approval={item({ stale: true })} />)
     expect(screen.getByText('已取消')).toBeInTheDocument()
+  })
+
+  it('bidi, format and zero-width characters show as visible escapes, so the text reads in the order it runs', () => {
+    installFakeForge()
+    const summary = 'echo safe‮;txt.exe‬ ⁦x⁩ a​b﻿­'
+    const { container } = render(<ApprovalCard sessionId="s1" approval={item({ summary })} />)
+    const pre = container.querySelector('pre.mffai-summary')!
+    expect(pre.textContent).toBe('echo safe\\u{202E};txt.exe\\u{202C} \\u{2066}x\\u{2069} a\\u{200B}b\\u{FEFF}\\u{AD}')
+    expect(/[\p{Cf}]/u.test(pre.textContent!)).toBe(false)
+    expect(pre.querySelectorAll('.mffai-esc')).toHaveLength(7)
+  })
+
+  it('a run of blank lines collapses to ⋯ N 空行, so the tail after it is in view; no max-height on a pending summary', () => {
+    installFakeForge()
+    const summary = `echo ok${'\n'.repeat(40)};rm -rf ~`
+    const { container } = render(<ApprovalCard sessionId="s1" approval={item({ summary })} />)
+    const pre = container.querySelector('pre.mffai-summary')!
+    expect(pre.textContent).toBe('echo ok\n⋯ 39 空行\n;rm -rf ~')
+    expect(pre.querySelector('.mffai-blank')!.textContent).toBe('⋯ 39 空行')
+    // 两行以内的空行原样
+    const { container: c2 } = render(<ApprovalCard sessionId="s1" approval={item({ summary: 'a\n\n\nb' })} />)
+    expect(c2.querySelector('pre.mffai-summary')!.textContent).toBe('a\n\n\nb')
+    // 开头的空行一样收起:命令不会被推到下面
+    const { container: c3 } = render(<ApprovalCard sessionId="s1" approval={item({ summary: `${'\n'.repeat(30)}rm -rf ~` })} />)
+    expect(c3.querySelector('pre.mffai-summary')!.textContent).toBe('⋯ 30 空行\nrm -rf ~')
+    const css = readFileSync(resolve(__dirname, '../mffai.css'), 'utf8')
+    const rule = /\.mffai-summary\s*\{([^}]*)\}/.exec(css)![1]
+    expect(rule).not.toMatch(/max-height|overflow/)
   })
 })

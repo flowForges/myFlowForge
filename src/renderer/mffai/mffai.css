@@ -124,7 +124,8 @@
 .mffai-chat-body .mffai-card { max-width: 760px; padding: 10px 12px; gap: 6px; font-family: inherit; color: var(--fg); }
 .mffai-chat-body .mffai-card-head, .mffai-chat-body .mffai-card-row, .mffai-chat-body .mffai-card-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .mffai-chat-body .mffai-card-actions .mffai-primary { margin-top: 0; }
-.mffai-summary { margin: 0; padding: 8px 10px; border-radius: 6px; background: var(--bg-2); font-family: var(--mono, monospace); font-size: 12px; white-space: pre-wrap; word-break: break-all; max-height: 360px; overflow: auto; }
+.mffai-summary { margin: 0; padding: 8px 10px; border-radius: 6px; background: var(--bg-2); font-family: var(--mono, monospace); font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+.mffai-esc, .mffai-blank { padding: 0 3px; border-radius: 3px; background: var(--surface); color: var(--del, #e5484d); }
 .mffai-approval-done { display: flex; flex-direction: row; align-items: center; gap: 8px; max-width: 760px; padding: 4px 10px; font-size: 12.5px; }
 .mffai-summary-line { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono, monospace); color: var(--faint); }
 .mffai-tail { display: flex; flex-direction: column; gap: 6px; max-width: 760px; }
