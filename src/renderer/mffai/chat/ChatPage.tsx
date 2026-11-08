@@ -1,4 +1,4 @@
-// 对话页(08 §7):左栏会话列表 + 新会话,右边是选中的会话(Task 7 在输入框上面放这一轮的内容)或新会话表单。
+// 对话页(08 §7):左栏会话列表 + 新会话,右边是选中的会话(SessionPane:各轮的内容 + 输入框)或新会话表单。
 // 选中、新会话、去合并都经 route。改名、发送重试时用同一个 commandId(超时后的重试才有回执重放)。
 import { useRef, useState } from 'react'
 import type { SessionSummary } from '@mffai/protocol'
@@ -11,7 +11,7 @@ import { DeleteSources } from '../ui/DeleteSources'
 import { useSessions } from './useSessions'
 import { SessionList } from './SessionList'
 import { NewSession } from './NewSession'
-import { MffaiComposer } from './MffaiComposer'
+import { SessionPane } from './SessionPane'
 import { DeleteSession } from './DeleteSession'
 
 const K = '\u0000'
@@ -61,19 +61,15 @@ export default function ChatPage() {
       </aside>
       <section className="mffai-chat-main">
         {activeId ? (
-          <>
-            <div className="mffai-chat-body" />
-            <MffaiComposer
-              key={activeId}
-              session={active ?? { id: activeId, origin: 'app' }}
-              imName={imNames.get(activeId)}
-              canStop={!!active?.open}
-              parked={active?.open?.parked ? {} : undefined}
-              onSend={(text) => send(activeId, text, (commandId) => call('session.prompt', { commandId, sessionId: activeId, text }))}
-              onCommand={(name, args) => send(activeId, `/${name}${K}${args}`, (commandId) => call('plugins.command.run', { commandId, sessionId: activeId, name, args }))}
-              onStop={() => { void call('session.cancel', { commandId: cmd(), sessionId: activeId }).catch((e) => console.error('mffai session.cancel', e)) }}
-            />
-          </>
+          <SessionPane
+            key={activeId}
+            sessionId={activeId}
+            summary={active}
+            imName={imNames.get(activeId)}
+            onSend={(text) => send(activeId, text, (commandId) => call('session.prompt', { commandId, sessionId: activeId, text }))}
+            onCommand={(name, args) => send(activeId, `/${name}${K}${args}`, (commandId) => call('plugins.command.run', { commandId, sessionId: activeId, name, args }))}
+            onStop={() => { void call('session.cancel', { commandId: cmd(), sessionId: activeId }).catch((e) => console.error('mffai session.cancel', e)) }}
+          />
         ) : (
           <NewSession key={JSON.stringify(r.newSession ?? null)} initial={r.newSession}
             onCreated={(id) => { reload(); route.set({ page: 'chat', sessionId: id }) }} />

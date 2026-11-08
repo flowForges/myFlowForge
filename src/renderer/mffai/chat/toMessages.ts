@@ -3,7 +3,6 @@
 import type { SessionOrigin } from '@mffai/protocol'
 import type { ChatMessage, ToolActivity } from '@shared/types'
 import { isEnded, type SessionView, type TurnView } from './reduce'
-import { originKind } from './SessionList'
 
 /** 截断过的工具输出,块尾的标记 */
 export const TRUNCATED_MARK = '\n… 已截断'
@@ -28,7 +27,7 @@ export function defuseImages(text: string): string {
 export interface MessageGroup { turnId: string; messages: ChatMessage[] }
 
 function turnMessages(v: SessionView, t: TurnView, origin: SessionOrigin): { messages: ChatMessage[]; streaming?: string } {
-  const via = (external: boolean) => (external ? '转发' : originKind(origin) === 'im' ? 'Telegram' : undefined)
+  const via = (external: boolean) => (external ? '转发' : origin === 'im' ? 'Telegram' : undefined)
   const items: { seq: number; msg: ChatMessage }[] = []
   t.users.forEach((u, i) => {
     const m: ChatMessage = { id: `${t.turnId}:u${i}`, who: 'user', text: u.text, ts: iso(u.ts) }

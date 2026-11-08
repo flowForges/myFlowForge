@@ -128,8 +128,9 @@ describe('DeleteSession', () => {
   it('executor.runs unsupported: no worktrees, delete still works', async () => {
     f = installFakeForge({ calls: { 'session.delete': { ok: true, redacted: 0, notes: [] } } })
     mount()
-    await waitFor(() => expect(confirmRows()).toContainEqual(['保留的 worktree', '0']))
-    expect(okBtn().disabled).toBe(false)
+    // 行在 executor.runs 答回来之前就是 0:等按钮可用,才算答过了
+    await waitFor(() => expect(okBtn().disabled).toBe(false))
+    expect(confirmRows()).toContainEqual(['保留的 worktree', '0'])
   })
 
   it('the confirm stays disabled until the run list answered', async () => {

@@ -1,7 +1,7 @@
 // 每个页面用夹具数据渲染,不能有 class 含 hint/desc/help/note/tip/caption 的元素,也不能有 <p>、<small>。
 // ★页面任务(6–13)往 ROWS 里追加自己的行。
 import { describe, it, expect, beforeEach } from 'vitest'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import MffaiView from './MffaiView'
 import { StatusStrip } from './StatusStrip'
@@ -20,6 +20,9 @@ import { DeleteSession } from './chat/DeleteSession'
 import { DeleteSources } from './ui/DeleteSources'
 import { MffaiComposer } from './chat/MffaiComposer'
 import { NewSession } from './chat/NewSession'
+import { RunCard } from './chat/RunCard'
+import { TurnTail } from './chat/TurnTail'
+import { ApprovalCard } from './chat/ApprovalCard'
 import { perms, runRow, summary } from './test/sessions'
 import { fail, installFakeForge, RUNNING_STATE, type CallTable, type FakeForge } from './test/fakeForge'
 import { ev, resetSeq, userMsg } from './test/events'
@@ -193,6 +196,83 @@ const ROWS: Row[] = [
     },
   },
   {
+    name: 'chat: a full turn (steps, think, tools, approvals, runs, tail), the memory list, the changes diff and the rollback confirm',
+    mount: async (f) => {
+      const S = 'sx'
+      const e = (type: Parameters<typeof ev>[0], payload: unknown) => ev(type, payload, { sessionId: S })
+      const evs = [
+        e('message.user', { turnId: 't0', text: 'first' }),
+        e('turn.snapshot', { turnId: 't0', phase: 'start', ref: 's' }), e('turn.snapshot', { turnId: 't0', phase: 'end', ref: 'e', changed: 2 }),
+        e('memory.injected', { turnId: 't0', kind: 'turn', text: 'm', items: ['n_a'] }),
+        e('plugins.injected', { turnId: 't0', text: 'p', skill: true, mcp: false }),
+        e('context.rebuilt', { turnId: 't0', step: 1, checkpointSeq: 1, throughSeq: 1, before: 900, after: 300 }),
+        e('message.reasoning.delta', { turnId: 't0', step: 1, text: 'thinking' }),
+        e('message.assistant', { turnId: 't0', step: 1, text: '# Title\n\n- a list\n\n```ts\nconst x = 1\n```\n[link](https://example.com)' }),
+        e('tool.started', { turnId: 't0', callId: 'c1', name: 'read', argsPreview: 'a.ts' }),
+        e('tool.ended', { turnId: 't0', callId: 'c1', name: 'read', ok: true, ms: 1, content: 'body', truncated: true }),
+        e('approval.requested', { approvalId: 'p0', turnId: 't0', callId: 'c2', tool: 'shell', summary: 'ls' }),
+        e('approval.resolved', { approvalId: 'p0', decision: 'deny', by: 'timeout' }),
+        e('sandbox.netDenied', { host: 'h', port: 1, reason: 'x' }),
+        e('session.approvalNarrowed', { approvalMode: 'ask' }),
+        e('turn.usage', { turnId: 't0', step: 1, input: 1, output: 2, cacheRead: 3 }),
+        e('turn.ended', { turnId: 't0' }),
+        e('message.user', { turnId: 't1', text: 'second' }),
+        e('turn.snapshot', { turnId: 't1', phase: 'start', reason: 'unsafe_filter' }),
+        e('executor.run.queued', { runId: 'rq', turnId: 't1', callId: 'c', executor: 'claude', summary: 's', readOnly: true, isolation: 'none', position: 2 }),
+        e('executor.run.started', { runId: 'r1', turnId: 't1', executor: 'codex', cwd: '/repo', isolation: 'wrapped', worktree: '/wt', untranslatedRules: 1 }),
+        ...Array.from({ length: 7 }, (_, i) => e('executor.run.progress', { runId: 'r1', turnId: 't1', kind: (['tool', 'file', 'text', 'think'] as const)[i % 4], text: `p${i}` })),
+        e('executor.run.ended', { runId: 'r1', turnId: 't1', executor: 'codex', status: 'failed', reason: 'exit_nonzero', ms: 2000, exit: 1, usage: { input: 1, output: 1 },
+          changed: { files: ['a.ts'], source: 'git', concurrent: true, filesTruncated: 1 }, violations: ['v'], violationsTruncated: 1, rawLog: '/raw', droppedProgress: 3, worktree: '/wt' }),
+        e('approval.requested', { approvalId: 'p1', turnId: 't1', callId: 'c3', tool: 'shell', summary: 'rm -rf build', key: 'k', unsandboxed: true }),
+        e('turn.parked', { turnId: 't1', step: 1, active: 1, pending: 1 }),
+      ]
+      f.script({
+        'session.list': { sessions: [summary(S, { open: { turnId: 't1', parked: true } })] },
+        'session.state': { session: summary(S), events: evs, hasMore: true, lastSeq: evs.at(-1)!.seq, open: { turnId: 't1', parked: true, approvalIds: ['p1'] } },
+        'plugins.commands': { commands: [] },
+        'memory.get': { id: 'n_a', layer: 'memory', text: 'remembered' },
+        'executor.changes': { files: [{ path: 'a.ts', status: 'M' }], source: 'git', concurrent: true },
+        'executor.diff': { path: 'a.ts', status: 'M', binary: false, truncated: true, lines: [{ kind: 'del', ln: 1, text: 'old' }] },
+        'executor.worktree.merge': () => fail(-32602, 'refused', { reason: 'conflict', restored: false, paths: ['a.ts'] }),
+        'executor.runs': { runs: [] },
+      })
+      route.set({ page: 'chat', sessionId: S })
+      render(<ChatPage />)
+      await screen.findByText('rm -rf build')
+      fireEvent.click(screen.getByRole('button', { name: '记忆 1' }))
+      await screen.findByText('remembered')
+      fireEvent.click(screen.getByRole('button', { name: '全部 7' }))
+      fireEvent.click(screen.getByRole('button', { name: '2 个文件' }))
+      fireEvent.click(await screen.findByText('a.ts', { selector: '.mffai-path' }))
+      await screen.findByText('old')
+      fireEvent.click(screen.getByRole('button', { name: '合并' }))
+      await act(async () => { fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '合并' })) })
+      await screen.findByText('未还原')
+    },
+  },
+  {
+    name: 'chat: the rollback confirm and a failed rollback; resolved approval lines; a queued run',
+    mount: async (f) => {
+      f.script({ 'turn.rollback': () => fail(-32603, 'x'), 'approval.respond': () => fail(-32603, 'x') })
+      const turn = { turnId: 't1', seq: 1, users: [], steps: [], approvals: [], runs: new Map(), netDenied: [], terminal: { type: 'turn.failed' as const, reason: 'cancelled' }, snapshot: { start: 'a', end: 'b', changed: 1 } }
+      render(
+        <>
+          <TurnTail sessionId="s1" canRollback turn={turn} />
+          <ApprovalCard sessionId="s1" approval={{ approvalId: 'p', turnId: 't1', callId: 'c', tool: 'mcp__x', summary: 'x', seq: 1, resolved: { decision: 'allow', by: 'user', via: 'telegram:1' } }} />
+          <ApprovalCard sessionId="s1" approval={{ approvalId: 'q', turnId: 't1', callId: 'c', tool: 'shell', summary: 'y', seq: 2 }} />
+          <RunCard sessionId="s1" turnOpen run={{ runId: 'r', turnId: 't1', seq: 1, phase: 'queued', executor: 'codex', position: 1, readOnly: false, isolation: 'own', progress: [] }} />
+        </>,
+      )
+      fireEvent.click(screen.getByRole('button', { name: '拒绝' }))
+      await screen.findByText('失败')
+      fireEvent.click(screen.getByRole('button', { name: '回滚本轮' }))
+      await screen.findByRole('dialog')
+      expect(findHints()).toEqual([])
+      await act(async () => { fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '回滚本轮' })) })
+      await waitFor(() => expect(screen.getAllByText('失败')).toHaveLength(2))
+    },
+  },
+  {
     name: 'strip: every chip',
     mount: () => {
       render(<StatusStrip state={{ ...RUNNING_STATE, proxyStale: true, compatible: false }} onRestart={() => {}} onResetTrip={() => {}} failed
@@ -231,6 +311,13 @@ describe('no explanatory text at render time', () => {
       </div>,
     )
     expect(findHints(container).map((h) => h.className || h.tag)).toEqual(['x-hint', 'desc', 'mffai-help', 'note', 'tooltip', 'caption', 'p', 'small'])
+  })
+
+  it('model text inside an assistant answer body is third-party content, not UI text: its <p> is not a finding', () => {
+    const { container } = render(<div><div className="msg-body ans"><p>model paragraph</p></div><span className="mffai-chip">x</span></div>)
+    expect(findHints(container)).toEqual([])
+    const { container: c2 } = render(<div className="msg-body"><p>user side</p></div>)
+    expect(findHints(c2).map((h) => h.tag)).toEqual(['p'])
   })
 
   for (const row of ROWS) {
