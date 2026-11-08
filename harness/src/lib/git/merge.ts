@@ -146,8 +146,8 @@ async function hooksDir(g: Git, pin: PinnedRepo): Promise<string[][]> {
 }
 
 /** 第 3 步:任何一条不安全,整个拒绝 */
-async function unsafePaths(g: Git, to: PinnedRepo, entries: Entry[], patch: Buffer): Promise<string[]> {
-  const hooks = await hooksDir(g, to)
+async function unsafePaths(g: Git, plain: Git, to: PinnedRepo, entries: Entry[], patch: Buffer): Promise<string[]> {
+  const hooks = await hooksDir(plain, to)
   const gitlinks = splitZ(await ok(g, ['ls-files', '-s', '-z'], { cwd: to.top }))
     .filter(l => l.startsWith('160000 '))
     .map(l => foldPath(l.slice(l.indexOf('\t') + 1)))
@@ -244,8 +244,8 @@ export async function mergeInto(o: MergeOpts): Promise<MergeOutcome> {
     const built = await buildPatch(o)
     if (!built) return refuse('nothing')
     const { entries, patch } = built
-    // 读配置不跑任何钩子:不经 guarded,才读得到用户自己的 core.hooksPath
-    const unsafe = await unsafePaths(pinnedGit(o.git, to.pin), to.pin, entries, patch)
+    // 只有读 core.hooksPath 这一条不经 guarded(否则读到的是我们的空目录):`git config` 不读索引,不跑钩子和 fsmonitor
+    const unsafe = await unsafePaths(g, pinnedGit(o.git, to.pin), to.pin, entries, patch)
     if (unsafe.length > 0) return refuse('unsafe_path', unsafe)
     const paths = entries.map(e => e.path)
     const dirty = await dirtyPaths(g, to.pin, paths)

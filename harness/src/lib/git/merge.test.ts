@@ -393,6 +393,16 @@ describe('mergeInto: refused, the checkout byte-identical (R4)', () => {
       expect(existsSync(mark)).toBe(false)
     })
 
+    it('a core.fsmonitor command in the checkout never runs, and the merge goes through', async () => {
+      const mark = join(root, 'fsmonitor-ran')
+      w(join(root, 'mon.sh'), `#!/bin/sh\ntouch "${mark}"\n`)
+      chmodSync(join(root, 'mon.sh'), 0o755)
+      const p = await prepare({ edit: () => w(W('n.txt'), 'n\n') })
+      ug(['config', 'core.fsmonitor', join(root, 'mon.sh')])
+      expect(await merge({}, p)).toEqual({ ok: true, files: 1 })
+      expect(existsSync(mark)).toBe(false)
+    })
+
     it('the checkout pin no longer matches (the repo was swapped)', async () => {
       const p = await prepare({ edit: () => w(W('n.txt'), 'n\n') })
       const stale: PinnedRepo = { ...p.toPin, ids: { ...p.toPin.ids, gitDir: { dev: p.toPin.ids.gitDir.dev, ino: p.toPin.ids.gitDir.ino + 1 } } }
