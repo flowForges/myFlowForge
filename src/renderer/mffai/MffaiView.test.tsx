@@ -117,6 +117,8 @@ describe('MffaiView', () => {
 
   it('debug panel: 发送 calls prompt and assistant event renders', async () => {
     setup({ enabled: true, autostart: true, running: true, supervisor: { state: 'running', version: '0.1.0' } })
+    // 默认页成了对话(Task 6):先落在调试页
+    route.set({ page: 'debug' })
     const { container } = render(<MffaiView />)
     await screen.findByText('发送')
     fireEvent.change(container.querySelector('.mffai-send input')!, { target: { value: 'hi' } })

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import MffaiView from './MffaiView'
 import { AddAccount } from './AddAccount'
+import { route } from './route'
 
 let mffai: any
 /** 与 preload 同语义:每个订阅者都收到事件,退订真的移除 */
@@ -43,6 +44,8 @@ function setup() {
     },
   }
   ;(window as any).forge = { mffai, setSettings: vi.fn() }
+  // 默认页成了对话(Task 6);这些测试写在调试面板是默认页的时候,挂载时先落在调试页
+  route.set({ page: 'debug' })
 }
 
 async function openConnections() {

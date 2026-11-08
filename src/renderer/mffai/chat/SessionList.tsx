@@ -76,7 +76,7 @@ function Row({ s, on, imName, onSelect, onRename, onDelete, menuOpen, setMenu }:
         <button className="mffai-sess-more" aria-label="更多" aria-haspopup="menu" aria-expanded={menuOpen}
           onClick={(e) => { e.stopPropagation(); setMenu(!menuOpen) }}>⋯</button>
         {menuOpen && (
-          <span className="menu-pop mffai-sess-pop" role="menu" onClick={(e) => e.stopPropagation()}>
+          <span className="mffai-sess-pop" role="menu" onClick={(e) => e.stopPropagation()}>
             <button className="menu-item" role="menuitem" onClick={begin}>改名</button>
             <button className="menu-item" role="menuitem" disabled={!!s.open} onClick={() => { if (s.open) return; setMenu(false); onDelete() }}>删除</button>
           </span>
