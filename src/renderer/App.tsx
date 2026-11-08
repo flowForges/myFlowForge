@@ -68,7 +68,7 @@ import { useKeybindings } from './state/useKeybindings'
 import { UpgradeModal } from './shell/UpgradeModal'
 import { DeleteConfirm } from './shell/DeleteConfirm'
 import { ActionConfirm } from './shell/ActionConfirm'
-import { markAllRead, notifFromLifecycle, sanitize, type Notif } from './shell/notifications'
+import { markAllRead, notifFromLifecycle, removeNotif, sanitize, upsertNotif, type Notif } from './shell/notifications'
 import { SetupProgress, INITIAL_SETUP_STATE, applySetupEvent } from './views/SetupProgress'
 import type { SetupProgressState } from './views/SetupProgress'
 import type { AgentState, ChatEvent, ChatQueueEvent, CreateWorkspaceOpts, EngineEvent, SetupEvent, Workspace } from '@shared/types'
@@ -527,6 +527,23 @@ export function App() {
     return () => off?.()
   }, [])
 
+  // mff-ai 铃铛(08 §13.6):只在启用时才 import 和订阅;停用或卸载时 stop
+  const mffaiOn = !!settings?.mffai?.enabled
+  useEffect(() => {
+    if (!mffaiOn) return
+    let stop: (() => void) | undefined
+    let dead = false
+    void import('./mffai/bell').then((m) => {
+      if (dead) return
+      stop = m.startBell({
+        upsert: (n) => setNotifs(ns => upsertNotif(ns, n)),
+        remove: (key) => setNotifs(ns => removeNotif(ns, key)),
+        open: () => { setView('mffai'); setNotifOpen(false) },
+      })
+    }).catch((e) => console.error('mffai bell', e))
+    return () => { dead = true; stop?.() }
+  }, [mffaiOn])
+
   const openWizard = () => { setCreateErr(null); setEditing(null); setWizardOpen(true) }
 
   const openEdit = async () => {
@@ -714,6 +731,7 @@ export function App() {
           // pane for app-global notifs (e.g. a perf stall → 调试日志). Read-only notifs just mark read.
           setNotifs(ns => ns.map((x, j) => (j === i ? { ...x, unread: false } : x)))
           const path = n.wsPath || home.workspaces.find(w => w.name === n.wsName)?.path
+          n.onOpen?.()
           if (n.view === 'mffai') { setView('mffai'); setNotifOpen(false) }
           else if (path) { setActiveId(path); setView('ws'); setNotifOpen(false) }
           else if (n.settingsPane) { setSettingsPane(n.settingsPane); setSettingsOpen(true); setNotifOpen(false) }
