@@ -5,7 +5,7 @@ import { accessSync, constants as fsConstants, lstatSync, readFileSync, realpath
 import { copyFile, lstat, mkdir, mkdtemp, rm, stat, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import type { FileChange } from '../../protocol/tools'
+import type { DiffLine, FileChange, FileDiff } from '../../protocol/tools'
 import { hasGitSegment, isInside, OUTSIDE, resolveToolPath } from '../fs/paths'
 import { lexists, mkdirChecked, removeLeaf, replaceFile, replaceSymlink, samePath } from '../fs/safeFs'
 
@@ -428,6 +428,87 @@ export async function changes(cwd: string, from: string, to: string, git: Git, o
     }
     return out
   })
+}
+
+export interface FileDiffOpts extends GitReadOpts {
+  /** 默认 2000 行 */
+  maxLines?: number
+  /** 行文字合计,默认 256 KB */
+  maxBytes?: number
+}
+
+/** 不跟着用户配置变的 diff 输出:颜色、空行的写法、相邻块合并、外部 diff、textconv 都关掉 */
+const PLAIN_DIFF = ['-c', 'diff.suppressBlankEmpty=false', '-c', 'diff.interHunkContext=0', '-c', 'diff.noprefix=false', '-c', 'core.quotePath=true']
+
+/**
+ * from..to 之间一个文件的 diff(08 §4.4)。path 从仓库根算,必须在 cwd 前缀下、而且真的变了,否则抛错(调用方先核对过改动清单)。
+ * 和 changes 同一套隔离:不安全的过滤器 → 抛 unsafe_filter;外部 diff、textconv 不跑
+ */
+export async function fileDiff(cwd: string, from: string, to: string, path: string, git: Git, opts: FileDiffOpts): Promise<FileDiff> {
+  const maxLines = opts.maxLines ?? 2000
+  const maxBytes = opts.maxBytes ?? 256 << 10
+  return inRepo(git, opts, async (g, pin) => {
+    if (await hasUnsafeFilter(g, pin, opts.writableRoots)) throw new Error('unsafe_filter')
+    const prefix = repoPrefix(pin, cwd)
+    if (!path.startsWith(prefix) || path === prefix) throw new Error('path not changed')
+    const spec = `:(top,literal)${path}`
+    const raw = splitZ(await run(g, ['diff', '--raw', '--no-renames', '--no-ext-diff', '--no-abbrev', '-z', from, to, '--', spec], { cwd: pin.top }))
+    if (raw.length < 2 || raw[1] !== path) throw new Error('path not changed')
+    const status = raw[0].split(' ')[4]?.[0]
+    if (!status || !STATUSES.has(status)) throw new Error(`未知的改动状态:${raw[0]}`)
+    const base = { path, status: status as FileChange['status'] }
+    const numstat = (await run(g, ['diff', '--numstat', '-z', '--no-renames', '--no-ext-diff', '--no-textconv', from, to, '--', spec], { cwd: pin.top })).toString()
+    if (numstat.startsWith('-\t-\t')) return { ...base, lines: [], binary: true, truncated: false }
+    const out = await run(g, [...PLAIN_DIFF, 'diff', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', '-U3', from, to, '--', spec], { cwd: pin.top, binary: true })
+    const { lines, truncated } = parseHunks(out.toString(), maxLines, maxBytes)
+    return { ...base, lines, binary: false, truncated }
+  })
+}
+
+/** 统一 diff 的块 → 行。按块头的行数走,不靠行首猜:空的上下文行、最后的换行都不会多出一行 */
+function parseHunks(text: string, maxLines: number, maxBytes: number): { lines: DiffLine[]; truncated: boolean } {
+  const lines: DiffLine[] = []
+  let bytes = 0
+  let oldLn = 0
+  let newLn = 0
+  let oldLeft = 0
+  let newLeft = 0
+  const push = (l: DiffLine): boolean => {
+    const n = Buffer.byteLength(l.text)
+    if (lines.length >= maxLines || bytes + n > maxBytes) return false
+    bytes += n
+    lines.push(l)
+    return true
+  }
+  for (const l of text.split('\n')) {
+    if (oldLeft <= 0 && newLeft <= 0) {
+      const m = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(l)
+      if (m) {
+        oldLn = Number(m[1])
+        oldLeft = m[2] === undefined ? 1 : Number(m[2])
+        newLn = Number(m[3])
+        newLeft = m[4] === undefined ? 1 : Number(m[4])
+      }
+      continue
+    }
+    if (l.startsWith('\\')) continue
+    const kind = l[0]
+    let ok = true
+    if (kind === '+') {
+      ok = push({ kind: 'add', ln: newLn++, text: l.slice(1) })
+      newLeft--
+    } else if (kind === '-') {
+      ok = push({ kind: 'del', ln: oldLn++, text: l.slice(1) })
+      oldLeft--
+    } else {
+      ok = push({ kind: 'ctx', ln: newLn++, text: l.slice(1) })
+      oldLn++
+      oldLeft--
+      newLeft--
+    }
+    if (!ok) return { lines, truncated: true }
+  }
+  return { lines, truncated: false }
 }
 
 /** from..to 之间 cwd 前缀下任一侧是子模块(gitlink,mode 160000)的路径:回滚写不回它们 */

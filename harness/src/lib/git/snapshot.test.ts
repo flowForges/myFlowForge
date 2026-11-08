@@ -1008,3 +1008,150 @@ describe('refExists', () => {
     expect(calls.every(a => a.some(x => x.startsWith('core.hooksPath=')))).toBe(true)
   })
 })
+
+describe('fileDiff (08 §4.4)', () => {
+  const fileDiff = async (from: string, to: string, p: string, g: Git = git(), o: { maxLines?: number; maxBytes?: number } = {}) =>
+    git_.fileDiff(repo, from, to, p, g, { pin: await pinRepo(repo, g), tmpDir: tmp, ...o })
+  const head = () => ug(['rev-parse', 'HEAD']).trim()
+  /** 和 app 的 parseUnifiedDiff 一样的规则 */
+  const expected = (from: string, to: string, p: string) => {
+    const res: { kind: string; ln: number; text: string }[] = []
+    let oldLn = 0
+    let newLn = 0
+    let inHunk = false
+    for (const l of ug(['diff', '-U3', '--no-color', from, to, '--', p]).split('\n')) {
+      if (l.startsWith('@@')) {
+        const m = /@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(l)!
+        oldLn = Number(m[1])
+        newLn = Number(m[2])
+        inHunk = true
+        continue
+      }
+      if (!inHunk || l.startsWith('+++') || l.startsWith('---') || l.startsWith('\\') || l === '') continue
+      if (l.startsWith('+')) res.push({ kind: 'add', ln: newLn++, text: l.slice(1) })
+      else if (l.startsWith('-')) res.push({ kind: 'del', ln: oldLn++, text: l.slice(1) })
+      else res.push({ kind: 'ctx', ln: newLn++, text: l.slice(1) }), oldLn++
+    }
+    return res
+  }
+
+  it('add, del and ctx line numbers match git diff -U3; status from the trees', async () => {
+    initRepo()
+    const lines = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`)
+    write(R('f.txt'), lines.join('\n') + '\n')
+    write(R('gone.txt'), 'bye\n')
+    ug(['add', '-A'])
+    commit('one')
+    const a = head()
+    const edited = [...lines]
+    edited.splice(3, 1, 'changed 4')
+    edited.splice(20, 0, 'inserted')
+    edited.splice(35, 2)
+    write(R('f.txt'), edited.join('\n') + '\n')
+    write(R('new.txt'), 'n1\nn2\n')
+    rmSync(R('gone.txt'))
+    ug(['add', '-A'])
+    commit('two')
+    const b = head()
+    const d = await fileDiff(a, b, 'f.txt')
+    expect(d).toMatchObject({ path: 'f.txt', status: 'M', binary: false, truncated: false })
+    expect(d.lines).toEqual(expected(a, b, 'f.txt'))
+    expect(d.lines.filter(l => l.kind === 'add').map(l => l.ln)).toEqual([4, 21])
+    expect(await fileDiff(a, b, 'new.txt')).toEqual({ path: 'new.txt', status: 'A', binary: false, truncated: false, lines: [{ kind: 'add', ln: 1, text: 'n1' }, { kind: 'add', ln: 2, text: 'n2' }] })
+    expect(await fileDiff(a, b, 'gone.txt')).toEqual({ path: 'gone.txt', status: 'D', binary: false, truncated: false, lines: [{ kind: 'del', ln: 1, text: 'bye' }] })
+  })
+
+  it('a binary file: binary, no lines', async () => {
+    initRepo()
+    write(R('x.bin'), Buffer.from([0, 1, 2, 3, 0, 255]))
+    ug(['add', '-A'])
+    commit('one')
+    const a = head()
+    write(R('x.bin'), Buffer.from([0, 9, 9, 9, 0, 255]))
+    ug(['add', '-A'])
+    commit('two')
+    expect(await fileDiff(a, head(), 'x.bin')).toEqual({ path: 'x.bin', status: 'M', binary: true, truncated: false, lines: [] })
+  })
+
+  it('cut at 2000 lines, and at 256 KB', async () => {
+    initRepo()
+    write(R('keep.txt'), 'k\n')
+    ug(['add', '-A'])
+    commit('one')
+    const a = head()
+    write(R('long.txt'), Array.from({ length: 3000 }, (_, i) => `l${i}`).join('\n') + '\n')
+    write(R('wide.txt'), Array.from({ length: 200 }, () => 'w'.repeat(4000)).join('\n') + '\n')
+    ug(['add', '-A'])
+    commit('two')
+    const long = await fileDiff(a, head(), 'long.txt')
+    expect(long.truncated).toBe(true)
+    expect(long.lines).toHaveLength(2000)
+    expect(long.lines.at(-1)).toEqual({ kind: 'add', ln: 2000, text: 'l1999' })
+    const wide = await fileDiff(a, head(), 'wide.txt')
+    expect(wide.truncated).toBe(true)
+    const bytes = wide.lines.reduce((n, l) => n + Buffer.byteLength(l.text), 0)
+    expect(bytes).toBeLessThanOrEqual(262144)
+    expect(bytes).toBeGreaterThan(262144 - 8000)
+    const small = await fileDiff(a, head(), 'long.txt', git(), { maxLines: 10 })
+    expect(small.lines).toHaveLength(10)
+  })
+
+  it('the external diff and the textconv the repo configures never run', async () => {
+    initRepo()
+    const mark = join(root, 'ran')
+    write(join(root, 'tool.sh'), `#!/bin/sh\ntouch "${mark}"\necho FROMTOOL\n`)
+    chmodSync(join(root, 'tool.sh'), 0o755)
+    write(R('.gitattributes'), '*.txt diff=tc\n')
+    write(R('f.txt'), 'one\n')
+    ug(['add', '-A'])
+    commit('one')
+    const a = head()
+    ug(['config', 'diff.external', join(root, 'tool.sh')])
+    ug(['config', 'diff.tc.textconv', join(root, 'tool.sh')])
+    ug(['config', 'diff.tc.command', join(root, 'tool.sh')])
+    write(R('f.txt'), 'two\n')
+    ug(['add', '-A'])
+    commit('two')
+    const d = await fileDiff(a, head(), 'f.txt')
+    expect(d.lines).toEqual([{ kind: 'del', ln: 1, text: 'one' }, { kind: 'add', ln: 1, text: 'two' }])
+    expect(existsSync(mark)).toBe(false)
+  })
+
+  it('a filter the sandbox could rewrite: refused like changes, and it never runs', async () => {
+    initRepo()
+    const mark = join(root, 'ran')
+    write(R('f.txt'), 'one\n')
+    ug(['add', '-A'])
+    commit('one')
+    const a = head()
+    write(R('f.txt'), 'two\n')
+    ug(['add', '-A'])
+    commit('two')
+    write(R('tool.sh'), `#!/bin/sh\ntouch "${mark}"\ncat\n`)
+    chmodSync(R('tool.sh'), 0o755)
+    write(R('.gitattributes'), '*.txt filter=f\n')
+    ug(['config', 'filter.f.clean', './tool.sh'])
+    ug(['config', 'filter.f.smudge', './tool.sh'])
+    await expect(fileDiff(a, head(), 'f.txt')).rejects.toThrow(/unsafe_filter/)
+    expect(existsSync(mark)).toBe(false)
+  })
+
+  it('a path with glob characters is literal, and a path outside the cwd prefix is not read', async () => {
+    initRepo()
+    write(R('a*.txt'), 'star\n')
+    write(R('ab.txt'), 'ab\n')
+    write(R('sub/s.txt'), 's\n')
+    ug(['add', '-A'])
+    commit('one')
+    const a = head()
+    write(R('a*.txt'), 'star2\n')
+    write(R('ab.txt'), 'ab2\n')
+    write(R('sub/s.txt'), 's2\n')
+    ug(['add', '-A'])
+    commit('two')
+    const d = await fileDiff(a, head(), 'a*.txt')
+    expect(d.lines.map(l => l.text)).toEqual(['star', 'star2'])
+    const g = git()
+    await expect(git_.fileDiff(join(repo, 'sub'), a, head(), 'ab.txt', g, { pin: await pinRepo(repo, g), tmpDir: tmp })).rejects.toThrow(/not changed/)
+  })
+})
