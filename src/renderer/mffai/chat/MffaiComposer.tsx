@@ -15,7 +15,8 @@ type PluginCommand = WorkerResult<'plugins.commands'>['commands'][number]
 const ERR_BUSY = -32003
 const REFRESH_ON = ['plugins.enabled', 'plugins.disabled', 'plugins.installed', 'plugins.uninstalled'] as const
 
-// 每个后台连接(window.forge.mffai)一份缓存;不支持(-32601)就是空的
+// 每个后台连接(window.forge.mffai)一份缓存;不支持(-32601)就是空的。
+// 挂载时先显示缓存,再重取一次:没有输入框挂着的时候(在插件页装、启用)来的变更事件这里收不到
 const cache = new WeakMap<object, Promise<PluginCommand[]>>()
 function loadCommands(force = false): Promise<PluginCommand[]> {
   const key = window.forge.mffai as object
@@ -24,12 +25,19 @@ function loadCommands(force = false): Promise<PluginCommand[]> {
   const p = call('plugins.commands').then(
     (r) => r.commands,
     (e) => {
-      if (!isUnsupported(e)) { console.error('mffai plugins.commands', e); cache.delete(key) }
-      return [] as PluginCommand[]
+      if (isUnsupported(e)) return [] as PluginCommand[]
+      console.error('mffai plugins.commands', e)
+      // 重取失败:留着上一份(没有就是空的),下次再取
+      if (cache.get(key) === p) { if (hit) cache.set(key, hit); else cache.delete(key) }
+      return hit ?? ([] as PluginCommand[])
     },
   )
   cache.set(key, p)
   return p
+}
+
+function cachedCommands(): Promise<PluginCommand[]> | undefined {
+  return cache.get(window.forge.mffai as object)
 }
 
 function usePluginCommands(): PluginCommand[] {
@@ -38,7 +46,9 @@ function usePluginCommands(): PluginCommand[] {
   const apply = (p: Promise<PluginCommand[]>) => { void p.then((l) => { if (alive.current) setList(l) }) }
   useEffect(() => {
     alive.current = true
-    apply(loadCommands())
+    const hit = cachedCommands()
+    if (hit) apply(hit)
+    apply(loadCommands(true))
     return () => { alive.current = false }
   }, [])
   useMffaiEvent({ types: REFRESH_ON }, () => apply(loadCommands(true)))

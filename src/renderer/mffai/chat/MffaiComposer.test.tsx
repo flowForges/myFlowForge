@@ -100,18 +100,32 @@ describe('MffaiComposer', () => {
     expect(screen.queryByRole('listbox')).toBeNull()
   })
 
-  it('the list is cached and refreshed on plugins.enabled/disabled/installed/uninstalled', async () => {
+  it('a plugin installed while no composer is mounted (on the plugins page) shows its command on the next mount', async () => {
     const { unmount } = render(<MffaiComposer session={{ id: 's1', origin: 'app' }} onSend={async () => {}} onCommand={async () => {}} onStop={() => {}} canStop={false} />)
     await waitFor(() => expect(f.callsOf('plugins.commands')).toHaveLength(1))
     unmount()
+    f.script({ 'plugins.commands': { commands: [...commands.commands, { name: 'new:cmd', plugin: 'new', description: 'n' }] } })
+    act(() => f.emit(ev('plugins.installed', { id: 'new', version: '1.0.0', integrity: 'sha256-x', format: 'native', sourceKind: 'path' })))
     mount()
-    await act(async () => {})
-    expect(f.callsOf('plugins.commands')).toHaveLength(1)
+    type('/new')
+    expect(await screen.findByRole('option', { name: /new:cmd/ })).toBeInTheDocument()
+  })
+
+  it('the cached list shows at once on the next mount while it is fetched again; refreshed on plugins.enabled/disabled/installed/uninstalled', async () => {
+    const { unmount } = render(<MffaiComposer session={{ id: 's1', origin: 'app' }} onSend={async () => {}} onCommand={async () => {}} onStop={() => {}} canStop={false} />)
+    await waitFor(() => expect(f.callsOf('plugins.commands')).toHaveLength(1))
+    unmount()
+    f.script({ 'plugins.commands': () => new Promise(() => {}) })
+    mount()
+    type('/zed')
+    expect(await screen.findByRole('option', { name: /zed:a/ })).toBeInTheDocument()
+    expect(f.callsOf('plugins.commands')).toHaveLength(2)
+    f.script({ 'plugins.commands': commands })
     const types = ['plugins.enabled', 'plugins.disabled', 'plugins.installed', 'plugins.uninstalled'] as const
     for (const [i, t] of types.entries()) {
       const payload = t === 'plugins.installed' ? { id: 'zed', version: '1.0.0', integrity: 'sha256-x', format: 'native', sourceKind: 'path' } : { id: 'zed' }
       act(() => f.emit(ev(t, payload)))
-      await waitFor(() => expect(f.callsOf('plugins.commands')).toHaveLength(i + 2))
+      await waitFor(() => expect(f.callsOf('plugins.commands')).toHaveLength(i + 3))
     }
   })
 
