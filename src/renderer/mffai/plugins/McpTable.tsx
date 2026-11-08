@@ -18,6 +18,10 @@ const TONE: Record<string, ChipTone> = {
 }
 
 export function McpStateCell({ state, reason }: { state: string; reason?: string }) {
+  // 不认识的状态是一个稳定代码,不是我们的标签:原样放进 CodeChip
+  if (state !== 'refused' && state !== 'stopped' && label('mcpState', state) === state) {
+    return <><CodeChip code={state} />{reason && <CodeChip code={reason} />}</>
+  }
   const [text, tone]: [string, ChipTone] =
     state === 'refused' ? ['未启动', 'bad']
       : state === 'stopped' ? (reason ? ['已退出', 'bad'] : ['已停止', 'muted'])

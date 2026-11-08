@@ -31,6 +31,8 @@ describe('McpStateCell', () => {
     expect(t(3)).toBe('已停止')
     expect(t(4)).toBe('需要配置needs_config')
     expect(t(5)).toBe('weird_state')
+    expect(container.querySelector('[data-x="5"]')!.querySelector('code')!.textContent).toBe('weird_state')
+    expect(container.querySelector('[data-x="3"] code')).toBeNull()
   })
 })
 
