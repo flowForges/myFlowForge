@@ -14,6 +14,23 @@ export interface Notif {
   settingsPane?: string
   // mff-ai 告警:点击切到 mff-ai 页
   view?: 'mffai'
+  // mff-ai 铃铛(08 §13.6),都可选:同 key 原地替换或移除;actions 渲染成按钮;onOpen 点击时先调,再走 view 跳转
+  key?: string
+  actions?: { label: string; run: () => void; danger?: boolean }[]
+  onOpen?: () => void
+}
+
+/** 同 key 的原地替换,否则放最前 */
+export function upsertNotif(ns: Notif[], n: Notif): Notif[] {
+  const i = n.key === undefined ? -1 : ns.findIndex((x) => x.key === n.key)
+  if (i < 0) return [n, ...ns]
+  const out = ns.slice()
+  out[i] = n
+  return out
+}
+
+export function removeNotif(ns: Notif[], key: string): Notif[] {
+  return ns.some((x) => x.key === key) ? ns.filter((x) => x.key !== key) : ns
 }
 
 export const ICN: Record<'ok' | 'warn' | 'file' | 'up', string> = {

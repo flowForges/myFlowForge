@@ -656,6 +656,10 @@
 .ni-warn { background: oklch(80% .13 80 / .16); color: var(--warn); }
 .ni-file { background: var(--surface-2); color: var(--fg-2); }
 .notif-item .ni-b { min-width: 0; flex: 1; }
+.notif-item .ni-acts { display: flex; gap: 6px; margin-top: 6px; }
+.notif-item .ni-act { font-size: 11.5px; padding: 3px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2); color: var(--fg); cursor: pointer; }
+.notif-item .ni-act:hover { background: var(--bg-3, var(--bg-2)); }
+.notif-item .ni-act.danger { color: var(--err); }
 .notif-item .ni-t { font-size: 12.5px; color: var(--fg-2); line-height: 1.42; }
 .notif-item .ni-t b { font-weight: 650; color: var(--fg); }
 .notif-item .ni-m { font: 10px/1 var(--mono); color: var(--faint); margin-top: 5px; }

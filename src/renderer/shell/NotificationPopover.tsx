@@ -86,7 +86,7 @@ export function NotificationPopover({
               // Every notif is clickable to mark it read; the `clickable` affordance (pointer/hover) is
               // reserved for those that actually navigate somewhere (a workspace or a settings pane).
               const interactive = !!onSelect
-              const navigates = !!(n.wsPath || n.wsName || n.settingsPane)
+              const navigates = !!(n.wsPath || n.wsName || n.settingsPane || n.onOpen)
               return (
                 <div
                   key={i}
@@ -99,6 +99,14 @@ export function NotificationPopover({
                   <div className="ni-b">
                     <div className="ni-t" dangerouslySetInnerHTML={{ __html: n.t }} />
                     <div className="ni-m">{n.m}</div>
+                    {n.actions && n.actions.length > 0 && (
+                      <div className="ni-acts">
+                        {n.actions.map((a) => (
+                          <button key={a.label} className={'ni-act' + (a.danger ? ' danger' : '')}
+                            onClick={(e) => { e.stopPropagation(); a.run() }}>{a.label}</button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               )
