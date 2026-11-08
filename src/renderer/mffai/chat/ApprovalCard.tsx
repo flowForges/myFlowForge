@@ -3,6 +3,7 @@
 import { useRef, useState, type ReactNode } from 'react'
 import { call, toCallError } from '../rpc'
 import { Chip } from '../ui/Chip'
+import { visibleChars } from '../ui/visible'
 import type { ApprovalItem } from './reduce'
 
 type Decision = 'allow' | 'allow_session' | 'deny'
@@ -12,24 +13,8 @@ function viaLabel(via: string | undefined): string {
   return ` · ${/^telegram(:|$)/i.test(via) ? 'Telegram' : via}`
 }
 
-/** 格式字符(双向控制、零宽、软连字符…)和行/段分隔符:显示成看得见的 \u{…},屏幕上的顺序就是要跑的顺序 */
-const INVISIBLE = /[\p{Cf}\u2028\u2029]/gu
 /** 连续超过两行的空行收成一行 ⋯ N 空行:后面的命令不会被挤出视野 */
 const BLANKS_KEPT = 2
-
-function escapes(line: string, key: string): ReactNode[] {
-  const out: ReactNode[] = []
-  let last = 0
-  let n = 0
-  for (const m of line.matchAll(INVISIBLE)) {
-    if (m.index > last) out.push(line.slice(last, m.index))
-    const cp = m[0].codePointAt(0)!.toString(16).toUpperCase()
-    out.push(<span key={`${key}e${n++}`} className="mffai-esc">{`\\u{${cp}}`}</span>)
-    last = m.index + m[0].length
-  }
-  if (last < line.length) out.push(line.slice(last))
-  return out
-}
 
 export function visibleSummary(text: string): ReactNode[] {
   const lines = text.split('\n')
@@ -43,7 +28,7 @@ export function visibleSummary(text: string): ReactNode[] {
       i = j - 1
       continue
     }
-    out.push(...escapes(lines[i], `l${i}`))
+    out.push(...visibleChars(lines[i], `l${i}`))
     if (i < lines.length - 1) out.push('\n')
   }
   return out
