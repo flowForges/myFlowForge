@@ -195,4 +195,16 @@ describe('ChatPage', () => {
     render(<ChatPage />)
     expect(await screen.findByText('不支持')).toBeInTheDocument()
   })
+
+  it('a memory.recommendation event shows the card above the session list; 开会话 opens a prefilled new-session form', async () => {
+    setup()
+    render(<ChatPage />)
+    await waitFor(() => expect(rowOf('本机会话')).toBeTruthy())
+    act(() => { f.emit(ev('memory.recommendation', { id: 'r1', category: 'routine', habitId: 'h1', text: '每周一常在 repo 工作', cwd: '/repo' })) })
+    expect(await screen.findByText('每周一常在 repo 工作')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '开会话' }))
+    expect(route.get()).toEqual({ page: 'chat', newSession: { cwd: '/repo' } })
+    expect((await screen.findByRole('textbox', { name: '工作目录' }) as HTMLInputElement).value).toBe('/repo')
+    expect(screen.queryByText('每周一常在 repo 工作')).toBeNull()
+  })
 })

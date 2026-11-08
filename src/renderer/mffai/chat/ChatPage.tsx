@@ -1,5 +1,6 @@
 // 对话页(08 §7):左栏会话列表 + 新会话,右边是选中的会话(SessionPane:各轮的内容 + 输入框)或新会话表单。
 // 选中、新会话、去合并都经 route。改名、发送重试时用同一个 commandId(超时后的重试才有回执重放)。
+// 页顶的习惯推荐卡片(08 §12.4)和对话本身无关,单独一个组件,纯事件驱动。
 import { useRef, useState } from 'react'
 import type { SessionSummary } from '@mffai/protocol'
 import { call, cmd, retryable } from '../rpc'
@@ -8,6 +9,7 @@ import { route } from '../route'
 import { useRoute } from '../useRoute'
 import { Chip } from '../ui/Chip'
 import { DeleteSources } from '../ui/DeleteSources'
+import { RecommendationCard } from '../memory/RecommendationCard'
 import { useSessions } from './useSessions'
 import { SessionList } from './SessionList'
 import { NewSession } from './NewSession'
@@ -50,42 +52,45 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="mffai-pane mffai-chat">
-      <aside className="mffai-chat-side">
-        <button className="set-btn" onClick={() => route.set({ page: 'chat', newSession: {} })}>新会话</button>
-        {unsupported
-          ? <Chip>不支持</Chip>
-          : <SessionList sessions={sessions} active={activeId} imNames={imNames}
-              onSelect={(id) => route.set({ page: 'chat', sessionId: id })}
-              onRename={rename} onDelete={setDeleting} />}
-      </aside>
-      <section className="mffai-chat-main">
-        {activeId ? (
-          <SessionPane
-            key={activeId}
-            sessionId={activeId}
-            summary={active}
-            imName={imNames.get(activeId)}
-            onSend={(text) => send(activeId, text, (commandId) => call('session.prompt', { commandId, sessionId: activeId, text }))}
-            onCommand={(name, args) => send(activeId, `/${name}${K}${args}`, (commandId) => call('plugins.command.run', { commandId, sessionId: activeId, name, args }))}
-            onStop={() => { void call('session.cancel', { commandId: cmd(), sessionId: activeId }).catch((e) => console.error('mffai session.cancel', e)) }}
-          />
-        ) : (
-          <NewSession key={JSON.stringify(r.newSession ?? null)} initial={r.newSession}
-            onCreated={(id) => { reload(); route.set({ page: 'chat', sessionId: id }) }} />
+    <div className="mffai-pane mffai-chatroot">
+      <RecommendationCard />
+      <div className="mffai-chat">
+        <aside className="mffai-chat-side">
+          <button className="set-btn" onClick={() => route.set({ page: 'chat', newSession: {} })}>新会话</button>
+          {unsupported
+            ? <Chip>不支持</Chip>
+            : <SessionList sessions={sessions} active={activeId} imNames={imNames}
+                onSelect={(id) => route.set({ page: 'chat', sessionId: id })}
+                onRename={rename} onDelete={setDeleting} />}
+        </aside>
+        <section className="mffai-chat-main">
+          {activeId ? (
+            <SessionPane
+              key={activeId}
+              sessionId={activeId}
+              summary={active}
+              imName={imNames.get(activeId)}
+              onSend={(text) => send(activeId, text, (commandId) => call('session.prompt', { commandId, sessionId: activeId, text }))}
+              onCommand={(name, args) => send(activeId, `/${name}${K}${args}`, (commandId) => call('plugins.command.run', { commandId, sessionId: activeId, name, args }))}
+              onStop={() => { void call('session.cancel', { commandId: cmd(), sessionId: activeId }).catch((e) => console.error('mffai session.cancel', e)) }}
+            />
+          ) : (
+            <NewSession key={JSON.stringify(r.newSession ?? null)} initial={r.newSession}
+              onCreated={(id) => { reload(); route.set({ page: 'chat', sessionId: id }) }} />
+          )}
+        </section>
+        {deleting && (
+          <DeleteSession session={deleting} onClose={() => setDeleting(null)}
+            onDeleted={(n) => {
+              const id = deleting.id
+              setDeleting(null)
+              if (route.get().sessionId === id) route.set({ page: 'chat' })
+              reload()
+              if (n.length) setNotes(n)
+            }} />
         )}
-      </section>
-      {deleting && (
-        <DeleteSession session={deleting} onClose={() => setDeleting(null)}
-          onDeleted={(n) => {
-            const id = deleting.id
-            setDeleting(null)
-            if (route.get().sessionId === id) route.set({ page: 'chat' })
-            reload()
-            if (n.length) setNotes(n)
-          }} />
-      )}
-      {notes && <DeleteSources title={(n) => `仍引用它的记忆 ${n} 条`} ids={notes} onClose={() => setNotes(null)} />}
+        {notes && <DeleteSources title={(n) => `仍引用它的记忆 ${n} 条`} ids={notes} onClose={() => setNotes(null)} />}
+      </div>
     </div>
   )
 }
