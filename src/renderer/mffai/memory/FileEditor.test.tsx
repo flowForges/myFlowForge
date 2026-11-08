@@ -175,6 +175,16 @@ describe('FileEditor', () => {
     expect(screen.getByText(`${[...content].length} / 2000`)).toBeInTheDocument()
   })
 
+  it('readOnly disables the textarea and hides the save/reload actions, keeping whatever text is there', async () => {
+    f = installFakeForge({ calls: { 'memory.file.get': { content: 'hello', hash: 'h1', cap: 2000 } } })
+    render(<FileEditor file="USER.md" readOnly />)
+    const box = await screen.findByLabelText<HTMLTextAreaElement>('USER.md')
+    expect(box).toBeDisabled()
+    expect(box).toHaveValue('hello')
+    expect(screen.queryByRole('button', { name: '保存' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '已在别处修改 · 重新载入' })).toBeNull()
+  })
+
   it('counts the whole document trimmed, across multiple lines with comments', async () => {
     const content = '- first <!-- mff id=n_a src=user -->\n- second <!-- mff id=n_b src=model -->\n'
     const expected = [...'- first\n- second'].length

@@ -44,7 +44,7 @@ const stripComment = (line: string): string => {
 /** 后台算字数、算上限用的"可见文本":去掉行尾来源注释,整篇再 trim */
 const visible = (md: string): string => md.split('\n').map(stripComment).join('\n').trim()
 
-export function FileEditor({ file }: { file: MemoryFile }) {
+export function FileEditor({ file, readOnly }: { file: MemoryFile; readOnly?: boolean }) {
   const [content, setContent] = useState('')
   const [cap, setCap] = useState(0)
   const [masked, setMasked] = useState(0)
@@ -137,19 +137,21 @@ export function FileEditor({ file }: { file: MemoryFile }) {
         aria-label={file}
         className="mffai-input mffai-filebody"
         value={content}
-        disabled={busy}
+        disabled={busy || readOnly}
         onChange={(e) => edit(e.target.value)}
       />
-      <div className="mffai-actions">
-        {conflict ? (
-          <button className="set-btn" onClick={load}>已在别处修改 · 重新载入</button>
-        ) : (
-          <button className="set-btn mffai-primary" disabled={!dirty || busy} onClick={() => void save()}>保存</button>
-        )}
-        {status === 'unsupported' && <Chip tone="bad">不支持</Chip>}
-        {status === 'failed' && <span className="mffai-fail">失败</span>}
-        {status === 'full' && <Chip tone="bad">已满</Chip>}
-      </div>
+      {!readOnly && (
+        <div className="mffai-actions">
+          {conflict ? (
+            <button className="set-btn" onClick={load}>已在别处修改 · 重新载入</button>
+          ) : (
+            <button className="set-btn mffai-primary" disabled={!dirty || busy} onClick={() => void save()}>保存</button>
+          )}
+          {status === 'unsupported' && <Chip tone="bad">不支持</Chip>}
+          {status === 'failed' && <span className="mffai-fail">失败</span>}
+          {status === 'full' && <Chip tone="bad">已满</Chip>}
+        </div>
+      )}
     </div>
   )
 }

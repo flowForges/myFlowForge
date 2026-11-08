@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import MemoryPage from './MemoryPage'
 import { fail, installFakeForge, RUNNING_STATE, type CallTable, type FakeForge } from '../test/fakeForge'
-import { resetSeq } from '../test/events'
+import { ev, resetSeq } from '../test/events'
 
 let f: FakeForge
 
@@ -103,5 +103,36 @@ describe('MemoryPage', () => {
     f = installFakeForge({ calls: baseCalls({ 'memory.health': () => fail(-32603, 'boom') }) })
     render(<MemoryPage />)
     await waitFor(() => expect(screen.getAllByRole('tab')).toHaveLength(6))
+  })
+
+  it('switching away from the profile tab and back keeps an unsaved edit (the editor stays mounted, just hidden)', async () => {
+    f = installFakeForge({ calls: baseCalls() })
+    render(<MemoryPage />)
+    const box = await screen.findByLabelText('USER.md')
+    fireEvent.change(box, { target: { value: 'unsaved draft' } })
+    fireEvent.click(screen.getByRole('tab', { name: '条目' }))
+    expect(screen.getByLabelText('USER.md')).toHaveValue('unsaved draft')
+    fireEvent.click(screen.getByRole('tab', { name: '档案' }))
+    expect(screen.getByLabelText('USER.md')).toHaveValue('unsaved draft')
+    const userEditor = screen.getByTestId('mffai-file-USER.md')
+    expect(within(userEditor).getByRole('button', { name: '保存' })).not.toBeDisabled()
+  })
+
+  it('the gate flipping to unavailable after being ok (plugin.failed) keeps the dirty draft, now read-only, with a 记忆不可用 banner', async () => {
+    f = installFakeForge({ calls: baseCalls() })
+    render(<MemoryPage />)
+    const box = await screen.findByLabelText('USER.md')
+    fireEvent.change(box, { target: { value: 'unsaved draft' } })
+    f.script({
+      'memory.health': () => fail(-32601),
+      status: { state: 'running', uptimeMs: 1, rssMb: 1, version: '0.1.0', plugins: [{ id: 'memory-default', state: 'failed', error: 'crashed' }] },
+    })
+    await act(async () => { f.emit(ev('plugin.failed', { id: 'memory-default', error: 'crashed' })) })
+    await screen.findByText('记忆不可用')
+    await screen.findByText('crashed')
+    expect(screen.getAllByRole('tab')).toHaveLength(6)
+    expect(screen.getByLabelText('USER.md')).toHaveValue('unsaved draft')
+    expect(screen.getByLabelText('USER.md')).toBeDisabled()
+    expect(screen.queryByRole('button', { name: '保存' })).toBeNull()
   })
 })
