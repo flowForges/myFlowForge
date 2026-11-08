@@ -1,9 +1,10 @@
 // Telegram 配对(08 §10.3)。码只在这个组件的 state 里:过期、取消、卸载、channel.paired、channel.pairing.burned
-// 时清掉。不进铃铛、不进日志、不进存储;出错只记方法和错误码。链接只认主进程放行的那一种形状
+// 时清掉。卸载时这个组件发出的码还在,就顺手 pairing.cancel(没人看得见的码不该还能用);别处开的配对不动。
+// 不进铃铛、不进日志、不进存储;出错只记方法和错误码。链接只认主进程放行的那一种形状
 // (host.ts TELEGRAM_START),二维码的内容就是链接,它的名字不带码。
 import { useEffect, useRef, useState } from 'react'
 import { QrCode } from '../../settings/QrCode'
-import { call, toCallError } from '../rpc'
+import { call, isUnsupported, toCallError } from '../rpc'
 import { useMffaiEvent } from '../events'
 import { Chip } from '../ui/Chip'
 import { CodeChip } from '../ui/CodeChip'
@@ -14,10 +15,13 @@ const ERR_INVALID = -32602
 const TELEGRAM_START = /^https:\/\/t\.me\/[A-Za-z0-9_]{5,32}\?start=[A-Za-z0-9_-]+$/
 
 type Active = { code: string; expiresAt: number; link?: string }
-type Failure = { code?: string }
+type Failure = { code?: string; unsupported?: boolean }
 
 export function Pairing({ active, onChanged }: { active: boolean; onChanged?: () => void }) {
-  const [pair, setPair] = useState<Active | null>(null)
+  const [pair, setPairState] = useState<Active | null>(null)
+  /** 卸载时看的:这个组件发出的码是不是还在 */
+  const held = useRef(false)
+  const setPair = (p: Active | null) => { held.current = p !== null; setPairState(p) }
   const [busy, setBusy] = useState(false)
   const [failed, setFailed] = useState<Failure | null>(null)
   const inflight = useRef(false)
@@ -26,7 +30,12 @@ export function Pairing({ active, onChanged }: { active: boolean; onChanged?: ()
   changed.current = onChanged
   useEffect(() => {
     alive.current = true
-    return () => { alive.current = false }
+    return () => {
+      alive.current = false
+      if (!held.current) return
+      held.current = false
+      void call('channel.telegram.pairing.cancel', {}).catch((e: unknown) => console.error('mffai channel.telegram.pairing.cancel', toCallError(e).code))
+    }
   }, [])
 
   useMffaiEvent({ types: ['channel.paired', 'channel.pairing.burned'] }, () => setPair(null))
@@ -35,7 +44,7 @@ export function Pairing({ active, onChanged }: { active: boolean; onChanged?: ()
     const c = toCallError(e)
     // 只记方法和码:消息里没有码,但不冒这个险
     console.error(`mffai ${method}`, c.code)
-    if (alive.current) setFailed(c.code === ERR_INVALID && c.message ? { code: c.message } : {})
+    if (alive.current) setFailed(isUnsupported(c) ? { unsupported: true } : c.code === ERR_INVALID && c.message ? { code: c.message } : {})
   }
 
   const begin = async () => {
@@ -45,7 +54,11 @@ export function Pairing({ active, onChanged }: { active: boolean; onChanged?: ()
     setFailed(null)
     try {
       const r = await call('channel.telegram.pairing.begin', {})
-      if (!alive.current) return
+      if (!alive.current) {
+        // 码到的时候组件已经没了:没人看得见,收回
+        void call('channel.telegram.pairing.cancel', {}).catch((e: unknown) => console.error('mffai channel.telegram.pairing.cancel', toCallError(e).code))
+        return
+      }
       setPair({ code: r.code, expiresAt: r.expiresAt, ...(r.link && TELEGRAM_START.test(r.link) && { link: r.link }) })
       changed.current?.()
     } catch (e) {
@@ -81,7 +94,7 @@ export function Pairing({ active, onChanged }: { active: boolean; onChanged?: ()
         <>
           <div className="mffai-row">
             <span className="mffai-paircode">{pair.code}</span>
-            <Countdown until={pair.expiresAt} onDone={() => setPair(null)} />
+            <Countdown until={pair.expiresAt} onDone={() => { setPair(null); changed.current?.() }} />
             {pair.link && <button className="set-btn" onClick={() => open(pair.link!)}>打开链接</button>}
             <button className="set-btn" onClick={() => void cancel()}>取消</button>
           </div>
@@ -94,7 +107,7 @@ export function Pairing({ active, onChanged }: { active: boolean; onChanged?: ()
           {active && <button className="set-btn" disabled={busy} onClick={() => void cancel()}>取消</button>}
         </div>
       )}
-      {failed && (failed.code ? <CodeChip code={failed.code} /> : <span className="mffai-fail">失败</span>)}
+      {failed && (failed.unsupported ? <Chip tone="bad">不支持</Chip> : failed.code ? <CodeChip code={failed.code} /> : <span className="mffai-fail">失败</span>)}
     </div>
   )
 }

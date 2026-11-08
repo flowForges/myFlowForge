@@ -2,11 +2,21 @@
 // 旁边是级别块。保存走 config.set,带整份配置:不认识的键和没改的项目原样回去。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
-import { Projects } from './Projects'
+import { useRef } from 'react'
+import type { SandboxStatus } from '@mffai/protocol'
+import { Projects as ProjectsView, useConfigSaver, type FullConfig } from './Projects'
 import { AUTO_LABEL } from '../ui/AutoSwitch'
 import { installFakeForge, fail, type FakeForge } from '../test/fakeForge'
 
 let f: FakeForge
+
+/** 和 Telegram 页一样:一个共享的保存器,保存后重取(这里是 onSaved) */
+function Projects({ config, level, onSaved }: { config: FullConfig; level?: SandboxStatus['level']; onSaved: () => void }) {
+  const ref = useRef(config)
+  ref.current = config
+  const saver = useConfigSaver(() => ref.current, async () => { onSaved() })
+  return <ProjectsView config={config} level={level} saver={saver} />
+}
 const config = () => ({
   enabled: true, staleMinutes: 10, future: { x: 1 },
   projects: [
@@ -35,13 +45,59 @@ describe('Projects', () => {
     expect(r0.queryByText('部分')).toBeNull()
   })
 
-  it.each([['partial', '部分'], ['none', '未隔离']] as const)('level %s: the switch is disabled with the level chip beside it', (level, chip) => {
+  it.each([['partial', '部分'], ['none', '未隔离']] as const)('level %s: an off switch is disabled with the level chip beside it', (level, chip) => {
     f = installFakeForge()
     render(<Projects config={config()} level={level} onSaved={() => {}} />)
-    for (const r of rows()) {
-      expect(within(r).getByRole('switch')).toBeDisabled()
-      expect(within(r).getByText(chip)).toBeInTheDocument()
-    }
+    expect(within(rows()[0]).getByRole('switch')).toBeDisabled()
+    for (const r of rows()) expect(within(r).getByText(chip)).toBeInTheDocument()
+  })
+
+  it('level partial with a project at auto:true: the switch can still be turned off, and the save goes through', async () => {
+    f = installFakeForge({ calls: { 'channel.telegram.config.set': ({ config: c }) => {
+      if ((c as { projects: { auto: boolean }[] }).projects.some((p) => p.auto)) fail(-32602, 'auto_requires_full')
+      return { ok: true }
+    } } })
+    render(<Projects config={config()} level="partial" onSaved={() => {}} />)
+    const sw = within(rows()[1]).getByRole('switch')
+    expect(sw).not.toBeDisabled()
+    fireEvent.click(sw)
+    expect(sw).not.toBeChecked()
+    // 关掉之后它也禁用了:不能再打开
+    expect(sw).toBeDisabled()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '保存' })) })
+    expect(sent()).toHaveLength(1)
+    expect(screen.queryByText('auto_requires_full')).toBeNull()
+    expect(screen.queryByText('失败')).toBeNull()
+  })
+
+  it('a row with an empty alias or path is not sent, and is marked', async () => {
+    f = installFakeForge({ calls: { 'channel.telegram.config.set': { ok: true } } })
+    render(<Projects config={config()} level="full" onSaved={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: '添加项目' }))
+    fireEvent.change(within(rows()[2]).getByLabelText('别名'), { target: { value: 'n' } })
+    fireEvent.change(within(rows()[0]).getByLabelText('路径'), { target: { value: '  ' } })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '保存' })) })
+    expect(sent()).toHaveLength(0)
+    expect(rows().map((r) => r.hasAttribute('data-invalid'))).toEqual([true, false, true])
+    expect(within(rows()[0]).getByLabelText('路径')).toHaveAttribute('aria-invalid', 'true')
+    expect(within(rows()[2]).getByLabelText('路径')).toHaveAttribute('aria-invalid', 'true')
+    expect(within(rows()[2]).getByLabelText('别名')).not.toHaveAttribute('aria-invalid', 'true')
+    // 改了那一行,标记就去掉
+    fireEvent.change(within(rows()[0]).getByLabelText('路径'), { target: { value: '/w/api' } })
+    expect(rows()[0].hasAttribute('data-invalid')).toBe(false)
+  })
+
+  it.each([
+    ['an index', { index: 1 }],
+    ['a name', { name: 'web' }],
+  ])('invalid_project naming the row by %s marks that row with the code', async (_n, data) => {
+    f = installFakeForge({ calls: { 'channel.telegram.config.set': () => fail(-32602, 'invalid_project', data) } })
+    render(<Projects config={config()} level="full" onSaved={() => {}} />)
+    fireEvent.change(within(rows()[1]).getByLabelText('路径'), { target: { value: '/' } })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '保存' })) })
+    expect(rows().map((r) => r.hasAttribute('data-invalid'))).toEqual([false, true])
+    expect(within(rows()[1]).getByText('invalid_project')).toBeInTheDocument()
+    expect(screen.getAllByText('invalid_project')).toHaveLength(1)
   })
 
   it('level unknown (permissions.get failed): disabled', () => {

@@ -173,3 +173,5 @@
 .mffai-tags { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .mffai-tag { display: inline-flex; align-items: center; gap: 2px; }
 .mffai-tags input { height: 26px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--fg); font-size: 12.5px; }
+.mffai-field { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--fg-2); }
+.mffai-row.bad [aria-invalid="true"] { border-color: var(--del, #e5484d); }

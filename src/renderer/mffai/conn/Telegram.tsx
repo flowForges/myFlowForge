@@ -12,7 +12,7 @@ import { Chip, type ChipTone } from '../ui/Chip'
 import { CodeChip } from '../ui/CodeChip'
 import { Confirm } from '../ui/Confirm'
 import { Pairing } from './Pairing'
-import { Projects, SaveFailureChip, useConfigSet, type FullConfig } from './Projects'
+import { Projects, SaveFailureChip, useConfigSaver, type ConfigSaver, type FullConfig, type SaveFailure } from './Projects'
 
 const ERR_INVALID = -32602
 
@@ -29,14 +29,13 @@ const DROPPED: [keyof TelegramStatus['dropped'], string][] = [
   ['unpaired', '陌生人'], ['stale', '过期'], ['group', '群'], ['attachment', '附件'], ['badUpdate', '坏消息'],
 ]
 
-type Failure = { code: string } | 'failed'
+type Failure = { code: string } | 'unsupported' | 'failed'
 const failureOf = (method: string, e: unknown): Failure => {
   const c = toCallError(e)
   console.error(`mffai ${method}`, c.code)
-  return c.code === ERR_INVALID && c.message ? { code: c.message } : 'failed'
+  return isUnsupported(c) ? 'unsupported' : c.code === ERR_INVALID && c.message ? { code: c.message } : 'failed'
 }
-const FailChip = ({ failure }: { failure: Failure | null }) =>
-  !failure ? null : failure === 'failed' ? <span className="mffai-fail">失败</span> : <CodeChip code={failure.code} />
+const FailChip = ({ failure }: { failure: Failure | null }) => <SaveFailureChip failure={failure} />
 
 /** 一个按钮的动作:ref 守卫(同一帧两次点击只发一次)、忙、失败 */
 function useAction() {
@@ -142,20 +141,28 @@ function Token({ s, onChanged }: { s: TelegramStatus; onChanged: () => void }) {
   )
 }
 
-function Settings({ config, onSaved }: { config: FullConfig; onSaved: () => void }) {
+function Settings({ config, saver }: { config: FullConfig; saver: ConfigSaver }) {
   const [minutes, setMinutes] = useState(String(config.staleMinutes))
   useEffect(() => { setMinutes(String(config.staleMinutes)) }, [config.staleMinutes])
-  const { save, busy, failure } = useConfigSet()
+  const [failure, setFailure] = useState<SaveFailure | null>(null)
+  const { busy } = saver
   const n = Number(minutes)
   const minutesOk = minutes.trim() !== '' && Number.isFinite(n) && n !== config.staleMinutes
-  const send = async (patch: Partial<FullConfig>) => { if (await save({ ...config, ...patch })) onSaved() }
+  const send = async (patch: Partial<FullConfig>) => {
+    setFailure(null)
+    const out = await saver.save(patch)
+    if (out !== 'ok' && out !== 'skipped') setFailure(out)
+  }
   return (
     <div className="mffai-row">
       <label className="mffai-switch">
         <input type="checkbox" role="switch" checked={config.enabled} disabled={busy} onChange={(e) => void send({ enabled: e.target.checked })} />
         启用
       </label>
-      <input type="number" aria-label="过期分钟" min={1} value={minutes} onChange={(e) => setMinutes(e.target.value)} />
+      <label className="mffai-field">
+        过期(分钟)
+        <input type="number" min={1} value={minutes} onChange={(e) => setMinutes(e.target.value)} />
+      </label>
       <button className="set-btn" disabled={!minutesOk || busy} onClick={() => void send({ staleMinutes: n })}>保存分钟</button>
       <SaveFailureChip failure={failure} />
     </div>
@@ -222,6 +229,7 @@ export function Telegram() {
   const [status, setStatus] = useState<TelegramStatus | null>(null)
   const [statusFail, setStatusFail] = useState<'unsupported' | 'failed' | null>(null)
   const [config, setConfig] = useState<FullConfig | null>(null)
+  const configRef = useRef<FullConfig | null>(null)
   const [chats, setChats] = useState<TelegramChats['chats']>([])
   const [level, setLevel] = useState<SandboxStatus['level'] | undefined>()
   const alive = useRef(true)
@@ -241,12 +249,13 @@ export function Telegram() {
       },
     )
   }, [])
-  const loadConfig = useCallback(() => {
-    void call('channel.telegram.config.get', {}).then(
-      (r) => { if (alive.current) setConfig(r as FullConfig) },
-      (e) => console.error('mffai channel.telegram.config.get', toCallError(e).code),
-    )
-  }, [])
+  const loadConfig = useCallback(() => call('channel.telegram.config.get', {}).then(
+    (r) => {
+      configRef.current = r as FullConfig
+      if (alive.current) setConfig(r as FullConfig)
+    },
+    (e) => console.error('mffai channel.telegram.config.get', toCallError(e).code),
+  ), [])
   const loadChats = useCallback(() => {
     void call('channel.telegram.chats', {}).then(
       (r) => { if (alive.current) setChats(r.chats) },
@@ -259,7 +268,7 @@ export function Telegram() {
       (e) => { if (alive.current) setLevel(undefined); console.error('mffai permissions.get', toCallError(e).code) },
     )
   }, [])
-  const loadAll = useCallback(() => { loadStatus(); loadConfig(); loadChats(); loadLevel() }, [loadStatus, loadConfig, loadChats, loadLevel])
+  const loadAll = useCallback(() => { loadStatus(); void loadConfig(); loadChats(); loadLevel() }, [loadStatus, loadConfig, loadChats, loadLevel])
   useEffect(loadAll, [loadAll])
 
   useMffaiEvent({ types: ['channel.status', 'channel.paired', 'channel.unpaired', 'channel.pairing.burned', 'channel.worktree.merged'] }, () => {
@@ -269,7 +278,8 @@ export function Telegram() {
   useMffaiEvent({ types: ['permissions.updated'] }, loadLevel)
   useMffaiReset(loadAll)
 
-  const configSaved = () => { loadConfig(); loadStatus() }
+  // 一个保存器给 启用、过期分钟、项目:保存完先重取配置,下一次才能开始
+  const saver = useConfigSaver(() => configRef.current, async () => { loadStatus(); await loadConfig() })
 
   if (statusFail === 'unsupported') return <div className="mffai-conn mffai-tg"><Chip tone="bad">不支持</Chip></div>
   return (
@@ -281,14 +291,14 @@ export function Telegram() {
           <Group title="令牌"><Token s={status} onChanged={loadStatus} /></Group>
         </>
       )}
-      {config && <Settings config={config} onSaved={configSaved} />}
+      {config && <Settings config={config} saver={saver} />}
       {status && (
         <>
           <Group title="配对"><Pairing active={status.pairing.active} onChanged={loadStatus} /></Group>
           {status.paired.length > 0 && <Group title="已配对"><Paired s={status} onChanged={loadStatus} /></Group>}
         </>
       )}
-      {config && <Group title="项目"><Projects config={config} level={level} onSaved={configSaved} /></Group>}
+      {config && <Group title="项目"><Projects config={config} level={level} saver={saver} /></Group>}
       {chats.length > 0 && <Group title="聊天"><Chats chats={chats} /></Group>}
     </div>
   )

@@ -100,6 +100,26 @@ describe('Pairing', () => {
     absent()
   })
 
+  it('expiry tells the parent, so a stale 配对中 is refetched away', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.setSystemTime(NOW)
+    f = installFakeForge({ calls: begin(LINK, 10_000) })
+    const onChanged = vi.fn()
+    render(<Pairing active={false} onChanged={onChanged} />)
+    await start()
+    const n = onChanged.mock.calls.length
+    act(() => { vi.advanceTimersByTime(11_000) })
+    expect(onChanged.mock.calls.length).toBe(n + 1)
+  })
+
+  it.each(['channel.telegram.pairing.begin', 'channel.telegram.pairing.cancel'] as const)('-32601 from %s → 不支持', async (method) => {
+    f = installFakeForge({ calls: { 'channel.telegram.pairing.begin': () => fail(-32601, 'method not found') } })
+    render(<Pairing active={method === 'channel.telegram.pairing.cancel'} />)
+    const name = method === 'channel.telegram.pairing.begin' ? '开始配对' : '取消'
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name })) })
+    expect(screen.getByText('不支持')).toBeInTheDocument()
+  })
+
   it('cancel clears it at once and calls pairing.cancel', async () => {
     f = installFakeForge({ calls: { ...begin(), 'channel.telegram.pairing.cancel': () => new Promise<never>(() => {}) } })
     render(<Pairing active={false} />)
@@ -109,22 +129,40 @@ describe('Pairing', () => {
     expect(f.callsOf('channel.telegram.pairing.cancel')).toEqual([{}])
   })
 
-  it('unmount clears it', async () => {
+  it('unmount clears it and cancels the code this component issued', async () => {
     f = installFakeForge({ calls: begin() })
     const { unmount } = render(<Pairing active={false} />)
     await start()
     unmount()
     absent()
+    expect(f.callsOf('channel.telegram.pairing.cancel')).toEqual([{}])
+  })
+
+  it('unmount without a local code cancels nothing (a pairing begun elsewhere is left alone)', async () => {
+    f = installFakeForge({ calls: begin() })
+    const { unmount } = render(<Pairing active />)
+    unmount()
+    expect(f.callsOf('channel.telegram.pairing.cancel')).toEqual([])
+  })
+
+  it('unmount after the code already cleared (paired) cancels nothing', async () => {
+    f = installFakeForge({ calls: begin() })
+    const { unmount } = render(<Pairing active={false} />)
+    await start()
+    act(() => { f.emit(ev('channel.paired', { channel: 'telegram', accountId: '42', name: 'Ann' })) })
+    unmount()
+    expect(f.callsOf('channel.telegram.pairing.cancel')).toEqual([])
   })
 
   it('a begin answer arriving after unmount is dropped', async () => {
     let resolve!: (v: { code: string; expiresAt: number; link: string }) => void
-    f = installFakeForge({ calls: { 'channel.telegram.pairing.begin': () => new Promise((r) => { resolve = r }) } })
+    f = installFakeForge({ calls: { 'channel.telegram.pairing.begin': () => new Promise((r) => { resolve = r }), 'channel.telegram.pairing.cancel': { ok: true } } })
     const { unmount } = render(<Pairing active={false} />)
     fireEvent.click(screen.getByRole('button', { name: '开始配对' }))
     unmount()
     await act(async () => { resolve({ code: CODE, expiresAt: Date.now() + 1000, link: LINK }) })
     absent()
+    expect(f.callsOf('channel.telegram.pairing.cancel')).toEqual([{}])
   })
 
   it('active elsewhere without a local code: 配对中 and 取消, no code', async () => {

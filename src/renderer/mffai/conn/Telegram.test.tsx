@@ -171,6 +171,23 @@ describe('Telegram token', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 
+  it('-32601 from setToken → 不支持', async () => {
+    await mount()
+    f.script({ 'channel.telegram.setToken': () => fail(-32601, 'method not found') })
+    fireEvent.change(screen.getByLabelText('令牌'), { target: { value: TOKEN } })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '保存令牌' })) })
+    expect(screen.getByText('不支持')).toBeInTheDocument()
+  })
+
+  it('-32601 from clearWebhook and unpair → 不支持', async () => {
+    await mount({ ...tgCalls(tgStatus({ state: 'conflict', paired: [{ accountId: '42', name: 'Ann', pairedAt: 1 }] })) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '清除 webhook' })) })
+    expect(within(screen.getByTestId('mffai-tg-status')).getByText('不支持')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '撤销' }))
+    await act(async () => { fireEvent.click(screen.getByRole('dialog').querySelector('.confirm-danger')!) })
+    expect(within(screen.getByRole('dialog')).getByText('不支持')).toBeInTheDocument()
+  })
+
   it('no token set → no 清除令牌', async () => {
     await mount(tgCalls(tgStatus({ tokenSet: false, bot: undefined })))
     expect(screen.queryByRole('button', { name: '清除令牌' })).toBeNull()
@@ -210,9 +227,42 @@ describe('Telegram config', () => {
 
   it('过期分钟 saves the whole config with the new number', async () => {
     await mount()
-    fireEvent.change(screen.getByLabelText('过期分钟'), { target: { value: '25' } })
+    fireEvent.change(screen.getByLabelText('过期(分钟)'), { target: { value: '25' } })
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: '保存分钟' })) })
     expect((f.callsOf('channel.telegram.config.set')[0] as { config: unknown }).config).toEqual({ ...tgConfig(), staleMinutes: 25 })
+  })
+
+  it('过期(分钟) is a visible label, not only an aria-label', async () => {
+    await mount()
+    const input = screen.getByLabelText('过期(分钟)')
+    expect(input.closest('label')?.textContent).toBe('过期(分钟)')
+    expect(input.hasAttribute('aria-label')).toBe(false)
+  })
+
+  it('one in-flight guard for every config save, and config.get is refetched before the next save starts', async () => {
+    // 后台:保存的就是下一次 config.get 回的
+    let stored: Record<string, unknown> = tgConfig()
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    await mount({ ...tgCalls(),
+      'channel.telegram.config.get': () => structuredClone(stored) as never,
+      'channel.telegram.config.set': async ({ config }) => { await gate; stored = config as Record<string, unknown>; return { ok: true } },
+    })
+    const order = () => f.calls.map((c) => c.method).filter((m) => m.startsWith('channel.telegram.config'))
+    const base = order().length
+    act(() => { fireEvent.click(screen.getByRole('switch', { name: '启用' })) })
+    // 第一个还在飞:项目的保存不发
+    fireEvent.change(screen.getByLabelText('别名'), { target: { value: 'renamed' } })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '保存' })) })
+    expect(f.callsOf('channel.telegram.config.set')).toHaveLength(1)
+    await act(async () => { release() })
+    await waitFor(() => expect(order().slice(base)).toEqual(['channel.telegram.config.set', 'channel.telegram.config.get']))
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '保存' })) })
+    const sets = f.callsOf('channel.telegram.config.set') as { config: { enabled: boolean; projects: { name: string }[] } }[]
+    expect(sets).toHaveLength(2)
+    // 第二次是在重取过的配置上改的:enabled 没被旧的展开翻回去
+    expect(sets[1].config.enabled).toBe(false)
+    expect(sets[1].config.projects[0].name).toBe('renamed')
   })
 
   it('projects get the sandbox level from permissions.get', async () => {
