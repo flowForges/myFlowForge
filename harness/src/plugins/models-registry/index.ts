@@ -38,6 +38,10 @@ const CHATGPT_USAGE = 'https://chatgpt.com/settings/usage'
 const OK_REASONS = new Set(['stop', 'length', 'tool_calls'])
 
 const invalid = (m: string) => new RpcError(ERR_INVALID_PARAMS, m)
+/** 地址由用户填的预设 */
+const isCustom = (p: Preset) => p.id.startsWith('custom-')
+/** 账号自己标的(只有自定义账号有)优先于预设的 */
+const restrictionOf = (a: AccountConfig, p: Preset) => a.restriction ?? p.restriction
 const keyName = (id: string) => `account/${id}/apiKey`
 const errKind = (err: unknown) => (err instanceof Error ? err.name : 'error')
 const fail = (kind: ModelError['kind'], message: string, retryable = false): ModelEvent => ({
@@ -230,6 +234,11 @@ export function createModelsRegistry(opts: RegistryOpts = {}): Plugin {
           const baseUrl = input.baseUrl?.trim() || undefined
           if (baseUrl !== undefined && !validUrl(baseUrl)) throw invalid('invalid base url')
           if (!protocols.length && !baseUrl) throw invalid('base url required')
+          // 08 §4.7:限制标记只给自定义预设(别的预设由目录定);手填 id 只给目录里没有清单的预设
+          if (input.restriction !== undefined && !isCustom(p)) throw invalid('restriction is only for custom presets')
+          if (input.modelIds?.length && service.catalog().models[p.id]?.length) throw invalid('this preset has a model list')
+          // 手填的 id 按列模型的默认元数据存;记成"列出的",下一次列得出来就整份换掉(08 §4.7)
+          const typed = input.modelIds?.length ? resolveListed([...new Set(input.modelIds)].map(id => ({ id })), p.snapshotProvider, snapshot, cache) : undefined
 
           const id = opts.id ?? randomUUID()
           if (store.get(id)) throw invalid('account exists')
@@ -242,6 +251,8 @@ export function createModelsRegistry(opts: RegistryOpts = {}): Plugin {
             ...(input.protocol && { protocol: input.protocol }),
             ...(p.restriction === 'coding-tools-only' && { restrictionAckAt: now() }),
             ...(input.models && { models: input.models }),
+            ...(typed && { models: [...(input.models ?? []), ...typed], listedModelIds: typed.map(m => m.id) }),
+            ...(input.restriction !== undefined && { restriction: input.restriction }),
           }
           try {
             store.add(acc)
@@ -316,7 +327,7 @@ export function createModelsRegistry(opts: RegistryOpts = {}): Plugin {
           const p = presets.get(a.presetId)
           if (!p) return yield fail('bad_request', 'unknown preset')
           // 受限规则:先于读密钥 / 选适配器,零网络
-          if (!req.interactive && p.restriction === 'coding-tools-only')
+          if (!req.interactive && restrictionOf(a, p) === 'coding-tools-only')
             return yield fail('restricted', 'this plan only allows interactive use in coding tools')
           const prep = await prepare(a, p)
           if ('error' in prep) return yield { type: 'done', reason: 'error', error: prep.error }

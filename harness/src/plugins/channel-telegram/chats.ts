@@ -705,8 +705,10 @@ export class Chats {
     const ref = chosen ?? catalog?.default
     if (!models || !catalog || !ref) return NO_MODEL_LINE
     if (inProject) return undefined
-    const presetId = models.accounts().find(a => a.id === ref.accountId)?.presetId
-    return catalog.presets.find(p => p.id === presetId)?.restriction === 'coding-tools-only' ? CODING_ONLY_LINE : undefined
+    const account = models.accounts().find(a => a.id === ref.accountId)
+    // 08 §4.7:自定义账号自己标的限制优先
+    const restriction = account?.restriction ?? catalog.presets.find(p => p.id === account?.presetId)?.restriction
+    return restriction === 'coding-tools-only' ? CODING_ONLY_LINE : undefined
   }
 
   /** 每小时 60 次:合并和队列只限并发,不限总量(R22)。超了丢弃,一小时说一次 */

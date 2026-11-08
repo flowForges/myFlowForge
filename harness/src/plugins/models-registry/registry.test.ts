@@ -559,3 +559,93 @@ describe('凭据存储不可用', () => {
     expect((await svc.testAccount(svc.accounts()[1].id)).ok).toBe(false)
   })
 })
+
+describe('08 §4.7: modelIds and restriction on models.addAccount', () => {
+  const custom = { presetId: 'custom-openai', apiKey: 'ck', baseUrl: 'https://llm.local/v1' }
+  const add = (k: Kernel, params: object, commandId = `add-${Math.random()}`) => k.handle('models.addAccount', { commandId, ...params } as never) as Promise<AccountView>
+
+  it('modelIds on a preset with an empty catalog list appear in accounts[].models with default metadata, and on disk', async () => {
+    const { k, svc } = await boot()
+    const view = await add(k, { ...custom, modelIds: ['my-model', 'vendor/x:1.5'] })
+    expect(view.models?.map(m => m.id)).toEqual(['my-model', 'vendor/x:1.5'])
+    expect(view.models![0]).toMatchObject({ id: 'my-model', name: 'my-model', reasoning: 'toggle' })
+    expect(typeof view.models![0].context).toBe('number')
+    const listed = (await k.handle('models.accounts', undefined)) as { accounts: AccountView[] }
+    expect(listed.accounts[0].models?.map(m => m.id)).toEqual(['my-model', 'vendor/x:1.5'])
+    expect(JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')).models.accounts[0].models.map((m: { id: string }) => m.id)).toEqual(['my-model', 'vendor/x:1.5'])
+    // 可以设为默认
+    svc.setDefault({ accountId: view.id, modelId: 'vendor/x:1.5' })
+  })
+
+  it('a later /models listing replaces the typed ids', async () => {
+    const { k, svc } = await boot()
+    const view = await add(k, { ...custom, modelIds: ['typed-a', 'gpt-5'] })
+    expect(svc.accounts()[0].models?.map(m => m.id)).toEqual(['typed-a', 'gpt-5'])
+    svc.registerAdapter('openai-chat', { async *stream() { yield { type: 'done', reason: 'stop' } }, async test() {}, listModels: async () => [{ id: 'gpt-5' }, { id: 'gpt-4o' }] })
+    await expect.poll(() => svc.accounts()[0].models?.map(m => m.id)).toEqual(['gpt-5', 'gpt-4o'])
+    expect(svc.accounts()[0].id).toBe(view.id)
+  })
+
+  it('an empty listing keeps the typed ids', async () => {
+    const { k, svc } = await boot()
+    await add(k, { ...custom, modelIds: ['typed-a'] })
+    let listed = 0
+    svc.registerAdapter('openai-chat', { async *stream() { yield { type: 'done', reason: 'stop' } }, async test() {}, listModels: async () => { listed++; return [] } })
+    await expect.poll(() => listed).toBeGreaterThan(0)
+    expect(svc.accounts()[0].models?.map(m => m.id)).toEqual(['typed-a'])
+  })
+
+  it('modelIds on a preset whose catalog has a list → -32602 and nothing added', async () => {
+    const { k } = await boot()
+    const e = await errOf(add(k, { presetId: 'kimi-cn', apiKey: 'kk', modelIds: ['x'] }))
+    expect(e.code).toBe(-32602)
+    expect(((await k.handle('models.accounts', undefined)) as { accounts: unknown[] }).accounts).toEqual([])
+  })
+
+  it('modelIds junk is refused by the schema: 51 ids, a 129-character id, a bad character', async () => {
+    const { k } = await boot()
+    for (const modelIds of [Array.from({ length: 51 }, (_, i) => `m${i}`), ['x'.repeat(129)], ['bad id'], ['a;b']]) {
+      expect((await errOf(add(k, { ...custom, modelIds }))).code).toBe(-32602)
+    }
+    expect(((await k.handle('models.accounts', undefined)) as { accounts: unknown[] }).accounts).toEqual([])
+    expect((await add(k, { ...custom, modelIds: Array.from({ length: 50 }, (_, i) => `m${i}`) })).models).toHaveLength(50)
+  })
+
+  it('restriction on a non-custom preset → -32602, both values, and nothing added', async () => {
+    const { k } = await boot()
+    for (const restriction of ['coding-tools-only', 'none']) {
+      expect((await errOf(add(k, { presetId: 'openai', apiKey: 'sk', restriction }))).code).toBe(-32602)
+      expect((await errOf(add(k, { presetId: 'zhipu-cn', apiKey: 'zk', restrictionAck: true, restriction }))).code).toBe(-32602)
+    }
+    expect(((await k.handle('models.accounts', undefined)) as { accounts: unknown[] }).accounts).toEqual([])
+  })
+
+  it("restriction:'coding-tools-only' on a custom account: interactive:false → done{restricted} with zero fetch; interactive:true goes through; it is in the view and on disk", async () => {
+    const f = spyFetch()
+    const { adapter, seen } = fakeAdapter(f.fn, () => OK)
+    const { k, svc } = await boot({ fetch: f.fn })
+    svc.registerAdapter('openai-chat', adapter)
+    const view = await add(k, { ...custom, restriction: 'coding-tools-only', modelIds: ['m'] })
+    expect(view.restriction).toBe('coding-tools-only')
+    expect(JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')).models.accounts[0].restriction).toBe('coding-tools-only')
+    expect(await collect(svc.stream({ accountId: view.id, modelId: 'm' }, req(false)))).toEqual([{ type: 'done', reason: 'error', error: expect.objectContaining({ kind: 'restricted', retryable: false }) }])
+    expect(f.calls).toEqual([])
+    expect(seen).toEqual([])
+    expect(await collect(svc.stream({ accountId: view.id, modelId: 'm' }, req(true)))).toEqual(OK)
+  })
+
+  it("restriction:'none' on a custom account is kept and changes nothing for background requests", async () => {
+    const f = spyFetch()
+    const { adapter } = fakeAdapter(f.fn, () => OK)
+    const { k, svc } = await boot({ fetch: f.fn })
+    svc.registerAdapter('openai-chat', adapter)
+    const view = await add(k, { ...custom, restriction: 'none', modelIds: ['m'] })
+    expect(view.restriction).toBe('none')
+    expect(await collect(svc.stream({ accountId: view.id, modelId: 'm' }, req(false)))).toEqual(OK)
+  })
+
+  it('an account without restriction has no restriction field in its view', async () => {
+    const { k } = await boot()
+    expect(await add(k, custom)).not.toHaveProperty('restriction')
+  })
+})

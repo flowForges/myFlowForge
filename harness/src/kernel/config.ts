@@ -10,6 +10,8 @@ export const AccountConfigSchema = z.object({
   baseUrl: z.string().optional(),
   protocol: z.enum(['openai-chat', 'openai-responses', 'anthropic', 'chatgpt']).optional(),
   restrictionAckAt: z.number().optional(),
+  // 08 §4.7:只有自定义预设的账号有;其余预设看目录里的 restriction
+  restriction: z.enum(['coding-tools-only', 'none']).optional(),
   models: z.array(ModelEntrySchema).optional(), // 手填清单 + 适配器列出的模型
   listedModelIds: z.array(z.string()).optional(), // models 里哪些 id 来自列模型(其余是手填)
 })

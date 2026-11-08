@@ -39,7 +39,7 @@ const CHEAP_ID = /(?:^|[^a-z])(?:mini|lite|flash|haiku|nano|small|spark)/i
 type ModelsView = Pick<ModelsService, 'catalog' | 'accounts'>
 export type BackgroundNone = 'no_model' | 'restricted' | 'unknown_subscription'
 
-function accountOf(models: ModelsView, accountId: string): { account: AccountView; preset: PresetView; list: ModelEntry[] } | undefined {
+function accountOf(models: ModelsView, accountId: string): { account: AccountView; preset: PresetView; list: ModelEntry[]; restriction: PresetView['restriction'] } | undefined {
   const account = models.accounts().find(a => a.id === accountId)
   if (!account) return undefined
   const catalog = models.catalog()
@@ -47,14 +47,15 @@ function accountOf(models: ModelsView, accountId: string): { account: AccountVie
   if (!preset) return undefined
   // 和 registry 的 modelsOf 同样的优先级
   const listed = catalog.models[account.presetId]
-  return { account, preset, list: listed?.length ? listed : (account.models ?? []) }
+  // 08 §4.7:自定义账号自己标的限制优先,和 registry 同一条
+  return { account, preset, list: listed?.length ? listed : (account.models ?? []), restriction: account.restriction ?? preset.restriction }
 }
 
 export function pickBackground(models: ModelsView, cfg: MemoryConfig, sessionRef?: ModelRef): { ref: ModelRef } | { none: BackgroundNone } {
   if (cfg.backgroundModel) {
     const explicit = accountOf(models, cfg.backgroundModel.accountId)
     if (!explicit) return { none: 'no_model' }
-    if (explicit.preset.restriction === 'coding-tools-only') return { none: 'restricted' }
+    if (explicit.restriction === 'coding-tools-only') return { none: 'restricted' }
     return { ref: cfg.backgroundModel }
   }
   // 不跨账号:对话不悄悄发给另一家
@@ -62,9 +63,9 @@ export function pickBackground(models: ModelsView, cfg: MemoryConfig, sessionRef
   if (!base) return { none: 'no_model' }
   const account = accountOf(models, base.accountId)
   if (!account) return { none: 'no_model' }
-  const { preset, list } = account
-  if (preset.restriction === 'coding-tools-only') return { none: 'restricted' }
-  if (preset.restriction === 'unknown' && preset.billing !== 'metered') return { none: 'unknown_subscription' }
+  const { preset, list, restriction } = account
+  if (restriction === 'coding-tools-only') return { none: 'restricted' }
+  if (restriction === 'unknown' && preset.billing !== 'metered') return { none: 'unknown_subscription' }
 
   const usable = (m: ModelEntry) => !m.deprecated && m.context >= MIN_CONTEXT
   const candidates = list.filter(usable)
@@ -362,10 +363,10 @@ export class Background {
     if (ref.accountId !== allowed) return 'restricted'
     const found = accountOf(models, ref.accountId)
     if (!found) return 'account_out'
-    const { account, preset, list } = found
-    if (preset.restriction === 'coding-tools-only') return 'restricted'
+    const { account, preset, list, restriction } = found
+    if (restriction === 'coding-tools-only') return 'restricted'
     const explicit = cfg.backgroundModel?.accountId === ref.accountId && cfg.backgroundModel.modelId === ref.modelId
-    if (preset.restriction === 'unknown' && preset.billing !== 'metered' && !explicit) return 'restricted'
+    if (restriction === 'unknown' && preset.billing !== 'metered' && !explicit) return 'restricted'
     if (account.state !== 'ok') return 'account_out'
     return { entry: list.find(m => m.id === ref.modelId), metered: preset.billing === 'metered' }
   }

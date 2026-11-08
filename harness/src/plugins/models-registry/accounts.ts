@@ -69,6 +69,7 @@ export class AccountStore {
       state: this.state(a.id),
       ...(a.baseUrl !== undefined && { baseUrl: a.baseUrl }),
       ...(a.models !== undefined && { models: a.models }),
+      ...(a.restriction !== undefined && { restriction: a.restriction }),
     }
   }
 }

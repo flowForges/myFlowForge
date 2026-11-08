@@ -74,6 +74,10 @@ export interface AddAccountInput {
   protocol?: ModelProtocol
   restrictionAck?: boolean
   models?: ModelEntry[] // 自定义预设的手填清单
+  /** 08 §4.7:手填的 id(只对目录清单为空的预设);之后列模型列得出来就换掉它们 */
+  modelIds?: string[]
+  /** 08 §4.7:只对自定义预设 */
+  restriction?: 'coding-tools-only' | 'none'
 }
 
 /** models-registry 提供的服务(spec §6.1);账号视图不含密钥 */

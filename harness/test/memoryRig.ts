@@ -24,6 +24,8 @@ export interface FakeAccount {
   presetId?: string
   billing?: PresetView['billing']
   restriction?: PresetView['restriction']
+  /** 08 §4.7:账号自己标的限制(自定义账号),进 accounts() 的视图 */
+  accountRestriction?: AccountView['restriction']
   state?: AccountState
   /** 只有 id 是必填;cost、deprecated、context 按用例给 */
   models: (Partial<ModelEntry> & { id: string })[]
@@ -75,7 +77,7 @@ export function fakeModels(opts: FakeModelsOpts = {}): FakeModels {
       models: Object.fromEntries(accounts.map(a => [presetIdOf(a), a.models.map(entry)])),
       default: defaultRef(),
     }),
-    accounts: (): AccountView[] => accounts.map(a => ({ id: a.id, presetId: presetIdOf(a), label: a.id, state: a.state ?? 'ok', models: a.models.map(entry) })),
+    accounts: (): AccountView[] => accounts.map(a => ({ id: a.id, presetId: presetIdOf(a), label: a.id, state: a.state ?? 'ok', models: a.models.map(entry), ...(a.accountRestriction && { restriction: a.accountRestriction }) })),
     stream(ref: ModelRef | 'default', req: Req) {
       const resolved = ref === 'default' ? defaultRef() : ref
       if (!resolved) throw new Error('fakeModels: no default model')

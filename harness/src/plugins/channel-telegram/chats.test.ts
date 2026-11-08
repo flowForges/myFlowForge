@@ -105,6 +105,15 @@ describe('a DM becomes an owner session', () => {
     expect(texts(r).at(-1)).toContain('/project')
   })
 
+  it('a custom account marked coding-tools-only (08 §4.7) in chat mode: zero requests, one fixed line', async () => {
+    const r = await rig({ models: { accounts: [{ id: 'mine', restriction: 'unknown', accountRestriction: 'coding-tools-only', models: [{ id: 'm' }] }] } })
+    await handled(r, r.dm('hello'))
+    await flow(r)
+    expect(r.models.calls).toEqual([])
+    expect(created(r)).toEqual([])
+    expect(texts(r).at(-1)).toContain('/project')
+  })
+
   it('a coding-tools-only account in a project session runs', async () => {
     const kit = projectKit()
     const r = await rig({ project: kit, models: CODING, plugins: () => [toolsRegistry, createLoopDefault({ git: kit.git })] })

@@ -50,6 +50,8 @@ export const AccountViewSchema = z.object({
   state: AccountStateSchema,
   baseUrl: z.string().optional(),
   models: z.array(ModelEntrySchema).optional(),
+  /** 08 §4.7:自定义账号自己标的限制;有它时比预设的 restriction 优先 */
+  restriction: z.enum(['coding-tools-only', 'none']).optional(),
 })
 export type AccountView = z.infer<typeof AccountViewSchema>
 

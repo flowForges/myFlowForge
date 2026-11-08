@@ -42,6 +42,9 @@ describe('pickBackground', () => {
     ['no account at all', [], {}, undefined, { none: 'no_model' }],
     ['explicit model is used as given', [{ id: 'a', models: [priced('big', 15)] }, { id: 'b', models: [priced('pick', 9), priced('cheap', 0.1)] }], { backgroundModel: ref('b', 'pick') }, session, { ref: ref('b', 'pick') }],
     ['explicit on coding-tools-only', [{ id: 'a', models: [priced('big', 15)] }, { id: 'b', restriction: 'coding-tools-only', models: [priced('pick', 9)] }], { backgroundModel: ref('b', 'pick') }, session, { none: 'restricted' }],
+    ['a custom account marked coding-tools-only', [{ id: 'a', restriction: 'unknown', billing: 'metered', accountRestriction: 'coding-tools-only', models: [priced('big', 15)] }], {}, session, { none: 'restricted' }],
+    ['explicit on a custom account marked coding-tools-only', [{ id: 'a', models: [priced('big', 15)] }, { id: 'b', restriction: 'unknown', accountRestriction: 'coding-tools-only', models: [priced('pick', 9)] }], { backgroundModel: ref('b', 'pick') }, session, { none: 'restricted' }],
+    ['a custom account marked none on a subscription preset', [{ id: 'a', restriction: 'unknown', billing: 'subscription', accountRestriction: 'none', models: [priced('big', 15)] }], {}, session, { ref: ref('a', 'big') }],
     ['explicit on a removed account', [{ id: 'a', models: [priced('big', 15)] }], { backgroundModel: ref('gone', 'pick') }, session, { none: 'no_model' }],
   ]
   it.each(rows)('%s', (_name, accounts, over, sessionRef, want) => {
@@ -147,6 +150,7 @@ describe('fences before the call', () => {
     ['coding-tools-only', { accounts: [{ id: 'acc', restriction: 'coding-tools-only', models: [{ id: 'm' }] }] }, 'restricted'],
     ['coding-tools-only, even when configured', { accounts: [{ id: 'acc', restriction: 'coding-tools-only', models: [{ id: 'm' }] }], config: { backgroundModel: A } }, 'restricted'],
     ['unknown subscription', { accounts: [{ id: 'acc', restriction: 'unknown', billing: 'subscription', models: [{ id: 'm' }] }] }, 'restricted'],
+    ['a custom account marked coding-tools-only, even when configured', { accounts: [{ id: 'acc', restriction: 'unknown', accountRestriction: 'coding-tools-only', models: [{ id: 'm' }] }], config: { backgroundModel: A } }, 'restricted'],
     ['missing account', { accounts: [{ id: 'other', models: [{ id: 'm' }] }] }, 'account_out'],
     ['account needs login', { accounts: [{ id: 'acc', state: 'needs_login', models: [{ id: 'm' }] }] }, 'account_out'],
     ['account quota exhausted', { accounts: [{ id: 'acc', state: 'quota_exhausted', models: [{ id: 'm' }] }] }, 'account_out'],
