@@ -1,6 +1,8 @@
 // 每轮的开始 / 结束快照与回滚(spec §11):git 部分在 lib/git/snapshot,这里管引用命名、事件与"哪一轮能回滚"
 import { dirname, join } from 'node:path'
 import type { Logger } from '../../kernel/log'
+import { isInside } from '../../lib/fs/paths'
+import { redact } from '../../lib/tools/redact'
 import { RpcError } from '../../kernel/rpcError'
 import { imWorktreeRootOf } from '../../lib/git/imWorktree'
 import { changes, fileDiff, pruneRefs, refBase, restore, submodulePaths, takeSnapshot, type Git, type RepoPin, type SnapshotResult } from '../../lib/git/snapshot'
@@ -152,13 +154,23 @@ export async function turnChanges(deps: SnapshotDeps, t: SnapshotTarget, events:
   }
 }
 
-/** `turn.diff`(08 §4.4):和 turn.changes 同一对引用;path 不在这一轮的改动清单里 → -32602,不跑 diff */
-export async function turnDiff(deps: SnapshotDeps, t: SnapshotTarget, events: KernelEvent[], turnId: string, path: string): Promise<FileDiff> {
+/**
+ * `turn.diff`(08 §4.4):和 turn.changes 同一对引用。path 是 turn.changes 回的、redact 过的那个:对上改动清单里某一项 redact 之后的样子,
+ * 再用真实路径跑 diff;对不上、两项撞成同一个 → -32602,不跑 diff。落在 `deny read` 根里的:照样算改过,不给内容(review M6)
+ */
+export async function turnDiff(deps: SnapshotDeps, t: SnapshotTarget, events: KernelEvent[], turnId: string, path: string, denied: string[] = []): Promise<FileDiff> {
   const files = await turnChanges(deps, t, events, turnId)
-  if (!files.some(f => f.path === path)) throw new RpcError(ERR_INVALID_PARAMS, 'path not in the change list')
+  const hits = files.filter(f => redact(f.path) === path)
+  if (hits.length === 0) throw new RpcError(ERR_INVALID_PARAMS, 'path not in the change list')
+  if (hits.length > 1) throw new RpcError(ERR_INVALID_PARAMS, 'ambiguous path')
+  const [hit] = hits
+  const { pin } = t
+  if (pin.kind === 'repo' && denied.some(d => isInside(join(pin.top, ...hit.path.split('/')), d, process.platform))) {
+    return { path, status: hit.status, lines: [], binary: false, truncated: false }
+  }
   const ts = scan(t.sessionId, events).turns.get(turnId)!
   try {
-    return await fileDiff(t.cwd, ts.start!, ts.end!, path, deps.git, gitOpts(deps, t))
+    return { ...(await fileDiff(t.cwd, ts.start!, ts.end!, hit.path, deps.git, gitOpts(deps, t))), path }
   } catch (err) {
     throw gitFailed(deps, 'turn.diff', err)
   }

@@ -97,10 +97,10 @@ const oneTool = (name: string, args: object): Script => (n => (n % 2 === 1 ? cal
 /** 插件日志(只留消息):测试据此确认第 2 轮已在等回滚,不靠睡固定时长 */
 let logs: string[] = []
 const logger = { info: (m: string) => { logs.push(m) }, warn: (m: string) => { logs.push(m) }, error: (m: string) => { logs.push(m) } }
-async function boot(calls: Message[][], script: () => Script, wrapGit?: (g: Git) => Git, extra: Plugin[] = []) {
+async function boot(calls: Message[][], script: () => Script, wrapGit?: (g: Git) => Git, extra: Plugin[] = [], config: Record<string, unknown> = {}) {
   const g = createGit({ base: baseEnv(), extraEnv: gitInjected() })
   logs = []
-  seedUnsandboxedAuto(dataDir) // auto 会话的 03 用例:NO_SANDBOX 下显式放开无沙箱 auto(R22)
+  seedUnsandboxedAuto(dataDir, config) // auto 会话的 03 用例:NO_SANDBOX 下显式放开无沙箱 auto(R22)
   const k = await createKernel({ sandbox: NO_SANDBOX,
     dataDir,
     home,
@@ -801,5 +801,30 @@ describe('turn.diff (08 §4.4)', () => {
     const turnId = await turn(k, sid, 'hello')
     await expect(diffOf(k, sid, turnId, 'a.txt')).rejects.toMatchObject({ code: -32602 })
     await expect(diffOf(k, 'nope', turnId, 'a.txt')).rejects.toMatchObject({ code: -32602 })
+  })
+
+  it('review M6: a path that redacts differently is listed redacted, and the redacted form diffs the real file', async () => {
+    initRepo()
+    const real = `sk-${'a'.repeat(24)}.txt`
+    const k = await boot([], () => oneTool('write', { path: real, content: 'k\n' }))
+    const sid = await create(k, CLAUDE)
+    const turnId = await turn(k, sid, 'write')
+    expect(await changesOf(k, sid, turnId)).toEqual({ files: [{ path: '***.txt', status: 'A' }] })
+    const d = await diffOf(k, sid, turnId, '***.txt')
+    expect(d).toMatchObject({ path: '***.txt', status: 'A', lines: [{ kind: 'add', ln: 1, text: 'k' }] })
+    expect(JSON.stringify(d)).not.toContain(real)
+    await expect(diffOf(k, sid, turnId, real)).rejects.toMatchObject({ code: -32602 })
+  })
+
+  it('review M6: a deny-read path is listed as changed and its diff has no contents', async () => {
+    initRepo()
+    const k = await boot([], () => oneTool('shell', { command: 'mkdir -p hidden && echo SECRETLINE > hidden/s.txt' }), undefined, [], { permissions: { rules: [{ effect: 'deny', rule: 'read(hidden/**)' }] } })
+    const sid = await create(k, CLAUDE)
+    const turnId = await turn(k, sid, 'write')
+    expect(existsSync(R('hidden/s.txt'))).toBe(true)
+    expect(await changesOf(k, sid, turnId)).toEqual({ files: [{ path: 'hidden/s.txt', status: 'A' }] })
+    const d = await diffOf(k, sid, turnId, 'hidden/s.txt')
+    expect(d).toEqual({ path: 'hidden/s.txt', status: 'A', lines: [], binary: false, truncated: false })
+    expect(JSON.stringify(d)).not.toContain('SECRETLINE')
   })
 })

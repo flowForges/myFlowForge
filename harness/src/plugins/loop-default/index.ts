@@ -9,7 +9,8 @@ import type { Sessions } from '../../kernel/sessions'
 import { createGit, NO_REPO, type Git } from '../../lib/git/snapshot'
 import type { MemoryService } from '../../lib/memory/types'
 import type { ModelsService } from '../../lib/models/types'
-import type { BackgroundRuns, PluginsService, ToolsService, TurnInbox } from '../../lib/tools/types'
+import { redact } from '../../lib/tools/redact'
+import type { BackgroundRuns, PluginsService, SandboxService, ToolsService, TurnInbox } from '../../lib/tools/types'
 import { ERR_BUSY, type ModelRef, type WorkerParams } from '../../protocol/index'
 import { runTurn, type LoopDeps, type TurnOutcome } from './loop'
 import { manifest } from './manifest'
@@ -165,12 +166,17 @@ export function createLoopDefault(opts: LoopDefaultOpts = {}): Plugin {
 
       ctx.rpc.register('turn.changes', async params => {
         const { sessionId, turnId } = params as WorkerParams<'turn.changes'>
-        return { files: await turnChanges(snap, targetOf(sessionId, 'snapshots missing'), ctx.events.history(sessionId), turnId) }
+        // 08 §4.4:路径和 executor.changes 一样过 redact
+        const files = await turnChanges(snap, targetOf(sessionId, 'snapshots missing'), ctx.events.history(sessionId), turnId)
+        return { files: files.map(f => ({ ...f, path: redact(f.path) })) }
       })
 
       ctx.rpc.register('turn.diff', async params => {
         const { sessionId, turnId, path } = params as WorkerParams<'turn.diff'>
-        return turnDiff(snap, targetOf(sessionId, 'snapshots missing'), ctx.events.history(sessionId), turnId, path)
+        const target = targetOf(sessionId, 'snapshots missing')
+        // 凭据根和 `deny read` 规则:模型读不到的,diff 也不给内容
+        const policy = ctx.services.get<SandboxService>('sandbox')?.execPolicy(sessionId, target.cwd)
+        return turnDiff(snap, target, ctx.events.history(sessionId), turnId, path, policy ? [...policy.denyRead, ...policy.ruleDenyRead] : [])
       })
     },
   }
