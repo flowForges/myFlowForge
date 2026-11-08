@@ -8,7 +8,7 @@ import type { ToolActivity } from '@shared/types'
 
 export type StepTool = ToolActivity & { truncated?: boolean }
 
-export interface Step { key: string; seq: number; text: string; final: boolean; reasoning: string; tools: StepTool[] }
+export interface Step { key: string; seq: number; ts: number; text: string; final: boolean; reasoning: string; tools: StepTool[] }
 
 export interface ApprovalItem {
   approvalId: string; turnId: string; callId: string; tool: string; summary: string; seq: number
@@ -31,7 +31,7 @@ export interface RunItem {
 
 export interface TurnView {
   turnId: string; seq: number
-  users: { text: string; followUp: boolean; external: boolean; seq: number }[]
+  users: { text: string; followUp: boolean; external: boolean; seq: number; ts: number }[]
   steps: Step[]
   approvals: ApprovalItem[]
   runs: Map<string, RunItem>
@@ -76,10 +76,10 @@ function withTurn(v: SessionView, turnId: string, seq: number, f: (t: TurnView) 
 }
 
 /** 这一步(turnId + step;loop-direct 没有 step 就按 turnId) */
-function withStep(t: TurnView, stepNo: number | undefined, seq: number, f: (s: Step) => Step): TurnView {
+function withStep(t: TurnView, stepNo: number | undefined, seq: number, ts: number, f: (s: Step) => Step): TurnView {
   const key = `${t.turnId}:${stepNo ?? ''}`
   const i = t.steps.findIndex((s) => s.key === key)
-  const cur = i >= 0 ? t.steps[i] : { key, seq, text: '', final: false, reasoning: '', tools: [] }
+  const cur = i >= 0 ? t.steps[i] : { key, seq, ts, text: '', final: false, reasoning: '', tools: [] }
   const steps = t.steps.slice()
   if (i >= 0) steps[i] = f(cur)
   else steps.push(f(cur))
@@ -87,11 +87,11 @@ function withStep(t: TurnView, stepNo: number | undefined, seq: number, f: (s: S
 }
 
 /** 工具调用挂在这一轮最近的一步上(message.assistant 先写,它的调用随后) */
-function withTool(t: TurnView, seq: number, callId: string, f: (x: StepTool | undefined) => StepTool): TurnView {
+function withTool(t: TurnView, seq: number, ts: number, callId: string, f: (x: StepTool | undefined) => StepTool): TurnView {
   const hostIdx = t.steps.findIndex((s) => s.tools.some((x) => x.id === callId))
   const host = hostIdx >= 0 ? t.steps[hostIdx] : t.steps.at(-1)
   const stepNo = host ? host.key.slice(t.turnId.length + 1) : ''
-  return withStep(t, stepNo === '' ? undefined : Number(stepNo), seq, (s) => {
+  return withStep(t, stepNo === '' ? undefined : Number(stepNo), seq, ts, (s) => {
     const j = s.tools.findIndex((x) => x.id === callId)
     const tools = s.tools.slice()
     if (j >= 0) tools[j] = f(tools[j])
@@ -138,7 +138,7 @@ function apply(v: SessionView, e: KernelEvent): SessionView {
     case 'message.user': {
       if (!turnId) return v
       const w = withTurn(v, turnId, seq, (t) => ({
-        ...t, users: [...t.users, { text: str(p.text) ?? '', followUp: p.followUp === true, external: p.external === true, seq }],
+        ...t, users: [...t.users, { text: str(p.text) ?? '', followUp: p.followUp === true, external: p.external === true, seq, ts: e.ts }],
       }))
       return { ...w, open: opened(turnId) }
     }
@@ -147,13 +147,13 @@ function apply(v: SessionView, e: KernelEvent): SessionView {
       return { ...withTurn(v, turnId, seq, (t) => t), open: opened(turnId) }
     case 'message.assistant.delta':
       if (!turnId) return v
-      return withTurn(v, turnId, seq, (t) => withStep(t, num(p.step), seq, (s) => (s.final ? s : { ...s, text: s.text + (str(p.text) ?? '') })))
+      return withTurn(v, turnId, seq, (t) => withStep(t, num(p.step), seq, e.ts, (s) => (s.final ? s : { ...s, text: s.text + (str(p.text) ?? '') })))
     case 'message.assistant':
       if (!turnId) return v
-      return withTurn(v, turnId, seq, (t) => withStep(t, num(p.step), seq, (s) => ({ ...s, text: str(p.text) ?? '', final: true })))
+      return withTurn(v, turnId, seq, (t) => withStep(t, num(p.step), seq, e.ts, (s) => ({ ...s, text: str(p.text) ?? '', final: true })))
     case 'message.reasoning.delta':
       if (!turnId) return v
-      return withTurn(v, turnId, seq, (t) => withStep(t, num(p.step), seq, (s) => ({ ...s, reasoning: s.reasoning + (str(p.text) ?? '') })))
+      return withTurn(v, turnId, seq, (t) => withStep(t, num(p.step), seq, e.ts, (s) => ({ ...s, reasoning: s.reasoning + (str(p.text) ?? '') })))
     case 'turn.usage':
       if (!turnId) return v
       return withTurn(v, turnId, seq, (t) => {
@@ -174,7 +174,7 @@ function apply(v: SessionView, e: KernelEvent): SessionView {
       const callId = str(p.callId)
       if (!turnId || !callId) return v
       const title = `${str(p.name) ?? ''} ${str(p.argsPreview) ?? ''}`.trim()
-      return withTurn(v, turnId, seq, (t) => withTool(t, seq, callId, (x) => {
+      return withTurn(v, turnId, seq, (t) => withTool(t, seq, e.ts, callId, (x) => {
         const base: StepTool = x ?? { id: callId, title, name: str(p.name), status: 'run' }
         if (e.type === 'tool.started') return base
         const { truncated: _old, ...rest } = base

@@ -22,7 +22,7 @@ const ROWS: Row[] = [
     events: () => [user('t1', 'hello')],
     check: (v) => {
       expect(v.turns.map((t) => t.turnId)).toEqual(['t1'])
-      expect(turn(v).users).toEqual([{ text: 'hello', followUp: false, external: false, seq: 1 }])
+      expect(turn(v).users).toEqual([{ text: 'hello', followUp: false, external: false, seq: 1, ts: 1_700_000_000_001 }])
       expect(v.open).toEqual({ turnId: 't1', parked: false })
     },
   },
