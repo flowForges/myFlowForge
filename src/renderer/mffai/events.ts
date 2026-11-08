@@ -1,6 +1,6 @@
 // 每个窗口只有一个 onEvent 订阅(08 §6.3),按引用计数:第一个订阅者来了才注册,最后一个走了就退掉。
 // 同样只有一个 onAlert 订阅,把 {kind:'reset'} 发给 onMffaiReset 的订阅者(评审修订 R11)。
-import { useEffect, useRef } from 'react'
+import { useLayoutEffect, useRef } from 'react'
 import type { EventType, KernelEvent, MffaiAlert } from '@mffai/protocol'
 
 export interface EventFilter { types?: readonly EventType[]; sessionId?: string }
@@ -53,13 +53,16 @@ export function onMffaiReset(cb: () => void): () => void {
   }
 }
 
-/** 挂载期间订阅;cb 总是最新的那个,过滤条件按内容比较(每次渲染新建对象不会重订) */
+/**
+ * 挂载期间订阅;cb 总是最新的那个,过滤条件按内容比较(每次渲染新建对象不会重订)。
+ * 用 layout effect:提交时就订上,不漏掉渲染和被动 effect 之间到的事件
+ */
 export function useMffaiEvent(filter: EventFilter, cb: (e: KernelEvent) => void): void {
   const ref = useRef(cb)
   ref.current = cb
   const types = filter.types ? [...filter.types].sort().join(',') : undefined
   const { sessionId } = filter
-  useEffect(() => {
+  useLayoutEffect(() => {
     const f: EventFilter = { ...(types !== undefined && { types: types ? (types.split(',') as EventType[]) : [] }), ...(sessionId !== undefined && { sessionId }) }
     return onMffaiEvent(f, (e) => ref.current(e))
   }, [types, sessionId])
@@ -68,5 +71,5 @@ export function useMffaiEvent(filter: EventFilter, cb: (e: KernelEvent) => void)
 export function useMffaiReset(cb: () => void): void {
   const ref = useRef(cb)
   ref.current = cb
-  useEffect(() => onMffaiReset(() => ref.current()), [])
+  useLayoutEffect(() => onMffaiReset(() => ref.current()), [])
 }

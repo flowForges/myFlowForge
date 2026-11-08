@@ -29,7 +29,7 @@ function setup(state: any) {
 }
 
 describe('MffaiView', () => {
-  beforeEach(() => { vi.useRealTimers(); route.set({ page: 'chat' }) })
+  beforeEach(() => vi.useRealTimers())
 
   it('disabled -> EnableCard with memory and data dir', async () => {
     setup({ enabled: false, autostart: true, running: false, dataDir: '/x/mff-ai' })
@@ -118,7 +118,6 @@ describe('MffaiView', () => {
   it('debug panel: 发送 calls prompt and assistant event renders', async () => {
     setup({ enabled: true, autostart: true, running: true, supervisor: { state: 'running', version: '0.1.0' } })
     const { container } = render(<MffaiView />)
-    fireEvent.click(await screen.findByText('调试'))
     await screen.findByText('发送')
     fireEvent.change(container.querySelector('.mffai-send input')!, { target: { value: 'hi' } })
     fireEvent.click(screen.getByText('发送'))
