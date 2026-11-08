@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { PROTOCOL_VERSION, runtimePaths, type ControlStatus, type KernelEvent } from '@mffai/protocol'
 import { createMffaiHost, type HostDeps } from './host'
 import { dataRoots, secretsAccountOf, SECRETS_SERVICE, WorkerMethods } from '@mffai/protocol'
 import { CALL_EXCLUDED, LONG_CALL_MS } from './host'
+import { createWipeLock, type WipeLock } from './wipeLock'
 
 const TOKEN = 'a'.repeat(64)
 
@@ -130,7 +131,7 @@ beforeEach(() => {
 })
 afterEach(() => rmSync(dirname(dir), { recursive: true, force: true }))
 
-function setup(opts: { up?: boolean; startOnSpawn?: boolean; isAlive?: (pid: number) => boolean } = {}) {
+function setup(opts: { up?: boolean; startOnSpawn?: boolean; isAlive?: (pid: number) => boolean; lock?: WipeLock } = {}) {
   const fake = fakeDaemon(dir)
   if (opts.up) fake.d.start()
   const sent: Array<[string, unknown]> = []
@@ -159,6 +160,7 @@ function setup(opts: { up?: boolean; startOnSpawn?: boolean; isAlive?: (pid: num
       // 旧监管收到 SIGTERM 体面退出
       if (pid === 4242 && sig === 'SIGTERM') { fake.d.up = false; fake.d.v2Auth = false }
     },
+    lock: opts.lock ?? createWipeLock(),
   }
   const host = createMffaiHost(deps)
   const alerts = () => sent.filter(([ch]) => ch === 'mffai:alert').map(([, p]) => p)
@@ -928,6 +930,74 @@ describe('mffai host state (08 §5.3)', () => {
     await t.host.openExternal('https://t.me/my_bot?start=abc', open)
     expect(open).toHaveBeenLastCalledWith('https://t.me/my_bot?start=abc')
     for (const bad of ['https://t.me@evil.com/x', 'https://u@t.me/x', 'https://t.me.evil.com/x', 'http://t.me/x', 'https://evil.com/https://t.me/', 'https://t.me', 'https://telegram.me/x']) {
+      await expect(t.host.openExternal(bad, open), bad).rejects.toThrow()
+    }
+    expect(open).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('08 Task 4 review fixes (host)', () => {
+  it('I1: enable waits while a wipe holds the lock and spawns only after it ends; the lock sees the op', async () => {
+    const lock = createWipeLock()
+    const t = setup({ lock })
+    expect(lock.begin()).toBe(true)
+    const p = t.host.enable()
+    await flush()
+    expect(lock.hostOp()).toBe('enable')
+    expect(t.spawnFn).not.toHaveBeenCalled()
+    lock.end()
+    await p
+    expect(t.spawnFn).toHaveBeenCalledTimes(1)
+    await flush()
+    expect(lock.hostOp()).toBeUndefined()
+  })
+
+  it('I4: with proxyStale, restart shuts the daemon down and respawns it with the new proxy', async () => {
+    const t = setup()
+    Object.assign(settings, { appProxy: 'http://127.0.0.1:7890' })
+    await t.host.enable()
+    Object.assign(settings, { appProxy: 'http://127.0.0.1:8888' })
+    expect((await t.host.getState()).proxyStale).toBe(true)
+    await t.host.restart()
+    expect(t.d.controlCalls.map(([m]) => m)).toContain('shutdown')
+    expect(t.d.controlCalls.map(([m]) => m)).not.toContain('restart')
+    expect(t.spawnFn).toHaveBeenCalledTimes(2)
+    const env = (t.spawnFn.mock.calls[1] as [string, string[], { env: NodeJS.ProcessEnv }])[2].env
+    expect(env.HTTPS_PROXY).toBe('http://127.0.0.1:8888')
+    const s = await t.host.getState()
+    expect('proxyStale' in s).toBe(false)
+    expect(s.running).toBe(true)
+  })
+
+  it('I4: without proxyStale, restart still uses control restart', async () => {
+    const t = setup({ up: true })
+    await t.host.ensureRunning()
+    await t.host.restart()
+    expect(t.d.controlCalls.map(([m]) => m)).toContain('restart')
+    expect(t.d.controlCalls.map(([m]) => m)).not.toContain('shutdown')
+  })
+
+  it('M6: a coded worker error wins over its message (a -32003 "timeout" stays -32003)', async () => {
+    const t = setup({ up: true })
+    const spy = withCallSpy(t)
+    spy.script['session.list'] = () => { throw Object.assign(new Error('timeout'), { code: -32003 }) }
+    await t.host.ensureRunning()
+    expect(await t.host.call('session.list', {})).toEqual({ ok: false, error: { code: -32003, message: 'timeout' } })
+  })
+
+  it('M6: dataExists is true when only a sibling root is left, even as a dangling link', async () => {
+    const t = setup()
+    symlinkSync(join(dirname(dir), 'nowhere'), `${dir}-plugins`)
+    expect((await t.host.getState()).dataExists).toBe(true)
+  })
+
+  it('M4: t.me only as https://t.me/<bot>?start=<code>', async () => {
+    const t = setup()
+    const open = vi.fn()
+    await t.host.openExternal('https://t.me/my_bot?start=abc-_1', open)
+    expect(open).toHaveBeenCalledTimes(1)
+    for (const bad of ['https://t.me/my_bot', 'https://t.me/abcd?start=x', 'https://t.me/my_bot?start=abc#x', 'https://t.me/my_bot/x?start=a',
+      'https://t.me/my_bot?start=a&x=1', 'https://t.me/my_bot?start=', 'https://t.me/my.bot?start=a', `https://t.me/${'a'.repeat(33)}?start=a`, 'https://t.me/joinchat/abcdef']) {
       await expect(t.host.openExternal(bad, open), bad).rejects.toThrow()
     }
     expect(open).toHaveBeenCalledTimes(1)

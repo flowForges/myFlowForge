@@ -765,9 +765,11 @@ app.whenReady().then(() => {
   //    启用 / 停用 / 自启开关都经设置的同一个写入口落盘,onSettings 再去驱动 host。
   registerMffaiIpc({
     handle: (ch, fn) => ipcMain.handle(ch, (_e, ...a) => fn(...a)),
-    // mffai:call / mffai:wipe 只收主窗口(宠物窗口共用同一份 preload)
+    // mffai:call / mffai:wipe 只收主窗口的顶层页面(宠物窗口共用同一份 preload;子框架不算)
     handleFrom: (ch, fn) => ipcMain.handle(ch, (e, ...a) =>
-      fn(!!mainWinRef && !mainWinRef.isDestroyed() && e.sender === mainWinRef.webContents, ...a)),
+      fn(!!mainWinRef && !mainWinRef.isDestroyed() && e.sender === mainWinRef.webContents &&
+        !!e.senderFrame && e.senderFrame.processId === e.sender.mainFrame.processId &&
+        e.senderFrame.routingId === e.sender.mainFrame.routingId, ...a)),
     readSettings,
     saveSettings: (patch) => methodTable[CH.configSetClientSettings](NOOP_CTX, patch),
     loadHost: loadMffaiHost,

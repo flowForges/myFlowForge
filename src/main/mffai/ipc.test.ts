@@ -5,6 +5,7 @@ import { dataRoots, secretsAccountOf, SECRETS_SERVICE, WorkerMethods, type Worke
 import { CH } from '../ipc/channels'
 import { CLIENT_SETTING_KEYS, MffaiSchema, SettingsSchema, defaultSettings, type Settings } from '../config/schema'
 import { createMffaiSettingsSync, mffaiTransition, registerMffaiIpc } from './ipc'
+import { createWipeLock } from './wipeLock'
 
 type Fn = (...a: unknown[]) => unknown
 // 08 §5.3:停用状态多了 dataExists(setup 注入 exists → false)和 roots
@@ -346,6 +347,7 @@ function setupCall(mffai: Settings['mffai'], o: { handleFrom?: boolean; fromMain
   }
   const loadHost = vi.fn(async () => host as never)
   const saveSettings = vi.fn((patch: Partial<Settings>) => { settings = { ...settings, ...patch } })
+  const lock = createWipeLock()
   const logs: string[] = []
   const removed: string[] = []
   const runs: Array<[string, string[]]> = []
@@ -366,11 +368,12 @@ function setupCall(mffai: Settings['mffai'], o: { handleFrom?: boolean; fromMain
     openExternal: vi.fn(),
     exists: wipe.exists,
     wipe,
+    lock,
     log: (m) => { logs.push(m) },
   })
   const fromMain = o.fromMain ?? true
   const invoke = (ch: string, ...a: unknown[]) => (fromHandlers.get(ch) ? fromHandlers.get(ch)!(fromMain, ...a) : handlers.get(ch)!(...a))
-  return { handlers, fromHandlers, host, loadHost, saveSettings, invoke, logs, removed, runs, wipe, settings: () => settings }
+  return { handlers, fromHandlers, host, loadHost, saveSettings, invoke, logs, removed, runs, wipe, lock, settings: () => settings }
 }
 
 describe('mffai:call / mffai:wipe registration', () => {
@@ -486,9 +489,10 @@ describe('mffai:wipe', () => {
   it('disabled: removes the four roots and the keychain entry with the injected fs and control client; never loads host', async () => {
     const t = setupCall({ enabled: false, autostart: true })
     const r = await t.invoke(CH.mffaiWipe)
-    const roots = Object.values(dataRoots(SIDE))
+    const r0 = dataRoots(SIDE)
+    const roots = [r0.worktrees, r0.imWorktrees, r0.plugins, r0.data] // 数据根最后删
     expect(t.removed).toEqual(roots)
-    expect(t.runs).toEqual([['security', ['delete-generic-password', '-a', secretsAccountOf(SIDE), '-s', SECRETS_SERVICE]]])
+    expect(t.runs).toEqual([['/usr/bin/security', ['delete-generic-password', '-a', secretsAccountOf(SIDE), '-s', SECRETS_SERVICE]]])
     expect(r).toEqual({ ok: true, removed: [...roots, `${SECRETS_SERVICE}/${secretsAccountOf(SIDE)}`] })
     expect(t.wipe.controlAlive).toHaveBeenCalledTimes(1)
     expect(t.loadHost).not.toHaveBeenCalled()
@@ -558,5 +562,51 @@ describe('mffai:state while disabled (08 §5.3)', () => {
     expect((await t.invoke(CH.mffaiState) as { dataExists: boolean }).dataExists).toBe(true)
     expect(t.wipe.exists).toHaveBeenCalledWith(SIDE)
     expect(t.loadHost).not.toHaveBeenCalled()
+  })
+})
+
+describe('08 Task 4 review fixes (ipc)', () => {
+  beforeEach4(() => { vi.stubEnv('MFFAI_DATA_DIR', SIDE) })
+  afterEach4(() => { vi.unstubAllEnvs() })
+
+  it('I1: the wipe is refused while a loaded host reports an op (e.g. disable temp-spawning to unregister autostart)', async () => {
+    const t = setupCall({ enabled: false, autostart: true })
+    t.lock.setOpProbe(() => 'disable')
+    expect(await t.invoke(CH.mffaiWipe)).toEqual({ ok: false, reason: 'busy' })
+    expect(t.wipe.controlAlive).not.toHaveBeenCalled()
+    expect(t.removed).toEqual([])
+    expect(t.lock.active()).toBe(false)
+    t.lock.setOpProbe(() => undefined)
+    expect(await t.invoke(CH.mffaiWipe)).toMatchObject({ ok: true })
+  })
+
+  it('I1: the settings toggle path does not load or enable the host while a wipe runs; it does once the wipe ends', async () => {
+    const lock = createWipeLock()
+    const host = { enable: vi.fn(async () => {}), disable: vi.fn(async () => {}), setAutostart: vi.fn(async () => {}) }
+    const loadHost = vi.fn(async () => host as never)
+    const fn = createMffaiSettingsSync({ initial: { enabled: false, autostart: true }, loadHost, onError: vi.fn(), lock })
+    expect(lock.begin()).toBe(true)
+    fn({ mffai: { enabled: true, autostart: true } })
+    for (let i = 0; i < 20; i++) await Promise.resolve()
+    expect(loadHost).not.toHaveBeenCalled()
+    lock.end()
+    await vi.waitFor(() => expect(host.enable).toHaveBeenCalledTimes(1))
+  })
+
+  it('I3: disabled dataExists stays true while any root is left (a partial wipe keeps the button)', async () => {
+    const t = setupCall({ enabled: false, autostart: true })
+    t.wipe.exists.mockImplementation((p: string) => p === `${SIDE}-plugins`)
+    expect((await t.invoke(CH.mffaiState) as { dataExists: boolean }).dataExists).toBe(true)
+    t.wipe.exists.mockImplementation(() => false)
+    expect((await t.invoke(CH.mffaiState) as { dataExists: boolean }).dataExists).toBe(false)
+  })
+
+  it('M2: params over 8 MB of JSON answer -32602 without loading the host', async () => {
+    const t = setupCall({ enabled: true, autostart: true })
+    const big = { commandId: 'c', sessionId: 's', text: 'x'.repeat(8 * 1024 * 1024) }
+    expect(await t.invoke(CH.mffaiCall, 'session.prompt', big)).toMatchObject({ ok: false, error: { code: -32602 } })
+    expect(t.loadHost).not.toHaveBeenCalled()
+    await t.invoke(CH.mffaiCall, 'session.prompt', { ...big, text: 'x'.repeat(1024) })
+    expect(t.host.call).toHaveBeenCalledTimes(1)
   })
 })

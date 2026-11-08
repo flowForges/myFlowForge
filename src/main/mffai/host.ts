@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync } from 'node:fs'
 import {
   connectClient,
   connectControlClient,
@@ -24,7 +24,8 @@ import type { CallEnvelope } from './callEnvelope'
 import { createWorkerConnection, isOldProtocol } from './connection'
 import { spawnDaemon, type SpawnFn } from './spawn'
 import { isCallable, LONG_CALL_MS } from './methods'
-import { rootsOf } from './wipe'
+import { anyRootExists, rootsOf } from './wipe'
+import { wipeLock, type WipeLock } from './wipeLock'
 
 // app 主进程里的 mff-ai 宿主。★只经 index.ts / ipc.ts 动态 import:未启用时永不加载。
 
@@ -46,6 +47,8 @@ export interface HostDeps {
   isAlive?: (pid: number) => boolean
   /** 给进程发信号;默认 process.kill */
   kill?: (pid: number, sig: NodeJS.Signals) => void
+  /** 和删除全部数据互斥的锁;默认模块级单例(ipc.ts 用同一把) */
+  lock?: WipeLock
 }
 
 function defaultIsAlive(pid: number): boolean {
@@ -79,8 +82,10 @@ function allowedUrl(url: unknown, prefix: string): string | undefined {
     return undefined
   }
 }
-/** 用量链接(chatgpt.com)和 Telegram 配对链接(t.me,08 §5.3) */
-const EXTERNAL_PREFIXES = ['https://chatgpt.com/', 'https://t.me/']
+/** 用量链接(chatgpt.com) */
+const EXTERNAL_PREFIX = 'https://chatgpt.com/'
+/** Telegram 配对链接(08 §5.3):只认 https://t.me/<机器人>?start=<码> */
+const TELEGRAM_START = /^https:\/\/t\.me\/[A-Za-z0-9_]{5,32}\?start=[A-Za-z0-9_-]+$/
 
 export type { CallEnvelope } from './callEnvelope'
 export { CALL_EXCLUDED, LONG_CALL_MS } from './methods'
@@ -89,16 +94,20 @@ export { CALL_EXCLUDED, LONG_CALL_MS } from './methods'
 function callFailure(err: unknown): CallEnvelope & { ok: false } {
   const e = err as { message?: unknown; code?: unknown; data?: unknown }
   const message = typeof e?.message === 'string' ? e.message : 'error'
-  if (message === 'timeout') return { ok: false, error: { code: ERR_APP_TIMEOUT, message } }
-  if (message === 'connection closed') return { ok: false, error: { code: ERR_APP_GONE, message } }
+  // 工作进程给了码就用它:它的消息碰巧是 'timeout' 也不是客户端超时
   if (typeof e?.code === 'number' && Number.isInteger(e.code)) {
     return { ok: false, error: { code: e.code, message, ...(e.data !== undefined && { data: e.data }) } }
   }
+  if (message === 'timeout') return { ok: false, error: { code: ERR_APP_TIMEOUT, message } }
+  if (message === 'connection closed') return { ok: false, error: { code: ERR_APP_GONE, message } }
   return { ok: false, error: { code: -32603, message: 'internal error' } }
 }
 
 const OPS: ReadonlySet<string> = new Set(['enable', 'disable', 'restart', 'resetTrip', 'ensure'] satisfies NonNullable<MffaiState['op']>[])
 const proxyOf = (s: { appProxy?: string }) => (s.appProxy ?? '').trim()
+const lexists = (p: string): boolean => {
+  try { lstatSync(p); return true } catch { return false }
+}
 
 /** ChatGPT 登录:只放行后台回调监听的一次性地址 http://127.0.0.1:<port>/auth/start?flow=<flowId>;返回规范化后的地址 */
 function loginStartUrl(url: unknown, flowId: string): string | undefined {
@@ -126,6 +135,7 @@ export function createMffaiHost(deps: HostDeps) {
   const isAlive = deps.isAlive ?? defaultIsAlive
   const kill = deps.kill ?? ((pid: number, sig: NodeJS.Signals) => void process.kill(pid, sig))
   const spec = { execPath, daemonJs: deps.daemonJs }
+  const lock = deps.lock ?? wipeLock
 
   // 调试会话:模型 + 工作目录 + 审批模式,任一变了就新建
   let debugSession: { key: string; id: string } | undefined
@@ -212,7 +222,9 @@ export function createMffaiHost(deps: HostDeps) {
   let last: { kind: string; p: Promise<void> } | undefined
   const serial = (kind: string, fn: () => Promise<void>): Promise<void> => {
     if (last?.kind === kind) return last.p
-    const p = queue.then(fn, fn)
+    // 删除全部数据进行中:先等它删完(评审修订 R7),再照常复查 enabled() 等
+    const run = () => lock.idle().then(fn)
+    const p = queue.then(run, run)
     const entry = { kind, p }
     last = entry
     queue = p.catch(() => undefined).finally(() => { if (last === entry) last = undefined })
@@ -257,6 +269,12 @@ export function createMffaiHost(deps: HostDeps) {
     }
   }
 
+  lock.setOpProbe(() => last?.kind)
+
+  /** 后台是这个宿主拉起的,而设置里的代理已经改了(要整个重拉才生效:工作进程的环境在后台启动时定下) */
+  const isProxyStale = (supervisor?: ControlStatus) =>
+    !!supervisor && spawnedProxy !== undefined && spawnedProxy !== proxyOf(deps.readSettings())
+
   const ensureRunning = (): Promise<void> => serial('ensure', () => bringUp(START_WAIT_MS, enabled))
 
   const enable = (): Promise<void> => serial('enable', async () => {
@@ -294,6 +312,13 @@ export function createMffaiHost(deps: HostDeps) {
       conn.resetCompat()
       return bringUp(START_WAIT_MS, enabled)
     }
+    if (isProxyStale(s)) {
+      // 代理改了:control('restart') 只重启工作进程,环境不变。停掉整个后台、按新代理重新拉起
+      conn.drop()
+      await control('shutdown')
+      await waitGone()
+      return bringUp(START_WAIT_MS, enabled)
+    }
     await control('restart') // 失败就抛出,现有连接保持不动
     conn.drop()
     await bringUp(STOP_WAIT_MS, enabled)
@@ -325,7 +350,7 @@ export function createMffaiHost(deps: HostDeps) {
     const rssMb = ws?.rssMb
     const pluginsActive = ws?.plugins.filter((p) => p.state === 'active').length
     const op = last && OPS.has(last.kind) ? (last.kind as NonNullable<MffaiState['op']>) : undefined
-    const proxyStale = !!supervisor && spawnedProxy !== undefined && spawnedProxy !== proxyOf(deps.readSettings())
+    const proxyStale = isProxyStale(supervisor)
     return {
       enabled: on,
       autostart,
@@ -339,7 +364,7 @@ export function createMffaiHost(deps: HostDeps) {
       ...(ws?.sandbox && { sandbox: ws.sandbox }),
       ...(op && { op }),
       ...(proxyStale && { proxyStale: true as const }),
-      dataExists: existsSync(dir),
+      dataExists: anyRootExists(dir, lexists),
       roots: rootsOf(dir),
     }
   }
@@ -430,7 +455,7 @@ export function createMffaiHost(deps: HostDeps) {
     chatgptCancel: (flowId: string) => requireWorker().call('auth.chatgpt.cancel', { flowId }),
     /** 页面要打开的外链:只放行 https://chatgpt.com/(用量)和 https://t.me/(配对) */
     async openExternal(url: string, open: OpenExternal): Promise<void> {
-      const href = EXTERNAL_PREFIXES.map((p) => allowedUrl(url, p)).find(Boolean)
+      const href = allowedUrl(url, EXTERNAL_PREFIX) ?? (typeof url === 'string' && TELEGRAM_START.test(url) ? url : undefined)
       if (!href) throw new Error('URL not allowed')
       open(href)
     },
