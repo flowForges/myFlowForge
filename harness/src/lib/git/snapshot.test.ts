@@ -71,6 +71,19 @@ describe('createGit timeout (Task 8 review I-4)', () => {
     }
   })
 
+  it('maxBytes stops reading at the cap: truncated, at most the cap, and it returns quickly (review M5)', async () => {
+    const g = createGit({ base: base(), extraEnv: injected(), timeoutMs: 20_000 })
+    const t0 = Date.now()
+    const r = await g(['-c', 'alias.big=!yes', 'big'], { cwd: root, maxBytes: 10_000 })
+    expect(r.truncated).toBe(true)
+    expect(r.stdout.length).toBeLessThanOrEqual(10_000)
+    expect(r.stdout.length).toBeGreaterThan(0)
+    expect(Date.now() - t0).toBeLessThan(10_000)
+    const small = await g(['--version'], { cwd: root, maxBytes: 10_000 })
+    expect(small.truncated).toBeUndefined()
+    expect(small.code).toBe(0)
+  })
+
   it('a git that ends in time is untouched by the timer', async () => {
     const g = createGit({ base: base(), extraEnv: injected(), timeoutMs: 5000 })
     const r = await g(['--version'], { cwd: root })
@@ -1094,6 +1107,30 @@ describe('fileDiff (08 §4.4)', () => {
     expect(bytes).toBeGreaterThan(262144 - 8000)
     const small = await fileDiff(a, head(), 'long.txt', git(), { maxLines: 10 })
     expect(small.lines).toHaveLength(10)
+  })
+
+  it('the diff output is capped while it is read, not after (review M5)', async () => {
+    initRepo()
+    write(R('keep.txt'), 'k\n')
+    ug(['add', '-A'])
+    commit('one')
+    const a = head()
+    write(R('huge.txt'), 'x'.repeat(8 << 20) + '\n')
+    ug(['add', '-A'])
+    commit('two')
+    const seen: { args: string[]; max?: number; got: number }[] = []
+    const real = git()
+    const spy: Git = async (args, o) => {
+      const r = await real(args, o)
+      seen.push({ args, max: o.maxBytes, got: r.stdout.length })
+      return r
+    }
+    const d = await fileDiff(a, head(), 'huge.txt', spy)
+    expect(d.truncated).toBe(true)
+    expect(d.lines).toEqual([])
+    const call = seen.find(c => c.args.includes('-U3'))!
+    expect(call.max).toBeLessThanOrEqual(1 << 20)
+    expect(call.got).toBeLessThanOrEqual(call.max!)
   })
 
   it('the external diff and the textconv the repo configures never run', async () => {

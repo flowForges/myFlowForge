@@ -9,10 +9,11 @@ import type { DiffLine, FileChange, FileDiff } from '../../protocol/tools'
 import { hasGitSegment, isInside, OUTSIDE, resolveToolPath } from '../fs/paths'
 import { lexists, mkdirChecked, removeLeaf, replaceFile, replaceSymlink, samePath } from '../fs/safeFs'
 
+/** maxBytes:stdout 读到这么多就不再读,杀掉 git,truncated = true(边读边截,不先整个收下) */
 export type Git = (
   args: string[],
-  o: { cwd: string; env?: Record<string, string>; input?: Buffer; binary?: boolean },
-) => Promise<{ code: number; stdout: Buffer; stderr: string }>
+  o: { cwd: string; env?: Record<string, string>; input?: Buffer; binary?: boolean; maxBytes?: number },
+) => Promise<{ code: number; stdout: Buffer; stderr: string; truncated?: boolean }>
 
 const IDENTITY = {
   GIT_AUTHOR_NAME: 'mff-ai',
@@ -45,13 +46,15 @@ export function createGit(opts: { base?: NodeJS.ProcessEnv; extraEnv?: Record<st
       const env = { ...gitEnv(opts.base ?? process.env), ...opts.extraEnv, ...o.env }
       const child = spawn('git', args, { cwd: o.cwd, env, stdio: [o.input ? 'pipe' : 'ignore', 'pipe', 'pipe'], windowsHide: true })
       const out: Buffer[] = []
+      let size = 0
+      let truncated = false
       let err = ''
       let done = false
       let grace: NodeJS.Timeout | undefined
       const finish = (code: number | null) => {
         clearTimeout(timer)
         clearTimeout(grace)
-        if (!done) (done = true), resolve({ code: code ?? -1, stdout: Buffer.concat(out), stderr: err.slice(0, STDERR_MAX) })
+        if (!done) (done = true), resolve({ code: code ?? -1, stdout: Buffer.concat(out), stderr: err.slice(0, STDERR_MAX), ...(truncated && { truncated }) })
       }
       // 过滤器之类的子进程会继承管道,杀了 git 也等不到 close:放开管道,不等它
       const timer = setTimeout(() => {
@@ -63,7 +66,24 @@ export function createGit(opts: { base?: NodeJS.ProcessEnv; extraEnv?: Record<st
           finish(-1)
         }, HELD_PIPE_MS)
       }, opts.timeoutMs ?? 120_000)
-      child.stdout!.on('data', (d: Buffer) => out.push(d))
+      child.stdout!.on('data', (d: Buffer) => {
+        if (truncated) return
+        const max = o.maxBytes ?? Infinity
+        if (size + d.length <= max) {
+          out.push(d)
+          size += d.length
+          return
+        }
+        out.push(d.subarray(0, max - size))
+        size = max
+        truncated = true
+        // 别的子进程(别名、过滤器)可能还拿着管道:放开它,不等 close
+        child.kill('SIGKILL')
+        child.stdin?.destroy()
+        child.stdout?.destroy()
+        child.stderr?.destroy()
+        finish(-1)
+      })
       child.stderr!.on('data', (d: Buffer) => {
         if (err.length < STDERR_MAX) err += d.toString()
       })
@@ -459,9 +479,14 @@ export async function fileDiff(cwd: string, from: string, to: string, path: stri
     const base = { path, status: status as FileChange['status'] }
     const numstat = (await run(g, ['diff', '--numstat', '-z', '--no-renames', '--no-ext-diff', '--no-textconv', from, to, '--', spec], { cwd: pin.top })).toString()
     if (numstat.startsWith('-\t-\t')) return { ...base, lines: [], binary: true, truncated: false }
-    const out = await run(g, [...PLAIN_DIFF, 'diff', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', '-U3', from, to, '--', spec], { cwd: pin.top, binary: true })
-    const { lines, truncated } = parseHunks(out.toString(), maxLines, maxBytes)
-    return { ...base, lines, binary: false, truncated }
+    // 边读边截:一个 1 GB 的文件不能先整个进内存。行文字之外还有每行的前缀、换行和块头
+    const cap = maxBytes + maxLines * 4 + (64 << 10)
+    const r = await g([...PLAIN_DIFF, 'diff', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', '-U3', from, to, '--', spec], { cwd: pin.top, binary: true, maxBytes: cap })
+    if (r.code !== 0 && !r.truncated) throw new Error(`git diff 失败(${r.code}):${r.stderr.split('\n')[0]}`)
+    // 截断时最后一行只读到一半:不给半行
+    const text = r.truncated ? r.stdout.subarray(0, r.stdout.lastIndexOf(0x0a) + 1).toString() : r.stdout.toString()
+    const { lines, truncated } = parseHunks(text, maxLines, maxBytes)
+    return { ...base, lines, binary: false, truncated: truncated || r.truncated === true }
   })
 }
 
