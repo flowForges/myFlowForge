@@ -17,11 +17,14 @@ export const LEGACY: readonly { file: string; rule: Rule; text: string }[] = [
   { file: 'DebugPanel.tsx', rule: 'placeholder', text: '工作目录' },
 ]
 
+/** 渲染守卫豁免的模型回答体的类名 */
+const ANSWER_CLASSES = ['msg-body', 'ans']
+
 export const MAX_CJK = 14
 const CJK = /[㐀-䶿一-鿿豈-﫿]/g
 const SENTENCE = /[。，；！？]/
 
-export type Rule = 'cjk-length' | 'punctuation' | 'placeholder' | 'dangerouslySetInnerHTML' | 'protocol-value-import'
+export type Rule = 'cjk-length' | 'punctuation' | 'placeholder' | 'dangerouslySetInnerHTML' | 'protocol-value-import' | 'answer-class'
 export interface Violation { file: string; line: number; rule: Rule; text: string }
 
 export const cjkCount = (s: string) => s.match(CJK)?.length ?? 0
@@ -71,6 +74,8 @@ export function scanHintText(file: string, text: string): Violation[] {
     out.push({ file, line: line(n), rule, text: t })
   }
   const checkText = (n: ts.Node, t: string) => {
+    // 渲染守卫对 .msg.ai .msg-body.ans 网开一面(那是模型的 Markdown):mffai 自己的元素不能借这两个类名躲过去
+    if (t.split(/\s+/).some((c) => ANSWER_CLASSES.includes(c))) push(n, 'answer-class', t)
     if (ALLOWLIST.includes(t.trim())) return
     if (cjkCount(t) > MAX_CJK) push(n, 'cjk-length', t)
     if (SENTENCE.test(t)) push(n, 'punctuation', t)

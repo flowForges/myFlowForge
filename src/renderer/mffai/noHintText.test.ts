@@ -54,6 +54,8 @@ describe('no explanatory text under src/renderer/mffai', () => {
     ['a dangerouslySetInnerHTML as a computed key', 'plant.ts', `export const p = { ['dangerouslySetInnerHTML']: { __html: '' } }\n`, 'dangerouslySetInnerHTML'],
     ['a dangerouslySetInnerHTML as a computed template key', 'Plant.tsx', 'export const C = () => <div {...{ [`dangerouslySetInnerHTML`]: { __html: "" } }} />\n', 'dangerouslySetInnerHTML'],
     ['，in a short literal', 'plant.ts', `export const x = '好，'\n`, 'punctuation'],
+    ['the exempt answer-body class msg-body', 'Plant.tsx', `export const C = () => <div className="msg-body x">a</div>\n`, 'answer-class'],
+    ['the exempt answer-body class ans in a template', 'Plant.tsx', 'export const C = ({ y }: { y: string }) => <div className={`${y} ans`}>a</div>\n', 'answer-class'],
     ['a nested folder', 'deep/Plant.tsx', `export const x = '${'一二三四五六七八九十一二三四五'}'\n`, 'cjk-length'],
   ]
   for (const [what, file, text, rule] of rows) {
@@ -68,6 +70,7 @@ describe('no explanatory text under src/renderer/mffai', () => {
       `export const C = () => <input placeholder="https://" />`,
       `export const A = '${ALLOWLIST[0]}'`,
       `export const C = () => <label>{'${ALLOWLIST[1]}'}</label>`,
+      `export const D = () => <div className="mffai-answer msg-bodyx">answer</div>`,
     ].join('\n')
     expect(scanHintText('Ok.tsx', ok)).toEqual([])
     expect(scanHintText('DebugPanel.tsx', `export const C = () => <input placeholder="工作目录" />`)).toEqual([])

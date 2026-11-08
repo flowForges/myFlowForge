@@ -314,10 +314,13 @@ describe('no explanatory text at render time', () => {
   })
 
   it('model text inside an assistant answer body is third-party content, not UI text: its <p> is not a finding', () => {
-    const { container } = render(<div><div className="msg-body ans"><p>model paragraph</p></div><span className="mffai-chip">x</span></div>)
+    const { container } = render(<div><div className="msg ai"><div className="msg-body ans"><p>model paragraph</p></div></div><span className="mffai-chip">x</span></div>)
     expect(findHints(container)).toEqual([])
     const { container: c2 } = render(<div className="msg-body"><p>user side</p></div>)
     expect(findHints(c2).map((h) => h.tag)).toEqual(['p'])
+    // 不在助手消息里的 .msg-body.ans 不算
+    const { container: c3 } = render(<div className="msg-body ans"><p>ours</p></div>)
+    expect(findHints(c3).map((h) => h.tag)).toEqual(['p'])
   })
 
   for (const row of ROWS) {
