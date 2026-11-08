@@ -1,11 +1,14 @@
 // 条目和删除(08 §12.3):层下拉 + 搜索框切到 memory.search,列表分页用 before。勾选多条批量删一次
 // memory.deleteMany;单条删用 memory.delete,超时后同一个 commandId 重试,-32602 not found 的重试算已经删了
 // (Review Focus 11)。memory.health 的 problems 里 delete_pending:<id> 对应的条目显示 删除中、按钮禁用。
-// 删完 sources 非空就弹 DeleteSources(06 Task 6 的那个组件,08 §7.2 共用)。
+// 删完 sources 非空就弹 DeleteSources(06 Task 6 的那个组件,08 §7.2 共用)。换层、搜索、重置都是整份换掉
+// 当前列表,勾选要跟着清掉——不然切到另一层之后,"删除所选"还按着上一屏的 id 发,删的是屏幕上压根没有的
+// 东西。只有「更早」是往后接页(items 只增不减),已勾的行仍然在屏幕上,不清。
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { MemoryItem, MemoryLayer } from '@mffai/protocol'
-import { call, isUnsupported, retryable, toCallError } from '../rpc'
+import { call, retryable, toCallError } from '../rpc'
 import { useMffaiEvent, useMffaiReset } from '../events'
+import { memoryUnsupported } from './unavailable'
 import { Chip } from '../ui/Chip'
 import { CodeChip } from '../ui/CodeChip'
 import { DeleteSources } from '../ui/DeleteSources'
@@ -103,7 +106,7 @@ export default function Items() {
         setFailed(null)
         setItems((prev) => (before === undefined ? r.items : [...(prev ?? []), ...r.items]))
       },
-      (e) => { if (alive.current) setFailed(isUnsupported(e) ? 'unsupported' : 'failed') },
+      (e) => { if (alive.current) setFailed(memoryUnsupported(e) ? 'unsupported' : 'failed') },
     )
   }, [layer])
 
@@ -111,19 +114,25 @@ export default function Items() {
     const q = query.trim()
     if (!q) return
     setMode('search')
+    setSelected(new Set()) // 整份换成搜索结果,上一屏勾的 id 不一定还在屏幕上
     void call('memory.search', { query: q, layer: scope, limit: PAGE }).then(
       (r) => { if (alive.current) { setFailed(null); setItems(r.items) } },
-      (e) => { if (alive.current) setFailed(isUnsupported(e) ? 'unsupported' : 'failed') },
+      (e) => { if (alive.current) setFailed(memoryUnsupported(e) ? 'unsupported' : 'failed') },
     )
   }, [query, scope])
 
   useEffect(() => {
-    if (mode === 'list') { setItems(null); loadList() }
+    // 换层(loadList 的引用随 layer 变)或从搜索模式切回列表:整份重取,勾选作废
+    if (mode === 'list') { setItems(null); setSelected(new Set()); loadList() }
     // 搜索模式下切层不重搜:只有点搜索才发
   }, [mode, loadList])
 
-  const reset = () => { setMode('list'); setQuery(''); setSelected(new Set()) }
-  useMffaiReset(() => { setItems(null); if (mode === 'list') loadList(); else runSearch() })
+  const reset = () => { setMode('list'); setQuery('') }
+  useMffaiReset(() => {
+    setItems(null)
+    setSelected(new Set())
+    if (mode === 'list') loadList(); else runSearch()
+  })
 
   const toggle = (id: string) => setSelected((s) => {
     const next = new Set(s)
@@ -159,7 +168,7 @@ export default function Items() {
       const c = toCallError(e)
       console.error('mffai memory.deleteMany', c)
       if (!alive.current) return
-      setBatchFailed(isUnsupported(c) ? 'unsupported' : 'failed')
+      setBatchFailed(memoryUnsupported(c) ? 'unsupported' : 'failed')
     } finally {
       batchInflight.current = false
       if (alive.current) setBatchBusy(false)

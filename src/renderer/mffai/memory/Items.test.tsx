@@ -159,4 +159,85 @@ describe('Items', () => {
     await act(async () => { f.emit(ev('memory.deleted', { id: 'n_a', rawSeqs: [] })) })
     await waitFor(() => expect(screen.queryByText('删除中')).toBeNull())
   })
+
+  it('checking a row then switching the layer clears the selection: 删除所选 disappears, not sent for an off-screen id', async () => {
+    f = installFakeForge({ calls: {
+      'memory.health': { dbBytes: 0, rawRows: 0, noteRows: 0, cursorLag: 0, pendingProposals: 0, problems: [] },
+      'memory.list': { items: [item('n_a')] },
+    } })
+    render(<Items />)
+    await screen.findByText('text of n_a')
+    fireEvent.click(screen.getByLabelText('选择 n_a'))
+    expect(screen.getByRole('button', { name: '删除所选 1' })).toBeInTheDocument()
+    f.script({ 'memory.list': { items: [] } })
+    fireEvent.change(screen.getByLabelText('层'), { target: { value: 'raw' } })
+    await waitFor(() => expect(screen.queryByText('text of n_a')).toBeNull())
+    expect(screen.queryByRole('button', { name: /删除所选/ })).toBeNull()
+  })
+
+  it('checking a row then searching clears the selection', async () => {
+    f = installFakeForge({ calls: {
+      'memory.health': { dbBytes: 0, rawRows: 0, noteRows: 0, cursorLag: 0, pendingProposals: 0, problems: [] },
+      'memory.list': { items: [item('n_a')] },
+      'memory.search': { items: [item('r_1', { layer: 'raw', text: 'found it' })] },
+    } })
+    render(<Items />)
+    await screen.findByText('text of n_a')
+    fireEvent.click(screen.getByLabelText('选择 n_a'))
+    expect(screen.getByRole('button', { name: '删除所选 1' })).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('搜索'), { target: { value: 'it' } })
+    fireEvent.click(screen.getByRole('button', { name: '搜索' }))
+    await screen.findByText('found it')
+    expect(screen.queryByRole('button', { name: /删除所选/ })).toBeNull()
+  })
+
+  it('a reset (event stream dropped and reconnected) clears the selection along with the list', async () => {
+    f = installFakeForge({ calls: {
+      'memory.health': { dbBytes: 0, rawRows: 0, noteRows: 0, cursorLag: 0, pendingProposals: 0, problems: [] },
+      'memory.list': { items: [item('n_a')] },
+    } })
+    render(<Items />)
+    await screen.findByText('text of n_a')
+    fireEvent.click(screen.getByLabelText('选择 n_a'))
+    expect(screen.getByRole('button', { name: '删除所选 1' })).toBeInTheDocument()
+    f.script({ 'memory.list': { items: [] } })
+    await act(async () => { f.alert({ kind: 'reset' }) })
+    await waitFor(() => expect(screen.queryByText('text of n_a')).toBeNull())
+    expect(screen.queryByRole('button', { name: /删除所选/ })).toBeNull()
+  })
+
+  it('a -32603 "memory is unavailable" on the list shows 不支持, same as -32601', async () => {
+    f = installFakeForge({ calls: {
+      'memory.health': { dbBytes: 0, rawRows: 0, noteRows: 0, cursorLag: 0, pendingProposals: 0, problems: [] },
+      'memory.list': () => fail(-32603, 'memory is unavailable'),
+    } })
+    render(<Items />)
+    await screen.findByText('不支持')
+  })
+
+  it('a -32603 "memory is unavailable" on memory.search shows 不支持', async () => {
+    f = installFakeForge({ calls: {
+      'memory.health': { dbBytes: 0, rawRows: 0, noteRows: 0, cursorLag: 0, pendingProposals: 0, problems: [] },
+      'memory.list': { items: [] },
+      'memory.search': () => fail(-32603, 'memory is unavailable'),
+    } })
+    render(<Items />)
+    await waitFor(() => expect(f.callsOf('memory.list')).toHaveLength(1))
+    fireEvent.change(screen.getByLabelText('搜索'), { target: { value: 'x' } })
+    fireEvent.click(screen.getByRole('button', { name: '搜索' }))
+    await screen.findByText('不支持')
+  })
+
+  it('a -32603 "memory is unavailable" on memory.deleteMany shows 不支持', async () => {
+    f = installFakeForge({ calls: {
+      'memory.health': { dbBytes: 0, rawRows: 0, noteRows: 0, cursorLag: 0, pendingProposals: 0, problems: [] },
+      'memory.list': { items: [item('n_a')] },
+      'memory.deleteMany': () => fail(-32603, 'memory is unavailable'),
+    } })
+    render(<Items />)
+    await screen.findByText('text of n_a')
+    fireEvent.click(screen.getByLabelText('选择 n_a'))
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '删除所选 1' })) })
+    await screen.findByText('不支持')
+  })
 })
