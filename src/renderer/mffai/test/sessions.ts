@@ -13,3 +13,9 @@ export function runRow(runId: string, sessionId: string, patch: Partial<RunRow> 
     runId, sessionId, turnId: 't1', executor: 'codex', phase: 'ended', status: 'ok', queuedAt: 1, readOnly: false, isolation: 'own', ...patch,
   })
 }
+
+/** permissions.get 的回答 */
+export const perms = (level: 'full' | 'partial' | 'none', allowUnsandboxedAuto = false) => ({
+  config: { rules: [], network: { allow: [] }, sandbox: { enabled: true, allowLoopback: false }, allowUnsandboxedAuto },
+  defaults: [], errors: [], sandbox: { level, missing: [], autoDegraded: level === 'none' && !allowUnsandboxedAuto },
+})
