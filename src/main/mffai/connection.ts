@@ -63,6 +63,7 @@ export function createWorkerConnection(o: ConnectionOpts) {
         // 对方的日志比我们见过的短:从它的 lastSeq 重新起订
         lastSeq = sub.lastSeq
         o.onReset()
+        alert({ kind: 'reset' }) // 评审修订 R11:页面丢掉缓存全部重取
         await w.call('events.subscribe', { after: lastSeq })
       }
     } catch (err) {

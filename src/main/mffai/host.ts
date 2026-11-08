@@ -3,9 +3,13 @@ import { existsSync, mkdirSync } from 'node:fs'
 import {
   connectClient,
   connectControlClient,
+  ERR_APP_GONE,
+  ERR_APP_TIMEOUT,
   PROTOCOL_VERSION,
   dataDir as defaultDataDir,
   runtimePaths,
+  WorkerMethods,
+  type WorkerMethodName,
   type ControlMethodName,
   type ControlParams,
   type ControlResult,
@@ -17,8 +21,10 @@ import {
   type WorkerResult,
 } from '@mffai/protocol'
 import { controlCall, readSupervisorJson, type ConnectControl, type ConnectWorker } from './client'
+import type { CallEnvelope } from './callEnvelope'
 import { createWorkerConnection, isOldProtocol } from './connection'
 import { spawnDaemon, type SpawnFn } from './spawn'
+import { rootsOf } from './wipe'
 
 // app 主进程里的 mff-ai 宿主。★只经 index.ts / ipc.ts 动态 import:未启用时永不加载。
 
@@ -73,7 +79,46 @@ function allowedUrl(url: unknown, prefix: string): string | undefined {
     return undefined
   }
 }
-const EXTERNAL_PREFIX = 'https://chatgpt.com/'
+/** 用量链接(chatgpt.com)和 Telegram 配对链接(t.me,08 §5.3) */
+const EXTERNAL_PREFIXES = ['https://chatgpt.com/', 'https://t.me/']
+
+export type { CallEnvelope } from './callEnvelope'
+
+/** 不走 mffai:call 的方法:传输层的握手和订阅,以及要开浏览器的 ChatGPT 登录(走现有通道) */
+export const CALL_EXCLUDED: ReadonlySet<string> = new Set(['auth.challenge', 'auth.verify', 'hello', 'events.subscribe', 'auth.chatgpt.begin'])
+
+const LONG_MS = 120_000
+const LONGEST_MS = 600_000
+const LONG_NAMED = [
+  'turn.rollback', 'turn.diff', 'channel.telegram.setToken', 'memory.delete', 'memory.deleteMany', 'memory.file.set',
+  'memory.proposals.decide', 'session.delete', 'plugins.install.confirm', 'plugins.uninstall', 'plugins.upgrade.prepare',
+  'plugins.store.discard', 'models.addAccount', 'models.testAccount', 'permissions.set',
+]
+const isLong = (m: string) => LONG_NAMED.includes(m) || (m.startsWith('executor.') && m !== 'executor.list') ||
+  m.startsWith('channel.telegram.worktree.') || m.startsWith('plugins.dev.')
+/**
+ * 长调用的期限(08 §5.1)。session.delete / memory.deleteMany 要扫整个日志再 VACUUM,
+ * 超时后页面用同一个 commandId 重试,回执去重。其余用连接默认的 5 s
+ */
+export const LONG_CALL_MS: Readonly<Record<string, number>> = Object.freeze(Object.fromEntries([
+  ...Object.keys(WorkerMethods).filter(isLong).map((m) => [m, LONG_MS] as const),
+  ['memory.consolidate', LONGEST_MS] as const,
+]))
+
+/** worker 的错误 → 信封。timeout / connection closed 是客户端自己的,映射成 app 的码 */
+function callFailure(err: unknown): CallEnvelope & { ok: false } {
+  const e = err as { message?: unknown; code?: unknown; data?: unknown }
+  const message = typeof e?.message === 'string' ? e.message : 'error'
+  if (message === 'timeout') return { ok: false, error: { code: ERR_APP_TIMEOUT, message } }
+  if (message === 'connection closed') return { ok: false, error: { code: ERR_APP_GONE, message } }
+  if (typeof e?.code === 'number' && Number.isInteger(e.code)) {
+    return { ok: false, error: { code: e.code, message, ...(e.data !== undefined && { data: e.data }) } }
+  }
+  return { ok: false, error: { code: -32603, message: 'internal error' } }
+}
+
+const OPS: ReadonlySet<string> = new Set(['enable', 'disable', 'restart', 'resetTrip', 'ensure'] satisfies NonNullable<MffaiState['op']>[])
+const proxyOf = (s: { appProxy?: string }) => (s.appProxy ?? '').trim()
 
 /** ChatGPT 登录:只放行后台回调监听的一次性地址 http://127.0.0.1:<port>/auth/start?flow=<flowId>;返回规范化后的地址 */
 function loginStartUrl(url: unknown, flowId: string): string | undefined {
@@ -168,10 +213,14 @@ export function createMffaiHost(deps: HostDeps) {
   }
 
   let spawnError: string | undefined
+  /** 这个宿主拉起后台时给的代理(去空白);后台不是我们拉起的 → undefined */
+  let spawnedProxy: string | undefined
   const spawn = () => {
     mkdirSync(dir, { recursive: true })
     spawnError = undefined
-    spawnDaemon({ execPath, daemonJs: deps.daemonJs, dataDir: dir, proxy: deps.readSettings().appProxy }, deps.spawnFn, (err) => {
+    const proxy = deps.readSettings().appProxy
+    spawnedProxy = proxyOf({ appProxy: proxy })
+    spawnDaemon({ execPath, daemonJs: deps.daemonJs, dataDir: dir, proxy }, deps.spawnFn, (err) => {
       spawnError = err.message
       log('mffai spawn failed', err)
     })
@@ -295,6 +344,8 @@ export function createMffaiHost(deps: HostDeps) {
     const ws = worker ? await worker.call('status').catch(() => undefined) : undefined
     const rssMb = ws?.rssMb
     const pluginsActive = ws?.plugins.filter((p) => p.state === 'active').length
+    const op = last && OPS.has(last.kind) ? (last.kind as NonNullable<MffaiState['op']>) : undefined
+    const proxyStale = !!supervisor && spawnedProxy !== undefined && spawnedProxy !== proxyOf(deps.readSettings())
     return {
       enabled: on,
       autostart,
@@ -306,6 +357,32 @@ export function createMffaiHost(deps: HostDeps) {
       dataDir: dir,
       // 旧后台的 status 没有该字段:不带
       ...(ws?.sandbox && { sandbox: ws.sandbox }),
+      ...(op && { op }),
+      ...(proxyStale && { proxyStale: true as const }),
+      dataExists: existsSync(dir),
+      roots: rootsOf(dir),
+    }
+  }
+
+  /**
+   * mffai:call 的落点。方法名已由 ipc.ts 过白名单,这里再挡一次传输层方法。
+   * ★绝不记参数和结果:失败只记方法名和错误码
+   */
+  async function call(method: WorkerMethodName, params: Record<string, unknown>): Promise<CallEnvelope> {
+    if (CALL_EXCLUDED.has(method) || !Object.hasOwn(WorkerMethods, method)) {
+      return { ok: false, error: { code: -32601, message: 'method not found' } }
+    }
+    const w = conn.current()
+    if (!w) return { ok: false, error: { code: ERR_APP_GONE, message: 'mff-ai not running' } }
+    const ms = Object.hasOwn(LONG_CALL_MS, method) ? LONG_CALL_MS[method] : undefined
+    try {
+      const p = params as WorkerParams<typeof method>
+      const result = await (ms === undefined ? w.call(method, p) : w.call(method, p, { timeoutMs: ms }))
+      return { ok: true, result }
+    } catch (err) {
+      const env = callFailure(err)
+      log(`mffai call ${method} failed: ${env.error.code}`)
+      return env
     }
   }
 
@@ -317,6 +394,7 @@ export function createMffaiHost(deps: HostDeps) {
 
   return {
     getState,
+    call,
     enable,
     disable,
     ensureRunning,
@@ -370,9 +448,9 @@ export function createMffaiHost(deps: HostDeps) {
       return { flowId }
     },
     chatgptCancel: (flowId: string) => requireWorker().call('auth.chatgpt.cancel', { flowId }),
-    /** 页面要打开的外链(用量链接):只放行 https://chatgpt.com/ */
+    /** 页面要打开的外链:只放行 https://chatgpt.com/(用量)和 https://t.me/(配对) */
     async openExternal(url: string, open: OpenExternal): Promise<void> {
-      const href = allowedUrl(url, EXTERNAL_PREFIX)
+      const href = EXTERNAL_PREFIXES.map((p) => allowedUrl(url, p)).find(Boolean)
       if (!href) throw new Error('URL not allowed')
       open(href)
     },
@@ -393,6 +471,7 @@ const h = (): MffaiHost => {
   return instance
 }
 export const getState = () => h().getState()
+export const call = (method: WorkerMethodName, params: Record<string, unknown>) => h().call(method, params)
 export const enable = () => h().enable()
 export const disable = () => h().disable()
 export const ensureRunning = () => h().ensureRunning()

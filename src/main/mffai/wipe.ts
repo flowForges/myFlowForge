@@ -1,5 +1,5 @@
 import { posix, win32 } from 'node:path'
-import { dataRoots, secretsAccountOf, SECRETS_SERVICE } from '@mffai/protocol'
+import { dataRoots, secretsAccountOf, SECRETS_SERVICE, type MffaiState } from '@mffai/protocol'
 
 // 删除全部数据(08 §12.5、评审修订 R7)。★不 import electron、不加载 host、不拉起后台:
 // 一切副作用都由调用方注入(ipc.ts 传真的 fs / 控制口 / 子进程,测试传假的)。
@@ -20,6 +20,11 @@ export interface WipeDeps {
   exists(p: string): boolean
   /** 跑一条命令,回退出码;argv 里没有任何秘密 */
   run(cmd: string, args: string[]): Promise<number>
+}
+
+/** 四个根和钥匙串条目(评审修订 R14:渲染层不算)。host 的状态和 ipc.ts 的停用状态都用它 */
+export function rootsOf(dir: string): NonNullable<MffaiState['roots']> {
+  return { ...dataRoots(dir), keychain: `${SECRETS_SERVICE}/${secretsAccountOf(dir)}` }
 }
 
 export type WipeResult = { ok: true; removed: string[] } | { ok: false; reason: 'enabled' | 'running' | 'bad_path' }

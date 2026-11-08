@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { PROTOCOL_VERSION, runtimePaths, type ControlStatus, type KernelEvent } from '@mffai/protocol'
 import { createMffaiHost, type HostDeps } from './host'
+import { dataRoots, secretsAccountOf, SECRETS_SERVICE, WorkerMethods } from '@mffai/protocol'
+import { CALL_EXCLUDED, LONG_CALL_MS } from './host'
 
 const TOKEN = 'a'.repeat(64)
 
@@ -761,5 +763,173 @@ describe('mffai host', () => {
     const t = setup()
     await expect(t.host.permissionsGet()).rejects.toThrow('mff-ai not running')
     await expect(t.host.permissionsSet({})).rejects.toThrow('mff-ai not running')
+  })
+})
+
+// —— 08 Task 4:通用通道 call、长调用期限、op / proxyStale / dataExists / roots、t.me ——
+
+/** 在假工作进程外再包一层:记下 (method, params, opts) 的全部三个参数,按 script 回答 */
+function withCallSpy(t: ReturnType<typeof setup>) {
+  const calls: unknown[][] = []
+  const script: Record<string, (p: any) => unknown> = {}
+  const orig = t.connectWorker.getMockImplementation()!
+  t.connectWorker.mockImplementation(async (o: any) => {
+    const c: any = await orig(o)
+    return {
+      ...c,
+      call: vi.fn(async (...a: unknown[]) => {
+        calls.push(a)
+        const f = script[a[0] as string]
+        return f ? f(a[1]) : c.call(a[0], a[1])
+      }),
+    }
+  })
+  return { calls, script }
+}
+
+describe('mffai host call (08 §5.1)', () => {
+  it('excluded names are exactly the five transport / browser methods, all real WorkerMethods keys', () => {
+    expect([...CALL_EXCLUDED].sort()).toEqual(['auth.challenge', 'auth.chatgpt.begin', 'auth.verify', 'events.subscribe', 'hello'])
+    for (const m of CALL_EXCLUDED) expect(m in WorkerMethods, m).toBe(true)
+  })
+
+  it('the long-method table matches spec §5.1 and names only real methods', () => {
+    for (const m of Object.keys(LONG_CALL_MS)) expect(m in WorkerMethods, m).toBe(true)
+    const long = Object.keys(WorkerMethods).filter((m) =>
+      ['turn.rollback', 'turn.diff', 'channel.telegram.setToken', 'memory.delete', 'memory.deleteMany', 'memory.file.set',
+        'memory.proposals.decide', 'session.delete', 'plugins.install.confirm', 'plugins.uninstall', 'plugins.upgrade.prepare',
+        'plugins.store.discard', 'models.addAccount', 'models.testAccount', 'permissions.set'].includes(m) ||
+      (m.startsWith('executor.') && m !== 'executor.list') || m.startsWith('channel.telegram.worktree.') || m.startsWith('plugins.dev.'))
+    expect(Object.keys(LONG_CALL_MS).sort()).toEqual([...long, 'memory.consolidate'].sort())
+    for (const m of long) expect(LONG_CALL_MS[m], m).toBe(120_000)
+    expect(LONG_CALL_MS['memory.consolidate']).toBe(600_000)
+    expect(LONG_CALL_MS['executor.list']).toBeUndefined()
+    expect(LONG_CALL_MS['status']).toBeUndefined()
+  })
+
+  it('passes the long timeout through to call(..., {timeoutMs}); no override for status', async () => {
+    const t = setup({ up: true })
+    const spy = withCallSpy(t)
+    spy.script['memory.deleteMany'] = () => ({ ok: true, redacted: 0, sources: [], gone: [] })
+    spy.script['memory.consolidate'] = () => ({ ok: true })
+    spy.script['session.delete'] = () => ({ ok: true, redacted: 0, notes: [] })
+    await t.host.ensureRunning()
+    expect(await t.host.call('memory.deleteMany', { commandId: 'c1', ids: ['n_a'] })).toEqual({ ok: true, result: { ok: true, redacted: 0, sources: [], gone: [] } })
+    await t.host.call('memory.consolidate', { commandId: 'c2' })
+    await t.host.call('session.delete', { commandId: 'c3', sessionId: 's1' })
+    const st = await t.host.call('status', {})
+    expect(st.ok).toBe(true)
+    const of = (m: string) => spy.calls.filter((c) => c[0] === m)
+    expect(of('memory.deleteMany')).toEqual([['memory.deleteMany', { commandId: 'c1', ids: ['n_a'] }, { timeoutMs: 120_000 }]])
+    expect(of('memory.consolidate')[0][2]).toEqual({ timeoutMs: 600_000 })
+    expect(of('session.delete')[0][2]).toEqual({ timeoutMs: 120_000 })
+    // getState also calls status; every status call has no third argument
+    for (const c of of('status')) expect(c.length, JSON.stringify(c)).toBe(2)
+  })
+
+  it('a worker error keeps code and data intact in the envelope', async () => {
+    const t = setup({ up: true })
+    const spy = withCallSpy(t)
+    const data = [{ index: 0, reason: 'busy', id: 'n_x' }]
+    spy.script['memory.deleteMany'] = () => { throw Object.assign(new Error('busy'), { code: -32003, data }) }
+    await t.host.ensureRunning()
+    expect(await t.host.call('memory.deleteMany', { commandId: 'c', ids: ['n_x'] })).toEqual({ ok: false, error: { code: -32003, message: 'busy', data } })
+  })
+
+  it('timeout → -32010, connection closed → -32011, an uncoded throw → -32603; not running → -32011', async () => {
+    const off = setup()
+    expect(await off.host.call('status', {})).toMatchObject({ ok: false, error: { code: -32011 } })
+    const t = setup({ up: true })
+    const spy = withCallSpy(t)
+    await t.host.ensureRunning()
+    spy.script['session.list'] = () => { throw new Error('timeout') }
+    expect(await t.host.call('session.list', {})).toEqual({ ok: false, error: { code: -32010, message: 'timeout' } })
+    spy.script['session.list'] = () => { throw new Error('connection closed') }
+    expect(await t.host.call('session.list', {})).toEqual({ ok: false, error: { code: -32011, message: 'connection closed' } })
+    spy.script['session.list'] = () => { throw new TypeError('x is not a function') }
+    expect(await t.host.call('session.list', {})).toMatchObject({ ok: false, error: { code: -32603 } })
+  })
+
+  it('excluded methods answer -32601 and never reach the worker', async () => {
+    const t = setup({ up: true })
+    const spy = withCallSpy(t)
+    await t.host.ensureRunning()
+    const before = spy.calls.length
+    for (const m of CALL_EXCLUDED) {
+      expect(await t.host.call(m as never, {}), m).toMatchObject({ ok: false, error: { code: -32601 } })
+    }
+    expect(await t.host.call('nope' as never, {})).toMatchObject({ ok: false, error: { code: -32601 } })
+    expect(spy.calls.length).toBe(before)
+  })
+
+  it('logs neither params nor results; on failure only the method name and the code', async () => {
+    const t = setup({ up: true })
+    const spy = withCallSpy(t)
+    const secret = ['sk', 'live', 'Zq9', 'marker'].join('-')
+    for (const m of ['channel.telegram.setToken', 'plugins.settings.set', 'models.addAccount']) {
+      spy.script[m] = (p) => { throw Object.assign(new Error(`bad ${JSON.stringify(p)}`), { code: -32602, data: { echo: p } }) }
+    }
+    await t.host.ensureRunning()
+    t.logs.length = 0
+    await t.host.call('channel.telegram.setToken', { token: secret })
+    await t.host.call('plugins.settings.set', { id: 'p', key: 'k', value: secret })
+    await t.host.call('models.addAccount', { commandId: 'c', presetId: 'x', apiKey: secret })
+    spy.script['models.accounts'] = () => ({ accounts: [{ label: secret }], secretsBackend: 'keychain' })
+    await t.host.call('models.accounts', {})
+    expect(t.logs.join('\n')).not.toContain(secret)
+    expect(t.logs).toEqual([
+      'mffai call channel.telegram.setToken failed: -32602',
+      'mffai call plugins.settings.set failed: -32602',
+      'mffai call models.addAccount failed: -32602',
+    ])
+  })
+})
+
+describe('mffai host state (08 §5.3)', () => {
+  it('op is "enable" while an enable is queued and absent after', async () => {
+    const t = setup()
+    const p = t.host.enable()
+    expect((await t.host.getState()).op).toBe('enable')
+    await p
+    await flush()
+    expect('op' in (await t.host.getState())).toBe(false)
+  })
+
+  it('proxyStale: only when this host spawned the daemon and the app proxy changed since', async () => {
+    const t = setup()
+    Object.assign(settings, { appProxy: 'http://127.0.0.1:7890' })
+    await t.host.enable()
+    expect('proxyStale' in (await t.host.getState())).toBe(false)
+    Object.assign(settings, { appProxy: 'http://127.0.0.1:8888' })
+    expect((await t.host.getState()).proxyStale).toBe(true)
+    Object.assign(settings, { appProxy: ' http://127.0.0.1:7890 ' })
+    expect('proxyStale' in (await t.host.getState())).toBe(false)
+    Object.assign(settings, { appProxy: undefined })
+    expect((await t.host.getState()).proxyStale).toBe(true)
+    // a daemon this host did not spawn (autostart): never
+    const u = setup({ up: true })
+    await u.host.ensureRunning()
+    Object.assign(settings, { appProxy: 'http://127.0.0.1:9999' })
+    expect('proxyStale' in (await u.host.getState())).toBe(false)
+  })
+
+  it('dataExists and roots', async () => {
+    const t = setup()
+    const s0 = await t.host.getState()
+    expect(s0.dataExists).toBe(false)
+    expect(s0.roots).toEqual({ ...dataRoots(dir), keychain: `${SECRETS_SERVICE}/${secretsAccountOf(dir)}` })
+    await t.host.enable()
+    expect((await t.host.getState()).dataExists).toBe(true)
+  })
+
+  it('openExternal also allows https://t.me/ with the exact-host check', async () => {
+    const t = setup()
+    const open = vi.fn()
+    await t.host.openExternal('https://t.me/my_bot?start=abc', open)
+    expect(open).toHaveBeenLastCalledWith('https://t.me/my_bot?start=abc')
+    for (const bad of ['https://t.me@evil.com/x', 'https://u@t.me/x', 'https://t.me.evil.com/x', 'http://t.me/x', 'https://evil.com/https://t.me/', 'https://t.me', 'https://telegram.me/x']) {
+      await expect(t.host.openExternal(bad, open), bad).rejects.toThrow()
+    }
+    expect(open).toHaveBeenCalledTimes(1)
   })
 })
