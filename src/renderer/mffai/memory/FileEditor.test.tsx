@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { FileEditor } from './FileEditor'
 import { fail, installFakeForge, type FakeForge } from '../test/fakeForge'
 import { ev, resetSeq } from '../test/events'
@@ -21,7 +21,7 @@ describe('FileEditor', () => {
     expect(screen.getByRole('button', { name: '保存' })).toBeDisabled()
   })
 
-  it('saves with the loaded hash; masked chip shows after a successful save', async () => {
+  it('saves with the loaded hash; masked chip shows, and the box reloads to the server-stored (masked, trimmed) text', async () => {
     f = installFakeForge({ calls: {
       'memory.file.get': { content: 'hello', hash: 'h1', cap: 2000 },
       'memory.file.set': { ok: true, hash: 'h2', masked: 1 },
@@ -29,10 +29,28 @@ describe('FileEditor', () => {
     render(<FileEditor file="USER.md" />)
     const box = await screen.findByLabelText('USER.md')
     fireEvent.change(box, { target: { value: 'hello world' } })
+    f.script({ 'memory.file.get': { content: 'hello [REDACTED]', hash: 'h2', cap: 2000 } })
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: '保存' })) })
     expect(f.callsOf('memory.file.set')).toEqual([{ commandId: expect.any(String), file: 'USER.md', content: 'hello world', expectedHash: 'h1' }])
     expect(screen.getByText('已打码 1')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByLabelText('USER.md')).toHaveValue('hello [REDACTED]'))
+    expect(f.callsOf('memory.file.get')).toHaveLength(2)
     expect(screen.getByRole('button', { name: '保存' })).toBeDisabled()
+  })
+
+  it('a memory.updated for this file that arrives while the save is still in flight is ignored (no false conflict)', async () => {
+    let resolveSet!: (v: { ok: boolean; hash: string; masked: number }) => void
+    f = installFakeForge({ calls: { 'memory.file.get': { content: 'hello', hash: 'h1', cap: 2000 } } })
+    f.script({ 'memory.file.set': () => new Promise((r) => { resolveSet = r }) })
+    render(<FileEditor file="USER.md" />)
+    fireEvent.change(await screen.findByLabelText('USER.md'), { target: { value: 'edited' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    act(() => { f.emit(ev('memory.updated', { file: 'USER.md', op: 'write', source: 'user' })) })
+    expect(screen.queryByRole('button', { name: '已在别处修改 · 重新载入' })).toBeNull()
+    f.script({ 'memory.file.get': { content: 'server text', hash: 'h3', cap: 2000 } })
+    await act(async () => { resolveSet({ ok: true, hash: 'h2', masked: 1 }) })
+    expect(screen.queryByRole('button', { name: '已在别处修改 · 重新载入' })).toBeNull()
+    expect(await screen.findByLabelText('USER.md')).toHaveValue('server text')
   })
 
   it('a hash conflict (ERR_BUSY) on save shows the reload button, not an overwrite', async () => {
@@ -121,5 +139,48 @@ describe('FileEditor', () => {
     await screen.findByLabelText('USER.md')
     act(() => { f.emit(ev('memory.updated', { file: 'MEMORY.md', op: 'write', source: 'user' })) })
     expect(f.callsOf('memory.file.get')).toHaveLength(1)
+  })
+
+  it('a memory.updated with no file field (a delete/remove) refetches a clean editor silently', async () => {
+    f = installFakeForge({ calls: { 'memory.file.get': { content: 'hello', hash: 'h1', cap: 2000 } } })
+    render(<FileEditor file="USER.md" />)
+    await screen.findByLabelText('USER.md')
+    f.script({ 'memory.file.get': { content: 'changed broadly', hash: 'h2', cap: 2000 } })
+    act(() => { f.emit(ev('memory.updated', { op: 'remove', source: 'user' })) })
+    expect(await screen.findByLabelText('USER.md')).toHaveValue('changed broadly')
+  })
+
+  it('a memory.updated with no file field while dirty shows the reload button, not a silent overwrite', async () => {
+    f = installFakeForge({ calls: { 'memory.file.get': { content: 'hello', hash: 'h1', cap: 2000 } } })
+    render(<FileEditor file="USER.md" />)
+    fireEvent.change(await screen.findByLabelText('USER.md'), { target: { value: 'my edit' } })
+    act(() => { f.emit(ev('memory.updated', { op: 'remove', source: 'user' })) })
+    await screen.findByRole('button', { name: '已在别处修改 · 重新载入' })
+    expect(screen.getByLabelText('USER.md')).toHaveValue('my edit')
+  })
+
+  it('the 已用 counter strips a recognized provenance comment and trims, like the server cap check', async () => {
+    const content = '- hello <!-- mff id=n_a src=user -->'
+    f = installFakeForge({ calls: { 'memory.file.get': { content, hash: 'h1', cap: 2000 } } })
+    render(<FileEditor file="USER.md" />)
+    await screen.findByLabelText('USER.md')
+    expect(screen.getByText(`${[...'- hello'].length} / 2000`)).toBeInTheDocument()
+  })
+
+  it('a comment that is not a recognized mff provenance tag counts toward the total (not stripped)', async () => {
+    const content = '- hello <!-- not-mff -->'
+    f = installFakeForge({ calls: { 'memory.file.get': { content, hash: 'h1', cap: 2000 } } })
+    render(<FileEditor file="USER.md" />)
+    await screen.findByLabelText('USER.md')
+    expect(screen.getByText(`${[...content].length} / 2000`)).toBeInTheDocument()
+  })
+
+  it('counts the whole document trimmed, across multiple lines with comments', async () => {
+    const content = '- first <!-- mff id=n_a src=user -->\n- second <!-- mff id=n_b src=model -->\n'
+    const expected = [...'- first\n- second'].length
+    f = installFakeForge({ calls: { 'memory.file.get': { content, hash: 'h1', cap: 2000 } } })
+    render(<FileEditor file="MEMORY.md" />)
+    await screen.findByLabelText('MEMORY.md')
+    expect(screen.getByText(`${expected} / 2000`)).toBeInTheDocument()
   })
 })
