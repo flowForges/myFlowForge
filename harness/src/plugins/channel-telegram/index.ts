@@ -666,7 +666,8 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
         timers.clearTimeout(statusTimer)
         statusTimer = undefined
         await poller.stop()
-        await chats.commandsIdle(COMMAND_STOP_MS)
+        // 进行中的 worktree 合并和命令一起等,同一份预算(review M1)
+        await Promise.all([chats.commandsIdle(COMMAND_STOP_MS), projects.idle(COMMAND_STOP_MS)])
         // 关内核时轮已经停了:终态在这里交给发送器。发不出去的 delivery 还开着,下次启动补
         chats.dispose()
         cards.dispose()

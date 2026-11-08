@@ -14,6 +14,7 @@ import { createImWorktree, imWorktreeRootOf, removeImWorktree, type ImWorktreeEr
 import { mergeInto } from '../../lib/git/merge'
 import { changes as gitChanges, fileDiff, guarded, pinIntact, pinnedGit, pinRepo, pruneRefs, refBase, takeSnapshot, type Git, type PinnedRepo, type RepoPin } from '../../lib/git/snapshot'
 import { worktreePin, worktreeRootOf } from '../../lib/git/worktree'
+import { redact } from '../../lib/tools/redact'
 import { denyReadCopies, treePolicy } from '../../lib/tools/treePolicy'
 import type { SandboxService, SessionCommands } from '../../lib/tools/types'
 import { ERR_BUSY, type ApprovalMode, type FileChange, type FileDiff, type KernelEvent, type TelegramChats } from '../../protocol/index'
@@ -377,16 +378,19 @@ export class Projects {
   /** 08 §4.4:现拍的快照对 base 的改动(未跟踪的也算),`deny read` 副本不算 */
   async changes(worktreeId: string): Promise<FileChange[]> {
     const v = await this.view(worktreeId)
-    return this.changedIn(v)
+    // 和 executor.changes 一样过 redact(§4.4、review M6)
+    return (await this.changedIn(v)).map(f => ({ ...f, path: redact(f.path) }))
   }
 
   /** 08 §4.4:path 必须在 changes 的清单里,否则 -32602,不跑 diff */
   async diff(worktreeId: string, path: string): Promise<FileDiff> {
     const v = await this.view(worktreeId)
-    const files = await this.changedIn(v)
-    if (!files.some(f => f.path === path)) throw new RpcError(-32602, 'path not in the change list')
+    // path 是 changes 回的、redact 过的那个;撞名的两项都不给
+    const hits = (await this.changedIn(v)).filter(f => redact(f.path) === path)
+    if (hits.length === 0) throw new RpcError(-32602, 'path not in the change list')
+    if (hits.length > 1) throw new RpcError(-32602, 'ambiguous path')
     try {
-      return await fileDiff(v.record.cwd, v.base, v.end, path, this.o.git, { pin: v.pin, tmpDir: this.o.tmpDir, writableRoots: v.roots })
+      return { ...(await fileDiff(v.record.cwd, v.base, v.end, hits[0].path, this.o.git, { pin: v.pin, tmpDir: this.o.tmpDir, writableRoots: v.roots })), path }
     } catch (err) {
       this.o.log.warn('telegram worktree diff failed', { code: codeOf(err) })
       throw new RpcError(-32603, 'diff failed')
@@ -418,7 +422,12 @@ export class Projects {
         throw new RpcError(-32603, 'merge failed')
       }
       if (!outcome.ok) throw refusal(outcome.reason, outcome)
-      this.o.append({ type: 'channel.worktree.merged', payload: { worktreeId, files: outcome.files } })
+      // 写不进事件也已经合进去了:记录照样标上,回 ok(review M1)
+      try {
+        this.o.append({ type: 'channel.worktree.merged', payload: { worktreeId, files: outcome.files } })
+      } catch {
+        this.o.log.warn('telegram merge event not recorded')
+      }
       record.merged = true
       this.o.state.data.worktrees[worktreeId] = record
       this.o.save()
@@ -459,9 +468,23 @@ export class Projects {
     const snap = await takeSnapshot(record.cwd, viewRef(worktreeId), git, { pin, tmpDir, writableRoots: roots })
     if (!snap.ref) throw refusal(snap.reason === 'unsafe_filter' || snap.reason === 'unsafe_repo' ? 'unsafe_repo' : 'nothing')
     // 读不懂的 base 当没有:不能让一个坏字段把记录变成孤儿,也不能把它当引用名交给 git
-    const base = (record.base !== undefined && SHA.test(record.base) ? record.base : undefined) ?? (await this.legacyBase(pin, project))
+    const base = ((await this.ancestor(pin, record.base)) ? record.base : undefined) ?? (await this.legacyBase(pin, project))
     if (!base) throw refusal('nothing')
     return { record, project, pin, base, end: viewRef(worktreeId), deny: this.denyCopies(record), roots }
+  }
+
+  /** 记下的 base 是 sha,而且是 worktree HEAD 的祖先(review M7):不是的话 diff 会把整棵树当成改动 */
+  private async ancestor(pin: PinnedRepo, base: string | undefined): Promise<boolean> {
+    if (base === undefined || !SHA.test(base)) return false
+    const r = await guarded(pinnedGit(this.o.git, pin), this.o.tmpDir, g => g(['merge-base', '--is-ancestor', base, 'HEAD'], { cwd: pin.top })).catch(() => ({ code: -1 }))
+    return r.code === 0
+  }
+
+  /** 关闭时等进行中的操作(合并在 git apply 中间被杀,检出就留着半截),有上限(review M1) */
+  async idle(ms: number): Promise<void> {
+    let timer: NodeJS.Timeout | undefined
+    await Promise.race([Promise.allSettled([...this.chains.values()]), new Promise<void>(res => (timer = setTimeout(res, ms)))])
+    clearTimeout(timer)
   }
 
   private async legacyBase(pin: PinnedRepo, project: PinnedRepo): Promise<string | undefined> {

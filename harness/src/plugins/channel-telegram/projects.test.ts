@@ -5,7 +5,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { imWorktreeRootOf } from '../../lib/git/imWorktree'
+import { createImWorktree, imWorktreeRootOf } from '../../lib/git/imWorktree'
 import { createGit, type Git } from '../../lib/git/snapshot'
 import { ERR_BUSY } from '../../protocol/index'
 import { CODEX_OK, delegate, untilGo } from '../../../test/executorRig'
@@ -17,6 +17,7 @@ import { createExecutorCli } from '../executor-cli/index'
 import { createLoopDefault } from '../loop-default'
 import { createToolsCoding } from '../tools-coding'
 import toolsRegistry from '../tools-registry'
+import { Projects } from './projects'
 import { TelegramState } from './state'
 
 const BUSY = '这轮还在跑,先 /cancel'
@@ -1460,5 +1461,102 @@ describe('08: IM worktree changes, diff and merge (§4.4, §4.5)', () => {
     expect(viewRefs()).toHaveLength(1)
     await r.k.handle('channel.telegram.worktree.discard', { commandId: 'd1', worktreeId: id })
     expect(viewRefs()).toEqual([])
+  })
+
+  describe('review fixes (Task 2 review)', () => {
+    it('M6: changes are redacted, and the redacted form diffs and merges the real file', async () => {
+      const r = await rig()
+      await send(r, '/project api')
+      const { id, cwd } = record(r)
+      const real = `sk-${'b'.repeat(24)}.txt`
+      writeFileSync(join(cwd, real), 'k\n')
+      expect((await changesOf(r, id)).files).toEqual([{ path: '***.txt', status: 'A' }])
+      const d = await diffOf(r, id, '***.txt')
+      expect(d).toMatchObject({ path: '***.txt', lines: [{ kind: 'add', ln: 1, text: 'k' }] })
+      expect(JSON.stringify(d)).not.toContain(real)
+      await expect(diffOf(r, id, real)).rejects.toMatchObject({ code: -32602 })
+      expect(await mergeOf(r, id)).toEqual({ ok: true, files: 1 })
+      expect(existsSync(join(repo, real))).toBe(true)
+    })
+
+    it('M7: a recorded base that is not an ancestor of the worktree HEAD falls back to merge-base', async () => {
+      const r = await rig()
+      await send(r, '/project api')
+      const { id, cwd } = record(r)
+      writeFileSync(join(cwd, 'n.txt'), 'n\n')
+      const empty = sh(['mktree'], repo).trim()
+      const orphan = execFileSync('git', ['commit-tree', '-m', 'orphan', empty], { cwd: repo, env: shEnv(), input: '', encoding: 'utf8' }).trim()
+      const state = onDisk(r)
+      state.worktrees[id].base = orphan
+      writeFileSync(stateFile(r), JSON.stringify(state))
+      await r.restart({ kill: true })
+      await online(r)
+      expect((await changesOf(r, id)).files).toEqual([{ path: 'n.txt', status: 'A' }])
+      expect(await mergeOf(r, id)).toEqual({ ok: true, files: 1 })
+    })
+
+    it('M1: shutdown waits for a merge in flight', async () => {
+      let release!: () => void
+      const held = new Promise<void>(res => (release = res))
+      let reached = false
+      const slow: Git = async (args, o) => {
+        if (args.includes('apply') && !args.includes('--check')) {
+          reached = true
+          await held
+        }
+        return git(args, o)
+      }
+      const r = await rig({ channel: { git: slow } })
+      await send(r, '/project api')
+      const { id, cwd } = record(r)
+      writeFileSync(join(cwd, 'n.txt'), 'n\n')
+      const merging = mergeOf(r, id).catch(e => e)
+      await expect.poll(() => reached, { timeout: 15_000, interval: 5 }).toBe(true)
+      let closed = false
+      const closing = r.restart().then(() => (closed = true))
+      // 渠道的停机预算里命令和合并共用 500 ms:在它之内放开
+      await new Promise(res => setTimeout(res, 150))
+      expect(closed).toBe(false)
+      release()
+      await closing
+      expect(await merging).toEqual({ ok: true, files: 1 })
+      expect(readFileSync(join(repo, 'n.txt'), 'utf8')).toBe('n\n')
+    })
+  })
+})
+
+describe('Projects.merge when channel.worktree.merged cannot be written (review M1)', () => {
+  it('still ok, and the record says merged', async () => {
+    const dataDir = join(base, 'data')
+    const tmp = join(base, 'ptmp')
+    mkdirSync(dataDir)
+    mkdirSync(tmp)
+    const made = await createImWorktree({ dataDir, project: repo, group: 'c0000000000000000', id: 'wt_1', git, tmpDir: tmp, untrusted: [dataDir], writableRoots: [], denyReadOf: () => [] })
+    if (!made.ok) throw new Error(made.error)
+    writeFileSync(join(made.cwd, 'n.txt'), 'n\n')
+    const data = { worktrees: { wt_1: { id: 'wt_1', project: 'api', projectPath: repo, top: repo, path: made.path, cwd: made.cwd, sessionIds: [], createdAt: 0, base: made.base } } }
+    const warns: string[] = []
+    const projects = new Projects({
+      dataDir, tmpDir: tmp, home, systemTmp, git,
+      state: { data } as never,
+      chats: { chatUsing: () => undefined, chatOnSession: () => undefined, isOpen: () => false } as never,
+      commands: {} as never,
+      sandbox: { status: () => ({ level: 'full', missing: [], autoDegraded: false }), execPolicy: () => ({ denyRead: [], persistence: [], dataDir, level: 'full', ruleDenyRead: [], ruleDenyWrite: [], untranslatedRules: 0, totalRules: 0 }) } as never,
+      sessions: { get: () => undefined },
+      config: () => ({ projects: [] }) as never,
+      history: () => [],
+      eventsAfter: () => [],
+      save: () => true,
+      notify: () => {},
+      now: () => 0,
+      log: { info() {}, warn: (m: string) => void warns.push(m), error() {} },
+      append: () => {
+        throw new Error('database is closed')
+      },
+    })
+    expect(await projects.merge('wt_1')).toEqual({ ok: true, files: 1 })
+    expect(readFileSync(join(repo, 'n.txt'), 'utf8')).toBe('n\n')
+    expect((await projects.list())[0]).toMatchObject({ merged: true })
+    expect(warns).toContain('telegram merge event not recorded')
   })
 })
