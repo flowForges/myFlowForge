@@ -1,10 +1,11 @@
 // 委派运行卡片(08 §8.5):按 runId 的 queued → started → progress* → ended。头、最近 5 条进度、结束后的结果,
 // 按钮 停止(只停这一个)/ 合并 / 丢弃。合并被拒按 data.reason 显示,带路径;写到一半没还原的标 未还原。
-// useRunActions 给任务页(Task 8)共用。
-import { useRef, useState } from 'react'
-import type { MergeRefusal, RunRow } from '@mffai/protocol'
+// 动作执行器在 ../actions,任务页(Task 8)共用。
+import { useState } from 'react'
+import type { RunRow } from '@mffai/protocol'
 import { CopyButton } from '../../views/chat/blocks'
-import { call, cmd, retryable, toCallError } from '../rpc'
+import { call } from '../rpc'
+import { useRunActions } from '../actions'
 import { label } from '../labels'
 import { Chip } from '../ui/Chip'
 import { CodeChip } from '../ui/CodeChip'
@@ -12,71 +13,9 @@ import { Confirm } from '../ui/Confirm'
 import { ChangesBlock } from './ChangesBlock'
 import type { RunItem } from './reduce'
 
-const ERR_INVALID = -32602
-const ERR_BUSY = -32003
 const SHOWN = 5
-const K = '\u0000'
 
-export type RunAction = 'stop' | 'merge' | 'discard'
-
-function refusalOf(e: unknown): MergeRefusal | undefined {
-  const c = toCallError(e)
-  const d = c.data as { reason?: unknown; paths?: unknown; restored?: unknown } | undefined
-  if (c.code !== ERR_INVALID || typeof d?.reason !== 'string') return undefined
-  return {
-    reason: d.reason as MergeRefusal['reason'],
-    ...(Array.isArray(d.paths) && { paths: d.paths.filter((p): p is string => typeof p === 'string') }),
-    ...(typeof d.restored === 'boolean' && { restored: d.restored }),
-  }
-}
-
-/** 一个运行的 停止 / 合并 / 丢弃。重试(超时后)用同一个 commandId;两次点击落在同一帧里只发一次 */
-export function useRunActions(sessionId: string, runId: string) {
-  const [busy, setBusy] = useState<RunAction | null>(null)
-  const [failed, setFailed] = useState<{ action: RunAction; busy: boolean } | null>(null)
-  const [refusal, setRefusal] = useState<MergeRefusal | null>(null)
-  const [merged, setMerged] = useState<{ files: number } | null>(null)
-  const [discarded, setDiscarded] = useState(false)
-  const inflight = useRef(false)
-  const retry = useRef(retryable()).current
-
-  const run = async (action: RunAction, f: (commandId: string) => Promise<void>) => {
-    if (inflight.current) return
-    inflight.current = true
-    setBusy(action)
-    setFailed(null)
-    if (action === 'merge') setRefusal(null)
-    const key = action + K + sessionId + K + runId
-    try {
-      await f(action === 'stop' ? cmd() : retry.id(key))
-      retry.done(key)
-    } catch (e) {
-      const r = action === 'merge' ? refusalOf(e) : undefined
-      if (r) { retry.done(key); setRefusal(r) } else {
-        const c = toCallError(e)
-        console.error(`mffai executor ${action}`, c)
-        setFailed({ action, busy: c.code === ERR_BUSY })
-      }
-    } finally {
-      inflight.current = false
-      setBusy(null)
-    }
-  }
-
-  return {
-    busy, failed, refusal, merged, discarded,
-    stop: () => run('stop', async (commandId) => { await call('executor.cancel', { commandId, sessionId, runId }) }),
-    merge: () => run('merge', async (commandId) => {
-      const r = await call('executor.worktree.merge', { commandId, sessionId, runId })
-      setMerged({ files: r.files })
-    }),
-    discard: () => run('discard', async (commandId) => {
-      const r = await call('executor.worktree.discard', { commandId, sessionId, runId })
-      if (!r.ok) throw new Error('discard refused')
-      setDiscarded(true)
-    }),
-  }
-}
+export { useRunActions, type RunAction } from '../actions'
 
 const ICON: Record<string, string> = { tool: '⚙', file: '▤', text: '✎', think: '◌' }
 

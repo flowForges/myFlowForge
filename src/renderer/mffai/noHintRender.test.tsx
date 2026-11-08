@@ -319,6 +319,35 @@ const ROWS: Row[] = [
     },
   },
   {
+    name: 'tasks: a merge refusal block with paths and 未还原, 失败 on one row and 忙 on another',
+    mount: async (f) => {
+      f.script({
+        'executor.runs': { runs: [
+          runRow('rd', 's1', { worktree: { path: '/wt/rd', present: true }, changed: 2 }),
+          runRow('rf', 's1', { worktree: { path: '/wt/rf', present: true }, changed: 1 }),
+          runRow('rb', 's1', { worktree: { path: '/wt/rb', present: true }, changed: 1 }),
+        ] },
+        'channel.telegram.chats': { chats: [], worktrees: [] },
+        'session.list': { sessions: [summary('s1', { cwd: '/repo' })] },
+        'executor.worktree.merge': (p) => p.runId === 'rd' ? fail(-32602, 'refused', { reason: 'dirty', paths: ['a.ts', 'b.ts'], restored: false })
+          : p.runId === 'rb' ? fail(-32003, 'busy') : fail(-32603, 'boom'),
+      })
+      render(<TasksPage />)
+      await screen.findByText('已结束')
+      for (const id of ['rd', 'rf', 'rb']) {
+        const row = document.querySelector(`[data-run="${id}"]`) as HTMLElement
+        fireEvent.click(within(row).getByRole('button', { name: '合并' }))
+        await act(async () => { fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '合并' })) })
+      }
+      const rd = document.querySelector('[data-run="rd"]') as HTMLElement
+      await within(rd).findByText('未还原')
+      expect(within(rd).getByText('dirty')).toBeTruthy()
+      expect(within(rd).getByText('b.ts')).toBeTruthy()
+      await within(document.querySelector('[data-run="rf"]') as HTMLElement).findByText('失败')
+      await within(document.querySelector('[data-run="rb"]') as HTMLElement).findByText('忙')
+    },
+  },
+  {
     name: 'tasks: executor.runs and channel.telegram.chats both unsupported',
     mount: async (f) => {
       f.script({ 'executor.runs': () => fail(-32601), 'channel.telegram.chats': () => fail(-32601) })

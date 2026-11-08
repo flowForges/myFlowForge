@@ -1,15 +1,15 @@
 // 任务页(08 §9):executor.runs 的 运行中 / 排队 / 已结束 三组,外加 IM worktree 一组(channel.telegram.chats 的
-// worktrees)。执行器行的 停止/合并/丢弃 复用 RunCard 的 useRunActions(sessionId, runId);IM worktree 没有会话
-// 可带,走 channel.telegram.worktree.*,自己的一套同样形状的动作(同一套合并/丢弃确认模式)。
+// worktrees)。执行器行的 停止/合并/丢弃 和 RunCard 共用 ../actions 的 useRunActions(sessionId, runId);IM worktree
+// 没有会话可带,走 channel.telegram.worktree.*(同一个 ../actions 里的 useWorktreeActions)。
 // 丢弃 IM worktree 时多算 在用的会话:后台的丢弃看不见里面开的 app 会话(07 followups Task 11 M4),
 // 这里按 session.list 的 cwd 是否落在这棵 worktree 路径下(按 / 分界,不把 wt_10 当 wt_1 的孩子)数给用户看。
 // 组标题的 N / 20 只在 已结束、IM worktree 两组上(委派 worktree 和 IM worktree 各自一个 20 个的上限,
 // 满了就是在这页丢弃;运行中、排队不占 worktree 名额,只显示行数)。
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { EventType, MergeRefusal, RunRow, SessionSummary, TelegramChats } from '@mffai/protocol'
+import type { EventType, RunRow, SessionSummary, TelegramChats } from '@mffai/protocol'
 import { fmtRelTime } from '@shared/relTime'
 import { CopyButton } from '../../views/chat/blocks'
-import { call, isUnsupported, retryable, toCallError } from '../rpc'
+import { call, isUnsupported, toCallError } from '../rpc'
 import { useMffaiEvent, useMffaiReset } from '../events'
 import { route } from '../route'
 import { label } from '../labels'
@@ -17,10 +17,8 @@ import { Chip } from '../ui/Chip'
 import { CodeChip } from '../ui/CodeChip'
 import { Confirm } from '../ui/Confirm'
 import { ChangesBlock } from '../chat/ChangesBlock'
-import { useRunActions } from '../chat/RunCard'
+import { useRunActions, useWorktreeActions } from '../actions'
 
-const K = '\u0000'
-const ERR_BUSY = -32003
 const REFRESH_MS = 300
 /** harness/src/lib/git/worktree.ts MAX_WORKTREES:委派 worktree 和 IM worktree 各自一个根下的上限 */
 const MAX_WORKTREES = 20
@@ -42,65 +40,7 @@ function countSessionsUnder(sessions: ReadonlyMap<string, SessionSummary>, root:
   return n
 }
 
-function refusalOf(e: unknown): MergeRefusal | undefined {
-  const c = toCallError(e)
-  const d = c.data as { reason?: unknown; paths?: unknown; restored?: unknown } | undefined
-  if (c.code !== -32602 || typeof d?.reason !== 'string') return undefined
-  return {
-    reason: d.reason as MergeRefusal['reason'],
-    ...(Array.isArray(d.paths) && { paths: d.paths.filter((p): p is string => typeof p === 'string') }),
-    ...(typeof d.restored === 'boolean' && { restored: d.restored }),
-  }
-}
-
 type Action = 'merge' | 'discard'
-
-/** IM worktree 自己的 合并/丢弃:和 RunCard 的 useRunActions 同一个模式,但没有会话,参数是 worktreeId */
-function useWorktreeActions(worktreeId: string) {
-  const [busy, setBusy] = useState<Action | null>(null)
-  const [failed, setFailed] = useState<{ action: Action; busy: boolean } | null>(null)
-  const [refusal, setRefusal] = useState<MergeRefusal | null>(null)
-  const [merged, setMerged] = useState<{ files: number } | null>(null)
-  const [discarded, setDiscarded] = useState(false)
-  const inflight = useRef(false)
-  const retry = useRef(retryable()).current
-
-  const run = async (action: Action, f: (commandId: string) => Promise<void>) => {
-    if (inflight.current) return
-    inflight.current = true
-    setBusy(action)
-    setFailed(null)
-    if (action === 'merge') setRefusal(null)
-    const key = action + K + worktreeId
-    try {
-      await f(retry.id(key))
-      retry.done(key)
-    } catch (e) {
-      const r = action === 'merge' ? refusalOf(e) : undefined
-      if (r) { retry.done(key); setRefusal(r) } else {
-        const c = toCallError(e)
-        console.error(`mffai telegram worktree ${action}`, c)
-        setFailed({ action, busy: c.code === ERR_BUSY })
-      }
-    } finally {
-      inflight.current = false
-      setBusy(null)
-    }
-  }
-
-  return {
-    busy, failed, refusal, merged, discarded,
-    merge: () => run('merge', async (commandId) => {
-      const r = await call('channel.telegram.worktree.merge', { commandId, worktreeId })
-      setMerged({ files: r.files })
-    }),
-    discard: () => run('discard', async (commandId) => {
-      const r = await call('channel.telegram.worktree.discard', { commandId, worktreeId })
-      if (!r.ok) throw new Error('discard refused')
-      setDiscarded(true)
-    }),
-  }
-}
 
 interface Tasks {
   runs: RunRow[] | null
@@ -227,7 +167,7 @@ function TaskRunRow({ row, session, onChanged }: { row: RunRow; session?: Sessio
         </div>
       )}
       {confirm === 'merge' && (
-        <Confirm title={session?.cwd ? `合并到 ${session.cwd}` : '合并'} rows={[['worktree', path ?? '']]} confirmLabel="合并"
+        <Confirm title={session?.cwd ? `合并到 ${session.cwd}` : '合并'} rows={[['worktree', path ?? ''], ['文件', String(row.changed ?? 0)]]} confirmLabel="合并"
           onCancel={() => setConfirm(null)} onConfirm={() => void act('merge')} />
       )}
       {confirm === 'discard' && (

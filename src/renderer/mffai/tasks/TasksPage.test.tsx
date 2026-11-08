@@ -249,6 +249,18 @@ describe('TasksPage', () => {
     expect(f.callsOf('executor.runs')).toHaveLength(2)
   })
 
+  it('the executor merge confirm carries the 文件 row, as RunCard does', async () => {
+    f = installFakeForge({ calls: {
+      'executor.runs': { runs: [runRow('re', 's1', { phase: 'ended', worktree: { path: '/wt/re', present: true }, changed: 3 })] },
+      'channel.telegram.chats': { chats: [], worktrees: [] },
+      'session.list': { sessions: [summary('s1', { cwd: '/repo' })] },
+    } })
+    render(<TasksPage />)
+    const row = (await screen.findByText('3 个文件')).closest('[data-run]') as HTMLElement
+    fireEvent.click(within(row).getByRole('button', { name: '合并' }))
+    expect(rows()).toEqual([['worktree', '/wt/re'], ['文件', '3']])
+  })
+
   it('a reset alert refetches at once', async () => {
     f = installFakeForge({ calls: {
       'executor.runs': { runs: [] },
