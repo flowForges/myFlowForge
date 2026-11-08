@@ -105,7 +105,7 @@ export function PluginDetail({ plugin, showNewSession, onEnabled, onClose }: {
     return (
       <div className="mffai-group mffai-detail" data-detail={id}>
         {head}
-        <Staging stagingId={staging} onClose={() => setStaging(null)}
+        <Staging stagingId={staging} current={detail!.grants} onClose={() => setStaging(null)}
           onInstalled={(pid, enabled) => { setStaging(null); onEnabled(pid, enabled); load() }} />
       </div>
     )
@@ -143,11 +143,14 @@ export function PluginDetail({ plugin, showNewSession, onEnabled, onClose }: {
       <div className="mffai-row">
         <span className="mffai-k">ref</span>
         <input aria-label="升级 ref" value={upRef} onChange={(e) => setUpRef(e.target.value)} />
-        <button className="set-btn" disabled={upgradeAct.busy} onClick={upgrade}>升级</button>
+        <button className="set-btn" disabled={upgradeAct.busy || !detail} onClick={upgrade}>升级</button>
         <FailChip failure={upgradeAct.failure} />
       </div>
       {uninstalling && (
-        <Confirm title="卸载插件" rows={[['插件', <PText key="id" text={id} mono />], ['版本', <PText key="v" text={plugin.version} mono />]]}
+        <Confirm title="卸载插件" rows={[
+          ['插件', <PText key="id" text={id} mono />], ['版本', <PText key="v" text={plugin.version} mono />],
+          ['删除', '插件代码'], ['删除', 'plugin-data'], ['删除', '插件的凭据'],
+        ]}
           keep={[KEEP_ON_UNINSTALL]} confirmLabel="卸载" danger busy={uninstallAct.busy}
           onCancel={() => setUninstalling(false)} onConfirm={uninstall}>
           <FailChip failure={uninstallAct.failure} />

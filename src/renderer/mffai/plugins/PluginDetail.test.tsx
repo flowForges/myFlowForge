@@ -83,6 +83,7 @@ describe('PluginDetail', () => {
     const dlg = screen.getByRole('dialog')
     const rows = [...dlg.querySelectorAll('.mffai-confirm-row')].map((r) => r.textContent)
     expect(rows).toContain('保留事件日志里已发生的调用记录')
+    expect(rows).toEqual(expect.arrayContaining(['删除插件代码', '删除plugin-data', '删除插件的凭据']))
     expect(rows.some((r) => r?.includes('zed-tools'))).toBe(true)
     expect(findHints()).toEqual([])
     const btn = within(dlg).getByRole('button', { name: '卸载' })
@@ -98,10 +99,14 @@ describe('PluginDetail', () => {
       'plugins.install.status': { state: 'ready', consent: FULL_CONSENT, consentHash: 'h2' },
     } })
     mount()
-    fireEvent.change(await screen.findByLabelText('升级 ref'), { target: { value: 'v2' } })
+    await screen.findByText('未启动')
+    fireEvent.change(screen.getByLabelText('升级 ref'), { target: { value: 'v2' } })
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: '升级' })) })
     expect(f.callsOf('plugins.upgrade.prepare')).toEqual([{ id: 'zed-tools', ref: 'v2' }])
     await screen.findByText('来源已变')
+    const fs = document.querySelector('[data-grants="fs-server"]') as HTMLElement
+    expect((within(fs).getByLabelText('不给') as HTMLInputElement).checked).toBe(true)
+    expect((screen.getByLabelText('fs-server api.declared.example') as HTMLInputElement).checked).toBe(true)
     expect(document.querySelector('[data-section="diff"]')).toHaveTextContent('sha256-OLDINTEGRITY → sha256-INTEGRITY0123')
     expect(findHints()).toEqual([])
   })
@@ -109,7 +114,8 @@ describe('PluginDetail', () => {
   it('升级 without a ref leaves it out', async () => {
     const f = installFakeForge({ calls: { 'plugins.get': DETAIL, 'plugins.mcp.status': { servers: [] }, 'plugins.upgrade.prepare': () => fail(-32602, 'bad_ref') } })
     mount()
-    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: '升级' })) })
+    await screen.findByText('未启动')
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '升级' })) })
     expect(f.callsOf('plugins.upgrade.prepare')).toEqual([{ id: 'zed-tools' }])
     expect(await screen.findByText('bad_ref')).toBeInTheDocument()
   })
@@ -120,6 +126,12 @@ describe('PluginDetail', () => {
     mount({ newSession: true })
     fireEvent.click(await screen.findByRole('button', { name: '新会话' }))
     expect(route.get()).toEqual({ page: 'chat', newSession: {} })
+  })
+
+  it('升级 waits for the detail: the current grants are its starting point', async () => {
+    installFakeForge({ calls: { 'plugins.get': () => new Promise(() => {}), 'plugins.mcp.status': { servers: [] } } })
+    mount()
+    expect((screen.getByRole('button', { name: '升级' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('a grants.updated event for it reloads; uninstalled closes; -32601 → 不支持', async () => {
