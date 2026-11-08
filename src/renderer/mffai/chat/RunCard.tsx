@@ -96,7 +96,7 @@ export function RunCard({ sessionId, checkout, run, turnOpen, row, onChanged }: 
   run: RunItem
   /** 运行所在的轮还开着(后台的 open 为准):否则没结束的运行也不给停止 */
   turnOpen: boolean
-  /** executor.runs 里这一行:worktree 还在不在、合并过没有(重开之后靠它) */
+  /** executor.runs 里这一行:worktree 还在不在、合并过没有。没有这一行 = 不知道,不给合并、丢弃 */
   row?: RunRow
   onChanged?: () => void
 }) {
@@ -108,7 +108,8 @@ export function RunCard({ sessionId, checkout, run, turnOpen, row, onChanged }: 
   const end = run.ended
   const files = end ? end.changed.files.length + (end.changed.filesTruncated ?? 0) : 0
   const worktree = end?.worktree ?? run.worktree ?? row?.worktree?.path
-  const present = !a.discarded && !!worktree && row?.worktree?.present !== false
+  // worktree 在不在只有 executor.runs 知道(丢弃不写事件):查不到这一行就不当它在
+  const present = !a.discarded && !!worktree && row?.worktree?.present === true
   const merged = a.merged ?? run.merged ?? (row?.worktree?.merged ? { files: row.changed ?? files } : null)
   const canStop = run.phase !== 'ended' && turnOpen
   const canMerge = run.phase === 'ended' && present && files > 0 && !merged

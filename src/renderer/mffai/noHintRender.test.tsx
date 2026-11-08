@@ -234,7 +234,7 @@ const ROWS: Row[] = [
         'executor.changes': { files: [{ path: 'a.ts', status: 'M' }], source: 'git', concurrent: true },
         'executor.diff': { path: 'a.ts', status: 'M', binary: false, truncated: true, lines: [{ kind: 'del', ln: 1, text: 'old' }] },
         'executor.worktree.merge': () => fail(-32602, 'refused', { reason: 'conflict', restored: false, paths: ['a.ts'] }),
-        'executor.runs': { runs: [] },
+        'executor.runs': { runs: [runRow('r1', S, { worktree: { path: '/wt', present: true }, changed: 2 })] },
       })
       route.set({ page: 'chat', sessionId: S })
       render(<ChatPage />)
@@ -245,7 +245,7 @@ const ROWS: Row[] = [
       fireEvent.click(screen.getByRole('button', { name: '2 个文件' }))
       fireEvent.click(await screen.findByText('a.ts', { selector: '.mffai-path' }))
       await screen.findByText('old')
-      fireEvent.click(screen.getByRole('button', { name: '合并' }))
+      fireEvent.click(await screen.findByRole('button', { name: '合并' }))
       await act(async () => { fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '合并' })) })
       await screen.findByText('未还原')
     },

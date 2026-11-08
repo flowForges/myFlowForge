@@ -19,7 +19,10 @@ import { isEnded, rollbackable, type SessionView, type TurnView } from './reduce
 import { toMessages } from './toMessages'
 import { useSession } from './useSession'
 
-/** 结束了、留着 worktree 的运行:重开之后 worktree 还在不在、合并过没有,要问 executor.runs */
+/**
+ * 结束了、留着 worktree 的运行:worktree 还在不在、合并过没有,要问 executor.runs。它不按会话查,也没有分页,
+ * 只有 limit(最多 200):取最多的一页,按会话筛;查不到的运行卡片不给合并、丢弃
+ */
 function useRunRows(sessionId: string, view: SessionView | null): { rows: Map<string, RunRow>; refresh: () => void } {
   const [rows, setRows] = useState<Map<string, RunRow>>(new Map())
   const need = useMemo(() => (view?.turns ?? []).flatMap((t) => [...t.runs.values()])

@@ -80,7 +80,8 @@ describe('DeleteSession', () => {
       'session.delete': () => fail(-32602, 'unmerged', { reason: 'unmerged', runs: [{ runId: 'r1', files: 4 }, { runId: 'zz', files: 1 }] }),
     } })
     const p = mount()
-    await waitFor(() => expect(okBtn().textContent).toBe('删除'))
+    await waitFor(() => expect(okBtn().disabled).toBe(false))
+    expect(okBtn().textContent).toBe('删除')
     await act(async () => { fireEvent.click(okBtn()) })
     await waitFor(() => expect(okBtn().textContent).toBe('删除并丢弃改动'))
     expect(f.callsOf('session.delete')).toHaveLength(1)
@@ -101,7 +102,9 @@ describe('DeleteSession', () => {
       'session.delete': () => fail(-32003, 'busy'),
     } })
     mount()
-    await waitFor(() => expect(okBtn().textContent).toBe('删除'))
+    // 按钮文字在 executor.runs 答回来之前就是 删除:等它可用
+    await waitFor(() => expect(okBtn().disabled).toBe(false))
+    expect(okBtn().textContent).toBe('删除')
     await act(async () => { fireEvent.click(okBtn()) })
     await waitFor(() => expect(okBtn().textContent).toBe('删除并丢弃改动'))
     expect(f.callsOf('executor.runs')).toHaveLength(2)

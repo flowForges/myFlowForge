@@ -14,6 +14,8 @@ const run = (patch: Partial<RunItem> = {}): RunItem => ({
   runId: 'r1', turnId: 't1', seq: 1, phase: 'running', executor: 'codex', isolation: 'wrapped', readOnly: false, cwd: '/repo', progress: [], ...patch,
 })
 const done = (patch: Partial<RunItem> = {}, end: Partial<ExecutorRunEndedPayload> = {}) => run({ phase: 'ended', worktree: '/wt/r1', ended: ended(end), ...patch })
+/** executor.runs 里这次运行的行:worktree 还在 */
+const kept = runRow('r1', S, { worktree: { path: '/wt/r1', present: true }, changed: 3 })
 const btn = (name: string) => screen.queryByRole('button', { name }) as HTMLButtonElement | null
 const dialog = () => screen.getByRole('dialog')
 const rows = () => [...dialog().querySelectorAll('.mffai-confirm-row')].map((r) => [...r.querySelectorAll('span')].map((c) => c.textContent))
@@ -49,7 +51,7 @@ describe('RunCard', () => {
 
   it('ended: status, reason, time, exit, CLI usage, violations with 还有 N 条, raw log with a copy button, N 个文件', () => {
     installFakeForge()
-    render(<RunCard sessionId={S} turnOpen={false} run={done({}, {
+    render(<RunCard sessionId={S} turnOpen={false} row={kept} run={done({}, {
       status: 'failed', reason: 'exit_nonzero', exit: 1, usage: { input: 10, output: 20 }, violations: ['net:evil:443'], violationsTruncated: 2,
       rawLog: '/raw/r1.log', changed: { files: ['a', 'b', 'c'], source: 'git', filesTruncated: 4 },
     })} />)
@@ -61,14 +63,14 @@ describe('RunCard', () => {
 
   it('a signal shows as a code', () => {
     installFakeForge()
-    render(<RunCard sessionId={S} turnOpen={false} run={done({}, { status: 'cancelled', signal: 'SIGTERM' })} />)
+    render(<RunCard sessionId={S} turnOpen={false} row={kept} run={done({}, { status: 'cancelled', signal: 'SIGTERM' })} />)
     expect(screen.getByText('SIGTERM')).toBeInTheDocument()
   })
 
   it('合并: the confirm names the session checkout as the target and the worktree as the source; then executor.worktree.merge; merged hides 合并', async () => {
     const f = installFakeForge({ calls: { 'executor.worktree.merge': { ok: true, files: 3 } } })
     // 运行的 cwd 是 worktree(来源),合并写进的是会话的检出
-    render(<RunCard sessionId={S} checkout="/repo" turnOpen={false} run={done({ cwd: '/wt/r1', worktree: '/wt/r1' })} />)
+    render(<RunCard sessionId={S} checkout="/repo" turnOpen={false} row={kept} run={done({ cwd: '/wt/r1', worktree: '/wt/r1' })} />)
     fireEvent.click(btn('合并')!)
     expect(dialog()).toHaveAccessibleName('合并到 /repo')
     expect(rows()).toEqual([['worktree', '/wt/r1'], ['文件', '3']])
@@ -80,16 +82,16 @@ describe('RunCard', () => {
 
   it('a run merged per its event shows no 合并', () => {
     installFakeForge()
-    render(<RunCard sessionId={S} turnOpen={false} run={done({ merged: { files: 2 } })} />)
+    render(<RunCard sessionId={S} turnOpen={false} row={kept} run={done({ merged: { files: 2 } })} />)
     expect(btn('合并')).toBeNull()
     expect(btn('丢弃')).not.toBeNull()
   })
 
   it('no 合并 without changes, without a worktree, or when the run list says the worktree is gone', () => {
     installFakeForge()
-    const { rerender } = render(<RunCard sessionId={S} turnOpen={false} run={done({}, { changed: { files: [], source: 'git' } })} />)
+    const { rerender } = render(<RunCard sessionId={S} turnOpen={false} row={kept} run={done({}, { changed: { files: [], source: 'git' } })} />)
     expect(btn('合并')).toBeNull()
-    rerender(<RunCard sessionId={S} turnOpen={false} run={done({ worktree: undefined }, { worktree: undefined })} />)
+    rerender(<RunCard sessionId={S} turnOpen={false} row={runRow('r1', S)} run={done({ worktree: undefined }, { worktree: undefined })} />)
     expect(btn('合并')).toBeNull()
     expect(btn('丢弃')).toBeNull()
     rerender(<RunCard sessionId={S} turnOpen={false} run={done()} row={runRow('r1', S, { worktree: { path: '/wt/r1', present: false } })} />)
@@ -97,9 +99,16 @@ describe('RunCard', () => {
     expect(btn('丢弃')).toBeNull()
   })
 
+  it('no row for the run in executor.runs: worktree state unknown, so no 合并 and no 丢弃', () => {
+    installFakeForge()
+    render(<RunCard sessionId={S} turnOpen={false} run={done()} />)
+    expect(btn('合并')).toBeNull()
+    expect(btn('丢弃')).toBeNull()
+  })
+
   const refuse = async (data: object) => {
     installFakeForge({ calls: { 'executor.worktree.merge': () => fail(-32602, 'refused', data) } })
-    const r = render(<RunCard sessionId={S} turnOpen={false} run={done()} />)
+    const r = render(<RunCard sessionId={S} turnOpen={false} row={kept} run={done()} />)
     fireEvent.click(btn('合并')!)
     await act(async () => { fireEvent.click(within(dialog()).getByRole('button', { name: '合并' })) })
     return r
@@ -129,7 +138,7 @@ describe('RunCard', () => {
 
   it('a merge of a run still going (-32003) shows 忙', async () => {
     installFakeForge({ calls: { 'executor.worktree.merge': () => fail(-32003, 'busy') } })
-    render(<RunCard sessionId={S} turnOpen={false} run={done()} />)
+    render(<RunCard sessionId={S} turnOpen={false} row={kept} run={done()} />)
     fireEvent.click(btn('合并')!)
     await act(async () => { fireEvent.click(within(dialog()).getByRole('button', { name: '合并' })) })
     expect(screen.getByText('忙')).toBeInTheDocument()
@@ -137,7 +146,7 @@ describe('RunCard', () => {
 
   it('丢弃: confirm 丢弃 worktree / 路径, then executor.worktree.discard; afterwards no buttons', async () => {
     const f = installFakeForge({ calls: { 'executor.worktree.discard': { ok: true } } })
-    render(<RunCard sessionId={S} turnOpen={false} run={done()} />)
+    render(<RunCard sessionId={S} turnOpen={false} row={kept} run={done()} />)
     fireEvent.click(btn('丢弃')!)
     expect(dialog()).toHaveAccessibleName('丢弃 worktree')
     expect(rows()).toEqual([['路径', '/wt/r1']])
@@ -150,7 +159,7 @@ describe('RunCard', () => {
 
   it('a discard answering ok:false shows 失败 and keeps the buttons', async () => {
     installFakeForge({ calls: { 'executor.worktree.discard': { ok: false } } })
-    render(<RunCard sessionId={S} turnOpen={false} run={done()} />)
+    render(<RunCard sessionId={S} turnOpen={false} row={kept} run={done()} />)
     fireEvent.click(btn('丢弃')!)
     await act(async () => { fireEvent.click(within(dialog()).getByRole('button', { name: '丢弃' })) })
     expect(screen.getByText('失败')).toBeInTheDocument()
@@ -162,7 +171,7 @@ describe('RunCard', () => {
       'executor.changes': { files: [{ path: 'a.ts', status: 'M' }], source: 'git' },
       'executor.diff': { path: 'a.ts', status: 'M', binary: false, truncated: false, lines: [{ kind: 'add', ln: 1, text: 'NEW' }] },
     } })
-    render(<RunCard sessionId={S} turnOpen={false} run={done({}, { changed: { files: ['a.ts'], source: 'git' } })} />)
+    render(<RunCard sessionId={S} turnOpen={false} row={kept} run={done({}, { changed: { files: ['a.ts'], source: 'git' } })} />)
     await act(async () => { fireEvent.click(btn('1 个文件')!) })
     expect(f.callsOf('executor.changes')).toEqual([{ sessionId: S, runId: 'r1' }])
     await act(async () => { fireEvent.click(screen.getByText('a.ts')) })
