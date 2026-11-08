@@ -38,15 +38,15 @@ function useRunRows(sessionId: string, view: SessionView | null): { rows: Map<st
   return { rows, refresh }
 }
 
-function Cards({ sessionId, turn, view, rows, onRunChanged }: {
-  sessionId: string; turn: TurnView; view: SessionView; rows: Map<string, RunRow>; onRunChanged: () => void
+function Cards({ sessionId, checkout, turn, view, rows, onRunChanged }: {
+  sessionId: string; checkout?: string; turn: TurnView; view: SessionView; rows: Map<string, RunRow>; onRunChanged: () => void
 }) {
   const open = !isEnded(view, turn)
   const cards = [
     ...turn.approvals.map((a) => ({ seq: a.seq, node: <ApprovalCard key={`a${a.approvalId}`} sessionId={sessionId} approval={a} /> })),
     ...[...turn.runs.values()].map((r) => ({
       seq: r.seq,
-      node: <RunCard key={`r${r.runId}`} sessionId={sessionId} run={r} turnOpen={open} row={rows.get(r.runId)} onChanged={onRunChanged} />,
+      node: <RunCard key={`r${r.runId}`} sessionId={sessionId} checkout={checkout} run={r} turnOpen={open} row={rows.get(r.runId)} onChanged={onRunChanged} />,
     })),
   ].sort((a, b) => a.seq - b.seq)
   return <>{cards.map((c) => c.node)}</>
@@ -104,7 +104,7 @@ export function SessionPane({ sessionId, summary, imName, onSend, onCommand, onS
             <Fragment key={g.turnId}>
               {g.messages.map((m) => <Message key={m.id} msg={m} streaming={streamingIds.has(m.id)} />)}
               <TurnTail sessionId={sessionId} turn={turn} canRollback={canRollback === turn.turnId} />
-              <Cards sessionId={sessionId} turn={turn} view={view} rows={rows} onRunChanged={refresh} />
+              <Cards sessionId={sessionId} checkout={session?.cwd ?? summary?.cwd} turn={turn} view={view} rows={rows} onRunChanged={refresh} />
             </Fragment>
           )
         })}

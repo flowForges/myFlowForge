@@ -89,8 +89,10 @@ function phaseChip(r: RunItem) {
   return <Chip tone={st === 'ok' ? 'ok' : st === 'cancelled' ? 'muted' : 'bad'}>{label('runStatus', st)}</Chip>
 }
 
-export function RunCard({ sessionId, run, turnOpen, row, onChanged }: {
+export function RunCard({ sessionId, checkout, run, turnOpen, row, onChanged }: {
   sessionId: string
+  /** 会话的 cwd:合并写进的检出。运行的 cwd 是 worktree(来源),不能当目标 */
+  checkout?: string
   run: RunItem
   /** 运行所在的轮还开着(后台的 open 为准):否则没结束的运行也不给停止 */
   turnOpen: boolean
@@ -197,7 +199,7 @@ export function RunCard({ sessionId, run, turnOpen, row, onChanged }: {
         </div>
       )}
       {confirm === 'merge' && (
-        <Confirm title={`合并到 ${run.cwd ?? ''}`.trim()} rows={[['文件', String(files)]]} confirmLabel="合并"
+        <Confirm title={checkout ? `合并到 ${checkout}` : '合并'} rows={[['worktree', worktree ?? ''], ['文件', String(files)]]} confirmLabel="合并"
           onCancel={() => setConfirm(null)} onConfirm={() => void act('merge')} />
       )}
       {confirm === 'discard' && (

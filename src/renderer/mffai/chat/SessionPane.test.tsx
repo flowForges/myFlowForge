@@ -208,6 +208,25 @@ describe('SessionPane (through ChatPage)', () => {
     expect(within(card('r1')).queryByRole('button', { name: '合并' })).toBeNull()
   })
 
+  it('the merge confirm targets the session cwd, not the run cwd (the worktree)', async () => {
+    const evs = [
+      e('message.user', { turnId: 't1', text: 'hi' }),
+      e('executor.run.started', { runId: 'r1', turnId: 't1', executor: 'codex', cwd: '/wt/s1/r1', isolation: 'own', worktree: '/wt/s1/r1' }),
+      e('executor.run.ended', { runId: 'r1', turnId: 't1', executor: 'codex', status: 'ok', ms: 1, changed: { files: ['a'], source: 'git' }, worktree: '/wt/s1/r1' }),
+      e('turn.ended', { turnId: 't1' }),
+    ]
+    f = installFakeForge({ calls: {
+      'session.list': { sessions: [summary(S, { cwd: '/repo' })] }, 'plugins.commands': { commands: [] },
+      'session.state': { session: summary(S, { cwd: '/repo' }), events: evs, hasMore: false, lastSeq: evs.at(-1)!.seq },
+      'executor.runs': { runs: [runRow('r1', S, { worktree: { path: '/wt/s1/r1', present: true }, changed: 1 })] },
+    } })
+    render(<ChatPage />)
+    const merge = await waitFor(() => within(card('r1')).getByRole('button', { name: '合并' }))
+    fireEvent.click(merge)
+    expect(screen.getByRole('dialog')).toHaveAccessibleName('合并到 /repo')
+    expect(within(screen.getByRole('dialog')).getByText('/wt/s1/r1')).toBeInTheDocument()
+  })
+
   it('the rollback button sits on the newest snapshotted turn only, once nothing is open', async () => {
     const snap = (id: string) => [e('turn.snapshot', { turnId: id, phase: 'start', ref: `${id}-s` }), e('turn.snapshot', { turnId: id, phase: 'end', ref: `${id}-e`, changed: 1 })]
     const evs = [

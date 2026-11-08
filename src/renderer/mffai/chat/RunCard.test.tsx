@@ -65,12 +65,13 @@ describe('RunCard', () => {
     expect(screen.getByText('SIGTERM')).toBeInTheDocument()
   })
 
-  it('合并: confirm 合并到 <cwd> / 文件 N, then executor.worktree.merge; merged hides 合并', async () => {
+  it('合并: the confirm names the session checkout as the target and the worktree as the source; then executor.worktree.merge; merged hides 合并', async () => {
     const f = installFakeForge({ calls: { 'executor.worktree.merge': { ok: true, files: 3 } } })
-    render(<RunCard sessionId={S} turnOpen={false} run={done()} />)
+    // 运行的 cwd 是 worktree(来源),合并写进的是会话的检出
+    render(<RunCard sessionId={S} checkout="/repo" turnOpen={false} run={done({ cwd: '/wt/r1', worktree: '/wt/r1' })} />)
     fireEvent.click(btn('合并')!)
     expect(dialog()).toHaveAccessibleName('合并到 /repo')
-    expect(rows()).toEqual([['文件', '3']])
+    expect(rows()).toEqual([['worktree', '/wt/r1'], ['文件', '3']])
     await act(async () => { fireEvent.click(within(dialog()).getByRole('button', { name: '合并' })) })
     expect(f.callsOf('executor.worktree.merge')).toEqual([{ commandId: expect.any(String), sessionId: S, runId: 'r1' }])
     expect(btn('合并')).toBeNull()
