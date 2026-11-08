@@ -505,7 +505,10 @@ function parseHunks(text: string, maxLines: number, maxBytes: number): { lines: 
     lines.push(l)
     return true
   }
-  for (const l of text.split('\n')) {
+  const all = text.split('\n')
+  // 最后一个换行之后的空串不是一行(截断时块还没走完,它会被当成空的上下文行)
+  if (all.at(-1) === '') all.pop()
+  for (const l of all) {
     if (oldLeft <= 0 && newLeft <= 0) {
       const m = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(l)
       if (m) {
