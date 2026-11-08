@@ -126,12 +126,14 @@ export const RuleSpecSchema = z.object({
   match: z.array(z.string()).optional(),
   noMatch: z.array(z.string()).optional(),
 })
+export type RuleSpec = z.infer<typeof RuleSpecSchema>
 export const RuleErrorSchema = z.object({
   index: z.number(),
   rule: z.string(),
   reason: z.enum(['syntax', 'subject', 'pattern', 'test_failed', 'network']),
   case: z.string().optional(),
 })
+export type RuleError = z.infer<typeof RuleErrorSchema>
 export const PermissionsConfigSchema = z.object({
   rules: z.array(RuleSpecSchema),
   network: z.object({ allow: z.array(z.string()) }),

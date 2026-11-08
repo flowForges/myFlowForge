@@ -162,3 +162,14 @@
 .mffai-paircode { font-size: 28px; font-weight: 600; letter-spacing: 3px; font-family: var(--mono, ui-monospace, monospace); }
 .mffai-pairing .qr { margin-top: 6px; }
 .mffai-tg-projects input[aria-label="别名"] { width: 120px; }
+/* 权限页(08 §11) */
+.mffai-perm { gap: 16px; }
+.mffai-rules { display: flex; flex-direction: column; gap: 8px; }
+.mffai-rule { flex-wrap: wrap; border-bottom: 1px solid var(--border); }
+.mffai-rule:last-child { border-bottom: none; }
+.mffai-rule-bad { background: color-mix(in srgb, var(--del, #e5484d) 8%, transparent); }
+.mffai-rule-error { display: inline-flex; gap: 4px; }
+.mffai-defaults { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 12.5px; color: var(--faint); font-family: var(--mono, monospace); }
+.mffai-tags { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.mffai-tag { display: inline-flex; align-items: center; gap: 2px; }
+.mffai-tags input { height: 26px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--fg); font-size: 12.5px; }

@@ -25,6 +25,7 @@ import { TurnTail } from './chat/TurnTail'
 import { ApprovalCard } from './chat/ApprovalCard'
 import TasksPage from './tasks/TasksPage'
 import ConnectionsPage from './conn/ConnectionsPage'
+import PermissionsPage from './perm/PermissionsPage'
 import { perms, runRow, summary } from './test/sessions'
 import { fail, installFakeForge, RUNNING_STATE, type CallTable, type FakeForge } from './test/fakeForge'
 import { ev, resetSeq, userMsg } from './test/events'
@@ -382,6 +383,33 @@ const ROWS: Row[] = [
       render(<ConnectionsPage />)
       fireEvent.click(screen.getByRole('tab', { name: 'Telegram' }))
       await screen.findByText('不支持')
+    },
+  },
+  {
+    name: 'perm: rules with a tag, defaults, network list, switches, invalid-rule error, and the reload-on-conflict button',
+    mount: async (f) => {
+      f.script({
+        'permissions.get': {
+          config: {
+            rules: [{ effect: 'ask', rule: 'shell:*', match: ['ls'], noMatch: [] }],
+            network: { allow: ['example.com'] },
+            sandbox: { enabled: true, allowLoopback: false },
+            allowUnsandboxedAuto: false,
+          },
+          defaults: ['shell:read'],
+          errors: [],
+          sandbox: { level: 'partial', missing: ['proxy'], autoDegraded: false },
+        },
+        'permissions.set': () => fail(-32602, 'invalid rules', [{ index: 0, rule: 'shell:*', reason: 'pattern', case: 'ls -la' }]),
+      })
+      render(<PermissionsPage />)
+      const row = await screen.findByText('example.com')
+      fireEvent.change(screen.getByLabelText('规则'), { target: { value: 'shell:write' } })
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: '保存' })) })
+      await screen.findByText('pattern')
+      expect(row).toBeInTheDocument()
+      await act(async () => { f.emit(ev('permissions.updated', { rules: 1, network: 1 })) })
+      await screen.findByRole('button', { name: '已在别处修改 · 重新载入' })
     },
   },
   {
