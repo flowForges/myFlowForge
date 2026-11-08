@@ -175,3 +175,22 @@
 .mffai-tags input { height: 26px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--fg); font-size: 12.5px; }
 .mffai-field { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--fg-2); }
 .mffai-row.bad [aria-invalid="true"] { border-color: var(--del, #e5484d); }
+/* 记忆页(08 §12) */
+.mffai-memory { gap: 14px; }
+.mffai-chatroot { flex-direction: column; }
+.mffai-recs { display: flex; flex-direction: column; gap: 8px; }
+.mffai-rec .mffai-v { display: block; margin-bottom: 4px; }
+.mffai-fileeditor { max-width: 720px; }
+.mffai-filebody { min-height: 140px; font-family: var(--mono, monospace); font-size: 12.5px; }
+.mffai-profile { gap: 14px; }
+.mffai-proposal { max-width: 720px; gap: 8px; }
+.mffai-quote { display: inline-block; padding: 2px 8px; border-left: 2px solid var(--border); color: var(--fg-2); font-size: 12.5px; }
+.mffai-itemrow { flex-wrap: wrap; border-bottom: 1px solid var(--border); }
+.mffai-itemrow:last-child { border-bottom: none; }
+.mffai-itemtext { flex: 1; min-width: 160px; }
+.mffai-habit .mffai-v { flex: 1; }
+.mffai-change { padding: 2px 0; }
+.mffai-change .mffai-file-btn { gap: 10px; }
+.mffai-meter-row .mffai-k { width: 56px; }
+.mffai-meter { flex: 1; max-width: 260px; height: 6px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
+.mffai-meter-fill { height: 100%; background: var(--accent); }
