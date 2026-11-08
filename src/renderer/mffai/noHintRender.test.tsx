@@ -29,6 +29,7 @@ import { perms, runRow, summary } from './test/sessions'
 import { fail, installFakeForge, RUNNING_STATE, type CallTable, type FakeForge } from './test/fakeForge'
 import { ev, resetSeq, userMsg } from './test/events'
 import { findHints } from './test/noHint'
+import { tgCalls, tgStatus } from './test/telegram'
 
 const roots = { data: '/d/mff-ai', worktrees: '/d/mff-ai-worktrees', imWorktrees: '/d/mff-ai-im', plugins: '/d/mff-ai-plugins', keychain: 'myflowforge-mffai/x' }
 
@@ -334,6 +335,14 @@ const ROWS: Row[] = [
       })
       f.mffai.models.accounts.mockResolvedValue({ accounts: [{ id: 'g1', presetId: 'p-gpt', label: 'gpt', state: 'needs_login' }], secretsBackend: 'unavailable' })
       f.mffai.chatgpt.begin.mockResolvedValue({ flowId: 'f1', authUrl: 'http://x' })
+      f.script({ ...tgCalls(tgStatus({
+        state: 'conflict', reason: 'webhook_set', undelivered: 2, problems: ['save_failed'], secretsBackend: 'plaintext-file', proxy: 'env',
+        paired: [{ accountId: '42', name: 'Ann', pairedAt: 1 }], pairing: { active: true, expiresAt: Date.now() + 60_000 },
+      })),
+      'permissions.get': perms('partial'),
+      'channel.telegram.chats': { chats: [{ chatId: 'c1', accountId: '42', sessionId: 's1', project: 'api', model: { accountId: 'a1', modelId: 'm1' }, queued: 1, running: true }], worktrees: [] },
+      'channel.telegram.pairing.begin': () => ({ code: 'AB12-CD34', expiresAt: Date.now() + 60_000, link: 'https://t.me/my_test_bot?start=AB12CD34' }),
+      'channel.telegram.config.set': () => fail(-32602, 'invalid_project') })
       f.script({ 'executor.list': { executors: [
         { id: 'claude', installed: true, version: '1.0.0', auth: 'ok', isolation: 'own', missing: [] },
         { id: 'codex', installed: false, auth: 'missing', isolation: 'none', missing: ['codex_selftest'] },
@@ -351,7 +360,28 @@ const ROWS: Row[] = [
       await screen.findByText('claude')
       await screen.findByText('codex_selftest')
       fireEvent.click(screen.getByRole('tab', { name: 'Telegram' }))
-      await screen.findByText('占位')
+      await screen.findByRole('button', { name: '清除 webhook' })
+      await screen.findByTestId('mffai-tg-chat')
+      await screen.findByText('部分')
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: '开始配对' })) })
+      await screen.findByText('AB12-CD34')
+      fireEvent.change(screen.getByLabelText('别名'), { target: { value: 'x' } })
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: '保存' })) })
+      await screen.findByText('invalid_project')
+      expect(findHints()).toEqual([])
+      fireEvent.click(screen.getByRole('button', { name: '撤销' }))
+      expect(findHints()).toEqual([])
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '取消' }))
+      fireEvent.click(screen.getByRole('button', { name: '清除令牌' }))
+      await screen.findByRole('dialog')
+    },
+  },
+  {
+    name: 'connections: Telegram unsupported',
+    mount: async () => {
+      render(<ConnectionsPage />)
+      fireEvent.click(screen.getByRole('tab', { name: 'Telegram' }))
+      await screen.findByText('不支持')
     },
   },
   {

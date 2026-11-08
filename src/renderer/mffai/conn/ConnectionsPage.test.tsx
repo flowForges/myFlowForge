@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 import ConnectionsPage from './ConnectionsPage'
 import { installFakeForge, type FakeForge } from '../test/fakeForge'
+import { tgCalls } from '../test/telegram'
 
 let f: FakeForge
 
@@ -28,12 +29,13 @@ describe('ConnectionsPage', () => {
     expect(await screen.findByText('claude')).toBeInTheDocument()
   })
 
-  it('switches to Telegram and shows a placeholder, not the model list', async () => {
-    f = installFakeForge()
+  it('switches to Telegram and shows its status, not the model list', async () => {
+    f = installFakeForge({ calls: tgCalls() })
     f.mffai.models.catalog.mockResolvedValue({ presets: [], models: {} })
     f.mffai.models.accounts.mockResolvedValue({ accounts: [{ id: 'a1', presetId: 'p', label: 'acc1', state: 'ok' }], secretsBackend: 'keychain' })
     render(<ConnectionsPage />)
     fireEvent.click(screen.getByRole('tab', { name: 'Telegram' }))
+    expect(await screen.findByTestId('mffai-tg-status')).toBeInTheDocument()
     expect(screen.queryByText('acc1')).toBeNull()
   })
 })

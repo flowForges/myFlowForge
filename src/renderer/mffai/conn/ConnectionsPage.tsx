@@ -1,8 +1,8 @@
-// 连接页(08 §10):三个子页 模型 / 执行器 / Telegram。Telegram 在 Task 10 换成真正的组件,这里先占位。
+// 连接页(08 §10):三个子页 模型 / 执行器 / Telegram。
 import { useState } from 'react'
 import { Connections } from '../Connections'
 import { Executors } from './Executors'
-import { Chip } from '../ui/Chip'
+import { Telegram } from './Telegram'
 
 type Tab = 'model' | 'exec' | 'telegram'
 const TABS: [Tab, string][] = [['model', '模型'], ['exec', '执行器'], ['telegram', 'Telegram']]
@@ -18,7 +18,7 @@ export default function ConnectionsPage() {
       </div>
       {tab === 'model' && <Connections />}
       {tab === 'exec' && <Executors />}
-      {tab === 'telegram' && <Chip>占位</Chip>}
+      {tab === 'telegram' && <Telegram />}
     </div>
   )
 }

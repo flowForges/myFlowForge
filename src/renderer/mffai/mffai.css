@@ -155,3 +155,10 @@
 .mffai-grouphead { display: flex; justify-content: space-between; align-items: center; padding-bottom: 4px; border-bottom: 1px solid var(--border); font-size: 12.5px; color: var(--faint); }
 .mffai-taskrow { flex-wrap: wrap; padding: 6px 0; border-bottom: 1px solid var(--border); }
 .mffai-taskrow:last-child { border-bottom: none; }
+.mffai-tg { display: flex; flex-direction: column; gap: 10px; }
+.mffai-tg-dropped { border-collapse: collapse; font-size: 12.5px; }
+.mffai-tg-dropped th { color: var(--faint); font-weight: normal; padding: 2px 10px 2px 0; text-align: left; }
+.mffai-tg-dropped td { padding: 2px 10px 2px 0; font-variant-numeric: tabular-nums; }
+.mffai-paircode { font-size: 28px; font-weight: 600; letter-spacing: 3px; font-family: var(--mono, ui-monospace, monospace); }
+.mffai-pairing .qr { margin-top: 6px; }
+.mffai-tg-projects input[aria-label="别名"] { width: 120px; }
