@@ -122,6 +122,16 @@ describe('Consent', () => {
     expect(rows[1]).not.toContain('必填')
   })
 
+  it('the config type is plugin-written: text, not one of our chips', () => {
+    const c = { ...FULL_CONSENT, config: [{ ...FULL_CONSENT.config[0], type: '敏感' }] }
+    render(<Consent consent={c} />)
+    const row = section('config').querySelector('[data-config]') as HTMLElement
+    const typed = within(row).getAllByText('敏感')
+    expect(typed).toHaveLength(2)
+    expect(typed.filter((e) => e.closest('.mffai-ptext'))).toHaveLength(1)
+    expect(row.querySelector('code')).toBeNull()
+  })
+
   it('notRun and warnings are expanded on first render, hooks in full, masked hooks marked', () => {
     const { container } = render(<Consent consent={FULL_CONSENT} />)
     expect(container.querySelector('details')).toBeNull()

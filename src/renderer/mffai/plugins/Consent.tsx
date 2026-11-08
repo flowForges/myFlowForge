@@ -200,7 +200,7 @@ export function Consent({ consent: c }: { consent: PluginConsent }) {
               <PText text={k.title} />
               {k.sensitive && <Chip tone="warn">敏感</Chip>}
               {k.required && <Chip>必填</Chip>}
-              <CodeChip code={k.type} />
+              <PText text={k.type} mono />
             </div>
           ))}
         </Section>

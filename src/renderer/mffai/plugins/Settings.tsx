@@ -5,7 +5,6 @@ import { useRef, useState } from 'react'
 import type { PluginConsent, PluginDetail } from '@mffai/protocol'
 import { call } from '../rpc'
 import { Chip } from '../ui/Chip'
-import { CodeChip } from '../ui/CodeChip'
 import { PText } from '../ui/PText'
 import { FailChip, useAction } from './action'
 
@@ -37,7 +36,7 @@ function SettingRow({ id, s, c, onChanged }: { id: string; s: Setting; c?: Confi
       {c && <PText text={c.title} />}
       {s.sensitive && <Chip tone="warn">敏感</Chip>}
       {c?.required && <Chip>必填</Chip>}
-      {c && <CodeChip code={c.type} />}
+      {c && <PText text={c.type} mono />}
       {s.sensitive
         ? <Chip tone={s.set ? 'ok' : 'muted'}>{s.set ? '已设置' : '未设置'}</Chip>
         : s.value !== undefined && <PText text={s.value} mono />}

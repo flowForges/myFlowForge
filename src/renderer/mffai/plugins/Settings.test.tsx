@@ -28,6 +28,7 @@ describe('Settings', () => {
     const mcpVar = row('MCP_VAR')
     expect(within(mcpVar).getByText('已设置')).toBeInTheDocument()
     expect(within(mcpVar).getByRole('button', { name: '清除' })).toBeInTheDocument()
+    expect(within(tok).getByText('string').closest('.mffai-ptext')).not.toBeNull()
     const region = row('region')
     expect(region).toHaveTextContent('eu-west')
     expect((within(region).getByLabelText('region') as HTMLInputElement).type).toBe('text')
