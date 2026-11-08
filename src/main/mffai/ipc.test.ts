@@ -189,6 +189,15 @@ describe('mffai 模型 / ChatGPT 登录通道', () => {
     await invoke(CH.mffaiPrompt, 'hi', { accountId: 'a', modelId: 'm', extra: 1 })
     expect(host.prompt).toHaveBeenLastCalledWith('hi', { accountId: 'a', modelId: 'm' })
   })
+
+  // 08 §4.7、§10.1:自定义预设的手填模型清单和自标限制经这条通道转发;非字符串数组项、非法 restriction 值都丢掉
+  it('已启用:addAccount 转发 modelIds 和 restriction,过滤掉不是字符串/不合法的项', async () => {
+    const { invoke, host } = setup({ enabled: true, autostart: true })
+    await invoke(CH.mffaiModelsAddAccount, { presetId: 'custom-x', apiKey: 'sk-1', modelIds: ['m-a', 'm-b', 1, null], restriction: 'coding-tools-only' })
+    expect(host.addAccount).toHaveBeenCalledWith({ presetId: 'custom-x', apiKey: 'sk-1', modelIds: ['m-a', 'm-b'], restriction: 'coding-tools-only' })
+    await invoke(CH.mffaiModelsAddAccount, { presetId: 'p', apiKey: 'sk-2', restriction: 'bogus' })
+    expect(host.addAccount).toHaveBeenLastCalledWith({ presetId: 'p', apiKey: 'sk-2' })
+  })
 })
 
 describe('mffai 权限通道', () => {

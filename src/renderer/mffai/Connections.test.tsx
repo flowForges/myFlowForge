@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import MffaiView from './MffaiView'
 import { AddAccount } from './AddAccount'
 import { route } from './route'
@@ -13,6 +13,7 @@ const presets = [
   { id: 'p-key', label: 'Key套餐', billing: 'metered', restriction: 'none', auth: 'api-key', protocols: [], docsUrl: '' },
   { id: 'p-code', label: '编程套餐', billing: 'subscription', restriction: 'coding-tools-only', auth: 'api-key', protocols: [], docsUrl: '' },
   { id: 'p-gpt', label: 'ChatGPT', billing: 'subscription', restriction: 'none', auth: 'chatgpt-oauth', protocols: [], docsUrl: '' },
+  { id: 'custom-openai', label: '自定义', billing: 'metered', restriction: 'none', auth: 'api-key', protocols: [], docsUrl: '' },
 ]
 let accounts: any[]
 let catalogDefault: any
@@ -121,6 +122,53 @@ describe('Connections', () => {
     await waitFor(() => expect(mffai.chatgpt.begin).toHaveBeenCalled())
     fireEvent.click(await screen.findByText('取消'))
     expect(mffai.chatgpt.cancel).toHaveBeenCalledWith('f1')
+  })
+
+  // 02 Task 13:默认模型下拉不再固定用第一个模型;选第二个就发第二个
+  it('choosing the second model on an account sends that one, not the first', async () => {
+    mffai.models.catalog = vi.fn(async () => ({
+      presets, models: { 'p-key': [model('m1'), model('m9')], 'p-code': [model('m2')] }, default: catalogDefault,
+    }))
+    await openConnections()
+    await screen.findByText('acc1')
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'm9' } })
+    fireEvent.click(screen.getAllByText('设为默认')[0])
+    await waitFor(() => expect(mffai.models.setDefault).toHaveBeenCalledWith('a1', 'm9'))
+  })
+
+  // 默认账号的下拉初始就是目录记的默认模型,不是它清单里的第一个
+  it('the default account initializes to the catalog default model, not array[0]', async () => {
+    mffai.models.catalog = vi.fn(async () => ({
+      presets, models: { 'p-key': [model('m1')], 'p-code': [model('m2'), model('m7')] }, default: { accountId: 'a2', modelId: 'm7' },
+    }))
+    await openConnections()
+    await screen.findByText('acc2')
+    expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('m7')
+  })
+
+  // 账号自己标的限制(自定义预设账号)比预设的优先:预设是 none,账号是 coding-tools-only 时徽章照样出来
+  it('an account-level restriction override shows the badge even when the preset itself is unrestricted', async () => {
+    accounts = [...accounts, { id: 'a9', presetId: 'custom-openai', label: 'cust', state: 'ok', restriction: 'coding-tools-only' }]
+    await openConnections()
+    const row = (await screen.findByText('cust')).closest('.mffai-row') as HTMLElement
+    expect(within(row).getByText('限编程工具')).toBeInTheDocument()
+  })
+
+  // secretsBackend unavailable / unreadable:钥匙串不可用块(10.1,此前只处理了 plaintext-file)
+  it('secretsBackend unavailable or unreadable shows the 钥匙串不可用 chip', async () => {
+    mffai.models.accounts = vi.fn(async () => ({ accounts, secretsBackend: 'unavailable' }))
+    await openConnections()
+    expect(await screen.findByText('钥匙串不可用')).toBeInTheDocument()
+  })
+
+  // needs_login 账号是 ChatGPT 预设时才有重新登录;a2 是 api-key 预设,不出这个按钮
+  it('重新登录 only appears for a needs_login ChatGPT-oauth account, and calls chatgpt.begin', async () => {
+    accounts = [...accounts, { id: 'a4', presetId: 'p-gpt', label: 'gpt-broken', state: 'needs_login' }]
+    await openConnections()
+    await screen.findByText('gpt-broken')
+    expect(screen.queryAllByText('重新登录')).toHaveLength(1)
+    fireEvent.click(screen.getByText('重新登录'))
+    await waitFor(() => expect(mffai.chatgpt.begin).toHaveBeenCalled())
   })
 })
 
@@ -284,6 +332,74 @@ describe('AddAccount ChatGPT flow cleanup', () => {
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'p-code' } })
     fireEvent.click(screen.getByText('添加'))
     expect(screen.getByRole('dialog', { name: '此套餐仅限编程工具内使用' })).toBeInTheDocument()
+  })
+})
+
+describe('AddAccount custom preset fields', () => {
+  beforeEach(setup)
+
+  it('模型 id and 仅限编程工具 only show for the custom preset', async () => {
+    render(<AddAccount presets={presets as any} onDone={vi.fn()} />)
+    fireEvent.click(screen.getByText('添加账号'))
+    expect(screen.queryByLabelText('模型 id')).toBeNull()
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'custom-openai' } })
+    expect(screen.getByLabelText('模型 id')).toBeInTheDocument()
+    expect(screen.getByLabelText('仅限编程工具')).toBeInTheDocument()
+  })
+
+  it('模型 id is comma-split, trimmed and deduped; restriction sent only when checked, only for custom', async () => {
+    const onDone = vi.fn()
+    render(<AddAccount presets={presets as any} onDone={onDone} />)
+    fireEvent.click(screen.getByText('添加账号'))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'custom-openai' } })
+    fireEvent.change(document.querySelector('input[type=password]') as HTMLInputElement, { target: { value: 'sk-c' } })
+    fireEvent.change(screen.getByLabelText('模型 id'), { target: { value: ' m-a , m-b ,m-a, ,m-b ' } })
+    fireEvent.click(screen.getByLabelText('仅限编程工具'))
+    fireEvent.click(screen.getByText('添加'))
+    await waitFor(() => expect(mffai.models.addAccount).toHaveBeenCalledWith({
+      presetId: 'custom-openai', apiKey: 'sk-c', modelIds: ['m-a', 'm-b'], restriction: 'coding-tools-only',
+    }))
+  })
+
+  it('a non-custom preset never sends modelIds or restriction', async () => {
+    render(<AddAccount presets={presets as any} onDone={vi.fn()} />)
+    fireEvent.click(screen.getByText('添加账号'))
+    fireEvent.change(document.querySelector('input[type=password]') as HTMLInputElement, { target: { value: 'sk-d' } })
+    fireEvent.click(screen.getByText('添加'))
+    await waitFor(() => expect(mffai.models.addAccount).toHaveBeenCalledWith({ presetId: 'p-key', apiKey: 'sk-d' }))
+  })
+})
+
+// Review Focus 8:API key 和 Telegram 令牌、插件敏感设置同一条规矩 —— 提交之后不留在 DOM、日志、存储里
+describe('AddAccount API key never lingers after a successful add', () => {
+  beforeEach(setup)
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  it('key is gone from the DOM, console and storage once the add resolves', async () => {
+    const spies = [vi.spyOn(console, 'error').mockImplementation(() => {}), vi.spyOn(console, 'log').mockImplementation(() => {}), vi.spyOn(console, 'warn').mockImplementation(() => {})]
+    // jsdom 环境本来没挂 localStorage/sessionStorage;临时装一份内存实现,只为了能断言「没写进去」
+    const memStorage = (): Storage => {
+      const d: Record<string, string> = {}
+      return {
+        getItem: (k) => d[k] ?? null, setItem: (k, v) => { d[k] = v }, removeItem: (k) => { delete d[k] },
+        clear: () => { for (const k of Object.keys(d)) delete d[k] }, key: (i) => Object.keys(d)[i] ?? null,
+        get length() { return Object.keys(d).length },
+      }
+    }
+    vi.stubGlobal('localStorage', memStorage())
+    vi.stubGlobal('sessionStorage', memStorage())
+    const secret = 'sk-super-secret-42'
+    render(<AddAccount presets={presets as any} onDone={vi.fn()} />)
+    fireEvent.click(screen.getByText('添加账号'))
+    fireEvent.change(document.querySelector('input[type=password]') as HTMLInputElement, { target: { value: secret } })
+    fireEvent.click(screen.getByText('添加'))
+    await waitFor(() => expect(mffai.models.addAccount).toHaveBeenCalled())
+    await screen.findByText('添加账号')
+    expect(document.body.innerHTML).not.toContain(secret)
+    for (const spy of spies) for (const call of spy.mock.calls) expect(JSON.stringify(call)).not.toContain(secret)
+    const dump = (s: Storage) => Object.keys(s).map((k) => s.getItem(k)).join('')
+    expect(dump(localStorage)).not.toContain(secret)
+    expect(dump(sessionStorage)).not.toContain(secret)
   })
 })
 

@@ -124,6 +124,9 @@ function addAccountInput(v: unknown): AddAccountInput {
   for (const k of ['label', 'apiKey', 'baseUrl'] as const) if (typeof o[k] === 'string') out[k] = o[k]
   if (typeof o.protocol === 'string') out.protocol = o.protocol as AddAccountInput['protocol']
   if (typeof o.restrictionAck === 'boolean') out.restrictionAck = o.restrictionAck
+  // 08 §4.7、§10.1:自定义预设的手填模型清单和自标限制;格式、是否只对自定义预设有效都交工作进程的 zod 校验
+  if (Array.isArray(o.modelIds)) out.modelIds = o.modelIds.filter((x): x is string => typeof x === 'string')
+  if (o.restriction === 'coding-tools-only' || o.restriction === 'none') out.restriction = o.restriction
   return out
 }
 

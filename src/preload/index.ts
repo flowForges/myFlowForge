@@ -561,6 +561,9 @@ const api = {
         presetId: string; label?: string; apiKey?: string; baseUrl?: string
         protocol?: 'openai-chat' | 'openai-responses' | 'anthropic'
         restrictionAck?: boolean
+        // 08 §4.7、§10.1:只对模型清单为空的预设(modelIds)/自定义预设(restriction)有效,其余由工作进程拒绝
+        modelIds?: string[]
+        restriction?: 'coding-tools-only' | 'none'
       }): Promise<import('@mffai/protocol').AccountView> => ipcRenderer.invoke(CH.mffaiModelsAddAccount, input),
       removeAccount: (id: string): Promise<{ ok: true }> => ipcRenderer.invoke(CH.mffaiModelsRemoveAccount, id),
       testAccount: (id: string): Promise<{ ok: boolean; error?: import('@mffai/protocol').ModelErrorView }> =>

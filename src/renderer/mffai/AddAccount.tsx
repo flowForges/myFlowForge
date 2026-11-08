@@ -7,6 +7,9 @@ export function AddAccount({ presets, onDone }: { presets: PresetView[]; onDone:
   const [presetId, setPresetId] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
+  // 08 §4.7、§10.1:自定义预设才有;逗号分隔的模型 id 和「仅限编程工具」勾选
+  const [modelIdsText, setModelIdsText] = useState('')
+  const [codingOnly, setCodingOnly] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [flowId, setFlowId] = useState<string | null>(null)
   const flowRef = useRef<string | null>(null)
@@ -44,10 +47,17 @@ export function AddAccount({ presets, onDone }: { presets: PresetView[]; onDone:
     })
   }, [flowId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const close = () => { cancelFlow(); setOpen(false); setApiKey(''); setBaseUrl(''); setConfirming(false) }
+  const close = () => { cancelFlow(); setOpen(false); setApiKey(''); setBaseUrl(''); setModelIdsText(''); setCodingOnly(false); setConfirming(false) }
+  const isCustom = preset?.id.startsWith('custom-') ?? false
   const submit = (restrictionAck: boolean) => {
     if (!preset || busy) return
-    const input = { presetId: preset.id, apiKey, ...(baseUrl && { baseUrl }), ...(restrictionAck && { restrictionAck: true }) }
+    // 逗号分隔,trim 去空白,Set 去重;只对自定义预设有意义,别的预设带了后台会 -32602
+    const modelIds = isCustom ? [...new Set(modelIdsText.split(',').map((s) => s.trim()).filter(Boolean))] : []
+    const input = {
+      presetId: preset.id, apiKey, ...(baseUrl && { baseUrl }), ...(restrictionAck && { restrictionAck: true }),
+      ...(isCustom && modelIds.length > 0 && { modelIds }),
+      ...(isCustom && codingOnly && { restriction: 'coding-tools-only' as const }),
+    }
     setApiKey('')
     setConfirming(false)
     setFailed(false)
@@ -89,7 +99,13 @@ export function AddAccount({ presets, onDone }: { presets: PresetView[]; onDone:
       ) : (
         <>
           <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} />
-          {preset?.id.startsWith('custom-') && <input value={baseUrl} onChange={e => setBaseUrl(e.target.value)} />}
+          {isCustom && (
+            <>
+              <input value={baseUrl} onChange={e => setBaseUrl(e.target.value)} />
+              <input aria-label="模型 id" value={modelIdsText} onChange={e => setModelIdsText(e.target.value)} />
+              <label><input type="checkbox" checked={codingOnly} onChange={e => setCodingOnly(e.target.checked)} />仅限编程工具</label>
+            </>
+          )}
           <div className="mffai-actions">
             <button className="set-btn" disabled={!preset || busy} onClick={() => preset?.restriction === 'coding-tools-only' ? setConfirming(true) : submit(false)}>添加</button>
             <button className="set-btn" onClick={close}>取消</button>
