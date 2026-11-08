@@ -85,6 +85,20 @@ describe('Habits', () => {
     await screen.findByText('不支持')
   })
 
+  it('a -32603 "memory is unavailable" on the list shows 不支持, same as -32601', async () => {
+    f = installFakeForge({ calls: { 'memory.habits.list': () => fail(-32603, 'memory is unavailable') } })
+    render(<Habits />)
+    await screen.findByText('不支持')
+  })
+
+  it('a -32603 "memory is unavailable" on toggling 主动推荐 shows 不支持', async () => {
+    f = installFakeForge({ calls: { 'memory.habits.list': { items: [] }, 'memory.recommendations.set': () => fail(-32603, 'memory is unavailable') } })
+    render(<Habits />)
+    await waitFor(() => expect(f.callsOf('memory.habits.list')).toHaveLength(1))
+    await act(async () => { fireEvent.click(screen.getByRole('switch', { name: '主动推荐' })) })
+    expect(screen.getByText('不支持')).toBeInTheDocument()
+  })
+
   it('a memory.recommendation event reloads the habits list', async () => {
     f = installFakeForge({ calls: { 'memory.habits.list': { items: [habit('h1')] } } })
     render(<Habits />)

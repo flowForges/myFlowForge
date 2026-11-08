@@ -1,7 +1,8 @@
 // 变更(08 §12.4):memory.changes,时间、文件、操作、来源一行,点开看 before/after。
 import { useEffect, useRef, useState } from 'react'
 import type { MemoryChange } from '@mffai/protocol'
-import { call, isUnsupported, toCallError } from '../rpc'
+import { call, toCallError } from '../rpc'
+import { memoryUnsupported } from './unavailable'
 import { Chip } from '../ui/Chip'
 
 function ChangeRow({ c }: { c: MemoryChange }) {
@@ -35,7 +36,7 @@ export function Changes() {
     alive.current = true
     void call('memory.changes', { limit: 100 }).then(
       (r) => { if (alive.current) setItems(r.items) },
-      (e) => { if (!alive.current) return; if (!isUnsupported(e)) console.error('mffai memory.changes', toCallError(e)); setFailed(isUnsupported(e) ? 'unsupported' : 'failed') },
+      (e) => { if (!alive.current) return; if (!memoryUnsupported(e)) console.error('mffai memory.changes', toCallError(e)); setFailed(memoryUnsupported(e) ? 'unsupported' : 'failed') },
     )
     return () => { alive.current = false }
   }, [])

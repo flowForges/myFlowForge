@@ -54,4 +54,10 @@ describe('Changes', () => {
     render(<Changes />)
     await screen.findByText('失败')
   })
+
+  it('a -32603 "memory is unavailable" shows 不支持, same as -32601', async () => {
+    f = installFakeForge({ calls: { 'memory.changes': () => fail(-32603, 'memory is unavailable') } })
+    render(<Changes />)
+    await screen.findByText('不支持')
+  })
 })

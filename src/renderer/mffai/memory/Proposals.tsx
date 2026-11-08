@@ -3,8 +3,9 @@
 // memory.proposal、memory.updated 到了,或者本地批准/驳回成功,整份重拉(06 followups Task 10)。
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { MemoryProposal } from '@mffai/protocol'
-import { call, isUnsupported, retryable, toCallError } from '../rpc'
+import { call, retryable, toCallError } from '../rpc'
 import { useMffaiEvent, useMffaiReset } from '../events'
+import { memoryUnsupported } from './unavailable'
 import { Chip } from '../ui/Chip'
 import { CodeChip } from '../ui/CodeChip'
 
@@ -49,7 +50,7 @@ function ProposalRow({ p, onDecided, onJumpToFile }: {
     } catch (e) {
       const c = toCallError(e)
       if (c.code === ERR_INVALID && c.message === 'full') setStatus('full')
-      else if (isUnsupported(c)) setStatus('unsupported')
+      else if (memoryUnsupported(c)) setStatus('unsupported')
       else { console.error('mffai memory.proposals.decide', c); setStatus('failed') }
     } finally {
       inflight.current = false
@@ -101,7 +102,7 @@ export function Proposals({ onJumpToFile }: { onJumpToFile: (file: Target) => vo
   const load = useCallback(() => {
     void call('memory.proposals.list', { status: 'pending' }).then(
       (r) => { if (alive.current) { setItems(r.items); setFailed(null) } },
-      (e) => { if (alive.current) setFailed(isUnsupported(e) ? 'unsupported' : 'failed') },
+      (e) => { if (alive.current) setFailed(memoryUnsupported(e) ? 'unsupported' : 'failed') },
     )
   }, [])
   useEffect(load, [load])

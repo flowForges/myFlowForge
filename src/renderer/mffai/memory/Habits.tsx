@@ -3,8 +3,9 @@
 // 这里只是发送上次点的那个值,不代表后台当下的真实状态。
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { MemoryHabit } from '@mffai/protocol'
-import { call, cmd, isUnsupported, toCallError } from '../rpc'
+import { call, cmd, toCallError } from '../rpc'
 import { useMffaiEvent, useMffaiReset } from '../events'
+import { memoryUnsupported } from './unavailable'
 import { Chip } from '../ui/Chip'
 
 const DAY_NAMES = ['日', '一', '二', '三', '四', '五', '六']
@@ -61,7 +62,7 @@ export function Habits() {
   const load = useCallback(() => {
     void call('memory.habits.list').then(
       (r) => { if (alive.current) { setItems(r.items); setFailed(null) } },
-      (e) => { if (alive.current) setFailed(isUnsupported(e) ? 'unsupported' : 'failed') },
+      (e) => { if (alive.current) setFailed(memoryUnsupported(e) ? 'unsupported' : 'failed') },
     )
   }, [])
   useEffect(load, [load])
@@ -79,7 +80,7 @@ export function Habits() {
     } catch (e) {
       const c = toCallError(e)
       console.error('mffai memory.recommendations.set', c)
-      if (alive.current) setRoutineFailed(isUnsupported(c) ? 'unsupported' : 'failed')
+      if (alive.current) setRoutineFailed(memoryUnsupported(c) ? 'unsupported' : 'failed')
     } finally {
       inflight.current = false
       if (alive.current) setRoutineBusy(false)

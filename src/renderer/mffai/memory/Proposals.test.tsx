@@ -97,6 +97,23 @@ describe('Proposals', () => {
     await screen.findByText('不支持')
   })
 
+  it('a -32603 "memory is unavailable" on the list shows 不支持, same as -32601', async () => {
+    f = installFakeForge({ calls: { 'memory.proposals.list': () => fail(-32603, 'memory is unavailable') } })
+    render(<Proposals onJumpToFile={() => {}} />)
+    await screen.findByText('不支持')
+  })
+
+  it('a -32603 "memory is unavailable" on decide shows 不支持 on that row', async () => {
+    f = installFakeForge({ calls: {
+      'memory.proposals.list': { items: [proposal('p1')] },
+      'memory.proposals.decide': () => fail(-32603, 'memory is unavailable'),
+    } })
+    render(<Proposals onJumpToFile={() => {}} />)
+    await screen.findByText('MEMORY.md')
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '批准' })) })
+    expect(within(document.querySelector('[data-proposal="p1"]') as HTMLElement).getByText('不支持')).toBeInTheDocument()
+  })
+
   it('a generic decide failure shows 失败 and keeps the row', async () => {
     f = installFakeForge({ calls: {
       'memory.proposals.list': { items: [proposal('p1')] },
