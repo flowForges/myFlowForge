@@ -38,3 +38,44 @@
 .mffai-sandbox.full { color: var(--accent); border-color: currentColor; }
 .mffai-net, .mffai-run { font-family: var(--mono, monospace); color: var(--faint); }
 .mffai-parked { align-self: center; white-space: nowrap; }
+/* 08:页面壳、共用控件、调试页 */
+.mffai-shell { flex: 1; min-height: 0; display: flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.mffai-nav { width: 132px; flex: 0 0 132px; }
+.mffai-nav button { justify-content: space-between; }
+.mffai-navnum { min-width: 18px; padding: 0 6px; border-radius: 99px; background: var(--accent); color: #0b1020; font-size: 11px; font-weight: 600; line-height: 18px; text-align: center; }
+.mffai-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: auto; padding: 14px 16px; }
+.mffai-pagebox, .mffai-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+.mffai-strip { flex-wrap: wrap; row-gap: 6px; }
+.mffai-chip.ok { color: var(--accent); border-color: currentColor; }
+.mffai-chip.bad { color: var(--del, #e5484d); border-color: currentColor; }
+.mffai-chip.warn { color: var(--warn); border-color: currentColor; }
+.mffai-code { font-family: var(--mono, monospace); word-break: break-all; }
+.mffai-switch { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--fg-2); }
+.mffai-switch.off { opacity: .5; }
+.mffai-danger { color: var(--del, #e5484d); }
+.mffai-card .mffai-actions { margin-top: 8px; }
+.mffai-card .mffai-actions .mffai-primary { margin-top: 0; }
+.mffai-confirm { width: 460px; max-width: calc(100vw - 40px); }
+.mffai-confirm-rows { display: flex; flex-direction: column; gap: 2px; margin-top: 12px; padding: 8px 10px; border-radius: 8px; background: var(--surface); font-size: 12.5px; }
+.mffai-confirm-row { display: flex; gap: 12px; padding: 3px 0; }
+.mffai-confirm-row .mffai-k { flex: 0 0 96px; }
+.mffai-confirm-row .mffai-v { flex: 1; min-width: 0; font-family: var(--mono, monospace); word-break: break-all; }
+.mffai-typed { width: 100%; height: 30px; margin-top: 10px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--fg); font-family: var(--mono, monospace); }
+.mffai-diff { overflow: auto; border: 1px solid var(--border); border-radius: 8px; padding: 6px 0; }
+.mffai-diff-flags { display: flex; gap: 6px; padding: 0 10px 6px; }
+.mffai-count { font-family: var(--mono, monospace); font-variant-numeric: tabular-nums; }
+.mffai-pathfield { display: inline-flex; gap: 6px; align-items: center; flex: 1; max-width: 520px; }
+.mffai-pathfield input { flex: 1; height: 30px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--fg); font-family: var(--mono, monospace); }
+.mffai-filter { max-width: 220px; height: 30px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--fg); }
+.mffai-filter.mffai-types { height: 72px; }
+.mffai-injects { display: flex; flex-direction: column; gap: 10px; overflow: auto; }
+.mffai-inject { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.mffai-pre { margin: 0; padding: 8px 10px; border-radius: 6px; background: var(--bg); font-family: var(--mono, monospace); font-size: 12px; white-space: pre-wrap; word-break: break-word; overflow: auto; }
+.mffai-raw { flex: 1; min-height: 0; display: flex; gap: 10px; }
+.mffai-rawlist { flex: 0 0 300px; margin: 0; padding: 4px; list-style: none; overflow: auto; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; }
+.mffai-rawlist li { padding: 3px 6px; border-radius: 5px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mffai-rawlist li:hover { background: var(--surface); }
+.mffai-rawlist li.on { background: var(--accent-dim); }
+.mffai-raw .mffai-pre { flex: 1; }
+.mffai-err { font-family: var(--mono, monospace); color: var(--del, #e5484d); word-break: break-all; }
+.mffai-debug[hidden] { display: none; }

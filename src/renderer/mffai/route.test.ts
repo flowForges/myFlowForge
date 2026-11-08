@@ -1,11 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { route, MFFAI_PAGES } from './route'
+import { route, MFFAI_PAGES, DEFAULT_PAGE } from './route'
 
 beforeEach(() => route.set({ page: 'chat' }))
 
 describe('route', () => {
   it('lists the seven pages in nav order', () => {
     expect(MFFAI_PAGES).toEqual(['chat', 'tasks', 'memory', 'plugins', 'conn', 'perm', 'debug'])
+  })
+
+  it('the default page is one of the seven', () => {
+    expect(MFFAI_PAGES).toContain(DEFAULT_PAGE)
   })
 
   it('get/set/subscribe', () => {

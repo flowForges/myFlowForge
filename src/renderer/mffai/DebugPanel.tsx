@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { KernelEvent, ModelRef, SandboxStatus } from '@mffai/protocol'
 import { ModelPicker } from './ModelPicker'
+import { applyRedaction } from './debug/redact'
 
 const KEEP = 500
 const ARGS_SHOWN = 60
@@ -279,7 +280,8 @@ export function DebugPanel() {
     const refresh = () => void api.state().then(s => { if (alive) setSandbox(s.sandbox) }).catch(() => {})
     refresh()
     const off = api.onEvent(e => {
-      setEvents(es => trimEvents([...es, e]))
+      // events.redacted:缓存里删掉的文字不留在屏幕上(08 §14)
+      setEvents(es => trimEvents([...(e.type === 'events.redacted' ? applyRedaction(es, e) : es), e]))
       if (e.type === 'kernel.started' || e.type === 'permissions.updated') refresh()
     })
     void api.tail(KEEP).then(r => {
