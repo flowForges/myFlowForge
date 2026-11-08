@@ -3913,6 +3913,30 @@ describe('08 §4.3: liveFor, unmergedFor and what a deleted session leaves behin
     expect(existsSync(wtPath(c.runId, 's3'))).toBe(true)
   })
 
+  it('forgetSession waits for a merge of that session already in flight', async () => {
+    const fake = installFake({ writeFiles: { 'n.txt': 'n\n' }, lines: CODEX_OK })
+    let hold!: () => void
+    const gate = new Promise<void>(res => (hold = res))
+    const real = isolatedGit()
+    // 合并的 git apply 停在门口:删会话的清理要等它
+    const slow: Git = async (args, o) => {
+      if (args.includes('apply') && !args.includes('--check')) await gate
+      return real(args, o)
+    }
+    const rig = rigWith(fake, { git: slow })
+    const { runId } = await one(rig, sched())
+    const merging = rig.manager.merge(SID, runId)
+    await new Promise(res => setTimeout(res, 300))
+    const forgetting = rig.manager.forgetSession(SID)
+    await new Promise(res => setTimeout(res, 300))
+    expect(existsSync(wtPath(runId))).toBe(true)
+    hold()
+    expect(await merging).toEqual({ ok: true, files: 1 })
+    await forgetting
+    expect(existsSync(wtPath(runId))).toBe(false)
+    expect(refs(`refs/mffai/runs/${SID}/`)).toEqual([])
+  })
+
   it('an id that is not a safe path component touches nothing', async () => {
     const fake = installFake({ writeFiles: { 'n.txt': 'n\n' }, lines: CODEX_OK })
     const rig = rigWith(fake)

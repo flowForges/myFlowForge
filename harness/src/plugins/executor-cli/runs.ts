@@ -1568,6 +1568,8 @@ export class RunManager implements BackgroundRuns {
   async sweepDeleted(sessionIds: string[]): Promise<void> {
     const ids = [...new Set(sessionIds)].filter(id => SAFE_SESSION_ID.test(id))
     if (ids.length === 0) return
+    // 合并在读这些运行的引用和 worktree:等它写完(成败都算)再删
+    await Promise.all(ids.map(id => this.merges.get(id) ?? Promise.resolve()))
     const gone = new Set(ids)
     this.endedRows = this.endedRows.filter(r => !gone.has(r.sessionId))
     for (const set of [this.mergedLocal, this.endTaken]) for (const key of [...set]) if (gone.has(key.slice(0, key.indexOf('/')))) set.delete(key)
