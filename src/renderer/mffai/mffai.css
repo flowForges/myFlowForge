@@ -194,3 +194,15 @@
 .mffai-meter-row .mffai-k { width: 56px; }
 .mffai-meter { flex: 1; max-width: 260px; height: 6px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
 .mffai-meter-fill { height: 100%; background: var(--accent); }
+
+/* 插件页(Task 13)。第三方文字 .mffai-ptext:虚线框,和界面的块、按钮一眼分得开 */
+.mffai-ptext { padding: 0 4px; border: 1px dashed var(--border); border-radius: 3px; white-space: pre-wrap; word-break: break-word; }
+.mffai-ptext.mono { font-family: var(--mono, monospace); font-size: 12px; }
+.mffai-pre .mffai-ptext { border: none; padding: 0; }
+.mffai-consent { display: flex; flex-direction: column; gap: 14px; }
+.mffai-crow { flex-wrap: wrap; }
+.mffai-crow > .mffai-k { min-width: 64px; }
+.mffai-cserver { display: flex; flex-direction: column; gap: 4px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.mffai-cserver:last-child { border-bottom: none; }
+.mffai-args, .mffai-symbolic { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.mffai-arg { display: inline-flex; gap: 3px; align-items: center; }
