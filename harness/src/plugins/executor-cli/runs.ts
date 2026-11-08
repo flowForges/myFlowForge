@@ -1361,8 +1361,7 @@ export class RunManager implements BackgroundRuns {
 
   /** 全部从事件和引用名推出来,重启后也能用。runId 不属于这个会话 → -32602 */
   async changes(sessionId: string, runId: string): Promise<{ files: FileChange[]; source: ExecutorChangesSource; concurrent?: boolean }> {
-    // 在跑的运行:每次现拍,才看得到进度
-    const set = await this.changeSet(sessionId, runId, this.live.has(runId))
+    const set = await this.changeSet(sessionId, runId, 'changes')
     if (set.kind === 'reported') return set.result
     return { files: set.files.map(f => ({ ...f, path: redact(f.path) })), source: 'git', ...set.concurrent }
   }
@@ -1371,7 +1370,11 @@ export class RunManager implements BackgroundRuns {
    * changes、diff、merge 共用:两张快照之间的改动(真实路径,`deny read` 副本已去掉)和算它用的引用、钉子。
    * 算不了 → run.ended 记下的(reported)
    */
-  private async changeSet(sessionId: string, runId: string, fresh = false): Promise<
+  /**
+   * mode 'changes':在跑的、在地的(检出之后还在变)每次现拍;没结束的 worktree 运行这次启动只拍一张(review M3)。
+   * 'view'(diff、merge):有就用,和界面列出来的是同一张
+   */
+  private async changeSet(sessionId: string, runId: string, mode: 'changes' | 'view' = 'view'): Promise<
     | { kind: 'reported'; result: { files: FileChange[]; source: ExecutorChangesSource; concurrent?: boolean } }
     | { kind: 'git'; files: FileChange[]; cwd: string; startRef: string; endRef: string; pin: PinnedRepo; started: { cwd: string; worktree?: string; executor?: string }; concurrent: { concurrent?: true } }
   > {
@@ -1405,6 +1408,7 @@ export class RunManager implements BackgroundRuns {
       // 只有 finish 拍的结束快照算数。还在跑、中断的(内核关闭和崩溃都不拍)要现拍:这里之前写下的 -end 早就过时了
       const finished = ended !== undefined && ended.status !== 'interrupted' && ended.changed?.source === 'git'
       const key = `${sessionId}/${runId}`
+      const fresh = mode === 'changes' && (this.live.has(runId) || !started.worktree)
       const reuse = finished || (!fresh && this.endTaken.has(key))
       if (!reuse || !(await exists(endRef))) {
         const end = await takeSnapshot(cwd, endRef, git, this.gitOpts(pin))
