@@ -12,7 +12,10 @@ export const imWorktreeRootOf = (dataDir: string) => `${dataDir}-im-worktrees`
 
 export type ImWorktreeError = 'not_git' | 'no_commits' | 'unsafe_repo' | 'root_conflict' | 'worktree_limit' | 'worktree_failed'
 
-export type ImWorktreeResult = { ok: true; id: string; path: string; cwd: string; top: string } | { ok: false; error: ImWorktreeError }
+/**
+ * base:新建时检出的提交(08 §4.5 合并的 base)。认出已建的那个时不给:项目的 HEAD 可能已经走了,那时读到的不是它的 base
+ */
+export type ImWorktreeResult = { ok: true; id: string; path: string; cwd: string; top: string; base?: string } | { ok: false; error: ImWorktreeError }
 
 /**
  * IM 会话不该读到的用户检出(07 §8.1):建 worktree 的那个项目的顶层(建的时候记下的,linked worktree、子模块、独立 git 目录从 common 目录都推不出来),
@@ -98,7 +101,7 @@ export async function createImWorktree(o: CreateImWorktreeOpts): Promise<ImWorkt
     if (!path) return fail('worktree_limit')
     await addWorktree(pin, path, sha, git, { tmpDir, root })
     removeInWorktree(path, o.denyReadOf(path, pin.top))
-    return { ok: true, id, path, cwd: enter(pin, path, project), top: pin.top }
+    return { ok: true, id, path, cwd: enter(pin, path, project), top: pin.top, base: sha }
   } catch {
     if (path) await cleanup(root, path, repo, git, tmpDir)
     return fail('worktree_failed')

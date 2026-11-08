@@ -58,7 +58,7 @@ describe('createImWorktree', () => {
     ug(['add', 'a.txt'])
     const before = bytes()
     const r = await create()
-    expect(r).toEqual({ ok: true, id: 'wt_1', path: pathOf(), cwd: pathOf(), top: repo })
+    expect(r).toEqual({ ok: true, id: 'wt_1', path: pathOf(), cwd: pathOf(), top: repo, base: ug(['rev-parse', 'HEAD']).trim() })
     expect(readFileSync(join(pathOf(), 'a.txt'), 'utf8')).toBe('a\n')
     expect(existsSync(join(pathOf(), '.env'))).toBe(false)
     expect(ug(['rev-parse', 'HEAD'], pathOf())).toBe(ug(['rev-parse', 'HEAD']))
@@ -66,6 +66,19 @@ describe('createImWorktree', () => {
     expect(worktrees()).toEqual([repo, pathOf()])
     expect(bytes()).toEqual(before)
     expect(readFileSync(join(repo, 'a.txt'), 'utf8')).toBe('dirty\n')
+  })
+
+  it('base is the HEAD it was made from, also when the worktree is reused after HEAD moved (08 §4.5)', async () => {
+    const first = ug(['rev-parse', 'HEAD']).trim()
+    const r = await create()
+    expect(r).toMatchObject({ ok: true, base: first })
+    writeFileSync(join(repo, 'a.txt'), 'later\n')
+    ug(['commit', '-qam', 'later'])
+    // 重投的 /project 认出已建的那个:base 是它自己的 HEAD 不变,不是项目现在的
+    ug(['commit', '-q', '--allow-empty', '-m', 'in the worktree'], pathOf())
+    const again = await create()
+    expect(again).toMatchObject({ ok: true, path: pathOf() })
+    expect((again as { base?: string }).base).toBeUndefined()
   })
 
   it('a project subdirectory: the cwd is the same subdirectory', async () => {
@@ -235,7 +248,9 @@ describe('createImWorktree', () => {
       const first = await create({ project: join(repo, 'sub') })
       writeFileSync(join(pathOf(), 'work.txt'), 'mine\n')
       const second = await create({ project: join(repo, 'sub') })
-      expect(second).toEqual(first)
+      // 08:base 只在新建时给(认出已建的那个时读到的 HEAD 不是它的 base)
+      const { base: _base, ...same } = first as Extract<typeof first, { ok: true }>
+      expect(second).toEqual(same)
       expect(worktrees()).toEqual([repo, pathOf()])
       expect(readFileSync(join(pathOf(), 'work.txt'), 'utf8')).toBe('mine\n')
     })
