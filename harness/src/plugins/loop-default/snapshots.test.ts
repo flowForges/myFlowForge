@@ -762,3 +762,44 @@ describe('unsafe_filter: rollback is unavailable for that turn (Task 9 review C3
     expect(existsSync(mark())).toBe(false)
   })
 })
+
+describe('turn.diff (08 §4.4)', () => {
+  const diffOf = (k: Kernel, sessionId: string, turnId: string, path: string) => k.handle('turn.diff', { sessionId, turnId, path })
+
+  it('a changed path: its lines between the turn snapshots', async () => {
+    initRepo()
+    const k = await boot([], () => oneTool('write', { path: 'a.txt', content: 'a v2\n' }))
+    const sid = await create(k, CLAUDE)
+    const turnId = await turn(k, sid, 'edit')
+    expect(await diffOf(k, sid, turnId, 'a.txt')).toEqual({
+      path: 'a.txt', status: 'M', binary: false, truncated: false,
+      lines: [{ kind: 'del', ln: 1, text: 'a v1' }, { kind: 'add', ln: 1, text: 'a v2' }],
+    })
+  })
+
+  it('a path not in the change list: -32602, and git never reads it (argv spy)', async () => {
+    initRepo()
+    const argv: string[][] = []
+    const spy = (real: Git): Git => (args, o) => {
+      argv.push(args)
+      return real(args, o)
+    }
+    const k = await boot([], () => oneTool('write', { path: 'a.txt', content: 'a v2\n' }), spy)
+    const sid = await create(k, CLAUDE)
+    const turnId = await turn(k, sid, 'edit')
+    argv.length = 0
+    for (const path of ['b.txt', '../outside', '.git/config', 'A.TXT']) {
+      await expect(diffOf(k, sid, turnId, path)).rejects.toMatchObject({ code: -32602 })
+    }
+    expect(argv.some(a => a.some(x => /b\.txt|outside|\.git\/config|A\.TXT/.test(x)))).toBe(false)
+    expect(argv.some(a => a.includes('-U3') || a.includes('--numstat'))).toBe(false)
+  })
+
+  it('a turn without snapshots, an unknown session: -32602', async () => {
+    const k = await boot([], () => () => say('hi'))
+    const sid = await create(k, CLAUDE)
+    const turnId = await turn(k, sid, 'hello')
+    await expect(diffOf(k, sid, turnId, 'a.txt')).rejects.toMatchObject({ code: -32602 })
+    await expect(diffOf(k, 'nope', turnId, 'a.txt')).rejects.toMatchObject({ code: -32602 })
+  })
+})

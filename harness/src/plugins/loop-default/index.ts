@@ -13,7 +13,7 @@ import type { BackgroundRuns, PluginsService, ToolsService, TurnInbox } from '..
 import { ERR_BUSY, type ModelRef, type WorkerParams } from '../../protocol/index'
 import { runTurn, type LoopDeps, type TurnOutcome } from './loop'
 import { manifest } from './manifest'
-import { endSnapshot, hasOpenTurn, rollbackTurn, startSnapshot, turnChanges, writableRootsFor, type SnapshotDeps } from './snapshots'
+import { endSnapshot, hasOpenTurn, rollbackTurn, startSnapshot, turnChanges, turnDiff, writableRootsFor, type SnapshotDeps } from './snapshots'
 
 export interface LoopDefaultOpts {
   /** 步数上限,默认 50 */
@@ -166,6 +166,11 @@ export function createLoopDefault(opts: LoopDefaultOpts = {}): Plugin {
       ctx.rpc.register('turn.changes', async params => {
         const { sessionId, turnId } = params as WorkerParams<'turn.changes'>
         return { files: await turnChanges(snap, targetOf(sessionId, 'snapshots missing'), ctx.events.history(sessionId), turnId) }
+      })
+
+      ctx.rpc.register('turn.diff', async params => {
+        const { sessionId, turnId, path } = params as WorkerParams<'turn.diff'>
+        return turnDiff(snap, targetOf(sessionId, 'snapshots missing'), ctx.events.history(sessionId), turnId, path)
       })
     },
   }

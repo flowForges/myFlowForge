@@ -3,9 +3,9 @@ import { dirname, join } from 'node:path'
 import type { Logger } from '../../kernel/log'
 import { RpcError } from '../../kernel/rpcError'
 import { imWorktreeRootOf } from '../../lib/git/imWorktree'
-import { changes, pruneRefs, refBase, restore, submodulePaths, takeSnapshot, type Git, type RepoPin, type SnapshotResult } from '../../lib/git/snapshot'
+import { changes, fileDiff, pruneRefs, refBase, restore, submodulePaths, takeSnapshot, type Git, type RepoPin, type SnapshotResult } from '../../lib/git/snapshot'
 import { worktreeRootOf } from '../../lib/git/worktree'
-import type { FileChange, KernelEvent } from '../../protocol/index'
+import type { FileChange, FileDiff, KernelEvent } from '../../protocol/index'
 
 const ERR_INVALID_PARAMS = -32602
 const ERR_INTERNAL = -32603
@@ -149,6 +149,18 @@ export async function turnChanges(deps: SnapshotDeps, t: SnapshotTarget, events:
     return await changes(t.cwd, ts.start, ts.end, deps.git, gitOpts(deps, t))
   } catch (err) {
     throw gitFailed(deps, 'turn.changes', err)
+  }
+}
+
+/** `turn.diff`(08 §4.4):和 turn.changes 同一对引用;path 不在这一轮的改动清单里 → -32602,不跑 diff */
+export async function turnDiff(deps: SnapshotDeps, t: SnapshotTarget, events: KernelEvent[], turnId: string, path: string): Promise<FileDiff> {
+  const files = await turnChanges(deps, t, events, turnId)
+  if (!files.some(f => f.path === path)) throw new RpcError(ERR_INVALID_PARAMS, 'path not in the change list')
+  const ts = scan(t.sessionId, events).turns.get(turnId)!
+  try {
+    return await fileDiff(t.cwd, ts.start!, ts.end!, path, deps.git, gitOpts(deps, t))
+  } catch (err) {
+    throw gitFailed(deps, 'turn.diff', err)
   }
 }
 
