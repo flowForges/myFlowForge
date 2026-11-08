@@ -360,7 +360,7 @@ export function createExecutorCli(opts: ExecutorCliOpts = {}): Plugin {
       })
       ctx.rpc.register('executor.runs', async params => {
         const { limit } = params as WorkerParams<'executor.runs'>
-        return { runs: manager.runs(limit) }
+        return { runs: await manager.runs(limit) }
       })
       ctx.rpc.register('executor.worktree.merge', async params => {
         const { sessionId, runId } = params as WorkerParams<'executor.worktree.merge'>

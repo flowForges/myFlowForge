@@ -142,6 +142,8 @@ export interface RunManagerDeps {
   platform?: NodeJS.Platform
   now?: () => number
   newId?: () => string
+  /** executor.runs 的大小;默认 lib/fs/dirSize(测试注入慢的) */
+  dirSize?: (path: string) => Promise<number | undefined>
   /** 只给测试 */
   runCli?: typeof realRunCli
   /** 只给测试:进度节流的窗口 */
@@ -149,6 +151,8 @@ export interface RunManagerDeps {
 }
 
 const KEEP_RUNS = 50
+/** 关闭时等进行中的合并:git apply 写到一半被杀,留下的就没人还原了 */
+const MERGE_DRAIN_MS = 30_000
 /** executor.runs:本次启动以来结束的,内存里留这么多 */
 const ENDED_RING = 200
 const REDETECT_WAIT_MS = 60_000
@@ -526,6 +530,18 @@ const safeList = (dir: string) => {
   }
 }
 
+/** 写了 message.user 还没有终态的轮 */
+function openTurn(events: KernelEvent[]): boolean {
+  const open = new Set<string>()
+  for (const e of events) {
+    const turnId = (e.payload as { turnId?: unknown } | undefined)?.turnId
+    if (typeof turnId !== 'string') continue
+    if (e.type === 'message.user') open.add(turnId)
+    else if (e.type === 'turn.ended' || e.type === 'turn.failed') open.delete(turnId)
+  }
+  return open.size > 0
+}
+
 const runRef = (sessionId: string, runId: string, phase: 'start' | 'end') => `refs/mffai/runs/${sessionId}/${runId}-${phase}`
 
 export class RunManager implements BackgroundRuns {
@@ -546,6 +562,10 @@ export class RunManager implements BackgroundRuns {
   private endedRows: RunRow[] = []
   /** 同一个会话的合并排队:两次合并不能交错着写同一个检出 */
   private merges = new Map<string, Promise<unknown>>()
+  /** 合并成功、但 executor.worktree.merged 没写进去的(review M1):runs 照样算合并过 */
+  private mergedLocal = new Set<string>()
+  /** 没结束的运行这次启动里拍过的 -end(review M3):changes、diff 共用这一张,不每次重拍 */
+  private endTaken = new Set<string>()
 
   constructor(private deps: RunManagerDeps) {
     const quiet = (fn: Logger['warn']): Logger['warn'] => (msg, data) => {
@@ -1333,11 +1353,16 @@ export class RunManager implements BackgroundRuns {
     this.stopped = true
     await Promise.allSettled([...this.turns.keys()].map(id => this.abandon(id, reason)))
     await Promise.allSettled([...this.removals])
+    // 进行中的合并有限地等(review M1):被杀在 git apply 中间,检出就留着半截
+    let timer: NodeJS.Timeout | undefined
+    await Promise.race([Promise.allSettled([...this.merges.values()]), new Promise<void>(res => (timer = setTimeout(res, MERGE_DRAIN_MS)))])
+    clearTimeout(timer)
   }
 
   /** 全部从事件和引用名推出来,重启后也能用。runId 不属于这个会话 → -32602 */
   async changes(sessionId: string, runId: string): Promise<{ files: FileChange[]; source: ExecutorChangesSource; concurrent?: boolean }> {
-    const set = await this.changeSet(sessionId, runId)
+    // 在跑的运行:每次现拍,才看得到进度
+    const set = await this.changeSet(sessionId, runId, this.live.has(runId))
     if (set.kind === 'reported') return set.result
     return { files: set.files.map(f => ({ ...f, path: redact(f.path) })), source: 'git', ...set.concurrent }
   }
@@ -1346,7 +1371,7 @@ export class RunManager implements BackgroundRuns {
    * changes、diff、merge 共用:两张快照之间的改动(真实路径,`deny read` 副本已去掉)和算它用的引用、钉子。
    * 算不了 → run.ended 记下的(reported)
    */
-  private async changeSet(sessionId: string, runId: string): Promise<
+  private async changeSet(sessionId: string, runId: string, fresh = false): Promise<
     | { kind: 'reported'; result: { files: FileChange[]; source: ExecutorChangesSource; concurrent?: boolean } }
     | { kind: 'git'; files: FileChange[]; cwd: string; startRef: string; endRef: string; pin: PinnedRepo; started: { cwd: string; worktree?: string; executor?: string }; concurrent: { concurrent?: true } }
   > {
@@ -1379,9 +1404,12 @@ export class RunManager implements BackgroundRuns {
       if (!(await exists(startRef))) return reported()
       // 只有 finish 拍的结束快照算数。还在跑、中断的(内核关闭和崩溃都不拍)要现拍:这里之前写下的 -end 早就过时了
       const finished = ended !== undefined && ended.status !== 'interrupted' && ended.changed?.source === 'git'
-      if (!finished || !(await exists(endRef))) {
+      const key = `${sessionId}/${runId}`
+      const reuse = finished || (!fresh && this.endTaken.has(key))
+      if (!reuse || !(await exists(endRef))) {
         const end = await takeSnapshot(cwd, endRef, git, this.gitOpts(pin))
         if (!end.ref) return reported()
+        if (!finished) this.endTaken.add(key)
       }
       const files = await gitChanges(cwd, startRef, endRef, git, this.gitOpts(pin))
       const denied = this.deniedForChanges(sessionId, started)
@@ -1414,7 +1442,7 @@ export class RunManager implements BackgroundRuns {
   /**
    * executor.runs(08 §4.4):活着的、本次启动以来结束的(环形 200)、根目录下还在的 worktree(配上该会话的事件)。新的在前
    */
-  runs(limit = 100): RunRow[] {
+  async runs(limit = 100): Promise<RunRow[]> {
     const rows = new Map<string, RunRow>()
     for (const run of this.live.values()) {
       const { s } = run
@@ -1434,14 +1462,23 @@ export class RunManager implements BackgroundRuns {
       if (!histories.has(sid)) histories.set(sid, this.deps.history(sid))
       return histories.get(sid)!
     }
-    const out = [...rows.values()].map(row => {
-      if (!row.worktree) return row
+    // 先截到 limit 再算大小(review I4):一棵 5 万项的树要几百毫秒
+    const picked = [...rows.values()].sort((a, b) => b.queuedAt - a.queuedAt).slice(0, limit)
+    const size = this.deps.dirSize ?? dirSize
+    const out: RunRow[] = []
+    for (const row of picked) {
+      if (!row.worktree) {
+        out.push(row)
+        continue
+      }
       const present = isDir(row.worktree.path)
-      const bytes = present && row.phase === 'ended' ? dirSize(row.worktree.path) : undefined
-      const merged = historyOf(row.sessionId).some(e => e.type === 'executor.worktree.merged' && (e.payload as { runId?: string } | undefined)?.runId === row.runId)
-      return { ...row, worktree: { path: row.worktree.path, present, ...(bytes !== undefined && { bytes }), merged } }
-    })
-    return out.sort((a, b) => b.queuedAt - a.queuedAt).slice(0, limit)
+      const bytes = present && row.phase === 'ended' ? await size(row.worktree.path) : undefined
+      const merged =
+        this.mergedLocal.has(`${row.sessionId}/${row.runId}`) ||
+        historyOf(row.sessionId).some(e => e.type === 'executor.worktree.merged' && (e.payload as { runId?: string } | undefined)?.runId === row.runId)
+      out.push({ ...row, worktree: { path: row.worktree.path, present, ...(bytes !== undefined && { bytes }), merged } })
+    }
+    return out
   }
 
   /** <根>/<会话>/<运行>:只认目录,链接不跟 */
@@ -1508,11 +1545,16 @@ export class RunManager implements BackgroundRuns {
     const events = this.deps.history(sessionId)
     const payload = (type: string) => events.find(e => e.type === type && (e.payload as { runId?: string } | undefined)?.runId === runId)?.payload as { cwd?: string; worktree?: string } | undefined
     if (!payload('executor.run.queued')) throw new RpcError(-32602, 'unknown run')
+    // 没有 run.ended:崩在运行中间,worktree 可能还是半截(spec §4.5 第 1 步、review M3)
+    if (!payload('executor.run.ended')) throw new RpcError(ERR_BUSY, 'run not ended')
+    if (openTurn(events)) throw new RpcError(ERR_BUSY, 'turn in progress')
     const started = payload('executor.run.started')
     if (!started?.worktree || typeof started.cwd !== 'string') throw refuse('nothing')
     const session = this.pinOf(sessionId)
     const sessionCwd = this.deps.sessions.get(sessionId)?.cwd
     if (session.kind !== 'repo' || sessionCwd === undefined) throw refuse('not_git')
+    // 在地的写运行(任何会话)正在写同一个检出:合进去的会和它写的搅在一起(review M4)
+    if (this.writerIn(session.top)) throw new RpcError(ERR_BUSY, 'a run is writing the checkout')
     if (!(await this.samePin(session, sessionCwd))) throw refuse('unsafe_repo')
     if (!isDir(started.worktree)) throw refuse('nothing')
     const from = worktreePin(session, started.worktree, started.cwd)
@@ -1534,8 +1576,17 @@ export class RunManager implements BackgroundRuns {
       throw new RpcError(-32603, 'merge failed')
     }
     if (!outcome.ok) throw refuse(outcome.reason, outcome)
-    this.write('executor.worktree.merged', sessionId, { runId, files: outcome.files })
+    // 写不进事件也已经合进去了:记在内存里,照样回 ok(review M1)
+    if (!this.write('executor.worktree.merged', sessionId, { runId, files: outcome.files })) this.mergedLocal.add(`${sessionId}/${runId}`)
     return { ok: true, files: outcome.files }
+  }
+
+  private writerIn(top: string): boolean {
+    for (const run of this.live.values()) {
+      if (run.s.readOnly || run.worktree || run.phase !== 'running') continue
+      if (isInside(resolveToolPath(run.cwd, '.'), top, this.platform)) return true
+    }
+    return false
   }
 
   /** 钉子还完整,而且现在从会话目录找到的还是它(同一组身份) */

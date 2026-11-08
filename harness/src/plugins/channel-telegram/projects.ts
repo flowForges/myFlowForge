@@ -248,18 +248,19 @@ export class Projects {
     }
   }
 
-  list(): TelegramChats['worktrees'] {
+  /** 大小一棵一棵算,每棵都会让出事件循环(review I4) */
+  async list(): Promise<TelegramChats['worktrees']> {
     const out: TelegramChats['worktrees'] = []
     for (const w of this.records.values()) {
       const usedByChat = this.o.chats.chatUsing(w.id)
-      const bytes = dirSize(w.path)
+      const bytes = await dirSize(w.path)
       out.push({
         id: w.id, project: w.project, path: w.path, sessionIds: [...w.sessionIds], createdAt: w.createdAt, ...(usedByChat !== undefined && { usedByChat }),
         ...(bytes !== undefined && { bytes }), merged: w.merged === true,
       })
     }
     for (const orphan of this.orphans.values()) {
-      const bytes = dirSize(orphan.path)
+      const bytes = await dirSize(orphan.path)
       out.push({ id: orphan.id, project: '', path: orphan.path, sessionIds: [], createdAt: orphan.createdAt, ...(bytes !== undefined && { bytes }) })
     }
     return out

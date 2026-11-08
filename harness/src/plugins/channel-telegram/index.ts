@@ -614,7 +614,10 @@ export function createChannelTelegram(opts: ChannelTelegramOpts = {}): Plugin {
         return { ok: true }
       })
 
-      register('channel.telegram.chats', async () => ({ chats: chats.list(), worktrees: projects.list() }))
+      register('channel.telegram.chats', async () => {
+        const worktrees = await projects.list()
+        return { chats: chats.list(), worktrees }
+      })
 
       register('channel.telegram.worktree.discard', async (params: { worktreeId: string }) => {
         await projects.discard(params.worktreeId)
