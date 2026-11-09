@@ -130,7 +130,8 @@ describe('MffaiComposer', () => {
   })
 
   it('a forced refetch always wins: a slower cached read or an older refetch answering last does not bring back the old list (M8)', async () => {
-    const pending: ((v: unknown) => void)[] = []
+    type Cmds = { commands: { name: string; plugin: string; description: string }[] }
+    const pending: ((v: Cmds) => void)[] = []
     f.script({ 'plugins.commands': () => new Promise((r) => { pending.push(r) }) })
     const first = render(<MffaiComposer session={{ id: 's1', origin: 'app' }} onSend={async () => {}} onCommand={async () => {}} onStop={() => {}} canStop={false} />)
     await waitFor(() => expect(pending).toHaveLength(1))

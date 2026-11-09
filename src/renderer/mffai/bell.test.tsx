@@ -3,7 +3,7 @@
 // 配对码、令牌、命令全文、记忆正文从不进通知(Task 10 控制者备注、Review Focus 8)。
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { act, fireEvent, render, screen } from '@testing-library/react'
-import type { MemoryProposal } from '@mffai/protocol'
+import type { MemoryProposal, SessionSummary } from '@mffai/protocol'
 import { MemoryProposalSchema } from '@mffai/protocol/browser'
 import { startBell, type BellSink } from './bell'
 import { route } from './route'
@@ -136,7 +136,7 @@ describe('bell: unsandboxed approvals and session titles', () => {
   })
 
   it('a title already resolved by the time it arrives does not bring the notification back', async () => {
-    let resolve!: (v: unknown) => void
+    let resolve!: (v: { sessions: SessionSummary[] }) => void
     boot({ 'session.list': () => new Promise((r) => { resolve = r }) })
     act(() => f.emit(ev('approval.requested', { approvalId: 'a1', turnId: 't1', callId: 'c1', tool: 'shell', summary: 'x' }, { sessionId: 's1' })))
     act(() => f.emit(ev('approval.resolved', { approvalId: 'a1', decision: 'allow', by: 'user' }, { sessionId: 's1' })))
