@@ -133,6 +133,8 @@ export function startBell(sink: BellSink): () => void {
       }
       case 'channel.paired': {
         const p = e.payload as ChannelPairedPayload
+        // 新的一次配对:之前超时没答的撤销 commandId 已经不算数,重放它只会拿回旧的 ok
+        unpairRetry.done(p.accountId)
         put({
           key: `mffai:paired:${p.accountId}`, ic: 'ok', cls: 'ni-ok', t: `${channelName(p.channel)} 已配对 <b>${sanitize(p.name)}</b>`, m: META,
           unread: true, view: 'mffai', onOpen: () => route.set({ page: 'conn' }),
@@ -142,6 +144,7 @@ export function startBell(sink: BellSink): () => void {
       }
       case 'channel.unpaired': {
         const p = e.payload as ChannelUnpairedPayload
+        unpairRetry.done(p.accountId)
         drop(`mffai:paired:${p.accountId}`)
         if (p.by === 'im') problem(`mffai:unpaired:${p.accountId}`, `<b>${channelName(p.channel)}</b> 对方已解除配对`, () => route.set({ page: 'conn' }))
         return

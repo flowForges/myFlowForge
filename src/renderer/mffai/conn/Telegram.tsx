@@ -173,6 +173,8 @@ function Paired({ s, onChanged }: { s: TelegramStatus; onChanged: () => void }) 
   const retry = useRef(retryable()).current
   const [target, setTarget] = useState<{ accountId: string; name: string } | null>(null)
   const { run, busy, failure, alive } = useAction()
+  // 解除或重新配对之后,超时没答的那个 commandId 不能再重放
+  useMffaiEvent({ types: ['channel.paired', 'channel.unpaired'] }, (e) => { retry.done((e.payload as { accountId: string }).accountId) })
   const unpair = () => {
     if (!target) return
     const { accountId } = target

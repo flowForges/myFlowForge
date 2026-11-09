@@ -210,6 +210,21 @@ describe('Telegram paired accounts', () => {
     expect(typeof sent[0].commandId).toBe('string')
   })
 
+  it('a timed-out 撤销, then channel.unpaired and a re-pair of the same account: the next 撤销 sends a new commandId', async () => {
+    await mount(tgCalls(tgStatus({ paired: [{ accountId: '42', name: 'Ann', pairedAt: 1 }] })))
+    let n = 0
+    f.script({ 'channel.telegram.unpair': () => { if (n++ === 0) fail(-32010, 'timeout'); return { ok: true } } })
+    fireEvent.click(screen.getByRole('button', { name: '撤销' }))
+    await act(async () => { fireEvent.click(screen.getByRole('dialog').querySelector('.confirm-danger')!) })
+    await waitFor(() => expect(f.callsOf('channel.telegram.unpair')).toHaveLength(1))
+    act(() => { f.emit(ev('channel.unpaired', { channel: 'telegram', accountId: '42', by: 'app' })) })
+    act(() => { f.emit(ev('channel.paired', { channel: 'telegram', accountId: '42', name: 'Ann' })) })
+    await act(async () => { fireEvent.click(screen.getByRole('dialog').querySelector('.confirm-danger')!) })
+    await waitFor(() => expect(f.callsOf('channel.telegram.unpair')).toHaveLength(2))
+    const ids = (f.callsOf('channel.telegram.unpair') as { commandId: string }[]).map((p) => p.commandId)
+    expect(ids[1]).not.toBe(ids[0])
+  })
+
   it('cancel in the confirm sends nothing', async () => {
     await mount(tgCalls(tgStatus({ paired: [{ accountId: '42', name: 'Ann', pairedAt: 1 }] })))
     fireEvent.click(screen.getByRole('button', { name: '撤销' }))

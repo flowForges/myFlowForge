@@ -208,6 +208,37 @@ describe('bell: other sources', () => {
     expect(s.byKey('mffai:paired:42')).toBeUndefined()
   })
 
+  it('a 撤销 that timed out after the harness already unpaired: unpaired, re-pair, 撤销 again sends a new commandId', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    let n = 0
+    boot({ 'channel.telegram.unpair': () => { if (n++ === 0) fail(-32010, 'timeout'); return { ok: true } } })
+    act(() => f.emit(ev('channel.paired', { channel: 'telegram', accountId: '42', name: 'Ann' })))
+    s.byKey('mffai:paired:42')!.actions![0].run()
+    await flush()
+    act(() => f.emit(ev('channel.unpaired', { channel: 'telegram', accountId: '42', by: 'app' })))
+    act(() => f.emit(ev('channel.paired', { channel: 'telegram', accountId: '42', name: 'Ann' })))
+    s.byKey('mffai:paired:42')!.actions![0].run()
+    await flush()
+    const ids = f.callsOf('channel.telegram.unpair').map((p) => (p as { commandId: string }).commandId)
+    expect(ids).toHaveLength(2)
+    expect(ids[1]).not.toBe(ids[0])
+  })
+
+  it('a timed-out 撤销, then a fresh channel.paired for that account (no unpaired seen): the next 撤销 sends a new commandId', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    let n = 0
+    boot({ 'channel.telegram.unpair': () => { if (n++ === 0) fail(-32010, 'timeout'); return { ok: true } } })
+    act(() => f.emit(ev('channel.paired', { channel: 'telegram', accountId: '42', name: 'Ann' })))
+    s.byKey('mffai:paired:42')!.actions![0].run()
+    await flush()
+    act(() => f.emit(ev('channel.paired', { channel: 'telegram', accountId: '42', name: 'Ann' })))
+    s.byKey('mffai:paired:42')!.actions![0].run()
+    await flush()
+    const ids = f.callsOf('channel.telegram.unpair').map((p) => (p as { commandId: string }).commandId)
+    expect(ids).toHaveLength(2)
+    expect(ids[1]).not.toBe(ids[0])
+  })
+
   it('an IM-side unpair, a burned pairing, and unauthorized / conflict status are problems; online is not', () => {
     boot()
     act(() => {
