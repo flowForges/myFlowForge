@@ -3,7 +3,7 @@
 import { useRef, useState, type ReactNode } from 'react'
 import { call, toCallError } from '../rpc'
 import { Chip } from '../ui/Chip'
-import { visibleChars } from '../ui/visible'
+import { visibleChars, visibleText } from '../ui/visible'
 import type { ApprovalItem } from './reduce'
 
 type Decision = 'allow' | 'allow_session' | 'deny'
@@ -67,7 +67,7 @@ export function ApprovalCard({ approval }: { sessionId: string; approval: Approv
     return (
       <div className="mffai-approval mffai-approval-done" data-approval={approval.approvalId}>
         <span className="mffai-tool">{approval.tool}</span>
-        <code className="mffai-summary-line" title={approval.summary}>{approval.summary}</code>
+        <code className="mffai-summary-line" title={visibleText(approval.summary)}>{visibleSummary(approval.summary)}</code>
         <Chip tone={approval.resolved?.decision === 'allow' ? 'ok' : 'muted'}>{done}</Chip>
       </div>
     )

@@ -82,6 +82,16 @@ describe('ApprovalCard', () => {
     expect(screen.getByText('已取消')).toBeInTheDocument()
   })
 
+  it('a resolved approval renders its summary line through the same escapes, title attribute included', () => {
+    installFakeForge()
+    const summary = 'echo safe\u202E;txt.exe\u202C a\u200Bb'
+    const { container } = render(<ApprovalCard sessionId="s1" approval={item({ summary, resolved: { decision: 'allow', by: 'user' } })} />)
+    const line = container.querySelector('code.mffai-summary-line')!
+    expect(line.textContent).toBe('echo safe\\u{202E};txt.exe\\u{202C} a\\u{200B}b')
+    expect(line.getAttribute('title')).toBe('echo safe\\u{202E};txt.exe\\u{202C} a\\u{200B}b')
+    expect(container.innerHTML).not.toMatch(/[\u202E\u202C\u200B]/)
+  })
+
   it('bidi, format and zero-width characters show as visible escapes, so the text reads in the order it runs', () => {
     installFakeForge()
     const summary = 'echo safe‮;txt.exe‬ ⁦x⁩ a​b﻿­'
