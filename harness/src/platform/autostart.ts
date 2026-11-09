@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { runtimePaths } from '../protocol/paths'
+import { autostartIds, runtimePaths } from '../protocol/paths'
 
 // 开机自启(spec §7):内容与命令是纯函数,applyAutostart 只做薄执行
 
@@ -17,6 +17,7 @@ export type AutostartPlan = {
 }
 export type ExecFn = (file: string, args: string[]) => Promise<void>
 
+// 默认数据目录的标识;别的数据目录按 autostartIds 派生(08 §18)
 export const LAUNCHD_LABEL = 'com.myflowforge.mffai'
 export const SYSTEMD_UNIT = 'mffai.service'
 export const WIN_RUN_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
@@ -25,13 +26,13 @@ export const WIN_RUN_NAME = 'myFlowForge-mffai'
 const xmlEsc = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;')
 
-export function launchdPlist(spec: LaunchSpec): string {
+export function launchdPlist(spec: LaunchSpec, label: string = LAUNCHD_LABEL): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>${LAUNCHD_LABEL}</string>
+  <string>${xmlEsc(label)}</string>
   <key>ProgramArguments</key>
   <array>
     <string>${xmlEsc(spec.execPath)}</string>
@@ -106,22 +107,24 @@ export function windowsRunValue(spec: LaunchSpec): string {
   return `wscript.exe "${spec.dataDir}\\run\\start.vbs"`
 }
 
-const plistPath = (home: string) => join(home, 'Library', 'LaunchAgents', `${LAUNCHD_LABEL}.plist`)
-const unitPath = (home: string) => join(home, '.config', 'systemd', 'user', SYSTEMD_UNIT)
-const desktopPath = (home: string) => join(home, '.config', 'autostart', 'mffai.desktop')
+const plistPath = (home: string, label: string) => join(home, 'Library', 'LaunchAgents', `${label}.plist`)
+const unitPath = (home: string, unit: string) => join(home, '.config', 'systemd', 'user', unit)
+// desktop 文件和 unit 同名(默认 mffai.desktop)
+const desktopPath = (home: string, unit: string) => join(home, '.config', 'autostart', unit.replace(/\.service$/, '.desktop'))
 
 export function planAutostart(op: 'install' | 'uninstall', spec: LaunchSpec, env: AutostartEnv): AutostartPlan {
   const plan: AutostartPlan = { writes: [], removes: [], commands: [], after: [] }
   const install = op === 'install'
+  const ids = autostartIds(spec.dataDir, env.home)
   if (env.platform === 'darwin') {
     if (env.uid === undefined) throw new Error('cannot resolve uid for launchctl')
     const domain = `gui/${env.uid}`
-    const p = plistPath(env.home)
+    const p = plistPath(env.home, ids.launchd)
     // 本进程由该 launchd 作业拉起时,bootout 会杀掉自己:只改 plist(已加载;卸载下次登录生效)
     const self = env.runningUnderLaunchd === true
-    if (!self) plan.commands.push({ argv: ['launchctl', 'bootout', `${domain}/${LAUNCHD_LABEL}`], ignoreFailure: true })
+    if (!self) plan.commands.push({ argv: ['launchctl', 'bootout', `${domain}/${ids.launchd}`], ignoreFailure: true })
     if (install) {
-      plan.writes.push({ path: p, content: launchdPlist(spec) })
+      plan.writes.push({ path: p, content: launchdPlist(spec, ids.launchd) })
       if (!self) plan.commands.push({ argv: ['launchctl', 'bootstrap', domain, p] })
     } else {
       plan.removes.push(p)
@@ -130,27 +133,27 @@ export function planAutostart(op: 'install' | 'uninstall', spec: LaunchSpec, env
     const vbs = runtimePaths(spec.dataDir).startVbs
     if (install) {
       plan.writes.push({ path: vbs, content: startVbs(spec) })
-      plan.commands.push({ argv: ['reg', 'add', WIN_RUN_KEY, '/v', WIN_RUN_NAME, '/t', 'REG_SZ', '/d', windowsRunValue(spec), '/f'] })
+      plan.commands.push({ argv: ['reg', 'add', WIN_RUN_KEY, '/v', ids.winRun, '/t', 'REG_SZ', '/d', windowsRunValue(spec), '/f'] })
     } else {
-      plan.commands.push({ argv: ['reg', 'delete', WIN_RUN_KEY, '/v', WIN_RUN_NAME, '/f'], ignoreFailure: true })
+      plan.commands.push({ argv: ['reg', 'delete', WIN_RUN_KEY, '/v', ids.winRun, '/f'], ignoreFailure: true })
       plan.removes.push(vbs)
     }
   } else if (env.hasSystemdUser) {
     // 守护进程此时已在运行,只 enable,不 --now
     if (install) {
-      plan.writes.push({ path: unitPath(env.home), content: systemdUnit(spec) })
-      plan.removes.push(desktopPath(env.home))
-      plan.commands.push({ argv: ['systemctl', '--user', 'daemon-reload'] }, { argv: ['systemctl', '--user', 'enable', SYSTEMD_UNIT] })
+      plan.writes.push({ path: unitPath(env.home, ids.systemd), content: systemdUnit(spec) })
+      plan.removes.push(desktopPath(env.home, ids.systemd))
+      plan.commands.push({ argv: ['systemctl', '--user', 'daemon-reload'] }, { argv: ['systemctl', '--user', 'enable', ids.systemd] })
     } else {
-      plan.commands.push({ argv: ['systemctl', '--user', 'disable', SYSTEMD_UNIT], ignoreFailure: true })
-      plan.removes.push(unitPath(env.home), desktopPath(env.home))
+      plan.commands.push({ argv: ['systemctl', '--user', 'disable', ids.systemd], ignoreFailure: true })
+      plan.removes.push(unitPath(env.home, ids.systemd), desktopPath(env.home, ids.systemd))
       plan.after.push({ argv: ['systemctl', '--user', 'daemon-reload'] })
     }
   } else if (install) {
-    plan.writes.push({ path: desktopPath(env.home), content: xdgDesktop(spec) })
-    plan.removes.push(unitPath(env.home))
+    plan.writes.push({ path: desktopPath(env.home, ids.systemd), content: xdgDesktop(spec) })
+    plan.removes.push(unitPath(env.home, ids.systemd))
   } else {
-    plan.removes.push(desktopPath(env.home), unitPath(env.home))
+    plan.removes.push(desktopPath(env.home, ids.systemd), unitPath(env.home, ids.systemd))
   }
   return plan
 }

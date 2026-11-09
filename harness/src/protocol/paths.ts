@@ -19,6 +19,16 @@ export function secretsAccountOf(dataDir: string): string {
   return sha8(dataDir)
 }
 
+/**
+ * 开机自启的三个标识(08 §18、评审修订 R12)。home 的默认数据目录 → 今天的固定值,逐字节不变;
+ * 别的数据目录(并排的测试包、MFFAI_DATA_DIR)加 sha8,两个包开自启不会互相覆盖
+ */
+export function autostartIds(dir: string, home: string = homedir()): { launchd: string; systemd: string; winRun: string } {
+  if (dir === dataDir(home)) return { launchd: 'com.myflowforge.mffai', systemd: 'mffai.service', winRun: 'myFlowForge-mffai' }
+  const h = secretsAccountOf(dir)
+  return { launchd: `com.myflowforge.mffai.${h}`, systemd: `mffai-${h}.service`, winRun: `myFlowForge-mffai-${h}` }
+}
+
 /** 数据目录和它的三个兄弟目录(和 lib 的 worktreeRootOf、imWorktreeRootOf、pluginStoreRootOf 一致,测试钉住) */
 export function dataRoots(dataDir: string): { data: string; worktrees: string; imWorktrees: string; plugins: string } {
   return { data: dataDir, worktrees: `${dataDir}-worktrees`, imWorktrees: `${dataDir}-im-worktrees`, plugins: `${dataDir}-plugins` }

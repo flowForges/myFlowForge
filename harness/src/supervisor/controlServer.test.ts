@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import net from 'node:net'
-import { FrameDecoder, connectControlClient, encodeFrame } from '../protocol/index'
+import { FrameDecoder, autostartIds, connectControlClient, dataDir as defaultDataDir, encodeFrame } from '../protocol/index'
 import { startControlServer } from './controlServer'
 import type { Supervisor } from './supervisor'
 
@@ -75,12 +75,68 @@ describe('control server', () => {
     closers.push(() => c.close())
     const spec = { execPath: '/x/Electron', daemonJs: '/x/mffaiDaemon.js' }
     expect(await c.call('autostart', { on: true, spec })).toEqual({ ok: true, errors: [] })
-    const plist = join(home, 'Library/LaunchAgents/com.myflowforge.mffai.plist')
+    const plist = join(home, `Library/LaunchAgents/${autostartIds(join(dir, 'data'), home).launchd}.plist`)
     expect(calls.map((x) => x[1])).toEqual(['bootout', 'bootstrap'])
     expect(calls[1][3]).toBe(plist)
     expect(readFileSync(plist, 'utf8')).toContain(join(dir, 'data'))
     expect(await c.call('autostart', { on: false, spec })).toEqual({ ok: true, errors: [] })
     expect(existsSync(plist)).toBe(false)
+  })
+
+  it('the default data dir of the given home keeps com.myflowforge.mffai.plist (Task 15)', async () => {
+    const calls: string[][] = []
+    const home = join(dir, 'home')
+    const a = addr()
+    const s = await startControlServer({
+      addr: a, token: 't', supervisor: {} as unknown as Supervisor, platform: 'darwin', home, dataDir: defaultDataDir(home), runningUnderLaunchd: false,
+      exec: async (f, args) => { calls.push([f, ...args]) },
+    })
+    closers.push(() => s.close())
+    const c = await connectControlClient({ addr: a, token: 't' })
+    closers.push(() => c.close())
+    expect(await c.call('autostart', { on: true, spec: { execPath: '/e', daemonJs: '/d' } })).toEqual({ ok: true, errors: [] })
+    const plist = join(home, 'Library/LaunchAgents/com.myflowforge.mffai.plist')
+    expect(readFileSync(plist, 'utf8')).toContain('<string>com.myflowforge.mffai</string>')
+    expect(calls[0]).toEqual(['launchctl', 'bootout', `gui/${process.getuid?.()}/com.myflowforge.mffai`])
+    expect(await c.call('autostart', { on: false, spec: { execPath: '/e', daemonJs: '/d' } })).toEqual({ ok: true, errors: [] })
+    expect(existsSync(plist)).toBe(false)
+  })
+
+  describe('XPC_SERVICE_NAME against the derived label (Task 15)', () => {
+    afterEach(() => { vi.unstubAllEnvs() })
+    const serve = async (data: string) => {
+      const calls: string[][] = []
+      const home = join(dir, 'home')
+      const a = addr()
+      const s = await startControlServer({
+        addr: a, token: 't', supervisor: {} as unknown as Supervisor, platform: 'darwin', home, dataDir: data,
+        exec: async (f, args) => { calls.push([f, ...args]) },
+      })
+      closers.push(() => s.close())
+      const c = await connectControlClient({ addr: a, token: 't' })
+      closers.push(() => c.close())
+      await c.call('autostart', { on: true, spec: { execPath: '/e', daemonJs: '/d' } })
+      return { calls, home }
+    }
+    it('equal to the derived label → running under launchd: plist only, no bootout/bootstrap', async () => {
+      const data = join(dir, 'side', 'mff-ai')
+      vi.stubEnv('XPC_SERVICE_NAME', autostartIds(data, join(dir, 'home')).launchd)
+      const { calls } = await serve(data)
+      expect(calls).toEqual([])
+    })
+    it('the fixed label while the data dir is another one → not ours: bootout/bootstrap the derived label', async () => {
+      const data = join(dir, 'side', 'mff-ai')
+      vi.stubEnv('XPC_SERVICE_NAME', 'com.myflowforge.mffai')
+      const { calls } = await serve(data)
+      expect(calls.map((x) => x[1])).toEqual(['bootout', 'bootstrap'])
+      expect(calls[0][2]).toMatch(new RegExp(`/${autostartIds(data, join(dir, 'home')).launchd.replace(/\./g, '\\.')}$`))
+    })
+    it('the default data dir: XPC_SERVICE_NAME com.myflowforge.mffai still counts as launchd', async () => {
+      const home = join(dir, 'home')
+      vi.stubEnv('XPC_SERVICE_NAME', 'com.myflowforge.mffai')
+      const { calls } = await serve(defaultDataDir(home))
+      expect(calls).toEqual([])
+    })
   })
 
   it('autostart reports command failures without throwing', async () => {

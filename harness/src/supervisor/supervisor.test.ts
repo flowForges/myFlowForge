@@ -320,6 +320,8 @@ describe('daemon entry', () => {
     // 演练模式下合法请求只出计划:不执行命令,连临时 home 也不写
     expect(await c.call('autostart', { on: true, spec: { execPath: process.execPath, daemonJs: bundle } })).toMatchObject({ ok: true })
     expect(existsSync(join(home, 'Library/LaunchAgents/com.myflowforge.mffai.plist'))).toBe(false)
+    // 临时数据目录的标签带 sha8(Task 15):整个 Library 都不该出现
+    expect(existsSync(join(home, 'Library'))).toBe(false)
     expect(existsSync(join(home, '.config'))).toBe(false)
     expect(await c.call('shutdown')).toEqual({ ok: true })
     c.close()

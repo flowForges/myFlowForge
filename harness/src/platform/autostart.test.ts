@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { runtimePaths } from '../protocol/paths'
+import { autostartIds, runtimePaths, secretsAccountOf } from '../protocol/paths'
 import {
   applyAutostart, launchdPlist, planAutostart, startVbs, systemdUnit, windowsRunValue, xdgDesktop, type LaunchSpec,
 } from './autostart'
@@ -141,5 +141,54 @@ describe('applyAutostart', () => {
     )
     expect(r.ok).toBe(false)
     expect(calls).toEqual([])
+  })
+})
+
+describe('side-by-side ids (Task 15)', () => {
+  const side: LaunchSpec = { ...spec, dataDir: '/h/.myFlowForge-test/mff-ai' }
+  const ids = autostartIds(side.dataDir, home)
+  const h = secretsAccountOf(side.dataDir)
+  it('another data dir: plist path, Label, bootout target all carry the sha8; the default plist is never named', () => {
+    expect(ids.launchd).toBe(`com.myflowforge.mffai.${h}`)
+    const env = { platform: 'darwin' as const, home, uid: 501, hasSystemdUser: false }
+    const p = join(home, `Library/LaunchAgents/com.myflowforge.mffai.${h}.plist`)
+    const i = planAutostart('install', side, env)
+    expect(i.writes).toEqual([{ path: p, content: launchdPlist(side, ids.launchd) }])
+    expect(i.writes[0].content).toContain(`<string>com.myflowforge.mffai.${h}</string>`)
+    expect(i.writes[0].content).not.toContain('<string>com.myflowforge.mffai</string>')
+    expect(i.commands).toEqual([
+      { argv: ['launchctl', 'bootout', `gui/501/com.myflowforge.mffai.${h}`], ignoreFailure: true },
+      { argv: ['launchctl', 'bootstrap', 'gui/501', p] },
+    ])
+    const u = planAutostart('uninstall', side, env)
+    expect(u.removes).toEqual([p])
+    expect(JSON.stringify([i, u])).not.toContain('com.myflowforge.mffai.plist')
+    expect(JSON.stringify([i, u])).not.toContain('gui/501/com.myflowforge.mffai"')
+  })
+  it('the default data dir under the given home keeps the fixed label in plist and plan', () => {
+    expect(launchdPlist(spec, autostartIds(spec.dataDir, home).launchd)).toBe(launchdPlist(spec))
+    expect(launchdPlist(spec)).toContain('<string>com.myflowforge.mffai</string>')
+  })
+  it('linux: unit and desktop names carry the sha8', () => {
+    const unit = join(home, `.config/systemd/user/mffai-${h}.service`)
+    const desk = join(home, `.config/autostart/mffai-${h}.desktop`)
+    const sd = { platform: 'linux' as const, home, uid: 1000, hasSystemdUser: true }
+    const i = planAutostart('install', side, sd)
+    expect(i.writes.map((w) => w.path)).toEqual([unit])
+    expect(i.removes).toEqual([desk])
+    expect(i.commands.map((c) => c.argv)).toEqual([['systemctl', '--user', 'daemon-reload'], ['systemctl', '--user', 'enable', `mffai-${h}.service`]])
+    const u = planAutostart('uninstall', side, sd)
+    expect(u.commands.map((c) => c.argv)).toEqual([['systemctl', '--user', 'disable', `mffai-${h}.service`]])
+    expect(u.removes).toEqual([unit, desk])
+    const plain = { ...sd, hasSystemdUser: false }
+    expect(planAutostart('install', side, plain).writes.map((w) => w.path)).toEqual([desk])
+    expect(planAutostart('uninstall', side, plain).removes).toEqual([desk, unit])
+  })
+  it('win32: the Run value name carries the sha8', () => {
+    const w: LaunchSpec = { execPath: 'C:\\e.exe', daemonJs: 'C:\\d.js', dataDir: 'C:\\Users\\u\\.myFlowForge-test\\mff-ai' }
+    const hw = secretsAccountOf(w.dataDir)
+    const env = { platform: 'win32' as const, home: 'C:\\Users\\u', hasSystemdUser: false }
+    expect(planAutostart('install', w, env).commands[0].argv[4]).toBe(`myFlowForge-mffai-${hw}`)
+    expect(planAutostart('uninstall', w, env).commands[0].argv[4]).toBe(`myFlowForge-mffai-${hw}`)
   })
 })

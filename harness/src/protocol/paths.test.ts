@@ -3,7 +3,8 @@ import { chmodSync, mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync } fr
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
-import { dataDir, dataRoots, ensureToken, runtimePaths, secretsAccountOf, SECRETS_SERVICE } from './index'
+import { homedir } from 'node:os'
+import { autostartIds, dataDir, dataRoots, ensureToken, runtimePaths, secretsAccountOf, SECRETS_SERVICE } from './index'
 import { pluginStoreRootOf } from '../lib/fs/paths'
 import { imWorktreeRootOf } from '../lib/git/imWorktree'
 import { worktreeRootOf } from '../lib/git/worktree'
@@ -82,5 +83,28 @@ describe('paths', () => {
     for (const d of ['/tmp/x/mff-ai', '/Users/u/.myFlowForge/mff-ai', 'C:\\Users\\u\\mff-ai']) expect(secretsAccountOf(d)).toBe(oldSha8(d))
     expect(SECRETS_SERVICE).toBe('myflowforge-mffai')
     expect(SERVICE).toBe(SECRETS_SERVICE)
+  })
+})
+
+describe('autostartIds (Task 15, side-by-side seams)', () => {
+  it('the default data dir keeps today\'s ids byte for byte', () => {
+    expect(autostartIds(dataDir())).toEqual({ launchd: 'com.myflowforge.mffai', systemd: 'mffai.service', winRun: 'myFlowForge-mffai' })
+    expect(autostartIds(dataDir(homedir()), homedir())).toEqual(autostartIds(dataDir()))
+    expect(autostartIds(dataDir('/h'), '/h')).toEqual({ launchd: 'com.myflowforge.mffai', systemd: 'mffai.service', winRun: 'myFlowForge-mffai' })
+  })
+
+  it('another data dir gets its sha8 on every id', () => {
+    const side = join('/h', '.myFlowForge-test', 'mff-ai')
+    const h = secretsAccountOf(side)
+    expect(h).toMatch(/^[0-9a-f]{8}$/)
+    expect(autostartIds(side, '/h')).toEqual({ launchd: `com.myflowforge.mffai.${h}`, systemd: `mffai-${h}.service`, winRun: `myFlowForge-mffai-${h}` })
+    // 别人家的默认目录对这个 home 不是默认
+    expect(autostartIds(dataDir('/other'), '/h').launchd).toBe(`com.myflowforge.mffai.${secretsAccountOf(dataDir('/other'))}`)
+  })
+
+  it('two dirs never collide, and none collides with the default', () => {
+    const dirs = [dataDir('/h'), '/h/.myFlowForge-test/mff-ai', '/h/.myFlowForge-b/mff-ai', '/tmp/x/mff-ai', '/tmp/x/mff-ai/', 'C:\\Users\\u\\mff-ai']
+    const ids = dirs.map((d) => autostartIds(d, '/h'))
+    for (const k of ['launchd', 'systemd', 'winRun'] as const) expect(new Set(ids.map((i) => i[k])).size).toBe(dirs.length)
   })
 })

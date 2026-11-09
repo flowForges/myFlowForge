@@ -6,7 +6,7 @@ import type { Supervisor } from './supervisor'
 import { homedir, userInfo } from 'node:os'
 import { resolve } from 'node:path'
 import { applyAutostart, defaultExec, planAutostart, probeSystemdUser, type ExecFn } from '../platform/autostart'
-import { dataDir as defaultDataDir } from '../protocol/paths'
+import { autostartIds, dataDir as defaultDataDir } from '../protocol/paths'
 import { ControlMethods } from '../protocol/rpc'
 
 const ERR_METHOD_NOT_FOUND = -32601
@@ -67,7 +67,8 @@ export function startControlServer(opts: ControlServerOpts): Promise<{ close(): 
             const plan = planAutostart(on ? 'install' : 'uninstall', spec, {
               platform,
               home,
-              runningUnderLaunchd: opts.runningUnderLaunchd ?? process.env.XPC_SERVICE_NAME === 'com.myflowforge.mffai',
+              // launchd 把作业标签放进 XPC_SERVICE_NAME;标签按数据目录派生
+              runningUnderLaunchd: opts.runningUnderLaunchd ?? process.env.XPC_SERVICE_NAME === autostartIds(spec.dataDir, home).launchd,
               uid: process.getuid?.(),
               hasSystemdUser: platform === 'linux' ? await probeSystemdUser(exec) : false,
             })
