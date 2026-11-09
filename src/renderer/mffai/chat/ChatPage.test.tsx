@@ -134,7 +134,7 @@ describe('ChatPage', () => {
     fireEvent.click(within(rowOf('本机会话')).getByRole('button', { name: '更多' }))
     fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
     const dlg = await screen.findByRole('dialog', { name: '删除会话' })
-    await waitFor(() => expect(within(dlg).getByText('保留的 worktree').nextSibling!.textContent).toBe('1'))
+    await waitFor(() => expect(within(dlg).getByText('删除 worktree').nextSibling!.textContent).toBe('1'))
     await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '删除' })) })
     expect(f.callsOf('session.delete')).toEqual([{ commandId: expect.any(String), sessionId: 'a' }])
     const box2 = await screen.findByRole('dialog', { name: '仍引用它的记忆 1 条' })

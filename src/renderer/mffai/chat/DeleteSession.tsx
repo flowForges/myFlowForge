@@ -1,4 +1,4 @@
-// 删除会话的确认框(08 §7.2、评审修订 R2)。行都是事实:会话、保留的 worktree、未合并的改动(按运行列出,
+// 删除会话的确认框(08 §7.2、评审修订 R2)。行都是事实:会话、删除 worktree、未合并的改动(按运行列出,
 // 每行一个 去合并)、来源、别的会话里的引用:保留。有未合并的改动时按钮是 删除并丢弃改动,
 // discardUnmerged 只带列出来的运行 id;后台再回 unmerged 就按它给的刷新,不自动重发。
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'

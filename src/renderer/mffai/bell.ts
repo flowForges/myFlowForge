@@ -122,7 +122,8 @@ export function startBell(sink: BellSink): () => void {
         if (sessionId) {
           void call('session.list', {}).then(
             (r) => {
-              const title = r.sessions.find((x) => x.id === sessionId)?.title
+              // 旧后台或假后台回的形状不全:当没取到
+              const title = r?.sessions?.find((x) => x.id === sessionId)?.title
               if (title && keys.has(key)) show(title)
             },
             (e) => { if (!stopped && !isUnsupported(e)) console.error('mffai bell session.list', toCallError(e).code) },

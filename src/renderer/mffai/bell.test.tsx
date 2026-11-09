@@ -135,6 +135,13 @@ describe('bell: unsandboxed approvals and session titles', () => {
     expect(container.querySelectorAll('img')).toHaveLength(0)
   })
 
+  it('a session.list answer without sessions keeps the plain notification and throws nothing', async () => {
+    boot({ 'session.list': {} as never })
+    act(() => f.emit(ev('approval.requested', { approvalId: 'a1', turnId: 't1', callId: 'c1', tool: 'shell', summary: 'x' }, { sessionId: 's1' })))
+    await flush()
+    expect(s.byKey('mffai:approval:a1')!.t).toBe('<b>shell</b> 待审批')
+  })
+
   it('a title already resolved by the time it arrives does not bring the notification back', async () => {
     let resolve!: (v: { sessions: SessionSummary[] }) => void
     boot({ 'session.list': () => new Promise((r) => { resolve = r }) })
