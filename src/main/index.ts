@@ -41,7 +41,7 @@ import { runPlugin } from './plugins/pluginHost'
 import { setPluginScheduler } from './plugins/pluginSchedulerRef'
 import { makeRun } from './usage/usageService'
 import { initAppLogFile, setAppLogEventSink, logInfo, logError } from './log/appLog'
-import { SYS_DIR } from './config/paths'
+import { MFFAI_DIR, SYS_DIR } from './config/paths'
 import { registerPetScheme, handlePetProtocol } from './pet/petProtocol'
 import { migratePetImagesInPet } from './pet/petImageStore'
 import { registerBackgroundScheme, handleBackgroundProtocol } from './appearance/backgroundProtocol'
@@ -599,6 +599,8 @@ app.whenReady().then(() => {
       clientVersion: app.getVersion(),
       // ★在这里算:host 被拆进 out/main/chunks/,那里的 __dirname 不是 out/main
       daemonJs: join(__dirname, 'mffaiDaemon.js'),
+      // 08 §18:<SYS_DIR>/mff-ai(MFFAI_DATA_DIR 优先);默认等于 dataDir()
+      dataDir: MFFAI_DIR(),
       log: (m, e) => logError('mffai', e === undefined ? m : `${m}: ${e instanceof Error ? e.message : String(e)}`),
     })
     mffaiHost = h
@@ -773,6 +775,7 @@ app.whenReady().then(() => {
     readSettings,
     saveSettings: (patch) => methodTable[CH.configSetClientSettings](NOOP_CTX, patch),
     loadHost: loadMffaiHost,
+    dataDir: MFFAI_DIR(),
     // 地址已由 host 过白名单(本机登录起始页 127.0.0.1/auth/start / chatgpt.com)
     openExternal: (url) => { void shell.openExternal(url).catch(mffaiFail) },
     log: (m) => logError('mffai', m),

@@ -1,12 +1,13 @@
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { lstatSync } from 'node:fs'
+import { lstatSync, readFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { connect as netConnect } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
 import { connectControlClient, dataDir, runtimePaths, type MffaiState } from '@mffai/protocol'
 import { CH } from '../ipc/channels'
 import type { Settings } from '../config/schema'
+import { SYS_DIR } from '../config/paths'
 import type { CallEnvelope } from './callEnvelope'
 import { CONTROL_TIMEOUT_MS, controlCall, readSupervisorJson } from './client'
 import { isCallable, takesCommandId } from './methods'
@@ -41,7 +42,9 @@ export interface MffaiIpcDeps {
   /** 路径在不在(按 lstat,悬空链接也算);默认 lstatSync。停用状态的 dataExists 和删除全部数据用 */
   exists?: (p: string) => boolean
   /** 删除全部数据的副作用,测试注入;默认真的控制口 / fs.rm / execFile */
-  wipe?: Partial<Pick<WipeDeps, 'controlAlive' | 'rm' | 'exists' | 'run' | 'platform' | 'home' | 'tmpDir'>>
+  wipe?: Partial<Pick<WipeDeps, 'controlAlive' | 'rm' | 'exists' | 'run' | 'platform' | 'home' | 'tmpDir' | 'readFile' | 'sysDir'>>
+  /** mff-ai 的数据目录;index.ts 传 MFFAI_DIR()(<SYS_DIR>/mff-ai)。默认 MFFAI_DATA_DIR,否则 dataDir() */
+  dataDir?: string
   /** 和启用互斥的锁;默认模块级单例(host、设置同步用同一把) */
   lock?: WipeLock
   /** 只记方法名、错误码和路径 */
@@ -67,6 +70,11 @@ function promptOpts(v: unknown): PromptOpts | undefined {
   if (cwd) out.cwd = cwd
   if (o.approvalMode === 'ask' || o.approvalMode === 'auto') out.approvalMode = o.approvalMode
   return Object.keys(out).length ? out : undefined
+}
+
+/** 读文本;读不到 → undefined */
+const readText = (p: string): string | undefined => {
+  try { return readFileSync(p, 'utf8') } catch { return undefined }
 }
 
 const lexists = (p: string): boolean => {
@@ -139,7 +147,7 @@ export function registerMffaiIpc(deps: MffaiIpcDeps): void {
   const log = deps.log ?? (() => {})
   const exists = deps.exists ?? lexists
   const lock = deps.lock ?? wipeLock
-  const mffaiDir = () => process.env.MFFAI_DATA_DIR || dataDir()
+  const mffaiDir = () => deps.dataDir ?? (process.env.MFFAI_DATA_DIR || dataDir())
 
   // 未启用:只读设置,host 永远不加载
   const enabled = () => deps.readSettings().mffai.enabled
@@ -270,6 +278,8 @@ export function registerMffaiIpc(deps: MffaiIpcDeps): void {
         rm: w.rm ?? ((p) => rm(p, { recursive: true, force: true })),
         exists: w.exists ?? exists,
         run: w.run ?? runCmd,
+        readFile: w.readFile ?? readText,
+        sysDir: w.sysDir ?? SYS_DIR,
       })
       if (r.ok) log(`mffai wipe removed: ${r.removed.join(', ')}`)
       return r

@@ -3,7 +3,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { dataRoots, secretsAccountOf, SECRETS_SERVICE } from '@mffai/protocol'
+import { autostartIds, dataRoots, secretsAccountOf, SECRETS_SERVICE } from '@mffai/protocol'
 import { anyRootExists, launchdLabelOf, probeControl, wipeData, type WipeDeps } from './wipe'
 
 const HOME = '/home/u'
@@ -103,7 +103,7 @@ describe('wipeData removal', () => {
 
   it('the plist goes only when present, only on darwin, and only for the default data dir (Task 15 derives other labels)', async () => {
     expect(launchdLabelOf(DIR, HOME)).toBe('com.myflowforge.mffai')
-    expect(launchdLabelOf('/srv/side/data', HOME)).toBeUndefined()
+    expect(launchdLabelOf('/srv/side/data', HOME)).toBe(`com.myflowforge.mffai.${secretsAccountOf('/srv/side/data')}`)
     const absent = deps({ exists: (p: string) => p !== PLIST })
     await wipeData(absent.d)
     expect(absent.removed).not.toContain(PLIST)
@@ -113,6 +113,45 @@ describe('wipeData removal', () => {
     const linux = deps({ platform: 'linux' })
     await wipeData(linux.d)
     expect(linux.removed.some((p) => p.includes('LaunchAgents'))).toBe(false)
+  })
+
+  it('with readFile given (ipc.ts always gives it), each data dir removes only its own derived plist, and only when it names this data dir (Task 15)', async () => {
+    const plist = (dir: string) => `<dict>\n  <key>MFFAI_DATA_DIR</key>\n    <string>${dir.replace(/&/g, '&amp;')}</string>\n</dict>`
+    const SIDE = '/srv/side/mff-ai'
+    expect(launchdLabelOf(SIDE, HOME)).toBe(autostartIds(SIDE, HOME).launchd)
+    const SIDE_PLIST = `/home/u/Library/LaunchAgents/com.myflowforge.mffai.${secretsAccountOf(SIDE)}.plist`
+    const side = deps({ dataDir: SIDE, readFile: (p: string) => (p === SIDE_PLIST ? plist(SIDE) : p === PLIST ? plist(DIR) : undefined) })
+    await wipeData(side.d)
+    expect(side.removed.filter((p) => p.includes('LaunchAgents'))).toEqual([SIDE_PLIST])
+    const ours = deps({ readFile: (p: string) => (p === PLIST ? plist(DIR) : undefined) })
+    await wipeData(ours.d)
+    expect(ours.removed).toContain(PLIST)
+    const other = deps({ readFile: () => plist('/home/u/.myFlowForge-test/mff-ai') })
+    await wipeData(other.d)
+    expect(other.removed).not.toContain(PLIST)
+    const unreadable = deps({ readFile: () => undefined })
+    await wipeData(unreadable.d)
+    expect(unreadable.removed).not.toContain(PLIST)
+    const amp = '/home/u/R&D/mff-ai'
+    const ampPlist = `/home/u/Library/LaunchAgents/${autostartIds(amp, HOME).launchd}.plist`
+    const esc = deps({ dataDir: amp, readFile: (p: string) => (p === ampPlist ? plist(amp) : undefined) })
+    await wipeData(esc.d)
+    expect(esc.removed).toContain(ampPlist)
+    const linux = deps({ platform: 'linux', readFile: () => plist(DIR) })
+    await wipeData(linux.d)
+    expect(linux.removed.some((p) => p.includes('LaunchAgents'))).toBe(false)
+  })
+
+  it('MFFAI_DATA_DIR may not be the app data dir (sysDir) or its parent (Task 15)', async () => {
+    const sys = '/home/u/.myFlowForge-test'
+    for (const dir of [sys, '/home/u/.myFlowForge-test/']) {
+      const t = deps({ dataDir: dir, envDataDir: dir, sysDir: sys })
+      expect(await wipeData(t.d)).toEqual({ ok: false, reason: 'bad_path' })
+      expect(t.removed).toEqual([])
+    }
+    const inside = '/home/u/.myFlowForge-test/side'
+    const ok = deps({ dataDir: inside, envDataDir: inside, sysDir: sys })
+    expect(await wipeData(ok.d)).toMatchObject({ ok: true })
   })
 
   it('linux runs secret-tool from a fixed system path; a missing entry still counts as done; none installed → nothing runs', async () => {

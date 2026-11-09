@@ -619,3 +619,57 @@ describe('08 Task 4 review fixes (ipc)', () => {
     expect(t.host.call).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('dataDir dep (Task 15)', () => {
+  afterEach4(() => { vi.unstubAllEnvs() })
+  const OTHER = '/tmp/mffai-ipc-never-created-t15/mff-ai'
+  const reg = (dataDirDep: string | undefined) => {
+    const handlers = new Map<string, Fn>()
+    const fromHandlers = new Map<string, (fromMain: boolean, ...a: unknown[]) => unknown>()
+    const removed: string[] = []
+    const runs: Array<[string, string[]]> = []
+    const loadHost = vi.fn(async () => ({}) as never)
+    registerMffaiIpc({
+      handle: (ch, fn) => { handlers.set(ch, fn) },
+      handleFrom: (ch, fn) => { fromHandlers.set(ch, fn) },
+      readSettings: () => ({ ...defaultSettings(), mffai: { enabled: false, autostart: true } }),
+      saveSettings: vi.fn(),
+      loadHost,
+      openExternal: vi.fn(),
+      exists: () => false,
+      ...(dataDirDep !== undefined && { dataDir: dataDirDep }),
+      wipe: {
+        controlAlive: async () => false,
+        rm: async (p) => { removed.push(p) },
+        exists: (p) => p.startsWith(OTHER),
+        run: async (c, a) => { runs.push([c, a]); return 0 },
+        readFile: () => undefined,
+        platform: 'darwin',
+        home: '/tmp/mffai-ipc-home-t15',
+      },
+      lock: createWipeLock(),
+    })
+    return { handlers, fromHandlers, removed, runs, loadHost }
+  }
+
+  it('disabledState and wipe use the given dataDir', async () => {
+    vi.stubEnv('MFFAI_DATA_DIR', '')
+    const t = reg(OTHER)
+    expect(await t.handlers.get(CH.mffaiState)!()).toEqual({
+      enabled: false, autostart: true, running: false, dataDir: OTHER, dataExists: false,
+      roots: { ...dataRoots(OTHER), keychain: `${SECRETS_SERVICE}/${secretsAccountOf(OTHER)}` },
+    })
+    expect(await t.fromHandlers.get(CH.mffaiWipe)!(true)).toMatchObject({ ok: true })
+    const r0 = dataRoots(OTHER)
+    expect(t.removed).toEqual([r0.worktrees, r0.imWorktrees, r0.plugins, r0.data])
+    expect(t.runs).toEqual([['/usr/bin/security', ['delete-generic-password', '-a', secretsAccountOf(OTHER), '-s', SECRETS_SERVICE]]])
+    expect(t.loadHost).not.toHaveBeenCalled()
+  })
+
+  it('without the dep: MFFAI_DATA_DIR, else dataDir() as before', async () => {
+    vi.stubEnv('MFFAI_DATA_DIR', '')
+    expect((await reg(undefined).handlers.get(CH.mffaiState)!() as { dataDir: string }).dataDir).toBe(dataDir())
+    vi.stubEnv('MFFAI_DATA_DIR', OTHER)
+    expect((await reg(undefined).handlers.get(CH.mffaiState)!() as { dataDir: string }).dataDir).toBe(OTHER)
+  })
+})

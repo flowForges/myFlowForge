@@ -4,6 +4,8 @@ import { resolve } from 'node:path'
 
 export default defineConfig({
   main: {
+    // 并排测试包的 app 数据目录名(08 §18):MFF_SYS_DIR_NAME=.myFlowForge-test npm run build;没设 → .myFlowForge
+    define: { __MFF_SYS_DIR_NAME__: process.env.MFF_SYS_DIR_NAME ? JSON.stringify(process.env.MFF_SYS_DIR_NAME) : 'undefined' },
     build: {
       outDir: 'out/main',
       rollupOptions: {

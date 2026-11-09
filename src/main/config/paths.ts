@@ -10,7 +10,14 @@ export function expandTilde(p: string): string {
   return p
 }
 
-export const SYS_DIR = join(homedir(), '.myFlowForge')
+// 并排的测试包(08 §18、评审修订 R12):构建期常量换 app 数据目录名;没设或不像一个点开头的目录名 → .myFlowForge
+declare const __MFF_SYS_DIR_NAME__: string | undefined
+export function sysDirName(v: unknown): string {
+  return typeof v === 'string' && /^\.[A-Za-z0-9._-]+$/.test(v) && !/^\.+$/.test(v) ? v : '.myFlowForge'
+}
+export const SYS_DIR = join(homedir(), sysDirName(typeof __MFF_SYS_DIR_NAME__ === 'string' ? __MFF_SYS_DIR_NAME__ : undefined))
+/** mff-ai 的数据目录:MFFAI_DATA_DIR 优先,否则 <SYS_DIR>/mff-ai(默认等于 @mffai/protocol 的 dataDir()) */
+export const MFFAI_DIR = () => process.env.MFFAI_DATA_DIR || join(SYS_DIR, 'mff-ai')
 export const sysFile = (name: string) => join(SYS_DIR, name)
 export const reposDir = () => join(SYS_DIR, 'repos')
 export const mirrorPath = (projectId: string) => join(reposDir(), `${projectId}.git`)
