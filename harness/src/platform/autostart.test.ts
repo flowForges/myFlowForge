@@ -192,3 +192,37 @@ describe('side-by-side ids (Task 15)', () => {
     expect(planAutostart('uninstall', w, env).commands[0].argv[4]).toBe(`myFlowForge-mffai-${hw}`)
   })
 })
+
+describe('side by side in a temp home (Task 15)', () => {
+  let dir: string
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'mffai-sbs-')) })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+  it('darwin and linux: two installs coexist, uninstalling one leaves the other', async () => {
+    const h = join(dir, 'home')
+    const regular: LaunchSpec = { execPath: '/A/Electron', daemonJs: '/A/d.js', dataDir: join(h, '.myFlowForge', 'mff-ai') }
+    const test: LaunchSpec = { execPath: '/T/Electron', daemonJs: '/T/d.js', dataDir: join(h, '.myFlowForge-test', 'mff-ai') }
+    const calls: string[] = []
+    const exec = async (f: string, a: string[]) => { calls.push([f, ...a].join(' ')) }
+    for (const env of [
+      { platform: 'darwin' as const, home: h, uid: 501, hasSystemdUser: false },
+      { platform: 'linux' as const, home: h, uid: 1000, hasSystemdUser: true },
+      { platform: 'linux' as const, home: h, uid: 1000, hasSystemdUser: false },
+    ]) {
+      const a = planAutostart('install', regular, env)
+      const b = planAutostart('install', test, env)
+      expect((await applyAutostart(a, exec)).ok).toBe(true)
+      expect((await applyAutostart(b, exec)).ok).toBe(true)
+      const [pa, pb] = [a.writes[0].path, b.writes[0].path]
+      expect(pa).not.toBe(pb)
+      expect(readFileSync(pa, 'utf8')).toContain(regular.dataDir)
+      expect(readFileSync(pb, 'utf8')).toContain(test.dataDir)
+      expect((await applyAutostart(planAutostart('uninstall', test, env), exec)).ok).toBe(true)
+      expect(existsSync(pb)).toBe(false)
+      expect(readFileSync(pa, 'utf8')).toBe(a.writes[0].content)
+      expect((await applyAutostart(planAutostart('uninstall', regular, env), exec)).ok).toBe(true)
+      expect(existsSync(pa)).toBe(false)
+    }
+    expect(calls.filter((c) => c.includes('bootout')).length).toBe(4)
+    expect(calls.join('\n')).toContain('gui/501/com.myflowforge.mffai\n')
+  })
+})
