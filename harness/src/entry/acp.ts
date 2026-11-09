@@ -1,11 +1,14 @@
 import { Readable, Writable } from 'node:stream'
 import { ndJsonStream } from '@agentclientprotocol/sdk'
 import { readFileSync } from 'node:fs'
-import { connectClient, dataDir, runtimePaths } from '../protocol/index'
+import { connectClient, runtimePaths } from '../protocol/index'
+import { acpDataDir } from './acpDataDir'
 import { runBridge } from '../acp-bridge/bridge'
 
 // mffaiAcp.js:stdio 上的 ACP agent,转接到已在运行的 mff-ai 工作进程(不自行拉起)
-const paths = runtimePaths(process.env.MFFAI_DATA_DIR || dataDir())
+// 构建期的 app 数据目录名(electron.vite.config.ts 的 define,测试包是 .myFlowForge-test),跟 app 的 MFFAI_DIR 同源
+declare const __MFF_SYS_DIR_NAME__: string | undefined
+const paths = runtimePaths(acpDataDir(process.env, typeof __MFF_SYS_DIR_NAME__ === 'string' ? __MFF_SYS_DIR_NAME__ : undefined))
 
 void runBridge({
   stream: ndJsonStream(Writable.toWeb(process.stdout) as WritableStream<Uint8Array>, Readable.toWeb(process.stdin) as ReadableStream<Uint8Array>),

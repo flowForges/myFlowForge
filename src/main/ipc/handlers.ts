@@ -111,6 +111,7 @@ import { pickInstaller } from '../update/installer'
 import { createUpdateFlow, type ApplyMode } from '../update/updateFlow'
 import type { UpdateBusyItem } from '@shared/types'
 import { makeProxyFetch, makeContentFetch } from '../update/proxyFetch'
+import { SELF_UPDATE_ENABLED } from '../config/buildFlavor'
 import { stat as fsStat, rename as fsRename, unlink as fsUnlink, writeFile as fsWriteFile } from 'node:fs/promises'
 import { startBridge } from '../mcp/forgeBridge'
 import { authSocketAddress } from '../mcp/bridgeAddress'
@@ -227,12 +228,13 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // proxy-THEN-direct: the update check must survive a down/misrouted/socks proxy (settings.agentProxy).
     // makeProxyFetch had no direct fallback, so any proxy hiccup → throw → 永久「检查失败」even when GitHub
     // is directly reachable. makeContentFetch tries the proxy then falls back to a direct fetch.
-    fetchLatest: (r) => fetchLatestRelease(r, { fetch: makeContentFetch(readSettings().agentProxy) as (url: string, init?: unknown) => Promise<{ ok: boolean; json: () => Promise<any> }>, platform: process.platform, arch: process.arch }),
+    // 测试包(MFF_TEST_BUILD=1)不自更新:永远「没有新版本」,手动检查也答「已是最新」,于是也不会下载
+    fetchLatest: (r) => SELF_UPDATE_ENABLED ? fetchLatestRelease(r, { fetch: makeContentFetch(readSettings().agentProxy) as (url: string, init?: unknown) => Promise<{ ok: boolean; json: () => Promise<any> }>, platform: process.platform, arch: process.arch }) : Promise.resolve(null),
     emit: broadcast,
     setTimeout: (fn, ms) => { setTimeout(fn, ms) },
     setInterval: (fn, ms) => { setInterval(fn, ms) },
   })
-  updateChecker.start()
+  if (SELF_UPDATE_ENABLED) updateChecker.start()
 
   // 更新前「退出会打断什么」。chatQueue / run2Manager / chatGateOwner 在下面才声明,但这里只在用户点了
   // 升级之后才被调用(那时 registerIpc 早已跑完),闭包引用不会碰到 TDZ。

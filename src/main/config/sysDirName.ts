@@ -16,3 +16,14 @@ export function buildSysDirName(v: string | undefined): string | undefined {
   }
   return v
 }
+
+/**
+ * 构建期:MFF_TEST_BUILD。没设或空 → false(正式包);'1' → true,而且必须同时给一个合格的 MFF_SYS_DIR_NAME ——
+ * 一个不自更新、却和正式包共用 ~/.myFlowForge 的「测试包」比没有测试包更糟;其它值一律让构建失败
+ */
+export function buildTestFlag(flag: string | undefined, sysDir: string | undefined): boolean {
+  if (flag === undefined || flag === '') return false
+  if (flag !== '1') throw new Error(`MFF_TEST_BUILD=${JSON.stringify(flag)} is invalid: use 1, or unset it for the release build`)
+  if (buildSysDirName(sysDir) === undefined) throw new Error('MFF_TEST_BUILD=1 needs MFF_SYS_DIR_NAME (e.g. .myFlowForge-test) so the test build never shares ~/.myFlowForge')
+  return true
+}

@@ -1,7 +1,7 @@
 import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import { resolve } from 'node:path'
-import { buildSysDirName } from './src/main/config/sysDirName'
+import { buildSysDirName, buildTestFlag } from './src/main/config/sysDirName'
 
 const defineStr = (v: string | undefined) => (v ? JSON.stringify(v) : 'undefined')
 
@@ -9,7 +9,11 @@ export default defineConfig({
   main: {
     // 并排测试包的 app 数据目录名(08 §18):MFF_SYS_DIR_NAME=.myFlowForge-test npm run build;没设 → .myFlowForge
     // 设了但不合格 buildSysDirName 抛错,构建失败
-    define: { __MFF_SYS_DIR_NAME__: defineStr(buildSysDirName(process.env.MFF_SYS_DIR_NAME)) },
+    // 测试包(MFF_TEST_BUILD=1,scripts/build-mac-test.sh):不自更新;必须同时设 MFF_SYS_DIR_NAME,否则构建失败
+    define: {
+      __MFF_SYS_DIR_NAME__: defineStr(buildSysDirName(process.env.MFF_SYS_DIR_NAME)),
+      __MFF_TEST_BUILD__: JSON.stringify(buildTestFlag(process.env.MFF_TEST_BUILD, process.env.MFF_SYS_DIR_NAME)),
+    },
     build: {
       outDir: 'out/main',
       rollupOptions: {

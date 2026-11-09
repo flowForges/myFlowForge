@@ -43,6 +43,7 @@ import { makeRun } from './usage/usageService'
 import { initAppLogFile, setAppLogEventSink, logInfo, logError } from './log/appLog'
 import { MFFAI_DIR, SYS_DIR } from './config/paths'
 import { registerPetScheme, handlePetProtocol } from './pet/petProtocol'
+import { APP_USER_MODEL_ID } from './config/buildFlavor'
 import { migratePetImagesInPet } from './pet/petImageStore'
 import { registerBackgroundScheme, handleBackgroundProtocol } from './appearance/backgroundProtocol'
 import { bgRelFromUrl, gcBackgrounds } from './appearance/backgroundStore'
@@ -95,7 +96,7 @@ app.on('second-instance', () => {
 // one the installer stamps on the Start-menu shortcut (electron-builder derives that from appId).
 // Without this, toasts are silently dropped — the app looks like it simply never notifies.
 if (process.platform === 'win32') {
-  app.setAppUserModelId('com.zghua.myflowforge')
+  app.setAppUserModelId(APP_USER_MODEL_ID)
   // The window is frameless, so Electron's default menu is never DRAWN on Windows — but its
   // accelerators stay registered. Ctrl+R would reload the renderer out from under a running
   // workflow, and Ctrl+W would close the window, neither of which this app ever asked for. Drop the

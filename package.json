@@ -9,6 +9,7 @@
     "start": "electron-vite preview",
     "dist": "npm run dist:mac-all",
     "dist:mac-all": "bash scripts/build-mac-all.sh",
+    "dist:mac-test": "bash scripts/build-mac-test.sh",
     "dist:win": "node scripts/build-win.mjs x64",
     "dist:win-arm64": "node scripts/build-win.mjs arm64",
     "make-win-icon": "node scripts/make-win-icon.mjs",
