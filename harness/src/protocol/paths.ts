@@ -23,10 +23,27 @@ export function secretsAccountOf(dataDir: string): string {
  * 开机自启的三个标识(08 §18、评审修订 R12)。home 的默认数据目录 → 今天的固定值,逐字节不变;
  * 别的数据目录(并排的测试包、MFFAI_DATA_DIR)加 sha8,两个包开自启不会互相覆盖
  */
-export function autostartIds(dir: string, home: string = homedir()): { launchd: string; systemd: string; winRun: string } {
-  if (dir === dataDir(home)) return { launchd: 'com.myflowforge.mffai', systemd: 'mffai.service', winRun: 'myFlowForge-mffai' }
+export interface AutostartIds { launchd: string; systemd: string; winRun: string }
+
+/** 默认数据目录的三个标识:只写在这一处 */
+export const DEFAULT_AUTOSTART_IDS: Readonly<AutostartIds> = Object.freeze({ launchd: 'com.myflowforge.mffai', systemd: 'mffai.service', winRun: 'myFlowForge-mffai' })
+
+export function autostartIds(dir: string, home: string = homedir()): AutostartIds {
+  if (dir === dataDir(home)) return { ...DEFAULT_AUTOSTART_IDS }
   const h = secretsAccountOf(dir)
-  return { launchd: `com.myflowforge.mffai.${h}`, systemd: `mffai-${h}.service`, winRun: `myFlowForge-mffai-${h}` }
+  const d = DEFAULT_AUTOSTART_IDS
+  return { launchd: `${d.launchd}.${h}`, systemd: `${d.systemd.replace(/\.service$/, '')}-${h}.service`, winRun: `${d.winRun}-${h}` }
+}
+
+/** plist 里的字符串转义(platform/autostart 写 plist、app 删除时认 plist 用同一份) */
+export const plistXmlEsc = (s: string): string =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;')
+
+const reEsc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** 这份 LaunchAgent plist 是不是这个数据目录的:MFFAI_DATA_DIR 键紧跟的字符串等于它。app 的删除全部数据只删自己的 */
+export function launchdPlistOwnedBy(plist: string, dataDir: string): boolean {
+  return new RegExp(`<key>MFFAI_DATA_DIR</key>\\s*<string>${reEsc(plistXmlEsc(dataDir))}</string>`).test(plist)
 }
 
 /** 数据目录和它的三个兄弟目录(和 lib 的 worktreeRootOf、imWorktreeRootOf、pluginStoreRootOf 一致,测试钉住) */

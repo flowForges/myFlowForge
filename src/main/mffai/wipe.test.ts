@@ -115,6 +115,13 @@ describe('wipeData removal', () => {
     expect(linux.removed.some((p) => p.includes('LaunchAgents'))).toBe(false)
   })
 
+  it('the ownership predicate and the default label come from @mffai/protocol, not a copy here (M4)', () => {
+    const src = readFileSync(join(__dirname, 'wipe.ts'), 'utf8')
+    expect(src).toContain('launchdPlistOwnedBy')
+    expect(src).not.toContain("'com.myflowforge.mffai'")
+    expect(src).not.toMatch(/xmlEsc/)
+  })
+
   it('with readFile given (ipc.ts always gives it), each data dir removes only its own derived plist, and only when it names this data dir (Task 15)', async () => {
     const plist = (dir: string) => `<dict>\n  <key>MFFAI_DATA_DIR</key>\n    <string>${dir.replace(/&/g, '&amp;')}</string>\n</dict>`
     const SIDE = '/srv/side/mff-ai'

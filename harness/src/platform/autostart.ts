@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { autostartIds, runtimePaths } from '../protocol/paths'
+import { autostartIds, DEFAULT_AUTOSTART_IDS, plistXmlEsc as xmlEsc, runtimePaths } from '../protocol/paths'
 
 // 开机自启(spec §7):内容与命令是纯函数,applyAutostart 只做薄执行
 
@@ -17,16 +17,10 @@ export type AutostartPlan = {
 }
 export type ExecFn = (file: string, args: string[]) => Promise<void>
 
-// 默认数据目录的标识;别的数据目录按 autostartIds 派生(08 §18)
-export const LAUNCHD_LABEL = 'com.myflowforge.mffai'
-export const SYSTEMD_UNIT = 'mffai.service'
+// 标识按 autostartIds 派生(08 §18),默认数据目录的值只在 protocol/paths 的 DEFAULT_AUTOSTART_IDS
 export const WIN_RUN_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
-export const WIN_RUN_NAME = 'myFlowForge-mffai'
 
-const xmlEsc = (s: string) =>
-  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;')
-
-export function launchdPlist(spec: LaunchSpec, label: string = LAUNCHD_LABEL): string {
+export function launchdPlist(spec: LaunchSpec, label: string = DEFAULT_AUTOSTART_IDS.launchd): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">

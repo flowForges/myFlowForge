@@ -2,13 +2,34 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { autostartIds, runtimePaths, secretsAccountOf } from '../protocol/paths'
+import { autostartIds, launchdPlistOwnedBy, runtimePaths, secretsAccountOf } from '../protocol/paths'
 import {
   applyAutostart, launchdPlist, planAutostart, startVbs, systemdUnit, windowsRunValue, xdgDesktop, type LaunchSpec,
 } from './autostart'
 
 const spec: LaunchSpec = { execPath: '/Apps/my App/Electron', daemonJs: '/Apps/R&D/mffaiDaemon.js', dataDir: '/h/.myFlowForge/mff-ai' }
 const home = '/h'
+
+describe('launchdPlistOwnedBy (the app wipe\'s ownership check) on real launchdPlist output', () => {
+  const side = '/h/.myFlowForge-test/mff-ai'
+  const amp = '/h/R&D <x>/mff-ai'
+  const of = (dataDir: string) => launchdPlist({ ...spec, dataDir }, autostartIds(dataDir, home).launchd)
+  it('the default data dir owns its plist; another dir, a prefix and a suffix of it do not', () => {
+    expect(launchdPlistOwnedBy(of(spec.dataDir), spec.dataDir)).toBe(true)
+    expect(launchdPlistOwnedBy(of(spec.dataDir), side)).toBe(false)
+    expect(launchdPlistOwnedBy(of(`${spec.dataDir}-2`), spec.dataDir)).toBe(false)
+    expect(launchdPlistOwnedBy(of(spec.dataDir), '/h/.myFlowForge')).toBe(false)
+  })
+  it('a non-default data dir (and one with XML specials) owns only its own', () => {
+    expect(launchdPlistOwnedBy(of(side), side)).toBe(true)
+    expect(launchdPlistOwnedBy(of(side), spec.dataDir)).toBe(false)
+    expect(launchdPlistOwnedBy(of(amp), amp)).toBe(true)
+  })
+  it('a data dir that only appears as the program path is not ownership', () => {
+    const p = launchdPlist({ execPath: side, daemonJs: '/d.js', dataDir: spec.dataDir })
+    expect(launchdPlistOwnedBy(p, side)).toBe(false)
+  })
+})
 
 describe('content generators', () => {
   it('plist has label, escaped paths, RunAtLoad true, KeepAlive false', () => {

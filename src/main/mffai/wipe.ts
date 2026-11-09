@@ -1,5 +1,5 @@
 import { posix, win32 } from 'node:path'
-import { autostartIds, dataRoots, secretsAccountOf, SECRETS_SERVICE, type MffaiState } from '@mffai/protocol'
+import { autostartIds, dataRoots, DEFAULT_AUTOSTART_IDS, launchdPlistOwnedBy, secretsAccountOf, SECRETS_SERVICE, type MffaiState } from '@mffai/protocol'
 
 // 删除全部数据(08 §12.5、评审修订 R7)。★不 import electron、不加载 host、不拉起后台:
 // 一切副作用都由调用方注入(ipc.ts 传真的 fs / 控制口 / 子进程,测试传假的)。
@@ -44,14 +44,9 @@ export function anyRootExists(dir: string, exists: (p: string) => boolean): bool
  * 这个数据目录的 LaunchAgent 标签(Task 15):和 harness/src/platform/autostart.ts 一样按 autostartIds 派生。
  * 默认数据目录仍是 com.myflowforge.mffai;别的目录带 sha8,并排的测试包删不到正式版的自启
  */
-export function launchdLabelOf(dir: string, home: string): string | undefined {
+export function launchdLabelOf(dir: string, home: string): string {
   return autostartIds(dir, home).launchd
 }
-
-const DEFAULT_LABEL = 'com.myflowforge.mffai'
-
-const xmlEsc = (s: string) =>
-  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;')
 
 /** 只认系统路径上的程序,不经 PATH */
 const SECURITY = '/usr/bin/security'
@@ -148,7 +143,7 @@ export async function wipeData(d: WipeDeps): Promise<WipeResult> {
     const plist = posix.join(d.home, 'Library', 'LaunchAgents', `${label}.plist`)
     // 给了 readFile(ipc.ts 总给):只删 MFFAI_DATA_DIR 指向这个数据目录的,别的、读不出来的都不碰。
     // 没给:只认默认标签(Task 4 的行为)
-    const owned = d.readFile ? (d.readFile(plist) ?? '').includes(`<string>${xmlEsc(d.dataDir)}</string>`) : label === DEFAULT_LABEL
+    const owned = d.readFile ? launchdPlistOwnedBy(d.readFile(plist) ?? '', d.dataDir) : label === DEFAULT_AUTOSTART_IDS.launchd
     if (d.exists(plist) && owned) {
       await d.rm(plist)
       removed.push(plist)
