@@ -19,8 +19,8 @@ export interface MffaiState {
   proxyStale?: true
   /** 数据目录还在(停用后的启用卡片用) */
   dataExists?: boolean
-  /** 主进程算好的根目录和钥匙串账号(评审修订 R14:渲染层不算) */
-  roots?: { data: string; worktrees: string; imWorktrees: string; plugins: string; keychain: string }
+  /** 主进程算好的根目录和钥匙串账号(评审修订 R14:渲染层不算);launchAgent:删除全部数据会删的这个数据目录自己的 plist,在才有 */
+  roots?: { data: string; worktrees: string; imWorktrees: string; plugins: string; keychain: string; launchAgent?: string }
 }
 
 /** `mffai:alert` 载荷 → 通知铃铛 */

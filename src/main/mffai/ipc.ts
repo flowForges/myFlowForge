@@ -11,7 +11,7 @@ import { SYS_DIR } from '../config/paths'
 import type { CallEnvelope } from './callEnvelope'
 import { CONTROL_TIMEOUT_MS, controlCall, readSupervisorJson } from './client'
 import { isCallable, takesCommandId } from './methods'
-import { anyRootExists, probeControl, rootsOf, wipeData, type WipeDeps } from './wipe'
+import { anyRootExists, ownedLaunchAgent, probeControl, rootsOf, wipeData, type WipeDeps } from './wipe'
 import { wipeLock, type WipeLock } from './wipeLock'
 
 type HostModule = typeof import('./host')
@@ -154,7 +154,11 @@ export function registerMffaiIpc(deps: MffaiIpcDeps): void {
   const disabledState = (): MffaiState => {
     const { enabled, autostart } = deps.readSettings().mffai
     const dir = mffaiDir()
-    return { enabled, autostart, running: false, dataDir: dir, dataExists: anyRootExists(dir, exists), roots: rootsOf(dir) }
+    const w = deps.wipe ?? {}
+    const launchAgent = ownedLaunchAgent({
+      platform: w.platform ?? process.platform, home: w.home ?? homedir(), dataDir: dir, exists, readFile: w.readFile ?? readText,
+    })
+    return { enabled, autostart, running: false, dataDir: dir, dataExists: anyRootExists(dir, exists), roots: { ...rootsOf(dir), ...(launchAgent && { launchAgent }) } }
   }
   /** 启用时才加载 host 做 fn,否则直接回未启用状态 */
   const whenEnabled = (fn: (h: HostModule) => Promise<unknown>) => async (): Promise<MffaiState> => {

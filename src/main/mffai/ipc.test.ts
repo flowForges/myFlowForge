@@ -673,3 +673,27 @@ describe('dataDir dep (Task 15)', () => {
     expect((await reg(undefined).handlers.get(CH.mffaiState)!() as { dataDir: string }).dataDir).toBe(OTHER)
   })
 })
+
+describe('mffai:state while disabled lists an owned LaunchAgent plist (M6)', () => {
+  afterEach4(() => { vi.unstubAllEnvs() })
+  it('roots.launchAgent is the plist path when present and owned; absent otherwise', async () => {
+    vi.stubEnv('MFFAI_DATA_DIR', SIDE)
+    const home = '/tmp/mffai-ipc-home-m6'
+    const plist = `${home}/Library/LaunchAgents/com.myflowforge.mffai.${secretsAccountOf(SIDE)}.plist`
+    let owned = true
+    const handlers = new Map<string, (...a: unknown[]) => unknown>()
+    registerMffaiIpc({
+      handle: (ch, fn) => { handlers.set(ch, fn) },
+      readSettings: () => ({ ...defaultSettings(), mffai: { enabled: false, autostart: true } }),
+      saveSettings: vi.fn(),
+      loadHost: vi.fn(),
+      openExternal: vi.fn(),
+      exists: (p: string) => p === plist,
+      wipe: { platform: 'darwin', home, readFile: (p: string) => (p === plist && owned ? `<key>MFFAI_DATA_DIR</key><string>${SIDE}</string>` : undefined) },
+      lock: createWipeLock(),
+    })
+    expect((await handlers.get(CH.mffaiState)!() as { roots: { launchAgent?: string } }).roots.launchAgent).toBe(plist)
+    owned = false
+    expect((await handlers.get(CH.mffaiState)!() as { roots: object }).roots).not.toHaveProperty('launchAgent')
+  })
+})

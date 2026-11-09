@@ -4,7 +4,7 @@ import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { autostartIds, dataRoots, secretsAccountOf, SECRETS_SERVICE } from '@mffai/protocol'
-import { anyRootExists, launchdLabelOf, probeControl, wipeData, type WipeDeps } from './wipe'
+import { anyRootExists, launchdLabelOf, ownedLaunchAgent, probeControl, wipeData, type WipeDeps } from './wipe'
 
 const HOME = '/home/u'
 const DIR = '/home/u/.myFlowForge/mff-ai'
@@ -113,6 +113,18 @@ describe('wipeData removal', () => {
     const linux = deps({ platform: 'linux' })
     await wipeData(linux.d)
     expect(linux.removed.some((p) => p.includes('LaunchAgents'))).toBe(false)
+  })
+
+  it('ownedLaunchAgent: the plist path only on darwin, when present and naming this data dir; never read when absent (M6)', () => {
+    const body = `<key>MFFAI_DATA_DIR</key>\n<string>${DIR}</string>`
+    const readFile = vi.fn((p: string) => (p === PLIST ? body : undefined))
+    const base = { platform: 'darwin' as NodeJS.Platform, home: HOME, dataDir: DIR, exists: (p: string) => p === PLIST, readFile }
+    expect(ownedLaunchAgent(base)).toBe(PLIST)
+    expect(ownedLaunchAgent({ ...base, platform: 'linux' })).toBeUndefined()
+    expect(ownedLaunchAgent({ ...base, readFile: () => '<string>/elsewhere/mff-ai</string>' })).toBeUndefined()
+    readFile.mockClear()
+    expect(ownedLaunchAgent({ ...base, exists: () => false })).toBeUndefined()
+    expect(readFile).not.toHaveBeenCalled()
   })
 
   it('the ownership predicate and the default label come from @mffai/protocol, not a copy here (M4)', () => {

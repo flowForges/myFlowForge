@@ -60,6 +60,7 @@ export function EnableCard({ expectedRssMb, dataDir, autostart, onToggleAutostar
             ['IM worktree', roots.imWorktrees],
             ['插件代码', roots.plugins],
             ['钥匙串条目', roots.keychain],
+            ...(roots.launchAgent ? [['LaunchAgent', roots.launchAgent] as const] : []),
           ]}
           keep={KEEP}
           confirmLabel="删除全部数据"

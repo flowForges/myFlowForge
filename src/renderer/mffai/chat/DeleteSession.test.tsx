@@ -34,7 +34,7 @@ describe('DeleteSession', () => {
       'session.delete': { ok: true, redacted: 3, notes: [] },
     } })
     const p = mount()
-    await waitFor(() => expect(confirmRows()).toEqual([['会话', '修 bug'], ['保留的 worktree', '2'], ['别的会话里的引用', '保留']]))
+    await waitFor(() => expect(confirmRows()).toEqual([['会话', '修 bug'], ['删除 worktree', '2'], ['别的会话里的引用', '保留']]))
     expect(screen.getByRole('dialog')).toHaveAccessibleName('删除会话')
     expect(okBtn().textContent).toBe('删除')
     await act(async () => { fireEvent.click(okBtn()) })
@@ -51,7 +51,7 @@ describe('DeleteSession', () => {
     const p = mount()
     await waitFor(() => expect(okBtn().textContent).toBe('删除并丢弃改动'))
     expect(confirmRows()).toEqual([
-      ['会话', '修 bug'], ['保留的 worktree', '3'], ['未合并的改动', '2 个文件'], ['', 'claude · 2 个文件'], ['别的会话里的引用', '保留'],
+      ['会话', '修 bug'], ['删除 worktree', '3'], ['未合并的改动', '2 个文件'], ['', 'claude · 2 个文件'], ['别的会话里的引用', '保留'],
     ])
     expect(screen.getAllByRole('button', { name: '去合并' })).toHaveLength(1)
     await act(async () => { fireEvent.click(okBtn()) })
@@ -109,7 +109,7 @@ describe('DeleteSession', () => {
     await waitFor(() => expect(okBtn().textContent).toBe('删除并丢弃改动'))
     expect(f.callsOf('executor.runs')).toHaveLength(2)
     expect(f.callsOf('session.delete')).toHaveLength(1)
-    expect(confirmRows()).toContainEqual(['保留的 worktree', '1'])
+    expect(confirmRows()).toContainEqual(['删除 worktree', '1'])
   })
 
   it('a timeout (-32010) then a retry reuses the commandId', async () => {
@@ -133,7 +133,7 @@ describe('DeleteSession', () => {
     mount()
     // 行在 executor.runs 答回来之前就是 0:等按钮可用,才算答过了
     await waitFor(() => expect(okBtn().disabled).toBe(false))
-    expect(confirmRows()).toContainEqual(['保留的 worktree', '0'])
+    expect(confirmRows()).toContainEqual(['删除 worktree', '0'])
   })
 
   it('the confirm stays disabled until the run list answered', async () => {

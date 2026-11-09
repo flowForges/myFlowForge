@@ -87,7 +87,7 @@ export function DeleteSession({ session, onClose, onDeleted }: {
 
   const rows: (readonly [string, ReactNode, ReactNode?])[] = [
     ['会话', session.title],
-    ['保留的 worktree', String(runs?.filter((r) => r.worktree?.present).length ?? 0)],
+    ['删除 worktree', String(runs?.filter((r) => r.worktree?.present).length ?? 0)],
   ]
   if (unmerged.length) {
     rows.push(['未合并的改动', `${unmerged.reduce((n, u) => n + u.files, 0)} 个文件`])

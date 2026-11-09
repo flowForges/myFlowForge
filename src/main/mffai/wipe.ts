@@ -48,6 +48,19 @@ export function launchdLabelOf(dir: string, home: string): string {
   return autostartIds(dir, home).launchd
 }
 
+/**
+ * 删除全部数据会删的 LaunchAgent plist:只在 darwin、在、而且是这个数据目录的才有(确认框列出它,wipeData 删它)。
+ * 给了 readFile(ipc.ts 总给):MFFAI_DATA_DIR 指向这个数据目录才算,读不出来的不碰。没给:只认默认标签(Task 4 的行为)
+ */
+export function ownedLaunchAgent(d: Pick<WipeDeps, 'platform' | 'home' | 'dataDir' | 'exists' | 'readFile'>): string | undefined {
+  if (d.platform !== 'darwin') return undefined
+  const label = launchdLabelOf(d.dataDir, d.home)
+  const plist = posix.join(d.home, 'Library', 'LaunchAgents', `${label}.plist`)
+  if (!d.exists(plist)) return undefined
+  const owned = d.readFile ? launchdPlistOwnedBy(d.readFile(plist) ?? '', d.dataDir) : label === DEFAULT_AUTOSTART_IDS.launchd
+  return owned ? plist : undefined
+}
+
 /** 只认系统路径上的程序,不经 PATH */
 const SECURITY = '/usr/bin/security'
 const SECRET_TOOL = ['/usr/bin/secret-tool', '/usr/local/bin/secret-tool', '/bin/secret-tool']
@@ -138,16 +151,10 @@ export async function wipeData(d: WipeDeps): Promise<WipeResult> {
   }
 
   // 旧的 LaunchAgent plist(后台不在时它只是个残留文件)。只删这个数据目录自己的标签
-  const label = d.platform === 'darwin' ? launchdLabelOf(d.dataDir, d.home) : undefined
-  if (label) {
-    const plist = posix.join(d.home, 'Library', 'LaunchAgents', `${label}.plist`)
-    // 给了 readFile(ipc.ts 总给):只删 MFFAI_DATA_DIR 指向这个数据目录的,别的、读不出来的都不碰。
-    // 没给:只认默认标签(Task 4 的行为)
-    const owned = d.readFile ? launchdPlistOwnedBy(d.readFile(plist) ?? '', d.dataDir) : label === DEFAULT_AUTOSTART_IDS.launchd
-    if (d.exists(plist) && owned) {
-      await d.rm(plist)
-      removed.push(plist)
-    }
+  const plist = ownedLaunchAgent(d)
+  if (plist) {
+    await d.rm(plist)
+    removed.push(plist)
   }
 
   // 主密钥。共用的探测账号 mffai-probe 不删(两个包共用);Windows 的 DPAPI 密文在数据目录里,已随之删掉

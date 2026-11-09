@@ -16,6 +16,18 @@ describe('EnableCard delete-all', () => {
     expect(screen.queryByText('删除全部数据')).toBeNull()
   })
 
+  it('with an owned LaunchAgent plist present, the confirm lists it after the keychain entry; without it there is no such row', () => {
+    const plist = '/h/Library/LaunchAgents/com.myflowforge.mffai.plist'
+    const r = card({ dataExists: true, roots: { ...roots, launchAgent: plist } })
+    fireEvent.click(screen.getByText('删除全部数据'))
+    const rows = () => [...screen.getByRole('dialog').querySelectorAll('.mffai-confirm-row')].map((x) => [...x.children].map((c) => c.textContent))
+    expect(rows().slice(4, 6)).toEqual([['钥匙串条目', roots.keychain], ['LaunchAgent', plist]])
+    r.unmount()
+    card({ dataExists: true, roots })
+    fireEvent.click(screen.getByText('删除全部数据'))
+    expect(rows().some(([k]) => k === 'LaunchAgent')).toBe(false)
+  })
+
   it('confirm lists the four paths, the keychain entry and the three 保留 rows, then wipes', async () => {
     const onWipe = vi.fn(async () => ({ ok: true as const }))
     card({ dataExists: true, roots, onWipe })
