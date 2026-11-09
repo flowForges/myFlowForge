@@ -1,5 +1,6 @@
 import { homedir } from 'node:os'
 import { join, basename } from 'node:path'
+import { DEFAULT_SYS_DIR_NAME, isValidSysDirName } from './sysDirName'
 
 // Expand a leading `~` / `~/...` to the user's home dir. A workspace path typed as
 // `~/work/...` would otherwise be taken literally — creating a real `~` directory
@@ -11,9 +12,10 @@ export function expandTilde(p: string): string {
 }
 
 // 并排的测试包(08 §18、评审修订 R12):构建期常量换 app 数据目录名;没设或不像一个点开头的目录名 → .myFlowForge
+// 构建期已经拒掉了不合格的名字;这里的回退只是保险
 declare const __MFF_SYS_DIR_NAME__: string | undefined
 export function sysDirName(v: unknown): string {
-  return typeof v === 'string' && /^\.[A-Za-z0-9._-]+$/.test(v) && !/^\.+$/.test(v) ? v : '.myFlowForge'
+  return isValidSysDirName(v) ? v : DEFAULT_SYS_DIR_NAME
 }
 export const SYS_DIR = join(homedir(), sysDirName(typeof __MFF_SYS_DIR_NAME__ === 'string' ? __MFF_SYS_DIR_NAME__ : undefined))
 /** mff-ai 的数据目录:MFFAI_DATA_DIR 优先,否则 <SYS_DIR>/mff-ai(默认等于 @mffai/protocol 的 dataDir()) */

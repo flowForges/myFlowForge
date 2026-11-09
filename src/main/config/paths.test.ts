@@ -4,6 +4,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { dataDir } from '@mffai/protocol'
 import { MFFAI_DIR, SYS_DIR, sysDirName } from './paths'
+import { buildSysDirName } from './sysDirName'
 
 // 08 §18 / 评审修订 R12:测试包的 app 数据目录与 mff-ai 数据目录。只算字符串,不碰任何目录
 describe('SYS_DIR / MFFAI_DIR (Task 15)', () => {
@@ -28,6 +29,24 @@ describe('SYS_DIR / MFFAI_DIR (Task 15)', () => {
     for (const bad of [undefined, null, 3, '', 'myFlowForge-test', '../x', '/abs', '.a/b', '.a\\b', '.', '..', '...', '.x\n', ' .x', '.x y', '.测试']) {
       expect(sysDirName(bad)).toBe('.myFlowForge')
     }
+  })
+
+  it('a name that case-folds to .myFlowForge is refused at runtime (it would be the real app dir on a case-insensitive disk)', () => {
+    for (const bad of ['.MyFlowForge', '.myflowforge', '.MYFLOWFORGE']) expect(sysDirName(bad)).toBe('.myFlowForge')
+  })
+
+  it('buildSysDirName: unset or empty keeps the default; a valid name passes; anything else fails the build with the variable named', () => {
+    expect(buildSysDirName(undefined)).toBeUndefined()
+    expect(buildSysDirName('')).toBeUndefined()
+    expect(buildSysDirName('.myFlowForge-test')).toBe('.myFlowForge-test')
+    for (const bad of ['../x', '/abs', '..', 'noDot', '.a/b', '.测试', '.myFlowForge', '.MyFlowForge', '.myflowforge']) {
+      expect(() => buildSysDirName(bad), bad).toThrow(/MFF_SYS_DIR_NAME/)
+    }
+  })
+
+  it('electron.vite.config.ts validates MFF_SYS_DIR_NAME through buildSysDirName', () => {
+    const cfg = readFileSync(join(__dirname, '..', '..', '..', 'electron.vite.config.ts'), 'utf8')
+    expect(cfg).toMatch(/buildSysDirName\(process\.env\.MFF_SYS_DIR_NAME\)/)
   })
 
   it('a build-time name moves SYS_DIR and MFFAI_DIR together', async () => {
