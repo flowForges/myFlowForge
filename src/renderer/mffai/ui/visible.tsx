@@ -3,6 +3,12 @@
 import type { ReactNode } from 'react'
 
 const INVISIBLE = /[\p{Cf}\u2028\u2029]/gu
+const escOf = (ch: string) => `\\u{${ch.codePointAt(0)!.toString(16).toUpperCase()}}`
+
+/** 纯文本版本:铃铛的通知是 HTML 字符串,先换成可见的 \u{…} 再 sanitize() */
+export function visibleText(text: string): string {
+  return text.replace(INVISIBLE, escOf)
+}
 
 export function visibleChars(text: string, key = 'v'): ReactNode[] {
   const out: ReactNode[] = []
@@ -10,8 +16,7 @@ export function visibleChars(text: string, key = 'v'): ReactNode[] {
   let n = 0
   for (const m of text.matchAll(INVISIBLE)) {
     if (m.index > last) out.push(text.slice(last, m.index))
-    const cp = m[0].codePointAt(0)!.toString(16).toUpperCase()
-    out.push(<span key={`${key}e${n++}`} className="mffai-esc">{`\\u{${cp}}`}</span>)
+    out.push(<span key={`${key}e${n++}`} className="mffai-esc">{escOf(m[0])}</span>)
     last = m.index + m[0].length
   }
   if (last < text.length) out.push(text.slice(last))

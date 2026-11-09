@@ -11,6 +11,7 @@ import { NotificationPopover } from '../shell/NotificationPopover'
 import { removeNotif, upsertNotif, type Notif } from '../shell/notifications'
 import { fail, installFakeForge, type CallTable, type FakeForge } from './test/fakeForge'
 import { ev, resetSeq } from './test/events'
+import { summary } from './test/sessions'
 
 const XSS = '<img src=x onerror=alert(1)>'
 
@@ -106,6 +107,70 @@ describe('bell: approvals', () => {
     act(() => f.emit(ev('approval.requested', { approvalId: 'a1', turnId: 't1', callId: 'c1', tool: 'shell', summary: 'x' }, { sessionId: 's9' })))
     s.byKey('mffai:approval:a1')!.onOpen!()
     expect(route.get()).toEqual({ page: 'chat', sessionId: 's9' })
+  })
+})
+
+describe('bell: unsandboxed approvals and session titles', () => {
+  it('unsandboxed:true says 未隔离 and offers only 拒绝, so it must be allowed from the chat card', () => {
+    boot()
+    act(() => f.emit(ev('approval.requested', { approvalId: 'a1', turnId: 't1', callId: 'c1', tool: 'shell', summary: 'x', unsandboxed: true }, { sessionId: 's1' })))
+    const n = s.byKey('mffai:approval:a1')!
+    expect(n.t).toContain('未隔离')
+    expect(n.actions?.map((a) => a.label)).toEqual(['拒绝'])
+    const { container } = popover(s.get())
+    expect(screen.queryByRole('button', { name: '允许' })).toBeNull()
+    expect(container.textContent).toContain('未隔离')
+  })
+
+  it('two approvals for the same tool carry their sanitized session titles in the body', async () => {
+    boot({ 'session.list': { sessions: [summary('s1', { title: '修登录' }), summary('s2', { title: `发文档${XSS}` })] } })
+    act(() => {
+      f.emit(ev('approval.requested', { approvalId: 'a1', turnId: 't1', callId: 'c1', tool: 'shell', summary: 'x' }, { sessionId: 's1' }))
+      f.emit(ev('approval.requested', { approvalId: 'a2', turnId: 't2', callId: 'c2', tool: 'shell', summary: 'x' }, { sessionId: 's2' }))
+    })
+    await flush()
+    expect(s.byKey('mffai:approval:a1')!.t).toBe('<b>shell</b> 待审批 · 修登录')
+    expect(s.byKey('mffai:approval:a2')!.t).toBe('<b>shell</b> 待审批 · 发文档')
+    const { container } = popover(s.get())
+    expect(container.querySelectorAll('img')).toHaveLength(0)
+  })
+
+  it('a title already resolved by the time it arrives does not bring the notification back', async () => {
+    let resolve!: (v: unknown) => void
+    boot({ 'session.list': () => new Promise((r) => { resolve = r }) })
+    act(() => f.emit(ev('approval.requested', { approvalId: 'a1', turnId: 't1', callId: 'c1', tool: 'shell', summary: 'x' }, { sessionId: 's1' })))
+    act(() => f.emit(ev('approval.resolved', { approvalId: 'a1', decision: 'allow', by: 'user' }, { sessionId: 's1' })))
+    await act(async () => { resolve({ sessions: [summary('s1', { title: 'T' })] }) })
+    expect(s.byKey('mffai:approval:a1')).toBeUndefined()
+  })
+})
+
+describe('bell: invisible characters are shown (M1)', () => {
+  it('a tool name, title and plugin id with bidi / zero-width chars show \\u{…} and never the raw char', async () => {
+    boot({ 'session.list': { sessions: [summary('s1', { title: 'a\u200Bb' })] } })
+    act(() => {
+      f.emit(ev('approval.requested', { approvalId: 'a1', turnId: 't1', callId: 'c1', tool: 'sh\u202Eell', summary: 'x' }, { sessionId: 's1' }))
+      f.emit(ev('plugin.failed', { id: 'p\u2028q', error: 'e' }))
+    })
+    await flush()
+    expect(s.byKey('mffai:approval:a1')!.t).toBe('<b>sh\\u{202E}ell</b> 待审批 · a\\u{200B}b')
+    expect(s.byKey('mffai:plugin:p\u2028q')!.t).toBe('<b>p\\u{2028}q</b> 启动失败')
+    expect(JSON.stringify(s.get().map((n) => n.t))).not.toMatch(/[\u202E\u200B\u2028]/)
+  })
+})
+
+describe('bell: session.deleted', () => {
+  it('drops that session\'s approval and run notifications, not another session\'s', () => {
+    boot()
+    act(() => {
+      f.emit(ev('approval.requested', { approvalId: 'a1', turnId: 't1', callId: 'c1', tool: 'shell', summary: 'x' }, { sessionId: 's1' }))
+      f.emit(ev('executor.run.ended', { runId: 'r1', turnId: 't1', executor: 'codex', status: 'ok', ms: 1, changed: { files: [], source: 'git' } }, { sessionId: 's1' }))
+      f.emit(ev('approval.requested', { approvalId: 'a2', turnId: 't2', callId: 'c2', tool: 'shell', summary: 'x' }, { sessionId: 's2' }))
+    })
+    act(() => f.emit(ev('session.deleted', {}, { sessionId: 's1' })))
+    expect(s.byKey('mffai:approval:a1')).toBeUndefined()
+    expect(s.byKey('mffai:run:r1')).toBeUndefined()
+    expect(s.byKey('mffai:approval:a2')).toBeDefined()
   })
 })
 
