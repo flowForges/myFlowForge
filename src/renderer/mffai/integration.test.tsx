@@ -14,11 +14,14 @@ import { removeNotif, upsertNotif, type Notif } from '../shell/notifications'
 import { fail, installFakeForge, RUNNING_STATE, type CallTable, type FakeForge } from './test/fakeForge'
 import { ev, resetSeq } from './test/events'
 import { perms, runRow, summary } from './test/sessions'
-import { FULL_CONSENT, pluginList } from './test/plugins'
+import { detailOf, FULL_CONSENT, listRow, pluginList } from './test/plugins'
+import { tgCalls, tgStatus } from './test/telegram'
 
 const API_KEY = ['sk-', 'int', 'egration-', 'k3y-77'].join('')
 const BOT_TOKEN = ['99887766', ':AAH', 'bell-tok3n'].join('')
 const PAIR_CODE = ['PAIR', '-', '5150'].join('')
+const PLUGIN_SECRET = ['plg-', 'sec', 'ret-', 'v4lue'].join('')
+const SECRETS = [API_KEY, BOT_TOKEN, PAIR_CODE, PLUGIN_SECRET]
 
 const S = 's1'
 const model = { id: 'm1', name: 'M1', context: 1, output: 1, image: false, reasoning: 'none' as const, toolCall: true }
@@ -60,14 +63,26 @@ const card = (runId: string) => document.querySelector(`[data-run="${runId}"]`) 
 const box = () => screen.getByRole('textbox', { name: '输入' }) as HTMLTextAreaElement
 const dialog = () => screen.getByRole('dialog')
 
+/** 每个 console.* 的间谍:秘密不进任何一条 */
+let consoleSpies: ReturnType<typeof vi.spyOn>[] = []
+
 function noSecrets(step: string) {
   const html = document.body.innerHTML
-  for (const s of [API_KEY, BOT_TOKEN, PAIR_CODE]) expect(html.includes(s), `${step}: ${s.slice(0, 4)}…`).toBe(false)
+  for (const s of SECRETS) expect(html.includes(s), `${step}: ${s.slice(0, 4)}…`).toBe(false)
+  // innerHTML 看不到输入框的 .value:逐个读
+  for (const el of document.querySelectorAll('input, textarea')) {
+    const v = (el as HTMLInputElement).value
+    for (const s of SECRETS) expect(v.includes(s), `${step} input ${el.getAttribute('aria-label')}`).toBe(false)
+  }
   for (const st of [localStorage, sessionStorage]) {
     for (let i = 0; i < st.length; i++) {
       const v = st.getItem(st.key(i)!) ?? ''
-      for (const s of [API_KEY, BOT_TOKEN, PAIR_CODE]) expect(v.includes(s), `${step} storage`).toBe(false)
+      for (const s of SECRETS) expect(v.includes(s), `${step} storage`).toBe(false)
     }
+  }
+  for (const spy of consoleSpies) {
+    const all = JSON.stringify(spy.mock.calls)
+    for (const s of SECRETS) expect(all.includes(s), `${step} console`).toBe(false)
   }
 }
 
@@ -86,11 +101,12 @@ beforeEach(() => {
   proposals = []
   accounts = []
 })
-afterEach(() => { vi.restoreAllMocks() })
+afterEach(() => { vi.restoreAllMocks(); consoleSpies = [] })
 
 describe('a scripted day on the fake harness', () => {
   it('runs every page end to end, every RPC asserted, no planted secret on screen', async () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    consoleSpies = [consoleSpy, ...(['log', 'warn', 'info', 'debug'] as const).map((m) => vi.spyOn(console, m).mockImplementation(() => {}))]
     const table: CallTable = {
         status: { state: 'running', uptimeMs: 1, rssMb: 50, version: '0.1.0', plugins: [{ id: 'loop-default', state: 'active' }], problems: [], secretsBackend: 'keychain', sandbox: { level: 'full', missing: [], autoDegraded: false } },
         'session.list': () => ({ sessions: structuredClone(sessions) }),
@@ -353,5 +369,69 @@ describe('a scripted day on the fake harness', () => {
     const unscripted = [...new Set(f.calls.map((c) => c.method))].filter((m) => !Object.hasOwn(table, m))
     expect(unscripted).toEqual([])
     expect(consoleSpy.mock.calls.map((c) => String(c[0]) + " " + JSON.stringify(c.slice(1)).slice(0, 200))).toEqual([])
+  }, 60_000)
+
+  it('the bot token, a pairing code and a plugin secret go through the real inputs and flows and are gone after (M7)', async () => {
+    consoleSpies = (['error', 'log', 'warn', 'info', 'debug'] as const).map((m) => vi.spyOn(console, m).mockImplementation(() => {}))
+    let tg = tgStatus({ tokenSet: false, bot: undefined, state: 'no_token' })
+    let detail = detailOf(FULL_CONSENT, { settings: [{ key: 'API_TOKEN', set: false, sensitive: true }] })
+    const table: CallTable = {
+      ...tgCalls(),
+      status: { state: 'running', uptimeMs: 1, rssMb: 50, version: '0.1.0', plugins: [], problems: [], secretsBackend: 'keychain', sandbox: { level: 'full', missing: [], autoDegraded: false } },
+      'session.list': { sessions: [] },
+      'memory.proposals.list': { items: [] },
+      'models.catalog': { presets: [], models: {} } as never,
+      'models.accounts': { accounts: [], secretsBackend: 'keychain' } as never,
+      'channel.telegram.status': () => structuredClone(tg),
+      'channel.telegram.setToken': (p) => {
+        expect(p).toEqual({ token: BOT_TOKEN })
+        tg = tgStatus({ tokenSet: true })
+        return { ok: true, bot: { id: 1, username: 'my_test_bot' } }
+      },
+      'channel.telegram.pairing.begin': { code: PAIR_CODE, expiresAt: Date.now() + 300_000, link: `https://t.me/my_test_bot?start=${PAIR_CODE}` },
+      'channel.telegram.pairing.cancel': { ok: true },
+      'plugins.list': pluginList({ plugins: [listRow('zed-tools')] }),
+      'plugins.get': () => structuredClone(detail),
+      'plugins.mcp.status': { servers: [] },
+      'plugins.settings.set': (p) => {
+        expect(p).toEqual({ id: 'zed-tools', key: 'API_TOKEN', value: PLUGIN_SECRET })
+        detail = detailOf(FULL_CONSENT, { settings: [{ key: 'API_TOKEN', set: true, sensitive: true }] })
+        return { ok: true }
+      },
+    }
+    f = installFakeForge({ state: { ...RUNNING_STATE }, calls: table })
+    render(<Day bellOn />)
+
+    // ── 令牌:真的输入框,保存后框里是空的 ──
+    await goto('连接')
+    fireEvent.click(await screen.findByRole('tab', { name: 'Telegram' }))
+    const token = await screen.findByLabelText('令牌') as HTMLInputElement
+    fireEvent.change(token, { target: { value: BOT_TOKEN } })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '保存令牌' })) })
+    expect(f.callsOf('channel.telegram.setToken')).toHaveLength(1)
+    await waitFor(() => expect((screen.getByLabelText('令牌') as HTMLInputElement).value).toBe(''))
+    noSecrets('token saved')
+
+    // ── 配对码:开始配对后看得见,channel.paired 之后没了,铃铛里从来没有 ──
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: '开始配对' })) })
+    expect(await screen.findByText(PAIR_CODE)).toBeInTheDocument()
+    expect(within(bell()).queryByText(PAIR_CODE, { exact: false })).toBeNull()
+    tg = tgStatus({ tokenSet: true, paired: [{ accountId: '42', name: 'Ann', pairedAt: Date.now() }] })
+    act(() => f.emit(ev('channel.paired', { channel: 'telegram', accountId: '42', name: 'Ann' })))
+    await waitFor(() => expect(document.body.innerHTML.includes(PAIR_CODE)).toBe(false))
+    expect(within(bell()).getByText('Ann')).toBeInTheDocument()
+    noSecrets('paired')
+
+    // ── 插件的敏感配置:真的密码框,保存后框里是空的,只显示 已设置 ──
+    await goto('插件')
+    fireEvent.click(await screen.findByRole('button', { name: '详情' }))
+    const secret = await screen.findByLabelText('API_TOKEN') as HTMLInputElement
+    fireEvent.change(secret, { target: { value: PLUGIN_SECRET } })
+    const row = secret.closest('[data-setting="API_TOKEN"]') as HTMLElement
+    await act(async () => { fireEvent.click(within(row).getByRole('button', { name: '保存' })) })
+    expect(f.callsOf('plugins.settings.set')).toHaveLength(1)
+    await waitFor(() => expect(within(document.querySelector('[data-setting="API_TOKEN"]') as HTMLElement).getByText('已设置')).toBeInTheDocument())
+    expect((screen.getByLabelText('API_TOKEN') as HTMLInputElement).value).toBe('')
+    noSecrets('plugin secret saved')
   }, 60_000)
 })
