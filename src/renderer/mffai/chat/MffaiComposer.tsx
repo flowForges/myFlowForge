@@ -43,7 +43,17 @@ function cachedCommands(): Promise<PluginCommand[]> | undefined {
 function usePluginCommands(): PluginCommand[] {
   const [list, setList] = useState<PluginCommand[]>([])
   const alive = useRef(true)
-  const apply = (p: Promise<PluginCommand[]>) => { void p.then((l) => { if (alive.current) setList(l) }) }
+  // 按发起顺序编号,只往前走:慢的缓存读或更早的重取后到,不会盖掉已经显示的更新的结果
+  const gen = useRef(0)
+  const shown = useRef(0)
+  const apply = (p: Promise<PluginCommand[]>) => {
+    const g = ++gen.current
+    void p.then((l) => {
+      if (!alive.current || g < shown.current) return
+      shown.current = g
+      setList(l)
+    })
+  }
   useEffect(() => {
     alive.current = true
     const hit = cachedCommands()

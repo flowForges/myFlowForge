@@ -129,6 +129,30 @@ describe('MffaiComposer', () => {
     }
   })
 
+  it('a forced refetch always wins: a slower cached read or an older refetch answering last does not bring back the old list (M8)', async () => {
+    const pending: ((v: unknown) => void)[] = []
+    f.script({ 'plugins.commands': () => new Promise((r) => { pending.push(r) }) })
+    const first = render(<MffaiComposer session={{ id: 's1', origin: 'app' }} onSend={async () => {}} onCommand={async () => {}} onStop={() => {}} canStop={false} />)
+    await waitFor(() => expect(pending).toHaveLength(1))
+    first.unmount()
+    mount()
+    await waitFor(() => expect(pending).toHaveLength(2))
+    const list = (name: string) => ({ commands: [{ name, plugin: 'zed', description: 'd' }] })
+    await act(async () => { pending[1](list('zed:new')) })
+    await act(async () => { pending[0](list('zed:old')) })
+    type('/zed')
+    expect(await screen.findByRole('option', { name: /zed:new/ })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /zed:old/ })).toBeNull()
+    act(() => f.emit(ev('plugins.enabled', { id: 'zed' })))
+    await waitFor(() => expect(pending).toHaveLength(3))
+    act(() => f.emit(ev('plugins.disabled', { id: 'zed' })))
+    await waitFor(() => expect(pending).toHaveLength(4))
+    await act(async () => { pending[3](list('zed:latest')) })
+    await act(async () => { pending[2](list('zed:stale')) })
+    expect(await screen.findByRole('option', { name: /zed:latest/ })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /zed:stale/ })).toBeNull()
+  })
+
   it('a busy send (-32003) shows 忙 and puts the text back', async () => {
     const p = mount({ onSend: vi.fn(async () => { throw callError(-32003, 'busy') }) })
     type('hi')
