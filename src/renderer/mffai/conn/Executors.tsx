@@ -5,6 +5,8 @@ import { call, cmd, isUnsupported, toCallError } from '../rpc'
 import { Chip } from '../ui/Chip'
 import { CodeChip } from '../ui/CodeChip'
 import { label } from '../labels'
+import { Icon } from '../shell/icons'
+import { execTint } from '../ui/tint'
 
 type ExecutorRow = ExecutorListResult['executors'][number]
 
@@ -13,15 +15,17 @@ const AUTH_TONE = { ok: 'ok', missing: 'bad', unknown: 'muted' } as const
 
 function ExecutorItem({ e }: { e: ExecutorRow }) {
   return (
-    <div className="mffai-row" data-executor={e.id}>
-      <span>{e.id}</span>
-      {e.installed
-        ? <Chip tone="ok">{`已安装${e.version ? ` ${e.version}` : ''}`}</Chip>
-        : <Chip>未安装</Chip>}
-      <Chip tone={AUTH_TONE[e.auth]}>{AUTH_LABEL[e.auth]}</Chip>
-      <Chip>{label('isolation', e.isolation)}</Chip>
-      {e.missing.map((code) => <CodeChip key={code} code={code} />)}
-    </div>
+    <tr data-executor={e.id}>
+      <td><div className="mffai-tname"><span className={`mffai-rlogo ${execTint(e.id)}`}><Icon name="term" size={12} /></span><span className="mffai-tool">{e.id}</span></div></td>
+      <td>
+        <div className="mffai-tstate">
+          {e.installed ? <Chip tone="ok">{`已安装${e.version ? ` ${e.version}` : ''}`}</Chip> : <Chip>未安装</Chip>}
+        </div>
+      </td>
+      <td><Chip tone={AUTH_TONE[e.auth]}>{AUTH_LABEL[e.auth]}</Chip></td>
+      <td><Chip tone={e.isolation === 'none' ? 'bad' : 'line'}>{label('isolation', e.isolation)}</Chip></td>
+      <td><div className="mffai-tstate">{e.missing.map((code) => <CodeChip key={code} code={code} />)}</div></td>
+    </tr>
   )
 }
 
@@ -69,13 +73,27 @@ export function Executors() {
 
   return (
     <div className="mffai-conn mffai-conn-exec">
-      <div className="mffai-actions">
-        {!unsupported && <button className="set-btn" disabled={refreshing} onClick={refresh}>刷新</button>}
+      <div className="mffai-sech">
+        <span className="mffai-tcard-title">执行器</span>
+        {rows && <span className="mffai-count">{rows.length}</span>}
+        <span className="mffai-spring" />
         {unsupported && <Chip>不支持</Chip>}
         {refreshing && <Chip tone="warn">刷新中</Chip>}
         {failed && <span className="mffai-fail">失败</span>}
+        {!unsupported && (
+          <button className="set-btn" disabled={refreshing} onClick={refresh}>
+            {refreshing ? <span className="mffai-spin" /> : <Icon name="refresh" size={13} />}刷新
+          </button>
+        )}
       </div>
-      {rows?.map((e) => <ExecutorItem key={e.id} e={e} />)}
+      {rows && rows.length > 0 && (
+        <div className="mffai-tbox">
+          <table className="mffai-tbl mffai-etbl">
+            <thead><tr>{['执行器', '安装', '登录', '隔离', '缺少'].map((c) => <th key={c}>{c}</th>)}</tr></thead>
+            <tbody>{rows.map((e) => <ExecutorItem key={e.id} e={e} />)}</tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }

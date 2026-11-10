@@ -5,6 +5,7 @@ import { route } from '../route'
 import { fail, installFakeForge, type FakeForge } from '../test/fakeForge'
 import { ev, resetSeq } from '../test/events'
 import { runRow, summary } from '../test/sessions'
+import { HeaderSlotCtx } from '../shell/headerSlot'
 
 const dialog = () => screen.getByRole('dialog')
 const rows = () => [...dialog().querySelectorAll('.mffai-confirm-row')].map((r) => [...r.querySelectorAll('span')].map((c) => c.textContent))
@@ -14,24 +15,27 @@ beforeEach(() => { resetSeq(); route.set({ page: 'chat' }) })
 afterEach(() => vi.useRealTimers())
 
 describe('TasksPage', () => {
-  it('groups executor.runs into 运行中 / 排队 / 已结束, in that order, each with its own rows', async () => {
+  it('groups executor.runs into 进行中 (running, then queued) and 已结束, in that order, each with its own rows', async () => {
     f = installFakeForge({ calls: {
       'executor.runs': { runs: [
-        runRow('rr', 's1', { phase: 'running', worktree: undefined, changed: undefined }),
-        runRow('rq', 's1', { phase: 'queued', worktree: undefined, changed: undefined }),
         runRow('re', 's1', { phase: 'ended', worktree: { path: '/wt/re', present: true }, changed: 2 }),
+        runRow('rq', 's1', { phase: 'queued', worktree: undefined, changed: undefined }),
+        runRow('rr', 's1', { phase: 'running', worktree: undefined, changed: undefined }),
       ] },
       'channel.telegram.chats': { chats: [], worktrees: [] },
       'session.list': { sessions: [summary('s1', { title: 'one', cwd: '/repo' })] },
     } })
     render(<TasksPage />)
     await screen.findByText('已结束')
-    const heads = [...document.querySelectorAll('.mffai-grouphead span:first-child')].map((n) => n.textContent)
-    expect(heads.indexOf('运行中')).toBeLessThan(heads.indexOf('排队'))
-    expect(heads.indexOf('排队')).toBeLessThan(heads.indexOf('已结束'))
-    expect(document.querySelector('[data-run="rr"]')).not.toBeNull()
-    expect(document.querySelector('[data-run="rq"]')).not.toBeNull()
-    expect(document.querySelector('[data-run="re"]')).not.toBeNull()
+    const heads = [...document.querySelectorAll('.mffai-tcard-title')].map((n) => n.textContent)
+    expect(heads).toEqual(['进行中', '已结束', 'IM worktree'])
+    const order = [...document.querySelectorAll('[data-run]')].map((n) => n.getAttribute('data-run'))
+    expect(order).toEqual(['rr', 'rq', 're'])
+    const live = document.querySelector('[data-tcard="live"]') as HTMLElement
+    expect(live.querySelector('[data-run="rr"]')).not.toBeNull()
+    expect(live.querySelector('[data-run="rq"]')).not.toBeNull()
+    expect(live.querySelector('[data-run="re"]')).toBeNull()
+    expect((document.querySelector('[data-tcard="ended"]') as HTMLElement).querySelector('[data-run="re"]')).not.toBeNull()
   })
 
   it('a click on a run row session jumps there (route set with sessionId and runId)', async () => {
@@ -271,5 +275,92 @@ describe('TasksPage', () => {
     await waitFor(() => expect(f.callsOf('executor.runs')).toHaveLength(1))
     act(() => f.alert({ kind: 'reset' }))
     await waitFor(() => expect(f.callsOf('executor.runs')).toHaveLength(2))
+  })
+
+  it('the header slot gets N 运行中 (run chip with a dot) and N 排队 from the runs the page holds', async () => {
+    f = installFakeForge({ calls: {
+      'executor.runs': { runs: [
+        runRow('a', 's1', { phase: 'running', worktree: undefined, changed: undefined }),
+        runRow('b', 's1', { phase: 'running', worktree: undefined, changed: undefined }),
+        runRow('c', 's1', { phase: 'queued', worktree: undefined, changed: undefined }),
+        runRow('d', 's1', { phase: 'ended', worktree: undefined, changed: undefined }),
+      ] },
+      'channel.telegram.chats': { chats: [], worktrees: [] },
+      'session.list': { sessions: [summary('s1')] },
+    } })
+    const slot = document.createElement('div')
+    document.body.append(slot)
+    render(<HeaderSlotCtx.Provider value={slot}><TasksPage /></HeaderSlotCtx.Provider>)
+    await waitFor(() => expect(slot).toHaveTextContent('2 运行中'))
+    expect(slot).toHaveTextContent('1 排队')
+    expect(within(slot).getByText('2 运行中')).toHaveClass('run', 'dot')
+    slot.remove()
+  })
+
+  it('an unsupported executor.runs puts no counts in the header slot', async () => {
+    f = installFakeForge({ calls: {
+      'executor.runs': () => fail(-32601),
+      'channel.telegram.chats': { chats: [], worktrees: [] },
+      'session.list': { sessions: [] },
+    } })
+    const slot = document.createElement('div')
+    document.body.append(slot)
+    render(<HeaderSlotCtx.Provider value={slot}><TasksPage /></HeaderSlotCtx.Provider>)
+    await screen.findByText('不支持')
+    expect(slot.textContent).toBe('')
+    slot.remove()
+  })
+
+  it('已结束 shows the worktree chip, one title per card with a count, and the rows carry logo tile, session link, status chip, 耗时, 改动, size', async () => {
+    f = installFakeForge({ calls: {
+      'executor.runs': { runs: [runRow('re', 's1', { phase: 'ended', status: 'failed', reason: 'timeout', ms: 1500, worktree: { path: '/wt/re', present: true, bytes: 3 * 1024 * 1024 }, changed: 4 })] },
+      'channel.telegram.chats': { chats: [], worktrees: [] },
+      'session.list': { sessions: [summary('s1', { title: 'one' })] },
+    } })
+    render(<TasksPage />)
+    const row = (await screen.findByText('4 个文件')).closest('[data-run]') as HTMLElement
+    expect(row.querySelector('.mffai-rlogo')).not.toBeNull()
+    expect(within(row).getByRole('button', { name: 'one' })).toHaveClass('mffai-tlink')
+    expect(within(row).getByText('timeout')).toBeInTheDocument()
+    expect(within(row).getByText('1.5 s')).toBeInTheDocument()
+    expect(within(row).getByText('3.0 MB')).toBeInTheDocument()
+    expect(document.querySelector('[data-tcard="ended"] .mffai-chip')).toHaveTextContent('worktree 1 / 20')
+    expect(within(row).getByRole('button', { name: '合并' })).toHaveClass('mffai-primary')
+    expect(within(row).getByRole('button', { name: '丢弃' })).toHaveClass('mffai-danger')
+  })
+
+  it('merge and discard confirms are anchored to the clicked button (the overlay is the anchored one once the button can be measured)', async () => {
+    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ x: 10, y: 10, left: 10, top: 10, right: 90, bottom: 40, width: 80, height: 30, toJSON: () => ({}) } as DOMRect)
+    f = installFakeForge({ calls: {
+      'executor.runs': { runs: [runRow('re', 's1', { phase: 'ended', worktree: { path: '/wt/re', present: true }, changed: 1 })] },
+      'channel.telegram.chats': { chats: [], worktrees: [{ id: 'w1', project: 'proj', path: '/im/w1', sessionIds: [], createdAt: 1 }] },
+      'session.list': { sessions: [summary('s1', { cwd: '/repo' })] },
+      'channel.telegram.config.get': { enabled: true, staleMinutes: 10, projects: [{ name: 'proj', path: '/checkout/proj', auto: false }] },
+    } })
+    render(<TasksPage />)
+    const run = (await screen.findByText('1 个文件')).closest('[data-run]') as HTMLElement
+    const wt = (await screen.findByText('proj')).closest('[data-worktree]') as HTMLElement
+    await within(wt).findByRole('button', { name: '合并' })
+    for (const [scope, name] of [[run, '合并'], [run, '丢弃'], [wt, '合并'], [wt, '丢弃']] as const) {
+      fireEvent.click(within(scope).getByRole('button', { name }))
+      expect(dialog().closest('.confirm-overlay')).toHaveClass('mffai-anchored')
+      fireEvent.click(within(dialog()).getByRole('button', { name: '取消' }))
+    }
+    rect.mockRestore()
+  })
+
+  it('IM worktree card: project, path with copy, 在用 chip, size; 改动 stays a toggle', async () => {
+    f = installFakeForge({ calls: {
+      'executor.runs': { runs: [] },
+      'channel.telegram.chats': { chats: [], worktrees: [{ id: 'w1', project: 'proj', path: '/im/w1', sessionIds: [], createdAt: 1, bytes: 2048, usedByChat: '7' }] },
+      'session.list': { sessions: [] },
+    } })
+    render(<TasksPage />)
+    const row = (await screen.findByText('proj')).closest('[data-worktree]') as HTMLElement
+    expect(row.closest('[data-tcard="im"]')).not.toBeNull()
+    expect(within(row).getByText('/im/w1')).toBeInTheDocument()
+    expect(within(row).getByText('2 KB')).toBeInTheDocument()
+    expect(within(row).getByText('7')).toBeInTheDocument()
+    expect(within(row).getByRole('button', { name: '改动' })).toHaveAttribute('aria-expanded', 'false')
   })
 })

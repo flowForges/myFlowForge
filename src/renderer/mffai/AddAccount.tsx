@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChatgptEndedPayload, PresetView } from '@mffai/protocol'
 
-/** 添加账号内联表单;受限套餐先确认,key 提交后立即清空 */
-export function AddAccount({ presets, onDone }: { presets: PresetView[]; onDone: () => void }) {
-  const [open, setOpen] = useState(false)
+/** 添加账号表单;受限套餐先确认,key 提交后立即清空。onClose 给了就是装在抽屉里:一开始就展开,关掉(取消、添加成功)通知抽屉 */
+export function AddAccount({ presets, onDone, onClose }: { presets: PresetView[]; onDone: () => void; onClose?: () => void }) {
+  const [open, setOpen] = useState(onClose !== undefined)
   const [presetId, setPresetId] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
@@ -47,7 +47,7 @@ export function AddAccount({ presets, onDone }: { presets: PresetView[]; onDone:
     })
   }, [flowId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const close = () => { cancelFlow(); setOpen(false); setApiKey(''); setBaseUrl(''); setModelIdsText(''); setCodingOnly(false); setConfirming(false) }
+  const close = () => { cancelFlow(); setOpen(false); setApiKey(''); setBaseUrl(''); setModelIdsText(''); setCodingOnly(false); setConfirming(false); onClose?.() }
   const isCustom = preset?.id.startsWith('custom-') ?? false
   const submit = (restrictionAck: boolean) => {
     if (!preset || busy) return
@@ -73,20 +73,20 @@ export function AddAccount({ presets, onDone }: { presets: PresetView[]; onDone:
     }).catch((e) => { if (gen === loginGen.current) fail(e) })
   }
 
-  if (!open) return <button className="set-btn" onClick={() => setOpen(true)} disabled={!presets.length}>添加账号</button>
+  if (!open && !onClose) return <button className="set-btn" onClick={() => setOpen(true)} disabled={!presets.length}>添加账号</button>
   if (confirming) {
     return (
       <div className="mffai-card" role="dialog" aria-labelledby="mffai-restrict-title">
         <div id="mffai-restrict-title">此套餐仅限编程工具内使用</div>
         <div className="mffai-actions">
-          <button className="set-btn" disabled={busy} onClick={() => submit(true)}>继续</button>
+          <button className="set-btn mffai-primary" disabled={busy} onClick={() => submit(true)}>继续</button>
           <button className="set-btn" onClick={() => setConfirming(false)}>取消</button>
         </div>
       </div>
     )
   }
   return (
-    <div className="mffai-card">
+    <div className="mffai-card mffai-addform">
       <select value={preset?.id ?? ''} onChange={e => { cancelFlow(); setPresetId(e.target.value) }}>
         {presets.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
       </select>
@@ -98,16 +98,18 @@ export function AddAccount({ presets, onDone }: { presets: PresetView[]; onDone:
         </div>
       ) : (
         <>
-          <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} />
+          {isCustom && (
+            <label className="mffai-fld"><span>接口地址</span><input value={baseUrl} onChange={e => setBaseUrl(e.target.value)} /></label>
+          )}
+          <label className="mffai-fld"><span>密钥</span><input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} /></label>
           {isCustom && (
             <>
-              <input value={baseUrl} onChange={e => setBaseUrl(e.target.value)} />
-              <input aria-label="模型 id" value={modelIdsText} onChange={e => setModelIdsText(e.target.value)} />
-              <label><input type="checkbox" checked={codingOnly} onChange={e => setCodingOnly(e.target.checked)} />仅限编程工具</label>
+              <label className="mffai-fld"><span>模型 id</span><input aria-label="模型 id" value={modelIdsText} onChange={e => setModelIdsText(e.target.value)} /></label>
+              <label className="mffai-check"><input type="checkbox" checked={codingOnly} onChange={e => setCodingOnly(e.target.checked)} />仅限编程工具</label>
             </>
           )}
           <div className="mffai-actions">
-            <button className="set-btn" disabled={!preset || busy} onClick={() => preset?.restriction === 'coding-tools-only' ? setConfirming(true) : submit(false)}>添加</button>
+            <button className="set-btn mffai-primary" disabled={!preset || busy} onClick={() => preset?.restriction === 'coding-tools-only' ? setConfirming(true) : submit(false)}>添加</button>
             <button className="set-btn" onClick={close}>取消</button>
           </div>
         </>

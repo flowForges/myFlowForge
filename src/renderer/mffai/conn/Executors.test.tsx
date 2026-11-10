@@ -100,4 +100,32 @@ describe('Executors', () => {
     expect(screen.getByText('claude')).toBeInTheDocument()
     expect(err).not.toHaveBeenCalled()
   })
+
+  it('a table: columns 执行器 / 安装 / 登录 / 隔离 / 缺少, a logo tile per row, header count and a refresh button with a spinner while loading', async () => {
+    let resolve!: (v: ExecutorListResult) => void
+    f = installFakeForge({ calls: {
+      'executor.list': { executors: [
+        { id: 'claude', installed: true, version: '1.2.3', auth: 'ok', isolation: 'own', missing: [] },
+        { id: 'codex', installed: false, auth: 'missing', isolation: 'none', missing: ['codex_network'] },
+        { id: 'gemini', installed: false, auth: 'unknown', isolation: 'none', missing: [] },
+      ] },
+    } })
+    f.script({ 'executor.refresh': () => new Promise<ExecutorListResult>((r) => { resolve = r }) })
+    render(<Executors />)
+    await screen.findByText('claude')
+    expect([...document.querySelectorAll('table.mffai-tbl th')].map((n) => n.textContent)).toEqual(['执行器', '安装', '登录', '隔离', '缺少'])
+    const rows = document.querySelectorAll('tr[data-executor]')
+    expect(rows).toHaveLength(3)
+    expect(rows[0].querySelector('.mffai-rlogo')).toHaveClass('cc')
+    expect(rows[1].querySelector('.mffai-rlogo')).toHaveClass('cx')
+    expect(rows[2].querySelector('.mffai-rlogo')).toHaveClass('gm')
+    const head = document.querySelector('.mffai-sech') as HTMLElement
+    expect(head).toHaveTextContent('执行器')
+    expect(within(head).getByText('3')).toBeInTheDocument()
+    expect(document.querySelector('.mffai-spin')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '刷新' }))
+    expect(document.querySelector('button .mffai-spin')).not.toBeNull()
+    await act(async () => { resolve({ executors: [] }) })
+    await waitFor(() => expect(document.querySelector('.mffai-spin')).toBeNull())
+  })
 })

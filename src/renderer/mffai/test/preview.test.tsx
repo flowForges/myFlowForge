@@ -24,6 +24,8 @@ import MffaiView from '../MffaiView'
 import { ApprovalCard } from '../chat/ApprovalCard'
 import { route } from '../route'
 import { installFakeForge } from './fakeForge'
+import { runRow } from './sessions'
+import type { RunRow } from '@mffai/protocol'
 import { fireEvent, waitFor, screen } from '@testing-library/react'
 
 const OUT = process.env.MFFAI_PREVIEW_OUT
@@ -80,13 +82,31 @@ describe.skipIf(!OUT)('preview screens', () => {
     expect(existsSync(join(OUT!, 'ui-confirm.html'))).toBe(true)
   })
 
-  it('01-tasks: rail and page header (the tasks body comes later)', async () => {
+  it('01-tasks: rail, page header with the run counts, and the three cards', async () => {
     route.set({ page: 'tasks' })
+    const now = Date.now()
+    const run = (runId: string, executor: string, sessionId: string, patch: Partial<RunRow>) => runRow(runId, sessionId, { executor, ...patch })
     installFakeForge({
       state: { proxyStale: true, rssMb: 112, pluginsActive: 4, supervisor: { state: 'running', version: 'v0.8.2', restarts: 0, protocolVersion: 3 } },
       calls: {
         status: { state: 'running', uptimeMs: 1, rssMb: 112, version: '0.8.2', plugins: [{ id: 'a', state: 'active' }, { id: 'b', state: 'failed' }], sandbox: { level: 'full', missing: [], autoDegraded: false } },
-        'session.list': { sessions: [{ id: 's1', title: 'one', origin: 'app', audience: 'owner', approvalMode: 'ask', createdAt: 1, updatedAt: 1, pendingApprovals: 2 }] },
+        'session.list': { sessions: [
+          { id: 's1', title: '登录模块错误处理重构', origin: 'app', audience: 'owner', approvalMode: 'ask', createdAt: 1, updatedAt: 1, pendingApprovals: 2 },
+          { id: 's2', title: '看下今天的线上告警', origin: 'app', audience: 'owner', approvalMode: 'ask', createdAt: 1, updatedAt: 1, pendingApprovals: 0 },
+          { id: 's3', title: 'forge-api 补单测', origin: 'app', audience: 'owner', approvalMode: 'ask', createdAt: 1, updatedAt: 1, pendingApprovals: 0, cwd: '~/work/forge-api' },
+          { id: 's4', title: 'README 翻译成英文', origin: 'app', audience: 'owner', approvalMode: 'ask', createdAt: 1, updatedAt: 1, pendingApprovals: 0, cwd: '~/work/forge-api' },
+          { id: 's5', title: '设计周报模板', origin: 'app', audience: 'owner', approvalMode: 'ask', createdAt: 1, updatedAt: 1, pendingApprovals: 0 },
+        ] },
+        'executor.runs': { runs: [
+          run('r1', 'codex', 's1', { phase: 'running', ms: 102000, worktree: { path: '~/.mff-ai/wt/r1', present: true, bytes: 312 * 1024 * 1024 } }),
+          run('r2', 'claude-code', 's2', { phase: 'running', ms: 38000, worktree: { path: '~/.mff-ai/wt/r2', present: true, bytes: 96 * 1024 * 1024 } }),
+          run('r3', 'codex', 's1', { phase: 'queued' }),
+          run('r4', 'codex', 's3', { status: 'ok', ms: 247000, changed: 7, worktree: { path: '~/.mff-ai/wt/r4', present: true, bytes: 288 * 1024 * 1024 } }),
+          run('r5', 'gemini', 's4', { status: 'ok', ms: 75000, changed: 2, worktree: { path: '~/.mff-ai/wt/r5', present: true, bytes: 41 * 1024 * 1024, merged: true } }),
+          run('r6', 'claude-code', 's5', { status: 'failed', reason: 'timeout', ms: 52000, changed: 0, worktree: { path: '~/.mff-ai/wt/r6', present: true, bytes: 12 * 1024 * 1024 } }),
+        ] },
+        'channel.telegram.chats': { chats: [], worktrees: [{ id: 'w1', project: 'ops-gateway', path: '~/.mff-ai/im-wt/ops-gateway-3f2a', sessionIds: [], createdAt: now - 3600_000, bytes: 96 * 1024 * 1024, usedByChat: '张伟' }] },
+        'channel.telegram.config.get': { enabled: true, staleMinutes: 10, projects: [{ name: 'ops-gateway', path: '~/work/ops-gateway', auto: false }] },
         'memory.health': { dbBytes: 0, rawRows: 0, noteRows: 0, cursorLag: 0, pendingProposals: 3, problems: [] },
         'models.catalog': { presets: [], models: { p: [{ id: 'm1', name: 'Claude Sonnet 4.5', context: 1, output: 1, image: false, reasoning: 'none', toolCall: true }] }, default: { accountId: 'a1', modelId: 'm1' } },
         'models.accounts': { accounts: [{ id: 'a1', presetId: 'p', label: 'Claude', state: 'ok' }], secretsBackend: 'keychain' },
@@ -96,10 +116,70 @@ describe.skipIf(!OUT)('preview screens', () => {
     })
     render(<MffaiView />)
     await screen.findByTestId('mffai-page-tasks')
-    await waitFor(() => expect(document.querySelectorAll('.mffai-navnum')).toHaveLength(3))
+    await waitFor(() => expect(document.querySelectorAll('.mffai-navnum').length).toBeGreaterThan(0))
     await screen.findByText('Claude · Claude Sonnet 4.5')
+    await screen.findByText('ops-gateway')
+    await waitFor(() => expect(document.querySelector('.mffai-head-slot')).toHaveTextContent('2 运行中'))
+    expect(document.querySelectorAll('[data-tcard]')).toHaveLength(3)
     writePreview('01-tasks', PREVIEW_SIZE)
     expect(existsSync(join(OUT!, '01-tasks.html'))).toBe(true)
+  })
+
+  const connCalls = (accounts: unknown[], extra: Record<string, unknown> = {}) => ({
+    status: { state: 'running', uptimeMs: 1, rssMb: 112, version: '0.8.2', plugins: [{ id: 'a', state: 'active' }, { id: 'b', state: 'failed' }], sandbox: { level: 'full', missing: [], autoDegraded: false } },
+    'session.list': { sessions: [] },
+    'memory.health': { dbBytes: 0, rawRows: 0, noteRows: 0, cursorLag: 0, pendingProposals: 0, problems: [] },
+    'events.tail': { events: [] },
+    ...extra,
+  }) as never
+  const mdl = (id: string, name: string) => ({ id, name, context: 1, output: 1, image: false, reasoning: 'none', toolCall: true })
+  const presetOf = (id: string, label: string, restriction = 'none', auth = 'api-key') => ({ id, label, billing: 'metered', restriction, auth, protocols: [], docsUrl: '' })
+
+  it('04-conn-1-models: account cards with quota bars and the add-account drawer open', async () => {
+    route.set({ page: 'conn' })
+    const f = installFakeForge({ state: { proxyStale: true, rssMb: 112, pluginsActive: 4, supervisor: { state: 'running', version: '0.8.2', restarts: 0, protocolVersion: 3 } }, calls: connCalls([]) })
+    f.mffai.models.catalog = async () => ({
+      presets: [presetOf('anthropic', 'Anthropic'), presetOf('openai', 'OpenAI'), presetOf('deepseek', 'DeepSeek'), presetOf('openrouter', 'OpenRouter'), presetOf('chatgpt', 'ChatGPT 订阅', 'none', 'chatgpt-oauth'), presetOf('custom-openai', '自定义')],
+      models: { anthropic: [mdl('claude-sonnet-4-5', 'claude-sonnet-4-5'), mdl('claude-opus-4', 'claude-opus-4')], chatgpt: [mdl('gpt-5-codex', 'gpt-5-codex')], deepseek: [mdl('deepseek-chat', 'deepseek-chat')], openrouter: [mdl('qwen/qwen3-coder', 'qwen/qwen3-coder')] },
+      default: { accountId: 'a1', modelId: 'claude-sonnet-4-5' },
+    }) as never
+    f.mffai.models.accounts = async () => ({ accounts: [
+      { id: 'a1', presetId: 'anthropic', label: 'Anthropic 个人', state: 'ok' },
+      { id: 'a2', presetId: 'deepseek', label: 'DeepSeek', state: 'ok' },
+      { id: 'a3', presetId: 'chatgpt', label: 'ChatGPT Plus', state: 'needs_login', restriction: 'coding-tools-only' },
+      { id: 'a4', presetId: 'openrouter', label: 'OpenRouter 团队', state: 'quota_exhausted' },
+    ], secretsBackend: 'keychain' }) as never
+    f.mffai.models.quota = async (id: string) => ((({ a1: { windows: [{ label: '5h', usedPercent: 42 }, { label: '周', usedPercent: 18 }] }, a2: { windows: [{ label: '余额', usedPercent: 34 }] }, a3: { windows: [{ label: '5h', usedPercent: 0 }, { label: '周', usedPercent: 64 }] }, a4: { windows: [{ label: '月', usedPercent: 100 }] } }) as Record<string, unknown>)[id]) as never
+    render(<MffaiView />)
+    await screen.findByTestId('mffai-page-conn')
+    await screen.findByText('Anthropic 个人')
+    await screen.findByText('5h 42%')
+    fireEvent.click(screen.getByRole('button', { name: '添加账号' }))
+    fireEvent.change(screen.getAllByRole('combobox').at(-1)!, { target: { value: 'custom-openai' } })
+    fireEvent.change(document.querySelector('input[type=password]')!, { target: { value: 'sk-••••••••••••••••••••3fa1' } })
+    writePreview('04-conn-1-models', PREVIEW_SIZE)
+    expect(existsSync(join(OUT!, '04-conn-1-models.html'))).toBe(true)
+  })
+
+  it('04-conn-3-executors: the executors table while refreshing', async () => {
+    route.set({ page: 'conn' })
+    const f = installFakeForge({ state: { proxyStale: true, rssMb: 112, pluginsActive: 4, supervisor: { state: 'running', version: '0.8.2', restarts: 0, protocolVersion: 3 } }, calls: connCalls([], {
+      'executor.list': { executors: [
+        { id: 'claude-code', installed: true, version: '2.1.3', auth: 'ok', isolation: 'own', missing: [] },
+        { id: 'codex', installed: true, version: '0.48.0', auth: 'missing', isolation: 'wrapped', missing: ['codex_network'] },
+        { id: 'gemini', installed: false, auth: 'unknown', isolation: 'none', missing: ['unsupported'] },
+      ] },
+      'executor.refresh': () => new Promise(() => {}),
+    }) })
+    f.mffai.models.accounts = async () => ({ accounts: [{ id: 'a1', presetId: 'p', label: 'Claude', state: 'ok' }], secretsBackend: 'keychain' }) as never
+    render(<MffaiView />)
+    await screen.findByTestId('mffai-page-conn')
+    fireEvent.click(screen.getByRole('tab', { name: '执行器' }))
+    await screen.findByText('codex_network')
+    fireEvent.click(screen.getByRole('button', { name: '刷新' }))
+    await screen.findByText('刷新中')
+    writePreview('04-conn-3-executors', PREVIEW_SIZE)
+    expect(existsSync(join(OUT!, '04-conn-3-executors.html'))).toBe(true)
   })
 
   const calls01 = {

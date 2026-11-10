@@ -26,6 +26,7 @@ import { ApprovalCard } from './chat/ApprovalCard'
 import TasksPage from './tasks/TasksPage'
 import ConnectionsPage from './conn/ConnectionsPage'
 import { Executors } from './conn/Executors'
+import { HeaderSlotCtx } from './shell/headerSlot'
 import PermissionsPage from './perm/PermissionsPage'
 import MemoryPage from './memory/MemoryPage'
 import PluginsPage from './plugins/PluginsPage'
@@ -434,6 +435,84 @@ const ROWS: Row[] = [
       f.script({ 'executor.list': () => fail(-32601) })
       render(<Executors />)
       await screen.findByText('不支持')
+    },
+  },
+  {
+    name: 'conn 08b: account grid with default star, quota bars (one above 80), a link quota, 钥匙串 chip, the add-account drawer with custom fields and the restriction confirm',
+    mount: async (f) => {
+      const m = (id: string, name: string) => ({ id, name, context: 1, output: 1, image: false, reasoning: 'none', toolCall: true })
+      const preset = (id: string, label: string, restriction = 'none') => ({ id, label, billing: 'metered', restriction, auth: 'api-key', protocols: [], docsUrl: '' })
+      f.mffai.models.catalog.mockResolvedValue({
+        presets: [preset('anthropic', 'Anthropic'), preset('zhipu-cn', '智谱', 'coding-tools-only'), preset('custom-openai', '自定义')],
+        models: { anthropic: [m('m1', 'M1'), m('m2', 'M2')] }, default: { accountId: 'a1', modelId: 'm2' },
+      } as never)
+      f.mffai.models.accounts.mockResolvedValue({ accounts: [
+        { id: 'a1', presetId: 'anthropic', label: '个人', state: 'ok' },
+        { id: 'a2', presetId: 'zhipu-cn', label: '公司', state: 'quota_exhausted' },
+        { id: 'a3', presetId: 'custom-openai', label: '网关', state: 'ok', restriction: 'coding-tools-only' },
+      ], secretsBackend: 'keychain' } as never)
+      f.mffai.models.quota.mockImplementation(async (id: string) => (id === 'a1' ? { windows: [{ label: '5h', usedPercent: 42 }, { label: '周', usedPercent: 91 }] } : { link: 'https://x/usage' }) as never)
+      render(<ConnectionsPage />)
+      await screen.findByText('5h 42%')
+      await screen.findAllByText('用量')
+      expect(document.querySelectorAll('.mffai-acard')).toHaveLength(3)
+      expect(findHints()).toEqual([])
+      fireEvent.click(screen.getByRole('button', { name: '添加账号' }))
+      expect(document.querySelector('aside.mffai-drawer')).not.toBeNull()
+      expect(findHints()).toEqual([])
+      fireEvent.change(screen.getAllByRole('combobox').at(-1)!, { target: { value: 'custom-openai' } })
+      await screen.findByLabelText('模型 id')
+      expect(findHints()).toEqual([])
+      fireEvent.change(screen.getAllByRole('combobox').at(-1)!, { target: { value: 'zhipu-cn' } })
+      fireEvent.change(document.querySelector('input[type=password]')!, { target: { value: 'k' } })
+      fireEvent.click(screen.getByRole('button', { name: '添加' }))
+      await screen.findByText('此套餐仅限编程工具内使用')
+      expect(findHints()).toEqual([])
+    },
+  },
+  {
+    name: 'conn 08b: executors table (installed with version, not installed, unknown auth, missing codes) while a refresh is in flight',
+    mount: async (f) => {
+      f.script({
+        'executor.list': { executors: [
+          { id: 'claude', installed: true, version: '1.0.0', auth: 'ok', isolation: 'own', missing: [] },
+          { id: 'codex', installed: true, version: '0.4', auth: 'missing', isolation: 'wrapped', missing: ['codex_network'] },
+          { id: 'gemini', installed: false, auth: 'unknown', isolation: 'none', missing: ['unsupported'] },
+        ] },
+        'executor.refresh': () => new Promise(() => {}),
+      })
+      render(<Executors />)
+      await screen.findByText('codex_network')
+      fireEvent.click(screen.getByRole('button', { name: '刷新' }))
+      await screen.findByText('刷新中')
+      expect(document.querySelector('button .mffai-spin')).not.toBeNull()
+    },
+  },
+  {
+    name: 'tasks 08b: header chips in the slot, the three cards (running + queued, ended with the worktree chip, IM) with a refusal and a failed row',
+    mount: async (f) => {
+      f.script({
+        'executor.runs': { runs: [
+          runRow('rr', 's1', { phase: 'running', worktree: undefined, changed: undefined }),
+          runRow('rq', 's1', { phase: 'queued', worktree: undefined, changed: undefined }),
+          runRow('re', 's1', { status: 'failed', reason: 'timeout', ms: 4000, worktree: { path: '/wt/re', present: true, bytes: 4096 }, changed: 2 }),
+        ] },
+        'channel.telegram.chats': { chats: [], worktrees: [{ id: 'w1', project: 'proj', path: '/im/w1', sessionIds: [], createdAt: Date.now(), bytes: 1024, usedByChat: '7' }] },
+        'session.list': { sessions: [summary('s1', { title: '一号', cwd: '/repo' })] },
+        'channel.telegram.config.get': { enabled: true, staleMinutes: 10, projects: [{ name: 'proj', path: '/checkout/proj', auto: false }] },
+        'executor.worktree.merge': () => fail(-32602, 'refused', { reason: 'dirty', paths: ['a.ts'], restored: false }),
+      })
+      const slot = document.createElement('div')
+      document.body.append(slot)
+      render(<HeaderSlotCtx.Provider value={slot}><TasksPage /></HeaderSlotCtx.Provider>)
+      await screen.findByText('proj')
+      await waitFor(() => expect(slot).toHaveTextContent('1 运行中'))
+      const re = document.querySelector('[data-run="re"]') as HTMLElement
+      fireEvent.click(within(re).getByRole('button', { name: '合并' }))
+      await act(async () => { fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '合并' })) })
+      await within(re).findByText('未还原')
+      expect(findHints()).toEqual([])
+      expect(findHints(slot)).toEqual([])
     },
   },
   {
