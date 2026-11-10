@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest'
 import { render } from '@testing-library/react'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { writePreview } from './preview'
+import { writePreview, type PreviewOpts } from './preview'
 import { CHAT_TG, PREVIEW_CHAT_NARROW, PREVIEW_NARROW, PREVIEW_SIZE, UI_DIFF, UI_ROWS, UI_TABLE, chatActiveEvents, chatSessions, chatTgEvents } from './previewFixtures'
 import { memStorage } from './panel'
 import { ACTIVITY_KEY } from '../layout'
@@ -30,6 +30,17 @@ import { detailOf, FULL_CONSENT, listRow, pluginList } from './plugins'
 import { fireEvent, waitFor, screen, within } from '@testing-library/react'
 
 const OUT = process.env.MFFAI_PREVIEW_OUT
+/** 这两屏另出强调色 / 皮肤 / 毛玻璃变体(08b Task 12) */
+const VARIANT_SCREENS = new Set(['03-chat-1-active', '05-plugins-1-detail'])
+/** 每屏写深色(原名)和浅色(-light);变体屏再写 -amber、-forge、-glass */
+function shot(name: string, opts: PreviewOpts): void {
+  writePreview(name, opts)
+  writePreview(`${name}-light`, { ...opts, theme: 'light' })
+  if (!VARIANT_SCREENS.has(name)) return
+  writePreview(`${name}-amber`, { ...opts, accent: 'amber' })
+  writePreview(`${name}-forge`, { ...opts, skin: 'forge' })
+  writePreview(`${name}-glass`, { ...opts, glass: true })
+}
 const TONES: ChipTone[] = ['ok', 'bad', 'warn', 'muted', 'run', 'acc', 'line']
 
 function Controls() {
@@ -70,11 +81,12 @@ function Controls() {
 describe.skipIf(!OUT)('preview screens', () => {
   it('ui: shared controls', () => {
     render(<Controls />)
-    writePreview('ui', PREVIEW_SIZE)
+    shot('ui', PREVIEW_SIZE)
     const html = readFileSync(join(OUT!, 'ui.html'), 'utf8')
     expect(html).toContain('data-theme="dark"')
     expect(html).toContain('--mffai-knob')
     expect(html).toContain('.code-line')
+    expect(readFileSync(join(OUT!, 'ui-light.html'), 'utf8')).toContain('data-theme="light"')
   })
 
   it('ui-confirm: a confirm over the controls, light theme', () => {
@@ -122,7 +134,7 @@ describe.skipIf(!OUT)('preview screens', () => {
     await screen.findByText('ops-gateway')
     await waitFor(() => expect(document.querySelector('.mffai-head-slot')).toHaveTextContent('2 运行中'))
     expect(document.querySelectorAll('[data-tcard]')).toHaveLength(3)
-    writePreview('01-tasks', PREVIEW_SIZE)
+    shot('01-tasks', PREVIEW_SIZE)
     expect(existsSync(join(OUT!, '01-tasks.html'))).toBe(true)
   })
 
@@ -158,7 +170,7 @@ describe.skipIf(!OUT)('preview screens', () => {
     fireEvent.click(screen.getByRole('button', { name: '添加账号' }))
     fireEvent.change(screen.getAllByRole('combobox').at(-1)!, { target: { value: 'custom-openai' } })
     fireEvent.change(document.querySelector('input[type=password]')!, { target: { value: 'sk-••••••••••••••••••••3fa1' } })
-    writePreview('04-conn-1-models', PREVIEW_SIZE)
+    shot('04-conn-1-models', PREVIEW_SIZE)
     expect(existsSync(join(OUT!, '04-conn-1-models.html'))).toBe(true)
   })
 
@@ -179,7 +191,7 @@ describe.skipIf(!OUT)('preview screens', () => {
     await screen.findByText('codex_network')
     fireEvent.click(screen.getByRole('button', { name: '刷新' }))
     await screen.findByText('刷新中')
-    writePreview('04-conn-3-executors', PREVIEW_SIZE)
+    shot('04-conn-3-executors', PREVIEW_SIZE)
     expect(existsSync(join(OUT!, '04-conn-3-executors.html'))).toBe(true)
   })
 
@@ -203,7 +215,7 @@ describe.skipIf(!OUT)('preview screens', () => {
     await waitFor(() => expect(document.querySelector('[data-project-row]')).not.toBeNull())
     fireEvent.click(screen.getByRole('button', { name: '开始配对' }))
     await screen.findByText('K7Q4M2')
-    writePreview('04-conn-2-telegram', PREVIEW_SIZE)
+    shot('04-conn-2-telegram', PREVIEW_SIZE)
     expect(existsSync(join(OUT!, '04-conn-2-telegram.html'))).toBe(true)
   })
 
@@ -221,7 +233,7 @@ describe.skipIf(!OUT)('preview screens', () => {
     await screen.findByText('完整')
     fireEvent.click(document.querySelector('button.mffai-power')!)
     await screen.findByText('1 有问题')
-    writePreview('01-tasks-power', PREVIEW_SIZE)
+    shot('01-tasks-power', PREVIEW_SIZE)
     expect(existsSync(join(OUT!, '01-tasks-power.html'))).toBe(true)
   })
 
@@ -233,7 +245,7 @@ describe.skipIf(!OUT)('preview screens', () => {
         <ApprovalCard sessionId="s1" approval={{ approvalId: 'q', turnId: 't1', callId: 'c', tool: 'http_get', summary: 'grafana.internal/api/ds/query', seq: 2 }} />
       </div></aside></div>,
     )
-    writePreview('cards-long-tool', { width: 400, height: 420 })
+    shot('cards-long-tool', { width: 400, height: 420 })
     expect(existsSync(join(OUT!, 'cards-long-tool.html'))).toBe(true)
   })
 
@@ -242,7 +254,7 @@ describe.skipIf(!OUT)('preview screens', () => {
     installFakeForge({ state: { enabled: false, running: false, supervisor: undefined, autostart: false, dataDir: '~/Library/Application Support/myFlowForge/mff-ai' } })
     render(<MffaiView />)
     await screen.findByText('启用')
-    writePreview('02-first-1-off', PREVIEW_SIZE)
+    shot('02-first-1-off', PREVIEW_SIZE)
     expect(existsSync(join(OUT!, '02-first-1-off.html'))).toBe(true)
   })
 
@@ -251,7 +263,7 @@ describe.skipIf(!OUT)('preview screens', () => {
     installFakeForge({ state: { running: false, supervisor: { state: 'tripped', version: '0.8.2', restarts: 3, protocolVersion: 3, trippedReason: 'crash-loop' } } })
     render(<MffaiView />)
     await screen.findByText('后台已熔断')
-    writePreview('02-first-4-fault', PREVIEW_SIZE)
+    shot('02-first-4-fault', PREVIEW_SIZE)
     expect(existsSync(join(OUT!, '02-first-4-fault.html'))).toBe(true)
   })
 
@@ -285,7 +297,7 @@ describe.skipIf(!OUT)('preview screens', () => {
         act(() => { f.emit(ev('memory.recommendation', { id: 'r1', category: 'routine', habitId: 'h1', text: '周一上午通常在 forge-api 看周报数据', cwd: '~/work/forge-api' })) })
         await screen.findByText('周一上午通常在 forge-api 看周报数据')
         await screen.findByRole('combobox', { name: '编辑工具' })
-        writePreview(name, size)
+        shot(name, size)
         expect(existsSync(join(OUT!, `${name}.html`))).toBe(true)
       } finally { r.uninstall() }
     })
@@ -305,7 +317,7 @@ describe.skipIf(!OUT)('preview screens', () => {
       await screen.findByTestId('mffai-page-chat')
       r.setMainWidth(1376)
       fireEvent.click(await screen.findByRole('button', { name: '添加账号' }))
-      writePreview('02-first-2-nomodel', PREVIEW_SIZE)
+      shot('02-first-2-nomodel', PREVIEW_SIZE)
       expect(existsSync(join(OUT!, '02-first-2-nomodel.html'))).toBe(true)
     } finally { r.uninstall() }
   })
@@ -357,7 +369,7 @@ describe.skipIf(!OUT)('preview screens', () => {
           fireEvent.change(screen.getByRole('textbox', { name: '输入' }), { target: { value: '/' } })
           await waitFor(() => expect(document.querySelectorAll('.mffai-slash [role=option]')).toHaveLength(3))
         }
-        writePreview(name, size)
+        shot(name, size)
         expect(existsSync(join(OUT!, `${name}.html`))).toBe(true)
       } finally { r.uninstall(); vi.unstubAllGlobals() }
     })
@@ -419,7 +431,7 @@ describe.skipIf(!OUT)('preview screens', () => {
     fireEvent.click(document.querySelector('[data-plugin="github-tools"] .mffai-prow-open')!)
     await screen.findByRole('button', { name: '保存授权' })
     await waitFor(() => expect(document.querySelector('[data-dsec="servers"] [data-mcp-row]')).not.toBeNull())
-    writePreview('05-plugins-1-detail', PREVIEW_SIZE)
+    shot('05-plugins-1-detail', PREVIEW_SIZE)
     expect(existsSync(join(OUT!, '05-plugins-1-detail.html'))).toBe(true)
   })
 
@@ -434,7 +446,7 @@ describe.skipIf(!OUT)('preview screens', () => {
     fireEvent.change(screen.getByLabelText('ref'), { target: { value: 'v1.5.0' } })
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: '读取' })) })
     await screen.findByText('symlink')
-    writePreview('05-plugins-2-install', PREVIEW_SIZE)
+    shot('05-plugins-2-install', PREVIEW_SIZE)
     expect(existsSync(join(OUT!, '05-plugins-2-install.html'))).toBe(true)
   })
 
@@ -444,7 +456,7 @@ describe.skipIf(!OUT)('preview screens', () => {
     render(<MffaiView />)
     await screen.findByTestId('mffai-page-plugins')
     await screen.findByText('1 已退出')
-    writePreview('05-plugins-3-mcp', PREVIEW_SIZE)
+    shot('05-plugins-3-mcp', PREVIEW_SIZE)
     expect(existsSync(join(OUT!, '05-plugins-3-mcp.html'))).toBe(true)
   })
 
@@ -484,7 +496,7 @@ describe.skipIf(!OUT)('preview screens', () => {
     fireEvent.change(screen.getByLabelText('路径'), { target: { value: '~/src/github-tools' } })
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: '读取' })) })
     await screen.findByRole('button', { name: '安装并启用' })
-    writePreview('06-consent-A', PREVIEW_SIZE)
+    shot('06-consent-A', PREVIEW_SIZE)
     expect(existsSync(join(OUT!, '06-consent-A.html'))).toBe(true)
   })
 
@@ -504,7 +516,7 @@ describe.skipIf(!OUT)('preview screens', () => {
     await act(async () => { fireEvent.click(up) })
     const dlg = await screen.findByRole('dialog')
     await within(dlg).findByRole('button', { name: '升级' })
-    writePreview('06-consent-B', PREVIEW_SIZE)
+    shot('06-consent-B', PREVIEW_SIZE)
     expect(existsSync(join(OUT!, '06-consent-B.html'))).toBe(true)
   })
   const pageCalls = (extra: Record<string, unknown> = {}) => ({ ...(plugCalls() as object), 'plugins.list': pluginList({ plugins: [], dev: [], problems: [] }), ...extra })
@@ -529,7 +541,7 @@ describe.skipIf(!OUT)('preview screens', () => {
     await screen.findAllByText('提取')
     await act(async () => { fireEvent.click(document.querySelectorAll('[data-proposal="p3"] .mffai-primary')[0]) })
     await screen.findByText('已满')
-    writePreview('07-memory', PREVIEW_SIZE)
+    shot('07-memory', PREVIEW_SIZE)
     expect(existsSync(join(OUT!, '07-memory.html'))).toBe(true)
   })
 
@@ -559,7 +571,7 @@ describe.skipIf(!OUT)('preview screens', () => {
     fireEvent.change(screen.getAllByLabelText('规则')[0], { target: { value: 'shell: rm -rf *' } })
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: '保存' })) })
     await screen.findByText('test_failed')
-    writePreview('08-permissions', PREVIEW_SIZE)
+    shot('08-permissions', PREVIEW_SIZE)
     expect(existsSync(join(OUT!, '08-permissions.html'))).toBe(true)
   })
 
@@ -573,7 +585,7 @@ describe.skipIf(!OUT)('preview screens', () => {
     const list = await screen.findByRole('listbox', { name: '事件' })
     await waitFor(() => expect(within(list).queryAllByRole('option').length).toBeGreaterThan(0))
     fireEvent.click(within(list).getAllByRole('option')[0])
-    writePreview('10-debug', PREVIEW_SIZE)
+    shot('10-debug', PREVIEW_SIZE)
     expect(existsSync(join(OUT!, '10-debug.html'))).toBe(true)
   })
 })
