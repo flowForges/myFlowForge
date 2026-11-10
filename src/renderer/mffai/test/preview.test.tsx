@@ -152,7 +152,7 @@ describe.skipIf(!OUT)('preview screens', () => {
 
   for (const [name, size, main] of [['02-first-3-ready', PREVIEW_SIZE, 1376], ['03-chat-4-narrow-list', PREVIEW_NARROW, 1036]] as const) {
     it(`${name}: the session column beside the new-session form`, async () => {
-      route.set({ page: 'chat' })
+      route.set({ page: 'chat', newSession: { cwd: '~/work/forge-api' } })
       const r = installResize()
       try {
         const f = installFakeForge({ state: { proxyStale: true, rssMb: 112, pluginsActive: 4, supervisor: { state: 'running', version: '0.8.2', restarts: 0, protocolVersion: 3 } }, calls: chatCalls() })
@@ -166,11 +166,37 @@ describe.skipIf(!OUT)('preview screens', () => {
         await screen.findByText('张伟')
         act(() => { f.emit(ev('memory.recommendation', { id: 'r1', category: 'routine', habitId: 'h1', text: '周一上午通常在 forge-api 看周报数据', cwd: '~/work/forge-api' })) })
         await screen.findByText('周一上午通常在 forge-api 看周报数据')
+        await screen.findByRole('combobox', { name: '编辑工具' })
         writePreview(name, size)
         expect(existsSync(join(OUT!, `${name}.html`))).toBe(true)
       } finally { r.uninstall() }
     })
   }
+
+  it('02-first-2-nomodel: no accounts, the start page with AddAccount open', async () => {
+    route.set({ page: 'chat' })
+    const r = installResize()
+    try {
+      const f = installFakeForge({ state: { rssMb: 98, pluginsActive: 4, supervisor: { state: 'running', version: '0.8.2', restarts: 0, protocolVersion: 3 } },
+        calls: { ...(chatCalls() as object), 'session.list': { sessions: [] } } as never })
+      const presets = [['anthropic', 'Anthropic'], ['openai', 'OpenAI'], ['deepseek', 'DeepSeek'], ['openrouter', 'OpenRouter']]
+        .map(([id, label]) => ({ id, label, billing: 'metered', restriction: 'none', auth: 'api-key', protocols: [], docsUrl: '' }))
+      f.mffai.models.catalog = async () => ({ presets, models: {} }) as never
+      f.mffai.models.accounts = async () => ({ accounts: [], secretsBackend: 'keychain' }) as never
+      render(<MffaiView />)
+      await screen.findByTestId('mffai-page-chat')
+      r.setMainWidth(1376)
+      fireEvent.click(await screen.findByRole('button', { name: '添加账号' }))
+      writePreview('02-first-2-nomodel', PREVIEW_SIZE)
+      expect(existsSync(join(OUT!, '02-first-2-nomodel.html'))).toBe(true)
+    } finally { r.uninstall() }
+  })
+
+  const COMMANDS = [
+    { name: 'review', plugin: 'code-review', description: '审阅当前改动', argumentHint: '[路径]' },
+    { name: 'commit', plugin: 'git-helper', description: '生成提交说明并提交' },
+    { name: 'deploy-preview', plugin: 'vercel-tools', description: '部署预览环境', argumentHint: '<分支>' },
+  ]
 
   const FRAMES = [
     ['03-chat-1-active', PREVIEW_SIZE, 1376, 's1', 'open'],
@@ -195,7 +221,7 @@ describe.skipIf(!OUT)('preview screens', () => {
           calls: {
             ...(chatCalls() as object),
             'session.state': { session: sess, events, hasMore: false, lastSeq: events.at(-1)!.seq, open },
-            'plugins.commands': { commands: [] },
+            'plugins.commands': { commands: name === '03-chat-1-active' ? COMMANDS : [] },
             'executor.runs': { runs: [{ runId: 'r2', sessionId: 's2', turnId: 't1', executor: 'Claude Code', phase: 'ended', status: 'ok', queuedAt: 1, readOnly: false, isolation: 'own', worktree: { path: '~/.mff-ai/wt/r2', present: true }, changed: 2 }] },
           } as never,
         })
@@ -209,6 +235,10 @@ describe.skipIf(!OUT)('preview screens', () => {
         await screen.findByText(sid === 's1' ? /throw new Error/ : '好,正在等合并结果')
         if (sid === 's2') fireEvent.click(await screen.findByRole('button', { name: '会话' }))
         await waitFor(() => expect(document.querySelector('[data-run]')).not.toBeNull())
+        if (name === '03-chat-1-active') {
+          fireEvent.change(screen.getByRole('textbox', { name: '输入' }), { target: { value: '/' } })
+          await waitFor(() => expect(document.querySelectorAll('.mffai-slash [role=option]')).toHaveLength(3))
+        }
         writePreview(name, size)
         expect(existsSync(join(OUT!, `${name}.html`))).toBe(true)
       } finally { r.uninstall(); vi.unstubAllGlobals() }
