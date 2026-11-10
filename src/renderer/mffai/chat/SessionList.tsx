@@ -1,29 +1,31 @@
-// 会话列表(08 §7.1、§7.2):来源图标、标题、相对时间、待批红点、运行中、挂起、群聊、Telegram 名字;
-// 双击标题或行菜单改名,行菜单删除(有开着的轮时灰掉,块上已经是 运行中)。
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+// 会话列表(08 §7.1、§7.2;08b §4.3):按 今天 / 昨天 / 更早 分组,两行:来源色块、标题;
+// 副行 = 目录 / Telegram 名字 / 来源,加 群聊、挂起;右边是时间或运行圈,待批红点。窄列只用 CSS 藏副行。
+// 双击标题或行菜单改名,行菜单删除(有开着的轮时灰掉)。行菜单悬停或聚焦时出现。
+import { useEffect, useRef, useState } from 'react'
 import type { SessionOrigin, SessionSummary } from '@mffai/protocol'
 import { fmtRelTime } from '@shared/relTime'
-import { ThinkSpinner } from '../../views/chat/Spinners'
 import { Chip } from '../ui/Chip'
+import { Icon, type IconName } from '../shell/icons'
 import { label } from '../labels'
 
 const KNOWN: readonly SessionOrigin[] = ['app', 'im', 'schedule', 'acp']
 /** 不认识的来源和内核 originOf 一样归到定时 */
 export const originKind = (o: string): SessionOrigin => (KNOWN.includes(o as SessionOrigin) ? (o as SessionOrigin) : 'schedule')
 
-const svg = (children: ReactNode) => (
-  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{children}</svg>
-)
-const ICONS: Record<SessionOrigin, ReactNode> = {
-  app: svg(<><rect x="3" y="4" width="18" height="12" rx="2" /><line x1="8" y1="20" x2="16" y2="20" /><line x1="12" y1="16" x2="12" y2="20" /></>),
-  im: svg(<path d="M21 4 3 11l6 2 2 6 3-4 5 4z" />),
-  acp: svg(<><polyline points="8 7 3 12 8 17" /><polyline points="16 7 21 12 16 17" /></>),
-  schedule: svg(<><circle cx="12" cy="12" r="9" /><polyline points="12 7 12 12 15 14" /></>),
-}
+const ICONS: Record<SessionOrigin, IconName> = { app: 'monitor', im: 'send', acp: 'code', schedule: 'clock' }
 
 export function OriginIcon({ origin }: { origin: string }) {
   const k = originKind(origin)
-  return <span className="mffai-origin" data-origin={k} role="img" aria-label={label('origin', k)}>{ICONS[k]}</span>
+  return <span className="mffai-origin" data-origin={k} role="img" aria-label={label('origin', k)}><Icon name={ICONS[k]} size={13} /></span>
+}
+
+/** 本地时区的 今天 / 昨天 / 更早 */
+export function dayGroup(t: number, now: number): '今天' | '昨天' | '更早' {
+  const d = new Date(now)
+  d.setHours(0, 0, 0, 0)
+  const today = d.getTime()
+  d.setDate(d.getDate() - 1)
+  return t >= today ? '今天' : t >= d.getTime() ? '昨天' : '更早'
 }
 
 function Row({ s, on, imName, onSelect, onRename, onDelete, menuOpen, setMenu }: {
@@ -53,32 +55,42 @@ function Row({ s, on, imName, onSelect, onRename, onDelete, menuOpen, setMenu }:
     if (ok) { setEditing(null); setFailed(false) } else setFailed(true)
   }
   const running = !!s.open && !s.open.parked
+  const kind = originKind(s.origin)
   return (
     <li className={`mffai-sess${on ? ' on' : ''}`} role="option" aria-selected={on} onClick={() => { if (editing === null) onSelect() }}>
       <OriginIcon origin={s.origin} />
-      {editing === null ? (
-        <span className="mffai-sess-title" onDoubleClick={(e) => { e.stopPropagation(); begin() }}>{s.title}</span>
-      ) : (
-        <input
-          className="mffai-sess-edit" aria-label="标题" autoFocus value={editing} disabled={saving}
-          onClick={(e) => e.stopPropagation()}
-          onChange={(e) => setEditing(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void save() }
-            if (e.key === 'Escape') { e.preventDefault(); setEditing(null); setFailed(false) }
-          }}
-        />
-      )}
+      <span className="mffai-sess-main">
+        {editing === null ? (
+          <span className="mffai-sess-title" onDoubleClick={(e) => { e.stopPropagation(); begin() }}>{s.title}</span>
+        ) : (
+          <input
+            className="mffai-sess-edit" aria-label="标题" autoFocus value={editing} disabled={saving}
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) => setEditing(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void save() }
+              if (e.key === 'Escape') { e.preventDefault(); setEditing(null); setFailed(false) }
+            }}
+          />
+        )}
+        <span className="mffai-sess-sub">
+          {kind === 'app' ? (s.cwd && <span className="mffai-sess-cwd">{s.cwd}</span>)
+            : kind === 'im' ? <><span className="mffai-sess-via">Telegram</span>{imName && <> · <span className="mffai-sess-im">{imName}</span></>}</>
+            : <span className="mffai-sess-via">{label('origin', kind)}</span>}
+          {s.audience === 'group' && <Chip tone="line">群聊</Chip>}
+          {s.open?.parked && <Chip tone="warn">挂起</Chip>}
+        </span>
+      </span>
       {failed && <span className="mffai-fail">失败</span>}
-      {originKind(s.origin) === 'im' && imName && <span className="mffai-sess-im">{imName}</span>}
-      {s.audience === 'group' && <Chip>群聊</Chip>}
-      {running && <Chip tone="ok"><ThinkSpinner size={11} />运行中</Chip>}
-      {s.open?.parked && <Chip tone="warn">挂起</Chip>}
-      {s.pendingApprovals > 0 && <span className="mffai-sess-dot" aria-label={`待批 ${s.pendingApprovals}`}>{s.pendingApprovals}</span>}
-      <span className="mffai-sess-time">{fmtRelTime(s.updatedAt, Date.now())}</span>
+      <span className="mffai-sess-right">
+        {running
+          ? <span className="mffai-sess-run"><span className="mffai-spin" aria-hidden="true" /><span className="mffai-vh">运行中</span></span>
+          : <span className="mffai-sess-time">{fmtRelTime(s.updatedAt, Date.now())}</span>}
+        {s.pendingApprovals > 0 && <span className="mffai-sess-dot" aria-label={`待批 ${s.pendingApprovals}`}>{s.pendingApprovals}</span>}
+      </span>
       <span className="mffai-sess-menu">
         <button className="mffai-sess-more" aria-label="更多" aria-haspopup="menu" aria-expanded={menuOpen}
-          onClick={(e) => { e.stopPropagation(); setMenu(!menuOpen) }}>⋯</button>
+          onClick={(e) => { e.stopPropagation(); setMenu(!menuOpen) }}><Icon name="more" size={14} /></button>
         {menuOpen && (
           <span className="mffai-sess-pop" role="menu" onClick={(e) => e.stopPropagation()}>
             <button className="menu-item" role="menuitem" onClick={begin}>改名</button>
@@ -107,13 +119,21 @@ export function SessionList({ sessions, active, imNames, onSelect, onRename, onD
     return () => document.removeEventListener('click', close)
   }, [menu])
   const sorted = [...sessions].sort((a, b) => b.updatedAt - a.updatedAt)
+  const now = Date.now()
+  let group: string | undefined
   return (
     <ul className="mffai-sesslist" role="listbox" aria-label="会话">
-      {sorted.map((s) => (
-        <Row key={s.id} s={s} on={s.id === active} imName={imNames?.get(s.id)}
-          onSelect={() => onSelect(s.id)} onRename={(t) => onRename(s.id, t)} onDelete={() => onDelete(s)}
-          menuOpen={menu === s.id} setMenu={(o) => setMenu(o ? s.id : null)} />
-      ))}
+      {sorted.flatMap((s) => {
+        const g = dayGroup(s.updatedAt, now)
+        const head = g !== group ? <li key={`#${g}`} className="mffai-sessgh" role="presentation">{g}</li> : null
+        group = g
+        const row = (
+          <Row key={s.id} s={s} on={s.id === active} imName={imNames?.get(s.id)}
+            onSelect={() => onSelect(s.id)} onRename={(t) => onRename(s.id, t)} onDelete={() => onDelete(s)}
+            menuOpen={menu === s.id} setMenu={(o) => setMenu(o ? s.id : null)} />
+        )
+        return head ? [head, row] : [row]
+      })}
     </ul>
   )
 }

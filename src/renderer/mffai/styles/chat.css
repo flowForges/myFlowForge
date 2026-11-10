@@ -12,30 +12,63 @@
 .mffai-sandbox.full { color: var(--accent); border-color: currentColor; }
 .mffai-net, .mffai-run { font-family: var(--mono, monospace); color: var(--faint); }
 .mffai-parked { align-self: center; white-space: nowrap; }
-/* 对话页(08 §7) */
-.mffai-chat { flex-direction: row; gap: 0; min-height: 0; margin: -14px -16px; }
-.mffai-chat-side { flex: 0 0 248px; display: flex; flex-direction: column; gap: 8px; min-height: 0; padding: 12px 10px; border-right: 1px solid var(--border); }
-.mffai-chat-side > .set-btn { align-self: flex-start; }
-.mffai-sesslist { flex: 1; min-height: 0; margin: 0; padding: 0; list-style: none; overflow: auto; }
-.mffai-sess { position: relative; display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 7px; font-size: 12.5px; color: var(--fg-2); cursor: pointer; }
+/* 对话页三栏(08b §4.3):会话列 256(窄 208)| 对话列 | 活动面板(Task 5) */
+.mffai-chat { flex: 1; display: flex; flex-direction: row; gap: 0; min-height: 0; margin: -14px -16px; }
+.mffai-sesscol { position: relative; flex: 0 0 256px; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--border); background: var(--mffai-col-bg); }
+.mffai-sesscol.narrow { flex-basis: 208px; }
+.mffai-sesscol-top { display: flex; gap: 8px; padding: 12px 12px 4px; }
+.mffai-sesscol.narrow .mffai-sesscol-top { gap: 6px; padding: 12px 10px 4px; }
+.mffai-sesscol-top .mffai-sesscol-new { flex: 1; height: 28px; margin-top: 0; align-self: auto; }
+.mffai-sesscol-top .mffai-sesscol-filter { flex: 0 0 28px; width: 28px; height: 28px; padding: 0; }
+.mffai-sesscol-top .mffai-sesscol-filter.on, .mffai-sesscol-top .mffai-sesscol-filter[aria-expanded="true"] { color: var(--accent); border-color: var(--mffai-acc-line); background: var(--accent-dim); }
+.mffai-sessfilter { display: flex; margin: 4px 12px 0; }
+.mffai-sessfilter > button { flex: 1; justify-content: center; }
+.mffai-sesscol.narrow .mffai-sessfilter { display: none; }
+.mffai-sesscol.narrow .mffai-sessfilter.open { display: flex; position: absolute; top: 46px; right: 10px; left: 10px; z-index: 40; margin: 0; padding: 4px; border: 1px solid var(--border-2); border-radius: 10px; background: var(--mffai-panel-bg); box-shadow: var(--mffai-shadow); }
+.mffai-sesscol > .mffai-chip { align-self: flex-start; margin: 12px; }
+.mffai-sesslist { flex: 1; min-height: 0; margin: 0; padding: 0 6px 10px; list-style: none; overflow: auto; }
+.mffai-sesscol.narrow .mffai-sesslist { padding: 0 5px 10px; }
+.mffai-sessgh { padding: 12px 8px 6px; font-size: 11px; font-weight: 600; color: var(--faint); }
+.mffai-sess { position: relative; display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-radius: 8px; font-size: 12.5px; color: var(--fg-2); cursor: pointer; }
+.mffai-sesscol.narrow .mffai-sess { padding: 6px 7px; }
 .mffai-sess:hover { background: var(--surface); }
 .mffai-sess.on { background: var(--accent-dim); color: var(--fg); }
-.mffai-origin { display: inline-grid; place-items: center; flex: 0 0 auto; color: var(--faint); }
-.mffai-sess-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mffai-sess-edit { flex: 1; min-width: 0; height: 24px; padding: 0 6px; border-radius: 5px; border: 1px solid var(--accent); background: var(--bg); color: var(--fg); font-size: 12.5px; }
-.mffai-sess-im { color: var(--faint); white-space: nowrap; }
-.mffai-sess .mffai-chip { display: inline-flex; align-items: center; gap: 4px; padding: 0 6px; font-size: 11px; white-space: nowrap; }
-.mffai-sess-dot { min-width: 16px; padding: 0 4px; border-radius: 99px; background: var(--del); color: var(--mffai-on-status); font-size: 10.5px; font-weight: 600; line-height: 16px; text-align: center; }
+.mffai-origin { display: grid; place-items: center; flex: 0 0 24px; width: 24px; height: 24px; border-radius: 7px; background: var(--surface); color: var(--muted); }
+.mffai-origin[data-origin="im"] { color: var(--mffai-o-tg); background: var(--mffai-o-tg-bg); }
+.mffai-origin[data-origin="schedule"] { color: var(--mffai-o-sc); background: var(--mffai-o-sc-bg); }
+.mffai-origin[data-origin="acp"] { color: var(--mffai-o-ed); background: var(--mffai-o-ed-bg); }
+.mffai-sess.on .mffai-origin[data-origin="app"] { background: var(--bg-2); color: var(--fg-2); }
+.mffai-sess-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.mffai-sess-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mffai-sess.on .mffai-sess-title { font-weight: 550; }
+.mffai-sess-edit { min-width: 0; height: 22px; padding: 0 6px; border-radius: 5px; border: 1px solid var(--accent); background: var(--bg); color: var(--fg); font-size: 12.5px; }
+.mffai-sess-sub { display: flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; white-space: nowrap; font-size: 10.5px; color: var(--faint); }
+.mffai-sess-sub:empty { display: none; }
+.mffai-sesscol.narrow .mffai-sess-sub { display: none; }
+.mffai-sess-cwd { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--mono, monospace); }
+.mffai-sess-via, .mffai-sess-im { flex: 0 0 auto; }
+.mffai-sess-sub .mffai-chip { flex: 0 0 auto; height: 15px; padding: 0 5px; font-size: 9.5px; }
+.mffai-sess-right { flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
 .mffai-sess-time { flex: 0 0 auto; color: var(--faint); font-size: 11px; white-space: nowrap; }
-.mffai-sess-menu { position: relative; flex: 0 0 auto; }
-.mffai-sess-more { width: 20px; height: 20px; border-radius: 5px; color: var(--faint); opacity: 0; }
-.mffai-sess:hover .mffai-sess-more, .mffai-sess-more[aria-expanded="true"] { opacity: 1; }
-.mffai-sess-more:hover { background: var(--surface-2); color: var(--fg); }
-.mffai-sess-pop { position: absolute; top: calc(100% + 4px); right: 0; z-index: 40; display: flex; flex-direction: column; min-width: 96px; padding: 4px; border: 1px solid var(--border-2); border-radius: 8px; background: var(--bg-2); box-shadow: var(--shadow); }
+.mffai-sess-right .mffai-sess-time { font-family: var(--mono, monospace); font-size: 10px; }
+.mffai-sess-run { display: grid; place-items: center; }
+.mffai-sess-run .mffai-spin { width: 10px; height: 10px; border-width: 1.6px; }
+.mffai-vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.mffai-sess-dot { min-width: 16px; height: 16px; padding: 0 4px; border-radius: 99px; background: var(--err); color: var(--mffai-on-status); font-size: 10px; font-weight: 700; line-height: 16px; text-align: center; }
+.mffai-sess .mffai-fail { flex: 0 0 auto; font-size: 11px; }
+/* 行菜单:悬停或聚焦时浮在右侧,盖住时间 */
+.mffai-sess-menu { position: absolute; top: 50%; right: 6px; transform: translateY(-50%); opacity: 0; pointer-events: none; }
+.mffai-sess:hover .mffai-sess-menu, .mffai-sess:focus-within .mffai-sess-menu, .mffai-sess-menu:has([aria-expanded="true"]) { opacity: 1; pointer-events: auto; }
+.mffai-sess-more { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; color: var(--muted); background: var(--mffai-panel-bg); box-shadow: 0 0 0 1px var(--border); }
+.mffai-sess-more:hover, .mffai-sess-more[aria-expanded="true"] { color: var(--fg); }
+.mffai-sess-pop { position: absolute; top: calc(100% + 4px); right: 0; z-index: 40; display: flex; flex-direction: column; min-width: 96px; padding: 4px; border: 1px solid var(--border-2); border-radius: 8px; background: var(--mffai-panel-bg); box-shadow: var(--mffai-shadow); }
 .mffai-sess-pop .menu-item { width: 100%; padding: 6px 8px; border-radius: 6px; font-size: 12.5px; text-align: left; color: var(--fg-2); }
 .mffai-sess-pop .menu-item:hover:not(:disabled) { background: var(--surface); }
 .mffai-sess-pop .menu-item:disabled { opacity: .45; cursor: default; }
 .mffai-chat-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; overflow: auto; }
+/* 起始页:表单和推荐卡居中一列(表单外观在 Task 6) */
+.mffai-chat-main.mffai-chat-new { align-items: center; padding: 56px 24px 24px; }
+.mffai-chat-main.mffai-chat-new > * { width: min(680px, 100%); max-width: none; }
 .mffai-chat-body { flex: 1; min-height: 0; overflow: auto; }
 .mffai-newsess { max-width: 620px; }
 .mffai-newsess .mffai-row { padding: 4px 0; }

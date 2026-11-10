@@ -6,7 +6,10 @@ import { render } from '@testing-library/react'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { writePreview } from './preview'
-import { PREVIEW_SIZE, UI_DIFF, UI_ROWS, UI_TABLE } from './previewFixtures'
+import { CHAT_TG, PREVIEW_NARROW, PREVIEW_SIZE, UI_DIFF, UI_ROWS, UI_TABLE, chatSessions } from './previewFixtures'
+import { installResize } from './resize'
+import { ev } from './events'
+import { act } from '@testing-library/react'
 import { Chip, type ChipTone } from '../ui/Chip'
 import { CodeChip } from '../ui/CodeChip'
 import { AutoSwitch, UNSANDBOXED_AUTO_LABEL } from '../ui/AutoSwitch'
@@ -130,4 +133,39 @@ describe.skipIf(!OUT)('preview screens', () => {
     writePreview('02-first-4-fault', PREVIEW_SIZE)
     expect(existsSync(join(OUT!, '02-first-4-fault.html'))).toBe(true)
   })
+
+  const chatCalls = () => ({
+    status: { state: 'running', uptimeMs: 1, rssMb: 112, version: '0.8.2', plugins: [{ id: 'a', state: 'active' }, { id: 'b', state: 'active' }, { id: 'c', state: 'active' }, { id: 'd', state: 'active' }], sandbox: { level: 'full', missing: [], autoDegraded: false } },
+    'session.list': { sessions: chatSessions(Date.now()) },
+    'channel.telegram.chats': CHAT_TG.chats,
+    'channel.telegram.status': CHAT_TG.status,
+    'memory.health': { dbBytes: 0, rawRows: 0, noteRows: 0, cursorLag: 0, pendingProposals: 0, problems: [] },
+    'models.catalog': { presets: [{ id: 'p', name: 'Anthropic' }], models: { p: [{ id: 'm1', name: 'Claude Sonnet 4.5', context: 1, output: 1, image: false, reasoning: 'none', toolCall: true }] }, default: { accountId: 'a1', modelId: 'm1' } },
+    'models.accounts': { accounts: [{ id: 'a1', presetId: 'p', label: 'Claude', state: 'ok' }], secretsBackend: 'keychain' },
+    'models.quota': { windows: [{ label: '5h', usedPercent: 42 }] },
+    'permissions.get': { config: { rules: [], network: { allow: [] }, sandbox: { enabled: true, allowLoopback: false }, allowUnsandboxedAuto: false }, defaults: [], errors: [], sandbox: { level: 'full', missing: [], autoDegraded: false } },
+    'events.tail': { events: [] },
+  }) as never
+
+  for (const [name, size, main] of [['02-first-3-ready', PREVIEW_SIZE, 1376], ['03-chat-4-narrow-list', PREVIEW_NARROW, 1036]] as const) {
+    it(`${name}: the session column beside the new-session form`, async () => {
+      route.set({ page: 'chat' })
+      const r = installResize()
+      try {
+        const f = installFakeForge({ state: { proxyStale: true, rssMb: 112, pluginsActive: 4, supervisor: { state: 'running', version: '0.8.2', restarts: 0, protocolVersion: 3 } }, calls: chatCalls() })
+        const model = { id: 'm1', name: 'Claude Sonnet 4.5', context: 1, output: 1, image: false, reasoning: 'none' as const, toolCall: true }
+        f.mffai.models.catalog = async () => ({ presets: [], models: { p: [model] }, default: { accountId: 'a1', modelId: 'm1' } }) as never
+        f.mffai.models.accounts = async () => ({ accounts: [{ id: 'a1', presetId: 'p', label: 'Anthropic', state: 'ok' }], secretsBackend: 'keychain' }) as never
+        render(<MffaiView />)
+        await screen.findByTestId('mffai-page-chat')
+        r.setMainWidth(main)
+        await waitFor(() => expect(document.querySelectorAll('.mffai-sess')).toHaveLength(9))
+        await screen.findByText('张伟')
+        act(() => { f.emit(ev('memory.recommendation', { id: 'r1', category: 'routine', habitId: 'h1', text: '周一上午通常在 forge-api 看周报数据', cwd: '~/work/forge-api' })) })
+        await screen.findByText('周一上午通常在 forge-api 看周报数据')
+        writePreview(name, size)
+        expect(existsSync(join(OUT!, `${name}.html`))).toBe(true)
+      } finally { r.uninstall() }
+    })
+  }
 })

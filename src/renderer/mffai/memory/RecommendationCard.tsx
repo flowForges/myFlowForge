@@ -6,6 +6,7 @@ import type { MemoryRecommendationPayload } from '@mffai/protocol'
 import { call, cmd, toCallError } from '../rpc'
 import { useMffaiEvent } from '../events'
 import { route } from '../route'
+import { Icon } from '../shell/icons'
 
 function RecRow({ rec, onOpened, onDismissed }: {
   rec: MemoryRecommendationPayload
@@ -40,6 +41,7 @@ function RecRow({ rec, onOpened, onDismissed }: {
 
   return (
     <div className="mffai-card mffai-rec" data-rec={rec.id}>
+      <span className="mffai-rec-ic"><Icon name="cal" size={16} /></span>
       <span className="mffai-v">{rec.text}</span>
       <div className="mffai-actions">
         <button className="set-btn mffai-primary" onClick={open}>开会话</button>

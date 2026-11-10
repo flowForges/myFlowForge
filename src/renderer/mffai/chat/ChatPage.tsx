@@ -1,4 +1,5 @@
-// 对话页(08 §7):左栏会话列表 + 新会话,右边是选中的会话(SessionPane:各轮的内容 + 输入框)或新会话表单。
+// 对话页(08 §7;08b §4.3):左边会话列(SessionColumn),右边是选中的会话(SessionPane:各轮的内容 + 输入框)或新会话表单。
+// 主区窄于 LIST_NARROW_BELOW 时会话列变窄;量不到宽度(jsdom)按宽处理(R4)。
 // 选中、新会话、去合并都经 route。改名、发送重试时用同一个 commandId(超时后的重试才有回执重放)。
 // 页顶的习惯推荐卡片(08 §12.4)和对话本身无关,单独一个组件,纯事件驱动。
 import { useRef, useState } from 'react'
@@ -7,11 +8,12 @@ import { call, cmd, retryable } from '../rpc'
 import { useMffaiEvent } from '../events'
 import { route } from '../route'
 import { useRoute } from '../useRoute'
-import { Chip } from '../ui/Chip'
 import { DeleteSources } from '../ui/DeleteSources'
 import { RecommendationCard } from '../memory/RecommendationCard'
 import { useSessions } from './useSessions'
-import { SessionList } from './SessionList'
+import { SessionColumn } from './SessionColumn'
+import { useMainWidth } from '../useMainWidth'
+import { LIST_NARROW_BELOW } from '../layout'
 import { NewSession } from './NewSession'
 import { SessionPane } from './SessionPane'
 import { DeleteSession } from './DeleteSession'
@@ -25,6 +27,8 @@ export default function ChatPage() {
   const [notes, setNotes] = useState<string[] | null>(null)
   const renameCmd = useRef(retryable()).current
   const sendCmd = useRef(retryable()).current
+  const width = useMainWidth()
+  const narrow = width !== undefined && width < LIST_NARROW_BELOW
 
   const activeId = r.newSession ? undefined : r.sessionId
   const active = activeId ? sessions.find((s) => s.id === activeId) : undefined
@@ -53,17 +57,13 @@ export default function ChatPage() {
 
   return (
     <div className="mffai-pane mffai-chatroot">
-      <RecommendationCard />
       <div className="mffai-chat">
-        <aside className="mffai-chat-side">
-          <button className="set-btn" onClick={() => route.set({ page: 'chat', newSession: {} })}>新会话</button>
-          {unsupported
-            ? <Chip>不支持</Chip>
-            : <SessionList sessions={sessions} active={activeId} imNames={imNames}
-                onSelect={(id) => route.set({ page: 'chat', sessionId: id })}
-                onRename={rename} onDelete={setDeleting} />}
-        </aside>
-        <section className="mffai-chat-main">
+        <SessionColumn sessions={sessions} active={activeId} imNames={imNames} unsupported={unsupported} narrow={narrow}
+          onNew={() => route.set({ page: 'chat', newSession: {} })}
+          onSelect={(id) => route.set({ page: 'chat', sessionId: id })}
+          onRename={rename} onDelete={setDeleting} />
+        <section className={`mffai-chat-main${activeId ? '' : ' mffai-chat-new'}`}>
+          <RecommendationCard />
           {activeId ? (
             <SessionPane
               key={activeId}

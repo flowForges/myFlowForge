@@ -10,6 +10,7 @@ import { PageHeader, PAGE_TITLE } from './shell/PageHeader'
 import { HeaderSlotCtx } from './shell/headerSlot'
 import { PowerButton } from './shell/Power'
 import { FaultPanel } from './shell/FaultPanel'
+import { MainWidthProvider } from './useMainWidth'
 import './mffai.css'
 
 /** 监督进程 50 + worker 51 MB(Task 10 实测),向上取整到 10 */
@@ -40,14 +41,14 @@ function Shell({ counts, strip, power }: { counts: NavCounts; strip: ReactNode; 
         onSelect={(p) => route.set({ page: p })}
         power={power}
       />
-      <div className="mffai-main">
+      <MainWidthProvider>
         <HeaderSlotCtx.Provider value={slot}>
           <PageHeader title={PAGE_TITLE[page]} pill={strip} slotRef={setSlot} />
           <Suspense fallback={null}>
             <div className="mffai-pagebox" data-testid={`mffai-page-${page}`}><Page /></div>
           </Suspense>
         </HeaderSlotCtx.Provider>
-      </div>
+      </MainWidthProvider>
     </>
   )
 }

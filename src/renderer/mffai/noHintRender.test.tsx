@@ -36,6 +36,9 @@ import { fail, installFakeForge, RUNNING_STATE, type CallTable, type FakeForge }
 import { ev, resetSeq, userMsg } from './test/events'
 import { findHints } from './test/noHint'
 import { tgCalls, tgStatus } from './test/telegram'
+import { SessionColumn } from './chat/SessionColumn'
+import { MainWidthProvider } from './useMainWidth'
+import { installResize } from './test/resize'
 
 const roots = { data: '/d/mff-ai', worktrees: '/d/mff-ai-worktrees', imWorktrees: '/d/mff-ai-im', plugins: '/d/mff-ai-plugins', keychain: 'myflowforge-mffai/x' }
 
@@ -704,6 +707,33 @@ const ROWS: Row[] = [
       document.body.appendChild(a)
       render(<Confirm title="合并" rows={[['运行', 'r1'], ['改动', '3']]} keep={['worktree']} confirmLabel="合并" anchor={a} requireTyped="r1" onCancel={() => {}} onConfirm={() => {}} />)
       expect(document.querySelector('.confirm-overlay.mffai-anchored')).not.toBeNull()
+    },
+  },
+  ...([false, true] as const).map((narrow): Row => ({
+    name: `session column: ${narrow ? 'narrow' : 'wide'}`,
+    mount: () => {
+      const s = [
+        summary('a', { title: '本机', cwd: '/w', pendingApprovals: 2, open: { turnId: 't', parked: false } }),
+        summary('b', { title: '手机', origin: 'im', audience: 'group', open: { turnId: 't', parked: true } }),
+        summary('c', { title: '编辑器', origin: 'acp' }),
+        summary('d', { title: '定时', origin: 'schedule', updatedAt: Date.now() }),
+      ]
+      render(<SessionColumn sessions={s} active="a" imNames={new Map([['b', 'Alice']])} unsupported={false} narrow={narrow}
+        onNew={() => {}} onSelect={() => {}} onRename={async () => true} onDelete={() => {}} />)
+      if (narrow) fireEvent.click(screen.getByRole('button', { name: '筛选' }))
+      fireEvent.click(within(document.querySelector('.mffai-sess') as HTMLElement).getByRole('button', { name: '更多' }))
+      expect(document.querySelector('.mffai-sesscol')).not.toBeNull()
+    },
+  })),
+  {
+    name: 'chat page: three columns at 1199 (narrow column)',
+    mount: async () => {
+      const r = installResize()
+      try {
+        render(<MainWidthProvider><ChatPage /></MainWidthProvider>)
+        r.setMainWidth(1199)
+        await waitFor(() => expect(document.querySelector('.mffai-sesscol.narrow .mffai-sess')).not.toBeNull())
+      } finally { r.uninstall() }
     },
   },
 ]

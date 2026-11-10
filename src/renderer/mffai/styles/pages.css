@@ -50,7 +50,12 @@
 .mffai-memory { gap: 14px; }
 .mffai-chatroot { flex-direction: column; }
 .mffai-recs { display: flex; flex-direction: column; gap: 8px; }
-.mffai-rec .mffai-v { display: block; margin-bottom: 4px; }
+.mffai-recs .mffai-rec { max-width: none; flex-direction: row; align-items: center; gap: 12px; padding: 14px 16px; border-radius: 11px; border-color: var(--mffai-acc-line); background: var(--mffai-panel-bg); }
+.mffai-rec-ic { display: grid; place-items: center; flex: 0 0 34px; width: 34px; height: 34px; border-radius: 9px; background: var(--accent-dim); color: var(--accent); }
+.mffai-rec .mffai-v { display: block; flex: 1; min-width: 0; font-size: 13px; color: var(--fg); }
+.mffai-rec .mffai-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; margin: 0; }
+.mffai-rec .mffai-actions .mffai-primary { margin-top: 0; height: 28px; }
+.mffai-rec .mffai-actions .set-btn:not(.mffai-primary) { height: 28px; background: transparent; border-color: transparent; }
 .mffai-fileeditor { max-width: 720px; }
 .mffai-filebody { min-height: 140px; font-family: var(--mono, monospace); font-size: 12.5px; }
 .mffai-profile { gap: 14px; }
