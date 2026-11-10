@@ -516,6 +516,29 @@ const ROWS: Row[] = [
     },
   },
   {
+    name: 'conn 08b: Telegram status card, live pairing panel with ring, paired card, project rows with warn switch rows, chats',
+    mount: async (f) => {
+      f.script({
+        ...tgCalls(tgStatus({
+          state: 'conflict', reason: 'webhook_set', undelivered: 2, problems: ['save_failed'],
+          paired: [{ accountId: '42', name: 'Ann', pairedAt: 1 }],
+        })),
+        'permissions.get': perms('partial'),
+        'channel.telegram.chats': { chats: [{ chatId: 'c1', accountId: '42', sessionId: 's1', project: 'api', model: { accountId: 'a1', modelId: 'm1' }, queued: 1, running: true }], worktrees: [] },
+        'channel.telegram.pairing.begin': () => ({ code: 'AB12-CD34', expiresAt: Date.now() + 60_000, link: 'https://t.me/my_test_bot?start=AB12CD34' }),
+      })
+      render(<ConnectionsPage />)
+      fireEvent.click(screen.getByRole('tab', { name: 'Telegram' }))
+      await screen.findByTestId('mffai-tg-chat')
+      await waitFor(() => expect(document.querySelector('[data-project-row]')).not.toBeNull())
+      expect(findHints()).toEqual([])
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: '开始配对' })) })
+      await screen.findByText('AB12-CD34')
+      expect(document.querySelector('.mffai-ring')).not.toBeNull()
+      expect(findHints()).toEqual([])
+    },
+  },
+  {
     name: 'connections: Telegram unsupported',
     mount: async () => {
       render(<ConnectionsPage />)

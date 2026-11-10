@@ -5,6 +5,7 @@
 // 每次都在最新的配置上改(不会拿旧的展开把别处刚改的 enabled 翻回去)。
 import { useEffect, useRef, useState } from 'react'
 import type { SandboxStatus, TelegramConfig, TelegramProject } from '@mffai/protocol'
+import { Icon } from '../shell/icons'
 import { call, isUnsupported, retryable, toCallError } from '../rpc'
 import { label } from '../labels'
 import { AutoSwitch } from '../ui/AutoSwitch'
@@ -140,23 +141,34 @@ export function Projects({ config, level, saver }: {
 
   return (
     <div className="mffai-tg-projects">
-      {rows.map(({ key, p }) => {
-        const b = bad.get(key)
-        return (
-          <div key={key} className={`mffai-row${b ? ' bad' : ''}`} data-project-row {...(b && { 'data-invalid': '' })}>
-            <input aria-label="别名" aria-invalid={b?.name || undefined} value={p.name} onChange={(e) => edit(key, { name: e.target.value })} />
-            <PathField kind="directory" label="路径" invalid={b?.path} value={p.path} onChange={(path) => edit(key, { path })} />
-            {/* 非 full 时只许关:开着的要能关掉,不然整份配置都存不上 */}
-            <AutoSwitch checked={p.auto} disabled={!autoOk && !p.auto} onChange={(auto) => edit(key, { auto })} />
-            {!autoOk && level && <Chip tone="warn">{label('level', level)}</Chip>}
-            {b?.code && <CodeChip code={b.code} />}
-            <button className="set-btn" onClick={() => remove(key)}>删除</button>
-          </div>
-        )
-      })}
+      <div className="mffai-sech">
+        <span>项目</span>
+        <span className="mffai-count">{rows.length}</span>
+        <span className="mffai-spring" />
+        <button className="set-btn" aria-label="添加项目" onClick={add}><Icon name="plus" size={12} />添加</button>
+      </div>
+      <div className="mffai-tgcard mffai-tg-plist">
+        {rows.map(({ key, p }) => {
+          const b = bad.get(key)
+          return (
+            <div key={key} className={`mffai-row${b ? ' bad' : ''}`} data-project-row {...(b && { 'data-invalid': '' })}>
+              <div className="mffai-tg-prow">
+                <input aria-label="别名" aria-invalid={b?.name || undefined} value={p.name} onChange={(e) => edit(key, { name: e.target.value })} />
+                <PathField kind="directory" label="路径" invalid={b?.path} value={p.path} onChange={(path) => edit(key, { path })} iconOnly />
+                <button className="set-btn mffai-iconbtn mffai-danger" onClick={() => remove(key)}><Icon name="trash" size={14} /><span className="mffai-sr">删除</span></button>
+              </div>
+              <div className="mffai-tg-pauto">
+                {/* 非 full 时只许关:开着的要能关掉,不然整份配置都存不上 */}
+                <AutoSwitch checked={p.auto} disabled={!autoOk && !p.auto} onChange={(auto) => edit(key, { auto })} />
+                {!autoOk && level && <Chip tone="warn">{label('level', level)}</Chip>}
+                {b?.code && <CodeChip code={b.code} />}
+              </div>
+            </div>
+          )
+        })}
+      </div>
       <div className="mffai-actions">
-        <button className="set-btn" onClick={add}>添加项目</button>
-        <button className="set-btn" disabled={!dirty || saver.busy} onClick={() => void submit()}>保存</button>
+        <button className="set-btn mffai-primary" disabled={!dirty || saver.busy} onClick={() => void submit()}>保存</button>
         <SaveFailureChip failure={failure} />
       </div>
     </div>

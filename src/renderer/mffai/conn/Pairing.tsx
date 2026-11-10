@@ -3,6 +3,7 @@
 // 不进铃铛、不进日志、不进存储;出错只记方法和错误码。链接只认主进程放行的那一种形状
 // (host.ts TELEGRAM_START),二维码的内容就是链接,它的名字不带码。
 import { useEffect, useRef, useState } from 'react'
+import { Icon } from '../shell/icons'
 import { QrCode } from '../../settings/QrCode'
 import { call, isUnsupported, toCallError } from '../rpc'
 import { useMffaiEvent } from '../events'
@@ -14,7 +15,7 @@ const ERR_INVALID = -32602
 /** 和 src/main/mffai/host.ts 的 TELEGRAM_START 一致 */
 const TELEGRAM_START = /^https:\/\/t\.me\/[A-Za-z0-9_]{5,32}\?start=[A-Za-z0-9_-]+$/
 
-type Active = { code: string; expiresAt: number; link?: string }
+type Active = { code: string; expiresAt: number; from: number; link?: string }
 type Failure = { code?: string; unsupported?: boolean }
 
 export function Pairing({ active, onChanged }: { active: boolean; onChanged?: () => void }) {
@@ -59,7 +60,7 @@ export function Pairing({ active, onChanged }: { active: boolean; onChanged?: ()
         void call('channel.telegram.pairing.cancel', {}).catch((e: unknown) => console.error('mffai channel.telegram.pairing.cancel', toCallError(e).code))
         return
       }
-      setPair({ code: r.code, expiresAt: r.expiresAt, ...(r.link && TELEGRAM_START.test(r.link) && { link: r.link }) })
+      setPair({ code: r.code, expiresAt: r.expiresAt, from: Date.now(), ...(r.link && TELEGRAM_START.test(r.link) && { link: r.link }) })
       changed.current?.()
     } catch (e) {
       fail('channel.telegram.pairing.begin', e)
@@ -88,21 +89,27 @@ export function Pairing({ active, onChanged }: { active: boolean; onChanged?: ()
 
   const open = (link: string) => void window.forge.mffai.openExternal(link).catch((e: unknown) => console.error('mffai openExternal', toCallError(e).code))
 
+  const copy = (link: string) => void Promise.resolve(navigator.clipboard?.writeText(link)).catch(() => console.error('mffai clipboard'))
+
   return (
-    <div className="mffai-pairing">
+    <div className={`mffai-pairing mffai-tgcard${pair ? ' live' : ''}`}>
       {pair ? (
-        <>
-          <div className="mffai-row">
-            <span className="mffai-paircode">{pair.code}</span>
-            <Countdown until={pair.expiresAt} onDone={() => { setPair(null); changed.current?.() }} />
-            {pair.link && <button className="set-btn" onClick={() => open(pair.link!)}>打开链接</button>}
-            <button className="set-btn" onClick={() => void cancel()}>取消</button>
-          </div>
+        <div className="mffai-pair-live">
           {pair.link && <QrCode text={pair.link} alt="配对二维码" />}
-        </>
+          <div className="mffai-pair-main">
+            <Chip tone="acc" dot>配对中</Chip>
+            <span className="mffai-paircode">{pair.code}</span>
+            <Countdown from={pair.from} until={pair.expiresAt} onDone={() => { setPair(null); changed.current?.() }} />
+            <div className="mffai-pair-acts">
+              {pair.link && <button className="set-btn mffai-primary" aria-label="打开链接" onClick={() => open(pair.link!)}><Icon name="ext" size={13} />在 Telegram 打开</button>}
+              {pair.link && <button className="set-btn" onClick={() => copy(pair.link!)}><Icon name="copy" size={13} />复制链接</button>}
+              <button className="set-btn" onClick={() => void cancel()}>取消</button>
+            </div>
+          </div>
+        </div>
       ) : (
         <div className="mffai-row">
-          <button className="set-btn" disabled={busy} onClick={() => void begin()}>开始配对</button>
+          <button className="set-btn mffai-primary" disabled={busy} onClick={() => void begin()}>开始配对</button>
           {active && <Chip tone="warn">配对中</Chip>}
           {active && <button className="set-btn" disabled={busy} onClick={() => void cancel()}>取消</button>}
         </div>

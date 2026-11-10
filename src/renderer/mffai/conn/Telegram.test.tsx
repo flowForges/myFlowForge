@@ -306,3 +306,33 @@ describe('Telegram chats', () => {
     expect(route.get()).toEqual({ page: 'chat', sessionId: 's1' })
   })
 })
+
+describe('Telegram 08b layout', () => {
+  it('two columns: status card, token and 已配对 on the left; pairing, projects and chats on the right', async () => {
+    await mount({ ...tgCalls(tgStatus({ paired: [{ accountId: '42', name: 'Ann', pairedAt: 1 }] })),
+      'channel.telegram.chats': { chats: [{ chatId: 'c1', accountId: '42', sessionId: 's1', project: 'api', queued: 0, running: false }], worktrees: [] } })
+    await screen.findByTestId('mffai-tg-chat')
+    const left = document.querySelector('.mffai-tg-cols > .mffai-tg-left')!
+    const right = document.querySelector('.mffai-tg-cols > .mffai-tg-right')!
+    const card = left.querySelector('.mffai-tgcard')!
+    expect(card.contains(screen.getByTestId('mffai-tg-status'))).toBe(true)
+    expect(card.contains(screen.getByRole('table'))).toBe(true)
+    expect(card.contains(screen.getByLabelText('令牌'))).toBe(true)
+    expect(card.contains(screen.getByLabelText('过期(分钟)'))).toBe(true)
+    expect(card.contains(screen.getByRole('switch', { name: '启用' }))).toBe(true)
+    expect(left.querySelector('.mffai-paired')!.textContent).toContain('Ann')
+    expect(left.textContent).toContain('已配对')
+    expect(left.querySelector('.mffai-pairing')).toBeNull()
+    expect(right.querySelector('.mffai-pairing')).not.toBeNull()
+    expect(right.querySelector('[data-project-row]')).not.toBeNull()
+    expect(right.querySelector('[data-testid=mffai-tg-chat]')).not.toBeNull()
+    expect(right.textContent).toContain('聊天')
+  })
+
+  it('the dropped counters are a five-cell row and 清除令牌 is a danger button next to 保存令牌', async () => {
+    await mount()
+    expect(document.querySelectorAll('.mffai-tg-dropped td')).toHaveLength(5)
+    expect(screen.getByRole('button', { name: '清除令牌' }).className).toContain('mffai-danger')
+    expect(screen.getByRole('button', { name: '保存令牌' }).className).toContain('mffai-primary')
+  })
+})

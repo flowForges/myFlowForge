@@ -180,4 +180,18 @@ describe('Projects', () => {
     act(() => { save.click(); save.click() })
     expect(sent()).toHaveLength(1)
   })
+
+  it('08b: a head with the count and an add button; each row has a folder button and a delete icon; the switch is a warn row', () => {
+    f = installFakeForge()
+    render(<Projects config={config()} level="full" onSaved={() => {}} />)
+    expect(document.querySelector('.mffai-tg-projects .mffai-sech')!.textContent).toContain('项目')
+    expect(document.querySelector('.mffai-tg-projects .mffai-sech .mffai-count')!.textContent).toBe('2')
+    expect(screen.getByRole('button', { name: '添加项目' }).textContent).toBe('添加')
+    for (const r of rows()) {
+      expect(r.querySelector('.mffai-pathfield button svg')).not.toBeNull()
+      expect(within(r).getByRole('button', { name: '删除' }).querySelector('svg')).not.toBeNull()
+      expect(r.querySelector('label.mffai-switch.mffai-warnrow')).not.toBeNull()
+    }
+    expect(rows()[0].querySelector('.mffai-warnrow')!.textContent).toBe(AUTO_LABEL)
+  })
 })

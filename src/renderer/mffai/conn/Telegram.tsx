@@ -7,6 +7,7 @@ import { fmtRelTime } from '@shared/relTime'
 import { call, isUnsupported, retryable, toCallError } from '../rpc'
 import { useMffaiEvent, useMffaiReset } from '../events'
 import { route } from '../route'
+import { Icon } from '../shell/icons'
 import { label } from '../labels'
 import { Chip, type ChipTone } from '../ui/Chip'
 import { CodeChip } from '../ui/CodeChip'
@@ -67,7 +68,7 @@ function useAction() {
   return { run, busy, failure, alive }
 }
 
-function StatusRow({ s, onChanged }: { s: TelegramStatus; onChanged: () => void }) {
+function StatusRow({ s, onChanged, enable }: { s: TelegramStatus; onChanged: () => void; enable?: ReactNode }) {
   const retry = useRef(retryable()).current
   const { run, busy, failure } = useAction()
   const [secrets, secretsTone] = SECRETS[s.secretsBackend] ?? [s.secretsBackend, 'muted']
@@ -78,17 +79,25 @@ function StatusRow({ s, onChanged }: { s: TelegramStatus; onChanged: () => void 
   })
   return (
     <>
-      <div className="mffai-row" data-testid="mffai-tg-status">
-        <Chip tone={STATE_TONE[s.state] ?? 'muted'}>{label('channelState', s.state)}</Chip>
-        {s.reason && <CodeChip code={s.reason} />}
-        {s.bot && <span>{`@${s.bot.username}`}</span>}
-        <Chip tone={secretsTone}>{secrets}</Chip>
-        <Chip>{PROXY[s.proxy] ?? s.proxy}</Chip>
-        {s.lastOkAt !== undefined && <span className="mffai-k">{`最后在线 ${fmtRelTime(s.lastOkAt, Date.now())}`}</span>}
-        {s.undelivered > 0 && <Chip tone="warn">{`未送达 ${s.undelivered}`}</Chip>}
-        {s.problems.map((p) => <CodeChip key={p} code={p} />)}
-        {s.state === 'conflict' && <button className="set-btn" disabled={busy} onClick={clearWebhook}>清除 webhook</button>}
-        <FailChip failure={failure} />
+      <div className="mffai-tg-head">
+        <span className="mffai-tg-logo"><Icon name="send" size={18} /></span>
+        <div className="mffai-tg-id" data-testid="mffai-tg-status">
+          <div className="mffai-tg-name">
+            {s.bot && <span className="mffai-tg-bot">{`@${s.bot.username}`}</span>}
+            <Chip tone={STATE_TONE[s.state] ?? 'muted'} dot>{label('channelState', s.state)}</Chip>
+            {s.reason && <CodeChip code={s.reason} />}
+          </div>
+          <div className="mffai-tg-meta">
+            <Chip tone={secretsTone}>{secrets}</Chip>
+            <Chip tone="line">{PROXY[s.proxy] ?? s.proxy}</Chip>
+            {s.lastOkAt !== undefined && <span className="mffai-k">{`最后在线 ${fmtRelTime(s.lastOkAt, Date.now())}`}</span>}
+            {s.undelivered > 0 && <Chip tone="warn">{`未送达 ${s.undelivered}`}</Chip>}
+            {s.problems.map((p) => <CodeChip key={p} code={p} />)}
+            {s.state === 'conflict' && <button className="set-btn" disabled={busy} onClick={clearWebhook}>清除 webhook</button>}
+            <FailChip failure={failure} />
+          </div>
+        </div>
+        {enable}
       </div>
       <table className="mffai-tg-dropped">
         <thead><tr>{DROPPED.map(([k, l]) => <th key={k}>{l}</th>)}</tr></thead>
@@ -124,12 +133,13 @@ function Token({ s, onChanged }: { s: TelegramStatus; onChanged: () => void }) {
   })
 
   return (
-    <div className="mffai-row">
+    <div className="mffai-row mffai-tg-token">
+      <span className="mffai-tg-lab">令牌</span>
       <input ref={input} type="password" aria-label="令牌" autoComplete="off" spellCheck={false}
         onChange={(e) => { setHasText(e.target.value.length > 0); setSaved(null) }} />
-      <button className="set-btn" disabled={!hasText || busy} onClick={save}>保存令牌</button>
+      <button className="set-btn mffai-primary" disabled={!hasText || busy} onClick={save}>保存令牌</button>
       {saved && <Chip tone="ok">{`@${saved}`}</Chip>}
-      {s.tokenSet && <button className="set-btn" disabled={busy} onClick={() => setConfirming(true)}>清除令牌</button>}
+      {s.tokenSet && <button className="set-btn mffai-danger" disabled={busy} onClick={() => setConfirming(true)}>清除令牌</button>}
       {!confirming && <FailChip failure={failure} />}
       {confirming && (
         <Confirm title="清除令牌" rows={[['机器人', s.bot ? `@${s.bot.username}` : '-']]} confirmLabel="清除令牌" danger busy={busy}
@@ -141,24 +151,38 @@ function Token({ s, onChanged }: { s: TelegramStatus; onChanged: () => void }) {
   )
 }
 
-function Settings({ config, saver }: { config: FullConfig; saver: ConfigSaver }) {
-  const [minutes, setMinutes] = useState(String(config.staleMinutes))
-  useEffect(() => { setMinutes(String(config.staleMinutes)) }, [config.staleMinutes])
+function useSend(saver: ConfigSaver) {
   const [failure, setFailure] = useState<SaveFailure | null>(null)
-  const { busy } = saver
-  const n = Number(minutes)
-  const minutesOk = minutes.trim() !== '' && Number.isFinite(n) && n !== config.staleMinutes
   const send = async (patch: Partial<FullConfig>) => {
     setFailure(null)
     const out = await saver.save(patch)
     if (out !== 'ok' && out !== 'skipped') setFailure(out)
   }
+  return { send, failure }
+}
+
+function EnableSwitch({ config, saver }: { config: FullConfig; saver: ConfigSaver }) {
+  const { send, failure } = useSend(saver)
   return (
-    <div className="mffai-row">
+    <>
+      <SaveFailureChip failure={failure} />
       <label className="mffai-switch">
-        <input type="checkbox" role="switch" checked={config.enabled} disabled={busy} onChange={(e) => void send({ enabled: e.target.checked })} />
-        启用
+        <span className="mffai-sr">启用</span>
+        <input type="checkbox" role="switch" checked={config.enabled} disabled={saver.busy} onChange={(e) => void send({ enabled: e.target.checked })} />
       </label>
+    </>
+  )
+}
+
+function Minutes({ config, saver }: { config: FullConfig; saver: ConfigSaver }) {
+  const [minutes, setMinutes] = useState(String(config.staleMinutes))
+  useEffect(() => { setMinutes(String(config.staleMinutes)) }, [config.staleMinutes])
+  const { send, failure } = useSend(saver)
+  const { busy } = saver
+  const n = Number(minutes)
+  const minutesOk = minutes.trim() !== '' && Number.isFinite(n) && n !== config.staleMinutes
+  return (
+    <div className="mffai-row mffai-tg-minutes">
       <label className="mffai-field">
         过期(分钟)
         <input type="number" min={1} value={minutes} onChange={(e) => setMinutes(e.target.value)} />
@@ -186,12 +210,14 @@ function Paired({ s, onChanged }: { s: TelegramStatus; onChanged: () => void }) 
     })
   }
   return (
-    <>
+    <div className="mffai-tgcard mffai-paired">
       {s.paired.map((p) => (
         <div key={p.accountId} className="mffai-row">
+          <span className="mffai-tg-av" aria-hidden="true">{Array.from(p.name)[0]}</span>
           <span>{p.name}</span>
-          <span className="mffai-k">{fmtRelTime(p.pairedAt, Date.now())}</span>
-          <button className="set-btn" onClick={() => setTarget({ accountId: p.accountId, name: p.name })}>撤销</button>
+          <span className="mffai-k mffai-mono">{fmtRelTime(p.pairedAt, Date.now())}</span>
+          <span className="mffai-spring" />
+          <button className="set-btn mffai-danger" onClick={() => setTarget({ accountId: p.accountId, name: p.name })}>撤销</button>
         </div>
       ))}
       {target && (
@@ -200,31 +226,36 @@ function Paired({ s, onChanged }: { s: TelegramStatus; onChanged: () => void }) 
           <FailChip failure={failure} />
         </Confirm>
       )}
-    </>
+    </div>
   )
 }
 
 function Chats({ chats }: { chats: TelegramChats['chats'] }) {
   return (
-    <>
+    <div className="mffai-tgcard mffai-tg-chats">
       {chats.map((c) => (
         <div key={c.chatId} className="mffai-row" data-testid="mffai-tg-chat">
-          <button className="set-btn" onClick={() => route.set({ page: 'chat', sessionId: c.sessionId })}>{c.sessionId}</button>
-          {c.project && <span>{c.project}</span>}
+          <Icon name="send" size={14} />
+          <button className="txt-btn mffai-tlink" onClick={() => route.set({ page: 'chat', sessionId: c.sessionId })}>{c.sessionId}</button>
+          <span className="mffai-spring" />
+          {c.project && <CodeChip code={c.project} />}
           {c.model && <span className="mffai-model">{c.model.modelId}</span>}
-          {c.queued > 0 && <Chip>{`排队 ${c.queued}`}</Chip>}
-          {c.running && <Chip tone="warn">运行中</Chip>}
+          {c.running && <Chip tone="run" dot>运行中</Chip>}
+          {c.queued > 0 && <Chip tone="line">{`排队 ${c.queued}`}</Chip>}
         </div>
       ))}
-    </>
+    </div>
   )
 }
 
-const Group = ({ title, children }: { title: string; children: ReactNode }) => (
-  <div className="mffai-group">
-    <div className="mffai-grouphead"><span>{title}</span></div>
+const Group = ({ title, count, children }: { title: string; count?: number; children: ReactNode }) => (
+  <section className="mffai-tgroup">
+    <div className="mffai-sech">
+      <span>{title}</span>
+      {count !== undefined && <span className="mffai-count">{count}</span>}
+    </div>
     {children}
-  </div>
+  </section>
 )
 
 export function Telegram() {
@@ -287,21 +318,23 @@ export function Telegram() {
   return (
     <div className="mffai-conn mffai-tg">
       {statusFail === 'failed' && <span className="mffai-fail">失败</span>}
-      {status && (
-        <>
-          <StatusRow s={status} onChanged={loadStatus} />
-          <Group title="令牌"><Token s={status} onChanged={loadStatus} /></Group>
-        </>
-      )}
-      {config && <Settings config={config} saver={saver} />}
-      {status && (
-        <>
-          <Group title="配对"><Pairing active={status.pairing.active} onChanged={loadStatus} /></Group>
-          {status.paired.length > 0 && <Group title="已配对"><Paired s={status} onChanged={loadStatus} /></Group>}
-        </>
-      )}
-      {config && <Group title="项目"><Projects config={config} level={level} saver={saver} /></Group>}
-      {chats.length > 0 && <Group title="聊天"><Chats chats={chats} /></Group>}
+      <div className="mffai-tg-cols">
+        <div className="mffai-tg-left">
+          {status && (
+            <div className="mffai-tgcard mffai-tg-status">
+              <StatusRow s={status} onChanged={loadStatus} enable={config && <EnableSwitch config={config} saver={saver} />} />
+              <Token s={status} onChanged={loadStatus} />
+              {config && <Minutes config={config} saver={saver} />}
+            </div>
+          )}
+          {status && status.paired.length > 0 && <Group title="已配对" count={status.paired.length}><Paired s={status} onChanged={loadStatus} /></Group>}
+        </div>
+        <div className="mffai-tg-right">
+          {status && <Pairing active={status.pairing.active} onChanged={loadStatus} />}
+          {config && <Projects config={config} level={level} saver={saver} />}
+          {chats.length > 0 && <Group title="聊天" count={chats.length}><Chats chats={chats} /></Group>}
+        </div>
+      </div>
     </div>
   )
 }

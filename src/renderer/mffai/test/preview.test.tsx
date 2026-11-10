@@ -182,6 +182,30 @@ describe.skipIf(!OUT)('preview screens', () => {
     expect(existsSync(join(OUT!, '04-conn-3-executors.html'))).toBe(true)
   })
 
+  it('04-conn-2-telegram: status card, paired card, live pairing panel, projects and chats', async () => {
+    route.set({ page: 'conn' })
+    const f = installFakeForge({ state: { proxyStale: true, rssMb: 112, pluginsActive: 4, supervisor: { state: 'running', version: '0.8.2', restarts: 0, protocolVersion: 3 } }, calls: connCalls([], {
+      'channel.telegram.status': { state: 'online', enabled: true, tokenSet: true, bot: { id: 1, username: 'forge_helper_bot' }, secretsBackend: 'keychain', proxy: 'none', lastOkAt: Date.now() - 120_000, paired: [{ accountId: '1', name: '张伟', pairedAt: Date.now() - 8 * 86_400_000 }, { accountId: '2', name: '产品群', pairedAt: Date.now() - 15 * 86_400_000 }], pairing: { active: false }, dropped: { unpaired: 3, stale: 0, group: 1, attachment: 2, badUpdate: 0 }, undelivered: 0, problems: [] },
+      'channel.telegram.config.get': { enabled: true, staleMinutes: 30, projects: [{ name: 'api', path: '~/work/forge-api', auto: true }, { name: 'ops', path: '~/work/ops-gateway', auto: false }] },
+      'channel.telegram.chats': { chats: [
+        { chatId: 'c1', accountId: '1', sessionId: '看下今天的线上告警', project: 'ops', model: { accountId: 'a1', modelId: 'claude-sonnet-4-5' }, queued: 1, running: true },
+        { chatId: 'c2', accountId: '2', sessionId: '发布清单核对', project: 'api', model: { accountId: 'a1', modelId: 'claude-sonnet-4-5' }, queued: 0, running: false },
+      ], worktrees: [] },
+      'channel.telegram.pairing.begin': () => ({ code: 'K7Q4M2', expiresAt: Date.now() + 252_000, link: 'https://t.me/forge_helper_bot?start=K7Q4M2' }),
+      'permissions.get': { config: { rules: [], network: { allow: [] }, sandbox: { enabled: true, allowLoopback: false }, allowUnsandboxedAuto: false }, defaults: [], errors: [], sandbox: { level: 'partial', missing: [], autoDegraded: false } },
+    }) })
+    f.mffai.models.accounts = async () => ({ accounts: [{ id: 'a1', presetId: 'p', label: 'Claude', state: 'ok' }], secretsBackend: 'keychain' }) as never
+    render(<MffaiView />)
+    await screen.findByTestId('mffai-page-conn')
+    fireEvent.click(screen.getByRole('tab', { name: 'Telegram' }))
+    await screen.findAllByTestId('mffai-tg-chat')
+    await waitFor(() => expect(document.querySelector('[data-project-row]')).not.toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: '开始配对' }))
+    await screen.findByText('K7Q4M2')
+    writePreview('04-conn-2-telegram', PREVIEW_SIZE)
+    expect(existsSync(join(OUT!, '04-conn-2-telegram.html'))).toBe(true)
+  })
+
   const calls01 = {
     status: { state: 'running', uptimeMs: 1, rssMb: 112, version: '0.8.2', plugins: [{ id: 'a', state: 'active' }, { id: 'b', state: 'failed' }, { id: 'm', state: 'active', trust: 'dev' }, { id: 'd', state: 'active' }], secretsBackend: 'plaintext-file', sandbox: { level: 'full', missing: [], autoDegraded: false } },
     'session.list': { sessions: [] },
