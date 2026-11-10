@@ -271,5 +271,16 @@ describe('MffaiComposer', () => {
       expect(bar.contains(top)).toBe(false)
       expect(top.compareDocumentPosition(bar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     })
-  })
+      it('fix: the / menu description is third-party text: PText with visible escapes, inside the ellipsis span', async () => {
+      f.script({ 'plugins.commands': { commands: [{ name: 'zed:z', plugin: 'zed', description: 'safe\u202Etxt a\u200Bb' }] } })
+      mount()
+      type('/')
+      await waitFor(() => expect(options()).toHaveLength(1))
+      const about = options()[0].querySelector('.mffai-slash-about')!
+      const p = about.querySelector('.mffai-ptext')!
+      expect(p.textContent).toBe('safe\\u{202E}txt a\\u{200B}b')
+      expect(p.querySelectorAll('.mffai-esc')).toHaveLength(2)
+      expect(about.innerHTML).not.toMatch(/[\u202E\u200B]/)
+    })
+})
 })

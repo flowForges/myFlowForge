@@ -12,6 +12,7 @@ import { Chip } from '../ui/Chip'
 import { CodeChip } from '../ui/CodeChip'
 import { Confirm } from '../ui/Confirm'
 import { Icon, type IconName } from '../shell/icons'
+import { visibleChars } from '../ui/visible'
 import { ChangesBlock } from './ChangesBlock'
 import type { RunItem } from './reduce'
 
@@ -23,6 +24,17 @@ export { useRunActions, type RunAction } from '../actions'
 const ICON: Record<string, IconName> = { tool: 'play', file: 'file', text: 'msg2', think: 'sparkle' }
 
 const fmtMs = (ms: number) => (ms < 1000 ? `${ms} ms` : ms < 60_000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.floor(ms / 60_000)} min ${Math.round((ms % 60_000) / 1000)} s`)
+
+/** 合并目标:从中间截断,最后一段(目录名)不缩,全路径在 title */
+function TargetPath({ path }: { path: string }) {
+  const cut = path.replace(/[\\/]+$/, '').search(/[^\\/]*$/)
+  return (
+    <code className="mffai-rcard-to" title={path}>
+      <span className="mffai-rcard-to-head">{path.slice(0, cut)}</span>
+      <span className="mffai-rcard-to-tail">{path.slice(cut)}</span>
+    </code>
+  )
+}
 
 function phaseChip(r: RunItem) {
   if (r.phase === 'queued') return <Chip>{r.position !== undefined ? `排队 #${r.position}` : '排队'}</Chip>
@@ -93,7 +105,7 @@ export function RunCard({ sessionId, checkout, run, turnOpen, row, onChanged }: 
       <div className="mffai-rcard-b">
         {(run.summary || nViol > 0) && (
           <div className="mffai-card-row mffai-rcard-sum">
-            {run.summary && <span className="mffai-rcard-title">{run.summary}</span>}
+            {run.summary && <span className="mffai-rcard-title">{visibleChars(run.summary)}</span>}
             <span className="mffai-spring" />
             {nViol > 0 && <Chip sq tone="bad">{`违规 ${nViol}`}</Chip>}
           </div>
@@ -157,7 +169,7 @@ export function RunCard({ sessionId, checkout, run, turnOpen, row, onChanged }: 
       {(canMerge || canDiscard || a.failed || end?.rawLog) && (
         <div className="mffai-card-actions mffai-rcard-f">
           {canMerge && <button className="set-btn mffai-primary" disabled={!!a.busy} onClick={ask('merge')}><Icon name="merge" size={13} />合并</button>}
-          {canMerge && checkout && <code className="mffai-rcard-to" title={checkout}>{checkout}</code>}
+          {canMerge && checkout && <TargetPath path={checkout} />}
           {canDiscard && <button className="set-btn mffai-danger" disabled={!!a.busy} onClick={ask('discard')}><Icon name="trash" size={13} />丢弃</button>}
           {a.failed?.busy && <Chip tone="warn">忙</Chip>}
           {a.failed && !a.failed.busy && <span className="mffai-fail">失败</span>}

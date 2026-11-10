@@ -818,6 +818,18 @@ const ROWS: Row[] = [
       expect(document.querySelector('.mffai-newhead')).not.toBeNull()
     },
   })),
+  {
+    name: 'approval card 08b fix: a 120-char tool name, unsandboxed, n / m, in a panel-wide column',
+    mount: () => {
+      render(
+        <aside className="mffai-act" style={{ width: 368 }}>
+          <ApprovalCard sessionId="s1" pos={{ n: 2, m: 3 }} approval={{ approvalId: 'p', turnId: 't1', callId: 'c', tool: 'mcp__' + 'y'.repeat(115), summary: 'rm -rf build', seq: 1, key: 'k', unsandboxed: true }} />
+        </aside>,
+      )
+      expect(screen.getByText('未隔离')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '拒绝' })).toBeInTheDocument()
+    },
+  },
   ...([false, true] as const).map((narrow): Row => ({
     name: `chat header: ${narrow ? 'narrow' : 'wide'}`,
     mount: () => {

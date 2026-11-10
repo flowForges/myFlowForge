@@ -21,6 +21,7 @@ import { DiffLines } from '../ui/DiffLines'
 import { PathField } from '../ui/PathField'
 import { Confirm } from '../ui/Confirm'
 import MffaiView from '../MffaiView'
+import { ApprovalCard } from '../chat/ApprovalCard'
 import { route } from '../route'
 import { installFakeForge } from './fakeForge'
 import { fireEvent, waitFor, screen } from '@testing-library/react'
@@ -117,6 +118,18 @@ describe.skipIf(!OUT)('preview screens', () => {
     await screen.findByText('1 有问题')
     writePreview('01-tasks-power', PREVIEW_SIZE)
     expect(existsSync(join(OUT!, '01-tasks-power.html'))).toBe(true)
+  })
+
+  it('cards-long-tool: a 120-char tool name, unsandboxed, n / m, in a 368 px panel', () => {
+    installFakeForge()
+    render(
+      <div className="mffai-page"><aside className="mffai-act" style={{ width: 368 }}><div className="mffai-act-body">
+        <ApprovalCard sessionId="s1" pos={{ n: 2, m: 3 }} approval={{ approvalId: 'p', turnId: 't1', callId: 'c', tool: 'mcp__' + 'y'.repeat(115), summary: 'rm -rf build', seq: 1, key: 'k', unsandboxed: true }} />
+        <ApprovalCard sessionId="s1" approval={{ approvalId: 'q', turnId: 't1', callId: 'c', tool: 'http_get', summary: 'grafana.internal/api/ds/query', seq: 2 }} />
+      </div></aside></div>,
+    )
+    writePreview('cards-long-tool', { width: 400, height: 420 })
+    expect(existsSync(join(OUT!, 'cards-long-tool.html'))).toBe(true)
   })
 
   it('02-first-1-off: the enable hero', async () => {

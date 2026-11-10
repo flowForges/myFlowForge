@@ -9,6 +9,7 @@ import { useMffaiEvent, useMffaiReset } from '../events'
 import { label } from '../labels'
 import { Chip } from '../ui/Chip'
 import { CodeChip } from '../ui/CodeChip'
+import { PText } from '../ui/PText'
 import { Icon } from '../shell/icons'
 import { OriginIcon, originKind } from './SessionList'
 
@@ -163,7 +164,7 @@ export function MffaiComposer({ session, imName, onSend, onCommand, onStop, canS
               onMouseDown={(e) => { e.preventDefault(); pick(c) }}>
               <span className="slash-cmd mffai-slash-name">/{c.name}</span>
               {c.argumentHint && <CodeChip code={c.argumentHint} />}
-              <span className="mffai-slash-about">{c.description}</span>
+              <span className="mffai-slash-about"><PText text={c.description} /></span>
               <span className="slash-tag"><Icon name="puzzle" size={12} />{c.plugin}</span>
             </li>
           ))}

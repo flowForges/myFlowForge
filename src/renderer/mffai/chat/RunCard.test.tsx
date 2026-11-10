@@ -213,7 +213,7 @@ describe('RunCard', () => {
       expect(container.querySelector('.mffai-rcard-chg')!.textContent).toContain('改动')
       expect(btn('3 个文件')).not.toBeNull()
       const foot = container.querySelector('.mffai-rcard-f')!
-      expect(within(foot as HTMLElement).getByText('/repo')).toBeInTheDocument()
+      expect(foot.querySelector('.mffai-rcard-to')!.textContent).toBe('/repo')
       const order = [...foot.querySelectorAll('button')].map((b) => b.textContent)
       expect(order.slice(0, 2)).toEqual(['合并', '丢弃'])
       expect(btn('丢弃')!.classList.contains('mffai-danger')).toBe(true)
@@ -240,5 +240,24 @@ describe('RunCard', () => {
       expect(document.querySelector('.confirm-overlay.mffai-anchored')).not.toBeNull()
       expect(spy.mock.contexts).toContain(b)
     })
-  })
+      it('fix: the run summary goes through the visible escapes', () => {
+      installFakeForge()
+      const { container } = render(<RunCard sessionId={S} turnOpen run={run({ summary: 'fix\u202Eexe.txt a\u200Bb' })} />)
+      const t = container.querySelector('.mffai-rcard-title')!
+      expect(t.textContent).toBe('fix\\u{202E}exe.txt a\\u{200B}b')
+      expect(t.querySelectorAll('.mffai-esc')).toHaveLength(2)
+      expect(container.innerHTML).not.toMatch(/[\u202E\u200B]/)
+    })
+
+    it('fix: the merge target truncates in the middle: the last segment never shrinks, the full path in title', () => {
+      installFakeForge()
+      const checkout = '/Users/someone/work/very/long/path/to/the/checkout/forge-api'
+      const { container } = render(<RunCard sessionId={S} checkout={checkout} turnOpen={false} row={kept} run={done()} />)
+      const to = container.querySelector('.mffai-rcard-to')!
+      expect(to.getAttribute('title')).toBe(checkout)
+      expect(to.textContent).toBe(checkout)
+      expect(to.querySelector('.mffai-rcard-to-head')!.textContent).toBe('/Users/someone/work/very/long/path/to/the/checkout/')
+      expect(to.querySelector('.mffai-rcard-to-tail')!.textContent).toBe('forge-api')
+    })
+})
 })

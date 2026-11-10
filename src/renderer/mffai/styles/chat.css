@@ -187,12 +187,16 @@
 .mffai-chat-body .mffai-appr-h, .mffai-act .mffai-appr-h { flex-wrap: nowrap; gap: 9px; padding: 10px 12px 0; }
 .mffai-appr-ic { display: grid; place-items: center; flex: 0 0 26px; width: 26px; height: 26px; border-radius: 8px; color: var(--warn); background: var(--mffai-warn-dim); }
 .mffai-appr.unsb .mffai-appr-ic { color: var(--err); background: var(--mffai-err-dim); }
-.mffai-appr-t { font-size: 13px; font-weight: 650; color: var(--fg); white-space: nowrap; }
+.mffai-appr-t { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 13px; font-weight: 650; color: var(--fg); white-space: nowrap; }
+.mffai-appr-h > .mffai-chip, .mffai-appr-pos, .mffai-appr-ic { flex: 0 0 auto; }
+.mffai-appr-h > .mffai-spring { flex: 0 1 0; }
 .mffai-appr-t .mffai-tool { font-size: 12.5px; color: var(--fg); }
-.mffai-appr-pos { font-family: var(--mono, monospace); font-size: 11px; color: var(--faint); }
+.mffai-appr-h .mffai-appr-pos { font-family: var(--mono, monospace); font-size: 11px; color: var(--faint); }
 .mffai-appr pre.mffai-summary { margin: 10px 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); font-size: 12px; line-height: 1.6; color: var(--fg); }
-.mffai-appr pre.mffai-summary::before { content: "$ "; color: var(--faint); user-select: none; }
-.mffai-chat-body .mffai-appr-f, .mffai-act .mffai-appr-f { flex-wrap: nowrap; gap: 8px; padding: 0 12px 12px; }
+.mffai-appr pre.mffai-summary.mffai-sh::before { content: "$ "; color: var(--faint); user-select: none; }
+.mffai-chat-body .mffai-appr-f, .mffai-act .mffai-appr-f { gap: 8px; padding: 0 12px 12px; }
+.mffai-appr-f { flex-wrap: wrap; }
+.mffai-appr-f > .set-btn { flex: 0 0 auto; }
 .mffai-appr-f .set-btn { height: 28px; padding: 0 11px; }
 .mffai-page .mffai-appr-f .set-btn.mffai-danger { color: var(--err); background: transparent; border-color: transparent; }
 .mffai-page .mffai-appr-f .set-btn.mffai-danger:hover:not(:disabled) { background: var(--mffai-err-dim); }
@@ -228,7 +232,9 @@
 .mffai-rcard-f .set-btn { height: 28px; padding: 0 11px; }
 .mffai-page .mffai-rcard-f .set-btn.mffai-danger { color: var(--err); background: transparent; border-color: transparent; }
 .mffai-page .mffai-rcard-f .set-btn.mffai-danger:hover:not(:disabled) { background: var(--mffai-err-dim); }
-.mffai-rcard-to { max-width: 220px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: var(--mono, monospace); font-size: 11px; color: var(--muted); }
+.mffai-rcard-to { display: inline-flex; min-width: 0; max-width: 260px; white-space: nowrap; font-family: var(--mono, monospace); font-size: 11px; color: var(--muted); }
+.mffai-rcard-to-head { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.mffai-rcard-to-tail { flex: 0 0 auto; color: var(--fg-2); }
 .mffai-rawlog { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .mffai-rawlog .mffai-path { max-width: 240px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; word-break: normal; font-size: 11px; color: var(--faint); }
 /* 改动清单:A / M / D 方块 */
@@ -253,6 +259,7 @@
 /* 对话流是可滚动的竖排 flex:卡片不许被压扁(overflow:hidden 的审批卡会被截掉) */
 .mffai-chat-body > * { flex-shrink: 0; }
 .mffai-chat-body .mffai-rcard-f, .mffai-act .mffai-rcard-f { flex-wrap: nowrap; }
+.mffai-rcard-f > .set-btn { flex: 0 0 auto; }
 .mffai-rawlog { flex: 0 1 auto; overflow: hidden; }
 .mffai-rawlog .mffai-copy { display: inline-flex; flex-direction: row; align-items: center; gap: 4px; flex: 0 0 auto; height: 24px; padding: 0 6px; border-radius: 6px; font-size: 11px; color: var(--muted); }
 .mffai-rawlog .mffai-copy:hover { background: var(--surface); color: var(--fg); }
