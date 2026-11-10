@@ -1,10 +1,14 @@
-import { lazy, Suspense, useCallback, useEffect, useState, type ComponentType, type LazyExoticComponent } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useState, type ComponentType, type LazyExoticComponent, type ReactNode } from 'react'
 import type { MffaiState } from '@mffai/protocol'
 import { EnableCard } from './EnableCard'
 import { StatusStrip } from './StatusStrip'
-import { DEFAULT_PAGE, MFFAI_PAGES, route, type MffaiPage } from './route'
+import { DEFAULT_PAGE, route, type MffaiPage } from './route'
 import { useRoute } from './useRoute'
 import { useShellInfo, type NavCounts } from './useShellInfo'
+import { Rail } from './shell/Rail'
+import { PageHeader, PAGE_TITLE } from './shell/PageHeader'
+import { HeaderSlotCtx } from './shell/headerSlot'
+import { Icon } from './shell/icons'
 import './mffai.css'
 
 /** 监督进程 50 + worker 51 MB(Task 10 实测),向上取整到 10 */
@@ -20,30 +24,31 @@ const PAGES: Record<MffaiPage, LazyExoticComponent<ComponentType>> = {
   perm: lazy(() => import('./perm/PermissionsPage')),
   debug: lazy(() => import('./debug/DebugPage')),
 }
-const PAGE_LABEL: Record<MffaiPage, string> = { chat: '对话', tasks: '任务', memory: '记忆', plugins: '插件', conn: '连接', perm: '权限', debug: '调试' }
-
-/** 左侧导航 7 项 + 当前页。数字:对话 = 待批审批,记忆 = 待确认提议,插件 = 不在 active 的插件;没有就不显示 */
-function Shell({ counts }: { counts: NavCounts }) {
+/** 左侧图标轨 + 主区(页头带状态胶囊,下面是当前页)。数字:对话 = 待批审批,记忆 = 待确认提议,插件 = 不在 active 的插件;没有就不显示 */
+function Shell({ counts, strip, tripped }: { counts: NavCounts; strip: ReactNode; tripped: boolean }) {
   const { page } = useRoute()
   const Page = PAGES[page]
+  const [slot, setSlot] = useState<HTMLElement | null>(null)
   // 离开 mff-ai 再回来落在默认页;别处(铃铛)在挂载前 set 的路由照常生效
   useEffect(() => () => route.set({ page: DEFAULT_PAGE }), [])
   return (
-    <div className="mffai-shell">
-      <nav className="set-nav mffai-nav">
-        {MFFAI_PAGES.map((p) => (
-          <button key={p} className={p === page ? 'on' : undefined} onClick={() => route.set({ page: p })}>
-            <span className="mffai-navlabel">{PAGE_LABEL[p]}</span>
-            {!!counts[p] && <span className="mffai-navnum">{counts[p]}</span>}
-          </button>
-        ))}
-      </nav>
+    <>
+      <Rail
+        page={page}
+        counts={counts}
+        onSelect={(p) => route.set({ page: p })}
+        // 电源键和弹层是下一步(Task 3);这里只是位置和状态色
+        power={<span className={`mffai-power${tripped ? ' bad' : ''}`}><Icon name="power" size={18} /></span>}
+      />
       <div className="mffai-main">
-        <Suspense fallback={null}>
-          <div className="mffai-pagebox" data-testid={`mffai-page-${page}`}><Page /></div>
-        </Suspense>
+        <HeaderSlotCtx.Provider value={slot}>
+          <PageHeader title={PAGE_TITLE[page]} pill={strip} slotRef={setSlot} />
+          <Suspense fallback={null}>
+            <div className="mffai-pagebox" data-testid={`mffai-page-${page}`}><Page /></div>
+          </Suspense>
+        </HeaderSlotCtx.Provider>
       </div>
-    </div>
+    </>
   )
 }
 
@@ -92,17 +97,21 @@ export default function MffaiView() {
       </div>
     )
   }
+  const strip = (
+    <StatusStrip
+      state={state}
+      info={connected ? info : undefined}
+      failed={failed}
+      // 宿主的重启:proxyStale 时整个重拉后台,换上新代理(Task 4)
+      onRestart={() => run(api.restart())}
+      onResetTrip={() => run(api.resetTrip())}
+    />
+  )
+  // 后台不在:只有状态条(和重新启动),没有导航
+  if (!state.running) return <div className="mffai-page">{strip}</div>
   return (
-    <div className="mffai-page">
-      <StatusStrip
-        state={state}
-        info={connected ? info : undefined}
-        failed={failed}
-        // 宿主的重启:proxyStale 时整个重拉后台,换上新代理(Task 4)
-        onRestart={() => run(api.restart())}
-        onResetTrip={() => run(api.resetTrip())}
-      />
-      {state.running && <Shell counts={counts} />}
+    <div className="mffai-page mffai-running">
+      <Shell counts={counts} strip={strip} tripped={state.supervisor?.state === 'tripped' || state.compatible === false} />
     </div>
   )
 }

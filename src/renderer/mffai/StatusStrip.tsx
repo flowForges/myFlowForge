@@ -1,6 +1,7 @@
 import type { MffaiState, Quota, StatusResult } from '@mffai/protocol'
 import { Chip } from './ui/Chip'
 import { label as codeLabel } from './labels'
+import { Icon } from './shell/icons'
 
 /** 状态条要的后台数据(MffaiView 取):status、待批审批数、默认模型和它的额度 */
 export interface StripInfo {
@@ -46,18 +47,23 @@ export function StatusStrip({ state, info, onRestart, onResetTrip, failed }: Sta
   const quota = info?.model?.quota
   return (
     <div className="mffai-strip">
-      <span className={`mffai-dot ${tone}`} />
-      <b>{text}</b>
-      {state.supervisor?.version && <span>{state.supervisor.version}</span>}
-      {state.pluginsActive != null && <span>{state.pluginsActive} 插件</span>}
-      {state.rssMb != null && <span>{state.rssMb} MB</span>}
-      {info?.model && <Chip>{`${info.model.account} · ${info.model.model}`}</Chip>}
-      {quota && 'windows' in quota && quota.windows.map((w) => <span key={w.label} className="mffai-quota">{`${w.label} ${w.usedPercent}%`}</span>)}
-      {sandbox && (
-        <Chip tone={LEVEL_TONE[sandbox.level] ?? 'muted'} title={sandbox.missing.length ? sandbox.missing.join(' ') : undefined}>
-          {codeLabel('level', sandbox.level)}
-        </Chip>
-      )}
+      <div className="mffai-stpill">
+        <span className={`mffai-dot ${tone}`} />
+        <b>{text}</b>
+        <span className="mffai-pillv">
+          {state.supervisor?.version && <span title={state.supervisor.version}>{state.supervisor.version}</span>}
+          {state.rssMb != null && <span>{state.rssMb} MB</span>}
+          {state.pluginsActive != null && <span>{state.pluginsActive} 插件</span>}
+        </span>
+        {(sandbox || info?.model) && <span className="mffai-sep" />}
+        {sandbox && (
+          <Chip sq tone={LEVEL_TONE[sandbox.level] ?? 'muted'} title={sandbox.missing.length ? sandbox.missing.join(' ') : undefined}>
+            <Icon name={sandbox.level === 'full' ? 'shieldok' : sandbox.level === 'partial' ? 'shieldx' : 'shield'} size={12} />{codeLabel('level', sandbox.level)}
+          </Chip>
+        )}
+        {info?.model && <Chip sq tone="acc" title={`${info.model.account} · ${info.model.model}`}>{`${info.model.account} · ${info.model.model}`}</Chip>}
+        {quota && 'windows' in quota && quota.windows.map((w) => <span key={w.label} className="mffai-quota">{`${w.label} ${w.usedPercent}%`}</span>)}
+      </div>
       {!!info?.pending && <Chip tone="warn">{`待处理 ${info.pending}`}</Chip>}
       {dev.length > 0 && <Chip tone="bad" title={dev.join(' ')}>开发插件 · 完全访问</Chip>}
       {status?.problems?.includes('dev_crashed') && <Chip tone="warn">开发插件已跳过</Chip>}

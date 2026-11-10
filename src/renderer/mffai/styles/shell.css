@@ -1,10 +1,46 @@
-/* 壳:页面、导航、主区、状态条(08 起的规则原样搬来) */
+/* 壳:页面、图标轨、主区、页头与状态胶囊 */
 .mffai-page { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 14px; padding: 20px 24px; overflow: auto; color: var(--fg); }
-.mffai-strip { display: flex; align-items: center; gap: 12px; font-size: 13px; }
-.mffai-shell { flex: 1; min-height: 0; display: flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
-.mffai-nav { width: 132px; flex: 0 0 132px; }
-.mffai-nav button { justify-content: space-between; }
-.mffai-navnum { min-width: 18px; padding: 0 6px; border-radius: 99px; background: var(--accent); color: var(--on-accent); font-size: 11px; font-weight: 600; line-height: 18px; text-align: center; }
-.mffai-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: auto; padding: 14px 16px; }
+.mffai-page.mffai-running { flex-direction: row; gap: 0; padding: 0; overflow: hidden; }
+
+/* 图标轨 */
+.mffai-rail { flex: 0 0 64px; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 0; background: var(--mffai-rail-bg); border-right: 1px solid var(--border); }
+.mffai-logo { width: 34px; height: 34px; margin-bottom: 8px; border-radius: 10px; display: grid; place-items: center; flex: 0 0 auto; background: var(--mffai-brand); color: var(--on-accent); }
+.mffai-nav { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; width: 100%; overflow-y: auto; }
+.mffai-nav button { position: relative; width: 52px; padding: 7px 0 5px; border: 0; border-radius: 10px; display: flex; flex-direction: column; align-items: center; gap: 4px; background: transparent; color: var(--muted); font: inherit; font-size: 10.5px; font-weight: 500; cursor: pointer; }
+.mffai-nav button:hover:not(:disabled) { background: var(--surface); }
+.mffai-nav button.on { background: var(--accent-dim); color: var(--fg); }
+.mffai-nav button.on .mffai-i { color: var(--accent); }
+.mffai-nav button.end { margin-top: auto; }
+.mffai-nav button:disabled { opacity: .35; cursor: default; }
+.mffai-nav .mffai-i { width: 19px; height: 19px; stroke-width: 1.7; }
+.mffai-navnum { position: absolute; top: 3px; right: 6px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 99px; background: var(--warn); color: var(--mffai-on-status); font-size: 9.5px; font-weight: 700; line-height: 15px; text-align: center; }
+.mffai-navnum.err { background: var(--err); }
+.mffai-power { width: 40px; height: 40px; margin-top: 4px; border-radius: 12px; display: grid; place-items: center; flex: 0 0 auto; position: relative; color: var(--ok); background: var(--mffai-ok-dim); box-shadow: inset 0 0 0 1px var(--mffai-ok-line); }
+.mffai-power::after { content: ""; position: absolute; right: 5px; top: 5px; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); animation: mffai-pulse 2s infinite; }
+.mffai-power.bad { color: var(--err); background: var(--mffai-err-dim); box-shadow: inset 0 0 0 1px var(--mffai-err-line); }
+.mffai-power.bad::after { background: var(--err); animation: none; }
+
+/* 主区和页头 */
+.mffai-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.mffai-head { flex: 0 0 auto; min-height: 52px; display: flex; align-items: center; gap: 10px; padding: 8px 18px; border-bottom: 1px solid var(--border); }
+.mffai-head-title { margin: 0; font-size: 15px; font-weight: 650; white-space: nowrap; }
+.mffai-head-slot { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.mffai-head-slot:empty { display: none; }
+.mffai-head-spring { flex: 1; }
 .mffai-pagebox, .mffai-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
-.mffai-strip { flex-wrap: wrap; row-gap: 6px; }
+.mffai-main > .mffai-pagebox { padding: 14px 16px; overflow: auto; }
+
+/* 状态条:胶囊,后面跟着今天的警告块和按钮 */
+.mffai-strip { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; row-gap: 6px; min-width: 0; font-size: 13px; }
+.mffai-stpill { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; height: 30px; padding: 0 6px 0 11px; border-radius: 99px; background: var(--surface); border: 1px solid var(--border); font-size: 12px; color: var(--fg-2); }
+.mffai-stpill b { font-weight: 500; white-space: nowrap; }
+.mffai-stpill .mffai-dot { flex: 0 0 8px; }
+.mffai-stpill .mffai-dot.ok { background: var(--ok); }
+.mffai-stpill .mffai-dot.wait { background: var(--warn); }
+.mffai-stpill .mffai-dot.bad { background: var(--err); }
+.mffai-pillv { display: inline-flex; align-items: center; min-width: 0; font: 11px var(--mono); color: var(--faint); }
+.mffai-pillv > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px; }
+.mffai-pillv > span + span::before { content: "·"; margin: 0 6px; }
+.mffai-sep { width: 1px; height: 14px; flex: 0 0 1px; background: var(--border); }
+.mffai-stpill .mffai-chip { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
+.mffai-stpill .mffai-quota { white-space: nowrap; }

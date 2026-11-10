@@ -14,6 +14,10 @@ import { Countdown } from '../ui/Countdown'
 import { DiffLines } from '../ui/DiffLines'
 import { PathField } from '../ui/PathField'
 import { Confirm } from '../ui/Confirm'
+import MffaiView from '../MffaiView'
+import { route } from '../route'
+import { installFakeForge } from './fakeForge'
+import { waitFor, screen } from '@testing-library/react'
 
 const OUT = process.env.MFFAI_PREVIEW_OUT
 const TONES: ChipTone[] = ['ok', 'bad', 'warn', 'muted', 'run', 'acc', 'line']
@@ -67,5 +71,27 @@ describe.skipIf(!OUT)('preview screens', () => {
     render(<><Controls /><Confirm title="合并" rows={UI_ROWS} keep={['分支 mffai/r_7f3a']} confirmLabel="合并" onCancel={() => {}} onConfirm={() => {}} /></>)
     writePreview('ui-confirm', { ...PREVIEW_SIZE, theme: 'light' })
     expect(existsSync(join(OUT!, 'ui-confirm.html'))).toBe(true)
+  })
+
+  it('01-tasks: rail and page header (the tasks body comes later)', async () => {
+    route.set({ page: 'tasks' })
+    installFakeForge({
+      state: { proxyStale: true, rssMb: 112, pluginsActive: 4, supervisor: { state: 'running', version: 'v0.8.2', restarts: 0, protocolVersion: 3 } },
+      calls: {
+        status: { state: 'running', uptimeMs: 1, rssMb: 112, version: '0.8.2', plugins: [{ id: 'a', state: 'active' }, { id: 'b', state: 'failed' }], sandbox: { level: 'full', missing: [], autoDegraded: false } },
+        'session.list': { sessions: [{ id: 's1', title: 'one', origin: 'app', audience: 'owner', approvalMode: 'ask', createdAt: 1, updatedAt: 1, pendingApprovals: 2 }] },
+        'memory.health': { dbBytes: 0, rawRows: 0, noteRows: 0, cursorLag: 0, pendingProposals: 3, problems: [] },
+        'models.catalog': { presets: [], models: { p: [{ id: 'm1', name: 'Claude Sonnet 4.5', context: 1, output: 1, image: false, reasoning: 'none', toolCall: true }] }, default: { accountId: 'a1', modelId: 'm1' } },
+        'models.accounts': { accounts: [{ id: 'a1', presetId: 'p', label: 'Claude', state: 'ok' }], secretsBackend: 'keychain' },
+        'models.quota': { windows: [{ label: '5h', usedPercent: 42 }] },
+        'events.tail': { events: [] },
+      },
+    })
+    render(<MffaiView />)
+    await screen.findByTestId('mffai-page-tasks')
+    await waitFor(() => expect(document.querySelectorAll('.mffai-navnum')).toHaveLength(3))
+    await screen.findByText('Claude · Claude Sonnet 4.5')
+    writePreview('01-tasks', PREVIEW_SIZE)
+    expect(existsSync(join(OUT!, '01-tasks.html'))).toBe(true)
   })
 })

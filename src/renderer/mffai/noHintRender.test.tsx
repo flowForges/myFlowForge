@@ -78,6 +78,18 @@ const ROWS: Row[] = [
     },
   })),
   {
+    name: 'shell: rail with every badge and a page header with every chip',
+    mount: async (f) => {
+      f.setState({ proxyStale: true, rssMb: 50, pluginsActive: 2 })
+      render(<MffaiView />)
+      await waitFor(() => expect(document.querySelectorAll('.mffai-navnum')).toHaveLength(3))
+      const head = document.querySelector('header.mffai-head')!
+      for (const t of ['开发插件 · 完全访问', '开发插件已跳过', '数据库未收紧', '明文存储', '代理已改', '待处理 2', '主账号 · GPT-5', '5h 40%', '50 MB']) {
+        await waitFor(() => expect(head).toHaveTextContent(t))
+      }
+    },
+  },
+  {
     name: 'shell: not running',
     mount: async (f) => {
       f.setState({ running: false, supervisor: { ...RUNNING_STATE.supervisor!, state: 'tripped' } })
