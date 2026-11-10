@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
+import { useState } from 'react'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { PluginInstallStatus } from '@mffai/protocol'
 import { Install, Staging } from './Install'
@@ -255,5 +256,28 @@ describe('Staging 08b: first install is a full review page', () => {
     expect(document.querySelector('.mffai-covt')).toBeNull()
     expect(screen.queryByRole('button', { name: '安装并启用' })).toBeNull()
     expect(screen.getByRole('button', { name: '升级但停用' })).toBeInTheDocument()
+  })
+})
+
+describe('Staging 08b: the page makes what it covers inert', () => {
+  it('while the review page is up, everything around it inside .mffai-plugins is inert; after 取消 nothing is', async () => {
+    const f = installFakeForge({ calls: { 'plugins.install.status': READY, 'plugins.install.cancel': { ok: true } } })
+    function Host() {
+      const [open, setOpen] = useState(true)
+      return (
+        <div className="mffai-plugins">
+          <aside className="mffai-pcol"><button>row</button></aside>
+          <div className="mffai-pright">{open && <Staging stagingId="st1" onClose={() => setOpen(false)} onInstalled={() => {}} />}</div>
+        </div>
+      )
+    }
+    render(<Host />)
+    await screen.findByRole('button', { name: '安装并启用' })
+    expect(document.querySelector('.mffai-pcol')!.hasAttribute('inert')).toBe(true)
+    expect(document.querySelector('.mffai-fetch.ok')!.hasAttribute('inert')).toBe(true)
+    expect(document.querySelector('.mffai-cpage')!.closest('[inert]')).toBeNull()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '取消' })) })
+    expect(f.callsOf('plugins.install.cancel')).toEqual([{ stagingId: 'st1' }])
+    expect(document.querySelector('[inert]')).toBeNull()
   })
 })

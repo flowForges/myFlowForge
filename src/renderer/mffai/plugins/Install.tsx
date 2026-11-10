@@ -16,17 +16,20 @@ import { PText } from '../ui/PText'
 import { Icon } from '../shell/icons'
 import { Consent, CWD_LABEL } from './Consent'
 import { diffMarks } from './ConsentSection'
+import { useInertOutside } from './UpgradeModal'
 import { Grants, initialGrants, upgradeGrants } from './Grants'
 import { FailChip, failureOf, useAction, type Failure } from './action'
 
 const POLL_MS = 1000
 
-export function Staging({ stagingId, current, onClose, onInstalled }: {
+export function Staging({ stagingId, current, onClose, onInstalled, onBusy }: {
   stagingId: string
   /** 升级:当前的授权。起点是它和新声明的交集(后台对发来的服务整份替换,不能从默认开始) */
   current?: GrantsT
   onClose: () => void
   onInstalled: (id: string, enabled: boolean) => void
+  /** 确认或取消在路上:升级弹窗这时不理 Esc(Esc 会卸载暂存、发取消,和确认抢) */
+  onBusy?: (busy: boolean) => void
 }) {
   const [st, setSt] = useState<PluginInstallStatus | null>(null)
   const [statusFailure, setStatusFailure] = useState<Failure | null>(null)
@@ -92,6 +95,12 @@ export function Staging({ stagingId, current, onClose, onInstalled }: {
 
   const ready = st?.state === 'ready' && st.consent && st.consentHash && grants
   const upgrade = current !== undefined
+  const busyRef = useRef(onBusy)
+  busyRef.current = onBusy
+  useEffect(() => { busyRef.current?.(busy) }, [busy])
+  // 首装整页盖住插件页:盖住的东西 inert,Tab 走不到
+  const page = useRef<HTMLDivElement>(null)
+  useInertOutside(page, Boolean(ready) && !upgrade)
   const servers = grants ? Object.values(grants.servers) : []
   const checkedHosts = servers.reduce((n, s) => n + s.network.length, 0)
   const cwdLevels = [...new Set(servers.map((s) => CWD_LABEL[s.cwd]))].join(' / ')
@@ -115,7 +124,7 @@ export function Staging({ stagingId, current, onClose, onInstalled }: {
         <>
           <div className="mffai-row mffai-fetch ok"><Icon name="check" size={14} /><Chip tone="ok">就绪</Chip></div>
           {/* 首装(A):整页审阅,盖住插件页 */}
-          <div className="mffai-cpage">
+          <div ref={page} className="mffai-cpage">
             <div className="mffai-cpage-b">
               <Consent consent={st.consent!} close={close} grants={grantsEditor} checkedHosts={checkedHosts} />
             </div>

@@ -51,6 +51,18 @@ export function PluginDetail({ plugin, showNewSession, onEnabled, onClose }: {
   const enableAct = useAction()
   const uninstallAct = useAction()
   const upgradeAct = useAction()
+  /** 升级暂存的确认或取消在路上:Esc 不关弹窗 */
+  const stagingBusy = useRef(false)
+  const upBtn = useRef<HTMLButtonElement>(null)
+  const hadStaging = useRef(false)
+  // 弹窗关了(取消、Esc、×、确认),焦点回到头里的 升级(这时已经可用)
+  useEffect(() => {
+    if (staging !== null) { hadStaging.current = true; return }
+    if (!hadStaging.current) return
+    hadStaging.current = false
+    stagingBusy.current = false
+    upBtn.current?.focus()
+  }, [staging])
 
   const load = useCallback(() => {
     void call('plugins.get', { id }).then(
@@ -114,7 +126,7 @@ export function PluginDetail({ plugin, showNewSession, onEnabled, onClose }: {
         {showNewSession && plugin.enabled && <button className="set-btn mffai-primary" onClick={() => route.set({ page: 'chat', newSession: {} })}><Icon name="chat" size={13} />新会话</button>}
         <span className="mffai-dup">
           <input aria-label="升级 ref" placeholder="ref" value={upRef} disabled={staging !== null} onChange={(e) => setUpRef(e.target.value)} />
-          <button className="set-btn" disabled={upgradeAct.busy || !detail || staging !== null} onClick={upgrade}><Icon name="up" size={13} />升级</button>
+          <button ref={upBtn} className="set-btn" disabled={upgradeAct.busy || !detail || staging !== null} onClick={upgrade}><Icon name="up" size={13} />升级</button>
         </span>
         <FailChip failure={upgradeAct.failure} />
         <button className="set-btn" disabled={enableAct.busy} onClick={() => setEnabled(!plugin.enabled)}>{plugin.enabled ? '禁用' : '启用'}</button>
@@ -133,8 +145,9 @@ export function PluginDetail({ plugin, showNewSession, onEnabled, onClose }: {
       <div className="mffai-group mffai-detail" data-detail={id}>
         {head}
         {/* 升级同意在弹窗里(B)。key:每次暂存一个新的 Staging,旧暂存的状态、consentHash、授权不会带到新暂存上 */}
-        <UpgradeModal onClose={() => setStaging(null)}>
+        <UpgradeModal onClose={() => { if (!stagingBusy.current) setStaging(null) }}>
           <Staging key={staging} stagingId={staging} current={detail!.grants} onClose={() => setStaging(null)}
+            onBusy={(b) => { stagingBusy.current = b }}
             onInstalled={(pid, enabled) => { setStaging(null); onEnabled(pid, enabled); load() }} />
         </UpgradeModal>
       </div>

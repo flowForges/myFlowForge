@@ -835,7 +835,7 @@ const ROWS: Row[] = [
       await act(async () => { fireEvent.click(screen.getByRole('button', { name: '升级' })) })
       const dlg = await screen.findByRole('dialog')
       await within(dlg).findByRole('button', { name: '升级' })
-      expect(within(dlg).getAllByText('未变').length).toBeGreaterThan(0)
+      expect(within(dlg).getAllByText('无新增').length).toBeGreaterThan(0)
     },
   },
   ...([

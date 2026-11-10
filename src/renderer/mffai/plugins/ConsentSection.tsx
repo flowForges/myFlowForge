@@ -5,29 +5,45 @@ import type { PluginDiff } from '@mffai/protocol'
 import { Chip } from '../ui/Chip'
 import { Icon, type IconName } from '../shell/icons'
 
-export type Marks = { add?: number; mod?: number; del?: number; same?: boolean }
+/** same:diff 比过两边,确实没变(未变);noAdd:diff 只记新增,只能说没有新增(无新增);都没有:diff 不比这一类,不标 */
+export type Marks = { add?: number; mod?: number; del?: number; same?: boolean; noAdd?: boolean }
 export type DiffSec = 'mcp' | 'network' | 'notRun' | 'skills' | 'config' | 'claimed'
 
-const marksOf = (add: number, mod: number, del: number): Marks => {
-  if (!add && !mod && !del) return { same: true }
+const marksOf = (add: number, mod: number, del: number, empty: Marks): Marks => {
+  if (!add && !mod && !del) return empty
   return { ...(add > 0 && { add }), ...(mod > 0 && { mod }), ...(del > 0 && { del }) }
 }
 
-/** 每一节的变更数,只看 diff 的字段。新加的必填敏感配置是新增配置的一部分,只算一次 */
+const SAME: Marks = { same: true }
+const NO_ADD: Marks = { noAdd: true }
+
+/**
+ * 每一节的变更数,只看 diff 的字段。没有变化时说多少,照后台 diffConsent 实际比了什么(harness lib/plugins/consent.ts):
+ * - MCP 服务:按名字比两边(增、删、command/args/env/declared 改动)→ 未变
+ * - 技能 · 命令:名字两边比、正文按哈希比 → 未变
+ * - 建议联网地址:diff 只比声明的域名,建议的域名不比 → 无新增
+ * - 不会运行:hook 两边比,agents/bin/…/远程 MCP/main 只记新增 → 无新增
+ * - 配置项:只记新增的键 → 无新增(新加的必填敏感是新增的一部分,只算一次)
+ * - 自称:不比 → 不标
+ */
 export function diffMarks(d: PluginDiff): Record<DiffSec, Marks> {
   return {
-    mcp: marksOf(d.mcp.added.length, d.mcp.changed.length, d.mcp.removed.length),
-    network: marksOf(d.network.added.length, 0, d.network.removed.length),
-    notRun: marksOf(d.notRun.hooksAdded.length + d.notRun.added.length, 0, d.notRun.hooksRemoved.length),
+    mcp: marksOf(d.mcp.added.length, d.mcp.changed.length, d.mcp.removed.length, SAME),
+    network: marksOf(d.network.added.length, 0, d.network.removed.length, NO_ADD),
+    notRun: marksOf(d.notRun.hooksAdded.length + d.notRun.added.length, 0, d.notRun.hooksRemoved.length, NO_ADD),
     skills: marksOf(
       d.skills.added.length + d.commands.added.length,
       d.skills.textChanged.length + d.commands.textChanged.length,
       d.skills.removed.length + d.commands.removed.length,
+      SAME,
     ),
-    config: marksOf(new Set([...d.config.added, ...d.config.requiredSensitive]).size, 0, 0),
-    claimed: { same: true },
+    config: marksOf(new Set([...d.config.added, ...d.config.requiredSensitive]).size, 0, 0, NO_ADD),
+    claimed: {},
   }
 }
+
+/** 有增、删或改 */
+export const hasChanges = (m: Marks) => Boolean(m.add || m.mod || m.del)
 
 export function MarkChips({ marks }: { marks: Marks }) {
   return (
@@ -36,6 +52,7 @@ export function MarkChips({ marks }: { marks: Marks }) {
       {marks.mod ? <Chip tone="warn" sq>{`改动 ${marks.mod}`}</Chip> : null}
       {marks.del ? <Chip tone="bad" sq>{`删除 ${marks.del}`}</Chip> : null}
       {marks.same && <Chip tone="line" sq>未变</Chip>}
+      {marks.noAdd && <Chip tone="line" sq>无新增</Chip>}
     </span>
   )
 }

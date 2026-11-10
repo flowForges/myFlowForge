@@ -3,7 +3,8 @@
 // 同意时服务没跑过,所以这里不写"同意了这些工具"(09 §7)。
 // 08b 两种排法,子组件同一套,只换分组和外框(spec R10、R11):
 //   page(首装 A):头、四块概览、两栏(左 自称 / 技能 · 命令 / 不会运行,右 MCP 服务 / 授权 / 配置项 / 警告)。
-//   upgrade(升级 B):头(升级 id、旧 › 新版本、来源已变)、新旧对照、每一类一节,有变化的在前,没变的也展开只标 未变。
+//   upgrade(升级 B):头(升级 id、旧 › 新版本、来源已变)、新旧对照、每一类一节,有变化的在前,没变的也展开,
+//   标 未变 / 无新增 / 不标,看 diff 对这一类比了什么(diffMarks)。
 import type { ReactNode } from 'react'
 import type { McpCwd, PluginConsent, PluginDiff } from '@mffai/protocol'
 import { Chip } from '../ui/Chip'
@@ -11,7 +12,7 @@ import { CodeChip } from '../ui/CodeChip'
 import { PText } from '../ui/PText'
 import { Icon } from '../shell/icons'
 import { ConsentOverview, notRunCount, suggestedCount } from './ConsentOverview'
-import { ConsentSection, diffMarks, type DiffSec } from './ConsentSection'
+import { ConsentSection, diffMarks, hasChanges, type DiffSec, type Marks } from './ConsentSection'
 
 type Mcp = PluginConsent['mcp'][number]
 type Hook = PluginConsent['notRun']['hooks'][number]
@@ -152,7 +153,7 @@ function PageHead({ c, close }: { c: PluginConsent; close?: ReactNode }) {
   )
 }
 
-function Claimed({ c, marks }: { c: PluginConsent; marks?: { same: true } }) {
+function Claimed({ c, marks }: { c: PluginConsent; marks?: Marks }) {
   return (
     <ConsentSection name="claimed" icon="user" title="自称" marks={marks} chip={<Chip tone="line" sq>未验证</Chip>}>
       <div className="mffai-cclaim">
@@ -390,9 +391,9 @@ function UpgradeLayout({ c, close, grants }: { c: PluginConsent; close?: ReactNo
         <ConfigRows c={c} />
       </ConsentSection>
     ),
-    claimed: <Claimed key="claimed" c={c} marks={{ same: true }} />,
+    claimed: <Claimed key="claimed" c={c} marks={marks?.claimed} />,
   }
-  const changed = (s: DiffSec) => marks !== null && !marks[s].same
+  const changed = (s: DiffSec) => marks !== null && hasChanges(marks[s])
   const order = [...ORDER.filter(changed), ...ORDER.filter((s) => !changed(s))]
   return (
     <div className="mffai-consent mffai-cb">

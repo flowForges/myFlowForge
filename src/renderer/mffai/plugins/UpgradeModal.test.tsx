@@ -15,10 +15,11 @@ const EMPTY: PluginDiff = {
   files: { from: 1, to: 1 }, integrity: null,
 }
 const HOOK = { event: 'E', command: 'c', masked: false }
-const ALL_SAME = { mcp: { same: true }, network: { same: true }, notRun: { same: true }, skills: { same: true }, config: { same: true }, claimed: { same: true } }
+/** 真比了两边的(服务按名字、技能 / 命令)才说 未变;只记新增的(配置、联网建议、不会运行的列表)说 无新增;自称不比,不标 */
+const ALL_SAME = { mcp: { same: true }, network: { noAdd: true }, notRun: { noAdd: true }, skills: { same: true }, config: { noAdd: true }, claimed: {} }
 
 describe('diffMarks', () => {
-  it('an empty diff marks every section 未变', () => {
+  it('an empty diff: 未变 only where both sides are compared, 无新增 where only additions are tracked, nothing on 自称', () => {
     expect(diffMarks(EMPTY)).toEqual(ALL_SAME)
   })
 
@@ -49,6 +50,19 @@ describe('diffMarks', () => {
 
   it('config: a new required sensitive key is counted once', () => {
     expect(diffMarks({ ...EMPTY, config: { added: ['k', 'j'], requiredSensitive: ['k'] } }).config).toEqual({ add: 2 })
+  })
+})
+
+describe('diffMarks per section, against diffConsent', () => {
+  it.each([
+    ['mcp', 'servers compared by name (added, removed, changed fields)', { same: true }],
+    ['skills', 'skill and command names compared both ways, text by hash', { same: true }],
+    ['network', 'declared hosts only; suggestedHosts are not diffed', { noAdd: true }],
+    ['notRun', 'hooks both ways, but agents/bin/…/remote MCP/main only as additions', { noAdd: true }],
+    ['config', 'only new keys', { noAdd: true }],
+    ['claimed', 'not diffed at all', {}],
+  ] as const)('%s: %s → %j', (sec, _why, want) => {
+    expect(diffMarks(EMPTY)[sec]).toEqual(want)
   })
 })
 
@@ -98,6 +112,37 @@ async function openUpgrade(extra: Record<string, unknown> = {}) {
   await within(dlg).findByRole('button', { name: '升级' })
   return { f, dlg, onEnabled }
 }
+
+describe('PluginDetail upgrade modal: focus, Esc while busy, ×', () => {
+  it('while open the detail head is inert; on close it is not, and focus returns to the re-enabled head 升级', async () => {
+    await openUpgrade()
+    const head = document.querySelector('.mffai-dhead') as HTMLElement
+    expect(head.closest('[inert]')).not.toBeNull()
+    expect(screen.getByRole('dialog').closest('[inert]')).toBeNull()
+    await act(async () => { fireEvent.keyDown(document, { key: 'Escape' }) })
+    expect(document.querySelector('[inert]')).toBeNull()
+    const up = within(head).getByRole('button', { name: '升级' }) as HTMLButtonElement
+    expect(up.disabled).toBe(false)
+    expect(document.activeElement).toBe(up)
+  })
+
+  it('Esc during a pending confirm is ignored: no cancel, the modal stays', async () => {
+    const { f, dlg } = await openUpgrade({ 'plugins.install.confirm': () => new Promise(() => {}) })
+    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '升级' })) })
+    expect(f.callsOf('plugins.install.confirm')).toHaveLength(1)
+    await act(async () => { fireEvent.keyDown(document, { key: 'Escape' }) })
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(f.callsOf('plugins.install.cancel')).toEqual([])
+  })
+
+  it('× in the modal head cancels once and closes', async () => {
+    const { f, dlg } = await openUpgrade()
+    const head = dlg.querySelector('[data-section="head"]') as HTMLElement
+    await act(async () => { fireEvent.click(within(head).getByRole('button', { name: '关闭' })) })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(f.callsOf('plugins.install.cancel')).toEqual([{ stagingId: 'up1' }])
+  })
+})
 
 describe('PluginDetail upgrade modal', () => {
   it('the upgrade consent is a modal: head, every section, footer +N ~N −N, 取消 · 升级但停用 · 升级', async () => {

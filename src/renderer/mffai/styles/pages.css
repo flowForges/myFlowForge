@@ -327,7 +327,7 @@ button.mffai-iconbtn:not(.set-btn):hover { color: var(--fg); background: var(--s
 
 .mffai-ca.mffai-consent { gap: 16px; }
 .mffai-chead { display: flex; align-items: center; gap: 14px; margin: 0 -26px; padding: 16px 26px; border-bottom: 1px solid var(--border); }
-.mffai-chead .mffai-dname > .mffai-ptext:first-child { font-size: 17px; font-weight: 650; border-style: none; padding: 0; }
+.mffai-chead .mffai-dname > .mffai-ptext:first-child { font-size: 17px; font-weight: 650; }
 .mffai-cmeta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 11.5px; color: var(--muted); }
 .mffai-cmeta .mffai-k { width: auto; font-size: 11px; }
 .mffai-cmeta .mffai-ptext.mono, .mffai-cmeta .mffai-count { font-size: 11.5px; }
@@ -359,7 +359,8 @@ button.mffai-iconbtn:not(.set-btn):hover { color: var(--fg); background: var(--s
 .mffai-csname.mffai-row { gap: 8px; padding: 2px 0 8px; color: var(--fg); }
 .mffai-csname .mffai-ptext { font-weight: 600; }
 .mffai-cmdline { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 9px 11px; border-radius: 8px; background: var(--bg); font-family: var(--mono); font-size: 11.5px; }
-.mffai-cmdline .mffai-ptext.mono { border-style: none; padding: 0; font-size: 11.5px; color: var(--fg-2); }
+/* 每个参数是自己的虚线框:["--token value"] 和 ["--token","value"] 一眼分得开 */
+.mffai-cmdline .mffai-ptext.mono { font-size: 11.5px; color: var(--fg-2); }
 .mffai-envtbl { display: flex; flex-direction: column; margin-top: 10px; }
 .mffai-envrow { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) 60px minmax(0, 1fr); align-items: center; gap: 8px; min-height: 36px; border-bottom: 1px solid var(--border); font-size: 12px; }
 .mffai-envh { min-height: 28px; font-size: 11.5px; color: var(--faint); }
@@ -377,7 +378,7 @@ button.mffai-iconbtn:not(.set-btn):hover { color: var(--fg); background: var(--s
 .mffai-cb.mffai-consent { flex: 1; min-height: 0; gap: 0; }
 .mffai-uhead { display: flex; align-items: flex-start; gap: 12px; padding: 16px 18px; border-bottom: 1px solid var(--border); }
 .mffai-utitle { font-size: 16px; font-weight: 650; color: var(--fg); }
-.mffai-uhead .mffai-dname > .mffai-ptext { font-size: 16px; font-weight: 650; border-style: none; padding: 0; }
+.mffai-uhead .mffai-dname > .mffai-ptext { font-size: 16px; font-weight: 650; }
 .mffai-uver { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--muted); }
 .mffai-ubody { flex: 1; min-height: 0; overflow: auto; }
 .mffai-ugrid { display: flex; flex-direction: column; gap: 4px; padding: 12px 18px; border-bottom: 1px solid var(--border); background: var(--bg-2); font-size: 12px; }

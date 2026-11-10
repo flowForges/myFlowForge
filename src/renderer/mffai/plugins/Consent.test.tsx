@@ -264,7 +264,7 @@ describe('Consent 08b layouts', () => {
     expect(marks('notrun')).toEqual(['新增 2', '删除 1'])
     expect(marks('skillcmd')).toEqual(['新增 2', '改动 2', '删除 2'])
     expect(marks('config')).toEqual(['新增 2'])
-    expect(marks('claimed')).toEqual(['未变'])
+    expect(marks('claimed')).toEqual([])
     expect(section('network').querySelector('[data-section="grants"]')).not.toBeNull()
     for (const s of ['net-added.example', 'net-removed.example']) expect(section('network'), s).toHaveTextContent(s)
     for (const s of ['mcp-added-1', 'mcp-removed-1', 'mcp-changed-1']) expect(section('mcp'), s).toHaveTextContent(s)
@@ -273,11 +273,14 @@ describe('Consent 08b layouts', () => {
     for (const s of ['cfg-added-1', 'cfg-reqsens-1']) expect(section('config'), s).toHaveTextContent(s)
   })
 
-  it('B: changed sections come first; unchanged 配置项 and 自称 stay expanded, every row shown, marked 未变 (R10)', () => {
+  it('B: changed sections come first; unchanged sections stay expanded, every row shown; 未变 / 无新增 / no mark as the diff allows (R10)', () => {
     const c: PluginConsent = { ...FULL_CONSENT, diff: { ...EMPTY_DIFF, network: { added: ['n.example'], removed: [] } } }
     render(<Consent consent={c} layout="upgrade" />)
     expect(secOrder()).toEqual(['network', 'mcp', 'notrun', 'skillcmd', 'config', 'claimed'])
-    for (const s of ['mcp', 'notrun', 'skillcmd', 'config', 'claimed']) expect(marks(s), s).toEqual(['未变'])
+    for (const s of ['mcp', 'skillcmd']) expect(marks(s), s).toEqual(['未变'])
+    for (const s of ['notrun', 'config']) expect(marks(s), s).toEqual(['无新增'])
+    expect(marks('claimed')).toEqual([])
+    expect(document.body.textContent).not.toMatch(/自称[^]*未变/)
     expect(section('config').querySelectorAll('[data-config]')).toHaveLength(2)
     expect(section('config')).toHaveTextContent('Region title')
     expect(section('claimed')).toHaveTextContent('Mallory Author')
@@ -304,5 +307,27 @@ describe('Consent 08b layouts', () => {
     expect(screen.queryByRole('button')).toBeNull()
     expect(within(section('claimed')).getByText('安装并启用').closest('.mffai-ptext')).not.toBeNull()
     expect(document.body.textContent).not.toMatch(/同意[^]*工具|工具[^]*同意/)
+  })
+})
+
+describe('Consent 08b: third-party frames', () => {
+  it('each arg is its own framed .mffai-ptext: one arg "--token value" differs from two args "--token" "value"', () => {
+    const one = { ...FULL_CONSENT, mcp: [{ ...FULL_CONSENT.mcp[1], name: 'one', args: ['--token value'] }, { ...FULL_CONSENT.mcp[1], name: 'two', args: ['--token', 'value'] }] }
+    for (const layout of ['page', 'upgrade'] as const) {
+      document.body.innerHTML = ''
+      render(<Consent consent={one} layout={layout} />)
+      const texts = (n: string) => [...server(n).querySelectorAll('[data-arg]')].map((a) => [...a.querySelectorAll('.mffai-ptext')].map((p) => p.textContent))
+      expect(texts('one'), layout).toEqual([['--token value']])
+      expect(texts('two'), layout).toEqual([['--token'], ['value']])
+    }
+  })
+
+  it('no consent CSS rule takes the frame off plugin text (args, command line, the id in either head)', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const css = ['base.css', 'pages.css'].map((f) => readFileSync(join(__dirname, '..', 'styles', f), 'utf8')).join('\n')
+    const rules = css.split('}').map((r) => r.trim()).filter((r) => /\.mffai-(cmdline|chead|uhead|arg|cs|consent|ca|cb)\b/.test(r.split('{')[0] ?? ''))
+    const unframing = rules.filter((r) => /\.mffai-ptext/.test(r.split('{')[0]) && /border(-style)?:\s*(none|0)/.test(r))
+    expect(unframing).toEqual([])
   })
 })
