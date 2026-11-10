@@ -59,7 +59,7 @@ function Injected({ events }: { events: KernelEvent[] }) {
       {items.map((e) => {
         const p = pl(e)
         return (
-          <div key={e.seq} className="mffai-inject">
+          <div key={e.seq} className="mffai-card mffai-inject">
             <div className="mffai-actions">
               <CodeChip code={e.type} />
               {typeof p.kind === 'string' && <Chip>{p.kind === 'session' ? '会话' : '轮'}</Chip>}
@@ -79,7 +79,7 @@ function Injected({ events }: { events: KernelEvent[] }) {
 function Plugins() {
   const { status, list } = usePlugins()
   return (
-    <div className="mffai-conn">
+    <div className="mffai-card mffai-conn">
       {status?.plugins.map((p) => (
         <div key={p.id} className="mffai-row">
           <span>{p.id}</span>
@@ -103,14 +103,14 @@ function Raw({ events }: { events: KernelEvent[] }) {
   const picked = seq === undefined ? undefined : events.find((e) => e.seq === seq)
   return (
     <div className="mffai-raw">
-      <ul role="listbox" aria-label="事件" className="mffai-rawlist">
+      <ul role="listbox" aria-label="事件" className="mffai-card mffai-rawlist">
         {events.map((e) => (
           <li key={e.seq} role="option" aria-selected={e.seq === seq} className={e.seq === seq ? 'on' : undefined} onClick={() => setSeq(e.seq)}>
             <span className="mffai-net">{e.seq}</span> {e.type}{e.sessionId ? ` ${e.sessionId}` : ''}
           </li>
         ))}
       </ul>
-      {picked && <pre className="mffai-pre">{JSON.stringify(picked, null, 2)}</pre>}
+      {picked && <pre className="mffai-card mffai-pre">{JSON.stringify(picked, null, 2)}</pre>}
     </div>
   )
 }
@@ -129,30 +129,32 @@ export default function DebugPage() {
   const filtered = useMemo(() => inSession.filter((e) => (!turn || turnOf(e) === turn) && (!types.length || types.includes(e.type))), [inSession, turn, types])
 
   return (
-    <div className="mffai-debug">
-      <div className="mffai-tabs" role="tablist">
-        {TABS.map(([id, name]) => (
-          <button key={id} role="tab" aria-selected={tab === id} className={`set-btn${tab === id ? ' active' : ''}`} onClick={() => setTab(id)}>{name}</button>
-        ))}
-      </div>
-      {tab !== 'panel' && tab !== 'plugins' && (
-        <div className="mffai-opts">
-          <select className="mffai-filter" aria-label="会话" value={session} onChange={(e) => { setSession(e.target.value); setTurn('') }}>
-            <option value="">全部会话</option>
-            {sessions.map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
-          <select className="mffai-filter" aria-label="轮" value={turn} onChange={(e) => setTurn(e.target.value)}>
-            <option value="">全部轮</option>
-            {turns.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
-          <select className="mffai-filter mffai-types" aria-label="事件类型" multiple value={types}
-            onChange={(e) => setTypes([...e.target.selectedOptions].map((o) => o.value))}>
-            {present.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
+    <div className="mffai-debug mffai-debugpage">
+      <div className="mffai-debughead">
+        <div className="mffai-tabs" role="tablist">
+          {TABS.map(([id, name]) => (
+            <button key={id} role="tab" aria-selected={tab === id} className={`set-btn${tab === id ? ' active' : ''}`} onClick={() => setTab(id)}>{name}</button>
+          ))}
         </div>
-      )}
+        {tab !== 'panel' && tab !== 'plugins' && (
+          <div className="mffai-opts">
+            <select className="mffai-filter" aria-label="会话" value={session} onChange={(e) => { setSession(e.target.value); setTurn('') }}>
+              <option value="">全部会话</option>
+              {sessions.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <select className="mffai-filter" aria-label="轮" value={turn} onChange={(e) => setTurn(e.target.value)}>
+              <option value="">全部轮</option>
+              {turns.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+            <select className="mffai-filter mffai-types" aria-label="事件类型" multiple value={types}
+              onChange={(e) => setTypes([...e.target.selectedOptions].map((o) => o.value))}>
+              {present.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </div>
+        )}
+      </div>
       {/* 面板一直挂着:切页签不丢它的缓存 */}
-      <div className="mffai-debug" hidden={tab !== 'panel'}><DebugPanel /></div>
+      <div className="mffai-debug mffai-debugpanel" hidden={tab !== 'panel'}><DebugPanel /></div>
       {tab === 'inject' && <Injected events={filtered} />}
       {tab === 'plugins' && <Plugins />}
       {tab === 'raw' && <Raw events={filtered} />}

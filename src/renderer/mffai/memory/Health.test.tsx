@@ -44,6 +44,20 @@ describe('Health', () => {
     expect(screen.getByText('1 / 10')).toBeInTheDocument()
   })
 
+  it('the six figures sit in one status card with 整理中 in its head while consolidating', async () => {
+    let done!: (v: { extracted: number; promoted: number; proposed: number }) => void
+    f = installFakeForge({ calls: { 'memory.health': health(), 'memory.consolidate': () => new Promise((r) => { done = r }) } })
+    render(<Health />)
+    await screen.findByText('1024')
+    const figs = document.querySelectorAll('.mffai-health .mffai-fig')
+    expect(figs).toHaveLength(6)
+    fireEvent.click(screen.getByRole('button', { name: '立即整理' }))
+    const chip = await screen.findByText('整理中')
+    expect(chip.closest('.mffai-card-h')).not.toBeNull()
+    await act(async () => { done({ extracted: 0, promoted: 0, proposed: 0 }) })
+    await waitFor(() => expect(screen.queryByText('整理中')).toBeNull())
+  })
+
   it('a file_over_cap problem renders as a CodeChip with the full code', async () => {
     f = installFakeForge({ calls: { 'memory.health': health({ problems: ['file_over_cap:MEMORY.md (12000>10000)'] }) } })
     render(<Health />)

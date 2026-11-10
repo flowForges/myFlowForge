@@ -36,6 +36,7 @@ function HabitRow({ h, onDecided }: { h: MemoryHabit; onDecided: () => void }) {
 
   return (
     <div className="mffai-row mffai-habit" data-habit={h.id}>
+      <svg className="mffai-i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M3 10h18M8 3v4M16 3v4" /></svg>
       <span className="mffai-v">{`周${DAY_NAMES[h.weekday] ?? h.weekday} ${h.hour} 点 · ${h.cwd}`}</span>
       <Chip tone={STATUS_TONE[h.status]}>{STATUS_LABEL[h.status]}</Chip>
       {h.status === 'detected' && (
@@ -91,16 +92,20 @@ export function Habits() {
 
   return (
     <div className="mffai-pane mffai-habits">
-      <div className="mffai-row">
-        <label className="mffai-switch">
-          <input type="checkbox" role="switch" checked={routine} disabled={routineBusy} onChange={(e) => void toggleRoutine(e.target.checked)} />
-          主动推荐
-        </label>
-        {routineFailed === 'unsupported' && <Chip tone="bad">不支持</Chip>}
-        {routineFailed === 'failed' && <span className="mffai-fail">失败</span>}
+      <div className="mffai-card mffai-habitcard">
+        <div className="mffai-card-h">
+          <span>习惯</span>
+          <span className="mffai-spacer" />
+          {routineFailed === 'unsupported' && <Chip tone="bad">不支持</Chip>}
+          {routineFailed === 'failed' && <span className="mffai-fail">失败</span>}
+          <label className="mffai-switch">
+            <input type="checkbox" role="switch" checked={routine} disabled={routineBusy} onChange={(e) => void toggleRoutine(e.target.checked)} />
+            主动推荐
+          </label>
+        </div>
+        {failed === 'failed' && <span className="mffai-fail">失败</span>}
+        {items?.map((h) => <HabitRow key={h.id} h={h} onDecided={load} />)}
       </div>
-      {failed === 'failed' && <span className="mffai-fail">失败</span>}
-      {items?.map((h) => <HabitRow key={h.id} h={h} onDecided={load} />)}
     </div>
   )
 }

@@ -36,6 +36,21 @@ describe('DebugPage', () => {
     expect(screen.getByRole('tab', { name: '面板' }).getAttribute('aria-selected')).toBe('true')
   })
 
+  it('page chrome: underline tabs and the three filters share one head row; the events live in a card', async () => {
+    render(<DebugPage />)
+    const root = document.querySelector('.mffai-debugpage') as HTMLElement
+    expect(root).not.toBeNull()
+    tab('注入')
+    const sel = await screen.findByLabelText('会话')
+    const head = sel.closest('.mffai-debughead') as HTMLElement
+    expect(within(head).getByRole('tablist')).toBeInTheDocument()
+    expect(within(head).getByLabelText('轮')).toBeInTheDocument()
+    expect(within(head).getByLabelText('事件类型')).toBeInTheDocument()
+    expect((await screen.findByText('MEM-FULL-TEXT')).closest('.mffai-card')).not.toBeNull()
+    tab('原始')
+    expect((await screen.findByRole('listbox', { name: '事件' })).closest('.mffai-card')).not.toBeNull()
+  })
+
   it('注入: each memory.injected and plugins.injected in full, truncated marked', async () => {
     render(<DebugPage />)
     tab('注入')

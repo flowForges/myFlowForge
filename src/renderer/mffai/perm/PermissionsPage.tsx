@@ -14,7 +14,9 @@ import { label as codeLabel } from '../labels'
 import { AutoSwitch, UNSANDBOXED_AUTO_LABEL } from '../ui/AutoSwitch'
 import { Chip, type ChipTone } from '../ui/Chip'
 import { CodeChip } from '../ui/CodeChip'
+import { HeaderExtra } from '../shell/headerSlot'
 import { RuleEditor, type RuleRow } from './RuleEditor'
+import { SaveBar } from './SaveBar'
 import { TagInput } from './TagInput'
 
 const LEVEL_TONE: Record<SandboxStatus['level'], ChipTone> = { full: 'ok', partial: 'warn', none: 'bad' }
@@ -225,73 +227,93 @@ export default function PermissionsPage() {
 
   return (
     <div className="mffai-pane mffai-perm">
+      <HeaderExtra>
+        <span className="mffai-k">会话</span>
+        <select aria-label="会话" value={sessionId} onChange={(e) => setSessionId(e.target.value)}>
+          <option value="">默认</option>
+          {sessions.map((s) => <option key={s.id} value={s.id}>{s.title || s.id}</option>)}
+        </select>
+      </HeaderExtra>
       {loadFailed === 'failed' && <span className="mffai-fail">失败</span>}
-      <div className="mffai-group">
-        <div className="mffai-grouphead"><span>默认规则</span></div>
-        <div className="mffai-row">
-          <span className="mffai-k">会话</span>
-          <select aria-label="会话" value={sessionId} onChange={(e) => setSessionId(e.target.value)}>
-            <option value="">默认</option>
-            {sessions.map((s) => <option key={s.id} value={s.id}>{s.title || s.id}</option>)}
-          </select>
+      {conflict && (
+        <div className="mffai-conflict">
+          <svg className="mffai-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5" /></svg>
+          <span aria-hidden="true">已在别处修改</span>
+          <button className="set-btn" aria-label="已在别处修改 · 重新载入" onClick={() => loadFull(sessionId)}>重新载入</button>
         </div>
-        {sandbox && (
-          <div className="mffai-row">
-            <Chip tone={LEVEL_TONE[sandbox.level] ?? 'muted'}>{codeLabel('level', sandbox.level)}</Chip>
-            {sandbox.missing.map((m) => <CodeChip key={m} code={m} />)}
-          </div>
-        )}
-        <ul className="mffai-defaults" data-testid="mffai-perm-defaults">
-          {defaults.map((d, i) => <li key={i}>{d}</li>)}
-        </ul>
-        {loadErrors.length > 0 && (
-          <div className="mffai-row" data-testid="mffai-perm-load-errors">
-            {loadErrors.map((e, i) => (
-              <span key={i} className="mffai-rule-error">
-                <CodeChip code={e.reason} />
-                <code className="mffai-badge mffai-code">{e.rule}</code>
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
-      {draft && (
-        <>
-          <div className="mffai-grouphead"><span>全局规则</span></div>
-          <div className="mffai-row">
-            <label className="mffai-switch">
-              <input type="checkbox" role="switch" checked={draft.sandbox.enabled} disabled={busy}
-                onChange={(e) => editSandbox({ enabled: e.target.checked })} />
-              沙箱
-            </label>
-            <label className="mffai-switch">
-              <input type="checkbox" role="switch" checked={draft.sandbox.allowLoopback} disabled={busy}
-                onChange={(e) => editSandbox({ allowLoopback: e.target.checked })} />
-              允许本机回环
-            </label>
-            <AutoSwitch checked={draft.allowUnsandboxedAuto} disabled={busy} label={UNSANDBOXED_AUTO_LABEL} onChange={editAuto} />
-          </div>
-          <div className="mffai-group">
-            <RuleEditor rows={rows} errors={rowErrors} disabled={busy} registerFlush={registerFlush}
-              onEdit={editRule} onMove={moveRule} onRemove={removeRule} onAdd={addRule} />
-          </div>
-          <div className="mffai-group">
-            <div className="mffai-grouphead"><span>联网名单</span></div>
-            <TagInput label="联网名单" value={draft.network.allow} disabled={busy} errors={networkErrors}
-              registerFlush={registerFlush} onChange={editNetwork} />
-          </div>
-          <div className="mffai-actions">
-            {conflict ? (
-              <button className="set-btn" onClick={() => loadFull(sessionId)}>已在别处修改 · 重新载入</button>
-            ) : (
-              <button className="set-btn mffai-primary" disabled={!dirty || busy} onClick={() => void save()}>保存</button>
-            )}
-            {fieldErrors.map((e, i) => <CodeChip key={i} code={e.reason} title={e.rule} />)}
-            {saveFailure === 'unsupported' && <Chip tone="bad">不支持</Chip>}
-            {saveFailure === 'failed' && <span className="mffai-fail">失败</span>}
-          </div>
-        </>
       )}
+      <div className="mffai-permcols">
+        <div className="mffai-permside">
+          {sandbox && (
+            <div className="mffai-card mffai-sandbox">
+              <svg className="mffai-i mffai-sandbox-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z" /></svg>
+              <div className="mffai-row">
+                <Chip tone={LEVEL_TONE[sandbox.level] ?? 'muted'}>{codeLabel('level', sandbox.level)}</Chip>
+                {sandbox.missing.map((m) => <CodeChip key={m} code={m} />)}
+              </div>
+            </div>
+          )}
+          {draft && (
+            <>
+              <div className="mffai-card mffai-switches">
+                <label className="mffai-switch">
+                  <input type="checkbox" role="switch" checked={draft.sandbox.enabled} disabled={busy}
+                    onChange={(e) => editSandbox({ enabled: e.target.checked })} />
+                  沙箱
+                </label>
+                <label className="mffai-switch">
+                  <input type="checkbox" role="switch" checked={draft.sandbox.allowLoopback} disabled={busy}
+                    onChange={(e) => editSandbox({ allowLoopback: e.target.checked })} />
+                  允许本机回环
+                </label>
+                <AutoSwitch checked={draft.allowUnsandboxedAuto} disabled={busy} label={UNSANDBOXED_AUTO_LABEL} onChange={editAuto} />
+              </div>
+              <div className="mffai-card mffai-netcard">
+                <div className="mffai-grouphead"><span>联网名单</span></div>
+                <TagInput label="联网名单" tone="acc" value={draft.network.allow} disabled={busy} errors={networkErrors}
+                  registerFlush={registerFlush} onChange={editNetwork} />
+              </div>
+            </>
+          )}
+        </div>
+        <div className="mffai-permmain">
+          {draft && (
+            <div className="mffai-card mffai-rulescard">
+              <div className="mffai-grouphead">
+                <span>全局规则</span>
+                <Chip tone="muted">{String(rows.length)}</Chip>
+                {rowErrors.size > 0 && <Chip tone="bad">{`${rowErrors.size} 处出错`}</Chip>}
+              </div>
+              <RuleEditor rows={rows} errors={rowErrors} disabled={busy} registerFlush={registerFlush}
+                onEdit={editRule} onMove={moveRule} onRemove={removeRule} onAdd={addRule} />
+              {(fieldErrors.length > 0 || saveFailure) && (
+                <div className="mffai-actions">
+                  {fieldErrors.map((e, i) => <CodeChip key={i} code={e.reason} title={e.rule} />)}
+                  {saveFailure === 'unsupported' && <Chip tone="bad">不支持</Chip>}
+                  {saveFailure === 'failed' && <span className="mffai-fail">失败</span>}
+                </div>
+              )}
+            </div>
+          )}
+          <div className="mffai-card mffai-defcard">
+            <div className="mffai-grouphead"><span>默认规则</span><Chip tone="line">只读</Chip></div>
+            <ul className="mffai-defaults" data-testid="mffai-perm-defaults">
+              {defaults.map((d, i) => <li key={i}>{d}</li>)}
+            </ul>
+            {loadErrors.length > 0 && (
+              <div className="mffai-row" data-testid="mffai-perm-load-errors">
+                {loadErrors.map((e, i) => (
+                  <span key={i} className="mffai-rule-error">
+                    <CodeChip code={e.reason} />
+                    <code className="mffai-badge mffai-code">{e.rule}</code>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+      {draft && <SaveBar dirty={dirty && !conflict} busy={busy} onSave={() => void save()} />}
     </div>
   )
 }

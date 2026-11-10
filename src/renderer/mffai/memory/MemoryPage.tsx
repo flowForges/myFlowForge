@@ -95,19 +95,21 @@ export default function MemoryPage() {
           {pluginError && <span className="mffai-fail">{pluginError}</span>}
         </div>
       )}
-      <div className="mffai-tabs" role="tablist">
-        {TABS.map(([id, name]) => (
-          <button key={id} role="tab" aria-selected={tab === id} className={`set-btn${tab === id ? ' active' : ''}`} onClick={() => setTab(id)}>{name}</button>
-        ))}
-      </div>
-      {/* 档案一直挂着:切标签页不丢没保存的草稿(和 DebugPage 的面板同一招) */}
-      <div className="mffai-group mffai-profile" hidden={tab !== 'profile'}>
+      <div className="mffai-tabrow">
+        <div className="mffai-tabs" role="tablist">
+          {TABS.map(([id, name]) => (
+            <button key={id} role="tab" aria-selected={tab === id} className={`set-btn${tab === id ? ' active' : ''}`} onClick={() => setTab(id)}>{name}</button>
+          ))}
+        </div>
         {filesRoot && (
-          <div className="mffai-row">
+          <div className="mffai-tabpath">
             <span className="mffai-path">{filesRoot}</span>
             <CopyButton className="mffai-copy" title="复制路径" text={() => filesRoot} />
           </div>
         )}
+      </div>
+      {/* 档案一直挂着:切标签页不丢没保存的草稿(和 DebugPage 的面板同一招) */}
+      <div className="mffai-group mffai-profile" hidden={tab !== 'profile'}>
         <FileEditor file="USER.md" readOnly={readOnly} />
         <FileEditor file="MEMORY.md" readOnly={readOnly} />
         {topics.map((t) => <FileEditor key={t} file={t} readOnly={readOnly} />)}

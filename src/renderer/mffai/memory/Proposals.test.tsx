@@ -42,6 +42,24 @@ describe('Proposals', () => {
     expect(await screen.findByText('the old line')).toBeInTheDocument()
   })
 
+  it('card layout: target and op chips plus flags in the head, the old text struck above an editable new text, 驳回 before 批准', async () => {
+    f = installFakeForge({ calls: {
+      'memory.proposals.list': { items: [proposal('p1', { op: 'replace', replaces: 'n_old', flags: ['exec'] })] },
+      'memory.get': { id: 'n_old', layer: 'memory', text: 'the old line' },
+    } })
+    render(<Proposals onJumpToFile={() => {}} />)
+    const card = (await screen.findByText('替换')).closest('.mffai-proposal') as HTMLElement
+    const head = card.querySelector('.mffai-pr-h') as HTMLElement
+    expect(within(head).getByText('MEMORY.md')).toBeInTheDocument()
+    expect(within(head).getByText('提取')).toBeInTheDocument()
+    expect(within(head).getByText('exec')).toBeInTheDocument()
+    const old = (await within(card).findByText('the old line')).closest('.mffai-pr-old') as HTMLElement
+    expect(old).not.toBeNull()
+    expect(card.querySelector('textarea')).toBeInTheDocument()
+    const names = within(card).getAllByRole('button').map((b) => b.textContent)
+    expect(names.indexOf('驳回')).toBeLessThan(names.indexOf('批准'))
+  })
+
   it('evidence ids each fetch their quote via memory.get', async () => {
     f = installFakeForge({ calls: {
       'memory.proposals.list': { items: [proposal('p1', { evidence: ['r_1', 'r_2'] })] },

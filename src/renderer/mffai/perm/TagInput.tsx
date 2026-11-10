@@ -3,10 +3,10 @@
 // 文字就不会因为没点「添加」而丢。registerFlush 让父组件在保存前再强制提交一次,不依赖事件顺序。
 // errors 按 value 的下标标红(联网名单的 reason:'network' 用,评审修订 1),不是规则表的行错误。
 import { useEffect, useRef, useState } from 'react'
-import { Chip } from '../ui/Chip'
+import { Chip, type ChipTone } from '../ui/Chip'
 import { CodeChip } from '../ui/CodeChip'
 
-export function TagInput({ label, value, onChange, disabled, errors, registerFlush }: {
+export function TagInput({ label, value, onChange, disabled, errors, registerFlush, tone }: {
   label: string
   value: readonly string[]
   onChange: (next: string[]) => void
@@ -14,6 +14,8 @@ export function TagInput({ label, value, onChange, disabled, errors, registerFlu
   errors?: ReadonlyMap<number, { reason: string }>
   /** 父组件保存前调一次,把还没点「添加」的文字也收进来 */
   registerFlush?: (flush: () => void) => () => void
+  /** 标签块的颜色:应匹配绿、不应匹配红、联网名单蓝 */
+  tone?: ChipTone
 }) {
   const [text, setText] = useState('')
   const add = () => {
@@ -33,16 +35,20 @@ export function TagInput({ label, value, onChange, disabled, errors, registerFlu
         const err = errors?.get(i)
         return (
           <span key={`${i}-${t}`} className={`mffai-tag${err ? ' mffai-tag-bad' : ''}`}>
-            <Chip>{t}</Chip>
+            <Chip tone={tone}>{t}</Chip>
             {err && <CodeChip code={err.reason} />}
-            <button type="button" disabled={disabled} aria-label={`删除 ${t}`} onClick={() => remove(i)}>删除</button>
+            <button type="button" disabled={disabled} aria-label={`删除 ${t}`} onClick={() => remove(i)}>
+              <svg className="mffai-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg>
+            </button>
           </span>
         )
       })}
       <input aria-label={label} value={text} disabled={disabled} onChange={(e) => setText(e.target.value)}
         onBlur={add}
         onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add() } }} />
-      <button type="button" className="set-btn" disabled={disabled} onClick={add}>添加</button>
+      <button type="button" className="mffai-tagadd" disabled={disabled} aria-label="添加" onClick={add}>
+        <svg className="mffai-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+      </button>
     </span>
   )
 }

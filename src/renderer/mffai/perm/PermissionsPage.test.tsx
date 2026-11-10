@@ -8,12 +8,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { PermissionsConfig, RuleSpec, SandboxStatus } from '@mffai/protocol'
 import PermissionsPage from './PermissionsPage'
+import { HeaderSlotCtx } from '../shell/headerSlot'
 import { UNSANDBOXED_AUTO_LABEL } from '../ui/AutoSwitch'
 import { fail, installFakeForge, type CallTable, type FakeForge } from '../test/fakeForge'
 import { ev, resetSeq } from '../test/events'
 import { summary } from '../test/sessions'
 
 let f: FakeForge
+let slot: HTMLElement
+// 会话选择器经 HeaderExtra 搬到页头:测试给一个挂载点
+const renderPage = () => render(<HeaderSlotCtx.Provider value={slot}><PermissionsPage /></HeaderSlotCtx.Provider>)
 
 const baseConfig = (patch: Partial<PermissionsConfig> = {}): PermissionsConfig => ({
   rules: [{ effect: 'ask', rule: 'shell(git status)', match: ['git status'], noMatch: [] }],
@@ -33,15 +37,17 @@ const rows = () => [...document.querySelectorAll('[data-rule]')] as HTMLElement[
 
 async function mount(calls: CallTable = { 'permissions.get': getResult() }) {
   f = installFakeForge({ calls })
-  render(<PermissionsPage />)
-  await screen.findByRole('button', { name: '保存' })
+  renderPage()
+  await screen.findByRole('switch', { name: '沙箱' })
 }
 
 beforeEach(() => {
   resetSeq()
+  slot = document.createElement('div')
+  document.body.append(slot)
   vi.spyOn(console, 'error').mockImplementation(() => {})
 })
-afterEach(() => { vi.restoreAllMocks() })
+afterEach(() => { vi.restoreAllMocks(); slot.remove() })
 
 describe('PermissionsPage', () => {
   it('loads the draft: rule row, network tag, switches and sandbox chips', async () => {
@@ -51,7 +57,7 @@ describe('PermissionsPage', () => {
     expect(screen.getByText('example.com')).toBeInTheDocument()
     expect(screen.getByText('shell:read')).toBeInTheDocument()
     expect(screen.getByText('proxy')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: '保存' })).toBeNull()
   })
 
   it('shows the sandbox level and every missing code as its own chip; none renders 未隔离', async () => {
@@ -75,13 +81,49 @@ describe('PermissionsPage', () => {
     expect(screen.getByText('shell(bad')).toBeInTheDocument()
   })
 
-  it('places the session selector inside the 默认规则/sandbox block; the editable section is titled 全局规则', async () => {
+  it('puts the session selector in the page header slot; the editable section is titled 全局规则', async () => {
     await mount()
     const heads = [...document.querySelectorAll('.mffai-grouphead')].map((h) => h.textContent)
-    expect(heads).toContain('默认规则')
-    expect(heads).toContain('全局规则')
-    const defaultsBlock = screen.getByTestId('mffai-perm-defaults').closest('.mffai-group') as HTMLElement
-    expect(within(defaultsBlock).getByLabelText('会话')).toBeInTheDocument()
+    expect(heads.some((h) => h?.startsWith('默认规则'))).toBe(true)
+    expect(heads.some((h) => h?.startsWith('全局规则'))).toBe(true)
+    expect(within(slot).getByLabelText('会话')).toBeInTheDocument()
+    const defaultsBlock = screen.getByTestId('mffai-perm-defaults').closest('.mffai-card') as HTMLElement
+    expect(within(defaultsBlock).queryByLabelText('会话')).toBeNull()
+  })
+
+  it('the save bar is absent while clean, appears with 未保存 after an edit, and is disabled while the save is in flight', async () => {
+    let resolveSet: ((v: { ok: boolean }) => void) | undefined
+    await mount({ 'permissions.get': getResult(), 'permissions.set': () => new Promise((resolve) => { resolveSet = resolve }) })
+    expect(screen.queryByText('未保存')).toBeNull()
+    fireEvent.click(screen.getByRole('switch', { name: '允许本机回环' }))
+    expect(screen.getByText('未保存')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled()
+    expect(f.callsOf('permissions.set')).toHaveLength(1)
+    await act(async () => { resolveSet!({ ok: true }) })
+    await waitFor(() => expect(screen.queryByText('未保存')).toBeNull())
+  })
+
+  it('a conflict shows the 已在别处修改 text and a 重新载入 button in the bar; the save bar is hidden meanwhile', async () => {
+    await mount()
+    fireEvent.change(within(rows()[0]).getByLabelText('规则'), { target: { value: 'changed' } })
+    act(() => { f.emit(ev('permissions.updated', { rules: 2, network: 1 })) })
+    const bar = (await screen.findByText('已在别处修改')).closest('.mffai-conflict') as HTMLElement
+    expect(within(bar).getByText('重新载入')).toBeInTheDocument()
+    expect(screen.queryByText('未保存')).toBeNull()
+  })
+
+  it('an erroring rule row is tinted and shows test_failed with its failing case inline in the row', async () => {
+    await mount({
+      'permissions.get': getResult(),
+      'permissions.set': () => fail(-32602, 'invalid', [{ index: 0, rule: 'shell(git status)', reason: 'test_failed', case: 'git push' }]),
+    })
+    fireEvent.change(within(rows()[0]).getByLabelText('规则'), { target: { value: 'shell(x)' } })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '保存' })) })
+    await screen.findByText('git push')
+    expect(rows()[0]).toHaveClass('mffai-rule-bad')
+    expect(within(rows()[0]).getByText('git push')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '保存' })).not.toBeDisabled()
   })
 
   it('the three switches: 沙箱, 允许本机回环, and allowUnsandboxedAuto with the sanctioned label verbatim', async () => {
@@ -143,10 +185,10 @@ describe('PermissionsPage', () => {
 
   it('save sends the whole draft (switches, rules, network) in one permissions.set call, disabled until dirty', async () => {
     await mount({ 'permissions.get': getResult(), 'permissions.set': { ok: true } })
-    const save = screen.getByRole('button', { name: '保存' })
-    expect(save).toBeDisabled()
+    expect(screen.queryByRole('button', { name: '保存' })).toBeNull()
     fireEvent.click(screen.getByRole('switch', { name: '允许本机回环' }))
     fireEvent.change(within(rows()[0]).getByLabelText('规则'), { target: { value: 'shell(git log)' } })
+    const save = screen.getByRole('button', { name: '保存' })
     expect(save).not.toBeDisabled()
     await act(async () => { fireEvent.click(save) })
     const sent = f.callsOf('permissions.set') as { commandId: string; config: PermissionsConfig }[]
@@ -157,7 +199,7 @@ describe('PermissionsPage', () => {
     }))
     expect(typeof sent[0].commandId).toBe('string')
     // 成功后重取:草稿变干净
-    await waitFor(() => expect(save).toBeDisabled())
+    await waitFor(() => expect(screen.queryByRole('button', { name: '保存' })).toBeNull())
   })
 
   it('inputs are locked while the save is in flight', async () => {
@@ -171,7 +213,7 @@ describe('PermissionsPage', () => {
     expect(screen.getByLabelText('联网名单')).toBeDisabled()
     expect(screen.getByRole('button', { name: '添加规则' })).toBeDisabled()
     await act(async () => { resolveSet!({ ok: true }) })
-    await waitFor(() => expect(screen.getByRole('button', { name: '保存' })).toBeDisabled())
+    await waitFor(() => expect(screen.queryByRole('button', { name: '保存' })).toBeNull())
   })
 
   it('two clicks in one frame save once (ref guard against double submit)', async () => {
@@ -237,7 +279,7 @@ describe('PermissionsPage', () => {
 
   it('-32601 on permissions.get shows 不支持 with no editable draft', async () => {
     f = installFakeForge({ calls: { 'permissions.get': () => fail(-32601) } })
-    render(<PermissionsPage />)
+    renderPage()
     await screen.findByText('不支持')
     expect(screen.queryByRole('button', { name: '保存' })).toBeNull()
   })
@@ -284,9 +326,9 @@ describe('PermissionsPage', () => {
         },
       },
     })
-    render(<PermissionsPage />)
+    renderPage()
     resolvers['']?.(getResult())
-    await screen.findByRole('button', { name: '保存' })
+    await screen.findByRole('switch', { name: '沙箱' })
     const select = await screen.findByLabelText<HTMLSelectElement>('会话')
     await waitFor(() => expect(within(select).getAllByRole('option')).toHaveLength(3))
     fireEvent.change(select, { target: { value: 'a' } })
@@ -309,7 +351,7 @@ describe('PermissionsPage', () => {
     f.script({ 'permissions.get': getResult({ rules: [] }) })
     await act(async () => { fireEvent.click(reload) })
     expect(rows()).toHaveLength(0)
-    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: '保存' })).toBeNull()
   })
 
   it('a clean draft refetches silently on permissions.updated: no reload button', async () => {

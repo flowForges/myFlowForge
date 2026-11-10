@@ -11,7 +11,7 @@ import { memStorage } from './panel'
 import { ACTIVITY_KEY } from '../layout'
 import { vi } from 'vitest'
 import { installResize } from './resize'
-import { ev } from './events'
+import { ev, userMsg } from './events'
 import { act } from '@testing-library/react'
 import { Chip, type ChipTone } from '../ui/Chip'
 import { CodeChip } from '../ui/CodeChip'
@@ -23,7 +23,7 @@ import { Confirm } from '../ui/Confirm'
 import MffaiView from '../MffaiView'
 import { ApprovalCard } from '../chat/ApprovalCard'
 import { route } from '../route'
-import { installFakeForge } from './fakeForge'
+import { fail, installFakeForge } from './fakeForge'
 import { runRow } from './sessions'
 import type { RunRow } from '@mffai/protocol'
 import { detailOf, FULL_CONSENT, listRow, pluginList } from './plugins'
@@ -506,5 +506,74 @@ describe.skipIf(!OUT)('preview screens', () => {
     await within(dlg).findByRole('button', { name: '升级' })
     writePreview('06-consent-B', PREVIEW_SIZE)
     expect(existsSync(join(OUT!, '06-consent-B.html'))).toBe(true)
+  })
+  const pageCalls = (extra: Record<string, unknown> = {}) => ({ ...(plugCalls() as object), 'plugins.list': pluginList({ plugins: [], dev: [], problems: [] }), ...extra })
+
+  it('07-memory: the 待确认 tab with replace, add and full proposals', async () => {
+    route.set({ page: 'memory' })
+    installFakeForge({ state: { ...(plugState as object), roots: { data: '~/.mff-ai', worktrees: '/w', imWorktrees: '/im', plugins: '/p', keychain: 'k' } } as never, calls: pageCalls({
+      'memory.health': { dbBytes: 1, rawRows: 1, noteRows: 1, cursorLag: 0, pendingProposals: 3, problems: ['delete_stuck:n_z'] },
+      'memory.file.get': { content: '', hash: 'h0', cap: 2000 },
+      'memory.list': { items: [] },
+      'memory.get': (p: { id: string }) => ({ id: p.id, layer: 'raw', text: p.id === 'n_old' ? 'forge-api 的测试命令是 pnpm jest' : '以后装依赖都用 pnpm 吧,提交信息写中文就行' }),
+      'memory.proposals.list': { items: [
+        { id: 'p1', target: 'USER.md', op: 'add', text: '偏好 pnpm,不用 npm;提交信息用中文', evidence: ['r_1'], source: 'extract', flags: [], status: 'pending', createdAt: 1 },
+        { id: 'p2', target: 'MEMORY.md', op: 'replace', text: 'forge-api 的测试命令是 pnpm vitest run', replaces: 'n_old', evidence: ['r_2'], source: 'model', flags: [], status: 'pending', createdAt: 2 },
+        { id: 'p3', target: 'topics/deploy.md', op: 'add', text: '预发环境部署前要先跑 db:migrate:check', evidence: ['r_3'], source: 'extract', flags: ['exec'], status: 'pending', createdAt: 3 },
+      ] },
+      'memory.proposals.decide': (p: { id: string }) => (p.id === 'p3' ? fail(-32602, 'full') : { ok: true }),
+    }) })
+    render(<MffaiView />)
+    await screen.findByTestId('mffai-page-memory')
+    fireEvent.click(await screen.findByRole('tab', { name: '待确认' }))
+    await screen.findAllByText('提取')
+    await act(async () => { fireEvent.click(document.querySelectorAll('[data-proposal="p3"] .mffai-primary')[0]) })
+    await screen.findByText('已满')
+    writePreview('07-memory', PREVIEW_SIZE)
+    expect(existsSync(join(OUT!, '07-memory.html'))).toBe(true)
+  })
+
+  it('08-permissions: sandbox, switches, network, the rules table with an error row, defaults and the save bar', async () => {
+    route.set({ page: 'perm' })
+    installFakeForge({ state: plugState, calls: pageCalls({
+      'permissions.get': {
+        config: {
+          rules: [
+            { effect: 'deny', rule: 'shell: rm -rf *', match: ['rm -rf /', 'rm -rf ~'], noMatch: ['rm -rf ./dist'] },
+            { effect: 'ask', rule: 'shell: git push*', match: ['git push origin main'], noMatch: ['git pull'] },
+            { effect: 'allow', rule: 'shell: pnpm vitest*', match: ['pnpm vitest run'], noMatch: ['pnpm publish'] },
+            { effect: 'allow', rule: 'read_file: src/**', match: ['src/a.ts'], noMatch: ['.env'] },
+          ],
+          network: { allow: ['registry.npmjs.org', 'api.github.com', '*.pypi.org'] }, sandbox: { enabled: true, allowLoopback: false }, allowUnsandboxedAuto: false,
+        },
+        defaults: ['deny read_file: ~/.ssh/**', 'deny read_file: **/.env*', 'ask shell: sudo *', 'ask write_file: /etc/**'], errors: [],
+        sandbox: { level: 'partial', missing: ['netns'], autoDegraded: false },
+      },
+      'permissions.set': () => fail(-32602, 'invalid', [{ index: 2, rule: 'shell: pnpm vitest*', reason: 'test_failed', case: 'pnpm publish' }]),
+    }) })
+    render(<MffaiView />)
+    await screen.findByTestId('mffai-page-perm')
+    await screen.findByText('registry.npmjs.org')
+    fireEvent.click(screen.getByRole('switch', { name: '允许本机回环' }))
+    fireEvent.click(screen.getByRole('switch', { name: '允许本机回环' }))
+    fireEvent.change(screen.getAllByLabelText('规则')[0], { target: { value: 'shell: rm -rf *' } })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '保存' })) })
+    await screen.findByText('test_failed')
+    writePreview('08-permissions', PREVIEW_SIZE)
+    expect(existsSync(join(OUT!, '08-permissions.html'))).toBe(true)
+  })
+
+  it('10-debug: the raw tab with filters and a picked event', async () => {
+    route.set({ page: 'debug' })
+    const events = [ev('memory.injected', { turnId: 't_9f2', kind: 'turn', text: 'items 2', items: [] }, { sessionId: 's_31ac' }), userMsg('s_31ac', 't_9f2', 'hello'), ev('plugins.injected', { turnId: 't_9f2', text: 'skill', skill: true, mcp: false }, { sessionId: 's_31ac' })]
+    installFakeForge({ state: plugState, calls: pageCalls({ 'events.tail': { events } }) })
+    render(<MffaiView />)
+    await screen.findByTestId('mffai-page-debug')
+    fireEvent.click(await screen.findByRole('tab', { name: '原始' }))
+    const list = await screen.findByRole('listbox', { name: '事件' })
+    await waitFor(() => expect(within(list).queryAllByRole('option').length).toBeGreaterThan(0))
+    fireEvent.click(within(list).getAllByRole('option')[0])
+    writePreview('10-debug', PREVIEW_SIZE)
+    expect(existsSync(join(OUT!, '10-debug.html'))).toBe(true)
   })
 })

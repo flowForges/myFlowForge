@@ -24,32 +24,53 @@ export function RuleEditor({ rows, errors, disabled, onEdit, onMove, onRemove, o
 }) {
   return (
     <div className="mffai-rules">
+      {rows.length > 0 && (
+        <div className="mffai-rulehead" aria-hidden="true">
+          <span /><span>效果</span><span>规则</span><span>应匹配</span><span>不应匹配</span><span />
+        </div>
+      )}
       {rows.map(({ id, r }, i) => {
         const err = errors.get(id)
         return (
           <div key={id} className={`mffai-row mffai-rule${err ? ' mffai-rule-bad' : ''}`} data-rule={id}>
-            <select aria-label="效果" value={r.effect} disabled={disabled}
-              onChange={(e) => onEdit(id, { effect: e.target.value as RuleSpec['effect'] })}>
-              {EFFECTS.map((e) => <option key={e} value={e}>{EFFECT_LABEL[e]}</option>)}
-            </select>
-            <input aria-label="规则" value={r.rule} disabled={disabled} onChange={(e) => onEdit(id, { rule: e.target.value })} />
-            <TagInput label="应匹配" value={r.match ?? []} disabled={disabled} registerFlush={registerFlush}
+            <svg className="mffai-i mffai-grip" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="1" /><circle cx="15" cy="6" r="1" /><circle cx="9" cy="12" r="1" /><circle cx="15" cy="12" r="1" /><circle cx="9" cy="18" r="1" /><circle cx="15" cy="18" r="1" /></svg>
+            <div className="mffai-seg mffai-effseg" role="group" aria-label="效果">
+              {EFFECTS.map((e) => (
+                <button key={e} type="button" className={`${e}${r.effect === e ? ' on' : ''}`} aria-pressed={r.effect === e} disabled={disabled}
+                  onClick={() => onEdit(id, { effect: e })}>{EFFECT_LABEL[e]}</button>
+              ))}
+            </div>
+            <div className="mffai-rulecell">
+              <input aria-label="规则" value={r.rule} disabled={disabled} onChange={(e) => onEdit(id, { rule: e.target.value })} />
+              {err && (
+                <span className="mffai-rule-error">
+                  <svg className="mffai-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /><path d="M12 9v4M12 17h.01" /></svg>
+                  <CodeChip code={err.reason} />
+                  {err.case !== undefined && <CodeChip code={err.case} />}
+                </span>
+              )}
+            </div>
+            <TagInput label="应匹配" tone="ok" value={r.match ?? []} disabled={disabled} registerFlush={registerFlush}
               onChange={(match) => onEdit(id, { match })} />
-            <TagInput label="不应匹配" value={r.noMatch ?? []} disabled={disabled} registerFlush={registerFlush}
+            <TagInput label="不应匹配" tone="bad" value={r.noMatch ?? []} disabled={disabled} registerFlush={registerFlush}
               onChange={(noMatch) => onEdit(id, { noMatch })} />
-            <button type="button" className="set-btn" disabled={disabled || i === 0} onClick={() => onMove(id, -1)}>上移</button>
-            <button type="button" className="set-btn" disabled={disabled || i === rows.length - 1} onClick={() => onMove(id, 1)}>下移</button>
-            <button type="button" className="set-btn" disabled={disabled} onClick={() => onRemove(id)}>删除</button>
-            {err && (
-              <span className="mffai-rule-error">
-                <CodeChip code={err.reason} />
-                {err.case !== undefined && <CodeChip code={err.case} />}
-              </span>
-            )}
+            <span className="mffai-ruleops">
+              <button type="button" className="mffai-iconbtn" aria-label="上移" disabled={disabled || i === 0} onClick={() => onMove(id, -1)}>
+                <svg className="mffai-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
+              </button>
+              <button type="button" className="mffai-iconbtn" aria-label="下移" disabled={disabled || i === rows.length - 1} onClick={() => onMove(id, 1)}>
+                <svg className="mffai-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12l7 7 7-7" /></svg>
+              </button>
+              <button type="button" className="mffai-iconbtn mffai-danger" aria-label="删除" disabled={disabled} onClick={() => onRemove(id)}>
+                <svg className="mffai-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" /></svg>
+              </button>
+            </span>
           </div>
         )
       })}
-      <button type="button" className="set-btn" disabled={disabled} onClick={onAdd}>添加规则</button>
+      <button type="button" className="set-btn mffai-addrule" disabled={disabled} onClick={onAdd}>
+        <svg className="mffai-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>添加规则
+      </button>
     </div>
   )
 }

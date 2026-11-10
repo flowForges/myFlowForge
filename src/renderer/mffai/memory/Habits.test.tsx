@@ -25,6 +25,15 @@ describe('Habits', () => {
     expect(screen.getByText('待确认')).toBeInTheDocument()
   })
 
+  it('the 主动推荐 switch sits in a habits card head, still a switch', async () => {
+    f = installFakeForge({ calls: { 'memory.habits.list': { items: [habit('h1')] } } })
+    render(<Habits />)
+    await screen.findByText('待确认')
+    const sw = screen.getByRole('switch', { name: '主动推荐' })
+    expect(sw.closest('.mffai-card-h')).not.toBeNull()
+    expect(sw.closest('.mffai-card')).toContainElement(document.querySelector('[data-habit="h1"]') as HTMLElement)
+  })
+
   it('confirm and dismiss buttons only show for detected habits', async () => {
     f = installFakeForge({ calls: { 'memory.habits.list': { items: [habit('h1', { status: 'confirmed' })] } } })
     render(<Habits />)

@@ -14,20 +14,20 @@ const domRows = () => [...document.querySelectorAll('[data-rule]')] as HTMLEleme
 const noop = { onEdit: () => {}, onMove: () => {}, onRemove: () => {}, onAdd: () => {} }
 
 describe('RuleEditor', () => {
-  it('one row per rule: effect select, rule text, its match/noMatch tags', () => {
+  it('one row per rule: effect seg, rule text, its match/noMatch tags', () => {
     render(<RuleEditor rows={rows()} errors={new Map()} {...noop} />)
     expect(domRows()).toHaveLength(2)
-    expect(within(domRows()[0]).getByLabelText<HTMLSelectElement>('效果').value).toBe('deny')
+    expect(within(domRows()[0]).getByRole('button', { name: '拒绝', pressed: true })).toBeInTheDocument()
     expect(within(domRows()[0]).getByLabelText<HTMLInputElement>('规则').value).toBe('read(a)')
     expect(within(domRows()[0]).getByText('x')).toBeInTheDocument()
-    expect(within(domRows()[1]).getByLabelText<HTMLSelectElement>('效果').value).toBe('ask')
+    expect(within(domRows()[1]).getByRole('button', { name: '询问', pressed: true })).toBeInTheDocument()
     expect(within(domRows()[1]).getByText('y')).toBeInTheDocument()
   })
 
   it('edits effect and rule text, identified by id', () => {
     const onEdit = vi.fn()
     render(<RuleEditor rows={rows()} errors={new Map()} {...noop} onEdit={onEdit} />)
-    fireEvent.change(within(domRows()[0]).getByLabelText('效果'), { target: { value: 'allow' } })
+    fireEvent.click(within(domRows()[0]).getByRole('button', { name: '允许' }))
     expect(onEdit).toHaveBeenCalledWith('r1', { effect: 'allow' })
     fireEvent.change(within(domRows()[1]).getByLabelText('规则'), { target: { value: 'shell(c)' } })
     expect(onEdit).toHaveBeenCalledWith('r2', { rule: 'shell(c)' })
@@ -49,6 +49,20 @@ describe('RuleEditor', () => {
     expect(within(domRows()[1]).getByRole('button', { name: '下移' })).toBeDisabled()
     fireEvent.click(within(domRows()[0]).getByRole('button', { name: '下移' }))
     expect(onMove).toHaveBeenCalledWith('r1', 1)
+  })
+
+  it('the effect seg shows exactly the current effect as pressed, one tone class per effect', () => {
+    render(<RuleEditor rows={rows()} errors={new Map()} {...noop} />)
+    const seg = within(domRows()[0]).getByRole('group', { name: '效果' })
+    expect(within(seg).getAllByRole('button').map((b) => [b.textContent, b.getAttribute('aria-pressed')])).toEqual([['拒绝', 'true'], ['询问', 'false'], ['允许', 'false']])
+    expect(within(seg).getByRole('button', { name: '拒绝' })).toHaveClass('deny')
+    expect(within(seg).getByRole('button', { name: '允许' })).toHaveClass('allow')
+  })
+
+  it('match tags are green (ok), noMatch tags red (bad)', () => {
+    render(<RuleEditor rows={[{ id: 'r1', r: { effect: 'ask', rule: 'a', match: ['m'], noMatch: ['n'] } }]} errors={new Map()} {...noop} />)
+    expect(screen.getByText('m').closest('.mffai-chip')).toHaveClass('ok')
+    expect(screen.getByText('n').closest('.mffai-chip')).toHaveClass('bad')
   })
 
   it('deletes a row by id', () => {
@@ -86,7 +100,7 @@ describe('RuleEditor', () => {
 
   it('disabled: every control in every row and the add button are disabled', () => {
     render(<RuleEditor rows={rows()} errors={new Map()} {...noop} disabled />)
-    expect(within(domRows()[0]).getByLabelText('效果')).toBeDisabled()
+    expect(within(domRows()[0]).getByRole('button', { name: '允许' })).toBeDisabled()
     expect(within(domRows()[0]).getByLabelText('规则')).toBeDisabled()
     expect(within(domRows()[0]).getByLabelText('应匹配')).toBeDisabled()
     expect(within(domRows()[0]).getByRole('button', { name: '删除' })).toBeDisabled()

@@ -60,34 +60,46 @@ function ProposalRow({ p, onDecided, onJumpToFile }: {
 
   return (
     <div className="mffai-card mffai-proposal" data-proposal={p.id}>
-      <div className="mffai-row">
-        <Chip>{p.target}</Chip>
+      <div className="mffai-pr-h">
+        <Chip tone="line" sq>
+          <svg className="mffai-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" /><path d="M14 3v6h6" /></svg>
+          {p.target}
+        </Chip>
         <Chip tone={p.op === 'replace' ? 'warn' : 'ok'}>{OP_LABEL[p.op]}</Chip>
-        <Chip tone="muted">{SOURCE_LABEL[p.source]}</Chip>
         {p.flags.map((fl) => <CodeChip key={fl} code={fl} />)}
+        <span className="mffai-spacer" />
+        <Chip tone="line">{SOURCE_LABEL[p.source]}</Chip>
       </div>
       {p.op === 'replace' && p.replaces && (
-        <div className="mffai-row"><span className="mffai-k">原文</span><Quote id={p.replaces} /></div>
+        <div className="mffai-pr-old"><span className="mffai-pr-sign del" aria-hidden="true">−</span><Quote id={p.replaces} /></div>
       )}
-      <textarea aria-label={`文字 ${p.id}`} className="mffai-input" value={text} disabled={busy}
-        onChange={(e) => setText(e.target.value)} />
-      {p.evidence.length > 0 && (
-        <div className="mffai-row">
-          <span className="mffai-k">证据</span>
-          {p.evidence.map((id) => <Quote key={id} id={id} />)}
+      <div className="mffai-pr-new">
+        <span className="mffai-pr-sign add" aria-hidden="true">+</span>
+        <textarea aria-label={`文字 ${p.id}`} className="mffai-input" value={text} disabled={busy}
+          onChange={(e) => setText(e.target.value)} />
+      </div>
+      {p.evidence.map((id) => (
+        <div key={id} className="mffai-pr-ev">
+          <svg className="mffai-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h4v4c0 3-2 5-4 6M15 7h4v4c0 3-2 5-4 6" /></svg>
+          <Quote id={id} />
         </div>
-      )}
+      ))}
       <div className="mffai-actions">
-        <button className="set-btn mffai-primary" disabled={busy} onClick={() => void decide('approve')}>批准</button>
-        <button className="set-btn" disabled={busy} onClick={() => void decide('reject')}>驳回</button>
         {status === 'full' && (
           <>
             <Chip tone="bad">已满</Chip>
-            <button className="set-btn" onClick={() => onJumpToFile(p.target)}>去编辑</button>
+            <button className="set-btn" onClick={() => onJumpToFile(p.target)}>
+              <svg className="mffai-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>去编辑
+            </button>
           </>
         )}
         {status === 'unsupported' && <Chip tone="bad">不支持</Chip>}
         {status === 'failed' && <span className="mffai-fail">失败</span>}
+        <span className="mffai-spacer" />
+        <button className="set-btn" disabled={busy} onClick={() => void decide('reject')}>驳回</button>
+        <button className="set-btn mffai-primary" disabled={busy} onClick={() => void decide('approve')}>
+          <svg className="mffai-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>批准
+        </button>
       </div>
     </div>
   )

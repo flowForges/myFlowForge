@@ -12,13 +12,13 @@
 .mffai-filter { max-width: 220px; height: 30px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--fg); }
 .mffai-filter.mffai-types { height: 72px; }
 .mffai-injects { display: flex; flex-direction: column; gap: 10px; overflow: auto; }
-.mffai-inject { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.mffai-inject { max-width: none; gap: 6px; }
 .mffai-raw { flex: 1; min-height: 0; display: flex; gap: 10px; }
-.mffai-rawlist { flex: 0 0 300px; margin: 0; padding: 4px; list-style: none; overflow: auto; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; }
+.mffai-rawlist { flex: 1 1 0; max-width: none; margin: 0; padding: 6px; list-style: none; overflow: auto; font-size: 12px; font-family: var(--mono, monospace); }
 .mffai-rawlist li { padding: 3px 6px; border-radius: 5px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mffai-rawlist li:hover { background: var(--surface); }
 .mffai-rawlist li.on { background: var(--accent-dim); }
-.mffai-raw .mffai-pre { flex: 1; }
+.mffai-raw .mffai-pre { flex: 0 0 38%; min-width: 0; overflow: auto; margin: 0; }
 .mffai-debug[hidden] { display: none; }
 /* 任务页(08 §9;08b):三张卡片,卡片里是表 */
 .mffai-tasks { gap: 22px; }
@@ -107,20 +107,9 @@
 .mffai-tg-chats .mffai-row + .mffai-row { border-top: 1px solid var(--border); }
 .mffai-tg-chats .mffai-model { font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
 /* 权限页(08 §11) */
-.mffai-perm { gap: 16px; }
-.mffai-rules { display: flex; flex-direction: column; gap: 8px; }
-.mffai-rule { flex-wrap: wrap; border-bottom: 1px solid var(--border); }
-.mffai-rule:last-child { border-bottom: none; }
-.mffai-rule-bad { background: var(--mffai-rule-bad); }
-.mffai-rule-error { display: inline-flex; gap: 4px; }
-.mffai-defaults { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 12.5px; color: var(--faint); font-family: var(--mono, monospace); }
-.mffai-tags { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.mffai-tag { display: inline-flex; align-items: center; gap: 2px; }
-.mffai-tags input { height: 26px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--fg); font-size: 12.5px; }
 .mffai-field { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--fg-2); }
 .mffai-row.bad [aria-invalid="true"] { border-color: var(--del); }
 /* 记忆页(08 §12) */
-.mffai-memory { gap: 14px; }
 .mffai-chatroot { flex-direction: column; }
 .mffai-recs { display: flex; flex-direction: column; gap: 8px; }
 .mffai-recs .mffai-rec { max-width: none; flex-direction: row; align-items: center; gap: 12px; padding: 14px 16px; border-radius: 11px; border-color: var(--mffai-acc-line); background: var(--mffai-panel-bg); }
@@ -132,17 +121,11 @@
 .mffai-fileeditor { max-width: 720px; }
 .mffai-filebody { min-height: 140px; font-family: var(--mono, monospace); font-size: 12.5px; }
 .mffai-profile { gap: 14px; }
-.mffai-proposal { max-width: 720px; gap: 8px; }
-.mffai-quote { display: inline-block; padding: 2px 8px; border-left: 2px solid var(--border); color: var(--fg-2); font-size: 12.5px; }
 .mffai-itemrow { flex-wrap: wrap; border-bottom: 1px solid var(--border); }
 .mffai-itemrow:last-child { border-bottom: none; }
 .mffai-itemtext { flex: 1; min-width: 160px; }
-.mffai-habit .mffai-v { flex: 1; }
 .mffai-change { padding: 2px 0; }
 .mffai-change .mffai-file-btn { gap: 10px; }
-.mffai-meter-row .mffai-k { width: 56px; }
-.mffai-meter { flex: 1; max-width: 260px; height: 6px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
-.mffai-meter-fill { height: 100%; background: var(--accent); }
 /* 插件页(Task 13)。第三方文字 .mffai-ptext:虚线框,和界面的块、按钮一眼分得开 */
 .mffai-consent { display: flex; flex-direction: column; gap: 14px; }
 .mffai-crow { flex-wrap: wrap; }
@@ -417,3 +400,116 @@ button.mffai-iconbtn:not(.set-btn):hover { color: var(--fg); background: var(--s
 .mffai-dl.mod .mffai-dsign { color: var(--warn); }
 .mffai-dl > .mffai-hook { flex: 1; padding: 0; border: none; }
 .mffai-umodal .mffai-cfoot.mffai-actions { min-height: 56px; padding: 0 16px; }
+
+/* 记忆页(08b R21):下划线页签 + 右上路径;卡片 */
+.mffai-memory { gap: 14px; }
+.mffai-tabrow { display: flex; align-items: flex-end; gap: 16px; border-bottom: 1px solid var(--border); }
+.mffai-tabrow > .mffai-tabs { border-bottom: none; flex: 0 0 auto; }
+.mffai-tabpath { display: inline-flex; align-items: center; gap: 6px; min-width: 0; margin: 0 0 6px auto; }
+.mffai-tabpath .mffai-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; word-break: normal; font-size: 11px; color: var(--faint); }
+.mffai-tabpath .mffai-copy { display: inline-flex; align-items: center; flex: 0 0 auto; height: 24px; padding: 0 6px; border-radius: 6px; font-size: 11px; color: var(--muted); }
+.mffai-tabpath .mffai-copy:hover { background: var(--surface); color: var(--fg); }
+.mffai-tabpath .mffai-copy svg { width: 12px; height: 12px; }
+.mffai-spacer { flex: 1; }
+.mffai-proposals, .mffai-habits, .mffai-health { gap: 12px; }
+.mffai-proposal { max-width: none; gap: 10px; padding: 14px 16px; border-radius: 11px; }
+.mffai-pr-h { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.mffai-pr-h > .mffai-chip.line.sq { font-family: var(--mono, monospace); }
+.mffai-pr-old, .mffai-pr-new { display: flex; align-items: flex-start; gap: 10px; }
+.mffai-pr-sign { flex: 0 0 14px; font-family: var(--mono, monospace); font-weight: 700; line-height: 22px; text-align: center; }
+.mffai-pr-sign.add { color: var(--mffai-add-fg); }
+.mffai-pr-sign.del { color: var(--mffai-del-fg); }
+.mffai-pr-old .mffai-quote { padding: 0; border: none; color: var(--faint); text-decoration: line-through; line-height: 22px; }
+.mffai-pr-new textarea { flex: 1; min-width: 0; min-height: 40px; border-color: transparent; background: var(--mffai-tint); font-size: 13px; resize: vertical; }
+.mffai-pr-new textarea:focus { border-color: var(--accent); }
+.mffai-pr-ev { display: flex; align-items: flex-start; gap: 10px; padding-left: 24px; color: var(--faint); }
+.mffai-pr-ev .mffai-i { margin-top: 3px; width: 13px; height: 13px; }
+.mffai-quote { display: inline-block; min-width: 0; padding: 2px 0 2px 10px; border-left: 2px solid var(--border-2); color: var(--fg-2); font-size: 12.5px; }
+.mffai-proposal .mffai-actions { align-items: center; }
+.mffai-proposal .mffai-actions .mffai-primary { margin-top: 0; }
+.mffai-proposal .mffai-actions .set-btn:not(.mffai-primary) { background: transparent; border-color: transparent; }
+.mffai-health > .mffai-card, .mffai-habits > .mffai-card { max-width: 640px; gap: 12px; padding: 16px 18px; border-radius: 11px; }
+.mffai-card-h { display: flex; align-items: center; gap: 8px; min-height: 24px; font-size: 13px; font-weight: 600; color: var(--fg); }
+.mffai-figs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 18px; }
+.mffai-fig { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.mffai-fig .mffai-k { width: auto; font-size: 11.5px; }
+.mffai-fig .mffai-count { font-size: 15px; font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; }
+.mffai-fig .mffai-usage { font-size: 11px; }
+.mffai-meters { display: flex; flex-direction: column; gap: 2px; padding-top: 10px; border-top: 1px solid var(--border); }
+.mffai-meter-row { padding: 2px 0; font-size: 11.5px; }
+.mffai-meter-row .mffai-k { width: 56px; }
+.mffai-meter { flex: 1; height: 6px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
+.mffai-meter-fill { height: 100%; background: var(--accent); }
+.mffai-habitcard .mffai-card-h .mffai-switch { font-weight: 500; }
+.mffai-habit { gap: 10px; padding: 9px 0; border-top: 1px solid var(--border); }
+.mffai-habit > .mffai-i { color: var(--faint); }
+.mffai-habit .mffai-v { flex: 1; min-width: 0; font-size: 12.5px; color: var(--fg); }
+
+/* 权限页(08 §11;08b):左列沙箱、开关、联网名单,右列规则表和默认规则;保存条浮在底部 */
+.mffai-perm { gap: 14px; position: relative; }
+.mffai-conflict { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 0 12px; border: 1px solid var(--mffai-acc-line); border-radius: 9px; background: var(--accent-dim); font-size: 13px; color: var(--fg); }
+.mffai-conflict .mffai-i { color: var(--accent); }
+.mffai-conflict .set-btn { margin-left: auto; height: 26px; }
+.mffai-permcols { display: grid; grid-template-columns: minmax(260px, 330px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.mffai-permside, .mffai-permmain { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.mffai-perm .mffai-card { max-width: none; padding: 14px 16px; gap: 10px; border-radius: 11px; }
+.mffai-sandbox { flex-direction: row; align-items: center; gap: 12px; }
+.mffai-sandbox-ic { width: 38px; height: 38px; padding: 10px; border-radius: 10px; background: var(--mffai-warn-dim); color: var(--warn); }
+.mffai-sandbox .mffai-row { flex-wrap: wrap; gap: 6px; padding: 0; }
+.mffai-switches { gap: 4px; }
+.mffai-switches > .mffai-switch { display: flex; flex-direction: row-reverse; justify-content: space-between; min-height: 38px; font-size: 13px; color: var(--fg); }
+.mffai-switches > .mffai-warnrow { flex-direction: row; margin-top: 6px; }
+.mffai-grouphead { display: flex; align-items: center; gap: 8px; min-height: 24px; font-size: 13px; font-weight: 600; color: var(--fg); }
+.mffai-netcard .mffai-grouphead, .mffai-defcard .mffai-grouphead { font-weight: 500; color: var(--faint); font-size: 12.5px; }
+.mffai-defcard .mffai-grouphead { color: var(--fg); font-weight: 600; }
+.mffai-rules { display: flex; flex-direction: column; }
+.mffai-rulehead, .mffai-rule { display: grid; grid-template-columns: 16px 146px minmax(150px, 1.3fr) minmax(130px, 1fr) minmax(130px, 1fr) 84px; align-items: center; gap: 12px; }
+.mffai-rulehead { padding: 0 8px; font-size: 11.5px; color: var(--faint); }
+.mffai-rule { padding: 10px 8px; border-radius: 8px; border-bottom: 1px solid var(--border); }
+.mffai-rule:last-of-type { border-bottom: none; }
+.mffai-rule-bad { background: var(--mffai-rule-bad); }
+.mffai-rule-bad .mffai-rulecell > input { border-color: var(--err); }
+.mffai-grip { color: var(--faint); cursor: grab; }
+.mffai-effseg { background: transparent; padding: 0; gap: 0; }
+.mffai-effseg > button { height: 26px; padding: 0 9px; border: 1px solid transparent; }
+.mffai-effseg > button.on.deny { color: var(--err); background: var(--mffai-err-dim); border-color: var(--mffai-err-line); box-shadow: none; }
+.mffai-effseg > button.on.ask { color: var(--warn); background: var(--mffai-warn-dim); border-color: var(--mffai-warn-line); box-shadow: none; }
+.mffai-effseg > button.on.allow { color: var(--ok); background: var(--mffai-ok-dim); border-color: var(--mffai-ok-line); box-shadow: none; }
+.mffai-rulecell { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.mffai-rulecell > input { width: 100%; font-family: var(--mono, monospace); }
+.mffai-rule-error { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.mffai-rule-error > .mffai-i { color: var(--err); }
+.mffai-tags { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.mffai-tag { display: inline-flex; align-items: center; gap: 2px; }
+.mffai-tag .mffai-chip { font-family: var(--mono, monospace); }
+.mffai-tag > button, .mffai-tagadd { display: inline-grid; place-items: center; width: 18px; height: 18px; padding: 0; border-radius: 5px; color: var(--faint); }
+.mffai-tag > button:hover:not(:disabled), .mffai-tagadd:hover:not(:disabled) { background: var(--surface-2); color: var(--fg); }
+.mffai-tag > button .mffai-i, .mffai-tagadd .mffai-i { width: 11px; height: 11px; }
+.mffai-tags input { width: 64px; height: 24px; padding: 0 7px; border-color: transparent; background: transparent; border-radius: 6px; font-size: 12px; }
+.mffai-tags input:focus { width: 120px; background: var(--surface); }
+.mffai-ruleops { display: inline-flex; gap: 2px; }
+.mffai-iconbtn { display: inline-grid; place-items: center; width: 26px; height: 26px; padding: 0; border-radius: 6px; color: var(--muted); }
+.mffai-iconbtn:hover:not(:disabled) { background: var(--surface-2); color: var(--fg); }
+.mffai-iconbtn:disabled { opacity: .35; cursor: default; }
+.mffai-iconbtn.mffai-danger { color: var(--err); }
+.mffai-addrule { align-self: flex-start; margin-top: 4px; }
+.mffai-defaults { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.mffai-defaults li { padding: 3px 8px; border: 1px solid var(--border-2); border-radius: 6px; font-size: 11.5px; font-family: var(--mono, monospace); color: var(--muted); }
+.mffai-savebar { margin-top: auto; position: sticky; bottom: 12px; align-self: center; z-index: 5; display: flex; align-items: center; gap: 14px; padding: 8px 8px 8px 14px; border: 1px solid var(--border-2); border-radius: 12px; background: var(--mffai-panel-bg); box-shadow: var(--mffai-shadow); }
+.mffai-savebar .set-btn { height: 28px; }
+
+/* 调试页(08b R19):页签 + 右侧筛选一行;事件区在卡片里。DebugPanel 不动,只靠作用域 CSS */
+.mffai-debughead { display: flex; align-items: flex-end; gap: 12px; border-bottom: 1px solid var(--border); }
+.mffai-debughead > .mffai-tabs { border-bottom: none; flex: 0 0 auto; }
+.mffai-debughead > .mffai-opts { margin: 0 0 6px auto; gap: 8px; align-items: flex-start; }
+.mffai-debughead .mffai-filter { max-width: 220px; height: 30px; }
+.mffai-debughead .mffai-filter.mffai-types { height: 58px; overflow: auto; }
+.mffai-debugpage > .mffai-injects, .mffai-debugpage > .mffai-conn, .mffai-debugpage > .mffai-raw { flex: 1; min-height: 0; }
+.mffai-debugpage .mffai-card { max-width: none; border-radius: 11px; }
+.mffai-debugpage .mffai-conn { align-items: stretch; padding: 8px 14px; }
+.mffai-debugpage .mffai-rawlist li { padding: 6px 10px; border-radius: 6px; }
+.mffai-debugpage .mffai-rawlist li.on { background: var(--accent-dim); color: var(--fg); }
+.mffai-debugpage .mffai-raw .mffai-pre { padding: 12px 14px; font-size: 11.5px; }
+.mffai-debugpage .mffai-debugpanel .mffai-log { padding: 14px 16px; border-radius: 11px; background: var(--surface); }
+.mffai-debugpage .mffai-debugpanel .mffai-line { padding: 3px 0; font-family: var(--mono, monospace); font-size: 12px; }
+.mffai-debugpage .mffai-debugpanel .mffai-send input { height: 32px; border-radius: 8px; }

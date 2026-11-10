@@ -1050,6 +1050,86 @@ const ROWS: Row[] = [
       expect(document.querySelector('header.mffai-chathead')).not.toBeNull()
     },
   })),
+  {
+    name: 'memory 待确认: proposal card with replace, flags, struck old text, evidence quote and 已满 + 去编辑',
+    mount: async (f) => {
+      f.script({
+        'memory.health': { dbBytes: 1, rawRows: 1, noteRows: 1, cursorLag: 0, pendingProposals: 1, problems: [] },
+        'memory.file.get': { content: '', hash: 'h0', cap: 2000 },
+        'memory.list': { items: [] },
+        'memory.get': (p: { id: string }) => ({ id: p.id, layer: 'raw', text: `quote of ${p.id}` }),
+        'memory.proposals.list': { items: [{ id: 'p9', target: 'MEMORY.md', op: 'replace', text: 'new line', replaces: 'n_old', evidence: ['r_7'], source: 'model', flags: ['exec'], status: 'pending', createdAt: 1 }] },
+        'memory.proposals.decide': () => fail(-32602, 'full'),
+      })
+      render(<MemoryPage />)
+      await screen.findByLabelText('USER.md')
+      fireEvent.click(screen.getByRole('tab', { name: '待确认' }))
+      await screen.findByText('quote of r_7')
+      await screen.findByText('quote of n_old')
+      fireEvent.click(screen.getByRole('button', { name: '批准' }))
+      await screen.findByText('已满')
+    },
+  },
+  {
+    name: 'memory 状态: status card with figures, meters, problem codes, 整理中 and a stuck delete',
+    mount: async (f) => {
+      f.script({
+        'memory.health': { dbBytes: 5, rawRows: 4, noteRows: 3, cursorLag: 2, pendingProposals: 1, lastConsolidation: '2026-11-01', budget: { tokens: 1, usd: 1, tokensLimit: 10, usdLimit: 10 }, backgroundModel: { accountId: 'a', modelId: 'haiku' }, problems: ['delete_stuck:n_z', 'file_over_cap:MEMORY.md (1>0)'] },
+        'memory.file.get': { content: '', hash: 'h0', cap: 2000 },
+        'memory.list': { items: [] },
+        'memory.consolidate': () => new Promise(() => {}),
+      })
+      render(<MemoryPage />)
+      await screen.findByLabelText('USER.md')
+      fireEvent.click(screen.getByRole('tab', { name: '状态' }))
+      await screen.findByText('删除卡住')
+      fireEvent.click(screen.getByRole('button', { name: '立即整理' }))
+      await screen.findByText('整理中')
+    },
+  },
+  {
+    name: 'memory 习惯: habits card with the 主动推荐 switch and a detected and a confirmed row',
+    mount: async (f) => {
+      f.script({
+        'memory.health': { dbBytes: 1, rawRows: 1, noteRows: 1, cursorLag: 0, pendingProposals: 0, problems: [] },
+        'memory.file.get': { content: '', hash: 'h0', cap: 2000 },
+        'memory.list': { items: [] },
+        'memory.habits.list': { items: [{ id: 'h1', kind: 'routine', weekday: 1, hour: 10, cwd: '/a', status: 'detected' }, { id: 'h2', kind: 'routine', weekday: 0, hour: 8, cwd: '/b', status: 'confirmed' }] },
+      })
+      render(<MemoryPage />)
+      await screen.findByLabelText('USER.md')
+      fireEvent.click(screen.getByRole('tab', { name: '习惯' }))
+      await screen.findByText('已确认')
+      expect(screen.getByRole('switch', { name: '主动推荐' })).toBeInTheDocument()
+    },
+  },
+  {
+    name: 'permissions: rules table with an error row, conflict bar and the save bar',
+    mount: async (f) => {
+      f.script({
+        'session.list': { sessions: [summary('s1', { title: '一号' })] },
+        'permissions.get': {
+          config: { rules: [{ effect: 'allow', rule: 'shell(pnpm vitest*)', match: ['pnpm vitest run'], noMatch: ['pnpm publish'] }, { effect: 'deny', rule: 'read_file(.env)', match: [], noMatch: [] }], network: { allow: ['registry.npmjs.org'] }, sandbox: { enabled: true, allowLoopback: false }, allowUnsandboxedAuto: true },
+          defaults: ['deny read_file: ~/.ssh/**'], errors: [{ index: 0, rule: 'read(bad', reason: 'syntax' }],
+          sandbox: { level: 'partial', missing: ['netns'], autoDegraded: false },
+        },
+        'permissions.set': () => fail(-32602, 'invalid rules', [{ index: 0, rule: 'shell(pnpm vitest*)', reason: 'test_failed', case: 'pnpm publish' }]),
+      })
+      const slot = document.createElement('div')
+      document.body.append(slot)
+      render(<HeaderSlotCtx.Provider value={slot}><PermissionsPage /></HeaderSlotCtx.Provider>)
+      await screen.findByText('registry.npmjs.org')
+      fireEvent.change(screen.getAllByLabelText('规则')[0], { target: { value: 'shell(pnpm vitest)' } })
+      expect(screen.getByText('未保存')).toBeInTheDocument()
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: '保存' })) })
+      await screen.findByText('test_failed')
+      expect(findHints()).toEqual([])
+      await act(async () => { f.emit(ev('permissions.updated', { rules: 1, network: 1 })) })
+      await screen.findByText('已在别处修改')
+      expect(findHints()).toEqual([])
+      slot.remove()
+    },
+  },
 ]
 
 describe('no explanatory text at render time', () => {

@@ -88,6 +88,30 @@ describe('MemoryPage', () => {
     expect(screen.getByRole('button', { name: /复制/ })).toBeInTheDocument()
   })
 
+  it('the path and copy button sit in the tab row and stay visible on other tabs', async () => {
+    f = installFakeForge({ calls: baseCalls(), state: { ...RUNNING_STATE, roots: { data: '/d/mff-ai', worktrees: '/w', imWorktrees: '/im', plugins: '/p', keychain: 'k' } } })
+    render(<MemoryPage />)
+    const path = await screen.findByText('/d/mff-ai/plugins/memory-default/files')
+    const row = path.closest('.mffai-tabrow') as HTMLElement
+    expect(within(row).getByRole('tablist')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('tab', { name: '待确认' }))
+    expect(within(row).getByText('/d/mff-ai/plugins/memory-default/files')).toBeVisible()
+    expect(within(row).getByRole('button', { name: /复制/ })).toBeVisible()
+  })
+
+  it('the proposals tab mounts neither Health nor Habits: memory.health stays at the gate call, memory.habits.list is never called', async () => {
+    f = installFakeForge({ calls: baseCalls() })
+    render(<MemoryPage />)
+    await screen.findByLabelText('USER.md')
+    fireEvent.click(screen.getByRole('tab', { name: '待确认' }))
+    await waitFor(() => expect(f.callsOf('memory.proposals.list')).toHaveLength(1))
+    expect(f.callsOf('memory.health')).toHaveLength(1)
+    expect(f.callsOf('memory.habits.list')).toHaveLength(0)
+    fireEvent.click(screen.getByRole('tab', { name: '习惯' }))
+    await waitFor(() => expect(f.callsOf('memory.habits.list')).toHaveLength(1))
+    expect(f.callsOf('memory.health')).toHaveLength(1)
+  })
+
   it('-32601 on memory.health shows 记忆不可用 with the plugin error from status', async () => {
     f = installFakeForge({ calls: {
       'memory.health': () => fail(-32601),

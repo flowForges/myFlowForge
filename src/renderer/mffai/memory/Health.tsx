@@ -136,35 +136,46 @@ export function Health() {
   const stuckIds = health.problems.filter((p) => p.startsWith(STUCK_PREFIX)).map((p) => p.slice(STUCK_PREFIX.length))
   const otherProblems = health.problems.filter((p) => !p.startsWith(STUCK_PREFIX))
 
+  const fig = (k: string, v: string | number) => (
+    <div className="mffai-fig"><span className="mffai-k">{k}</span><span className="mffai-count">{v}</span></div>
+  )
+
   return (
     <div className="mffai-pane mffai-health">
       {failed === 'failed' && <span className="mffai-fail">失败</span>}
       {stuckIds.map((id) => <StuckRow key={id} id={id} onDone={load} />)}
-      <div className="mffai-row"><span className="mffai-k">库大小</span><span className="mffai-count">{health.dbBytes}</span></div>
-      <div className="mffai-row"><span className="mffai-k">原始行数</span><span className="mffai-count">{health.rawRows}</span></div>
-      <div className="mffai-row"><span className="mffai-k">笔记数</span><span className="mffai-count">{health.noteRows}</span></div>
-      <div className="mffai-row"><span className="mffai-k">cursorLag</span><span className="mffai-count">{health.cursorLag}</span></div>
-      <div className="mffai-row"><span className="mffai-k">待确认数</span><span className="mffai-count">{health.pendingProposals}</span></div>
-      <div className="mffai-row">
-        <span className="mffai-k">上次整理</span>
-        <span>{health.lastConsolidation ? formatLocal(health.lastConsolidation) : '-'}</span>
-        {lastResult && (
-          <span className="mffai-usage">{`提取 ${lastResult.extracted} · 写入 ${lastResult.promoted} · 提议 ${lastResult.proposed}`}</span>
+      <div className="mffai-card mffai-statuscard">
+        <div className="mffai-card-h">
+          <span>状态</span>
+          {consolidating && <Chip tone="warn" dot>整理中</Chip>}
+        </div>
+        <div className="mffai-figs">
+          {fig('库大小', health.dbBytes)}
+          {fig('笔记数', health.noteRows)}
+          {fig('原始行数', health.rawRows)}
+          {fig('待确认数', health.pendingProposals)}
+          {fig('cursorLag', health.cursorLag)}
+          <div className="mffai-fig">
+            <span className="mffai-k">上次整理</span>
+            <span className="mffai-count">{health.lastConsolidation ? formatLocal(health.lastConsolidation) : '-'}</span>
+            {lastResult && (
+              <span className="mffai-usage">{`提取 ${lastResult.extracted} · 写入 ${lastResult.promoted} · 提议 ${lastResult.proposed}`}</span>
+            )}
+          </div>
+        </div>
+        {health.backgroundModel && <div className="mffai-row"><span className="mffai-k">后台模型</span><span>{health.backgroundModel.modelId}</span></div>}
+        {health.budget && (
+          <div className="mffai-meters">
+            <Meter label="tokens" value={health.budget.tokens} limit={health.budget.tokensLimit} />
+            <Meter label="usd" value={health.budget.usd} limit={health.budget.usdLimit} />
+          </div>
         )}
-      </div>
-      {health.backgroundModel && <div className="mffai-row"><span className="mffai-k">后台模型</span><span>{health.backgroundModel.modelId}</span></div>}
-      {health.budget && (
-        <>
-          <Meter label="tokens" value={health.budget.tokens} limit={health.budget.tokensLimit} />
-          <Meter label="usd" value={health.budget.usd} limit={health.budget.usdLimit} />
-        </>
-      )}
-      {otherProblems.map((p) => <CodeChip key={p} code={p} />)}
-      <div className="mffai-actions">
-        <button className="set-btn mffai-primary" disabled={consolidating} onClick={() => void consolidate()}>立即整理</button>
-        {consolidating && <Chip tone="warn">整理中</Chip>}
-        {consolidateFailed === 'unsupported' && <Chip tone="bad">不支持</Chip>}
-        {consolidateFailed === 'failed' && <span className="mffai-fail">失败</span>}
+        {otherProblems.length > 0 && <div className="mffai-row">{otherProblems.map((p) => <CodeChip key={p} code={p} />)}</div>}
+        <div className="mffai-actions">
+          <button className="set-btn mffai-primary" disabled={consolidating} onClick={() => void consolidate()}>立即整理</button>
+          {consolidateFailed === 'unsupported' && <Chip tone="bad">不支持</Chip>}
+          {consolidateFailed === 'failed' && <span className="mffai-fail">失败</span>}
+        </div>
       </div>
     </div>
   )
