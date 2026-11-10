@@ -27,4 +27,14 @@ describe('AutoSwitch', () => {
     expect(box.disabled).toBe(true)
     expect(box.checked).toBe(true)
   })
+
+  it('warn-row styling keeps the label text verbatim and the checkbox inside label.mffai-switch', () => {
+    const { container } = render(<AutoSwitch checked onChange={() => {}} />)
+    const label = container.querySelector('label.mffai-switch')!
+    expect(label).not.toBeNull()
+    expect(label.classList.contains('mffai-warnrow')).toBe(true)
+    expect(label.textContent).toBe(AUTO_LABEL)
+    expect(label.querySelector('input[type=checkbox]')).not.toBeNull()
+    expect(label.querySelectorAll('input')).toHaveLength(1)
+  })
 })

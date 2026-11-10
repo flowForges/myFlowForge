@@ -1,0 +1,79 @@
+/* 调试、连接、任务、权限、记忆、插件(08 起的规则原样搬来) */
+.mffai-debug { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+.mffai-log { flex: 1; min-height: 120px; overflow: auto; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 12.5px; }
+.mffai-line { padding: 2px 0; white-space: pre-wrap; }
+.mffai-line.user { color: var(--faint); }
+.mffai-send { display: flex; gap: 8px; }
+.mffai-send input { flex: 1; height: 30px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--fg); }
+.mffai-conn { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.mffai-conn .mffai-row { padding: 4px 0; }
+.mffai-quota { font-size: 12px; color: var(--faint); }
+.mffai-usage { font-size: 11.5px; color: var(--faint); }
+.mffai-filter { max-width: 220px; height: 30px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--fg); }
+.mffai-filter.mffai-types { height: 72px; }
+.mffai-injects { display: flex; flex-direction: column; gap: 10px; overflow: auto; }
+.mffai-inject { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.mffai-raw { flex: 1; min-height: 0; display: flex; gap: 10px; }
+.mffai-rawlist { flex: 0 0 300px; margin: 0; padding: 4px; list-style: none; overflow: auto; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; }
+.mffai-rawlist li { padding: 3px 6px; border-radius: 5px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mffai-rawlist li:hover { background: var(--surface); }
+.mffai-rawlist li.on { background: var(--accent-dim); }
+.mffai-raw .mffai-pre { flex: 1; }
+.mffai-debug[hidden] { display: none; }
+/* 任务页(08 §9) */
+.mffai-tasks { gap: 18px; }
+.mffai-group { display: flex; flex-direction: column; gap: 6px; }
+.mffai-grouphead { display: flex; justify-content: space-between; align-items: center; padding-bottom: 4px; border-bottom: 1px solid var(--border); font-size: 12.5px; color: var(--faint); }
+.mffai-taskrow { flex-wrap: wrap; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.mffai-taskrow:last-child { border-bottom: none; }
+.mffai-tg { display: flex; flex-direction: column; gap: 10px; }
+.mffai-tg-dropped { border-collapse: collapse; font-size: 12.5px; }
+.mffai-tg-dropped th { color: var(--faint); font-weight: normal; padding: 2px 10px 2px 0; text-align: left; }
+.mffai-tg-dropped td { padding: 2px 10px 2px 0; font-variant-numeric: tabular-nums; }
+.mffai-paircode { font-size: 28px; font-weight: 600; letter-spacing: 3px; font-family: var(--mono, ui-monospace, monospace); }
+.mffai-pairing .qr { margin-top: 6px; }
+.mffai-tg-projects input[aria-label="别名"] { width: 120px; }
+/* 权限页(08 §11) */
+.mffai-perm { gap: 16px; }
+.mffai-rules { display: flex; flex-direction: column; gap: 8px; }
+.mffai-rule { flex-wrap: wrap; border-bottom: 1px solid var(--border); }
+.mffai-rule:last-child { border-bottom: none; }
+.mffai-rule-bad { background: var(--mffai-rule-bad); }
+.mffai-rule-error { display: inline-flex; gap: 4px; }
+.mffai-defaults { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 12.5px; color: var(--faint); font-family: var(--mono, monospace); }
+.mffai-tags { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.mffai-tag { display: inline-flex; align-items: center; gap: 2px; }
+.mffai-tags input { height: 26px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--fg); font-size: 12.5px; }
+.mffai-field { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--fg-2); }
+.mffai-row.bad [aria-invalid="true"] { border-color: var(--del); }
+/* 记忆页(08 §12) */
+.mffai-memory { gap: 14px; }
+.mffai-chatroot { flex-direction: column; }
+.mffai-recs { display: flex; flex-direction: column; gap: 8px; }
+.mffai-rec .mffai-v { display: block; margin-bottom: 4px; }
+.mffai-fileeditor { max-width: 720px; }
+.mffai-filebody { min-height: 140px; font-family: var(--mono, monospace); font-size: 12.5px; }
+.mffai-profile { gap: 14px; }
+.mffai-proposal { max-width: 720px; gap: 8px; }
+.mffai-quote { display: inline-block; padding: 2px 8px; border-left: 2px solid var(--border); color: var(--fg-2); font-size: 12.5px; }
+.mffai-itemrow { flex-wrap: wrap; border-bottom: 1px solid var(--border); }
+.mffai-itemrow:last-child { border-bottom: none; }
+.mffai-itemtext { flex: 1; min-width: 160px; }
+.mffai-habit .mffai-v { flex: 1; }
+.mffai-change { padding: 2px 0; }
+.mffai-change .mffai-file-btn { gap: 10px; }
+.mffai-meter-row .mffai-k { width: 56px; }
+.mffai-meter { flex: 1; max-width: 260px; height: 6px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
+.mffai-meter-fill { height: 100%; background: var(--accent); }
+/* 插件页(Task 13)。第三方文字 .mffai-ptext:虚线框,和界面的块、按钮一眼分得开 */
+.mffai-consent { display: flex; flex-direction: column; gap: 14px; }
+.mffai-crow { flex-wrap: wrap; }
+.mffai-crow > .mffai-k { min-width: 64px; }
+.mffai-cserver { display: flex; flex-direction: column; gap: 4px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.mffai-cserver:last-child { border-bottom: none; }
+.mffai-args, .mffai-symbolic { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.mffai-arg { display: inline-flex; gap: 3px; align-items: center; }
+.mffai-check { display: inline-flex; gap: 4px; align-items: center; }
+.mffai-mcp { border-collapse: collapse; font-size: 12.5px; }
+.mffai-mcp th { color: var(--faint); font-weight: normal; padding: 2px 12px 2px 0; text-align: left; }
+.mffai-mcp td { padding: 3px 12px 3px 0; vertical-align: middle; }

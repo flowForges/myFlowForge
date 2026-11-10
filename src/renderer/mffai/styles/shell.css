@@ -1,0 +1,10 @@
+/* 壳:页面、导航、主区、状态条(08 起的规则原样搬来) */
+.mffai-page { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 14px; padding: 20px 24px; overflow: auto; color: var(--fg); }
+.mffai-strip { display: flex; align-items: center; gap: 12px; font-size: 13px; }
+.mffai-shell { flex: 1; min-height: 0; display: flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.mffai-nav { width: 132px; flex: 0 0 132px; }
+.mffai-nav button { justify-content: space-between; }
+.mffai-navnum { min-width: 18px; padding: 0 6px; border-radius: 99px; background: var(--accent); color: var(--on-accent); font-size: 11px; font-weight: 600; line-height: 18px; text-align: center; }
+.mffai-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: auto; padding: 14px 16px; }
+.mffai-pagebox, .mffai-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+.mffai-strip { flex-wrap: wrap; row-gap: 6px; }

@@ -1,0 +1,144 @@
+/* 共用控件(08b spec §3.3)。尺寸照 docs 设计图的 _src/base.css。
+   app 的控件类(set-btn、txt-btn、menu-item、输入框)只在 .mffai-page 里改外观,用 :where 压到一个类的权重,
+   后面任何具体的 mffai 规则都能覆盖它。 */
+@keyframes mffai-pulse { 0%, 100% { opacity: 1 } 50% { opacity: .45 } }
+@keyframes mffai-spin { to { transform: rotate(360deg) } }
+
+.mffai-page :where(.set-btn) { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 30px; padding: 0 13px; border-radius: 7px; font-size: 12.5px; font-weight: 500; white-space: nowrap; color: var(--fg-2); background: var(--surface); border: 1px solid var(--border); }
+.mffai-page :where(.set-btn:disabled) { opacity: .45; cursor: default; }
+.mffai-page :where(.set-btn.mffai-primary) { color: var(--on-accent); background: var(--accent); border-color: transparent; font-weight: 600; }
+.mffai-page .set-btn.mffai-primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.08); }
+.mffai-page :where(.set-btn.mffai-danger) { color: var(--err); }
+.mffai-page :where(.txt-btn) { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px; border-radius: 6px; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+.mffai-page :where(.txt-btn:hover:not(:disabled)) { background: var(--surface); color: var(--fg); }
+.mffai-page :where(.txt-btn:disabled) { opacity: .45; cursor: default; }
+.mffai-page :where(.menu-item) { display: flex; align-items: center; gap: 9px; padding: 7px 9px; border-radius: 7px; font-size: 12.5px; color: var(--fg-2); }
+.mffai-page :where(.menu-item.on, .menu-item:hover:not(:disabled)) { background: var(--accent-dim); color: var(--fg); }
+.mffai-page :where(input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"]), select) { height: 32px; min-width: 0; padding: 0 11px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--fg); font: inherit; font-size: 12.5px; }
+.mffai-page :where(textarea) { padding: 9px 11px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--fg); font: inherit; font-size: 12.5px; }
+.mffai-page :where(input, select, textarea):where(:focus) { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+.mffai-page :where([aria-invalid="true"]) { border-color: var(--err); }
+
+/* 08 起的规则原样搬来 */
+.mffai-row { display: flex; align-items: center; gap: 14px; padding: 8px 0; font-size: 13px; }
+.mffai-k { width: 80px; color: var(--faint); }
+.mffai-path { font-family: var(--mono, monospace); font-size: 12px; word-break: break-all; }
+.mffai-primary { align-self: flex-start; margin-top: 8px; background: var(--accent); color: var(--on-accent); border-color: transparent; }
+.mffai-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+.mffai-dot.ok { background: var(--accent); }
+.mffai-dot.bad { background: var(--del); }
+.mffai-fail { color: var(--del); font-size: 12.5px; }
+.mffai-actions { display: flex; gap: 8px; }
+.mffai-picker { max-width: 220px; height: 32px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--fg); }
+.mffai-ok { color: var(--accent); }
+.mffai-code { font-family: var(--mono, monospace); word-break: break-all; }
+.mffai-switch { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--fg-2); }
+.mffai-switch.off { opacity: .5; }
+.mffai-danger { color: var(--del); }
+.mffai-card .mffai-actions { margin-top: 8px; }
+.mffai-card .mffai-actions .mffai-primary { margin-top: 0; }
+.mffai-confirm { width: 460px; max-width: calc(100vw - 40px); }
+.mffai-confirm-rows { display: flex; flex-direction: column; gap: 2px; margin-top: 12px; padding: 8px 10px; border-radius: 8px; background: var(--surface); font-size: 12.5px; }
+.mffai-confirm-row { display: flex; gap: 12px; padding: 3px 0; }
+.mffai-confirm-row .mffai-k { flex: 0 0 96px; }
+.mffai-confirm-row .mffai-v { flex: 1; min-width: 0; font-family: var(--mono, monospace); word-break: break-all; }
+.mffai-typed { width: 100%; height: 32px; margin-top: 10px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--fg); font-family: var(--mono, monospace); }
+.mffai-diff { overflow: auto; border: 1px solid var(--border); border-radius: 8px; padding: 6px 0; }
+.mffai-diff-flags { display: flex; gap: 6px; padding: 0 10px 6px; }
+.mffai-count { font-family: var(--mono, monospace); font-variant-numeric: tabular-nums; }
+.mffai-pathfield { display: inline-flex; gap: 6px; align-items: center; flex: 1; max-width: 520px; }
+.mffai-pathfield input { flex: 1; height: 32px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--fg); font-family: var(--mono, monospace); }
+.mffai-pre { margin: 0; padding: 8px 10px; border-radius: 6px; background: var(--bg); font-family: var(--mono, monospace); font-size: 12px; white-space: pre-wrap; word-break: break-word; overflow: auto; }
+.mffai-err { font-family: var(--mono, monospace); color: var(--del); word-break: break-all; }
+.mffai-confirm-row > .set-btn { flex: 0 0 auto; height: 22px; padding: 0 8px; font-size: 12px; }
+.mffai-esc, .mffai-blank { padding: 0 3px; border-radius: 3px; background: var(--surface); color: var(--del); }
+.mffai-ptext { padding: 0 4px; border: 1px dashed var(--border); border-radius: 3px; white-space: pre-wrap; word-break: break-word; }
+.mffai-ptext.mono { font-family: var(--mono, monospace); font-size: 12px; }
+.mffai-pre .mffai-ptext { border: none; padding: 0; }
+
+/* 08b 控件 */
+.mffai-i { width: 15px; height: 15px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.mffai-card { display: flex; flex-direction: column; gap: 4px; max-width: 460px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); }
+.mffai-badge { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 8px; border-radius: 99px; font-size: 11px; font-weight: 600; white-space: nowrap; vertical-align: middle; color: var(--fg-2); background: var(--mffai-tint); }
+.mffai-chip.ok { color: var(--ok); background: var(--mffai-ok-dim); }
+.mffai-chip.bad { color: var(--err); background: var(--mffai-err-dim); }
+.mffai-chip.warn { color: var(--warn); background: var(--mffai-warn-dim); }
+.mffai-chip.run, .mffai-chip.acc { color: var(--accent); background: var(--accent-dim); }
+.mffai-chip.line { background: transparent; border: 1px solid var(--border-2); color: var(--muted); font-weight: 500; }
+.mffai-chip.sq { border-radius: 5px; }
+.mffai-chip.dot::before { content: ""; flex: 0 0 6px; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.mffai-chip.dot.run::before { animation: mffai-pulse 1.4s infinite; }
+.mffai-chip .mffai-i { width: 11px; height: 11px; stroke-width: 2.2; }
+.mffai-badge.mffai-code { height: auto; min-height: 19px; padding: 0 6px; border-radius: 5px; font-family: var(--mono); font-size: 11px; font-weight: 400; white-space: normal; color: var(--fg-2); background: var(--mffai-tint); }
+.mffai-code.bad { color: var(--err); background: var(--mffai-err-dim); }
+.mffai-code.warn { color: var(--warn); background: var(--mffai-warn-dim); }
+.mffai-spin { flex: 0 0 auto; width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--mffai-spin-track); border-top-color: var(--accent); animation: mffai-spin .8s linear infinite; }
+
+/* 开关:复选框画成 34×20 的拨钮,圆钮是 --mffai-knob */
+.mffai-switch input[type="checkbox"] { appearance: none; -webkit-appearance: none; position: relative; flex: 0 0 34px; width: 34px; height: 20px; margin: 0; border: 0; border-radius: 99px; background: var(--surface-2); cursor: pointer; transition: background .16s; }
+.mffai-switch input[type="checkbox"]::before { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--mffai-knob); box-shadow: var(--mffai-knob-shadow); transition: transform .16s; }
+.mffai-switch input[type="checkbox"]:checked { background: var(--accent); }
+.mffai-switch input[type="checkbox"]:checked::before { transform: translateX(14px); }
+.mffai-switch input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mffai-switch input[type="checkbox"]:disabled { cursor: default; }
+/* 琥珀警告行(自动放行的两句标签) */
+.mffai-warnrow { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--mffai-warn-line); background: var(--mffai-warn-dim); color: var(--fg); font-size: 12.5px; }
+.mffai-warnrow > .mffai-i { width: 14px; height: 14px; color: var(--warn); }
+.mffai-warnrow-text { flex: 1; min-width: 0; }
+.mffai-warnrow input[type="checkbox"]:checked { background: var(--warn); }
+
+/* 页签(下划线)、分段 */
+.mffai-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); }
+.mffai-tabs .set-btn { height: 34px; margin-bottom: -1px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; font-size: 13px; color: var(--muted); }
+.mffai-tabs .set-btn:hover:not(:disabled) { background: transparent; color: var(--fg); }
+.mffai-tabs .set-btn.active { color: var(--fg); border-bottom-color: var(--accent); }
+.mffai-seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--surface); }
+.mffai-seg > button { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 11px; border-radius: 6px; font-size: 12px; font-weight: 500; white-space: nowrap; color: var(--muted); }
+.mffai-seg > button:hover:not(:disabled) { color: var(--fg); }
+.mffai-seg > button.on, .mffai-seg > button[aria-pressed="true"], .mffai-seg > button[aria-selected="true"] { background: var(--bg-2); color: var(--fg); box-shadow: 0 0 0 1px var(--border-2); }
+.mffai-seg.sm > button { height: 22px; padding: 0 8px; font-size: 11.5px; }
+
+/* 表格 */
+.mffai-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.mffai-tbl th { padding: 0 10px 8px; border-bottom: 1px solid var(--border); text-align: left; font-size: 11.5px; font-weight: 500; white-space: nowrap; color: var(--faint); }
+.mffai-tbl td { padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; color: var(--fg-2); }
+.mffai-tbl tr:last-child td { border-bottom: none; }
+.mffai-tbl tr.sel td { background: var(--accent-dim); }
+
+/* 弹层、遮罩、弹窗 */
+.mffai-pop { position: absolute; z-index: 40; padding: 6px; border: 1px solid var(--border-2); border-radius: 10px; background: var(--bg-2); box-shadow: var(--mffai-shadow); }
+.mffai-scrim { position: absolute; inset: 0; z-index: 30; background: var(--mffai-scrim); }
+.mffai-scrim.dim { background: var(--mffai-dim); }
+.mffai-modal { display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border-2); border-radius: 14px; background: var(--bg); box-shadow: var(--mffai-shadow); }
+.mffai-modal-h { display: flex; align-items: center; gap: 10px; height: 50px; padding: 0 16px; border-bottom: 1px solid var(--border); font-size: 14px; font-weight: 600; }
+.mffai-modal-f { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); background: var(--bg-2); }
+
+/* 确认框:DOM 和 app 一样(.confirm-*),外观经 .mffai-page / .mffai-confirm 改;按钮类名不加东西 */
+.mffai-page .confirm-overlay { background: var(--mffai-scrim); }
+.mffai-page .confirm-overlay.mffai-anchored { background: transparent; }
+.mffai-anchored .confirm-card { position: fixed; margin: 0; }
+.mffai-confirm { padding: 16px; border-color: var(--border-2); border-radius: 14px; box-shadow: var(--mffai-shadow); }
+.mffai-confirm .confirm-title { margin-top: 0; font-size: 14px; font-weight: 650; }
+.mffai-confirm .confirm-actions { gap: 8px; margin-top: 14px; }
+.mffai-confirm .confirm-actions > button { height: 30px; padding: 0 13px; border-radius: 7px; font-size: 12.5px; font-weight: 600; }
+.mffai-confirm .confirm-cancel { color: var(--fg-2); font-weight: 500; }
+.mffai-confirm .confirm-ok { color: var(--on-accent); background: var(--accent); }
+.mffai-confirm .confirm-danger { color: var(--mffai-on-status); background: var(--err); }
+.mffai-confirm .confirm-actions > button:disabled { opacity: .45; cursor: default; }
+.mffai-confirm-rows { background: var(--bg-2); border: 1px solid var(--border); }
+
+/* 倒计时环 */
+.mffai-countring { display: inline-flex; align-items: center; gap: 8px; }
+.mffai-ring { flex: 0 0 34px; transform: rotate(-90deg); }
+.mffai-ring circle { fill: none; stroke-width: 3; }
+.mffai-ring-track { stroke: var(--surface-2); }
+.mffai-ring-arc { stroke: var(--accent); stroke-linecap: round; transition: stroke-dashoffset 1s linear; }
+
+/* diff(行的 .code-line 来自检查器的样式,这里只换底色) */
+.mffai-diff { padding: 0; border-radius: 8px; background: var(--bg); }
+.mffai-diff-flags { padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--bg-2); }
+.mffai-diff .code-line { font-size: 11.5px; line-height: 1.6; }
+.mffai-diff .code-line .ln { width: 40px; flex-basis: 40px; padding-right: 10px; }
+.mffai-diff .code-line.add { background: var(--mffai-add-dim); color: var(--mffai-add-fg); }
+.mffai-diff .code-line.del { background: var(--mffai-del-dim); color: var(--mffai-del-fg); }
+.mffai-pathfield > .set-btn { flex: 0 0 auto; height: 32px; }

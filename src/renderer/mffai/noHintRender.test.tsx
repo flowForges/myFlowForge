@@ -634,6 +634,29 @@ const ROWS: Row[] = [
       render(node)
     },
   },
+  {
+    name: 'chip variants',
+    mount: () => {
+      render(
+        <>
+          {(['ok', 'bad', 'warn', 'muted', 'run', 'acc', 'line'] as const).map((t) => (
+            <span key={t}><Chip tone={t}>{t}</Chip><Chip tone={t} dot>{t}</Chip><Chip tone={t} sq>{t}</Chip><Chip tone={t} dot sq title={t}>{t}</Chip></span>
+          ))}
+          <Countdown from={Date.now() - 10_000} until={Date.now() + 60_000} />
+        </>,
+      )
+    },
+  },
+  {
+    name: 'confirm anchored to a button',
+    mount: () => {
+      const a = document.createElement('button')
+      a.getBoundingClientRect = () => ({ x: 1200, y: 700, left: 1200, top: 700, width: 80, height: 30, right: 1280, bottom: 730, toJSON: () => ({}) }) as DOMRect
+      document.body.appendChild(a)
+      render(<Confirm title="合并" rows={[['运行', 'r1'], ['改动', '3']]} keep={['worktree']} confirmLabel="合并" anchor={a} requireTyped="r1" onCancel={() => {}} onConfirm={() => {}} />)
+      expect(document.querySelector('.confirm-overlay.mffai-anchored')).not.toBeNull()
+    },
+  },
 ]
 
 describe('no explanatory text at render time', () => {

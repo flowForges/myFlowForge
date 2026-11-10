@@ -115,7 +115,7 @@ describe('ApprovalCard', () => {
     // 开头的空行一样收起:命令不会被推到下面
     const { container: c3 } = render(<ApprovalCard sessionId="s1" approval={item({ summary: `${'\n'.repeat(30)}rm -rf ~` })} />)
     expect(c3.querySelector('pre.mffai-summary')!.textContent).toBe('⋯ 30 空行\nrm -rf ~')
-    const css = readFileSync(resolve(__dirname, '../mffai.css'), 'utf8')
+    const css = readFileSync(resolve(__dirname, '../styles/chat.css'), 'utf8')
     const rule = /\.mffai-summary\s*\{([^}]*)\}/.exec(css)![1]
     expect(rule).not.toMatch(/max-height|overflow/)
   })

@@ -1,0 +1,60 @@
+/* mff-ai 的颜色(08b spec §3.1、R16)。全部从 app 变量派生,于是强调色、浅色和深色变体、皮肤、毛玻璃、壁纸自动生效。
+   ★这是唯一可以写 color-mix 和字面色的文件;字面色只有开关圆钮一个(和 app settings.css 的 .toggle::after 一致)。 */
+.mffai-page {
+  --mffai-ok-dim: color-mix(in oklab, var(--ok) 15%, transparent);
+  --mffai-warn-dim: color-mix(in oklab, var(--warn) 14%, transparent);
+  --mffai-err-dim: color-mix(in oklab, var(--err) 14%, transparent);
+  --mffai-tint: color-mix(in oklab, var(--fg) 6%, transparent);
+  --mffai-add-dim: color-mix(in oklab, var(--add) 11%, transparent);
+  --mffai-del-dim: color-mix(in oklab, var(--del) 11%, transparent);
+  --mffai-add-fg: color-mix(in oklab, var(--add) 70%, var(--fg));
+  --mffai-del-fg: color-mix(in oklab, var(--del) 70%, var(--fg));
+  --mffai-warn-line: color-mix(in oklab, var(--warn) 38%, var(--border));
+  --mffai-err-line: color-mix(in oklab, var(--err) 45%, var(--border));
+  --mffai-acc-line: color-mix(in oklab, var(--accent) 40%, var(--border));
+  --mffai-ok-line: color-mix(in oklab, var(--ok) 35%, transparent);
+  --mffai-warn-wash: color-mix(in oklab, var(--warn) 5%, var(--surface));
+  --mffai-err-wash: color-mix(in oklab, var(--err) 5%, var(--surface));
+  --mffai-ring-warn: color-mix(in oklab, var(--warn) 6%, transparent);
+  --mffai-ring-err: color-mix(in oklab, var(--err) 6%, transparent);
+  --mffai-rule-bad: color-mix(in srgb, var(--del) 8%, transparent);
+  --mffai-spin-track: color-mix(in oklab, var(--accent) 25%, transparent);
+  --mffai-on-status: var(--on-accent);
+  --mffai-rail-bg: var(--sidebar);
+  --mffai-col-bg: color-mix(in oklab, var(--sidebar) 50%, var(--bg));
+  --mffai-panel-bg: var(--bg-2);
+  --mffai-scrim: color-mix(in oklab, var(--sidebar) 60%, transparent);
+  --mffai-dim: color-mix(in oklab, var(--sidebar) 35%, transparent);
+  --mffai-shadow: var(--shadow);
+  --mffai-brand: linear-gradient(135deg, var(--accent), var(--syn-kw));
+  /* 会话来源:Telegram / 定时 / 编辑器(借语法色,§3.2) */
+  --mffai-o-tg: var(--syn-fn);
+  --mffai-o-sc: var(--syn-kw);
+  --mffai-o-ed: var(--syn-st);
+  --mffai-o-tg-bg: color-mix(in oklab, var(--mffai-o-tg) 14%, transparent);
+  --mffai-o-sc-bg: color-mix(in oklab, var(--mffai-o-sc) 14%, transparent);
+  --mffai-o-ed-bg: color-mix(in oklab, var(--mffai-o-ed) 13%, transparent);
+  /* 模型 / 执行器标志 */
+  --mffai-p-anth: var(--syn-nu);
+  --mffai-p-oai: var(--fg);
+  --mffai-p-ds: var(--syn-pr);
+  --mffai-p-or: var(--syn-kw);
+  --mffai-p-cc: var(--syn-nu);
+  --mffai-p-cx: var(--fg-2);
+  --mffai-p-gm: var(--accent);
+  --mffai-p-anth-bg: color-mix(in oklab, var(--mffai-p-anth) 18%, transparent);
+  --mffai-p-oai-bg: color-mix(in oklab, var(--mffai-p-oai) 18%, transparent);
+  --mffai-p-ds-bg: color-mix(in oklab, var(--mffai-p-ds) 18%, transparent);
+  --mffai-p-or-bg: color-mix(in oklab, var(--mffai-p-or) 18%, transparent);
+  --mffai-p-cc-bg: color-mix(in oklab, var(--mffai-p-cc) 18%, transparent);
+  --mffai-p-cx-bg: color-mix(in oklab, var(--mffai-p-cx) 18%, transparent);
+  --mffai-p-gm-bg: color-mix(in oklab, var(--mffai-p-gm) 18%, transparent);
+  /* 开关圆钮:app 没有 --knob(§3.2 第 1 条) */
+  --mffai-knob: #fff;
+  --mffai-knob-shadow: 0 1px 2px color-mix(in oklab, var(--fg) 30%, transparent);
+}
+[data-glass="on"] .mffai-page {
+  --mffai-rail-bg: var(--glass-sidebar);
+  --mffai-col-bg: color-mix(in oklab, var(--glass-sidebar) 50%, transparent);
+  --mffai-panel-bg: var(--glass-panel);
+}
