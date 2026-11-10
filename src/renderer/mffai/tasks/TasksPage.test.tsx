@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import TasksPage from './TasksPage'
 import { route } from '../route'
 import { fail, installFakeForge, type FakeForge } from '../test/fakeForge'
@@ -217,6 +219,10 @@ describe('TasksPage', () => {
     render(<TasksPage />)
     await screen.findByText('不支持')
     expect(screen.queryByText('运行中')).toBeNull()
+    // 不支持是一枚 chip,不是横贯整组的条:组里直接放的 chip 不被拉伸
+    expect(screen.getByText('不支持').parentElement!.classList.contains('mffai-tgroup')).toBe(true)
+    const css = readFileSync(resolve(__dirname, '../styles/pages.css'), 'utf8')
+    expect(css).toMatch(/\.mffai-tgroup > \.mffai-chip \{[^}]*align-self: flex-start/)
   })
 
   it('channel.telegram.chats answering -32601 shows 不支持 for the IM worktree group only', async () => {
