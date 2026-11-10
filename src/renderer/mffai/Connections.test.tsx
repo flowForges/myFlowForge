@@ -84,6 +84,7 @@ describe('Connections', () => {
     await waitFor(() => expect(mffai.models.accounts.mock.calls.length).toBe(3))
     const before = mffai.models.accounts.mock.calls.length
     fireEvent.click(screen.getAllByText('删除')[0])
+    fireEvent.click(document.querySelector('.mffai-confirm .confirm-danger')!)
     await waitFor(() => expect(mffai.models.removeAccount).toHaveBeenCalledWith('a1'))
     await waitFor(() => expect(mffai.models.accounts.mock.calls.length).toBe(before + 1))
   })

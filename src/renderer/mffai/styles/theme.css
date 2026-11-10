@@ -28,6 +28,8 @@
   --mffai-scrim: color-mix(in oklab, var(--sidebar) 60%, transparent);
   --mffai-dim: color-mix(in oklab, var(--sidebar) 35%, transparent);
   --mffai-shadow: var(--shadow);
+  /* 页头的默认高度(min-height 52 + 底边 1);抽屉量得到页头时用量到的 */
+  --mffai-head-h: 53px;
   --mffai-brand: linear-gradient(135deg, var(--accent), var(--syn-kw));
   /* 会话来源:Telegram / 定时 / 编辑器(借语法色,§3.2) */
   --mffai-o-tg: var(--syn-fn);

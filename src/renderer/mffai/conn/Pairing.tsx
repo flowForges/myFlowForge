@@ -101,7 +101,7 @@ export function Pairing({ active, onChanged }: { active: boolean; onChanged?: ()
             <span className="mffai-paircode">{pair.code}</span>
             <Countdown from={pair.from} until={pair.expiresAt} onDone={() => { setPair(null); changed.current?.() }} />
             <div className="mffai-pair-acts">
-              {pair.link && <button className="set-btn mffai-primary" aria-label="打开链接" onClick={() => open(pair.link!)}><Icon name="ext" size={13} />在 Telegram 打开</button>}
+              {pair.link && <button className="set-btn mffai-primary" onClick={() => open(pair.link!)}><Icon name="ext" size={13} />在 Telegram 打开</button>}
               {pair.link && <button className="set-btn" onClick={() => copy(pair.link!)}><Icon name="copy" size={13} />复制链接</button>}
               <button className="set-btn" onClick={() => void cancel()}>取消</button>
             </div>

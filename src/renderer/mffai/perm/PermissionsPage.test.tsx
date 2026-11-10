@@ -202,6 +202,18 @@ describe('PermissionsPage', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: '保存' })).toBeNull())
   })
 
+  it('clicking an effect in a row sends that effect for that rule in permissions.set', async () => {
+    await mount({ 'permissions.get': getResult({ rules: [rule('shell(a)'), rule('shell(b)', { effect: 'deny' })] }), 'permissions.set': { ok: true } })
+    const seg = within(rows()[0]).getByRole('group', { name: '效果' })
+    fireEvent.click(within(seg).getByRole('button', { name: '拒绝' }))
+    expect(within(seg).getByRole('button', { name: '拒绝' }).getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(within(within(rows()[1]).getByRole('group', { name: '效果' })).getByRole('button', { name: '询问' }))
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '保存' })) })
+    const sent = f.callsOf('permissions.set') as { config: PermissionsConfig }[]
+    expect(sent).toHaveLength(1)
+    expect(sent[0].config.rules.map((r) => [r.rule, r.effect])).toEqual([['shell(a)', 'deny'], ['shell(b)', 'ask']])
+  })
+
   it('inputs are locked while the save is in flight', async () => {
     let resolveSet: ((v: { ok: boolean }) => void) | undefined
     await mount({ 'permissions.get': getResult(), 'permissions.set': () => new Promise((resolve) => { resolveSet = resolve }) })

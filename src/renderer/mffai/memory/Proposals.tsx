@@ -71,7 +71,7 @@ function ProposalRow({ p, onDecided, onJumpToFile }: {
         <Chip tone="line">{SOURCE_LABEL[p.source]}</Chip>
       </div>
       {p.op === 'replace' && p.replaces && (
-        <div className="mffai-pr-old"><span className="mffai-pr-sign del" aria-hidden="true">−</span><Quote id={p.replaces} /></div>
+        <div className="mffai-pr-old" role="group" aria-label="原文"><span className="mffai-pr-sign del" aria-hidden="true">−</span><Quote id={p.replaces} /></div>
       )}
       <div className="mffai-pr-new">
         <span className="mffai-pr-sign add" aria-hidden="true">+</span>
@@ -79,7 +79,7 @@ function ProposalRow({ p, onDecided, onJumpToFile }: {
           onChange={(e) => setText(e.target.value)} />
       </div>
       {p.evidence.map((id) => (
-        <div key={id} className="mffai-pr-ev">
+        <div key={id} className="mffai-pr-ev" role="group" aria-label="证据">
           <svg className="mffai-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h4v4c0 3-2 5-4 6M15 7h4v4c0 3-2 5-4 6" /></svg>
           <Quote id={id} />
         </div>

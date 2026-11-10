@@ -55,6 +55,7 @@ describe('Proposals', () => {
     expect(within(head).getByText('exec')).toBeInTheDocument()
     const old = (await within(card).findByText('the old line')).closest('.mffai-pr-old') as HTMLElement
     expect(old).not.toBeNull()
+    expect(within(card).getByRole('group', { name: '原文' })).toBe(old)
     expect(card.querySelector('textarea')).toBeInTheDocument()
     const names = within(card).getAllByRole('button').map((b) => b.textContent)
     expect(names.indexOf('驳回')).toBeLessThan(names.indexOf('批准'))
@@ -68,6 +69,10 @@ describe('Proposals', () => {
     render(<Proposals onJumpToFile={() => {}} />)
     expect(await screen.findByText('quote of r_1')).toBeInTheDocument()
     expect(await screen.findByText('quote of r_2')).toBeInTheDocument()
+    const ev = screen.getAllByRole('group', { name: '证据' })
+    expect(ev).toHaveLength(2)
+    expect(ev.every((e) => e.classList.contains('mffai-pr-ev'))).toBe(true)
+    expect(ev[1]).toHaveTextContent('quote of r_2')
   })
 
   it('approving sends the edited text; a successful decide reloads the list', async () => {

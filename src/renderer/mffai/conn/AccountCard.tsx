@@ -1,8 +1,9 @@
 // 账号卡片(08b spec §2.3):Connections.tsx 里的账号行搬来,逻辑和处理函数原样,外观换成卡片。
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { AccountState, AccountView, ModelEntry, PresetView, Quota } from '@mffai/protocol'
 import { Icon } from '../shell/icons'
 import { Chip } from '../ui/Chip'
+import { Confirm } from '../ui/Confirm'
 import { presetTint } from '../ui/tint'
 
 export const STATE_LABEL: Record<AccountState, string> = {
@@ -38,6 +39,9 @@ export function AccountCard({ account, preset, models, defaultModelId, isDefault
 }) {
   const [quota, setQuota] = useState<Quota | null>(null)
   const [failed, setFailed] = useState(false)
+  // 删除是一次就没的操作:先贴着按钮问一句
+  const [asking, setAsking] = useState(false)
+  const delRef = useRef<HTMLButtonElement>(null)
   // 02 Task 13:默认模型下拉不再固定用第一个模型;默认账号拿目录的默认模型,其余账号退到自己清单的第一个
   const [modelId, setModelId] = useState(() => (isDefault && defaultModelId) || models[0]?.id || '')
   const m = window.forge.mffai.models
@@ -74,9 +78,13 @@ export function AccountCard({ account, preset, models, defaultModelId, isDefault
         </div>
         <div className="mffai-aact">
           <button className="set-btn" onClick={() => act(m.testAccount(account.id), true)}>测试</button>
-          <button className="set-btn mffai-iconbtn mffai-danger" onClick={() => act(m.removeAccount(account.id), true)}>
+          <button ref={delRef} className="set-btn mffai-iconbtn mffai-danger" onClick={() => setAsking(true)}>
             <Icon name="trash" size={14} /><span className="mffai-sr">删除</span>
           </button>
+          {asking && (
+            <Confirm title="删除账号" rows={[['账号', account.label], ...(preset?.label ? [['套餐', preset.label] as const] : [])]} confirmLabel="删除" danger anchor={delRef.current}
+              onCancel={() => setAsking(false)} onConfirm={() => { setAsking(false); act(m.removeAccount(account.id), true) }} />
+          )}
         </div>
       </div>
       {quota && <QuotaView quota={quota} />}

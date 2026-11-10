@@ -4,7 +4,7 @@ import { Chip } from '../ui/Chip'
 export function SaveBar({ dirty, busy, onSave }: { dirty: boolean; busy: boolean; onSave(): void }) {
   if (!dirty) return null
   return (
-    <div className="mffai-savebar" role="group" aria-label="保存条">
+    <div className="mffai-savebar" role="status" aria-label="保存条">
       <Chip tone="warn" dot>未保存</Chip>
       <button className="set-btn mffai-primary" disabled={busy} onClick={onSave}>保存</button>
     </div>

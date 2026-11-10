@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { AddAccountDrawer } from './AddAccountDrawer'
 import ConnectionsPage from './ConnectionsPage'
 import { installFakeForge, type FakeForge } from '../test/fakeForge'
@@ -62,6 +64,63 @@ describe('AddAccountDrawer', () => {
     rerender(<AddAccountDrawer open={false} onClose={onClose}><span>b</span></AddAccountDrawer>)
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(onClose).not.toHaveBeenCalled()
+  })
+})
+
+describe('AddAccountDrawer as a modal dialog', () => {
+  it('role=dialog, aria-modal, named 添加账号; the first field gets focus and focus goes back on close', () => {
+    const opener = document.createElement('button')
+    document.body.appendChild(opener)
+    opener.focus()
+    const { rerender } = render(<AddAccountDrawer open onClose={() => {}}><select aria-label="套餐"><option>a</option></select><input aria-label="名字" /></AddAccountDrawer>)
+    const dlg = screen.getByRole('dialog', { name: '添加账号' })
+    expect(dlg.tagName).toBe('ASIDE')
+    expect(dlg.classList.contains('mffai-drawer')).toBe(true)
+    expect(dlg.getAttribute('aria-modal')).toBe('true')
+    expect(document.activeElement).toBe(screen.getByRole('combobox', { name: '套餐' }))
+    rerender(<AddAccountDrawer open={false} onClose={() => {}}><span /></AddAccountDrawer>)
+    expect(document.activeElement).toBe(opener)
+    opener.remove()
+  })
+
+  it('Tab from the last control wraps to the first (× 关闭), Shift+Tab from the first wraps to the last', () => {
+    render(<AddAccountDrawer open onClose={() => {}}><input aria-label="名字" /><button>保存</button></AddAccountDrawer>)
+    const first = screen.getByRole('button', { name: '关闭' }), last = screen.getByRole('button', { name: '保存' })
+    last.focus()
+    fireEvent.keyDown(last, { key: 'Tab' })
+    expect(document.activeElement).toBe(first)
+    fireEvent.keyDown(first, { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(last)
+    // 中间的 Tab 交给浏览器
+    const mid = screen.getByRole('textbox', { name: '名字' })
+    mid.focus()
+    const ev = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+    mid.dispatchEvent(ev)
+    expect(ev.defaultPrevented).toBe(false)
+  })
+
+  it('with no fields the dialog itself takes focus', () => {
+    render(<AddAccountDrawer open onClose={() => {}}><span>body</span></AddAccountDrawer>)
+    expect(document.activeElement).toBe(screen.getByRole('dialog', { name: '添加账号' }))
+  })
+
+  it('the top follows the measured page header, not a fixed 53px', () => {
+    const main = document.createElement('div')
+    main.className = 'mffai-main'
+    const head = document.createElement('div')
+    head.className = 'mffai-head'
+    main.appendChild(head)
+    document.body.appendChild(main)
+    const box = (top: number, bottom: number) => ({ top, bottom, left: 0, right: 100, width: 100, height: bottom - top, x: 0, y: top, toJSON: () => ({}) }) as DOMRect
+    main.getBoundingClientRect = () => box(10, 800)
+    head.getBoundingClientRect = () => box(10, 91)
+    render(<AddAccountDrawer open onClose={() => {}}><span>b</span></AddAccountDrawer>, { container: main.appendChild(document.createElement('div')) })
+    expect((document.querySelector('aside.mffai-drawer') as HTMLElement).style.top).toBe('81px')
+    expect((document.querySelector('.mffai-drawer-dim') as HTMLElement).style.top).toBe('81px')
+    const css = readFileSync(resolve(__dirname, '../styles/pages.css'), 'utf8')
+    expect(css).not.toMatch(/53px/)
+    expect(css).toMatch(/\.mffai-drawer \{[^}]*top: var\(--mffai-head-h\)/)
+    main.remove()
   })
 })
 

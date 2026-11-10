@@ -2,6 +2,8 @@
 // 已配对和撤销、启用和过期分钟(整份配置)、项目、聊天,-32601 → 不支持,channel.* 事件后重取。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { Telegram } from './Telegram'
 import { route } from '../route'
 import { fail, installFakeForge, type CallTable, type FakeForge } from '../test/fakeForge'
@@ -332,6 +334,14 @@ describe('Telegram 08b layout', () => {
   it('the dropped counters are a five-cell row and 清除令牌 is a danger button next to 保存令牌', async () => {
     await mount()
     expect(document.querySelectorAll('.mffai-tg-dropped td')).toHaveLength(5)
+    // 表格语义保留:五个列头,每个数字的格子能对上列头;CSS 不把表格部件改成 display: contents
+    const table = screen.getByRole('table')
+    expect(within(table).getAllByRole('columnheader')).toHaveLength(5)
+    expect(within(table).getAllByRole('cell')).toHaveLength(5)
+    const css = readFileSync(resolve(__dirname, '../styles/pages.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    const rules = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)].filter((m) => m[1].includes('.mffai-tg-dropped'))
+    expect(rules.length).toBeGreaterThan(0)
+    for (const m of rules) expect(m[2], m[1].trim()).not.toMatch(/display:\s*(contents|grid|flex|block)/)
     expect(screen.getByRole('button', { name: '清除令牌' }).className).toContain('mffai-danger')
     expect(screen.getByRole('button', { name: '保存令牌' }).className).toContain('mffai-primary')
   })

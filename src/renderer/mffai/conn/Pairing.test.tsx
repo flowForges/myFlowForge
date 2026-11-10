@@ -53,7 +53,7 @@ describe('Pairing', () => {
     expect(qr).not.toBeNull()
     // 二维码的名字不带码
     expect(qr.getAttribute('aria-label')).not.toContain(RAW)
-    fireEvent.click(screen.getByRole('button', { name: '打开链接' }))
+    fireEvent.click(screen.getByRole('button', { name: '在 Telegram 打开' }))
     expect(f.mffai.openExternal).toHaveBeenCalledWith(LINK)
     expect(f.forge.openExternal).not.toHaveBeenCalled()
   })
@@ -62,7 +62,7 @@ describe('Pairing', () => {
     f = installFakeForge({ calls: begin(`https://evil.example/?start=${RAW}`) })
     render(<Pairing active={false} />)
     await start()
-    expect(screen.queryByRole('button', { name: '打开链接' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '在 Telegram 打开' })).toBeNull()
     expect(document.querySelector('svg.qr')).toBeNull()
   })
 
@@ -70,7 +70,7 @@ describe('Pairing', () => {
     f = installFakeForge({ calls: begin(null) })
     render(<Pairing active={false} />)
     await start()
-    expect(screen.queryByRole('button', { name: '打开链接' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '在 Telegram 打开' })).toBeNull()
     expect(document.querySelector('svg.qr')).toBeNull()
   })
 
@@ -202,8 +202,10 @@ describe('Pairing', () => {
     expect(document.querySelector('.mffai-pairing.live')).not.toBeNull()
     expect(document.querySelector('.mffai-ring')).not.toBeNull()
     expect(document.querySelector('.mffai-paircode')!.textContent).toBe(CODE)
-    const open = screen.getByRole('button', { name: '打开链接' })
+    const open = screen.getByRole('button', { name: '在 Telegram 打开' })
     expect(open.textContent).toBe('在 Telegram 打开')
+    // 无障碍名就是看得见的字(WCAG 2.5.3),不另起一个
+    expect(open.hasAttribute('aria-label')).toBe(false)
     expect(open.className).toContain('mffai-primary')
     fireEvent.click(screen.getByRole('button', { name: '复制链接' }))
     expect(writeText).toHaveBeenCalledWith(LINK)

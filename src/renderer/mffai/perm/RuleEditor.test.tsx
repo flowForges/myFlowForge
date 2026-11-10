@@ -3,6 +3,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import type { RuleError } from '@mffai/protocol'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { RuleEditor, type RuleRow } from './RuleEditor'
 
 const rows = (): RuleRow[] => [
@@ -101,10 +103,18 @@ describe('RuleEditor', () => {
   it('disabled: every control in every row and the add button are disabled', () => {
     render(<RuleEditor rows={rows()} errors={new Map()} {...noop} disabled />)
     expect(within(domRows()[0]).getByRole('button', { name: '允许' })).toBeDisabled()
+    for (const row of domRows()) for (const name of ['拒绝', '询问', '允许']) expect(within(row).getByRole('button', { name }), name).toBeDisabled()
     expect(within(domRows()[0]).getByLabelText('规则')).toBeDisabled()
     expect(within(domRows()[0]).getByLabelText('应匹配')).toBeDisabled()
     expect(within(domRows()[0]).getByRole('button', { name: '删除' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '添加规则' })).toBeDisabled()
+  })
+
+  it('the drag grip has no grab cursor: rows move with 上移 / 下移, there is no drag', () => {
+    const css = readFileSync(resolve(__dirname, '../styles/pages.css'), 'utf8')
+    const rules = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)].filter((m) => m[1].includes('.mffai-grip'))
+    expect(rules.length).toBeGreaterThan(0)
+    for (const m of rules) expect(m[2]).not.toMatch(/cursor:\s*(grab|move)/)
   })
 
   it('registerFlush is forwarded to every match/noMatch TagInput', () => {

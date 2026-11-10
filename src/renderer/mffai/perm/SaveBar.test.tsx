@@ -13,6 +13,10 @@ describe('SaveBar', () => {
     const onSave = vi.fn()
     render(<SaveBar dirty busy={false} onSave={onSave} />)
     expect(screen.getByText('未保存')).toBeInTheDocument()
+    // 出现时读屏会念出来:role=status 的区域,名字 保存条,里面是 未保存 和 保存
+    const bar = screen.getByRole('status', { name: '保存条' })
+    expect(bar).toHaveTextContent('未保存')
+    expect(bar).toContainElement(screen.getByRole('button', { name: '保存' }))
     const save = screen.getByRole('button', { name: '保存' })
     expect(save).not.toBeDisabled()
     expect(save).toHaveClass('mffai-primary')

@@ -68,10 +68,11 @@
 .mffai-tg-name { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 14px; font-weight: 600; color: var(--fg); }
 .mffai-tg-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 12px; }
 .mffai-tg-meta .mffai-k { width: auto; font-size: 11.5px; }
-.mffai-tg-dropped { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); padding: 8px 0; border-collapse: collapse; }
-.mffai-tg-dropped thead, .mffai-tg-dropped tbody, .mffai-tg-dropped tr { display: contents; }
-.mffai-tg-dropped td { grid-row: 1; text-align: center; font-size: 15px; font-weight: 600; font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--fg); }
-.mffai-tg-dropped th { grid-row: 2; text-align: center; font-size: 11px; font-weight: normal; color: var(--faint); }
+/* 丢弃计数:真表格(列头 + 一行数字);列头组放成表尾,数字在上、名字在下,表格语义不动 */
+.mffai-tg-dropped { width: 100%; table-layout: fixed; margin: 8px 0; border-collapse: collapse; }
+.mffai-tg-dropped thead { display: table-footer-group; }
+.mffai-tg-dropped td { padding: 0; text-align: center; font-size: 15px; font-weight: 600; font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--fg); }
+.mffai-tg-dropped th { padding: 0; text-align: center; font-size: 11px; font-weight: normal; color: var(--faint); }
 .mffai-tg-token, .mffai-tg-minutes { padding: 0; }
 .mffai-tg-lab { flex: 0 0 64px; font-size: 12.5px; color: var(--fg-2); }
 .mffai-tg-token input[type="password"] { flex: 1; min-width: 0; height: 32px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface-2); color: var(--fg); }
@@ -299,8 +300,8 @@ button.mffai-iconbtn:not(.set-btn):hover { color: var(--fg); background: var(--s
 
 /* 添加账号抽屉 */
 .mffai-main { position: relative; }
-.mffai-drawer-dim { position: absolute; inset: 53px 0 0 0; z-index: 30; background: var(--mffai-dim); }
-.mffai-drawer { position: absolute; top: 53px; right: 0; bottom: 0; z-index: 31; display: flex; flex-direction: column; width: min(404px, 100%); border-left: 1px solid var(--border-2); background: var(--mffai-panel-bg); box-shadow: var(--mffai-shadow); }
+.mffai-drawer-dim { position: absolute; inset: var(--mffai-head-h) 0 0 0; z-index: 30; background: var(--mffai-dim); }
+.mffai-drawer { position: absolute; top: var(--mffai-head-h); right: 0; bottom: 0; z-index: 31; display: flex; flex-direction: column; width: min(404px, 100%); border-left: 1px solid var(--border-2); background: var(--mffai-panel-bg); box-shadow: var(--mffai-shadow); }
 .mffai-drawer:focus { outline: none; }
 .mffai-drawer:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .mffai-drawer-head { flex: 0 0 48px; display: flex; align-items: center; gap: 10px; padding: 0 14px 0 18px; border-bottom: 1px solid var(--border); color: var(--fg); }
@@ -470,7 +471,7 @@ button.mffai-iconbtn:not(.set-btn):hover { color: var(--fg); background: var(--s
 .mffai-rule:last-of-type { border-bottom: none; }
 .mffai-rule-bad { background: var(--mffai-rule-bad); }
 .mffai-rule-bad .mffai-rulecell > input { border-color: var(--err); }
-.mffai-grip { color: var(--faint); cursor: grab; }
+.mffai-grip { color: var(--faint); }
 .mffai-effseg { background: transparent; padding: 0; gap: 0; }
 .mffai-effseg > button { height: 26px; padding: 0 9px; border: 1px solid transparent; }
 .mffai-effseg > button.on.deny { color: var(--err); background: var(--mffai-err-dim); border-color: var(--mffai-err-line); box-shadow: none; }

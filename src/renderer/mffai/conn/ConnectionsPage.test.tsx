@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import ConnectionsPage from './ConnectionsPage'
 import { installFakeForge, type FakeForge } from '../test/fakeForge'
 import { tgCalls } from '../test/telegram'
@@ -131,7 +131,7 @@ describe('ConnectionsPage', () => {
       expect(f.mffai.openExternal).toHaveBeenCalledWith('https://x/usage')
     })
 
-    it('delete is an icon button, still reachable as 删除, and removes that account at once', async () => {
+    it('delete is an icon button, still reachable as 删除, and removes that account after its confirm', async () => {
       setup([{ id: 'a1', presetId: 'anthropic', label: 'acc1', state: 'ok' }], () => null)
       f.mffai.models.removeAccount.mockResolvedValue({ ok: true } as never)
       render(<ConnectionsPage />)
@@ -140,7 +140,31 @@ describe('ConnectionsPage', () => {
       const btn = within(card).getByRole('button', { name: '删除' })
       expect(btn.querySelector('svg.mffai-i')).not.toBeNull()
       fireEvent.click(btn)
+      const dlg = screen.getByRole('dialog', { name: '删除账号' })
+      fireEvent.click(within(dlg).getByRole('button', { name: '删除' }))
       await waitFor(() => expect(f.mffai.models.removeAccount).toHaveBeenCalledWith('a1'))
+    })
+
+    it('delete asks first: the anchored confirm names the account; 取消 and Esc remove nothing', async () => {
+      setup([{ id: 'a1', presetId: 'anthropic', label: 'acc1', state: 'ok' }], () => null)
+      f.mffai.models.removeAccount.mockResolvedValue({ ok: true } as never)
+      render(<ConnectionsPage />)
+      await screen.findByText('acc1')
+      const card = screen.getByText('acc1').closest('.mffai-acard') as HTMLElement
+      const btn = within(card).getByRole('button', { name: '删除' })
+      fireEvent.click(btn)
+      const dlg = screen.getByRole('dialog', { name: '删除账号' })
+      expect(dlg).toHaveTextContent('acc1')
+      expect(within(dlg).getByRole('button', { name: '删除' }).className).toBe('confirm-danger')
+      expect(f.mffai.models.removeAccount).not.toHaveBeenCalled()
+      fireEvent.click(within(dlg).getByRole('button', { name: '取消' }))
+      expect(screen.queryByRole('dialog', { name: '删除账号' })).toBeNull()
+      expect(document.activeElement).toBe(btn)
+      fireEvent.click(btn)
+      fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+      expect(screen.queryByRole('dialog', { name: '删除账号' })).toBeNull()
+      await act(async () => { await Promise.resolve() })
+      expect(f.mffai.models.removeAccount).not.toHaveBeenCalled()
     })
 
     it('默认模型 select and 设为默认 per card; the default card has it disabled', async () => {
