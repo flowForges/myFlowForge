@@ -49,4 +49,13 @@ describe('FaultPanel', () => {
     expect(screen.queryByText('重新启动')).toBeNull()
     expect(screen.getByText('后台已熔断')).toBeInTheDocument()
   })
+
+  it('starting and restarting: no 重新启动, the title is the state label', () => {
+    for (const [state, text] of [['starting', '启动中'], ['restarting', '重启中']] as const) {
+      const { unmount } = render(<FaultPanel state={tripped({ supervisor: { ...RUNNING_STATE.supervisor!, state } })} busy={false} onRestart={() => {}} onResetTrip={() => {}} />)
+      expect(screen.getByText(text, { selector: 'h2' })).toBeInTheDocument()
+      expect(screen.queryByText('重新启动')).toBeNull()
+      unmount()
+    }
+  })
 })

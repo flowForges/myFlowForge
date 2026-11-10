@@ -97,3 +97,4 @@
 .mffai-fault h2 { margin: 14px 0 0; font-size: 20px; font-weight: 700; color: var(--fg); }
 .mffai-faultrow { display: flex; gap: 6px; margin-top: 10px; }
 .mffai-fault .set-btn.mffai-primary { align-self: auto; margin-top: 24px; width: 320px; height: 36px; font-size: 13px; }
+.mffai-powerpop:focus { outline: none; }

@@ -137,9 +137,9 @@ export default function MffaiView() {
   if (!state.running) {
     return (
       <div className="mffai-page mffai-running">
-        <Rail page={page} counts={{}} disabled onSelect={() => {}} power={power} />
+        <Rail page={DEFAULT_PAGE} counts={{}} disabled onSelect={() => {}} power={power} />
         <div className="mffai-main">
-          <PageHeader title={PAGE_TITLE[page]} pill={strip} />
+          <PageHeader title={PAGE_TITLE[DEFAULT_PAGE]} pill={strip} />
           <div className="mffai-pagebox mffai-herobox">
             <FaultPanel state={state} busy={!!state.op} onRestart={onRestart} onResetTrip={onResetTrip} />
           </div>

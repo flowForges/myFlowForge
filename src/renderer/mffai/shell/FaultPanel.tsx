@@ -9,8 +9,10 @@ export function FaultPanel({ state, busy, onRestart, onResetTrip }: { state: Mff
   const sv = state.supervisor
   const incompatible = state.compatible === false
   const tripped = sv?.state === 'tripped'
-  const title = incompatible ? '版本不兼容' : tripped ? '后台已熔断' : '已停止'
   const { text } = stateLabel(state)
+  const title = incompatible ? '版本不兼容' : tripped ? '后台已熔断' : text
+  // 启动中、重启中、停止中不给按钮(和页头原来的条件一样)
+  const gone = state.enabled && !sv
   return (
     <section className="mffai-fault">
       <span className="mffai-faultic"><Icon name="power" size={24} /></span>
@@ -20,7 +22,7 @@ export function FaultPanel({ state, busy, onRestart, onResetTrip }: { state: Mff
         {sv?.trippedReason && <CodeChip code={sv.trippedReason} tone="bad" />}
         {sv?.version && <Chip tone="line">{sv.version}</Chip>}
       </div>
-      {!busy && (
+      {!busy && (tripped || incompatible || gone) && (
         <button type="button" className="set-btn mffai-primary" onClick={tripped && !incompatible ? onResetTrip : onRestart}>
           <Icon name="refresh" size={14} />重新启动
         </button>

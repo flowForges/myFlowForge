@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import MffaiView, { MFFAI_EXPECTED_RSS_MB } from './MffaiView'
 import { DEFAULT_PAGE, route } from './route'
 import { fail, installFakeForge, type FakeForge } from './test/fakeForge'
@@ -72,7 +72,7 @@ describe('MffaiView', () => {
   it('stopping -> 已停止, plugin count shown', async () => {
     setup({ enabled: true, autostart: true, running: true, pluginsActive: 3, supervisor: { state: 'stopping', version: '0.1.0' } })
     render(<MffaiView />)
-    expect((await screen.findAllByText('已停止')).length).toBeGreaterThan(0)
+    expect(await screen.findByText('已停止')).toBeInTheDocument()
     expect(screen.getByText('3 插件')).toBeInTheDocument()
   })
 
@@ -87,7 +87,9 @@ describe('MffaiView', () => {
     setup({ enabled: true, autostart: true, running: false, supervisor: { state: 'tripped', version: '0.1.0' } })
     render(<MffaiView />)
     // 页头胶囊和故障面板各有一个状态块
-    expect((await screen.findAllByText('已熔断')).length).toBeGreaterThan(0)
+    await screen.findByText('后台已熔断')
+    expect(within(document.querySelector('header.mffai-head') as HTMLElement).getByText('已熔断')).toBeInTheDocument()
+    expect(within(document.querySelector('.mffai-fault') as HTMLElement).getByText('已熔断')).toBeInTheDocument()
     fireEvent.click(screen.getByText('重新启动'))
     expect(mffai.resetTrip).toHaveBeenCalled()
   })
@@ -196,6 +198,15 @@ describe('MffaiView shell', () => {
     expect(route.get().page).toBe('chat')
     expect(document.querySelector('.mffai-fault')).not.toBeNull()
     expect(screen.getAllByText('重新启动')).toHaveLength(1)
+  })
+
+  it('not running: the header title and the rail highlight are pinned to the default page whatever the route says', async () => {
+    route.set({ page: 'memory' })
+    f.setState({ running: false, supervisor: undefined })
+    render(<MffaiView />)
+    await screen.findByText('重新启动')
+    expect(document.querySelector('header.mffai-head .mffai-head-title')!.textContent).toBe('对话')
+    expect(nav().filter((b) => b.classList.contains('on')).map((b) => b.querySelector('.mffai-navlabel')!.textContent)).toEqual(['对话'])
   })
 
   it('tripped: fault panel with the reason code; 重新启动 is resetTrip', async () => {

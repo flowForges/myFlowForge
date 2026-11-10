@@ -67,7 +67,7 @@ export function PowerButton({ state, info, onEnable, onDisable, onAutostart, onR
     <div
       className="mffai-powerwrap"
       ref={wrap}
-      onBlur={(e) => { const n = e.relatedTarget as Node | null; if (open && n && !wrap.current?.contains(n)) setOpen(false) }}
+      onBlur={(e) => { const n = e.relatedTarget as Node | null; if (open && !(n && wrap.current?.contains(n))) setOpen(false) }}
     >
       <button
         ref={btn}
@@ -81,7 +81,7 @@ export function PowerButton({ state, info, onEnable, onDisable, onAutostart, onR
         <Icon name="power" size={18} />
       </button>
       {open && (
-        <div className="mffai-powerpop" role="dialog" aria-label="后台">
+        <div className="mffai-powerpop" role="dialog" aria-label="后台" tabIndex={-1}>
           <div className="mffai-prow mffai-phead">
             <span className={`mffai-dot ${head.tone === 'off' ? '' : head.tone}`} />
             <b>后台</b>

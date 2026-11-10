@@ -64,6 +64,19 @@ describe('PowerButton', () => {
     expect(pop()).toBeNull()
   })
 
+  it('Tab leaving the popover closes it, also when focus goes nowhere (null relatedTarget); moving within it does not', () => {
+    render(<div><button data-testid="out">x</button><PowerButton state={st()} {...handlers()} /></div>)
+    fireEvent.click(btn())
+    const sw = screen.getByRole('switch', { name: '后台' })
+    fireEvent.focusOut(btn(), { relatedTarget: sw })
+    expect(pop()).not.toBeNull()
+    fireEvent.focusOut(sw, { relatedTarget: null })
+    expect(pop()).toBeNull()
+    fireEvent.click(btn())
+    fireEvent.focusOut(screen.getByRole('switch', { name: '后台' }), { relatedTarget: screen.getByTestId('out') })
+    expect(pop()).toBeNull()
+  })
+
   it('rows: 后台 + chip + switch, 版本, 内存, 插件 N 个 and N 有问题, 重启, 开机自启, 重启后台', () => {
     const h = handlers()
     render(
