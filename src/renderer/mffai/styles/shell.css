@@ -9,12 +9,13 @@
 .mffai-nav button { position: relative; width: 52px; padding: 7px 0 5px; border: 0; border-radius: 10px; display: flex; flex-direction: column; align-items: center; gap: 4px; background: transparent; color: var(--muted); font: inherit; font-size: 10.5px; font-weight: 500; cursor: pointer; }
 .mffai-nav button:hover:not(:disabled) { background: var(--surface); }
 .mffai-nav button.on { background: var(--accent-dim); color: var(--fg); }
+.mffai-nav button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .mffai-nav button.on .mffai-i { color: var(--accent); }
 .mffai-nav button.end { margin-top: auto; }
 .mffai-nav button:disabled { opacity: .35; cursor: default; }
 .mffai-nav .mffai-i { width: 19px; height: 19px; stroke-width: 1.7; }
-.mffai-navnum { position: absolute; top: 3px; right: 6px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 99px; background: var(--warn); color: var(--mffai-on-status); font-size: 9.5px; font-weight: 700; line-height: 15px; text-align: center; }
-.mffai-navnum.err { background: var(--err); }
+.mffai-navnum { position: absolute; top: 3px; right: 6px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 99px; background: var(--warn); color: var(--mffai-on-warn); font-size: 9.5px; font-weight: 700; line-height: 15px; text-align: center; }
+.mffai-navnum.err { background: var(--err); color: var(--mffai-on-status); }
 .mffai-power { width: 40px; height: 40px; margin-top: 4px; border-radius: 12px; display: grid; place-items: center; flex: 0 0 auto; position: relative; color: var(--ok); background: var(--mffai-ok-dim); box-shadow: inset 0 0 0 1px var(--mffai-ok-line); }
 .mffai-power::after { content: ""; position: absolute; right: 5px; top: 5px; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); animation: mffai-pulse 2s infinite; }
 .mffai-power.bad { color: var(--err); background: var(--mffai-err-dim); box-shadow: inset 0 0 0 1px var(--mffai-err-line); }

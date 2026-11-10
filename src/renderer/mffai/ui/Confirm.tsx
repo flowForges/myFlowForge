@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
 
 const GAP = 6
 const EDGE = 8
@@ -49,11 +49,25 @@ export function Confirm({ title, rows, keep, confirmLabel, danger, busy, require
     window.addEventListener('resize', place)
     return () => window.removeEventListener('resize', place)
   }, [anchor])
+  // 贴在按钮旁时:焦点进卡片(要逐字输入就进输入框,否则进 取消),关掉后回到按钮
+  useEffect(() => {
+    if (!anchor) return
+    const box = card.current
+    ;(box?.querySelector<HTMLElement>('.mffai-typed') ?? box?.querySelector<HTMLElement>('.confirm-cancel'))?.focus()
+    return () => { if (anchor.isConnected) anchor.focus() }
+  }, [anchor])
+  const busyRef = useRef(busy)
+  busyRef.current = busy
+  const onKey = (e: KeyboardEvent) => {
+    if (!anchor || e.key !== 'Escape') return
+    e.stopPropagation()
+    if (!busyRef.current) onCancel()
+  }
   const style: CSSProperties | undefined = pos ? { top: pos.top, left: pos.left } : undefined
   const blocked = busy || (requireTyped !== undefined && typed.normalize('NFC') !== requireTyped.normalize('NFC'))
   const all: readonly (readonly [string, ReactNode, ReactNode?])[] = [...rows, ...(keep ?? []).map((k) => ['保留', k] as const)]
   return (
-    <div className={pos ? 'confirm-overlay on mffai-anchored' : 'confirm-overlay on'} onClick={onCancel}>
+    <div className={pos ? 'confirm-overlay on mffai-anchored' : 'confirm-overlay on'} onClick={onCancel} onKeyDown={onKey}>
       <div ref={card} style={style} className="confirm-card mffai-confirm" role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}>
         <div className="confirm-title">{title}</div>
         {all.length > 0 && (

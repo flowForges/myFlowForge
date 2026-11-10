@@ -56,8 +56,10 @@
 .mffai-vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .mffai-sess-dot { min-width: 16px; height: 16px; padding: 0 4px; border-radius: 99px; background: var(--err); color: var(--mffai-on-status); font-size: 10px; font-weight: 700; line-height: 16px; text-align: center; }
 .mffai-sess .mffai-fail { flex: 0 0 auto; font-size: 11px; }
-/* 行菜单:悬停或聚焦时浮在右侧,盖住时间 */
+/* 行菜单:悬停或聚焦时浮在右侧,盖住时间(不盖红点) */
 .mffai-sess-menu { position: absolute; top: 50%; right: 6px; transform: translateY(-50%); opacity: 0; pointer-events: none; }
+/* 有待批红点的行:菜单让到红点左边,红点一直看得见 */
+.mffai-sess:has(.mffai-sess-dot) .mffai-sess-menu { right: 34px; }
 .mffai-sess:hover .mffai-sess-menu, .mffai-sess:focus-within .mffai-sess-menu, .mffai-sess-menu:has([aria-expanded="true"]) { opacity: 1; pointer-events: auto; }
 .mffai-sess-more { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; color: var(--muted); background: var(--mffai-panel-bg); box-shadow: 0 0 0 1px var(--border); }
 .mffai-sess-more:hover, .mffai-sess-more[aria-expanded="true"] { color: var(--fg); }
@@ -159,7 +161,7 @@
 .mffai-chathead .mffai-nhide { display: none; }
 .mffai-chathead .mffai-actbtn { display: inline-flex; align-items: center; gap: 6px; height: 28px; margin: 0; padding: 0 10px; border-radius: 8px; font-size: 12.5px; }
 .mffai-chathead .mffai-actbtn.on { color: var(--accent); border-color: var(--mffai-acc-line); background: var(--accent-dim); }
-.mffai-actbtn .n { min-width: 16px; height: 16px; padding: 0 4px; border-radius: 99px; background: var(--warn); color: var(--bg); font-size: 10px; font-weight: 700; line-height: 16px; text-align: center; }
+.mffai-actbtn .n { min-width: 16px; height: 16px; padding: 0 4px; border-radius: 99px; background: var(--warn); color: var(--mffai-on-warn); font-size: 10px; font-weight: 700; line-height: 16px; text-align: center; }
 
 .mffai-act { grid-column: 2; grid-row: 1 / span 2; display: flex; flex-direction: column; width: 368px; min-height: 0; border-left: 1px solid var(--border); background: var(--mffai-panel-bg); }
 .mffai-act.drawer { position: absolute; top: 0; right: 0; bottom: 0; z-index: 31; box-shadow: var(--mffai-shadow); }

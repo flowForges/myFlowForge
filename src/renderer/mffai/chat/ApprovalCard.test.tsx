@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { ApprovalCard } from './ApprovalCard'
@@ -115,9 +115,13 @@ describe('ApprovalCard', () => {
     // 开头的空行一样收起:命令不会被推到下面
     const { container: c3 } = render(<ApprovalCard sessionId="s1" approval={item({ summary: `${'\n'.repeat(30)}rm -rf ~` })} />)
     expect(c3.querySelector('pre.mffai-summary')!.textContent).toBe('⋯ 30 空行\nrm -rf ~')
-    const css = readFileSync(resolve(__dirname, '../styles/chat.css'), 'utf8')
-    const rule = /\.mffai-summary\s*\{([^}]*)\}/.exec(css)![1]
-    expect(rule).not.toMatch(/max-height|overflow/)
+    // 所有样式文件里,每条选中 .mffai-summary 的规则(不含 .mffai-summary-line 之类的别的类)
+    const dir = resolve(__dirname, '../styles')
+    const rules = readdirSync(dir).filter((f) => f.endsWith('.css'))
+      .flatMap((f) => [...readFileSync(resolve(dir, f), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^}]*)\}/g)])
+      .filter((m) => /\.mffai-summary(?![\w-])/.test(m[1]))
+    expect(rules.length).toBeGreaterThanOrEqual(2)
+    for (const m of rules) expect(m[2], m[1].trim()).not.toMatch(/max-height|overflow/)
   })
   it('08b: pending is .mffai-appr (unsb when unsandboxed), resolved keeps the .mffai-approval-done line', () => {
     installFakeForge()

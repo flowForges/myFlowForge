@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { Confirm } from './Confirm'
 
 describe('Confirm', () => {
@@ -138,5 +140,70 @@ describe('Confirm', () => {
       rerender(<Confirm title="信任" rows={[]} confirmLabel="信任" requireTyped="plugin.json" busy anchor={anchorAt(rect(1200, 700, 80, 30))} onCancel={() => {}} onConfirm={onConfirm} />)
       expect((screen.getByRole('button', { name: '信任' }) as HTMLButtonElement).disabled).toBe(true)
     })
+
+    it('Esc cancels; focus goes into the card (取消) and back to the trigger on close', () => {
+      viewport(1280, 800)
+      sizeCards()
+      const trigger = anchorAt(rect(600, 100, 80, 30))
+      trigger.focus()
+      const onCancel = vi.fn(), onConfirm = vi.fn()
+      const { unmount } = render(<Confirm title="删除" rows={[]} confirmLabel="删除" danger anchor={trigger} onCancel={onCancel} onConfirm={onConfirm} />)
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: '取消' }))
+      expect(screen.getByRole('dialog', { name: '删除' }).contains(document.activeElement)).toBe(true)
+      fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+      expect(onCancel).toHaveBeenCalledTimes(1)
+      expect(onConfirm).not.toHaveBeenCalled()
+      unmount()
+      expect(document.activeElement).toBe(trigger)
+    })
+
+    it('with requireTyped the typed field gets focus; Esc while busy does nothing', () => {
+      viewport(1280, 800)
+      sizeCards()
+      const onCancel = vi.fn()
+      render(<Confirm title="信任" rows={[]} confirmLabel="信任" requireTyped="x" busy anchor={anchorAt(rect(600, 100, 80, 30))} onCancel={onCancel} onConfirm={() => {}} />)
+      expect(document.activeElement).toBe(screen.getByRole('textbox'))
+      fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+      expect(onCancel).not.toHaveBeenCalled()
+    })
+
+    it('a card taller than the window is pinned to the top edge and scrolls inside', () => {
+      viewport(1280, 300)
+      CARD.h = 500
+      try {
+        sizeCards()
+        const { container } = render(<Confirm title="t" rows={[]} confirmLabel="好" anchor={anchorAt(rect(600, 100, 80, 30))} onCancel={() => {}} onConfirm={() => {}} />)
+        expect(parseFloat((container.querySelector('.confirm-card') as HTMLElement).style.top)).toBe(8)
+      } finally { CARD.h = 200 }
+      const css = readFileSync(resolve(__dirname, '../styles/base.css'), 'utf8')
+      const rule = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)].filter((m) => m[1].trim() === '.mffai-anchored .confirm-card').map((m) => m[2]).join(';')
+      expect(rule).toMatch(/max-height:\s*calc\(100vh - 16px\)/)
+      expect(rule).toMatch(/overflow-y:\s*auto/)
+    })
+
+    it('the resize listener is removed on unmount', () => {
+      viewport(1280, 800)
+      sizeCards()
+      const add = vi.spyOn(window, 'addEventListener'), remove = vi.spyOn(window, 'removeEventListener')
+      try {
+        const { unmount } = render(<Confirm title="t" rows={[]} confirmLabel="好" anchor={anchorAt(rect(600, 100, 80, 30))} onCancel={() => {}} onConfirm={() => {}} />)
+        const fn = add.mock.calls.find((c) => c[0] === 'resize')![1]
+        expect(remove.mock.calls.some((c) => c[0] === 'resize' && c[1] === fn)).toBe(false)
+        unmount()
+        expect(remove.mock.calls.some((c) => c[0] === 'resize' && c[1] === fn)).toBe(true)
+      } finally { add.mockRestore(); remove.mockRestore() }
+    })
+  })
+
+  it('centred (no anchor): focus is left alone and Esc does nothing, as before', () => {
+    const outside = document.createElement('button')
+    document.body.appendChild(outside)
+    outside.focus()
+    const onCancel = vi.fn()
+    render(<Confirm title="t" rows={[]} confirmLabel="好" onCancel={onCancel} onConfirm={() => {}} />)
+    expect(document.activeElement).toBe(outside)
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+    expect(onCancel).not.toHaveBeenCalled()
+    outside.remove()
   })
 })

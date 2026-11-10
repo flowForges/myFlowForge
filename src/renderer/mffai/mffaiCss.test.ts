@@ -22,9 +22,37 @@ const NAMED = new Set(('aliceblue antiquewhite aqua aquamarine azure beige bisqu
   + 'peru pink plum powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown seagreen seashell sienna silver '
   + 'skyblue slateblue slategray slategrey snow springgreen steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke yellow '
   + 'yellowgreen canvas canvastext linktext visitedtext activetext buttonface buttontext buttonborder field fieldtext highlight highlighttext '
-  + 'mark marktext graytext accentcolor accentcolortext').split(' '))
+  + 'mark marktext graytext accentcolor accentcolortext selecteditem selecteditemtext '
+  // 旧的系统色(CSS Color 4 里已弃用,浏览器仍认)
+  + 'activeborder activecaption appworkspace background buttonhighlight buttonshadow captiontext inactiveborder inactivecaption '
+  + 'inactivecaptiontext infobackground infotext menu menutext scrollbar threeddarkshadow threedface threedhighlight '
+  + 'threedlightshadow threedshadow window windowframe windowtext').split(' '))
+/** 值里写的是属性名而不是颜色的属性(transition: background …) */
+const PROP_LISTS = new Set(['transition', 'transition-property', 'will-change'])
 
 interface Decl { prop: string; value: string }
+
+/** 去掉注释;字符串里的 /* 不算注释开头 */
+function stripComments(s: string): string {
+  let out = ''
+  for (let j = 0; j < s.length; j++) {
+    const c = s[j]
+    if (c === '"' || c === "'") {
+      let k = j + 1
+      while (k < s.length && s[k] !== c) k += s[k] === '\\' ? 2 : 1
+      out += s.slice(j, k + 1)
+      j = k
+      continue
+    }
+    if (c === '/' && s[j + 1] === '*') {
+      const k = s.indexOf('*/', j + 2)
+      j = k < 0 ? s.length : k + 1
+      continue
+    }
+    out += c
+  }
+  return out
+}
 interface Rule { file: string; selector: string; decls: Decl[]; keyframe?: boolean }
 interface Sheet { file: string; rules: Rule[]; imports: string[]; keyframes: string[]; atRules: string[] }
 
@@ -92,7 +120,7 @@ function parse(file: string, src: string): Sheet {
       i = end + 1
     }
   }
-  walk(src.replace(/\/\*[\s\S]*?\*\//g, ''), false)
+  walk(stripComments(src), false)
   return sheet
 }
 
@@ -151,7 +179,7 @@ function walkCss(dir: string): string[] {
 function appVars(): Set<string> {
   const out = new Set<string>()
   for (const f of ['tokens.css', 'glass.css']) {
-    const src = readFileSync(resolve(HERE, '../theme', f), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    const src = stripComments(readFileSync(resolve(HERE, '../theme', f), 'utf8'))
     for (const m of src.matchAll(/(--[\w-]+)\s*:/g)) out.add(m[1])
   }
   return out
@@ -181,16 +209,18 @@ function checkCss(root: string): string[] {
           }
         }
       }
+      const glassRule = splitTop(r.selector, ',').every((sel) => /\[data-glass/.test(sel))
       for (const d of r.decls) {
-        const lits = literals(d.value)
+        const lits = PROP_LISTS.has(d.prop.toLowerCase()) ? [] : literals(d.value)
         if (isTheme) themeLiterals += lits.length
         else {
           for (const l of lits) bad.push(`${s.file}: literal colour ${l} in ${r.selector} { ${d.prop} }`)
           if (/color-mix\(/i.test(d.value)) bad.push(`${s.file}: color-mix outside ${THEME} in ${r.selector} { ${d.prop} }`)
           if (d.prop.startsWith('--mffai')) bad.push(`${s.file}: --mffai-* defined outside ${THEME}: ${d.prop}`)
         }
-        for (const m of d.value.matchAll(/var\(\s*(--[\w-]+)/g)) {
+        for (const m of d.value.matchAll(/var\(\s*(--[\w-]+)/gi)) {
           const v = m[1]
+          if (v.startsWith('--glass-') && !glassRule) bad.push(`${s.file}: ${v} outside a [data-glass] rule in ${r.selector}`)
           if (v.startsWith('--mffai')) { if (!defined.has(v)) bad.push(`${s.file}: ${v} not defined in ${THEME}`) }
           else if (!APP_VARS.has(v)) bad.push(`${s.file}: ${v} is not an app variable`)
         }
@@ -206,6 +236,50 @@ function glassGaps(themeSrc: string): string[] {
   const glass = parse(THEME, themeSrc).rules.filter((r) => r.selector.replace(/\s+/g, ' ') === '[data-glass="on"] .mffai-page')
   const got = Object.fromEntries(glass.flatMap((r) => r.decls).map((d) => [d.prop, d.value]))
   return ['--mffai-rail-bg', '--mffai-col-bg', '--mffai-panel-bg'].filter((v) => !/var\(--glass-/.test(got[v] ?? ''))
+}
+
+/** oklch(L C h) 或 #rgb/#rrggbb → 相对亮度(WCAG) */
+function luminance(c: string): number {
+  let rgb: number[]
+  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(c.trim())
+  if (hex) {
+    const h = hex[1].length === 3 ? [...hex[1]].map((x) => x + x).join('') : hex[1]
+    rgb = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4))
+  } else {
+    const m = /^oklch\(\s*([\d.]+)%\s+([\d.]+)\s+([\d.]+)\s*\)$/.exec(c.trim())
+    if (!m) throw new Error(`cannot read colour ${c}`)
+    const L = +m[1] / 100, C = +m[2], h = (+m[3] * Math.PI) / 180
+    const a = C * Math.cos(h), b = C * Math.sin(h)
+    const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3
+    const mm = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3
+    const s = (L - 0.0894841775 * a - 1.291485548 * b) ** 3
+    rgb = [4.0767416621 * l - 3.3077115913 * mm + 0.2309699292 * s, -1.2684380046 * l + 2.6097574011 * mm - 0.3413193965 * s, -0.0041960863 * l - 0.7034186147 * mm + 1.707614701 * s]
+      .map((v) => Math.min(1, Math.max(0, v)))
+  }
+  return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
+}
+const contrast = (x: string, y: string) => { const a = luminance(x), b = luminance(y); return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05) }
+
+/** 一个主题下的 app 变量:tokens.css 里 dark 块打底,light 再盖一层 */
+function tokens(theme: 'dark' | 'light'): Record<string, string> {
+  const t = parse('tokens.css', readFileSync(resolve(HERE, '../theme/tokens.css'), 'utf8'))
+  const pick = (sel: string) => Object.fromEntries(t.rules.filter((r) => r.selector.replace(/\s+/g, ' ') === sel).flatMap((r) => r.decls).map((d) => [d.prop, d.value]))
+  return { ...pick(':root, [data-theme="dark"]'), ...(theme === 'light' ? pick('[data-theme="light"]') : {}) }
+}
+
+/** 把 var(--x) 顺着 theme.css 和 tokens 解到字面色 */
+function resolveColour(value: string, theme: 'dark' | 'light'): string {
+  const th = parse(THEME, readFileSync(join(HERE, THEME), 'utf8'))
+  const mine = (sel: string) => Object.fromEntries(th.rules.filter((r) => r.selector.replace(/\s+/g, ' ') === sel).flatMap((r) => r.decls).map((d) => [d.prop, d.value]))
+  const vars = { ...tokens(theme), ...mine('.mffai-page'), ...(theme === 'light' ? mine('[data-theme="light"] .mffai-page') : {}) }
+  let v = value.trim()
+  for (let i = 0; i < 10; i++) {
+    const m = /^var\(\s*(--[\w-]+)\s*\)$/.exec(v)
+    if (!m) return v
+    v = vars[m[1]]
+    if (!v) throw new Error(`${m[1]} undefined in ${theme}`)
+  }
+  return v
 }
 
 /** 整页的 import 顺序 */
@@ -285,7 +359,27 @@ describe('mff-ai CSS guard', () => {
   it('every var() exists: --mffai-* in theme.css, the rest in the app tokens', () => {
     expect(plant('styles/chat.css', '.mffai-x { color: var(--mffai-nope) }').join('\n')).toMatch(/--mffai-nope not defined/)
     expect(plant('styles/chat.css', '.mffai-x { color: var(--not-an-app-var) }').join('\n')).toMatch(/--not-an-app-var is not an app variable/)
-    expect(plant('styles/chat.css', '.mffai-x { color: var(--fg); background: var(--glass-panel); border-color: var(--mffai-tint) }')).toEqual([])
+    expect(plant('styles/chat.css', '[data-glass="on"] .mffai-x { color: var(--fg); background: var(--glass-panel); border-color: var(--mffai-tint) }')).toEqual([])
+    expect(plant('styles/chat.css', '.mffai-x { color: VAR(--mffai-nope) }').join('\n')).toMatch(/--mffai-nope not defined/)
+    expect(plant('styles/chat.css', '.mffai-x { color: Var( --not-an-app-var) }').join('\n')).toMatch(/--not-an-app-var is not an app variable/)
+  })
+
+  it('--glass-* is only read under a [data-glass] selector', () => {
+    expect(plant('styles/chat.css', '.mffai-x { background: var(--glass-panel) }').join('\n')).toMatch(/--glass-panel outside a \[data-glass\] rule/)
+    expect(plant('styles/chat.css', '[data-glass="on"] .mffai-x, .mffai-y { background: var(--glass-panel) }').join('\n')).toMatch(/--glass-panel outside/)
+    expect(plant('styles/chat.css', '[data-glass="on"] .mffai-x { background: var(--glass-sidebar) }')).toEqual([])
+  })
+
+  it('system colours count as literals; property lists in transition do not', () => {
+    for (const lit of ['WindowText', 'Canvas', 'ButtonFace', 'Menu', 'Background']) {
+      expect(plant('styles/chat.css', `.mffai-x { color: ${lit} }`).join('\n'), lit).toMatch(/literal colour/)
+    }
+    expect(plant('styles/chat.css', '.mffai-x { transition: background .2s, color .2s; will-change: background }')).toEqual([])
+  })
+
+  it('a comment opener inside a string does not hide the rules after it', () => {
+    expect(plant('styles/chat.css', '.mffai-x::before { content: "/*" } .mffai-y { color: #000 } .mffai-z::after { content: "*/" }').join('\n')).toMatch(/literal colour #000/)
+    expect(plant('styles/chat.css', '/* #000 */ .mffai-x::before { content: "/* #000 */" }')).toEqual([])
   })
 
   it('theme.css redefines the rail, column and panel backgrounds under glass from --glass-*', () => {
@@ -298,5 +392,20 @@ describe('mff-ai CSS guard', () => {
       '--mffai-warn-line', '--mffai-err-line', '--mffai-acc-line', '--mffai-warn-wash', '--mffai-err-wash', '--mffai-ring-warn', '--mffai-ring-err', '--mffai-on-status',
       '--mffai-rail-bg', '--mffai-col-bg', '--mffai-panel-bg', '--mffai-scrim', '--mffai-dim', '--mffai-shadow', '--mffai-brand', '--mffai-o-tg', '--mffai-o-sc', '--mffai-o-ed',
       '--mffai-p-anth', '--mffai-p-oai', '--mffai-p-ds', '--mffai-p-or', '--mffai-p-cc', '--mffai-p-cx', '--mffai-p-gm', '--mffai-knob']) expect(vars.has(v), v).toBe(true)
+  })
+  it('text on solid warn and err badges has at least 4.5:1, dark and light', () => {
+    const rules = walkCss(HERE).flatMap((p) => parse(relative(HERE, p), readFileSync(p, 'utf8')).rules)
+    const pairs = rules.flatMap((r) => {
+      const bg = r.decls.find((d) => d.prop === 'background' && /^var\(--(warn|err)\)$/.test(d.value))
+      const fg = r.decls.find((d) => d.prop === 'color')
+      return bg && fg ? [{ sel: r.selector, bg: bg.value, fg: fg.value }] : []
+    })
+    expect(pairs.map((p) => p.sel)).toEqual(expect.arrayContaining(['.mffai-navnum', '.mffai-navnum.err', '.mffai-sess-dot', '.mffai-actbtn .n', '.mffai-confirm .confirm-danger']))
+    for (const theme of ['dark', 'light'] as const) {
+      for (const p of pairs) {
+        const ratio = contrast(resolveColour(p.fg, theme), resolveColour(p.bg, theme))
+        expect(ratio, `${theme} ${p.sel}: ${ratio.toFixed(2)}`).toBeGreaterThanOrEqual(4.5)
+      }
+    }
   })
 })

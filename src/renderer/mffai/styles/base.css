@@ -116,7 +116,7 @@
 /* 确认框:DOM 和 app 一样(.confirm-*),外观经 .mffai-page / .mffai-confirm 改;按钮类名不加东西 */
 .mffai-page .confirm-overlay { background: var(--mffai-scrim); }
 .mffai-page .confirm-overlay.mffai-anchored { background: transparent; }
-.mffai-anchored .confirm-card { position: fixed; margin: 0; }
+.mffai-anchored .confirm-card { position: fixed; margin: 0; max-height: calc(100vh - 16px); overflow-y: auto; }
 .mffai-confirm { padding: 16px; border-color: var(--border-2); border-radius: 14px; box-shadow: var(--mffai-shadow); }
 .mffai-confirm .confirm-title { margin-top: 0; font-size: 14px; font-weight: 650; }
 .mffai-confirm .confirm-actions { gap: 8px; margin-top: 14px; }

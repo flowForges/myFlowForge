@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import type { SessionSummary } from '@mffai/protocol'
 import { SessionColumn } from './SessionColumn'
 import ChatPage from './ChatPage'
@@ -7,7 +9,7 @@ import { MainWidthProvider } from '../useMainWidth'
 import { route } from '../route'
 import { installResize } from '../test/resize'
 import { installFakeForge, type FakeForge } from '../test/fakeForge'
-import { resetSeq } from '../test/events'
+import { ev, resetSeq } from '../test/events'
 import { perms, summary } from '../test/sessions'
 
 const titles = () => [...document.querySelectorAll('.mffai-sess')].map((r) => r.querySelector('.mffai-sess-title')!.textContent)
@@ -104,6 +106,17 @@ describe('SessionColumn', () => {
     expect(b.querySelector('.mffai-sess-dot')).toBeNull()
   })
 
+  it('the row menu does not cover the pending dot: rows with a dot move the menu left of it', () => {
+    mount()
+    expect(rowOf('本机').querySelector('.mffai-sess-dot')).not.toBeNull()
+    const css = readFileSync(resolve(__dirname, '../styles/chat.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    const rule = (sel: string) => [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)].filter((m) => m[1].split(',').map((x) => x.trim()).includes(sel)).map((m) => m[2]).join(';')
+    const right = /right:\s*(\d+)px/.exec(rule('.mffai-sess:has(.mffai-sess-dot) .mffai-sess-menu'))
+    // 点在行右内边距 8px 里,最少 16px 宽:菜单的右边要让过 8 + 16 + 间距
+    expect(Number(right?.[1])).toBeGreaterThanOrEqual(30)
+    expect(rule('.mffai-sess-dot')).not.toMatch(/opacity:\s*0|visibility:\s*hidden/)
+  })
+
   it('narrow: aside gets .narrow; the second line, the Telegram name and 群聊 stay in the DOM', () => {
     mount({ narrow: true })
     expect(col().classList.contains('narrow')).toBe(true)
@@ -177,6 +190,45 @@ describe('SessionList groups', () => {
     for (const h of list.querySelectorAll('.mffai-sessgh')) expect(h.getAttribute('role')).toBe('presentation')
   })
 
+  it('local midnight is the boundary: 23:59:59 yesterday is 昨天, 00:00:00 today is 今天', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 10, 10, 0, 0, 30).getTime())
+    mount({ sessions: [
+      summary('t', { title: '零点', updatedAt: new Date(2026, 10, 10, 0, 0, 0).getTime() }),
+      summary('y', { title: '昨夜', updatedAt: new Date(2026, 10, 9, 23, 59, 59).getTime() }),
+      summary('o', { title: '前天零点前', updatedAt: new Date(2026, 10, 8, 23, 59, 59).getTime() }),
+    ] })
+    const list = document.querySelector('.mffai-sesslist')!
+    const seq = [...list.children].map((li) => li.classList.contains('mffai-sessgh') ? `#${li.textContent}` : li.querySelector('.mffai-sess-title')!.textContent)
+    expect(seq).toEqual(['#今天', '零点', '#昨天', '昨夜', '#更早', '前天零点前'])
+  })
+
+  it('an invalid updatedAt goes to 更早 at the bottom, shows no NaN, and the valid rows keep newest-first', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 10, 10, 15, 0).getTime())
+    const at = (h: number) => new Date(2026, 10, 10, h, 0).getTime()
+    mount({ sessions: [
+      summary('a', { title: '九点', updatedAt: at(9) }),
+      { ...summary('bad', { title: '坏时间' }), updatedAt: Number.NaN },
+      summary('b', { title: '十四点', updatedAt: at(14) }),
+      summary('c', { title: '十点', updatedAt: at(10) }),
+    ] })
+    const list = document.querySelector('.mffai-sesslist')!
+    const seq = [...list.children].map((li) => li.classList.contains('mffai-sessgh') ? `#${li.textContent}` : li.querySelector('.mffai-sess-title')!.textContent)
+    expect(seq).toEqual(['#今天', '十四点', '十点', '九点', '#更早', '坏时间'])
+    expect(list.textContent).not.toMatch(/NaN|Invalid/)
+  })
+
+  it('an unknown origin shows under 全部 with the 定时 tile and label', () => {
+    mount()
+    expect(seg('全部').getAttribute('aria-pressed')).toBe('true')
+    const e = rowOf('寻呼')
+    expect(e).toBeTruthy()
+    expect(e.querySelector('.mffai-origin')!.getAttribute('data-origin')).toBe('schedule')
+    expect(e.querySelector('.mffai-origin')!.getAttribute('aria-label')).toBe('定时')
+    expect(e.querySelector('.mffai-sess-via')!.textContent).toBe('定时')
+  })
+
   it('an empty group has no head', () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date(2026, 10, 10, 15, 0).getTime())
@@ -232,6 +284,23 @@ describe('ChatPage with the session column', () => {
     expect(rowOf('手机').querySelector('.mffai-sess-sub')).not.toBeNull()
     r.setMainWidth(1200)
     expect(col().classList.contains('narrow')).toBe(false)
+  })
+
+  it('with a session open the recommendation card sits above the conversation, outside the scrolling chat body', async () => {
+    setup()
+    route.set({ page: 'chat', sessionId: 'a' })
+    render(<ChatPage />)
+    await waitFor(() => expect(document.querySelector('.mffai-chat-body')).not.toBeNull())
+    act(() => { f.emit(ev('memory.recommendation', { id: 'r1', category: 'routine', habitId: 'h1', text: '周一看周报', cwd: '~/w' })) })
+    const card = (await screen.findByText('周一看周报')).closest('.mffai-recs') as HTMLElement
+    expect(card).not.toBeNull()
+    expect(card.parentElement!.classList.contains('mffai-chat-main')).toBe(true)
+    expect(card.closest('.mffai-chat-body, .mffai-convo')).toBeNull()
+    // 它在网格第一行、对话流在第二行,滚的只是 .mffai-chat-body
+    expect(card.compareDocumentPosition(document.querySelector('.mffai-convo')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const css = readFileSync(resolve(__dirname, '../styles/chat.css'), 'utf8')
+    expect(css).toMatch(/\.mffai-chat-main:not\(\.mffai-chat-new\) > \.mffai-recs \{[^}]*grid-row: 1/)
+    expect(css).toMatch(/\.mffai-convo \{[^}]*grid-row: 2/)
   })
 
   it('the origin filter never calls session.list again', async () => {

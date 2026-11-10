@@ -118,7 +118,9 @@ export function SessionList({ sessions, active, imNames, onSelect, onRename, onD
     document.addEventListener('click', close)
     return () => document.removeEventListener('click', close)
   }, [menu])
-  const sorted = [...sessions].sort((a, b) => b.updatedAt - a.updatedAt)
+  // 坏的 updatedAt(NaN、Infinity)排到最后,不打乱其余的顺序,也不让同一个组头出现两次
+  const key = (x: SessionSummary) => (Number.isFinite(x.updatedAt) ? x.updatedAt : Number.NEGATIVE_INFINITY)
+  const sorted = [...sessions].sort((a, b) => { const x = key(a), y = key(b); return x === y ? 0 : y > x ? 1 : -1 })
   const now = Date.now()
   let group: string | undefined
   return (

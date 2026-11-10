@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { Rail } from './Rail'
 import { MFFAI_PAGES } from '../route'
 
@@ -21,6 +23,20 @@ describe('Rail', () => {
     expect(buttons().filter((b) => b.classList.contains('on')).map((b) => b.querySelector('.mffai-navlabel')!.textContent)).toEqual(['记忆'])
     r.rerender(<Rail page="debug" counts={{}} onSelect={() => {}} power={null} />)
     expect(buttons().filter((b) => b.classList.contains('on')).map((b) => b.querySelector('.mffai-navlabel')!.textContent)).toEqual(['调试'])
+  })
+
+  it('aria-current="page" on the active button only, following the page', () => {
+    const r = render(<Rail page="plugins" counts={{}} onSelect={() => {}} power={null} />)
+    expect(buttons().filter((b) => b.getAttribute('aria-current') === 'page').map((b) => b.querySelector('.mffai-navlabel')!.textContent)).toEqual(['插件'])
+    expect(screen.getByRole('button', { current: 'page' })).toHaveClass('on')
+    r.rerender(<Rail page="chat" counts={{}} onSelect={() => {}} power={null} />)
+    expect(buttons().filter((b) => b.hasAttribute('aria-current')).map((b) => b.querySelector('.mffai-navlabel')!.textContent)).toEqual(['对话'])
+  })
+
+  it('nav buttons have a :focus-visible ring', () => {
+    const css = readFileSync(resolve(__dirname, '../styles/shell.css'), 'utf8')
+    const rule = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)].filter((m) => m[1].split(',').map((x) => x.trim()).includes('.mffai-nav button:focus-visible')).map((m) => m[2]).join(';')
+    expect(rule).toMatch(/outline:\s*2px solid var\(--accent\)/)
   })
 
   it('counts show only when non-zero; plugins badge is the error tone, chat and memory the warn tone', () => {

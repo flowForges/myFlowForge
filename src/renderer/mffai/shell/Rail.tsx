@@ -15,7 +15,7 @@ export function Rail({ page, counts, disabled, onSelect, power }: { page: MffaiP
       <span className="mffai-logo"><Icon name="sparkle" size={16} /></span>
       <nav className="mffai-nav">
         {MFFAI_PAGES.map((p) => (
-          <button key={p} className={`${p === page ? 'on ' : ''}${p === 'debug' ? 'end' : ''}`.trim() || undefined} disabled={disabled} onClick={() => onSelect(p)}>
+          <button key={p} className={`${p === page ? 'on ' : ''}${p === 'debug' ? 'end' : ''}`.trim() || undefined} aria-current={p === page ? 'page' : undefined} disabled={disabled} onClick={() => onSelect(p)}>
             <Icon name={NAV_ICON[p]} size={20} />
             <span className="mffai-navlabel">{PAGE_TITLE[p]}</span>
             {!!counts[p] && <span className={`mffai-navnum ${BADGE_TONE[p] ?? 'warn'}`}>{counts[p]}</span>}
