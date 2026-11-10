@@ -14,7 +14,7 @@ afterEach(() => { done?.(); done = undefined; vi.unstubAllGlobals() })
 const head = () => document.querySelector('header.mffai-chathead') as HTMLElement
 
 describe('ChatHeader', () => {
-  it('title, 运行中, cwd, mode, then the 活动 toggle with the count; aria-pressed / aria-expanded follow panelOn', () => {
+  it('title, 运行中, cwd, mode, then the 活动 toggle with the count; aria-expanded and aria-controls follow panelOn, no aria-pressed', () => {
     const onToggle = vi.fn()
     const { rerender } = render(<ChatHeader title="登录重构" running cwd="~/work/forge-api" mode="ask" pending={2} panelOn onToggle={onToggle} />)
     expect(head().querySelector('.mffai-chathead-title')!.textContent).toBe('登录重构')
@@ -22,7 +22,8 @@ describe('ChatHeader', () => {
     const btn = within(head()).getByRole('button', { name: /活动/ })
     expect(btn.classList.contains('mffai-actbtn')).toBe(true)
     expect(btn.classList.contains('on')).toBe(true)
-    expect(btn.getAttribute('aria-pressed')).toBe('true')
+    expect(btn.hasAttribute('aria-pressed')).toBe(false)
+    expect(btn.getAttribute('aria-controls')).toBe('mffai-act')
     expect(btn.getAttribute('aria-expanded')).toBe('true')
     expect(btn.querySelector('.n')!.textContent).toBe('2')
     fireEvent.click(btn)
@@ -30,13 +31,27 @@ describe('ChatHeader', () => {
     // 收起时数字照样显示
     rerender(<ChatHeader title="登录重构" running={false} mode="auto" pending={2} panelOn={false} onToggle={onToggle} />)
     expect(btn.classList.contains('on')).toBe(false)
-    expect(btn.getAttribute('aria-pressed')).toBe('false')
+    expect(btn.hasAttribute('aria-pressed')).toBe(false)
+    expect(btn.getAttribute('aria-controls')).toBe('mffai-act')
     expect(btn.getAttribute('aria-expanded')).toBe('false')
     expect(btn.querySelector('.n')!.textContent).toBe('2')
     expect(within(head()).queryByText('运行中')).toBeNull()
     expect(within(head()).getByText('自动放行')).toBeInTheDocument()
     rerender(<ChatHeader title="登录重构" running={false} mode="ask" pending={0} panelOn={false} onToggle={onToggle} />)
     expect(btn.querySelector('.n')).toBeNull()
+  })
+
+  it('a parked turn: 挂起 (warn) instead of 运行中', () => {
+    render(<ChatHeader title="t" running={false} parked mode="ask" pending={0} panelOn={false} onToggle={() => {}} />)
+    const chip = within(head()).getByText('挂起')
+    expect(chip.classList.contains('warn')).toBe(true)
+    expect(within(head()).queryByText('运行中')).toBeNull()
+  })
+
+  it('in the pane: a parked session shows 挂起 in the header, a running one 运行中', async () => {
+    const m = await mountPanel(1440, panelCalls(undefined, {}, { parked: true })); done = m.done
+    expect(within(head()).getByText('挂起').classList.contains('warn')).toBe(true)
+    expect(within(head()).queryByText('运行中')).toBeNull()
   })
 
   it('the toggle is a native button: keyboard reachable', () => {

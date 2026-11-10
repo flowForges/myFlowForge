@@ -2,7 +2,7 @@
 // 本轮 = 开着的那一轮,没有就最后一轮:待你处理(待批审批)、委派运行、本轮改动 N(数字来自快照,点了滚到那一轮的轮尾,R12)。
 // 会话 = 全部轮:审批(待批整卡、已决一行,ApprovalCard 自己决定)、委派运行。卡片由 SessionPane 经 render* 给出,props 和对话流里一样(R3)。
 // drawer:窄窗浮层,带遮罩;Esc、遮罩、› 关。
-import { useEffect, type ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import { Chip } from '../ui/Chip'
 import { Icon } from '../shell/icons'
 import { ACT_PANEL_ID } from './ChatHeader'
@@ -39,6 +39,9 @@ export function ActivityPanel({ view, scope, onScope, drawer, onClose, renderApp
   renderRun(r: RunItem): ReactNode
   onJumpTail(turnId: string): void
 }) {
+  const ref = useRef<HTMLElement>(null)
+  // 抽屉打开:焦点进面板(关上时 SessionPane 把它还给「活动」)
+  useEffect(() => { if (drawer) ref.current?.focus() }, [drawer])
   useEffect(() => {
     if (!drawer) return
     const onKey = (e: KeyboardEvent) => {
@@ -86,7 +89,7 @@ export function ActivityPanel({ view, scope, onScope, drawer, onClose, renderApp
   return (
     <>
       {drawer && <div className="mffai-scrim" onClick={onClose} />}
-      <aside id={ACT_PANEL_ID} className={`mffai-act${drawer ? ' drawer' : ''}`} aria-label="活动">
+      <aside ref={ref} id={ACT_PANEL_ID} className={`mffai-act${drawer ? ' drawer' : ''}`} aria-label="活动" tabIndex={-1}>
         <div className="mffai-act-head">
           <span className="mffai-act-title">活动</span>
           {pending > 0 && <Chip tone="warn">{`待处理 ${pending}`}</Chip>}

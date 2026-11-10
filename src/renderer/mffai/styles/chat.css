@@ -261,3 +261,5 @@
 /* 卡片的位置和宿主(CardHost):不占盒子,卡片照旧是对话流 / 面板分区的直接排版子项 */
 .mffai-cardslot, .mffai-cardhost { display: contents; }
 .mffai-chat-body .mffai-cardhost > * { flex-shrink: 0; }
+.mffai-act:focus { outline: none; }
+.mffai-act:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }

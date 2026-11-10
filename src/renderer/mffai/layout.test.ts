@@ -64,6 +64,28 @@ describe('layout', () => {
     offB()
   })
 
+  it('storage that throws on write: the choice is kept in memory for that storage and read back (a new pane reads it)', () => {
+    vi.spyOn(localStorage, 'setItem').mockImplementation(() => { throw new Error('full') })
+    activityPref.set('closed')
+    expect(activityPref.get()).toBe('closed')
+    activityPref.set('open')
+    expect(activityPref.get()).toBe('open')
+    activityPref.set('closed')
+    // 另一个存储(另一个测试、另一个窗口)不受影响
+    vi.stubGlobal('localStorage', memStorage())
+    expect(activityPref.get()).toBe('open')
+  })
+
+  it('a later successful write wins over the in-memory fallback', () => {
+    const real = localStorage.setItem.bind(localStorage)
+    const spy = vi.spyOn(localStorage, 'setItem').mockImplementation(() => { throw new Error('full') })
+    activityPref.set('closed')
+    spy.mockImplementation(real)
+    activityPref.set('open')
+    expect(localStorage.getItem(ACTIVITY_KEY)).toBe('open')
+    expect(activityPref.get()).toBe('open')
+  })
+
   it('storage that throws on write still notifies (the choice holds for this run)', () => {
     vi.spyOn(localStorage, 'setItem').mockImplementation(() => { throw new Error('full') })
     const cb = vi.fn()

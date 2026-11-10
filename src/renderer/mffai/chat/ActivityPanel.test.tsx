@@ -205,6 +205,65 @@ describe('activity panel at main width 1440', () => {
   })
 })
 
+describe('drawer focus, anchors focus the card, anchor labels escaped (Task 5 review 2, 5, 6)', () => {
+  it('keyboard: 活动 opens the drawer and focus moves into it; the conversation is inert; Esc closes it and focus returns to 活动', async () => {
+    const m = await mountPanel(1100); done = m.done
+    const convo = document.querySelector('.mffai-convo') as HTMLElement
+    actBtn().focus()
+    expect(document.activeElement).toBe(actBtn())
+    fireEvent.click(actBtn())
+    expect(act$()!.classList.contains('drawer')).toBe(true)
+    expect(act$()!.contains(document.activeElement)).toBe(true)
+    expect(convo.hasAttribute('inert')).toBe(true)
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    expect(act$()).toBeNull()
+    expect(convo.hasAttribute('inert')).toBe(false)
+    expect(document.activeElement).toBe(actBtn())
+    // 遮罩和 › 关也把焦点还给 活动
+    fireEvent.click(actBtn())
+    fireEvent.click(within(act$()!).getByRole('button', { name: '收起' }))
+    expect(document.activeElement).toBe(actBtn())
+    fireEvent.click(actBtn())
+    fireEvent.click(document.querySelector('.mffai-scrim')!)
+    expect(document.activeElement).toBe(actBtn())
+    expect(convo.hasAttribute('inert')).toBe(false)
+  })
+
+  it('docked: the conversation is never inert', async () => {
+    const m = await mountPanel(1440); done = m.done
+    expect(act$()).not.toBeNull()
+    expect(document.querySelector('.mffai-convo')!.hasAttribute('inert')).toBe(false)
+  })
+
+  it('an anchor click moves focus to the card: its first enabled button', async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+    const m = await mountPanel(1440); done = m.done
+    fireEvent.click(within(body$()).getByRole('button', { name: 'shell 待审批' }))
+    await waitFor(() => expect(document.activeElement).toBe(within(approval()[0] as HTMLElement).getByRole('button', { name: '允许' })))
+  })
+
+  it('an anchor to a card with no enabled button focuses the card itself (tabIndex -1)', async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+    const evs = panelEvents().filter((x) => x.type !== 'approval.requested')
+    const m = await mountPanel(1440, { ...panelCalls(evs), 'executor.runs': { runs: [] } }); done = m.done
+    const stop = within(run()[0] as HTMLElement).getByRole('button', { name: '停止' }) as HTMLButtonElement
+    stop.disabled = true
+    fireEvent.click(within(body$()).getByRole('button', { name: 'codex 运行中' }))
+    await waitFor(() => expect(document.activeElement).toBe(run()[0]))
+    expect((run()[0] as HTMLElement).tabIndex).toBe(-1)
+  })
+
+  it('anchor labels show invisible characters in a tool or executor name as escapes', async () => {
+    const evs = panelEvents().map((x) => x.type === 'approval.requested'
+      ? { ...x, payload: { ...(x.payload as object), tool: 'sh\u202Eell' } } : x)
+    const m = await mountPanel(1440, panelCalls(evs)); done = m.done
+    const a = body$().querySelector('.mffai-anchor.warn')!
+    expect(a.querySelector('.mffai-esc')).not.toBeNull()
+    expect(a.textContent).toBe('sh\\u{202E}ell 待审批')
+    expect(a.innerHTML).not.toMatch(/\u202E/)
+  })
+})
+
 describe('untrusted content inside the panel (Review Focus 9)', () => {
   it('an approval summary and a run progress text of an <img> tag render as text; an invisible character renders as .mffai-esc', async () => {
     const tag = '<img src=x onerror=alert(1)>'

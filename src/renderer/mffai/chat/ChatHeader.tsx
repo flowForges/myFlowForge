@@ -5,9 +5,11 @@ import { Icon } from '../shell/icons'
 
 export const ACT_PANEL_ID = 'mffai-act'
 
-export function ChatHeader({ title, running, cwd, mode, pending, panelOn, narrow, onToggle }: {
+export function ChatHeader({ title, running, parked, cwd, mode, pending, panelOn, narrow, onToggle }: {
   title: string
   running: boolean
+  /** 开着的那一轮挂起了:挂起 块代替 运行中 */
+  parked?: boolean
   cwd?: string
   mode: 'ask' | 'auto'
   pending: number
@@ -18,14 +20,14 @@ export function ChatHeader({ title, running, cwd, mode, pending, panelOn, narrow
   return (
     <header className="mffai-chathead">
       <span className="mffai-chathead-title" title={title}>{title}</span>
-      {running && <Chip tone="run" dot>运行中</Chip>}
+      {parked ? <Chip tone="warn" dot>挂起</Chip> : running && <Chip tone="run" dot>运行中</Chip>}
       {cwd && <span className="mffai-chathead-cwd" title={cwd}><Icon name="folder" size={12} />{cwd}</span>}
       <span className={`mffai-chathead-mode${narrow ? ' mffai-nhide' : ''}`}>
         {mode === 'auto' ? <Chip tone="warn">自动放行</Chip> : <Chip tone="line">询问</Chip>}
       </span>
       <span className="mffai-spring" />
-      <button type="button" className={`set-btn mffai-actbtn${panelOn ? ' on' : ''}`} aria-pressed={panelOn} aria-expanded={panelOn}
-        aria-controls={panelOn ? ACT_PANEL_ID : undefined} onClick={onToggle}>
+      <button type="button" className={`set-btn mffai-actbtn${panelOn ? ' on' : ''}`} aria-expanded={panelOn}
+        aria-controls={ACT_PANEL_ID} onClick={onToggle}>
         <Icon name="sidebar" size={14} />活动
         {pending > 0 && <span className="n">{pending}</span>}
       </button>

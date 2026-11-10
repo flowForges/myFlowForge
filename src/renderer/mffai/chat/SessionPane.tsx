@@ -92,11 +92,11 @@ function Cards({ turn, rows, placement, onOpen, host }: {
     const anchors = [
       ...turn.approvals.filter(isPending).map((a) => ({
         seq: a.seq,
-        node: <InlineAnchor key={`a${a.approvalId}`} tone="warn" label={`${a.tool} 待审批`} onOpen={() => onOpen({ turnId: turn.turnId, attr: 'data-approval', id: a.approvalId })} />,
+        node: <InlineAnchor key={`a${a.approvalId}`} tone="warn" name={a.tool} state="待审批" onOpen={() => onOpen({ turnId: turn.turnId, attr: 'data-approval', id: a.approvalId })} />,
       })),
       ...[...turn.runs.values()].filter((r) => r.phase !== 'ended' || unmerged(r, rows.get(r.runId))).map((r) => ({
         seq: r.seq,
-        node: <InlineAnchor key={`r${r.runId}`} tone="run" label={`${r.executor} ${r.phase === 'queued' ? '排队' : r.phase === 'running' ? '运行中' : '未合并'}`}
+        node: <InlineAnchor key={`r${r.runId}`} tone="run" name={r.executor} state={r.phase === 'queued' ? '排队' : r.phase === 'running' ? '运行中' : '未合并'}
           onOpen={() => onOpen({ turnId: turn.turnId, attr: 'data-run', id: r.runId })} />,
       })),
     ].sort((a, b) => a.seq - b.seq)
@@ -163,8 +163,22 @@ export function SessionPane({ sessionId, summary, imName, onSend, onCommand, onS
   useEffect(() => {
     if (!target) return
     setTarget(null)
-    findBy(document.querySelector('.mffai-act'), `[${target.attr}]`, target.attr, target.id)?.scrollIntoView?.({ block: 'nearest' })
+    const el = findBy(document.querySelector('.mffai-act'), `[${target.attr}]`, target.attr, target.id) as HTMLElement | undefined
+    if (!el) return
+    el.scrollIntoView?.({ block: 'nearest' })
+    // 焦点跟过去:卡片里第一个能按的按钮,没有就卡片本身
+    const btn = [...el.querySelectorAll('button')].find((b) => !b.disabled)
+    if (btn) btn.focus()
+    else { el.tabIndex = -1; el.focus() }
   }, [target])
+  // 抽屉关上(Esc、遮罩、›、再点活动):焦点回到「活动」;拉宽成停靠时不动
+  const convo = useRef<HTMLDivElement>(null)
+  const lastMode = useRef(panel.mode)
+  useEffect(() => {
+    const was = lastMode.current
+    lastMode.current = panel.mode
+    if (was === 'drawer' && panel.mode === 'inline') convo.current?.querySelector<HTMLButtonElement>('.mffai-actbtn')?.focus()
+  }, [panel.mode])
   const jumpTail = useCallback((turnId: string) => {
     findBy(stick.ref.current, '.mffai-tail[data-turn]', 'data-turn', turnId)?.scrollIntoView?.({ block: 'end' })
   }, [stick.ref])
@@ -195,8 +209,8 @@ export function SessionPane({ sessionId, summary, imName, onSend, onCommand, onS
   return (
     <ChatHtmlCtx.Provider value={false}>
     <UntrustedMdCtx.Provider value={true}>
-      <div className="mffai-convo">
-      <ChatHeader title={session?.title ?? summary?.title ?? ''} running={!!open && !open.parked} cwd={checkout}
+      <div className="mffai-convo" ref={convo} inert={panel.mode === 'drawer'}>
+      <ChatHeader title={session?.title ?? summary?.title ?? ''} running={!!open && !open.parked} parked={!!open?.parked} cwd={checkout}
         mode={approvalMode} pending={pending} panelOn={inPanel} narrow={panel.narrow} onToggle={panel.toggle} />
       <div className="mffai-chat-body" ref={stick.ref} onScroll={onScroll}>
         {view?.hasMore && <button className="txt-btn mffai-older" onClick={loadOlder}>更早</button>}
