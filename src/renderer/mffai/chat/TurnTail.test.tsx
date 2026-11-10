@@ -98,4 +98,18 @@ describe('TurnTail', () => {
     rerender(<TurnTail sessionId={S} canRollback={false} turn={t({ rolledBack: { files: 2, skipped: [] } })} />)
     expect(screen.getByText('已回滚 2 个文件')).toBeInTheDocument()
   })
+  it('08b: one row of light buttons, usage as mono text, spring, then 回滚本轮', () => {
+    installFakeForge()
+    const { container } = render(<TurnTail sessionId={S} canRollback turn={t({
+      usage: { turnId: 't1', input: 1, output: 2, cacheRead: 3 }, plugins: true, netDenied: ['h:443'],
+      injected: { items: ['n_a'], truncated: false }, snapshot: { start: 'a', end: 'b', changed: 2 },
+    })} />)
+    const row = container.querySelector('.mffai-tail-row')!
+    const kids = [...row.children]
+    const name = (el: Element) => (el.classList.contains('mffai-spring') ? '|' : el.textContent)
+    expect(kids.map(name)).toEqual(['改动 2', '记忆 1', '插件索引', '已拦截 h:443', '输入 1 · 输出 2 · 缓存 3', '|', '回滚本轮'])
+    expect(btn('改动 2')!.classList.contains('mffai-tbtn')).toBe(true)
+    expect(btn('回滚本轮')!.classList.contains('mffai-tbtn')).toBe(true)
+    expect(screen.getByText('输入 1 · 输出 2 · 缓存 3').classList.contains('mffai-tail-use')).toBe(true)
+  })
 })

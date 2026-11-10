@@ -1,6 +1,7 @@
 // 输入框(08 §7.4)。不复用 app 的 Composer:textarea,回车发送,Shift+回车换行,没有 placeholder。
 // `/` 打开 plugins.commands 的菜单(名字、插件、argumentHint 放在 CodeChip 里);选中后回车走 plugins.command.run。
 // 来源不是 app 的会话没有输入框(R5):一行来源块 + 停止。
+// 08b:圆角外壳;底栏是只读的模型 / 目录 / 审批模式块(R15,来自会话已有的数据)和圆形的停止 / 发送钮;非本机会话是虚线来源条,挂起块在它上面。
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { SessionOrigin, SessionSummary, WorkerResult } from '@mffai/protocol'
 import { call, isUnsupported, toCallError } from '../rpc'
@@ -8,7 +9,8 @@ import { useMffaiEvent, useMffaiReset } from '../events'
 import { label } from '../labels'
 import { Chip } from '../ui/Chip'
 import { CodeChip } from '../ui/CodeChip'
-import { originKind } from './SessionList'
+import { Icon } from '../shell/icons'
+import { OriginIcon, originKind } from './SessionList'
 
 type PluginCommand = WorkerResult<'plugins.commands'>['commands'][number]
 
@@ -70,7 +72,10 @@ function usePluginCommands(): PluginCommand[] {
 const SLASH = /^\/(\S*)$/
 const COMMAND = /^\/(\S+)(?:\s+([\s\S]*))?$/
 
-export function MffaiComposer({ session, imName, onSend, onCommand, onStop, canStop, parked, readOnly }: {
+/** 路径的最后一段(底栏只放目录名,全路径在 title 里) */
+const base = (p: string) => p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p
+
+export function MffaiComposer({ session, imName, onSend, onCommand, onStop, canStop, parked, readOnly, info }: {
   session: Pick<SessionSummary, 'id' | 'origin'>
   /** IM 会话的 Telegram 名字 */
   imName?: string
@@ -82,6 +87,8 @@ export function MffaiComposer({ session, imName, onSend, onCommand, onStop, canS
   parked?: { running?: number }
   /** 会话已删、后台没连上 */
   readOnly?: boolean
+  /** 底栏的只读块:给了哪个显示哪个 */
+  info?: { model?: string; cwd?: string; mode?: 'ask' | 'auto' }
 }) {
   const commands = usePluginCommands()
   const [text, setText] = useState('')
@@ -130,19 +137,19 @@ export function MffaiComposer({ session, imName, onSend, onCommand, onStop, canS
     }
   }
 
-  const status = (
-    <>
-      {parked && <Chip tone="warn">{parked.running !== undefined ? `挂起 · ${parked.running} 运行中` : '挂起'}</Chip>}
-      {canStop && <button className="set-btn" onClick={onStop}>停止</button>}
-    </>
-  )
+  const parkedChip = parked && <Chip tone="warn">{parked.running !== undefined ? `挂起 · ${parked.running} 运行中` : '挂起'}</Chip>
 
   const origin: SessionOrigin = originKind(session.origin)
   if (origin !== 'app') {
     return (
       <div className="mffai-composer mffai-composer-ro">
-        <Chip>{origin === 'im' ? `Telegram${imName ? ` · ${imName}` : ''}` : label('origin', origin)}</Chip>
-        {status}
+        {parked && <div className="mffai-composer-top">{parkedChip}</div>}
+        <div className="mffai-srcbar">
+          <OriginIcon origin={origin} />
+          <Chip tone="line">{origin === 'im' ? `Telegram${imName ? ` · ${imName}` : ''}` : label('origin', origin)}</Chip>
+          <span className="mffai-spring" />
+          {canStop && <button className="set-btn mffai-xs" onClick={onStop}><Icon name="pause" size={12} />停止</button>}
+        </div>
       </div>
     )
   }
@@ -156,20 +163,14 @@ export function MffaiComposer({ session, imName, onSend, onCommand, onStop, canS
               onMouseDown={(e) => { e.preventDefault(); pick(c) }}>
               <span className="slash-cmd mffai-slash-name">/{c.name}</span>
               {c.argumentHint && <CodeChip code={c.argumentHint} />}
-              <span className="slash-tag">{c.plugin}</span>
+              <span className="mffai-slash-about">{c.description}</span>
+              <span className="slash-tag"><Icon name="puzzle" size={12} />{c.plugin}</span>
             </li>
           ))}
         </ul>
       )}
-      {(parked || canStop || err) && (
-        <div className="mffai-composer-bar">
-          {status}
-          {err === 'busy' && <Chip tone="warn">忙</Chip>}
-          {err === 'failed' && <span className="mffai-fail">失败</span>}
-        </div>
-      )}
       <textarea
-        className="mffai-input" aria-label="输入" rows={3} autoFocus value={text} disabled={readOnly}
+        className="mffai-input" aria-label="输入" rows={2} autoFocus value={text} disabled={readOnly}
         onChange={(e) => edit(e.target.value)}
         onKeyDown={(e) => {
           if (e.nativeEvent.isComposing) return
@@ -182,6 +183,18 @@ export function MffaiComposer({ session, imName, onSend, onCommand, onStop, canS
           if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send() }
         }}
       />
+      <div className="mffai-composer-bar">
+        {info?.model && <span className="mffai-cinfo" title={info.model}><Icon name="sparkle" size={13} />{info.model}</span>}
+        {info?.cwd && <span className="mffai-cinfo" title={info.cwd}><Icon name="folder" size={13} />{base(info.cwd)}</span>}
+        {info?.mode && <span className={`mffai-cinfo${info.mode === 'auto' ? ' warn' : ''}`}><Icon name={info.mode === 'auto' ? 'zap' : 'shield'} size={13} />{info.mode === 'auto' ? '自动放行' : '询问'}</span>}
+        {parkedChip}
+        {err === 'busy' && <Chip tone="warn">忙</Chip>}
+        {err === 'failed' && <span className="mffai-fail">失败</span>}
+        <span className="mffai-spring" />
+        {canStop
+          ? <button type="button" className="mffai-cround stop" aria-label="停止" title="停止" onClick={onStop}><i /></button>
+          : <button type="button" className="mffai-cround send" aria-label="发送" title="发送" disabled={readOnly || !text.trim()} onClick={() => void send()}><Icon name="up" size={16} /></button>}
+      </div>
     </div>
   )
 }

@@ -57,10 +57,17 @@ function unmerged(r: RunItem, row: RunRow | undefined): boolean {
   return r.phase === 'ended' && files > 0 && row?.worktree?.present === true && !row.worktree.merged && !r.merged
 }
 
-function Cards({ sessionId, checkout, turn, view, rows, onRunChanged, placement, onOpen }: {
+/** 会话里全部待批审批的次序(按轮、再按 seq):卡片上的 n / m,纯显示 */
+function pendingOrder(view: SessionView): Map<string, { n: number; m: number }> {
+  const ids = view.turns.flatMap((t) => [...t.approvals].filter(isPending).sort((a, b) => a.seq - b.seq).map((a) => a.approvalId))
+  return new Map(ids.map((id, i) => [id, { n: i + 1, m: ids.length }]))
+}
+
+function Cards({ sessionId, checkout, turn, view, rows, onRunChanged, placement, onOpen, order }: {
   sessionId: string; checkout?: string; turn: TurnView; view: SessionView; rows: Map<string, RunRow>; onRunChanged: () => void
   placement: 'inline' | 'anchors'
   onOpen: (target: Target) => void
+  order: Map<string, { n: number; m: number }>
 }) {
   const open = !isEnded(view, turn)
   if (placement === 'anchors') {
@@ -78,7 +85,7 @@ function Cards({ sessionId, checkout, turn, view, rows, onRunChanged, placement,
     return <>{anchors.map((c) => c.node)}</>
   }
   const cards = [
-    ...turn.approvals.map((a) => ({ seq: a.seq, node: <ApprovalCard key={`a${a.approvalId}`} sessionId={sessionId} approval={a} /> })),
+    ...turn.approvals.map((a) => ({ seq: a.seq, node: <ApprovalCard key={`a${a.approvalId}`} sessionId={sessionId} approval={a} pos={order.get(a.approvalId)} /> })),
     ...[...turn.runs.values()].map((r) => ({
       seq: r.seq,
       node: <RunCard key={`r${r.runId}`} sessionId={sessionId} checkout={checkout} run={r} turnOpen={open} row={rows.get(r.runId)} onChanged={onRunChanged} />,
@@ -157,10 +164,13 @@ export function SessionPane({ sessionId, summary, imName, onSend, onCommand, onS
     ? [...(view.turns.find((t) => t.turnId === view.open!.turnId)?.runs.values() ?? [])].filter((x) => x.phase !== 'ended').length
     : undefined
   const checkout = session?.cwd ?? summary?.cwd
+  const approvalMode = session?.approvalMode ?? summary?.approvalMode ?? 'ask'
+  const modelId = (session?.model ?? summary?.model)?.modelId
   const pending = view ? view.turns.reduce((n, t) => n + t.approvals.filter(isPending).length, 0) : (summary?.pendingApprovals ?? 0)
 
   // 面板里的卡片:props 和对话流里的一样
-  const renderApproval = (a: ApprovalItem) => <ApprovalCard key={`a${a.approvalId}`} sessionId={sessionId} approval={a} />
+  const order = useMemo(() => (view ? pendingOrder(view) : new Map<string, { n: number; m: number }>()), [view])
+  const renderApproval = (a: ApprovalItem) => <ApprovalCard key={`a${a.approvalId}`} sessionId={sessionId} approval={a} pos={order.get(a.approvalId)} />
   const renderRun = (x: RunItem) => {
     const turn = view?.turns.find((t) => t.turnId === x.turnId)
     const turnOpen = !!view && !!turn && !isEnded(view, turn)
@@ -172,7 +182,7 @@ export function SessionPane({ sessionId, summary, imName, onSend, onCommand, onS
     <UntrustedMdCtx.Provider value={true}>
       <div className="mffai-convo">
       <ChatHeader title={session?.title ?? summary?.title ?? ''} running={!!open && !open.parked} cwd={checkout}
-        mode={session?.approvalMode ?? summary?.approvalMode ?? 'ask'} pending={pending} panelOn={inPanel} narrow={panel.narrow} onToggle={panel.toggle} />
+        mode={approvalMode} pending={pending} panelOn={inPanel} narrow={panel.narrow} onToggle={panel.toggle} />
       <div className="mffai-chat-body" ref={stick.ref} onScroll={onScroll}>
         {view?.hasMore && <button className="txt-btn mffai-older" onClick={loadOlder}>更早</button>}
         {error === 'gone' && <Chip tone="bad">已删除</Chip>}
@@ -185,7 +195,7 @@ export function SessionPane({ sessionId, summary, imName, onSend, onCommand, onS
               {g.messages.map((m) => <Message key={m.id} msg={m} streaming={streamingIds.has(m.id)} />)}
               <TurnTail sessionId={sessionId} turn={turn} canRollback={canRollback === turn.turnId} />
               <Cards sessionId={sessionId} checkout={checkout} turn={turn} view={view} rows={rows} onRunChanged={refresh}
-                placement={inPanel ? 'anchors' : 'inline'} onOpen={openCard} />
+                placement={inPanel ? 'anchors' : 'inline'} onOpen={openCard} order={order} />
             </Fragment>
           )
         })}
@@ -196,6 +206,7 @@ export function SessionPane({ sessionId, summary, imName, onSend, onCommand, onS
         canStop={!!open}
         parked={open?.parked ? (running !== undefined ? { running } : {}) : undefined}
         readOnly={error === 'gone'}
+        info={{ ...(modelId && { model: modelId }), ...(checkout && { cwd: checkout }), mode: approvalMode }}
         onSend={onSend}
         onCommand={onCommand}
         onStop={onStop}

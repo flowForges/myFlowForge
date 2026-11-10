@@ -212,4 +212,64 @@ describe('MffaiComposer', () => {
     await act(async () => { fireEvent.keyDown(box(), { key: 'Enter' }) })
     expect(p.onSend).not.toHaveBeenCalled()
   })
+  describe('08b', () => {
+    it('info chips render only the fields given; never a placeholder', () => {
+      mount({ info: { model: 'claude-sonnet-4-5', cwd: '/w/forge-api', mode: 'auto' } })
+      const chips = () => [...document.querySelectorAll('.mffai-cinfo')].map((c) => c.textContent)
+      expect(chips()).toEqual(['claude-sonnet-4-5', 'forge-api', '自动放行'])
+      expect(document.querySelector('[placeholder]')).toBeNull()
+    })
+
+    it('info chips: only cwd given → only that chip; none given → none', () => {
+      mount({ info: { cwd: '/w/x' } })
+      expect([...document.querySelectorAll('.mffai-cinfo')].map((c) => c.textContent)).toEqual(['x'])
+    })
+
+    it('no info → no chips', () => {
+      mount()
+      expect(document.querySelectorAll('.mffai-cinfo')).toHaveLength(0)
+    })
+
+    it('the round send button sends like Enter; it is disabled while the box is empty', async () => {
+      const p = mount()
+      const send = () => screen.getByRole('button', { name: '发送' }) as HTMLButtonElement
+      expect(send().disabled).toBe(true)
+      type('hello')
+      expect(send().disabled).toBe(false)
+      await act(async () => { fireEvent.click(send()) })
+      expect(p.onSend).toHaveBeenCalledWith('hello')
+      expect(box().value).toBe('')
+    })
+
+    it('with an open turn the round button is 停止 instead of 发送', () => {
+      const p = mount({ canStop: true })
+      expect(screen.queryByRole('button', { name: '发送' })).toBeNull()
+      const stop = screen.getByRole('button', { name: '停止' })
+      expect(stop.classList.contains('mffai-cround')).toBe(true)
+      fireEvent.click(stop)
+      expect(p.onStop).toHaveBeenCalled()
+    })
+
+    it('the / menu row: name, argumentHint as a CodeChip, the description, the plugin', async () => {
+      mount()
+      type('/')
+      await waitFor(() => expect(options()).toHaveLength(3))
+      const b = options().find((o) => o.textContent?.includes('zed:b'))!
+      expect(b.querySelector('code')!.textContent).toBe('<who>')
+      expect(within(b).getByText('say hi')).toBeInTheDocument()
+      expect(b.querySelector('.slash-tag')!.textContent).toBe('zed')
+    })
+
+    it('read-only: a dashed source bar with the origin icon and chip; 挂起 above it, inside .mffai-composer', () => {
+      mount({ session: { id: 's1', origin: 'im' }, imName: 'Alice', canStop: true, parked: { running: 1 } })
+      const ro = document.querySelector('.mffai-composer.mffai-composer-ro')!
+      const bar = ro.querySelector('.mffai-srcbar')!
+      expect(bar.querySelector('.mffai-origin[data-origin="im"]')).not.toBeNull()
+      expect(within(bar as HTMLElement).getByText('Telegram · Alice')).toBeInTheDocument()
+      expect(within(bar as HTMLElement).getByRole('button', { name: '停止' })).toBeInTheDocument()
+      const top = within(ro as HTMLElement).getByText('挂起 · 1 运行中')
+      expect(bar.contains(top)).toBe(false)
+      expect(top.compareDocumentPosition(bar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    })
+  })
 })

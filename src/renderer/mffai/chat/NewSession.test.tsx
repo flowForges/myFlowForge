@@ -1,9 +1,14 @@
 import { describe, it, expect, vi } from 'vitest'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { NewSession } from './NewSession'
+import ChatPage from './ChatPage'
+import { route } from '../route'
+import { ev } from '../test/events'
 import { AUTO_LABEL } from '../ui/AutoSwitch'
 import { fail, installFakeForge, type CallTable } from '../test/fakeForge'
-import { perms } from '../test/sessions'
+import { perms, summary } from '../test/sessions'
 
 const model = (id: string) => ({ id, name: id.toUpperCase(), context: 1, output: 1, image: false, reasoning: 'none' as const, toolCall: true })
 const presets = [{ id: 'p', label: 'Key', billing: 'metered', restriction: 'none', auth: 'api-key', protocols: [], docsUrl: '' }]
@@ -101,5 +106,43 @@ describe('NewSession', () => {
     const [a, b] = f.callsOf('session.create') as any[]
     expect(b.commandId).toBe(a.commandId)
     expect(onCreated).toHaveBeenCalledWith('s9')
+  })
+  it('08b: the 新对话 title row with the brand tile, the form as a panel, 开始 kept', async () => {
+    setup()
+    const { container } = render(<NewSession onCreated={() => {}} initial={{ cwd: '/repo' }} />)
+    const head = container.querySelector('.mffai-newhead')!
+    expect(head.textContent).toBe('新对话')
+    expect(head.querySelector('.mffai-brandtile svg')).not.toBeNull()
+    const form = container.querySelector('.mffai-newsess')!
+    expect(form.classList.contains('mffai-form')).toBe(true)
+    expect([...form.querySelectorAll('.mffai-k')].map((k) => k.textContent)).toEqual(['模型', '工作目录', '编辑工具', '审批'])
+    expect(head.compareDocumentPosition(form) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(within(form as HTMLElement).getByRole('button', { name: '开始' })).toBeInTheDocument()
+    expect(within(form as HTMLElement).getByRole('button', { name: '选择' })).toBeInTheDocument()
+    // Review Focus 7:开关标签逐字
+    const sw = await waitFor(() => { const l = form.querySelector('label.mffai-switch.mffai-warnrow'); expect(l).not.toBeNull(); return l! })
+    expect(sw.textContent).toBe(AUTO_LABEL)
+    expect(sw.querySelector('input[type=checkbox][role=switch]')).not.toBeNull()
+  })
+  it('08b: RecommendationCard sits above the form on the start page (title first via CSS order) and at the top of the conversation column with a session open', async () => {
+    const f = setup({ calls: {
+      'session.list': { sessions: [summary('a', { title: '本机会话' })] },
+      'session.state': { session: summary('a'), events: [], hasMore: false, lastSeq: 0 },
+      'plugins.commands': { commands: [] }, 'executor.runs': { runs: [] },
+    } })
+    route.set({ page: 'chat' })
+    render(<ChatPage />)
+    await screen.findByRole('button', { name: '开始' })
+    act(() => { f.emit(ev('memory.recommendation', { id: 'r1', category: 'routine', habitId: 'h1', text: '每周一常在 repo 工作', cwd: '/repo' })) })
+    await screen.findByText('每周一常在 repo 工作')
+    const main = () => document.querySelector('.mffai-chat-main')!
+    const kids = () => [...main().children].map((c) => c.className.split(' ')[0])
+    expect(kids()).toEqual(['mffai-recs', 'mffai-newhead', 'mffai-card'])
+    const css = readFileSync(resolve(__dirname, '../styles/chat.css'), 'utf8')
+    expect(css).toMatch(/\.mffai-chat-new\s*>\s*\.mffai-newhead\s*\{[^}]*order:\s*-1/)
+    act(() => route.set({ page: 'chat', sessionId: 'a' }))
+    await waitFor(() => expect(document.querySelector('.mffai-convo')).not.toBeNull())
+    expect(kids()).toEqual(['mffai-recs', 'mffai-convo'])
+    expect(css).toMatch(/\.mffai-recs\s*\{[^}]*grid-column:\s*1;\s*grid-row:\s*1/)
   })
 })

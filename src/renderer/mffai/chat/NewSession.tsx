@@ -1,6 +1,7 @@
 // 新会话表单(08 §7.3),就在对话区里。模型:ModelPicker,没有账号就是 AddAccount;工作目录:PathField;
 // 编辑工具和 auto 开关只在填了目录时出现;沙箱 none 且不许无沙箱自动放行时,开关旁一个 需审批。
 // session.create 从不带 origin(宿主也会剥掉,这里不给)。
+// 08b:上面一行 新对话 标题(品牌块),表单是一块面板;对话页用 CSS order 把标题排到推荐卡上面。
 import { useEffect, useRef, useState } from 'react'
 import type { ModelRef, Toolset } from '@mffai/protocol'
 import { ModelPicker } from '../ModelPicker'
@@ -10,6 +11,7 @@ import { call, retryable } from '../rpc'
 import { PathField } from '../ui/PathField'
 import { AutoSwitch } from '../ui/AutoSwitch'
 import { Chip } from '../ui/Chip'
+import { Icon } from '../shell/icons'
 
 const TOOLSETS: readonly { value: '' | Toolset; text: string }[] = [
   { value: '', text: '自动' },
@@ -65,34 +67,41 @@ export function NewSession({ onCreated, initial }: { onCreated: (sessionId: stri
   }
 
   return (
-    <div className="mffai-card mffai-newsess">
-      <div className="mffai-row">
-        <span className="mffai-k">模型</span>
-        {noAccounts ? <AddAccount presets={catalog.presets} onDone={reload} /> : <ModelPicker value={model} onChange={setModel} />}
+    <>
+      <div className="mffai-newhead">
+        <span className="mffai-brandtile"><Icon name="sparkle" size={18} /></span>
+        <h2 className="mffai-newhead-title">新对话</h2>
       </div>
-      <div className="mffai-row">
-        <span className="mffai-k">工作目录</span>
-        <PathField value={cwd} onChange={setCwd} kind="directory" label="工作目录" />
+      <div className="mffai-card mffai-newsess mffai-form">
+        <div className="mffai-row">
+          <span className="mffai-k">模型</span>
+          {noAccounts ? <AddAccount presets={catalog.presets} onDone={reload} /> : <ModelPicker value={model} onChange={setModel} />}
+        </div>
+        <div className="mffai-row">
+          <span className="mffai-k">工作目录</span>
+          <PathField value={cwd} onChange={setCwd} kind="directory" label="工作目录" />
+        </div>
+        {dir && (
+          <>
+            <div className="mffai-row">
+              <span className="mffai-k">编辑工具</span>
+              <select className="mffai-picker" aria-label="编辑工具" value={toolset} onChange={(e) => setToolset(e.target.value as '' | Toolset)}>
+                {TOOLSETS.map((t) => <option key={t.value} value={t.value}>{t.text}</option>)}
+              </select>
+            </div>
+            <div className="mffai-row">
+              <span className="mffai-k">审批</span>
+              <AutoSwitch checked={auto} onChange={setAuto} />
+              {mustAsk && <Chip tone="warn">需审批</Chip>}
+            </div>
+          </>
+        )}
+        <div className="mffai-actions">
+          <span className="mffai-spring" />
+          {failed && <span className="mffai-fail">失败</span>}
+          <button className="set-btn mffai-primary" disabled={!model || busy} onClick={() => void start()}>开始</button>
+        </div>
       </div>
-      {dir && (
-        <>
-          <div className="mffai-row">
-            <span className="mffai-k">编辑工具</span>
-            <select className="mffai-picker" aria-label="编辑工具" value={toolset} onChange={(e) => setToolset(e.target.value as '' | Toolset)}>
-              {TOOLSETS.map((t) => <option key={t.value} value={t.value}>{t.text}</option>)}
-            </select>
-          </div>
-          <div className="mffai-row">
-            <span className="mffai-k">审批</span>
-            <AutoSwitch checked={auto} onChange={setAuto} />
-            {mustAsk && <Chip tone="warn">需审批</Chip>}
-          </div>
-        </>
-      )}
-      <div className="mffai-actions">
-        <button className="set-btn mffai-primary" disabled={!model || busy} onClick={() => void start()}>开始</button>
-        {failed && <span className="mffai-fail">失败</span>}
-      </div>
-    </div>
+    </>
   )
 }

@@ -756,6 +756,68 @@ const ROWS: Row[] = [
       } finally { r.uninstall() }
     },
   })),
+  {
+    name: 'cards 08b: pending (plain, unsandboxed, n / m), each resolved line, live and ended runs with an anchored merge confirm',
+    mount: () => {
+      const a = (id: string, patch: object = {}) => ({ approvalId: id, turnId: 't1', callId: 'c', tool: 'shell', summary: `echo ${id}`, seq: 1, ...patch })
+      const ended = { runId: 'r2', turnId: 't1', executor: 'Codex', status: 'ok' as const, ms: 192_000, exit: 0, usage: { input: 1, output: 2 }, violations: ['~/.npmrc'],
+        changed: { files: ['a.ts', 'b.ts'], source: 'git' as const, concurrent: true }, worktree: '/wt/r2', rawLog: '/raw/r2.log' }
+      render(
+        <>
+          <ApprovalCard sessionId="s1" approval={a('p1', { key: 'k' })} pos={{ n: 1, m: 2 }} />
+          <ApprovalCard sessionId="s1" approval={a('p2', { unsandboxed: true })} pos={{ n: 2, m: 2 }} />
+          {([{ decision: 'allow', by: 'user', via: 'telegram:1' }, { decision: 'deny', by: 'user' }, { decision: 'deny', by: 'timeout' }, { decision: 'deny', by: 'cancel' }] as const).map((resolved, i) => (
+            <ApprovalCard key={i} sessionId="s1" approval={a(`d${i}`, { resolved })} />
+          ))}
+          <RunCard sessionId="s1" turnOpen run={{ runId: 'r1', turnId: 't1', seq: 1, phase: 'running', executor: 'Codex', summary: '补齐单测', isolation: 'wrapped', untranslatedRules: 1, readOnly: false,
+            progress: (['file', 'tool', 'text', 'think'] as const).map((kind, i) => ({ seq: i, kind, text: `p${i}` })) }} />
+          <RunCard sessionId="s1" checkout="~/work/forge-api" turnOpen={false} row={runRow('r2', 's1', { worktree: { path: '/wt/r2', present: true }, changed: 2 })}
+            run={{ runId: 'r2', turnId: 't1', seq: 2, phase: 'ended', executor: 'Codex', isolation: 'wrapped', worktree: '/wt/r2', progress: [], ended }} />
+        </>,
+      )
+      const b = screen.getByRole('button', { name: '合并' })
+      b.getBoundingClientRect = () => ({ x: 600, y: 500, left: 600, top: 500, width: 80, height: 28, right: 680, bottom: 528, toJSON: () => ({}) }) as DOMRect
+      fireEvent.click(b)
+      expect(document.querySelector('.confirm-overlay.mffai-anchored')).not.toBeNull()
+      expect(document.querySelectorAll('.mffai-appr')).toHaveLength(2)
+    },
+  },
+  {
+    name: 'composer 08b: info chips, the / menu open, the round send; and the read-only source bar with 挂起',
+    mount: async (f) => {
+      f.script({ 'plugins.commands': { commands: [{ name: 'review', plugin: 'code-review', description: '审阅当前改动', argumentHint: '[路径]' }, { name: 'commit', plugin: 'git-helper', description: 'commit' }] } })
+      render(
+        <>
+          <MffaiComposer session={{ id: 's1', origin: 'app' }} info={{ model: 'claude-sonnet-4-5', cwd: '~/work/forge-api', mode: 'ask' }} canStop={false}
+            onSend={async () => {}} onCommand={async () => {}} onStop={() => {}} />
+          <MffaiComposer session={{ id: 's2', origin: 'im' }} imName="张伟" canStop parked={{ running: 1 }} onSend={async () => {}} onCommand={async () => {}} onStop={() => {}} />
+        </>,
+      )
+      fireEvent.change(screen.getByRole('textbox', { name: '输入' }), { target: { value: '/' } })
+      await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(2))
+      expect(document.querySelector('.mffai-srcbar')).not.toBeNull()
+      expect(document.querySelector('[placeholder]')).toBeNull()
+    },
+  },
+  ...([true, false] as const).map((accounts): Row => ({
+    name: `start page 08b: ${accounts ? '新对话 form with a recommendation and a cwd' : 'no accounts (AddAccount in the model row)'}`,
+    mount: async (f) => {
+      f.script({ 'permissions.get': perms('none'), 'session.list': { sessions: [] } })
+      f.mffai.models.catalog = async () => ({ presets: [{ id: 'p', label: 'Key', billing: 'metered', restriction: 'none', auth: 'api-key', protocols: [], docsUrl: '' }], models: { p: [{ id: 'm1', name: 'M1', context: 1, output: 1, image: false, reasoning: 'none', toolCall: true }] }, default: { accountId: 'a1', modelId: 'm1' } }) as never
+      f.mffai.models.accounts = async () => ({ accounts: accounts ? [{ id: 'a1', presetId: 'p', label: 'acc', state: 'ok' }] : [], secretsBackend: 'keychain' }) as never
+      route.set({ page: 'chat', newSession: { cwd: '/repo' } })
+      render(<ChatPage />)
+      await screen.findByRole('button', { name: '开始' })
+      if (accounts) {
+        act(() => { f.emit(ev('memory.recommendation', { id: 'r1', category: 'routine', habitId: 'h1', text: '周一看周报', cwd: '/repo' })) })
+        await screen.findByText('周一看周报')
+        await screen.findByText('需审批')
+      } else {
+        fireEvent.click(await screen.findByRole('button', { name: '添加账号' }))
+      }
+      expect(document.querySelector('.mffai-newhead')).not.toBeNull()
+    },
+  })),
   ...([false, true] as const).map((narrow): Row => ({
     name: `chat header: ${narrow ? 'narrow' : 'wide'}`,
     mount: () => {

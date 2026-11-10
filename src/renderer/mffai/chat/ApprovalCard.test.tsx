@@ -119,4 +119,38 @@ describe('ApprovalCard', () => {
     const rule = /\.mffai-summary\s*\{([^}]*)\}/.exec(css)![1]
     expect(rule).not.toMatch(/max-height|overflow/)
   })
+  it('08b: pending is .mffai-appr (unsb when unsandboxed), resolved keeps the .mffai-approval-done line', () => {
+    installFakeForge()
+    const { container, rerender } = render(<ApprovalCard sessionId="s1" approval={item()} />)
+    const card = () => container.querySelector('[data-approval="p1"]')!
+    expect(card().classList.contains('mffai-appr')).toBe(true)
+    expect(card().classList.contains('unsb')).toBe(false)
+    expect(card().querySelector('.mffai-appr-h')!.textContent).toContain('shell 待审批')
+    rerender(<ApprovalCard sessionId="s1" approval={item({ unsandboxed: true })} />)
+    expect(card().classList.contains('mffai-appr')).toBe(true)
+    expect(card().classList.contains('unsb')).toBe(true)
+    rerender(<ApprovalCard sessionId="s1" approval={item({ resolved: { decision: 'deny', by: 'timeout' } })} />)
+    expect(card().classList.contains('mffai-approval-done')).toBe(true)
+    expect(card().classList.contains('mffai-appr')).toBe(false)
+    expect(card().querySelector('svg')).not.toBeNull()
+  })
+
+  it('08b: 允许 and 本会话允许 come before the spring, 拒绝 after it', () => {
+    installFakeForge()
+    const { container } = render(<ApprovalCard sessionId="s1" approval={item({ key: 'k' })} />)
+    const order = [...container.querySelectorAll('.mffai-appr-f > *')].map((el) => (el.classList.contains('mffai-spring') ? '|' : el.textContent))
+    expect(order).toEqual(['允许', '本会话允许', '|', '拒绝'])
+    expect(btn('拒绝')!.classList.contains('mffai-danger')).toBe(true)
+    expect(btn('允许')!.classList.contains('mffai-primary')).toBe(true)
+  })
+
+  it('08b: n / m only when several are pending', () => {
+    installFakeForge()
+    const { container, rerender } = render(<ApprovalCard sessionId="s1" approval={item()} pos={{ n: 1, m: 2 }} />)
+    expect(container.querySelector('.mffai-appr-pos')!.textContent).toBe('1 / 2')
+    rerender(<ApprovalCard sessionId="s1" approval={item()} pos={{ n: 1, m: 1 }} />)
+    expect(container.querySelector('.mffai-appr-pos')).toBeNull()
+    rerender(<ApprovalCard sessionId="s1" approval={item()} />)
+    expect(container.querySelector('.mffai-appr-pos')).toBeNull()
+  })
 })

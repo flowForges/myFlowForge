@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import type { ExecutorRunEndedPayload } from '@mffai/protocol'
 import { RunCard } from './RunCard'
@@ -177,5 +177,68 @@ describe('RunCard', () => {
     await act(async () => { fireEvent.click(screen.getByText('a.ts')) })
     expect(f.callsOf('executor.diff')).toEqual([{ sessionId: S, runId: 'r1', path: 'a.ts' }])
     expect(screen.getByText('NEW')).toBeInTheDocument()
+  })
+  describe('08b layout', () => {
+    afterEach(() => { vi.restoreAllMocks() })
+
+    it('live (queued or running) is .mffai-rcard.live; ended is not; id and data-run stay', () => {
+      installFakeForge()
+      const { container, rerender } = render(<RunCard sessionId={S} turnOpen run={run({ summary: '补齐单测' })} />)
+      const card = () => container.querySelector('[data-run="r1"]')!
+      expect(card().id).toBe('mffai-run-r1')
+      expect(card().classList.contains('mffai-rcard')).toBe(true)
+      expect(card().classList.contains('live')).toBe(true)
+      expect(screen.getByText('补齐单测')).toBeInTheDocument()
+      rerender(<RunCard sessionId={S} turnOpen run={run({ phase: 'queued', position: 1 })} />)
+      expect(card().classList.contains('live')).toBe(true)
+      rerender(<RunCard sessionId={S} turnOpen={false} row={kept} run={done()} />)
+      expect(card().classList.contains('mffai-rcard')).toBe(true)
+      expect(card().classList.contains('live')).toBe(false)
+      expect(card().id).toBe('mffai-run-r1')
+    })
+
+    it('progress rows carry a per-kind icon; the newest row is marked last', () => {
+      installFakeForge()
+      const progress = (['file', 'tool', 'text', 'think'] as const).map((kind, i) => ({ seq: i, kind, text: `p${i}` }))
+      const { container } = render(<RunCard sessionId={S} turnOpen run={run({ progress })} />)
+      const rows = [...container.querySelectorAll('.mffai-progress-row')]
+      expect(rows.map((r) => r.querySelector('.mffai-progress-icon svg'))).not.toContain(null)
+      expect(rows.map((r) => r.classList.contains('last'))).toEqual([false, false, false, true])
+    })
+
+    it('ended: violations count chip, 改动 label beside N 个文件, the merge target path in the footer', () => {
+      installFakeForge()
+      const { container } = render(<RunCard sessionId={S} checkout="/repo" turnOpen={false} row={kept} run={done({}, { violations: ['~/.npmrc'], violationsTruncated: 1 })} />)
+      expect(screen.getByText('违规 2')).toBeInTheDocument()
+      expect(container.querySelector('.mffai-rcard-chg')!.textContent).toContain('改动')
+      expect(btn('3 个文件')).not.toBeNull()
+      const foot = container.querySelector('.mffai-rcard-f')!
+      expect(within(foot as HTMLElement).getByText('/repo')).toBeInTheDocument()
+      const order = [...foot.querySelectorAll('button')].map((b) => b.textContent)
+      expect(order.slice(0, 2)).toEqual(['合并', '丢弃'])
+      expect(btn('丢弃')!.classList.contains('mffai-danger')).toBe(true)
+    })
+
+    const rect = { x: 600, y: 500, left: 600, top: 500, width: 80, height: 28, right: 680, bottom: 528, toJSON: () => ({}) } as DOMRect
+
+    it('the merge confirm is anchored to the clicked 合并 button (R13)', () => {
+      installFakeForge()
+      const spy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(rect)
+      render(<RunCard sessionId={S} checkout="/repo" turnOpen={false} row={kept} run={done()} />)
+      const b = btn('合并')!
+      fireEvent.click(b)
+      expect(document.querySelector('.confirm-overlay.mffai-anchored')).not.toBeNull()
+      expect(spy.mock.contexts).toContain(b)
+    })
+
+    it('the discard confirm is anchored to the clicked 丢弃 button', () => {
+      installFakeForge()
+      const spy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(rect)
+      render(<RunCard sessionId={S} turnOpen={false} row={kept} run={done()} />)
+      const b = btn('丢弃')!
+      fireEvent.click(b)
+      expect(document.querySelector('.confirm-overlay.mffai-anchored')).not.toBeNull()
+      expect(spy.mock.contexts).toContain(b)
+    })
   })
 })
