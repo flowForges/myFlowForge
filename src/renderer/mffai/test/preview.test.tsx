@@ -17,7 +17,7 @@ import { Confirm } from '../ui/Confirm'
 import MffaiView from '../MffaiView'
 import { route } from '../route'
 import { installFakeForge } from './fakeForge'
-import { waitFor, screen } from '@testing-library/react'
+import { fireEvent, waitFor, screen } from '@testing-library/react'
 
 const OUT = process.env.MFFAI_PREVIEW_OUT
 const TONES: ChipTone[] = ['ok', 'bad', 'warn', 'muted', 'run', 'acc', 'line']
@@ -93,5 +93,41 @@ describe.skipIf(!OUT)('preview screens', () => {
     await screen.findByText('Claude · Claude Sonnet 4.5')
     writePreview('01-tasks', PREVIEW_SIZE)
     expect(existsSync(join(OUT!, '01-tasks.html'))).toBe(true)
+  })
+
+  const calls01 = {
+    status: { state: 'running', uptimeMs: 1, rssMb: 112, version: '0.8.2', plugins: [{ id: 'a', state: 'active' }, { id: 'b', state: 'failed' }, { id: 'm', state: 'active', trust: 'dev' }, { id: 'd', state: 'active' }], secretsBackend: 'plaintext-file', sandbox: { level: 'full', missing: [], autoDegraded: false } },
+    'session.list': { sessions: [] },
+    'memory.health': { dbBytes: 0, rawRows: 0, noteRows: 0, cursorLag: 0, pendingProposals: 0, problems: [] },
+  } as never
+
+  it('01-tasks-power: the power popover open over the tasks page', async () => {
+    route.set({ page: 'tasks' })
+    installFakeForge({ state: { proxyStale: true, rssMb: 112, autostart: true, pluginsActive: 4, supervisor: { state: 'running', version: '0.8.2', restarts: 0, protocolVersion: 3 } }, calls: calls01 })
+    render(<MffaiView />)
+    await screen.findByTestId('mffai-page-tasks')
+    await screen.findByText('完整')
+    fireEvent.click(document.querySelector('button.mffai-power')!)
+    await screen.findByText('1 有问题')
+    writePreview('01-tasks-power', PREVIEW_SIZE)
+    expect(existsSync(join(OUT!, '01-tasks-power.html'))).toBe(true)
+  })
+
+  it('02-first-1-off: the enable hero', async () => {
+    route.set({ page: 'chat' })
+    installFakeForge({ state: { enabled: false, running: false, supervisor: undefined, autostart: false, dataDir: '~/Library/Application Support/myFlowForge/mff-ai' } })
+    render(<MffaiView />)
+    await screen.findByText('启用')
+    writePreview('02-first-1-off', PREVIEW_SIZE)
+    expect(existsSync(join(OUT!, '02-first-1-off.html'))).toBe(true)
+  })
+
+  it('02-first-4-fault: the fault panel', async () => {
+    route.set({ page: 'chat' })
+    installFakeForge({ state: { running: false, supervisor: { state: 'tripped', version: '0.8.2', restarts: 3, protocolVersion: 3, trippedReason: 'crash-loop' } } })
+    render(<MffaiView />)
+    await screen.findByText('后台已熔断')
+    writePreview('02-first-4-fault', PREVIEW_SIZE)
+    expect(existsSync(join(OUT!, '02-first-4-fault.html'))).toBe(true)
   })
 })

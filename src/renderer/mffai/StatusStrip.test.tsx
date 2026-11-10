@@ -77,4 +77,16 @@ describe('StatusStrip', () => {
     strip({}, { pending: 0 })
     expect(screen.queryByText(/待处理/)).toBeNull()
   })
+
+  it('未设模型: only once status has loaded and there is no default model', () => {
+    const r = strip({})
+    expect(screen.queryByText('未设模型')).toBeNull()
+    r.unmount()
+    const r2 = strip({}, { status: status() })
+    expect(screen.getByText('未设模型')).toBeInTheDocument()
+    r2.unmount()
+    strip({}, { status: status(), model: { account: 'Claude', model: 'Sonnet' } })
+    expect(screen.queryByText('未设模型')).toBeNull()
+    expect(screen.getByText('Claude · Sonnet')).toBeInTheDocument()
+  })
 })

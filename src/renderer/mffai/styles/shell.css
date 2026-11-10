@@ -44,3 +44,56 @@
 .mffai-sep { width: 1px; height: 14px; flex: 0 0 1px; background: var(--border); }
 .mffai-stpill .mffai-chip { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
 .mffai-stpill .mffai-quota { white-space: nowrap; }
+
+/* 电源键和弹层 */
+.mffai-rail { position: relative; z-index: 5; }
+.mffai-powerwrap { position: relative; flex: 0 0 auto; margin-top: 4px; }
+.mffai-powerwrap > .mffai-power { margin-top: 0; border: 0; padding: 0; font: inherit; cursor: pointer; }
+.mffai-power.off { color: var(--faint); background: var(--surface); box-shadow: inset 0 0 0 1px var(--border); }
+.mffai-power.off::after { display: none; }
+.mffai-power.wait { color: var(--warn); background: var(--mffai-warn-dim); box-shadow: inset 0 0 0 1px var(--mffai-warn-line); }
+.mffai-power.wait::after { background: var(--warn); }
+.mffai-power.open { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mffai-power:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mffai-powerpop { position: absolute; left: calc(100% + 16px); bottom: 0; z-index: 50; width: 280px; padding: 14px; border: 1px solid var(--border); border-radius: 14px; background: var(--mffai-panel-bg); box-shadow: var(--mffai-shadow); font-size: 12.5px; color: var(--fg-2); }
+.mffai-prow { display: flex; align-items: center; gap: 8px; }
+.mffai-phead { margin-bottom: 12px; font-size: 13.5px; color: var(--fg); }
+.mffai-phead .mffai-dot { flex: 0 0 8px; background: var(--faint); }
+.mffai-phead .mffai-dot.ok { background: var(--ok); }
+.mffai-phead .mffai-dot.wait { background: var(--warn); }
+.mffai-phead .mffai-dot.bad { background: var(--err); }
+.mffai-kv { display: grid; grid-template-columns: 44px 1fr; gap: 7px 8px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.mffai-powerpop .mffai-k { width: auto; color: var(--muted); }
+.mffai-v { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--fg); font-family: var(--mono); }
+.mffai-v .mffai-bad { color: var(--err); font-family: inherit; }
+.mffai-v .mffai-bad::before { content: "·"; margin-right: 6px; color: var(--fg-2); }
+.mffai-pchips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.mffai-pauto { justify-content: space-between; margin-top: 12px; color: var(--fg-2); }
+.mffai-prestart { width: 100%; margin-top: 12px; color: var(--warn); background: var(--mffai-warn-dim); border-color: var(--mffai-warn-line); }
+
+/* 首次使用:启用页和故障面板 */
+.mffai-pagebox.mffai-herobox { align-items: center; justify-content: center; }
+.mffai-hero { width: min(520px, 100%); display: flex; flex-direction: column; align-items: center; }
+.mffai-herologo { width: 64px; height: 64px; border-radius: 18px; display: grid; place-items: center; background: var(--mffai-brand); color: var(--on-accent); }
+.mffai-herologo .mffai-i { width: 28px; height: 28px; }
+.mffai-herotitle { margin-top: 16px; font-size: 24px; font-weight: 700; letter-spacing: -.01em; color: var(--fg); }
+.mffai-feats { display: flex; gap: 6px; margin: 26px 0; }
+.mffai-feat { width: 76px; display: flex; flex-direction: column; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); }
+.mffai-feattile { width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center; background: var(--surface); color: var(--fg-2); }
+.mffai-feattile .mffai-i { width: 18px; height: 18px; }
+.mffai-hero > .mffai-card { width: 100%; max-width: none; padding: 6px 16px; gap: 0; }
+.mffai-hero > .mffai-card .mffai-row { height: 44px; padding: 0; border-bottom: 1px solid var(--border); }
+.mffai-hero > .mffai-card .mffai-row:last-child { border-bottom: 0; }
+.mffai-hero .mffai-k { width: 90px; color: var(--fg-2); }
+.mffai-hero .mffai-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; word-break: normal; }
+.mffai-hero .mffai-mono { font-family: var(--mono); }
+.mffai-hero label.mffai-row { justify-content: space-between; }
+.mffai-hero .mffai-iconbtn { height: 24px; width: 24px; padding: 0; }
+.mffai-hero .set-btn.mffai-enable { width: 100%; height: 42px; margin-top: 16px; align-self: auto; font-size: 14px; }
+.mffai-hero .set-btn.mffai-wipe { margin-top: 10px; height: 28px; border-color: transparent; background: transparent; }
+.mffai-fault { width: 420px; max-width: 100%; display: flex; flex-direction: column; align-items: center; }
+.mffai-faultic { width: 56px; height: 56px; border-radius: 16px; display: grid; place-items: center; background: var(--mffai-err-dim); color: var(--err); }
+.mffai-faultic .mffai-i { width: 24px; height: 24px; }
+.mffai-fault h2 { margin: 14px 0 0; font-size: 20px; font-weight: 700; color: var(--fg); }
+.mffai-faultrow { display: flex; gap: 6px; margin-top: 10px; }
+.mffai-fault .set-btn.mffai-primary { align-self: auto; margin-top: 24px; width: 320px; height: 36px; font-size: 13px; }

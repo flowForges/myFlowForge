@@ -620,6 +620,43 @@ const ROWS: Row[] = [
       await screen.findByRole('dialog')
     },
   },
+  ...([
+    ['run', {}],
+    ['off', { enabled: false, running: false, supervisor: undefined }],
+    ['bad', { running: false, supervisor: { state: 'tripped', version: '0.8.2', restarts: 3, protocolVersion: 3, trippedReason: 'crash-loop' } }],
+  ] as const).map(([tone, patch]): Row => ({
+    name: `power popover: ${tone}`,
+    mount: async (f) => {
+      f.setState({ proxyStale: true, rssMb: 112, ...patch } as never)
+      render(<MffaiView />)
+      await waitFor(() => expect(document.querySelector('button.mffai-power')).not.toBeNull())
+      fireEvent.click(document.querySelector('button.mffai-power')!)
+      expect(document.querySelector('.mffai-powerpop')).not.toBeNull()
+      await waitFor(() => expect(document.querySelectorAll('.mffai-powerpop .mffai-chip').length).toBeGreaterThan(0))
+    },
+  })),
+  {
+    name: 'enable hero',
+    mount: async (f) => {
+      f.setState({ enabled: false, running: false, supervisor: undefined, dataDir: '/d', dataExists: true, roots })
+      render(<MffaiView />)
+      await screen.findByText('启用')
+      fireEvent.click(screen.getByText('删除全部数据'))
+      await screen.findAllByText('保留')
+    },
+  },
+  ...([
+    ['tripped', { running: false, supervisor: { state: 'tripped', version: '0.8.2', restarts: 3, protocolVersion: 3, trippedReason: 'oom' } }, '后台已熔断'],
+    ['incompatible', { running: false, compatible: false }, '版本不兼容'],
+    ['gone', { running: false, supervisor: undefined }, '已停止'],
+  ] as const).map(([name, patch, title]): Row => ({
+    name: `fault panel: ${name}`,
+    mount: async (f) => {
+      f.setState(patch as never)
+      render(<MffaiView />)
+      await screen.findByText(title, { selector: 'h2' })
+    },
+  })),
   {
     name: 'strip: every chip',
     mount: () => {

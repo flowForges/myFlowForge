@@ -8,7 +8,8 @@ import { useShellInfo, type NavCounts } from './useShellInfo'
 import { Rail } from './shell/Rail'
 import { PageHeader, PAGE_TITLE } from './shell/PageHeader'
 import { HeaderSlotCtx } from './shell/headerSlot'
-import { Icon } from './shell/icons'
+import { PowerButton } from './shell/Power'
+import { FaultPanel } from './shell/FaultPanel'
 import './mffai.css'
 
 /** 监督进程 50 + worker 51 MB(Task 10 实测),向上取整到 10 */
@@ -25,7 +26,7 @@ const PAGES: Record<MffaiPage, LazyExoticComponent<ComponentType>> = {
   debug: lazy(() => import('./debug/DebugPage')),
 }
 /** 左侧图标轨 + 主区(页头带状态胶囊,下面是当前页)。数字:对话 = 待批审批,记忆 = 待确认提议,插件 = 不在 active 的插件;没有就不显示 */
-function Shell({ counts, strip, tripped }: { counts: NavCounts; strip: ReactNode; tripped: boolean }) {
+function Shell({ counts, strip, power }: { counts: NavCounts; strip: ReactNode; power: ReactNode }) {
   const { page } = useRoute()
   const Page = PAGES[page]
   const [slot, setSlot] = useState<HTMLElement | null>(null)
@@ -37,8 +38,7 @@ function Shell({ counts, strip, tripped }: { counts: NavCounts; strip: ReactNode
         page={page}
         counts={counts}
         onSelect={(p) => route.set({ page: p })}
-        // 电源键和弹层是下一步(Task 3);这里只是位置和状态色
-        power={<span className={`mffai-power${tripped ? ' bad' : ''}`}><Icon name="power" size={18} /></span>}
+        power={power}
       />
       <div className="mffai-main">
         <HeaderSlotCtx.Provider value={slot}>
@@ -73,27 +73,51 @@ export default function MffaiView() {
 
   const connected = !!state?.enabled && !!state.running
   const { info, counts } = useShellInfo(connected)
+  const { page } = useRoute()
 
   if (!state) return <div className="mffai-page" />
+  // 启用卡的两条老路径,电源键的弹层原样复用
+  // 立刻落盘(enabled 未变,不加载 host),轮询读回的就是用户的选择
+  const onToggleAutostart = (on: boolean) => {
+    setState({ ...state, autostart: on })
+    void Promise.resolve(window.forge.setSettings({ mffai: { enabled: false, autostart: on } })).catch((e) => console.error('mffai', e))
+  }
+  const onEnable = () => run(Promise.resolve(window.forge.setSettings({ mffai: { enabled: false, autostart: state.autostart } })).then(() => api.enable()))
+  // 宿主的重启:proxyStale 时整个重拉后台,换上新代理(Task 4)
+  const onRestart = () => run(api.restart())
+  const onResetTrip = () => run(api.resetTrip())
+  const power = (
+    <PowerButton
+      state={state}
+      info={connected ? info : undefined}
+      onEnable={onEnable}
+      onDisable={() => run(api.disable())}
+      onAutostart={(on) => (state.enabled ? run(api.setAutostart(on)) : onToggleAutostart(on))}
+      onRestart={onRestart}
+      onResetTrip={onResetTrip}
+    />
+  )
   if (!state.enabled) {
     return (
-      <div className="mffai-page">
-        <EnableCard
-          expectedRssMb={MFFAI_EXPECTED_RSS_MB}
-          dataDir={state.dataDir ?? ''}
-          autostart={state.autostart}
-          failed={failed}
-          dataExists={state.dataExists}
-          roots={state.roots}
-          // 删除全部数据不经后台:主进程直接删,删完重读状态(dataExists 变假,按钮就没了)
-          onWipe={() => api.wipe().finally(refresh)}
-          // 立刻落盘(enabled 未变,不加载 host),轮询读回的就是用户的选择
-          onToggleAutostart={(on) => {
-            setState({ ...state, autostart: on })
-            void Promise.resolve(window.forge.setSettings({ mffai: { enabled: false, autostart: on } })).catch((e) => console.error('mffai', e))
-          }}
-          onEnable={() => run(Promise.resolve(window.forge.setSettings({ mffai: { enabled: false, autostart: state.autostart } })).then(() => api.enable()))}
-        />
+      <div className="mffai-page mffai-running">
+        <Rail page={page} counts={{}} disabled onSelect={() => {}} power={power} />
+        <div className="mffai-main">
+          <PageHeader title="mff-ai" pill={<span className="mffai-stpill"><span className="mffai-dot" /><b>未启用</b></span>} />
+          <div className="mffai-pagebox mffai-herobox">
+            <EnableCard
+              expectedRssMb={MFFAI_EXPECTED_RSS_MB}
+              dataDir={state.dataDir ?? ''}
+              autostart={state.autostart}
+              failed={failed}
+              dataExists={state.dataExists}
+              roots={state.roots}
+              // 删除全部数据不经后台:主进程直接删,删完重读状态(dataExists 变假,按钮就没了)
+              onWipe={() => api.wipe().finally(refresh)}
+              onToggleAutostart={onToggleAutostart}
+              onEnable={onEnable}
+            />
+          </div>
+        </div>
       </div>
     )
   }
@@ -103,15 +127,28 @@ export default function MffaiView() {
       info={connected ? info : undefined}
       failed={failed}
       // 宿主的重启:proxyStale 时整个重拉后台,换上新代理(Task 4)
-      onRestart={() => run(api.restart())}
-      onResetTrip={() => run(api.resetTrip())}
+      onRestart={onRestart}
+      onResetTrip={onResetTrip}
+      hideRestart={!state.running}
     />
   )
-  // 后台不在:只有状态条(和重新启动),没有导航
-  if (!state.running) return <div className="mffai-page">{strip}</div>
+  // 后台不在:图标轨停用(不能导航),主区是故障面板
+  if (!state.running) {
+    return (
+      <div className="mffai-page mffai-running">
+        <Rail page={page} counts={{}} disabled onSelect={() => {}} power={power} />
+        <div className="mffai-main">
+          <PageHeader title={PAGE_TITLE[page]} pill={strip} />
+          <div className="mffai-pagebox mffai-herobox">
+            <FaultPanel state={state} busy={!!state.op} onRestart={onRestart} onResetTrip={onResetTrip} />
+          </div>
+        </div>
+      </div>
+    )
+  }
   return (
     <div className="mffai-page mffai-running">
-      <Shell counts={counts} strip={strip} tripped={state.supervisor?.state === 'tripped' || state.compatible === false} />
+      <Shell counts={counts} strip={strip} power={power} />
     </div>
   )
 }

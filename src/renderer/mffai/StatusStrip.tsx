@@ -17,9 +17,11 @@ export interface StatusStripProps {
   onRestart: () => void
   onResetTrip: () => void
   failed?: boolean
+  /** 故障面板自己带 `重新启动`,页头里的就不再出 */
+  hideRestart?: boolean
 }
 
-function label(s: MffaiState): { text: string; tone: 'ok' | 'bad' | 'wait' } {
+export function stateLabel(s: MffaiState): { text: string; tone: 'ok' | 'bad' | 'wait' } {
   if (s.compatible === false) return { text: '版本不兼容', tone: 'bad' }
   switch (s.supervisor?.state) {
     case 'running': return { text: '运行中', tone: 'ok' }
@@ -33,8 +35,8 @@ function label(s: MffaiState): { text: string; tone: 'ok' | 'bad' | 'wait' } {
 
 const LEVEL_TONE = { full: 'ok', partial: 'warn', none: 'bad' } as const
 
-export function StatusStrip({ state, info, onRestart, onResetTrip, failed }: StatusStripProps) {
-  const { text, tone } = label(state)
+export function StatusStrip({ state, info, onRestart, onResetTrip, failed, hideRestart }: StatusStripProps) {
+  const { text, tone } = stateLabel(state)
   const tripped = state.supervisor?.state === 'tripped'
   const incompatible = state.compatible === false
   // 启用了但监管不在(启动失败 / 被杀):重新启动 = 拉起
@@ -55,12 +57,13 @@ export function StatusStrip({ state, info, onRestart, onResetTrip, failed }: Sta
           {state.rssMb != null && <span>{state.rssMb} MB</span>}
           {state.pluginsActive != null && <span>{state.pluginsActive} 插件</span>}
         </span>
-        {(sandbox || info?.model) && <span className="mffai-sep" />}
+        {(sandbox || info?.model || status) && <span className="mffai-sep" />}
         {sandbox && (
           <Chip sq tone={LEVEL_TONE[sandbox.level] ?? 'muted'} title={sandbox.missing.length ? sandbox.missing.join(' ') : undefined}>
             <Icon name={sandbox.level === 'full' ? 'shieldok' : sandbox.level === 'partial' ? 'shieldx' : 'shield'} size={12} />{codeLabel('level', sandbox.level)}
           </Chip>
         )}
+        {status && !info?.model && <Chip sq tone="warn">未设模型</Chip>}
         {info?.model && <Chip sq tone="acc" title={`${info.model.account} · ${info.model.model}`}>{`${info.model.account} · ${info.model.model}`}</Chip>}
         {quota && 'windows' in quota && quota.windows.map((w) => <span key={w.label} className="mffai-quota">{`${w.label} ${w.usedPercent}%`}</span>)}
       </div>
@@ -71,7 +74,7 @@ export function StatusStrip({ state, info, onRestart, onResetTrip, failed }: Sta
       {status?.secretsBackend === 'plaintext-file' && <Chip tone="warn">明文存储</Chip>}
       {state.proxyStale && <Chip tone="warn">代理已改</Chip>}
       {state.proxyStale && !busy && <button className="set-btn" onClick={onRestart}>重启</button>}
-      {(tripped || incompatible || gone) && !busy && (
+      {(tripped || incompatible || gone) && !busy && !hideRestart && (
         <button className="set-btn" onClick={tripped && !incompatible ? onResetTrip : onRestart}>重新启动</button>
       )}
       {failed && <span className="mffai-fail">失败</span>}

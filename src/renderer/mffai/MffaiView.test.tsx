@@ -72,7 +72,7 @@ describe('MffaiView', () => {
   it('stopping -> 已停止, plugin count shown', async () => {
     setup({ enabled: true, autostart: true, running: true, pluginsActive: 3, supervisor: { state: 'stopping', version: '0.1.0' } })
     render(<MffaiView />)
-    expect(await screen.findByText('已停止')).toBeInTheDocument()
+    expect((await screen.findAllByText('已停止')).length).toBeGreaterThan(0)
     expect(screen.getByText('3 插件')).toBeInTheDocument()
   })
 
@@ -86,7 +86,8 @@ describe('MffaiView', () => {
   it('tripped -> 重新启动 calls resetTrip', async () => {
     setup({ enabled: true, autostart: true, running: false, supervisor: { state: 'tripped', version: '0.1.0' } })
     render(<MffaiView />)
-    expect(await screen.findByText('已熔断')).toBeInTheDocument()
+    // 页头胶囊和故障面板各有一个状态块
+    expect((await screen.findAllByText('已熔断')).length).toBeGreaterThan(0)
     fireEvent.click(screen.getByText('重新启动'))
     expect(mffai.resetTrip).toHaveBeenCalled()
   })
@@ -102,7 +103,7 @@ describe('MffaiView', () => {
   it('enabled but no supervisor (start failed / killed) -> 已停止 + 重新启动 calls restart', async () => {
     setup({ enabled: true, autostart: true, running: false, dataDir: '/d' })
     render(<MffaiView />)
-    expect(await screen.findByText('已停止')).toBeInTheDocument()
+    expect((await screen.findAllByText('已停止')).length).toBeGreaterThan(0)
     fireEvent.click(screen.getByText('重新启动'))
     expect(mffai.restart).toHaveBeenCalled()
     expect(mffai.resetTrip).not.toHaveBeenCalled()
@@ -185,11 +186,44 @@ describe('MffaiView shell', () => {
     expect(navItem('记忆').className).toContain('on')
   })
 
-  it('not running: strip only, no nav', async () => {
+  it('not running: rail disabled, no navigation', async () => {
     f.setState({ running: false, supervisor: undefined })
     render(<MffaiView />)
     expect(await screen.findByText('重新启动')).toBeInTheDocument()
-    expect(document.querySelector('.mffai-nav')).toBeNull()
+    expect(nav()).toHaveLength(7)
+    expect(nav().every((b) => (b as HTMLButtonElement).disabled)).toBe(true)
+    fireEvent.click(navItem('调试'))
+    expect(route.get().page).toBe('chat')
+    expect(document.querySelector('.mffai-fault')).not.toBeNull()
+    expect(screen.getAllByText('重新启动')).toHaveLength(1)
+  })
+
+  it('tripped: fault panel with the reason code; 重新启动 is resetTrip', async () => {
+    f.setState({ running: false, supervisor: { state: 'tripped', version: '0.8.2', restarts: 3, protocolVersion: 3, trippedReason: 'crash-loop' } })
+    render(<MffaiView />)
+    expect(await screen.findByText('后台已熔断')).toBeInTheDocument()
+    expect(screen.getByText('crash-loop')).toBeInTheDocument()
+    expect(nav().every((b) => (b as HTMLButtonElement).disabled)).toBe(true)
+    expect(document.querySelector('header .mffai-stpill')).not.toBeNull()
+    fireEvent.click(screen.getByText('重新启动'))
+    expect(f.mffai.resetTrip).toHaveBeenCalledTimes(1)
+    expect(f.mffai.restart).not.toHaveBeenCalled()
+  })
+
+  it('disabled: the rail with seven disabled buttons, the page header 未启用 and the enable hero', async () => {
+    f.setState({ enabled: false, running: false, supervisor: undefined, dataDir: '/d/mff-ai' })
+    render(<MffaiView />)
+    expect(await screen.findByText('启用')).toBeInTheDocument()
+    expect(nav()).toHaveLength(7)
+    expect(nav().every((b) => (b as HTMLButtonElement).disabled)).toBe(true)
+    fireEvent.click(navItem('任务'))
+    expect(route.get().page).toBe('chat')
+    expect(document.querySelector('header.mffai-head .mffai-head-title')!.textContent).toBe('mff-ai')
+    expect(document.querySelector('header.mffai-head')!.textContent).toContain('未启用')
+    for (const t of ['对话', '委派 CLI', '记忆', 'Telegram', '插件']) expect(document.querySelector('.mffai-hero')!.textContent).toContain(t)
+    expect(document.querySelectorAll('.mffai-hero .mffai-feat')).toHaveLength(5)
+    expect(document.querySelector('button.mffai-power.off')).not.toBeNull()
+    expect(f.mffai.enable).not.toHaveBeenCalled()
   })
 
   it('counts: pending approvals, pending proposals, plugins not active; none when zero', async () => {
