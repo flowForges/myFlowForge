@@ -6,7 +6,10 @@ import { render } from '@testing-library/react'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { writePreview } from './preview'
-import { CHAT_TG, PREVIEW_NARROW, PREVIEW_SIZE, UI_DIFF, UI_ROWS, UI_TABLE, chatSessions } from './previewFixtures'
+import { CHAT_TG, PREVIEW_CHAT_NARROW, PREVIEW_NARROW, PREVIEW_SIZE, UI_DIFF, UI_ROWS, UI_TABLE, chatActiveEvents, chatSessions, chatTgEvents } from './previewFixtures'
+import { memStorage } from './panel'
+import { ACTIVITY_KEY } from '../layout'
+import { vi } from 'vitest'
 import { installResize } from './resize'
 import { ev } from './events'
 import { act } from '@testing-library/react'
@@ -166,6 +169,49 @@ describe.skipIf(!OUT)('preview screens', () => {
         writePreview(name, size)
         expect(existsSync(join(OUT!, `${name}.html`))).toBe(true)
       } finally { r.uninstall() }
+    })
+  }
+
+  const FRAMES = [
+    ['03-chat-1-active', PREVIEW_SIZE, 1376, 's1', 'open'],
+    ['03-chat-2-telegram', PREVIEW_SIZE, 1376, 's2', 'open'],
+    ['03-chat-3-collapsed', PREVIEW_SIZE, 1376, 's1', 'closed'],
+    ['03-chat-4-narrow', PREVIEW_CHAT_NARROW, 1036, 's1', 'open'],
+  ] as const
+  for (const [name, size, main, sid, pref] of FRAMES) {
+    it(`${name}: the chat header, the conversation and the activity panel`, async () => {
+      vi.stubGlobal('localStorage', memStorage())
+      localStorage.setItem(ACTIVITY_KEY, pref)
+      route.set({ page: 'chat', sessionId: sid })
+      const r = installResize()
+      try {
+        const now = Date.now()
+        const e = (type: string, payload: Record<string, unknown>) => ev(type as never, payload, { sessionId: sid, ts: now - 60_000 })
+        const events = (sid === 's1' ? chatActiveEvents(e) : chatTgEvents(e)) as { seq: number }[]
+        const sess = chatSessions(now).find((x) => x.id === sid)!
+        const open = sid === 's1' ? { turnId: 't1', parked: false, approvalIds: ['a1', 'a2'] } : { turnId: 't2', parked: true, approvalIds: [] }
+        const f = installFakeForge({
+          state: { proxyStale: true, rssMb: 112, pluginsActive: 4, supervisor: { state: 'running', version: '0.8.2', restarts: 0, protocolVersion: 3 } },
+          calls: {
+            ...(chatCalls() as object),
+            'session.state': { session: sess, events, hasMore: false, lastSeq: events.at(-1)!.seq, open },
+            'plugins.commands': { commands: [] },
+            'executor.runs': { runs: [{ runId: 'r2', sessionId: 's2', turnId: 't1', executor: 'Claude Code', phase: 'ended', status: 'ok', queuedAt: 1, readOnly: false, isolation: 'own', worktree: { path: '~/.mff-ai/wt/r2', present: true }, changed: 2 }] },
+          } as never,
+        })
+        const model = { id: 'm1', name: 'Claude Sonnet 4.5', context: 1, output: 1, image: false, reasoning: 'none' as const, toolCall: true }
+        f.mffai.models.catalog = async () => ({ presets: [], models: { p: [model] }, default: { accountId: 'a1', modelId: 'm1' } }) as never
+        render(<MffaiView />)
+        await screen.findByTestId('mffai-page-chat')
+        r.setMainWidth(main)
+        await waitFor(() => expect(document.querySelectorAll('.mffai-sess')).toHaveLength(9))
+        await waitFor(() => expect(document.querySelector('header.mffai-chathead')).not.toBeNull())
+        await screen.findByText(sid === 's1' ? /throw new Error/ : '好,正在等合并结果')
+        if (sid === 's2') fireEvent.click(await screen.findByRole('button', { name: '会话' }))
+        await waitFor(() => expect(document.querySelector('[data-run]')).not.toBeNull())
+        writePreview(name, size)
+        expect(existsSync(join(OUT!, `${name}.html`))).toBe(true)
+      } finally { r.uninstall(); vi.unstubAllGlobals() }
     })
   }
 })

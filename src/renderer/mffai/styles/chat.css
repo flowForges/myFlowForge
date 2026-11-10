@@ -86,9 +86,10 @@
 /* 对话:一轮(Task 7) */
 .mffai-chat-body { display: flex; flex-direction: column; gap: 8px; padding-right: 4px; }
 .mffai-chat-body .mffai-older { align-self: center; }
-.mffai-chat-body .mffai-card { max-width: 760px; padding: 10px 12px; gap: 6px; font-family: inherit; color: var(--fg); }
-.mffai-chat-body .mffai-card-head, .mffai-chat-body .mffai-card-row, .mffai-chat-body .mffai-card-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.mffai-chat-body .mffai-card-actions .mffai-primary { margin-top: 0; }
+.mffai-chat-body .mffai-card, .mffai-act .mffai-card { max-width: 760px; padding: 10px 12px; gap: 6px; font-family: inherit; color: var(--fg); }
+.mffai-chat-body .mffai-card-head, .mffai-chat-body .mffai-card-row, .mffai-chat-body .mffai-card-actions,
+.mffai-act .mffai-card-head, .mffai-act .mffai-card-row, .mffai-act .mffai-card-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.mffai-chat-body .mffai-card-actions .mffai-primary, .mffai-act .mffai-card-actions .mffai-primary { margin-top: 0; }
 .mffai-summary { margin: 0; padding: 8px 10px; border-radius: 6px; background: var(--bg-2); font-family: var(--mono, monospace); font-size: 12px; white-space: pre-wrap; word-break: break-all; }
 .mffai-approval-done { display: flex; flex-direction: row; align-items: center; gap: 8px; max-width: 760px; padding: 4px 10px; font-size: 12.5px; }
 .mffai-summary-line { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono, monospace); color: var(--faint); }
@@ -113,3 +114,42 @@
 .mffai-st { flex: 0 0 14px; font-family: var(--mono, monospace); font-size: 12px; color: var(--faint); }
 .mffai-st.st-A { color: var(--accent); }
 .mffai-st.st-D { color: var(--del); }
+
+/* 会话打开:对话列(会话头 + 对话流 + 输入框)和活动面板(08b §4.3);推荐卡片在对话列顶上 */
+.mffai-chat-main:not(.mffai-chat-new) { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto minmax(0, 1fr); gap: 0; padding: 0; overflow: hidden; }
+.mffai-chat-main:not(.mffai-chat-new) > .mffai-recs { grid-column: 1; grid-row: 1; margin: 12px 20px 0; }
+.mffai-convo { grid-column: 1; grid-row: 2; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.mffai-convo > .mffai-chat-body { padding: 18px max(20px, calc((100% - 780px) / 2)); }
+.mffai-convo > .mffai-composer { margin: 0 max(20px, calc((100% - 780px) / 2)) 16px; }
+.mffai-spring { flex: 1; }
+
+.mffai-chathead { flex: 0 0 48px; display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0 16px 0 20px; border-bottom: 1px solid var(--border); }
+.mffai-chathead-title { min-width: 0; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; color: var(--fg); }
+.mffai-chathead .mffai-chip { flex: 0 0 auto; }
+.mffai-chathead-cwd { display: inline-flex; align-items: center; gap: 5px; min-width: 0; height: 20px; padding: 0 8px; border: 1px solid var(--border-2); border-radius: 99px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: var(--mono, monospace); font-size: 11px; color: var(--muted); }
+.mffai-chathead-cwd .mffai-i { flex: 0 0 auto; }
+.mffai-chathead-mode { display: inline-flex; flex: 0 0 auto; }
+.mffai-chathead .mffai-nhide { display: none; }
+.mffai-chathead .mffai-actbtn { display: inline-flex; align-items: center; gap: 6px; height: 28px; margin: 0; padding: 0 10px; border-radius: 8px; font-size: 12.5px; }
+.mffai-chathead .mffai-actbtn.on { color: var(--accent); border-color: var(--mffai-acc-line); background: var(--accent-dim); }
+.mffai-actbtn .n { min-width: 16px; height: 16px; padding: 0 4px; border-radius: 99px; background: var(--warn); color: var(--bg); font-size: 10px; font-weight: 700; line-height: 16px; text-align: center; }
+
+.mffai-act { grid-column: 2; grid-row: 1 / span 2; display: flex; flex-direction: column; width: 368px; min-height: 0; border-left: 1px solid var(--border); background: var(--mffai-panel-bg); }
+.mffai-act.drawer { position: absolute; top: 0; right: 0; bottom: 0; z-index: 31; box-shadow: var(--mffai-shadow); }
+.mffai-scrim { position: absolute; inset: 0; z-index: 30; background: var(--mffai-scrim); }
+.mffai-act-head { flex: 0 0 48px; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 16px; border-bottom: 1px solid var(--border); }
+.mffai-act-title { font-size: 13.5px; font-weight: 600; color: var(--fg); }
+.mffai-act-close { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 6px; color: var(--muted); }
+.mffai-act-close:hover { color: var(--fg); background: var(--surface); }
+.mffai-act-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 18px; padding: 14px; overflow: auto; }
+.mffai-act-sec { display: flex; flex-direction: column; gap: 8px; }
+.mffai-act-h { font-size: 11.5px; font-weight: 600; color: var(--faint); }
+.mffai-act-n { margin-left: 4px; font-family: var(--mono, monospace); color: var(--muted); }
+.mffai-act .mffai-card, .mffai-act .mffai-approval-done { max-width: none; margin: 0; }
+.mffai-act-jump { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); font-size: 12.5px; color: var(--fg-2); text-align: left; }
+.mffai-act-jump:hover { color: var(--fg); border-color: var(--border-2); }
+
+.mffai-anchor { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px 0 10px; border: 1px solid transparent; border-radius: 99px; font-size: 12px; font-weight: 600; }
+.mffai-anchor.warn { color: var(--warn); background: var(--mffai-warn-dim); border-color: var(--mffai-warn-line); }
+.mffai-anchor.run { color: var(--accent); background: var(--accent-dim); border-color: var(--mffai-acc-line); }
+.mffai-anchor:focus-visible, .mffai-actbtn:focus-visible, .mffai-act-close:focus-visible, .mffai-act-jump:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

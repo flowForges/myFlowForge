@@ -44,3 +44,43 @@ export const CHAT_TG = {
   chats: { chats: [{ chatId: '1', accountId: '1', sessionId: 's2', queued: 0, running: false }, { chatId: '2', accountId: '2', sessionId: 's4', queued: 0, running: false }], worktrees: [] },
   status: { state: 'online', enabled: true, tokenSet: true, secretsBackend: 'keychain', proxy: 'none', paired: [{ accountId: '1', name: '张伟', pairedAt: 1 }, { accountId: '2', name: '产品群', pairedAt: 1 }], pairing: { active: false }, dropped: { unpaired: 0, stale: 0, group: 0, attachment: 0, badUpdate: 0 }, undelivered: 0, problems: [] },
 }
+
+export const PREVIEW_CHAT_NARROW = { width: 1100, height: 800 } as const
+
+type Ev = (type: string, payload: Record<string, unknown>) => unknown
+
+/** 03-chat-1/3/4:s1 开着的一轮,一个运行中的 Codex 委派、一个未隔离的 shell 待批、一个带 key 的待批 */
+export function chatActiveEvents(e: Ev): unknown[] {
+  const T = 't1'
+  return [
+    e('message.user', { turnId: T, text: '把 src/auth 里散落的 throw new Error 换成统一的 AuthError,再让 Codex 把单测补齐。' }),
+    e('turn.snapshot', { turnId: T, phase: 'start', ref: 'refs/start' }),
+    e('message.assistant', { turnId: T, step: 1, text: '我先把 `AuthError` 定义成带 `code` 字段的类,login、refresh、logout 三处共 9 个 `throw` 已经替换。现在跑一遍现有单测确认没有回归' }),
+    e('executor.run.queued', { runId: 'r1', turnId: T, callId: 'c1', executor: 'Codex', summary: '为 AuthError 补齐单测', readOnly: false, isolation: 'wrapped', position: 1 }),
+    e('executor.run.started', { runId: 'r1', turnId: T, executor: 'Codex', cwd: '~/work/forge-api', isolation: 'wrapped', untranslatedRules: 1 }),
+    ...[['file', '读取 src/auth/errors.ts'], ['text', '编辑 test/auth/login.test.ts'], ['tool', '运行 pnpm vitest run test/auth'], ['think', '12 个用例通过,继续补边界情况'], ['text', '编辑 test/auth/errors.test.ts']]
+      .map(([kind, text]) => e('executor.run.progress', { runId: 'r1', turnId: T, kind, text })),
+    e('approval.requested', { approvalId: 'a1', turnId: T, callId: 'c2', tool: 'shell', summary: 'pnpm install --frozen-lockfile && pnpm vitest run src/auth --reporter=verbose', unsandboxed: true }),
+    e('approval.requested', { approvalId: 'a2', turnId: T, callId: 'c3', tool: 'shell', summary: 'git stash push -m "pre-auth-refactor"', key: 'shell:git stash' }),
+  ]
+}
+
+/** 03-chat-2:Telegram 会话 s2,第一轮已结束(两条已决、一条超时、一个结束了的 Claude Code 委派),第二轮挂起 */
+export function chatTgEvents(e: Ev): unknown[] {
+  return [
+    e('message.user', { turnId: 't1', text: '今天线上 5xx 有点多,帮我看下是哪个服务' }),
+    e('approval.requested', { approvalId: 'g1', turnId: 't1', callId: 'c1', tool: 'shell', summary: 'kubectl logs deploy/gateway --since=2h' }),
+    e('approval.resolved', { approvalId: 'g1', decision: 'allow', by: 'user', via: 'telegram:1' }),
+    e('approval.requested', { approvalId: 'g2', turnId: 't1', callId: 'c2', tool: 'shell', summary: 'kubectl rollout restart deploy/gateway' }),
+    e('approval.resolved', { approvalId: 'g2', decision: 'deny', by: 'user', via: 'telegram:1' }),
+    e('approval.requested', { approvalId: 'g3', turnId: 't1', callId: 'c3', tool: 'http_get', summary: 'grafana.internal/api/ds/query' }),
+    e('approval.resolved', { approvalId: 'g3', decision: 'deny', by: 'timeout' }),
+    e('executor.run.started', { runId: 'r2', turnId: 't1', executor: 'Claude Code', cwd: 'im/ops-gateway', isolation: 'own', worktree: '~/.mff-ai/wt/r2' }),
+    e('executor.run.ended', { runId: 'r2', turnId: 't1', executor: 'Claude Code', status: 'ok', ms: 192_000, exit: 0, usage: { input: 48200, output: 6100 }, violations: ['~/.npmrc'], changed: { files: ['config/pool.ts', 'test/pool.test.ts'], source: 'git', concurrent: true }, worktree: '~/.mff-ai/wt/r2', rawLog: '~/.mff-ai/runs/r_8f2c/raw.log' }),
+    e('message.assistant', { turnId: 't1', step: 1, text: '`gateway` 在 09:40 之后 502 占比 4.1%,集中在 `/v2/orders`。我让 Claude Code 在 IM worktree 里排查连接池配置。' }),
+    e('turn.ended', { turnId: 't1' }),
+    e('message.user', { turnId: 't2', text: '连接池那个改动先合进去吧' }),
+    e('message.assistant', { turnId: 't2', step: 1, text: '好,正在等合并结果' }),
+    e('turn.parked', { turnId: 't2', step: 1, active: 1, pending: 0 }),
+  ]
+}

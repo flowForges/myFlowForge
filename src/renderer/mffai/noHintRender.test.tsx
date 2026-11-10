@@ -39,6 +39,8 @@ import { tgCalls, tgStatus } from './test/telegram'
 import { SessionColumn } from './chat/SessionColumn'
 import { MainWidthProvider } from './useMainWidth'
 import { installResize } from './test/resize'
+import { ChatHeader } from './chat/ChatHeader'
+import { S, panelCalls, panelEvents } from './test/panel'
 
 const roots = { data: '/d/mff-ai', worktrees: '/d/mff-ai-worktrees', imWorktrees: '/d/mff-ai-im', plugins: '/d/mff-ai-plugins', keychain: 'myflowforge-mffai/x' }
 
@@ -736,6 +738,31 @@ const ROWS: Row[] = [
       } finally { r.uninstall() }
     },
   },
+  ...(['本轮', '会话', 'drawer', 'anchors'] as const).map((which): Row => ({
+    name: `activity panel: ${which}`,
+    mount: async (f) => {
+      f.script(panelCalls(panelEvents(S, { summary: 'npm test\u202E' })))
+      route.set({ page: 'chat', sessionId: S })
+      const r = installResize()
+      try {
+        render(<MainWidthProvider><ChatPage /></MainWidthProvider>)
+        r.setMainWidth(which === 'drawer' ? 1100 : 1440)
+        await screen.findByText('fix the build')
+        if (which === 'drawer') fireEvent.click(document.querySelector('button.mffai-actbtn')!)
+        if (which === '会话') fireEvent.click(within(document.querySelector('aside.mffai-act') as HTMLElement).getByRole('button', { name: '会话' }))
+        await waitFor(() => expect(document.querySelector('aside.mffai-act [data-run="r1"]')).not.toBeNull())
+        if (which === 'drawer') expect(document.querySelector('.mffai-scrim')).not.toBeNull()
+        if (which === 'anchors') expect(document.querySelectorAll('.mffai-chat-body .mffai-anchor').length).toBeGreaterThan(1)
+      } finally { r.uninstall() }
+    },
+  })),
+  ...([false, true] as const).map((narrow): Row => ({
+    name: `chat header: ${narrow ? 'narrow' : 'wide'}`,
+    mount: () => {
+      render(<ChatHeader title="登录模块错误处理重构" running cwd="~/work/forge-api" mode="auto" pending={2} panelOn={!narrow} narrow={narrow} onToggle={() => {}} />)
+      expect(document.querySelector('header.mffai-chathead')).not.toBeNull()
+    },
+  })),
 ]
 
 describe('no explanatory text at render time', () => {
