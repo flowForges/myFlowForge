@@ -257,3 +257,7 @@
 .mffai-rawlog .mffai-copy { display: inline-flex; flex-direction: row; align-items: center; gap: 4px; flex: 0 0 auto; height: 24px; padding: 0 6px; border-radius: 6px; font-size: 11px; color: var(--muted); }
 .mffai-rawlog .mffai-copy:hover { background: var(--surface); color: var(--fg); }
 .mffai-rawlog .mffai-copy svg { width: 12px; height: 12px; }
+
+/* 卡片的位置和宿主(CardHost):不占盒子,卡片照旧是对话流 / 面板分区的直接排版子项 */
+.mffai-cardslot, .mffai-cardhost { display: contents; }
+.mffai-chat-body .mffai-cardhost > * { flex-shrink: 0; }

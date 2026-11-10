@@ -3,7 +3,8 @@
 // 远程图不加载(UntrustedMdCtx:改成链接,旁边是主机名)。
 // 08b §4.3:会话头 + 对话列 + 活动面板。面板停靠或抽屉时,审批卡、运行卡只在面板里,对话流原位置留锚点;收起时卡片照旧在流里(R3)。
 // 面板也在这两个 Provider 里面:不可信内容的规则覆盖面板。
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import type { RunRow, SessionSummary } from '@mffai/protocol'
 import { Message } from '../../views/chat/Message'
 import { ChatHtmlCtx } from '../../views/chat/markdown'
@@ -20,6 +21,7 @@ import { TurnTail } from './TurnTail'
 import { ChatHeader } from './ChatHeader'
 import { ActivityPanel, isPending, scopeTurn, type PanelScope } from './ActivityPanel'
 import { InlineAnchor } from './InlineAnchor'
+import { CardSlot, useCardHosts, type HostOf } from './CardHost'
 import { useActivityPanel } from './useActivityPanel'
 import { isEnded, rollbackable, type ApprovalItem, type RunItem, type SessionView, type TurnView } from './reduce'
 import { toMessages } from './toMessages'
@@ -63,13 +65,29 @@ function pendingOrder(view: SessionView): Map<string, { n: number; m: number }> 
   return new Map(ids.map((id, i) => [id, { n: i + 1, m: ids.length }]))
 }
 
-function Cards({ sessionId, checkout, turn, view, rows, onRunChanged, placement, onOpen, order }: {
+/** 一轮的卡片(按 seq),每张一个固定的 key:宿主按它找 */
+function turnCards({ sessionId, checkout, turn, view, rows, onRunChanged, order }: {
   sessionId: string; checkout?: string; turn: TurnView; view: SessionView; rows: Map<string, RunRow>; onRunChanged: () => void
+  order: Map<string, { n: number; m: number }>
+}): { key: string; seq: number; node: ReactNode }[] {
+  const open = !isEnded(view, turn)
+  return [
+    ...turn.approvals.map((a) => ({ key: `a${a.approvalId}`, seq: a.seq, node: <ApprovalCard key={`a${a.approvalId}`} sessionId={sessionId} approval={a} pos={order.get(a.approvalId)} /> })),
+    ...[...turn.runs.values()].map((r) => ({
+      key: `r${r.runId}`,
+      seq: r.seq,
+      node: <RunCard key={`r${r.runId}`} sessionId={sessionId} checkout={checkout} run={r} turnOpen={open} row={rows.get(r.runId)} onChanged={onRunChanged} />,
+    })),
+  ].sort((a, b) => a.seq - b.seq)
+}
+
+/** 对话流里一轮的卡片位置:收起时是卡片本身(宿主搬进来),展开时是锚点 */
+function Cards({ turn, rows, placement, onOpen, host }: {
+  turn: TurnView; rows: Map<string, RunRow>
   placement: 'inline' | 'anchors'
   onOpen: (target: Target) => void
-  order: Map<string, { n: number; m: number }>
+  host: HostOf
 }) {
-  const open = !isEnded(view, turn)
   if (placement === 'anchors') {
     const anchors = [
       ...turn.approvals.filter(isPending).map((a) => ({
@@ -84,14 +102,11 @@ function Cards({ sessionId, checkout, turn, view, rows, onRunChanged, placement,
     ].sort((a, b) => a.seq - b.seq)
     return <>{anchors.map((c) => c.node)}</>
   }
-  const cards = [
-    ...turn.approvals.map((a) => ({ seq: a.seq, node: <ApprovalCard key={`a${a.approvalId}`} sessionId={sessionId} approval={a} pos={order.get(a.approvalId)} /> })),
-    ...[...turn.runs.values()].map((r) => ({
-      seq: r.seq,
-      node: <RunCard key={`r${r.runId}`} sessionId={sessionId} checkout={checkout} run={r} turnOpen={open} row={rows.get(r.runId)} onChanged={onRunChanged} />,
-    })),
+  const slots = [
+    ...turn.approvals.map((a) => ({ seq: a.seq, key: `a${a.approvalId}` })),
+    ...[...turn.runs.values()].map((r) => ({ seq: r.seq, key: `r${r.runId}` })),
   ].sort((a, b) => a.seq - b.seq)
-  return <>{cards.map((c) => c.node)}</>
+  return <>{slots.map((c) => <CardSlot key={c.key} host={host(c.key)} />)}</>
 }
 
 /** 锚点点了要打开的卡片:所在的轮、卡片上的属性和值 */
@@ -168,14 +183,14 @@ export function SessionPane({ sessionId, summary, imName, onSend, onCommand, onS
   const modelId = (session?.model ?? summary?.model)?.modelId
   const pending = view ? view.turns.reduce((n, t) => n + t.approvals.filter(isPending).length, 0) : (summary?.pendingApprovals ?? 0)
 
-  // 面板里的卡片:props 和对话流里的一样
+  // 全部卡片各挂一次(进各自的宿主);对话流和面板里放的只是位置
   const order = useMemo(() => (view ? pendingOrder(view) : new Map<string, { n: number; m: number }>()), [view])
-  const renderApproval = (a: ApprovalItem) => <ApprovalCard key={`a${a.approvalId}`} sessionId={sessionId} approval={a} pos={order.get(a.approvalId)} />
-  const renderRun = (x: RunItem) => {
-    const turn = view?.turns.find((t) => t.turnId === x.turnId)
-    const turnOpen = !!view && !!turn && !isEnded(view, turn)
-    return <RunCard key={`r${x.runId}`} sessionId={sessionId} checkout={checkout} run={x} turnOpen={turnOpen} row={rows.get(x.runId)} onChanged={refresh} />
-  }
+  const { host, keep } = useCardHosts()
+  const cards = view ? view.turns.flatMap((turn) => turnCards({ sessionId, checkout, turn, view, rows, onRunChanged: refresh, order })) : []
+  const cardKeys = cards.map((c) => c.key).join('\u0000')
+  useEffect(() => { keep(cardKeys ? cardKeys.split('\u0000') : []) }, [cardKeys, keep])
+  const renderApproval = (a: ApprovalItem) => <CardSlot key={`a${a.approvalId}`} host={host(`a${a.approvalId}`)} />
+  const renderRun = (x: RunItem) => <CardSlot key={`r${x.runId}`} host={host(`r${x.runId}`)} />
 
   return (
     <ChatHtmlCtx.Provider value={false}>
@@ -194,8 +209,7 @@ export function SessionPane({ sessionId, summary, imName, onSend, onCommand, onS
             <Fragment key={g.turnId}>
               {g.messages.map((m) => <Message key={m.id} msg={m} streaming={streamingIds.has(m.id)} />)}
               <TurnTail sessionId={sessionId} turn={turn} canRollback={canRollback === turn.turnId} />
-              <Cards sessionId={sessionId} checkout={checkout} turn={turn} view={view} rows={rows} onRunChanged={refresh}
-                placement={inPanel ? 'anchors' : 'inline'} onOpen={openCard} order={order} />
+              <Cards turn={turn} rows={rows} placement={inPanel ? 'anchors' : 'inline'} onOpen={openCard} host={host} />
             </Fragment>
           )
         })}
@@ -216,6 +230,7 @@ export function SessionPane({ sessionId, summary, imName, onSend, onCommand, onS
         <ActivityPanel view={view} sessionId={sessionId} scope={scope} onScope={setScope} drawer={panel.mode === 'drawer'} onClose={panel.close}
           renderApproval={renderApproval} renderRun={renderRun} onJumpTail={jumpTail} />
       )}
+      {cards.map((c) => createPortal(c.node, host(c.key), c.key))}
     </UntrustedMdCtx.Provider>
     </ChatHtmlCtx.Provider>
   )
