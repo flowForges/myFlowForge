@@ -102,7 +102,7 @@ describe('Staging', () => {
     expect((fs.querySelector('input[type=radio]:checked') as HTMLInputElement).parentElement).toHaveTextContent('不给')
     expect(document.body.textContent).not.toContain('gone.example')
     expect(screen.getByText('typed.example')).toBeInTheDocument()
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '安装' })) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '升级但停用' })) })
     expect((f.callsOf('plugins.install.confirm') as any[])[0].grants).toEqual({ servers: {
       'fs-server': { network: ['api.declared.example'], cwd: 'none' },
       'net-server': { network: ['typed.example'], cwd: 'write' },
@@ -203,5 +203,57 @@ describe('Install 08b pane', () => {
     const band = document.querySelector('.mffai-fetch.bad') as HTMLElement
     expect(within(band).getByText('symlink').tagName).toBe('CODE')
     expect(within(band).getByText('scripts/ssh-config').closest('.mffai-ptext')).not.toBeNull()
+  })
+})
+
+describe('Staging 08b: first install is a full review page', () => {
+  it('ready: the page (head with close, overview, two columns) and a footer with 联网 N 个地址, 项目目录 and 取消 · 安装 · 安装并启用', async () => {
+    const f = installFakeForge()
+    await ready(f)
+    const page = document.querySelector('.mffai-cpage') as HTMLElement
+    expect(page).not.toBeNull()
+    expect(page.querySelector('[data-section="head"]')).not.toBeNull()
+    expect(page.querySelectorAll('.mffai-covt')).toHaveLength(4)
+    expect(page.querySelector('.mffai-ccol [data-section="grants"]')).not.toBeNull()
+    const foot = page.querySelector('.mffai-cfoot') as HTMLElement
+    expect([...foot.querySelectorAll('.mffai-chip')].map((c) => c.textContent)).toEqual(['联网 0 个地址', '项目目录 只读'])
+    expect(within(foot).getAllByRole('button').map((b) => b.textContent)).toEqual(['取消', '安装', '安装并启用'])
+    expect(document.querySelector('.mffai-covt:nth-child(2)')).toHaveTextContent('0 / 4 已勾')
+    fireEvent.click(screen.getByLabelText('fs-server api.declared.example'))
+    expect(foot.querySelector('.mffai-chip')).toHaveTextContent('联网 1 个地址')
+    expect(document.querySelector('.mffai-covt:nth-child(2)')).toHaveTextContent('1 / 4 已勾')
+    fireEvent.click(within(document.querySelector('[data-grants="net-server"]') as HTMLElement).getByLabelText('不给'))
+    expect([...foot.querySelectorAll('.mffai-chip')][1]).toHaveTextContent('项目目录 只读 / 不给')
+    expect(findHints()).toEqual([])
+  })
+
+  it('the head close button cancels the staging once, like 取消', async () => {
+    const f = installFakeForge({ calls: { 'plugins.install.cancel': { ok: true } } })
+    const { onClose } = await ready(f)
+    const head = document.querySelector('.mffai-cpage [data-section="head"]') as HTMLElement
+    await act(async () => { fireEvent.click(within(head).getByRole('button', { name: '关闭' })) })
+    expect(f.callsOf('plugins.install.cancel')).toEqual([{ stagingId: 'st1' }])
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('安装并启用 from the page sends exactly the BASE params', async () => {
+    const f = installFakeForge({ calls: { 'plugins.install.confirm': { ok: true, id: 'zed-tools' } } })
+    await ready(f)
+    const foot = document.querySelector('.mffai-cfoot') as HTMLElement
+    await act(async () => { fireEvent.click(within(foot).getByRole('button', { name: '安装并启用' })) })
+    expect(f.callsOf('plugins.install.confirm')).toEqual([{
+      commandId: expect.any(String), stagingId: 'st1', consentHash: 'hash-abc', enable: true,
+      grants: { servers: { 'fs-server': { network: [], cwd: 'read' }, 'net-server': { network: [], cwd: 'read' } } },
+    }])
+  })
+
+  it('an upgrade staging (with current) is not the page: no overview, the upgrade buttons', async () => {
+    installFakeForge({ calls: { 'plugins.install.status': READY } })
+    render(<Staging stagingId="st1" current={{ servers: {} }} onClose={() => {}} onInstalled={() => {}} />)
+    await screen.findByRole('button', { name: '升级' })
+    expect(document.querySelector('.mffai-cpage')).toBeNull()
+    expect(document.querySelector('.mffai-covt')).toBeNull()
+    expect(screen.queryByRole('button', { name: '安装并启用' })).toBeNull()
+    expect(screen.getByRole('button', { name: '升级但停用' })).toBeInTheDocument()
   })
 })

@@ -3,7 +3,8 @@
 // ready → 同意页 + 授权 + 安装 / 安装并启用 / 取消。确认带 consentHash 和每个服务的授权。
 // 没确认就离开(取消、关掉、换页)时取消暂存:暂存同时最多 3 个,留着会挡住下一次安装。
 // 08b:添加面板 = 头(添加插件 + 关闭)、本地路径 / git 分段、字段、读取;读取之后表单留着(读取不可再点),
-// 暂存在 获取记录 下面是一条带:读取中 / 失败(代码 + 路径)/ 就绪(同意页和授权跟在后面,同意页是 Task 10)。
+// 暂存在 获取记录 下面是一条带:读取中 / 失败(代码 + 路径)/ 就绪。就绪后首装是整页审阅(A,盖住插件页,
+// 底栏 取消 / 安装 / 安装并启用);带 current 的是升级(B,在 UpgradeModal 里,底栏 取消 / 升级但停用 / 升级)。
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Grants as GrantsT, PluginInstallStatus, PluginSourceParam, PluginsInstallStatePayload } from '@mffai/protocol'
 import { call, retryable } from '../rpc'
@@ -13,7 +14,8 @@ import { CodeChip } from '../ui/CodeChip'
 import { PathField } from '../ui/PathField'
 import { PText } from '../ui/PText'
 import { Icon } from '../shell/icons'
-import { Consent } from './Consent'
+import { Consent, CWD_LABEL } from './Consent'
+import { diffMarks } from './ConsentSection'
 import { Grants, initialGrants, upgradeGrants } from './Grants'
 import { FailChip, failureOf, useAction, type Failure } from './action'
 
@@ -89,8 +91,16 @@ export function Staging({ stagingId, current, onClose, onInstalled }: {
   })
 
   const ready = st?.state === 'ready' && st.consent && st.consentHash && grants
+  const upgrade = current !== undefined
+  const servers = grants ? Object.values(grants.servers) : []
+  const checkedHosts = servers.reduce((n, s) => n + s.network.length, 0)
+  const cwdLevels = [...new Set(servers.map((s) => CWD_LABEL[s.cwd]))].join(' / ')
+  const totals = st?.consent?.diff ? Object.values(diffMarks(st.consent.diff)) : []
+  const sum = (k: 'add' | 'mod' | 'del') => totals.reduce((n, m) => n + (m[k] ?? 0), 0)
+  const close = <button className="mffai-iconbtn" disabled={busy} onClick={cancel}><Icon name="x" size={14} /><span className="mffai-sr">关闭</span></button>
+  const grantsEditor = ready ? <Grants mcp={st.consent!.mcp} value={grants} onChange={setGrants} disabled={busy} /> : null
   return (
-    <div className="mffai-staging" data-staging={stagingId}>
+    <div className={`mffai-staging${upgrade ? ' mffai-ustaging' : ''}`} data-staging={stagingId}>
       {fetching && !statusFailure && <div className="mffai-row mffai-fetch run"><span className="mffai-spin" /><Chip tone="warn">读取中</Chip></div>}
       {statusFailure && <div className="mffai-row mffai-fetch bad"><Icon name="alert" size={14} /><FailChip failure={statusFailure} /></div>}
       {st?.state === 'failed' && (
@@ -101,19 +111,52 @@ export function Staging({ stagingId, current, onClose, onInstalled }: {
           {st.path && <PText text={st.path} mono />}
         </div>
       )}
-      {ready && (
+      {ready && !upgrade && (
         <>
           <div className="mffai-row mffai-fetch ok"><Icon name="check" size={14} /><Chip tone="ok">就绪</Chip></div>
-          <Consent consent={st.consent!} />
-          <Grants mcp={st.consent!.mcp} value={grants} onChange={setGrants} disabled={busy} />
+          {/* 首装(A):整页审阅,盖住插件页 */}
+          <div className="mffai-cpage">
+            <div className="mffai-cpage-b">
+              <Consent consent={st.consent!} close={close} grants={grantsEditor} checkedHosts={checkedHosts} />
+            </div>
+            <div className="mffai-actions mffai-cfoot">
+              <Chip tone="line"><Icon name="globe" size={12} />{`联网 ${checkedHosts} 个地址`}</Chip>
+              {servers.length > 0 && <Chip tone="line"><Icon name="folder" size={12} />{`项目目录 ${cwdLevels}`}</Chip>}
+              <span className="mffai-head-spring" />
+              <FailChip failure={failure} />
+              <button className="set-btn" disabled={busy} onClick={cancel}>取消</button>
+              <button className="set-btn" disabled={busy} onClick={() => confirm(false)}>安装</button>
+              <button className="set-btn mffai-primary" disabled={busy} onClick={() => confirm(true)}><Icon name="check" size={13} />安装并启用</button>
+            </div>
+          </div>
         </>
       )}
-      <div className="mffai-actions">
-        {ready && <button className="set-btn" disabled={busy} onClick={() => confirm(false)}>安装</button>}
-        {ready && <button className="set-btn mffai-primary" disabled={busy} onClick={() => confirm(true)}>安装并启用</button>}
-        <button className="set-btn" disabled={busy} onClick={cancel}>取消</button>
-        <FailChip failure={failure} />
-      </div>
+      {ready && upgrade && (
+        <>
+          {/* 升级(B):弹窗里,变更清单 + 每一节 */}
+          <Consent consent={st.consent!} layout="upgrade" close={close} grants={grantsEditor} />
+          <div className="mffai-actions mffai-cfoot">
+            {totals.length > 0 && (
+              <span className="mffai-ctotal">
+                <Chip tone="ok" sq>{`+ ${sum('add')}`}</Chip>
+                <Chip tone="warn" sq>{`~ ${sum('mod')}`}</Chip>
+                <Chip tone="bad" sq>{`− ${sum('del')}`}</Chip>
+              </span>
+            )}
+            <span className="mffai-head-spring" />
+            <FailChip failure={failure} />
+            <button className="set-btn" disabled={busy} onClick={cancel}>取消</button>
+            <button className="set-btn" disabled={busy} onClick={() => confirm(false)}>升级但停用</button>
+            <button className="set-btn mffai-primary" disabled={busy} onClick={() => confirm(true)}><Icon name="check" size={13} />升级</button>
+          </div>
+        </>
+      )}
+      {!ready && (
+        <div className="mffai-actions">
+          <button className="set-btn" disabled={busy} onClick={cancel}>取消</button>
+          <FailChip failure={failure} />
+        </div>
+      )}
     </div>
   )
 }

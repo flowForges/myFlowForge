@@ -2,7 +2,8 @@
 // 升级(ref 可填,走同一个同意页,带 diff)、禁用 / 启用、卸载(确认框带 保留 一行,09 §13)。
 // 启用成功后由页面决定显示 新会话(09 §15:插件视图钉在会话的第一轮,要新开会话才看得到)。
 // 08b:头(标志、id、版本、格式、状态、来源、动作)+ 页签 授权 / 配置 / 服务 N / 内容。页签只是跳转锚点(R22):
-// 各分区和今天一样随详情一起挂着,点页签只 scrollIntoView。
+// 各分区和今天一样随详情一起挂着,点页签只 scrollIntoView。升级暂存时和今天一样只留头,同意在 UpgradeModal 里;
+// 暂存开着时头里的 升级 和 ref 不可用(再点会换暂存)。
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Grants as GrantsT, PluginDetail as Detail, PluginIdPayload, PluginListResult } from '@mffai/protocol'
 import { call, isUnsupported, retryable } from '../rpc'
@@ -17,6 +18,7 @@ import { Grants, initialGrants } from './Grants'
 import { Settings } from './Settings'
 import { McpStateCell, McpTable } from './McpTable'
 import { Staging } from './Install'
+import { UpgradeModal } from './UpgradeModal'
 import { FailChip, useAction } from './action'
 
 type Row = PluginListResult['plugins'][number]
@@ -111,8 +113,8 @@ export function PluginDetail({ plugin, showNewSession, onEnabled, onClose }: {
       <div className="mffai-dact">
         {showNewSession && plugin.enabled && <button className="set-btn mffai-primary" onClick={() => route.set({ page: 'chat', newSession: {} })}><Icon name="chat" size={13} />新会话</button>}
         <span className="mffai-dup">
-          <input aria-label="升级 ref" placeholder="ref" value={upRef} onChange={(e) => setUpRef(e.target.value)} />
-          <button className="set-btn" disabled={upgradeAct.busy || !detail} onClick={upgrade}><Icon name="up" size={13} />升级</button>
+          <input aria-label="升级 ref" placeholder="ref" value={upRef} disabled={staging !== null} onChange={(e) => setUpRef(e.target.value)} />
+          <button className="set-btn" disabled={upgradeAct.busy || !detail || staging !== null} onClick={upgrade}><Icon name="up" size={13} />升级</button>
         </span>
         <FailChip failure={upgradeAct.failure} />
         <button className="set-btn" disabled={enableAct.busy} onClick={() => setEnabled(!plugin.enabled)}>{plugin.enabled ? '禁用' : '启用'}</button>
@@ -130,8 +132,11 @@ export function PluginDetail({ plugin, showNewSession, onEnabled, onClose }: {
     return (
       <div className="mffai-group mffai-detail" data-detail={id}>
         {head}
-        <Staging stagingId={staging} current={detail!.grants} onClose={() => setStaging(null)}
-          onInstalled={(pid, enabled) => { setStaging(null); onEnabled(pid, enabled); load() }} />
+        {/* 升级同意在弹窗里(B)。key:每次暂存一个新的 Staging,旧暂存的状态、consentHash、授权不会带到新暂存上 */}
+        <UpgradeModal onClose={() => setStaging(null)}>
+          <Staging key={staging} stagingId={staging} current={detail!.grants} onClose={() => setStaging(null)}
+            onInstalled={(pid, enabled) => { setStaging(null); onEnabled(pid, enabled); load() }} />
+        </UpgradeModal>
       </div>
     )
   }

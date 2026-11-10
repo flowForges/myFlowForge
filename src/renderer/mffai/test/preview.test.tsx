@@ -27,7 +27,7 @@ import { installFakeForge } from './fakeForge'
 import { runRow } from './sessions'
 import type { RunRow } from '@mffai/protocol'
 import { detailOf, FULL_CONSENT, listRow, pluginList } from './plugins'
-import { fireEvent, waitFor, screen } from '@testing-library/react'
+import { fireEvent, waitFor, screen, within } from '@testing-library/react'
 
 const OUT = process.env.MFFAI_PREVIEW_OUT
 const TONES: ChipTone[] = ['ok', 'bad', 'warn', 'muted', 'run', 'acc', 'line']
@@ -446,5 +446,65 @@ describe.skipIf(!OUT)('preview screens', () => {
     await screen.findByText('1 已退出')
     writePreview('05-plugins-3-mcp', PREVIEW_SIZE)
     expect(existsSync(join(OUT!, '05-plugins-3-mcp.html'))).toBe(true)
+  })
+
+  // 06-consent:A 首装整页,B 升级弹窗
+  const GH_NEW = {
+    ...GH,
+    claimed: { name: 'GitHub Tools', description: '在对话里查 PR、issue 和 release', author: 'Acme Labs', homepage: 'https://acme.dev/gh-tools' },
+    source: { kind: 'git' as const, url: 'github.com/acme/github-tools', commit: '3f9c2a1' },
+    integrity: 'sha256-Rk3…9fQ=', files: 42, bytes: 319_488,
+    mcp: [{ ...GH.mcp[0], command: 'node', args: ['${PLUGIN_ROOT}/dist/server.js', '--token', 'MASKED', '--cache', '${PLUGIN_DATA}'], argsMasked: [2],
+      env: [{ name: 'GITHUB_TOKEN', source: 'config' as const, required: true }, { name: 'GH_HOST', source: 'literal' as const, required: false, value: 'github.com' }] }, GH.mcp[1]],
+    skills: [{ name: 'pr-summary', description: '总结一个 PR 的改动', modelInvocable: true, userInvocable: false, files: 2, flags: [], ignored: [] }],
+    commands: [{ name: '/gh-issue', description: '新建 issue', flags: [], ignored: [] }, { name: '/gh-release', description: '起草 release note', flags: [], ignored: ['allowed-tools'] }],
+    notRun: { hooks: [{ event: 'PreToolUse', command: 'bash ${PLUGIN_ROOT}/hooks/guard.sh --token', masked: true }], agents: ['reviewer.md', 'triager.md'], bin: ['gh-helper'], monitors: [], workflows: [], lsp: [], other: [], remoteMcp: [{ name: 'gh-cloud', type: 'http', url: 'https://mcp.acme.dev/sse' }], scripts: ['postinstall'] },
+    warnings: ['credentials_in_source', 'truncated'], truncatedSections: [{ section: 'skills', omitted: 4 }],
+  }
+  const { diff: _gd, ...GH_A } = GH_NEW
+  const GH_B = {
+    ...GH_NEW, version: '1.5.0', source: { kind: 'git' as const, url: 'acme-labs/github-tools', commit: '9d01b7e' }, integrity: 'sha256-p0L…a1c=', files: 47, bytes: 346_112,
+    warnings: ['credentials_in_source'], truncatedSections: [],
+    diff: {
+      fromVersion: '1.4.0', toVersion: '1.5.0', sourceChanged: true,
+      mcp: { added: ['gh-actions'], removed: [], changed: [{ name: 'github', fields: ['args' as const] }] },
+      skills: { added: [], removed: [], textChanged: [] }, commands: { added: [], removed: ['/gh-release'], textChanged: [] },
+      network: { added: ['pipelines.actions.githubusercontent.com'], removed: [] }, config: { added: [], requiredSensitive: [] },
+      notRun: { hooksAdded: [{ event: 'PostToolUse', command: 'node ${PLUGIN_ROOT}/hooks/audit.js', masked: false }], hooksRemoved: [], added: [] },
+      files: { from: 42, to: 47 }, integrity: { from: 'sha256-Rk3…9fQ=', to: 'sha256-p0L…a1c=' },
+    },
+  }
+
+  it('06-consent-A: the first-install review page over the plugins page', async () => {
+    route.set({ page: 'plugins' })
+    installFakeForge({ state: plugState, calls: plugCalls({ 'plugins.install.prepare': { stagingId: 'st1' }, 'plugins.install.status': { state: 'ready', consent: GH_A, consentHash: 'h' } }) })
+    render(<MffaiView />)
+    await screen.findByTestId('mffai-page-plugins')
+    fireEvent.click(await screen.findByRole('button', { name: '添加' }))
+    fireEvent.change(screen.getByLabelText('路径'), { target: { value: '~/src/github-tools' } })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '读取' })) })
+    await screen.findByRole('button', { name: '安装并启用' })
+    writePreview('06-consent-A', PREVIEW_SIZE)
+    expect(existsSync(join(OUT!, '06-consent-A.html'))).toBe(true)
+  })
+
+  it('06-consent-B: the upgrade change modal', async () => {
+    route.set({ page: 'plugins' })
+    installFakeForge({ state: plugState, calls: plugCalls({
+      'plugins.get': detailOf(GH_A as never, { grants: { servers: { github: { network: [], cwd: 'read' }, 'gh-search': { network: [], cwd: 'none' } } }, servers: [{ name: 'github', state: 'running' }] }),
+      'plugins.upgrade.prepare': { stagingId: 'up1' },
+      'plugins.install.status': { state: 'ready', consent: GH_B, consentHash: 'h2' },
+    }) })
+    render(<MffaiView />)
+    await screen.findByTestId('mffai-page-plugins')
+    await waitFor(() => expect(document.querySelector('[data-plugin="github-tools"]')).not.toBeNull())
+    fireEvent.click(document.querySelector('[data-plugin="github-tools"] .mffai-prow-open')!)
+    const up = await screen.findByRole('button', { name: '升级' })
+    await waitFor(() => expect((up as HTMLButtonElement).disabled).toBe(false))
+    await act(async () => { fireEvent.click(up) })
+    const dlg = await screen.findByRole('dialog')
+    await within(dlg).findByRole('button', { name: '升级' })
+    writePreview('06-consent-B', PREVIEW_SIZE)
+    expect(existsSync(join(OUT!, '06-consent-B.html'))).toBe(true)
   })
 })

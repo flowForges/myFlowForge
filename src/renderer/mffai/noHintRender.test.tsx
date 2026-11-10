@@ -809,6 +809,35 @@ const ROWS: Row[] = [
       await screen.findByText('就绪')
     },
   },
+  {
+    name: 'consent 08b A: the full review page (head with close, overview tiles, both columns, footer chips and buttons)',
+    mount: async (f) => {
+      f.script({ 'plugins.install.status': { state: 'ready', consent: FULL_CONSENT, consentHash: 'h' } })
+      render(<div className="mffai-plugins"><Staging stagingId="a" onClose={() => {}} onInstalled={() => {}} /></div>)
+      await screen.findByRole('button', { name: '安装并启用' })
+      expect(document.querySelectorAll('.mffai-cpage .mffai-covt')).toHaveLength(4)
+      fireEvent.click(screen.getByLabelText('fs-server api.declared.example'))
+    },
+  },
+  {
+    name: 'consent 08b B: the upgrade modal (head, old/new grid, every section with marks incl. 未变, footer totals)',
+    mount: async (f) => {
+      f.script({
+        'plugins.list': pluginList({ plugins: [listRow('zed-tools')] }),
+        'plugins.get': detailOf({ ...FULL_CONSENT, diff: { ...FULL_CONSENT.diff!, config: { added: [], requiredSensitive: [] } } }),
+        'plugins.mcp.status': { servers: [] },
+        'plugins.upgrade.prepare': { stagingId: 'up1' },
+        'plugins.install.status': { state: 'ready', consent: { ...FULL_CONSENT, diff: { ...FULL_CONSENT.diff!, config: { added: [], requiredSensitive: [] } } }, consentHash: 'h' },
+      })
+      render(<PluginsPage />)
+      fireEvent.click(await screen.findByRole('button', { name: '详情' }))
+      await waitFor(() => expect((screen.getByRole('button', { name: '升级' }) as HTMLButtonElement).disabled).toBe(false))
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: '升级' })) })
+      const dlg = await screen.findByRole('dialog')
+      await within(dlg).findByRole('button', { name: '升级' })
+      expect(within(dlg).getAllByText('未变').length).toBeGreaterThan(0)
+    },
+  },
   ...([
     ['run', {}],
     ['off', { enabled: false, running: false, supervisor: undefined }],
