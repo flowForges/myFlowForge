@@ -96,3 +96,16 @@ describe('DevMode', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: '重启后台' })).toBeInTheDocument())
   })
 })
+
+describe('DevMode 08b', () => {
+  it('+ in the group head focuses the folder field; the trust confirm is unchanged behind it', () => {
+    installFakeForge()
+    render(<DevMode dev={[{ id: 'dev-a', hash: 'hash-aaaa', trustedAt: 1 }]} problems={[]} onChanged={() => {}} />)
+    const head = group().querySelector('.mffai-grouphead') as HTMLElement
+    expect(within(head).getByText('完全访问')).toBeInTheDocument()
+    fireEvent.click(within(head).getByRole('button', { name: '添加开发插件' }))
+    expect(document.activeElement).toBe(screen.getByLabelText('开发插件目录'))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(within(document.querySelector('[data-dev="dev-a"]') as HTMLElement).getByText('dev-a').closest('.mffai-ptext')).not.toBeNull()
+  })
+})

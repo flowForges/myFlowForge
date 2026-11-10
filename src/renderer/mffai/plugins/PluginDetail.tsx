@@ -1,12 +1,16 @@
 // 插件详情(08 §13.3):plugins.get → 授权(同一个编辑器,plugins.grants.set)、配置、服务状态、
 // 升级(ref 可填,走同一个同意页,带 diff)、禁用 / 启用、卸载(确认框带 保留 一行,09 §13)。
 // 启用成功后由页面决定显示 新会话(09 §15:插件视图钉在会话的第一轮,要新开会话才看得到)。
+// 08b:头(标志、id、版本、格式、状态、来源、动作)+ 页签 授权 / 配置 / 服务 N / 内容。页签只是跳转锚点(R22):
+// 各分区和今天一样随详情一起挂着,点页签只 scrollIntoView。
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Grants as GrantsT, PluginDetail as Detail, PluginIdPayload, PluginListResult } from '@mffai/protocol'
 import { call, isUnsupported, retryable } from '../rpc'
 import { useMffaiEvent, useMffaiReset } from '../events'
 import { route } from '../route'
 import { Chip } from '../ui/Chip'
+import { CodeChip } from '../ui/CodeChip'
+import { Icon } from '../shell/icons'
 import { Confirm } from '../ui/Confirm'
 import { PText } from '../ui/PText'
 import { Grants, initialGrants } from './Grants'
@@ -16,6 +20,9 @@ import { Staging } from './Install'
 import { FailChip, useAction } from './action'
 
 type Row = PluginListResult['plugins'][number]
+
+const sourceText = (s: Row['source']) => (s.kind === 'path' ? s.path : `${s.url}@${s.commit}`)
+type Sec = 'grants' | 'settings' | 'servers' | 'content'
 
 export const KEEP_ON_UNINSTALL = '事件日志里已发生的调用记录'
 
@@ -89,17 +96,35 @@ export function PluginDetail({ plugin, showNewSession, onEnabled, onClose }: {
   })
 
   const head = (
-    <div className="mffai-row mffai-crow">
-      <PText text={id} mono />
-      <PText text={plugin.version} mono />
-      <Chip tone={plugin.enabled ? 'ok' : 'muted'}>{plugin.enabled ? '已启用' : '已停用'}</Chip>
-      <button className="set-btn" disabled={enableAct.busy} onClick={() => setEnabled(!plugin.enabled)}>{plugin.enabled ? '禁用' : '启用'}</button>
-      {showNewSession && plugin.enabled && <button className="set-btn mffai-primary" onClick={() => route.set({ page: 'chat', newSession: {} })}>新会话</button>}
-      <FailChip failure={enableAct.failure} />
-      <button className="set-btn" onClick={() => setUninstalling(true)}>卸载</button>
-      <button className="set-btn" onClick={onClose}>关闭</button>
+    <div className="mffai-dhead">
+      <span className="mffai-plogo lg"><Icon name="puzzle" size={18} /></span>
+      <div className="mffai-did">
+        <div className="mffai-dname">
+          <PText text={id} />
+          <PText text={plugin.version} mono />
+          <CodeChip code={plugin.format} />
+          <Chip tone={plugin.enabled ? 'ok' : 'muted'} dot={plugin.enabled}>{plugin.enabled ? '已启用' : '已停用'}</Chip>
+          {plugin.problems.map((c) => <CodeChip key={c} code={c} />)}
+        </div>
+        <div className="mffai-dsrc"><PText text={sourceText(plugin.source)} mono /></div>
+      </div>
+      <div className="mffai-dact">
+        {showNewSession && plugin.enabled && <button className="set-btn mffai-primary" onClick={() => route.set({ page: 'chat', newSession: {} })}><Icon name="chat" size={13} />新会话</button>}
+        <span className="mffai-dup">
+          <input aria-label="升级 ref" placeholder="ref" value={upRef} onChange={(e) => setUpRef(e.target.value)} />
+          <button className="set-btn" disabled={upgradeAct.busy || !detail} onClick={upgrade}><Icon name="up" size={13} />升级</button>
+        </span>
+        <FailChip failure={upgradeAct.failure} />
+        <button className="set-btn" disabled={enableAct.busy} onClick={() => setEnabled(!plugin.enabled)}>{plugin.enabled ? '禁用' : '启用'}</button>
+        <FailChip failure={enableAct.failure} />
+        <button className="set-btn mffai-danger" onClick={() => setUninstalling(true)}><Icon name="trash" size={13} />卸载</button>
+        <button className="mffai-iconbtn" onClick={onClose}><Icon name="x" size={14} /><span className="mffai-sr">关闭</span></button>
+      </div>
     </div>
   )
+  const secs = useRef<Partial<Record<Sec, HTMLElement | null>>>({})
+  const jump = (s: Sec) => secs.current[s]?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  const secRef = (s: Sec) => (el: HTMLElement | null) => { secs.current[s] = el }
 
   if (staging) {
     return (
@@ -111,40 +136,70 @@ export function PluginDetail({ plugin, showNewSession, onEnabled, onClose }: {
     )
   }
 
+  const c = detail?.consent
   return (
     <div className="mffai-group mffai-detail" data-detail={id}>
       {head}
+      <nav className="mffai-tabs mffai-dtabs" aria-label="分区">
+        <button className="set-btn" onClick={() => jump('grants')}>授权</button>
+        <button className="set-btn" onClick={() => jump('settings')}>配置</button>
+        <button className="set-btn" onClick={() => jump('servers')}>服务 <span className="mffai-tabn">{detail?.servers.length ?? 0}</span></button>
+        <button className="set-btn" onClick={() => jump('content')}>内容</button>
+      </nav>
       {loadFailed === 'unsupported' && <Chip tone="bad">不支持</Chip>}
       {loadFailed === 'failed' && <span className="mffai-fail">失败</span>}
-      {detail && draft && (
-        <>
-          <Grants mcp={detail.consent.mcp} value={draft} disabled={grantsAct.busy} onChange={(g) => { dirty.current = true; setDraft(g) }} />
-          {detail.consent.mcp.length > 0 && (
-            <div className="mffai-actions">
-              <button className="set-btn mffai-primary" disabled={grantsAct.busy} onClick={saveGrants}>保存授权</button>
+      <div className="mffai-dbody">
+        <div className="mffai-dcol">
+          <section className="mffai-dsec" data-dsec="grants" ref={secRef('grants')}>
+            <div className="mffai-sech">
+              <span>每个服务的授权</span>
+              <span className="mffai-head-spring" />
               <FailChip failure={grantsAct.failure} />
+              {detail && draft && detail.consent.mcp.length > 0 && (
+                <button className="set-btn mffai-primary" disabled={grantsAct.busy} onClick={saveGrants}>保存授权</button>
+              )}
             </div>
-          )}
-          <Settings id={id} config={detail.consent.config} settings={detail.settings} onChanged={load} />
-          {detail.servers.length > 0 && (
-            <div className="mffai-group" data-section="servers">
-              <div className="mffai-grouphead"><span>服务状态</span></div>
-              {detail.servers.map((s) => (
-                <div key={s.name} className="mffai-row" data-server-state={s.name}>
-                  <PText text={s.name} mono />
-                  <McpStateCell state={s.state} reason={s.reason} />
-                </div>
-              ))}
-              <McpTable plugin={id} />
-            </div>
-          )}
-        </>
-      )}
-      <div className="mffai-row">
-        <span className="mffai-k">ref</span>
-        <input aria-label="升级 ref" value={upRef} onChange={(e) => setUpRef(e.target.value)} />
-        <button className="set-btn" disabled={upgradeAct.busy || !detail} onClick={upgrade}>升级</button>
-        <FailChip failure={upgradeAct.failure} />
+            {detail && draft && (
+              <Grants mcp={detail.consent.mcp} value={draft} disabled={grantsAct.busy} onChange={(g) => { dirty.current = true; setDraft(g) }} />
+            )}
+          </section>
+        </div>
+        <div className="mffai-dcol">
+          <section className="mffai-dsec" data-dsec="settings" ref={secRef('settings')}>
+            <div className="mffai-sech"><span>配置</span></div>
+            {detail && draft && <Settings id={id} config={detail.consent.config} settings={detail.settings} onChanged={load} />}
+          </section>
+          <section className="mffai-dsec" data-dsec="servers" ref={secRef('servers')}>
+            <div className="mffai-sech"><span>服务</span></div>
+            {detail && draft && detail.servers.length > 0 && (
+              <div className="mffai-group mffai-dcard" data-section="servers">
+                {detail.servers.map((s) => (
+                  <div key={s.name} className="mffai-row" data-server-state={s.name}>
+                    <PText text={s.name} mono />
+                    <span className="mffai-head-spring" />
+                    <McpStateCell state={s.state} reason={s.reason} />
+                  </div>
+                ))}
+                <McpTable plugin={id} compact />
+              </div>
+            )}
+          </section>
+          <section className="mffai-dsec" data-dsec="content" ref={secRef('content')}>
+            <div className="mffai-sech"><span>内容</span></div>
+            {c && (
+              <div className="mffai-dcard mffai-dcontent">
+                <div className="mffai-row"><span className="mffai-k">integrity</span><PText text={c.integrity} mono /></div>
+                <div className="mffai-row"><span className="mffai-k">文件</span><span className="mffai-count">{c.files}</span><span className="mffai-k">bytes</span><span className="mffai-count">{c.bytes}</span></div>
+                {c.skills.length > 0 && (
+                  <div className="mffai-row mffai-crow"><span className="mffai-k">技能</span>{c.skills.map((k, i) => <PText key={i} text={k.name} mono />)}</div>
+                )}
+                {c.commands.length > 0 && (
+                  <div className="mffai-row mffai-crow"><span className="mffai-k">命令</span>{c.commands.map((k, i) => <PText key={i} text={k.name} mono />)}</div>
+                )}
+              </div>
+            )}
+          </section>
+        </div>
       </div>
       {uninstalling && (
         <Confirm title="卸载插件" rows={[

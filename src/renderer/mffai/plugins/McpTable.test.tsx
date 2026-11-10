@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { act, render, screen, waitFor, within } from '@testing-library/react'
 import { McpStateCell, McpTable } from './McpTable'
 import { fail, installFakeForge } from '../test/fakeForge'
@@ -79,5 +79,27 @@ describe('McpTable', () => {
     installFakeForge({ calls: { 'plugins.mcp.status': () => fail(-32603, 'x') } })
     render(<McpTable />)
     await screen.findByText('失败')
+  })
+  it('onCounts reports the loaded rows: total, problems (refused, exited with a code, unknown) and the per-state numbers', async () => {
+    const f = installFakeForge({ calls: { 'plugins.mcp.status': { servers: servers as never } } })
+    const onCounts = vi.fn()
+    render(<McpTable onCounts={onCounts} />)
+    await screen.findByText('未启动')
+    await waitFor(() => expect(onCounts).toHaveBeenLastCalledWith({ total: 5, problems: 3, running: 1, exited: 1, refused: 1 }))
+    f.script({ 'plugins.mcp.status': { servers: [{ plugin: 'zed', server: 'a', sessionId: 's1', state: 'running' }, { plugin: 'zed', server: 'n', sessionId: 's1', state: 'needs_config', reason: 'needs_config' }] } })
+    await act(async () => { f.emit(ev('plugins.mcp.status', { plugin: 'zed', server: 'a', state: 'running' }, { sessionId: 's1' })) })
+    await waitFor(() => expect(onCounts).toHaveBeenLastCalledWith({ total: 2, problems: 1, running: 1, exited: 0, refused: 0 }))
+    expect(f.callsOf('plugins.mcp.status')).toHaveLength(2)
+  })
+
+  it('compact: the detail card drops the 插件 column, the other cells stay', async () => {
+    installFakeForge({ calls: { 'plugins.mcp.status': { servers: servers as never } } })
+    render(<McpTable plugin="zed" compact />)
+    await screen.findByText('未启动')
+    expect([...document.querySelectorAll('.mffai-mcp th')].map((t) => t.textContent)).toEqual(['服务', '会话', '状态', 'pid'])
+    expect(row('a').querySelectorAll('td')).toHaveLength(4)
+    expect(within(row('a')).queryByText('zed')).toBeNull()
+    expect(row('d')).toHaveTextContent('4242')
+    expect(row('e')).toBeNull()
   })
 })

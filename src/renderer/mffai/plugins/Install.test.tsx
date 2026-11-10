@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { PluginInstallStatus } from '@mffai/protocol'
 import { Install, Staging } from './Install'
 import { fail, installFakeForge, type FakeForge } from '../test/fakeForge'
@@ -165,5 +165,43 @@ describe('Staging', () => {
     const [a, b] = f.callsOf('plugins.install.confirm') as any[]
     expect(a.enable).toBe(false)
     expect(b.commandId).toBe(a.commandId)
+  })
+})
+
+describe('Install 08b pane', () => {
+  it('添加插件 heading, a close button, 本地路径 / git as a segmented tablist', () => {
+    installFakeForge()
+    const onClose = vi.fn()
+    render(<Install onClose={onClose} onInstalled={() => {}} />)
+    expect(screen.getByRole('heading', { name: '添加插件' })).toBeInTheDocument()
+    const tabs = screen.getByRole('tablist')
+    expect(tabs.classList.contains('mffai-seg')).toBe(true)
+    expect(within(tabs).getByRole('tab', { name: '本地路径' }).getAttribute('aria-selected')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }))
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(findHints()).toEqual([])
+  })
+
+  it('after 读取 the form stays with 读取 disabled and the fetch shows under 获取记录 as a band', async () => {
+    const f = installFakeForge({ calls: { 'plugins.install.prepare': { stagingId: 'st1' }, 'plugins.install.status': { state: 'fetching' } } })
+    render(<Install onClose={() => {}} onInstalled={() => {}} />)
+    fireEvent.change(screen.getByLabelText('路径'), { target: { value: '/src/zed' } })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '读取' })) })
+    await screen.findByText('读取中')
+    expect(screen.getByText('获取记录')).toBeInTheDocument()
+    expect(document.querySelector('.mffai-fetch.run')).toHaveTextContent('读取中')
+    const go = screen.getByRole('button', { name: '读取' }) as HTMLButtonElement
+    expect(go.disabled).toBe(true)
+    fireEvent.click(go)
+    expect(f.callsOf('plugins.install.prepare')).toHaveLength(1)
+  })
+
+  it('a failed fetch is a bad band with its code and the path as PText', async () => {
+    installFakeForge({ calls: { 'plugins.install.status': { state: 'failed', error: 'symlink', path: 'scripts/ssh-config' } } })
+    render(<Staging stagingId="st1" onClose={() => {}} onInstalled={() => {}} />)
+    await screen.findByText('symlink')
+    const band = document.querySelector('.mffai-fetch.bad') as HTMLElement
+    expect(within(band).getByText('symlink').tagName).toBe('CODE')
+    expect(within(band).getByText('scripts/ssh-config').closest('.mffai-ptext')).not.toBeNull()
   })
 })

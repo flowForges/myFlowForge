@@ -7,6 +7,7 @@ import { MCP_SERVER_NAME } from '@mffai/protocol/browser'
 import { PText } from '../ui/PText'
 import { TagInput } from '../perm/TagInput'
 import { CWD_LABEL } from './Consent'
+import { Icon } from '../shell/icons'
 
 type Mcp = PluginConsent['mcp'][number]
 const CWDS: readonly McpCwd[] = ['none', 'read', 'write']
@@ -71,11 +72,11 @@ function ServerGrants({ m, value, onChange, disabled }: {
   const cap = capOf(m)
   return (
     <div className="mffai-cserver" data-grants={m.name}>
-      <div className="mffai-row"><PText text={m.name} mono /></div>
-      <div className="mffai-row mffai-crow">
-        <span className="mffai-k">联网</span>
+      <div className="mffai-row mffai-gname"><Icon name="server" size={13} /><PText text={m.name} mono /></div>
+      <div className="mffai-row mffai-crow mffai-grow">
+        <span className="mffai-gico" title="联网"><Icon name="globe" size={13} /><span className="mffai-sr">联网</span></span>
         {options.map((h) => (
-          <label key={h} className="mffai-check">
+          <label key={h} className="mffai-check mffai-hostchk">
             <input type="checkbox" aria-label={`${m.name} ${h}`} disabled={disabled} checked={checked(h)} onChange={(e) => toggle(h, e.target.checked)} />
             <PText text={h} mono />
           </label>
@@ -86,15 +87,18 @@ function ServerGrants({ m, value, onChange, disabled }: {
             onChange={(next) => onChange({ ...value, network: [...options.filter(checked), ...next] })} />
         )}
       </div>
-      <div className="mffai-row mffai-crow" role="radiogroup" aria-label={`cwd ${m.name}`}>
-        <span className="mffai-k">cwd</span>
-        {CWDS.map((c) => (
-          <label key={c} className="mffai-check">
-            <input type="radio" name={`cwd-${m.name}`} disabled={disabled || RANK[c] > RANK[cap]} checked={value.cwd === c}
-              onChange={() => onChange({ ...value, cwd: c })} />
-            {CWD_LABEL[c]}
-          </label>
-        ))}
+      <div className="mffai-row mffai-crow mffai-grow">
+        <span className="mffai-gico" title="cwd"><Icon name="folder" size={13} /><span className="mffai-sr">cwd</span></span>
+        <span className="mffai-seg sm mffai-gseg" role="radiogroup" aria-label={`cwd ${m.name}`}>
+          {CWDS.map((c) => (
+            <label key={c} className="mffai-check">
+              <input type="radio" name={`cwd-${m.name}`} disabled={disabled || RANK[c] > RANK[cap]} checked={value.cwd === c}
+                onChange={() => onChange({ ...value, cwd: c })} />
+              {CWD_LABEL[c]}
+            </label>
+          ))}
+        </span>
+        <span className="mffai-k mffai-gdir">项目目录</span>
       </div>
     </div>
   )

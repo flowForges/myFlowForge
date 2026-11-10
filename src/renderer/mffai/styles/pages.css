@@ -152,9 +152,131 @@
 .mffai-args, .mffai-symbolic { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .mffai-arg { display: inline-flex; gap: 3px; align-items: center; }
 .mffai-check { display: inline-flex; gap: 4px; align-items: center; }
-.mffai-mcp { border-collapse: collapse; font-size: 12.5px; }
-.mffai-mcp th { color: var(--faint); font-weight: normal; padding: 2px 12px 2px 0; text-align: left; }
-.mffai-mcp td { padding: 3px 12px 3px 0; vertical-align: middle; }
+.mffai-mcp td .mffai-badge + .mffai-badge { margin-left: 6px; }
+.mffai-mcp td:last-child, .mffai-mcp th:last-child { text-align: right; }
+
+/* 插件页 08b:左列(已安装、存储已恢复、全部 MCP、插件行、开发插件)+ 右边一个视图(详情 / 全部 MCP / 添加) */
+.mffai-plugins { flex: 1; flex-direction: row; gap: 0; min-height: 0; margin: -14px -16px; }
+.mffai-pcol { flex: 0 0 290px; display: flex; flex-direction: column; gap: 6px; min-height: 0; padding: 14px 10px; overflow: auto; border-right: 1px solid var(--border); background: var(--mffai-col-bg); }
+.mffai-pcol-head { display: flex; align-items: center; gap: 8px; padding: 0 4px 6px 6px; font-size: 12.5px; color: var(--faint); }
+.mffai-pcol-head .mffai-count { font-size: 11.5px; color: var(--muted); }
+.mffai-pcol-head .set-btn { height: 28px; padding: 0 11px; }
+.mffai-pwarn { display: flex; align-items: center; gap: 8px; padding: 7px 8px 7px 12px; border: 1px solid var(--mffai-warn-line); border-radius: 9px; background: var(--mffai-warn-dim); color: var(--warn); font-size: 12.5px; font-weight: 500; }
+.mffai-pwarn-t { flex: 1; }
+.mffai-pwarn .set-btn { height: 26px; padding: 0 10px; font-size: 12px; }
+.mffai-pprob { flex-wrap: wrap; gap: 6px; padding: 2px 6px; }
+.mffai-pall { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border-radius: 9px; font-size: 13px; color: var(--fg-2); text-align: left; }
+.mffai-pall:hover { background: var(--surface); }
+.mffai-pall.on { background: var(--accent-dim); color: var(--fg); font-weight: 600; }
+.mffai-pall:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.mffai-pall-t { flex: 1; }
+.mffai-pcount { min-width: 18px; padding: 1px 5px; border-radius: 99px; font-family: var(--mono); font-size: 11px; font-weight: 400; text-align: center; color: var(--faint); }
+.mffai-pcount.bad { color: var(--err); background: var(--mffai-err-dim); }
+.mffai-plogo { flex: 0 0 30px; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; color: var(--accent); background: var(--accent-dim); }
+.mffai-plogo.sm { flex-basis: 24px; width: 24px; height: 24px; border-radius: 6px; color: var(--muted); background: var(--surface); }
+.mffai-plogo.lg { flex-basis: 40px; width: 40px; height: 40px; border-radius: 10px; }
+.mffai-plogo.bad { color: var(--err); background: var(--mffai-err-dim); }
+.mffai-plist { display: flex; flex-direction: column; gap: 2px; }
+.mffai-prow.mffai-row { position: relative; align-items: flex-start; gap: 10px; padding: 10px; border-radius: 9px; }
+.mffai-prow:hover { background: var(--surface); }
+.mffai-prow.on { background: var(--accent-dim); }
+.mffai-prow-open { position: absolute; inset: 0; z-index: 0; border-radius: 9px; background: transparent; cursor: pointer; }
+.mffai-prow-open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.mffai-pmain { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.mffai-pname { display: flex; align-items: baseline; gap: 6px; min-width: 0; font-weight: 600; color: var(--fg); }
+.mffai-pname .mffai-ptext.mono { font-size: 11px; font-weight: 400; color: var(--faint); }
+.mffai-pchips { display: flex; flex-wrap: wrap; gap: 4px; }
+.mffai-psrc { display: block; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11px; color: var(--faint); }
+.mffai-psrc .mffai-ptext.mono { white-space: nowrap; font-size: 11px; }
+.mffai-pend { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.mffai-pend .set-btn { height: 24px; padding: 0 8px; font-size: 11.5px; }
+.mffai-pcol .mffai-group[data-section="dev"] { display: flex; flex-direction: column; gap: 2px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+.mffai-pcol .mffai-group[data-section="dev"] > .mffai-grouphead { display: flex; align-items: center; gap: 8px; padding: 0 4px 4px 6px; font-size: 12.5px; color: var(--faint); }
+.mffai-devrow.mffai-row { align-items: center; gap: 10px; padding: 8px 10px; }
+.mffai-devmeta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 11px; color: var(--faint); }
+.mffai-devmeta .mffai-k { width: auto; }
+.mffai-devrow .txt-btn { flex: 0 0 auto; }
+.mffai-devtrust.mffai-row { gap: 6px; padding: 4px 6px; }
+.mffai-devtrust .mffai-pathfield { flex: 1; min-width: 0; max-width: none; }
+.mffai-devtrust .mffai-pathfield input, .mffai-devtrust .set-btn { height: 28px; }
+.mffai-group[data-section="dev"] > [data-dev-result] { gap: 6px; padding: 6px; font-size: 11.5px; }
+.mffai-group[data-section="dev"] > [data-dev-result] > .mffai-k { min-width: 0; width: auto; }
+.mffai-group[data-section="dev"] > .mffai-actions { padding: 4px 6px; }
+
+.mffai-pright { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: auto; }
+.mffai-pview { display: flex; flex-direction: column; gap: 14px; padding: 18px 26px 26px; }
+.mffai-pview[hidden] { display: none; }
+.mffai-pmcp-head { display: flex; align-items: center; gap: 8px; min-height: 30px; }
+.mffai-ptitle { margin: 0 6px 0 0; font-size: 16px; font-weight: 650; color: var(--fg); }
+.mffai-pview[data-view="mcp"] .mffai-group:has(> .mffai-mcp) { padding: 4px 8px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); }
+
+/* 详情:头、锚点页签、两栏 */
+.mffai-dhead { display: flex; align-items: flex-start; gap: 14px; padding-bottom: 14px; }
+.mffai-did { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.mffai-dname { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--fg); }
+.mffai-dname > .mffai-ptext:first-child { font-size: 16px; font-weight: 650; }
+.mffai-dname > .mffai-ptext.mono { color: var(--muted); }
+.mffai-dsrc { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11.5px; color: var(--faint); }
+.mffai-dsrc .mffai-ptext.mono { white-space: nowrap; font-size: 11.5px; }
+.mffai-dact { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; }
+.mffai-dup { display: inline-flex; }
+.mffai-page .mffai-dup input { width: 84px; height: 30px; border-radius: 7px 0 0 7px; border-right: 0; font-family: var(--mono); font-size: 12px; }
+.mffai-page .mffai-dup .set-btn { border-radius: 0 7px 7px 0; }
+.mffai-page .mffai-dact .set-btn.mffai-danger { background: transparent; border-color: transparent; }
+.mffai-page .mffai-dact .set-btn.mffai-danger:hover:not(:disabled) { background: var(--mffai-err-dim); }
+.mffai-dtabs { margin-bottom: 16px; }
+.mffai-tabn { display: inline-grid; place-items: center; min-width: 18px; height: 16px; margin-left: 4px; padding: 0 4px; border-radius: 99px; font-family: var(--mono); font-size: 10.5px; background: var(--mffai-tint); color: var(--fg-2); }
+.mffai-dbody { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 22px; align-items: start; }
+.mffai-dcol { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.mffai-dsec { display: flex; flex-direction: column; gap: 8px; scroll-margin-top: 12px; }
+.mffai-dsec .mffai-grouphead { display: none; }
+.mffai-dcard { display: flex; flex-direction: column; padding: 4px 14px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); }
+.mffai-dcard > .mffai-row { min-height: 40px; border-bottom: 1px solid var(--border); }
+.mffai-dcard > .mffai-row:last-child { border-bottom: none; }
+.mffai-dcard > .mffai-group[data-section="mcp-table"] { margin: 0 -6px; }
+.mffai-dcontent .mffai-k { width: auto; min-width: 56px; }
+.mffai-setrow.mffai-row { gap: 8px; padding: 10px 0; }
+.mffai-setctl { flex: 1 1 100%; display: flex; align-items: center; gap: 6px; }
+.mffai-setctl input { flex: 1; min-width: 90px; }
+.mffai-page .mffai-setrow input { height: 28px; }
+.mffai-page .mffai-setrow .set-btn { height: 26px; padding: 0 9px; }
+.mffai-page .mffai-setrow .set-btn.mffai-danger { background: transparent; border-color: transparent; }
+
+/* 授权:每个服务一块,联网是带勾的域名块,目录是三段 */
+.mffai-dsec .mffai-csec { border-top: 1px solid var(--border); }
+.mffai-gname.mffai-row { gap: 8px; padding: 12px 0 4px; color: var(--fg); }
+.mffai-gname .mffai-ptext { font-weight: 600; }
+.mffai-grow.mffai-row { align-items: center; gap: 6px; padding: 4px 0; }
+.mffai-gico { display: grid; place-items: center; flex: 0 0 22px; color: var(--faint); }
+.mffai-hostchk.mffai-check { gap: 7px; height: 28px; padding: 0 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); font-size: 12px; cursor: pointer; }
+.mffai-hostchk:has(input:checked) { border-color: var(--accent); background: var(--accent-dim); }
+.mffai-hostchk:has(input:disabled) { opacity: .5; cursor: default; }
+.mffai-hostchk input { margin: 0; accent-color: var(--accent); }
+.mffai-gseg { position: relative; }
+.mffai-gseg > .mffai-check { position: relative; display: inline-flex; align-items: center; height: 22px; padding: 0 9px; border-radius: 6px; font-size: 11.5px; font-weight: 500; color: var(--muted); cursor: pointer; }
+.mffai-gseg > .mffai-check:has(input:checked) { background: var(--bg-2); color: var(--fg); box-shadow: 0 0 0 1px var(--border-2); }
+.mffai-gseg > .mffai-check:has(input:disabled) { opacity: .45; cursor: default; }
+.mffai-gseg > .mffai-check:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
+.mffai-gseg input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: inherit; }
+.mffai-crow > .mffai-k.mffai-gdir { min-width: 0; width: auto; font-size: 11.5px; }
+
+/* 添加面板:分段、字段、获取记录的三种带 */
+.mffai-install.mffai-group { display: flex; flex-direction: column; gap: 12px; max-width: 780px; }
+.mffai-iseg { align-self: flex-start; }
+.mffai-iseg > button { height: 28px; }
+.mffai-ifld.mffai-row { gap: 12px; padding: 0; }
+.mffai-ifld > .mffai-k { flex: 0 0 52px; width: 52px; font-size: 12.5px; color: var(--fg-2); }
+.mffai-ifld > .mffai-k + .mffai-k, .mffai-ifld > input + .mffai-k { flex-basis: auto; width: auto; margin-left: 10px; }
+.mffai-ifld > input { flex: 1; font-family: var(--mono); }
+.mffai-ifld > .mffai-pathfield { max-width: none; }
+.mffai-iact.mffai-actions { justify-content: flex-end; align-items: center; }
+.mffai-irec { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.mffai-fetch.mffai-row { gap: 10px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 9px; }
+.mffai-fetch.run { border-color: var(--mffai-acc-line); background: var(--accent-dim); color: var(--accent); }
+.mffai-fetch.bad { border-color: var(--mffai-err-line); background: var(--mffai-err-dim); color: var(--err); }
+.mffai-fetch.ok { border-color: var(--mffai-ok-line); background: var(--mffai-ok-dim); color: var(--ok); }
+.mffai-staging { display: flex; flex-direction: column; gap: 10px; }
+.mffai-staging > .mffai-actions { justify-content: flex-end; }
 
 /* 连接页:模型(账号卡片网格、抽屉)、执行器(表) */
 .mffai-conn-page > .mffai-tabs { flex: 0 0 auto; }

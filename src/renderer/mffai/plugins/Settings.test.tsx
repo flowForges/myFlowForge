@@ -75,3 +75,13 @@ describe('Settings', () => {
     expect(within(row('region')).getByText('不支持')).toBeInTheDocument()
   })
 })
+
+describe('Settings 08b', () => {
+  it('one card, a row per key in order; a sensitive row keeps no value in the DOM', () => {
+    installFakeForge()
+    render(<Settings id="zed-tools" config={FULL_CONSENT.config} settings={settings} onChanged={() => {}} />)
+    const card = document.querySelector('[data-section="settings"] .mffai-dcard') as HTMLElement
+    expect([...card.querySelectorAll('[data-setting]')].map((r) => r.getAttribute('data-setting'))).toEqual(['API_TOKEN', 'region', 'MCP_VAR'])
+    expect((within(row('MCP_VAR')).getByLabelText('MCP_VAR') as HTMLInputElement).value).toBe('')
+  })
+})

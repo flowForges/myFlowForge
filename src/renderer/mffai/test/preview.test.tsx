@@ -26,6 +26,7 @@ import { route } from '../route'
 import { installFakeForge } from './fakeForge'
 import { runRow } from './sessions'
 import type { RunRow } from '@mffai/protocol'
+import { detailOf, FULL_CONSENT, listRow, pluginList } from './plugins'
 import { fireEvent, waitFor, screen } from '@testing-library/react'
 
 const OUT = process.env.MFFAI_PREVIEW_OUT
@@ -361,4 +362,89 @@ describe.skipIf(!OUT)('preview screens', () => {
       } finally { r.uninstall(); vi.unstubAllGlobals() }
     })
   }
+  // 05-plugins:左列 + 详情 / 添加 / 全部 MCP
+  const plugCalls = (extra: Record<string, unknown> = {}) => ({
+    status: { state: 'running', uptimeMs: 1, rssMb: 112, version: '0.8.2', plugins: [{ id: 'a', state: 'active' }, { id: 'b', state: 'active' }, { id: 'my-hooks', state: 'active', trust: 'dev' }, { id: 'd', state: 'failed' }], sandbox: { level: 'full', missing: [], autoDegraded: false } },
+    'session.list': { sessions: [] },
+    'memory.health': { dbBytes: 0, rawRows: 0, noteRows: 0, cursorLag: 0, pendingProposals: 0, problems: [] },
+    'models.catalog': { presets: [], models: { p: [{ id: 'm1', name: 'Claude Sonnet 4.5', context: 1, output: 1, image: false, reasoning: 'none', toolCall: true }] }, default: { accountId: 'a1', modelId: 'm1' } },
+    'models.accounts': { accounts: [{ id: 'a1', presetId: 'p', label: 'Claude', state: 'ok' }], secretsBackend: 'keychain' },
+    'models.quota': { windows: [{ label: '5h', usedPercent: 42 }] },
+    'events.tail': { events: [] },
+    'plugins.list': pluginList({
+      plugins: [
+        listRow('github-tools', { version: '1.4.0', format: 'claude', source: { kind: 'git', url: 'github.com/acme/github-tools', commit: '3f9c2a1' } }),
+        listRow('code-review', { version: '0.9.2', source: { kind: 'path', path: '~/plugins/code-review' } }),
+        listRow('vercel-tools', { version: '2.0.1', state: 'server_failed', problems: ['server_failed'], source: { kind: 'git', url: 'github.com/vt/mcp', commit: 'a1b2c3d' } }),
+        listRow('notes', { version: '0.3.0', enabled: false, source: { kind: 'path', path: '~/plugins/notes' } }),
+      ],
+      dev: [{ id: 'my-hooks.ts', hash: 'sha256:9be1c04', trustedAt: Date.now() - 2 * 86_400_000 }],
+      problems: ['store_recovered'],
+    }),
+    'plugins.mcp.status': { servers: [
+      { plugin: 'github-tools', server: 'github', sessionId: 's1', state: 'running', pid: 48213 },
+      { plugin: 'github-tools', server: 'github', sessionId: 's2', state: 'running', pid: 48877 },
+      { plugin: 'vercel-tools', server: 'deploy', sessionId: 's1', state: 'stopped', reason: 'server_exited' },
+      { plugin: 'vercel-tools', server: 'logs', sessionId: 's3', state: 'refused', reason: 'needs_config' },
+      { plugin: 'code-review', server: 'lint', sessionId: 's5', state: 'stopped' },
+    ] },
+    ...extra,
+  }) as never
+  const plugState = { proxyStale: true, rssMb: 112, pluginsActive: 4, supervisor: { state: 'running', version: '0.8.2', restarts: 0, protocolVersion: 3 } } as never
+  const GH = {
+    ...FULL_CONSENT,
+    id: 'github-tools', version: '1.4.0', format: 'claude' as const,
+    mcp: [
+      { ...FULL_CONSENT.mcp[1], name: 'github', declared: null, fetchesAtRuntime: true, suggestedHosts: ['api.github.com', 'uploads.github.com', 'objects.githubusercontent.com'], problems: [] },
+      { ...FULL_CONSENT.mcp[1], name: 'gh-search', declared: null, suggestedHosts: ['api.github.com', 'codeload.github.com'], problems: [] },
+    ],
+    config: [
+      { key: 'GITHUB_TOKEN', title: 'GitHub token', sensitive: true, required: true, type: 'string' },
+      { key: 'org', title: '默认组织', sensitive: false, required: false, type: 'string' },
+    ],
+  }
+
+  it('05-plugins-1-detail: list column and the github-tools detail', async () => {
+    route.set({ page: 'plugins' })
+    installFakeForge({ state: plugState, calls: plugCalls({
+      'plugins.get': detailOf(GH, {
+        grants: { servers: { github: { network: ['api.github.com'], cwd: 'read' }, 'gh-search': { network: [], cwd: 'none' } } },
+        settings: [{ key: 'GITHUB_TOKEN', set: true, sensitive: true }, { key: 'org', set: true, sensitive: false, value: 'acme' }],
+        servers: [{ name: 'github', state: 'running' }, { name: 'gh-search', state: 'stopped' }],
+      }),
+    }) })
+    render(<MffaiView />)
+    await screen.findByTestId('mffai-page-plugins')
+    await waitFor(() => expect(document.querySelector('[data-plugin="github-tools"]')).not.toBeNull())
+    fireEvent.click(document.querySelector('[data-plugin="github-tools"] .mffai-prow-open')!)
+    await screen.findByRole('button', { name: '保存授权' })
+    await waitFor(() => expect(document.querySelector('[data-dsec="servers"] [data-mcp-row]')).not.toBeNull())
+    writePreview('05-plugins-1-detail', PREVIEW_SIZE)
+    expect(existsSync(join(OUT!, '05-plugins-1-detail.html'))).toBe(true)
+  })
+
+  it('05-plugins-2-install: the add pane with a git source and a fetch in progress', async () => {
+    route.set({ page: 'plugins' })
+    installFakeForge({ state: plugState, calls: plugCalls({ 'plugins.install.prepare': { stagingId: 'st1' }, 'plugins.install.status': { state: 'failed', error: 'symlink', path: 'scripts/ssh-config' } }) })
+    render(<MffaiView />)
+    await screen.findByTestId('mffai-page-plugins')
+    fireEvent.click(await screen.findByRole('button', { name: '添加' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'git' }))
+    fireEvent.change(screen.getByLabelText('地址'), { target: { value: 'https://github.com/acme/github-tools' } })
+    fireEvent.change(screen.getByLabelText('ref'), { target: { value: 'v1.5.0' } })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '读取' })) })
+    await screen.findByText('symlink')
+    writePreview('05-plugins-2-install', PREVIEW_SIZE)
+    expect(existsSync(join(OUT!, '05-plugins-2-install.html'))).toBe(true)
+  })
+
+  it('05-plugins-3-mcp: the all-MCP view', async () => {
+    route.set({ page: 'plugins' })
+    installFakeForge({ state: plugState, calls: plugCalls() })
+    render(<MffaiView />)
+    await screen.findByTestId('mffai-page-plugins')
+    await screen.findByText('1 已退出')
+    writePreview('05-plugins-3-mcp', PREVIEW_SIZE)
+    expect(existsSync(join(OUT!, '05-plugins-3-mcp.html'))).toBe(true)
+  })
 })

@@ -1,6 +1,7 @@
 // MCP 服务状态(08 §13.4):plugins.mcp.status(不带 sessionId)的总表,可按插件筛。
 // refused → 未启动 + 代码(从没起来,因为 X);stopped 带代码 → 已退出 + 代码(跑过、死于 X);
 // stopped 没代码 → 已停止(我们自己停的)。别的状态走 labels.ts,不认识的原样显示。事件到了重取。
+// 08b:compact = 详情里的服务卡,不要 插件 列;onCounts 把已取到的行的数字报给左列(R23,不多调一次)。
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WorkerResult } from '@mffai/protocol'
 import { call, isUnsupported } from '../rpc'
@@ -29,7 +30,29 @@ export function McpStateCell({ state, reason }: { state: string; reason?: string
   return <><Chip tone={tone}>{text}</Chip>{reason && <CodeChip code={reason} />}</>
 }
 
-export function McpTable({ plugin }: { plugin?: string }) {
+export interface McpCounts { total: number; problems: number; running: number; exited: number; refused: number }
+
+/** 有问题的:没起来(refused)、带代码退出的、需要什么才能起的、不认识的状态 */
+const FINE = new Set(['running', 'starting', 'stopping', 'disabled'])
+const isProblem = (r: Row) => !FINE.has(r.state) && !(r.state === 'stopped' && !r.reason)
+
+export function mcpCounts(rows: readonly Row[]): McpCounts {
+  return {
+    total: rows.length,
+    problems: rows.filter(isProblem).length,
+    running: rows.filter((r) => r.state === 'running').length,
+    exited: rows.filter((r) => r.state === 'stopped' && !!r.reason).length,
+    refused: rows.filter((r) => r.state === 'refused').length,
+  }
+}
+
+export function McpTable({ plugin, compact, onCounts }: {
+  plugin?: string
+  /** 详情的服务卡:行里不要 插件 列 */
+  compact?: boolean
+  /** 从已经取到的行算出来 */
+  onCounts?: (c: McpCounts) => void
+}) {
   const [rows, setRows] = useState<Row[] | null>(null)
   const [failed, setFailed] = useState<'unsupported' | 'failed' | null>(null)
   const alive = useRef(true)
@@ -46,6 +69,11 @@ export function McpTable({ plugin }: { plugin?: string }) {
   useEffect(load, [load])
   useMffaiEvent({ types: ['plugins.mcp.status', 'plugins.disabled', 'plugins.uninstalled', 'plugins.upgraded'] }, load)
   useMffaiReset(load)
+  const countsRef = useRef(onCounts)
+  countsRef.current = onCounts
+  useEffect(() => {
+    if (rows) countsRef.current?.(mcpCounts(rows.filter((r) => plugin === undefined || r.plugin === plugin)))
+  }, [rows, plugin])
 
   if (failed === 'unsupported') return <div className="mffai-group" data-section="mcp-table"><Chip tone="bad">不支持</Chip></div>
   const shown = (rows ?? []).filter((r) => plugin === undefined || r.plugin === plugin)
@@ -53,12 +81,12 @@ export function McpTable({ plugin }: { plugin?: string }) {
     <div className="mffai-group" data-section="mcp-table">
       {failed === 'failed' && <span className="mffai-fail">失败</span>}
       {shown.length > 0 && (
-        <table className="mffai-mcp">
-          <thead><tr><th>插件</th><th>服务</th><th>会话</th><th>状态</th><th>pid</th></tr></thead>
+        <table className={`mffai-tbl mffai-mcp${compact ? ' compact' : ''}`}>
+          <thead><tr>{!compact && <th>插件</th>}<th>服务</th><th>会话</th><th>状态</th><th>pid</th></tr></thead>
           <tbody>
             {shown.map((r) => (
               <tr key={`${r.plugin}/${r.sessionId}/${r.server}`} data-mcp-row={`${r.plugin}/${r.sessionId}/${r.server}`}>
-                <td><PText text={r.plugin} mono /></td>
+                {!compact && <td><PText text={r.plugin} mono /></td>}
                 <td><PText text={r.server} mono /></td>
                 <td><span className="mffai-path">{r.sessionId}</span></td>
                 <td><McpStateCell state={r.state} reason={r.reason} /></td>

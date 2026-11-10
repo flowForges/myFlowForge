@@ -151,3 +151,52 @@ describe('PluginDetail', () => {
     await screen.findByText('不支持')
   })
 })
+
+describe('PluginDetail 08b', () => {
+  it('the tab bar jumps to sections: scrollIntoView on the section, every section stays mounted', async () => {
+    installFakeForge({ calls: { 'plugins.get': DETAIL, 'plugins.mcp.status': { servers: [] } } })
+    const spy = vi.fn()
+    const orig = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = spy
+    try {
+      mount()
+      await screen.findByText('未启动')
+      const nav = screen.getByRole('navigation', { name: '分区' })
+      expect([...nav.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['授权', '配置', '服务 2', '内容'])
+      for (const [name, sec] of [[/^授权/, 'grants'], [/^配置/, 'settings'], [/^服务/, 'servers'], [/^内容/, 'content']] as const) {
+        fireEvent.click(within(nav).getByRole('button', { name }))
+        expect(spy.mock.contexts.at(-1)).toBe(document.querySelector(`[data-dsec="${sec}"]`))
+        for (const s of ['grants', 'settings', 'servers', 'content']) expect(document.querySelector(`[data-dsec="${s}"]`), s).not.toBeNull()
+        for (const s of ['grants', 'settings', 'servers']) expect(document.querySelector(`[data-section="${s}"]`), s).not.toBeNull()
+      }
+      expect(spy).toHaveBeenCalledTimes(4)
+    } finally { Element.prototype.scrollIntoView = orig }
+  })
+
+  it('head: id, version and source as PText, the format code, the state; 内容 lists integrity, skills and commands as PText', async () => {
+    installFakeForge({ calls: { 'plugins.get': DETAIL, 'plugins.mcp.status': { servers: [] } } })
+    mount()
+    await screen.findByText('未启动')
+    const head = document.querySelector('.mffai-dhead') as HTMLElement
+    for (const t of ['zed-tools', '1.2.0', '/src/zed-tools']) expect(within(head).getByText(t).closest('.mffai-ptext'), t).not.toBeNull()
+    expect(within(head).getByText('native').tagName).toBe('CODE')
+    expect(within(head).getByText('已启用')).toBeInTheDocument()
+    for (const b of ['升级', '禁用', '卸载']) expect(within(head).getByRole('button', { name: b })).toBeInTheDocument()
+    const content = document.querySelector('[data-dsec="content"]') as HTMLElement
+    for (const t of ['sha256-INTEGRITY0123', 'skill-alpha', 'cmd-beta']) {
+      const el = within(content).getByText(t)
+      expect(el.closest('.mffai-ptext'), t).not.toBeNull()
+      expect(el.closest('button, a, .mffai-chip'), t).toBeNull()
+    }
+    expect(content).toHaveTextContent('37')
+  })
+
+  it('the 服务 card shows the per-session table without the 插件 column', async () => {
+    installFakeForge({ calls: { 'plugins.get': DETAIL, 'plugins.mcp.status': { servers: [{ plugin: 'zed-tools', server: 'fs-server', sessionId: 's1', state: 'running', pid: 7 }] } } })
+    mount()
+    await screen.findByText('未启动')
+    const card = document.querySelector('[data-dsec="servers"]') as HTMLElement
+    await waitFor(() => expect(card.querySelector('[data-mcp-row="zed-tools/s1/fs-server"]')).not.toBeNull())
+    expect([...card.querySelectorAll('.mffai-mcp th')].map((t) => t.textContent)).toEqual(['服务', '会话', '状态', 'pid'])
+  })
+})

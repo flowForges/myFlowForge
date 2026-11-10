@@ -2,6 +2,8 @@
 // Staging(安装和升级共用):听 plugins.install.state、fetching 时每秒轮询 install.status;failed 显示代码和违规的相对路径;
 // ready → 同意页 + 授权 + 安装 / 安装并启用 / 取消。确认带 consentHash 和每个服务的授权。
 // 没确认就离开(取消、关掉、换页)时取消暂存:暂存同时最多 3 个,留着会挡住下一次安装。
+// 08b:添加面板 = 头(添加插件 + 关闭)、本地路径 / git 分段、字段、读取;读取之后表单留着(读取不可再点),
+// 暂存在 获取记录 下面是一条带:读取中 / 失败(代码 + 路径)/ 就绪(同意页和授权跟在后面,同意页是 Task 10)。
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Grants as GrantsT, PluginInstallStatus, PluginSourceParam, PluginsInstallStatePayload } from '@mffai/protocol'
 import { call, retryable } from '../rpc'
@@ -10,6 +12,7 @@ import { Chip } from '../ui/Chip'
 import { CodeChip } from '../ui/CodeChip'
 import { PathField } from '../ui/PathField'
 import { PText } from '../ui/PText'
+import { Icon } from '../shell/icons'
 import { Consent } from './Consent'
 import { Grants, initialGrants, upgradeGrants } from './Grants'
 import { FailChip, failureOf, useAction, type Failure } from './action'
@@ -88,10 +91,11 @@ export function Staging({ stagingId, current, onClose, onInstalled }: {
   const ready = st?.state === 'ready' && st.consent && st.consentHash && grants
   return (
     <div className="mffai-staging" data-staging={stagingId}>
-      {fetching && !statusFailure && <div className="mffai-row"><Chip tone="warn">读取中</Chip></div>}
-      {statusFailure && <div className="mffai-row"><FailChip failure={statusFailure} /></div>}
+      {fetching && !statusFailure && <div className="mffai-row mffai-fetch run"><span className="mffai-spin" /><Chip tone="warn">读取中</Chip></div>}
+      {statusFailure && <div className="mffai-row mffai-fetch bad"><Icon name="alert" size={14} /><FailChip failure={statusFailure} /></div>}
       {st?.state === 'failed' && (
-        <div className="mffai-row">
+        <div className="mffai-row mffai-fetch bad">
+          <Icon name="alert" size={14} />
           <Chip tone="bad">读取失败</Chip>
           {st.error && <CodeChip code={st.error} />}
           {st.path && <PText text={st.path} mono />}
@@ -99,6 +103,7 @@ export function Staging({ stagingId, current, onClose, onInstalled }: {
       )}
       {ready && (
         <>
+          <div className="mffai-row mffai-fetch ok"><Icon name="check" size={14} /><Chip tone="ok">就绪</Chip></div>
           <Consent consent={st.consent!} />
           <Grants mcp={st.consent!.mcp} value={grants} onChange={setGrants} disabled={busy} />
         </>
@@ -136,28 +141,39 @@ export function Install({ onClose, onInstalled }: { onClose: () => void; onInsta
     if (alive.current) setStagingId(r.stagingId)
   })
 
-  if (stagingId) return <Staging stagingId={stagingId} onClose={onClose} onInstalled={onInstalled} />
   return (
     <div className="mffai-group mffai-install">
-      <div className="mffai-tabs" role="tablist">
-        {([['path', '本地路径'], ['git', 'git']] as const).map(([id, name]) => (
-          <button key={id} role="tab" aria-selected={tab === id} className={`set-btn${tab === id ? ' active' : ''}`} onClick={() => setTab(id)}>{name}</button>
+      <div className="mffai-pmcp-head">
+        <h2 className="mffai-ptitle">添加插件</h2>
+        <span className="mffai-head-spring" />
+        <button className="mffai-iconbtn" onClick={onClose}><Icon name="x" size={14} /><span className="mffai-sr">关闭</span></button>
+      </div>
+      <div className="mffai-seg mffai-iseg" role="tablist">
+        {([['path', '本地路径', 'folder'], ['git', 'git', 'branch']] as const).map(([id, name, icon]) => (
+          <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'on' : ''} onClick={() => setTab(id)}><Icon name={icon} size={13} />{name}</button>
         ))}
       </div>
       {tab === 'path'
-        ? <div className="mffai-row"><PathField kind="directory" label="路径" value={path} onChange={setPath} /></div>
+        ? <div className="mffai-row mffai-ifld"><span className="mffai-k">路径</span><PathField kind="directory" label="路径" value={path} onChange={setPath} /></div>
         : (
           <>
-            <div className="mffai-row"><span className="mffai-k">地址</span><input aria-label="地址" value={url} onChange={(e) => setUrl(e.target.value)} /></div>
-            <div className="mffai-row"><span className="mffai-k">ref</span><input aria-label="ref" value={ref} onChange={(e) => setRef(e.target.value)} /></div>
-            <div className="mffai-row"><span className="mffai-k">子目录</span><input aria-label="子目录" value={subpath} onChange={(e) => setSubpath(e.target.value)} /></div>
+            <div className="mffai-row mffai-ifld"><span className="mffai-k">地址</span><input aria-label="地址" value={url} onChange={(e) => setUrl(e.target.value)} /></div>
+            <div className="mffai-row mffai-ifld">
+              <span className="mffai-k">ref</span><input aria-label="ref" value={ref} onChange={(e) => setRef(e.target.value)} />
+              <span className="mffai-k">子目录</span><input aria-label="子目录" value={subpath} onChange={(e) => setSubpath(e.target.value)} />
+            </div>
           </>
         )}
-      <div className="mffai-actions">
-        <button className="set-btn mffai-primary" disabled={busy || !source()} onClick={prepare}>读取</button>
-        <button className="set-btn" onClick={onClose}>取消</button>
+      <div className="mffai-actions mffai-iact">
         <FailChip failure={failure} />
+        <button className="set-btn mffai-primary" disabled={busy || !source() || stagingId !== null} onClick={prepare}><Icon name="dl" size={13} />读取</button>
       </div>
+      {stagingId && (
+        <div className="mffai-irec">
+          <div className="mffai-sech"><span>获取记录</span></div>
+          <Staging stagingId={stagingId} onClose={onClose} onInstalled={onInstalled} />
+        </div>
+      )}
     </div>
   )
 }

@@ -31,7 +31,7 @@ function SettingRow({ id, s, c, onChanged }: { id: string; s: Setting; c?: Confi
   })
 
   return (
-    <div className="mffai-row mffai-crow" data-setting={s.key}>
+    <div className="mffai-row mffai-crow mffai-setrow" data-setting={s.key}>
       <PText text={s.key} mono />
       {c && <PText text={c.title} />}
       {s.sensitive && <Chip tone="warn">敏感</Chip>}
@@ -40,11 +40,13 @@ function SettingRow({ id, s, c, onChanged }: { id: string; s: Setting; c?: Confi
       {s.sensitive
         ? <Chip tone={s.set ? 'ok' : 'muted'}>{s.set ? '已设置' : '未设置'}</Chip>
         : s.value !== undefined && <PText text={s.value} mono />}
-      <input ref={input} type={s.sensitive ? 'password' : 'text'} aria-label={s.key} autoComplete="off" spellCheck={false}
-        onChange={(e) => setHasText(e.target.value.length > 0)} />
-      <button className="set-btn" disabled={busy || !hasText} onClick={save}>保存</button>
-      {s.set && <button className="set-btn" disabled={busy} onClick={clear}>清除</button>}
-      <FailChip failure={failure} />
+      <span className="mffai-setctl">
+        <input ref={input} type={s.sensitive ? 'password' : 'text'} aria-label={s.key} autoComplete="off" spellCheck={false}
+          onChange={(e) => setHasText(e.target.value.length > 0)} />
+        <button className="set-btn" disabled={busy || !hasText} onClick={save}>保存</button>
+        {s.set && <button className="set-btn mffai-danger" disabled={busy} onClick={clear}>清除</button>}
+        <FailChip failure={failure} />
+      </span>
     </div>
   )
 }
@@ -59,7 +61,9 @@ export function Settings({ id, config, settings, onChanged }: {
   return (
     <div className="mffai-group" data-section="settings">
       <div className="mffai-grouphead"><span>配置</span></div>
-      {settings.map((s) => <SettingRow key={s.key} id={id} s={s} c={config.find((c) => c.key === s.key)} onChanged={onChanged} />)}
+      <div className="mffai-dcard">
+        {settings.map((s) => <SettingRow key={s.key} id={id} s={s} c={config.find((c) => c.key === s.key)} onChanged={onChanged} />)}
+      </div>
     </div>
   )
 }

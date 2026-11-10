@@ -10,6 +10,7 @@ import { Confirm } from '../ui/Confirm'
 import { PathField } from '../ui/PathField'
 import { PText } from '../ui/PText'
 import { FailChip, useAction } from './action'
+import { Icon } from '../shell/icons'
 
 type Dev = PluginListResult['dev'][number]
 type TrustResult = WorkerResult<'plugins.dev.trust'>
@@ -56,13 +57,18 @@ function DevRow({ d, onRemoved }: { d: Dev; onRemoved: () => void }) {
     onRemoved()
   })
   return (
-    <div className="mffai-row mffai-crow" data-dev={d.id}>
-      <PText text={d.id} mono />
-      <span className="mffai-k">hash</span>
-      <PText text={d.hash} mono />
-      <time dateTime={new Date(d.trustedAt).toISOString()}>{new Date(d.trustedAt).toLocaleString()}</time>
-      <button className="set-btn" disabled={busy} onClick={remove}>移除</button>
-      <FailChip failure={failure} />
+    <div className="mffai-row mffai-devrow" data-dev={d.id}>
+      <span className="mffai-plogo bad"><Icon name="code" size={14} /></span>
+      <span className="mffai-pmain">
+        <PText text={d.id} mono />
+        <span className="mffai-devmeta">
+          <span className="mffai-k">hash</span>
+          <PText text={d.hash} mono />
+          <time dateTime={new Date(d.trustedAt).toISOString()}>{new Date(d.trustedAt).toLocaleString()}</time>
+        </span>
+        <FailChip failure={failure} />
+      </span>
+      <button className="txt-btn" disabled={busy} onClick={remove}>移除</button>
     </div>
   )
 }
@@ -73,6 +79,7 @@ export function DevMode({ dev, problems, onChanged }: { dev: readonly Dev[]; pro
   const [result, setResult] = useState<TrustResult | null>(null)
   const [needsRestart, setNeedsRestart] = useState(false)
   const { run, busy, failure, setFailure, alive } = useAction()
+  const field = useRef<HTMLDivElement>(null)
 
   const trust = (p: string) => void run('plugins.dev.trust', async () => {
     const r = await call('plugins.dev.trust', { path: p, acknowledge: ACKNOWLEDGE })
@@ -87,13 +94,15 @@ export function DevMode({ dev, problems, onChanged }: { dev: readonly Dev[]; pro
     <div className="mffai-group" data-section="dev">
       <div className="mffai-grouphead">
         <span>开发插件</span>
-        <span className="mffai-row">
-          <Chip tone="bad">完全访问</Chip>
-          {problems.includes('dev_crashed') && <Chip tone="warn">已跳过</Chip>}
-        </span>
+        <Chip tone="bad">完全访问</Chip>
+        {problems.includes('dev_crashed') && <Chip tone="warn">已跳过</Chip>}
+        <span className="mffai-head-spring" />
+        <button className="mffai-iconbtn" onClick={() => field.current?.querySelector('input')?.focus()}>
+          <Icon name="plus" size={14} /><span className="mffai-sr">添加开发插件</span>
+        </button>
       </div>
       {dev.map((d) => <DevRow key={d.id} d={d} onRemoved={() => { setNeedsRestart(true); onChanged() }} />)}
-      <div className="mffai-row">
+      <div className="mffai-row mffai-devtrust" ref={field}>
         <PathField kind="directory" label="开发插件目录" value={path} onChange={setPath} />
         <button className="set-btn" disabled={!basename(path.trim())} onClick={() => { setFailure(null); setConfirming(path.trim()) }}>信任</button>
       </div>

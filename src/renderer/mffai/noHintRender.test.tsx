@@ -727,6 +727,88 @@ const ROWS: Row[] = [
       await screen.findByRole('dialog')
     },
   },
+  {
+    name: 'plugins 08b: list column (已安装 N, store_recovered bar, other codes, 全部 MCP counts, rows with chips and switches, dev group with +)',
+    mount: async (f) => {
+      f.script({
+        'plugins.list': pluginList({
+          plugins: [listRow('zed-tools'), listRow('broken', { enabled: false, state: 'integrity_failed', problems: ['integrity_failed'] })],
+          dev: [{ id: 'dev-a', hash: 'h', trustedAt: 1 }],
+          problems: ['store_recovered', 'store_odd'],
+        }),
+        'plugins.mcp.status': { servers: [
+          { plugin: 'zed-tools', server: 'a', sessionId: 's1', state: 'running', pid: 1 },
+          { plugin: 'zed-tools', server: 'b', sessionId: 's1', state: 'refused', reason: 'cwd_too_broad' },
+        ] },
+      })
+      render(<PluginsPage />)
+      await waitFor(() => expect(document.querySelector('.mffai-pall .mffai-pcount.bad')).not.toBeNull())
+      expect(document.querySelector('.mffai-pwarn')).not.toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: '添加开发插件' }))
+    },
+  },
+  {
+    name: 'plugins 08b: the all-MCP view with its header chips',
+    mount: async (f) => {
+      f.script({
+        'plugins.list': pluginList({ plugins: [listRow('zed-tools')] }),
+        'plugins.mcp.status': { servers: [
+          { plugin: 'zed-tools', server: 'a', sessionId: 's1', state: 'running', pid: 1 },
+          { plugin: 'zed-tools', server: 'b', sessionId: 's1', state: 'stopped', reason: 'server_exited' },
+          { plugin: 'zed-tools', server: 'c', sessionId: 's1', state: 'refused', reason: 'needs_config' },
+          { plugin: 'zed-tools', server: 'd', sessionId: 's1', state: 'stopped' },
+        ] },
+      })
+      render(<PluginsPage />)
+      await screen.findByText('1 已退出')
+      expect(document.querySelector('[data-view="mcp"]')!.hasAttribute('hidden')).toBe(false)
+    },
+  },
+  {
+    name: 'plugins 08b: detail head, the anchor tab bar, grants with host chips and the cwd seg, settings card, services card, 内容',
+    mount: async (f) => {
+      f.script({
+        'plugins.list': pluginList({ plugins: [listRow('zed-tools', { problems: ['odd_problem'] })] }),
+        'plugins.get': detailOf(FULL_CONSENT, {
+          settings: [{ key: 'API_TOKEN', set: true, sensitive: true }, { key: 'region', set: true, sensitive: false, value: 'eu' }],
+          servers: [{ name: 'fs-server', state: 'running' }, { name: 'net-server', state: 'refused', reason: 'cwd_too_broad' }],
+        }),
+        'plugins.mcp.status': { servers: [{ plugin: 'zed-tools', server: 'fs-server', sessionId: 's1', state: 'running', pid: 7 }] },
+        'plugins.grants.set': () => fail(-32602, 'grants_exceed_declared'),
+      })
+      render(<PluginsPage />)
+      fireEvent.click(await screen.findByRole('button', { name: '详情' }))
+      await screen.findByRole('navigation', { name: '分区' })
+      await waitFor(() => expect(document.querySelector('[data-dsec="servers"] [data-mcp-row]')).not.toBeNull())
+      fireEvent.click(screen.getByLabelText('net-server pypi.org'))
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: '保存授权' })) })
+      await screen.findByText('grants_exceed_declared')
+    },
+  },
+  {
+    name: 'plugins 08b: the add pane (git seg, fields) with a fetch record in each band (fetching, failed, ready)',
+    mount: async (f) => {
+      let n = 0
+      f.script({
+        'plugins.list': pluginList(),
+        'plugins.mcp.status': { servers: [] },
+        'plugins.install.prepare': () => ({ stagingId: `st${++n}` }),
+        'plugins.install.status': { state: 'fetching' },
+      })
+      render(<PluginsPage />)
+      fireEvent.click(await screen.findByRole('button', { name: '添加' }))
+      fireEvent.click(screen.getByRole('tab', { name: 'git' }))
+      fireEvent.change(screen.getByLabelText('地址'), { target: { value: 'https://x/y.git' } })
+      fireEvent.change(screen.getByLabelText('ref'), { target: { value: 'v1' } })
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: '读取' })) })
+      await screen.findByText('读取中')
+      expect(findHints()).toEqual([])
+      f.script({ 'plugins.install.status': (p: { stagingId: string }) => (p.stagingId === 'a' ? { state: 'failed', error: 'symlink', path: 'scripts/x' } : { state: 'ready', consent: FULL_CONSENT, consentHash: 'h' }) })
+      render(<div className="mffai-irec"><Staging stagingId="a" onClose={() => {}} onInstalled={() => {}} /><Staging stagingId="b" onClose={() => {}} onInstalled={() => {}} /></div>)
+      await screen.findByText('symlink')
+      await screen.findByText('就绪')
+    },
+  },
   ...([
     ['run', {}],
     ['off', { enabled: false, running: false, supervisor: undefined }],

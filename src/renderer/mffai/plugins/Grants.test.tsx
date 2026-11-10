@@ -136,3 +136,18 @@ describe('Grants', () => {
     expect(within(box('fs-server')).getByText('fs-server').closest('.mffai-ptext')).not.toBeNull()
   })
 })
+
+describe('Grants 08b', () => {
+  it('hosts are checkbox chips (none checked); 项目目录 is a three-way radiogroup seg', () => {
+    render(<Harness onChange={() => {}} />)
+    const fs = box('fs-server')
+    const chips = [...fs.querySelectorAll('label.mffai-hostchk')]
+    expect(chips).toHaveLength(2)
+    expect(chips.every((c) => !(c.querySelector('input[type=checkbox]') as HTMLInputElement).checked)).toBe(true)
+    const seg = within(fs).getByRole('radiogroup', { name: 'cwd fs-server' })
+    expect(seg.classList.contains('mffai-gseg')).toBe(true)
+    expect([...seg.querySelectorAll('label')].map((l) => l.textContent)).toEqual(['不给', '只读', '读写'])
+    expect(within(fs).getByText('项目目录')).toBeInTheDocument()
+    expect(findHints()).toEqual([])
+  })
+})
