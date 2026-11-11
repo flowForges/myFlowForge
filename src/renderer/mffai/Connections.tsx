@@ -31,6 +31,9 @@ function Relogin() {
 export function Connections() {
   const { catalog, accounts, backend, reload } = useModels()
   const [drawer, setDrawer] = useState(false)
+  // 添加在路上:抽屉不能关(Esc、遮罩、×、取消),调用结束时由 onDone 关;失败则留着
+  const adding = useRef(false)
+  const closeDrawer = () => { if (!adding.current) setDrawer(false) }
   const needsLogin = accounts.some((a) => a.state === 'needs_login' && catalog?.presets.find((p) => p.id === a.presetId)?.auth === 'chatgpt-oauth')
   const presets = catalog?.presets ?? []
   return (
@@ -55,8 +58,8 @@ export function Connections() {
           )
         })}
       </div>
-      <AddAccountDrawer open={drawer} onClose={() => setDrawer(false)}>
-        <AddAccount presets={presets} onDone={() => { setDrawer(false); reload() }} onClose={() => setDrawer(false)} />
+      <AddAccountDrawer open={drawer} onClose={closeDrawer}>
+        <AddAccount presets={presets} onDone={() => { setDrawer(false); reload() }} onClose={closeDrawer} onBusy={(b) => { adding.current = b }} />
       </AddAccountDrawer>
     </div>
   )

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { ChatgptEndedPayload, PresetView } from '@mffai/protocol'
 
 /** 添加账号表单;受限套餐先确认,key 提交后立即清空。onClose 给了就是装在抽屉里:一开始就展开,关掉(取消、添加成功)通知抽屉 */
-export function AddAccount({ presets, onDone, onClose }: { presets: PresetView[]; onDone: () => void; onClose?: () => void }) {
+export function AddAccount({ presets, onDone, onClose, onBusy }: { presets: PresetView[]; onDone: () => void; onClose?: () => void; onBusy?: (busy: boolean) => void }) {
   const [open, setOpen] = useState(onClose !== undefined)
   const [presetId, setPresetId] = useState('')
   const [apiKey, setApiKey] = useState('')
@@ -62,7 +62,8 @@ export function AddAccount({ presets, onDone, onClose }: { presets: PresetView[]
     setConfirming(false)
     setFailed(false)
     setBusy(true)
-    void api.models.addAccount(input).then(() => { close(); onDone() }).catch(fail).finally(() => setBusy(false))
+    onBusy?.(true)
+    void api.models.addAccount(input).then(() => { close(); onDone() }).catch(fail).finally(() => { setBusy(false); onBusy?.(false) })
   }
   const login = () => {
     setFailed(false)

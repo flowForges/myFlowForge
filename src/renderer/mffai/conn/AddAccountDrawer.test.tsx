@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { AddAccountDrawer } from './AddAccountDrawer'
@@ -186,6 +186,27 @@ describe('the drawer on the 模型 tab', () => {
     const dump = (s: Storage) => Object.keys(s).map((k) => s.getItem(k)).join('')
     expect(dump(localStorage)).not.toContain(secret)
     expect(dump(sessionStorage)).not.toContain(secret)
+  })
+
+  it('while addAccount is in flight Esc, the dim, × and 取消 do not close; a second add is not sent; it closes when the call finishes', async () => {
+    connections()
+    let done!: () => void
+    f.mffai.models.addAccount.mockImplementation(() => new Promise((res) => { done = () => res({} as never) }))
+    await open()
+    fireEvent.change(document.querySelector('input[type=password]')!, { target: { value: 'sk-pending' } })
+    fireEvent.click(screen.getByRole('button', { name: '添加' }))
+    await waitFor(() => expect(f.mffai.models.addAccount).toHaveBeenCalledTimes(1))
+    fireEvent.keyDown(document, { key: 'Escape' })
+    fireEvent.click(document.querySelector('.mffai-drawer-dim')!)
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }))
+    fireEvent.click(screen.getByRole('button', { name: '取消' }))
+    expect(document.querySelector('aside.mffai-drawer')).not.toBeNull()
+    fireEvent.change(document.querySelector('input[type=password]')!, { target: { value: 'sk-second' } })
+    fireEvent.click(screen.getByRole('button', { name: '添加' }))
+    expect(f.mffai.models.addAccount).toHaveBeenCalledTimes(1)
+    await act(async () => { done() })
+    await waitFor(() => expect(document.querySelector('aside.mffai-drawer')).toBeNull())
+    expect(f.mffai.models.addAccount).toHaveBeenCalledTimes(1)
   })
 
   it('closing the drawer on a pending ChatGPT login cancels the flow', async () => {
