@@ -21,6 +21,7 @@ import { useRunActions, useWorktreeActions } from '../actions'
 import { Icon } from '../shell/icons'
 import { HeaderExtra } from '../shell/headerSlot'
 import { execTint } from '../ui/tint'
+import { fmtDuration } from './duration'
 
 const REFRESH_MS = 300
 /** harness/src/lib/git/worktree.ts MAX_WORKTREES:委派 worktree 和 IM worktree 各自一个根下的上限 */
@@ -31,7 +32,6 @@ const RUN_TRIGGERS: readonly EventType[] = [
   'executor.worktree.merged', 'channel.worktree.merged',
 ]
 
-const fmtMs = (ms: number) => (ms < 1000 ? `${ms} ms` : ms < 60_000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.floor(ms / 60_000)} min ${Math.round((ms % 60_000) / 1000)} s`)
 const fmtBytes = (n: number) => (n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / (1024 * 1024)).toFixed(1)} MB`)
 
 /** 会话的 cwd 必须落在 worktree 路径之下(自己或者 /子路径),不把一个更长的兄弟路径当孩子 */
@@ -182,7 +182,7 @@ function TaskRunRow({ row, session, onChanged }: { row: RunRow; session?: Sessio
             {a.discarded && <Chip>已丢弃</Chip>}
           </div>
         </td>
-        <td className="mffai-mono">{row.ms !== undefined ? fmtMs(row.ms) : '—'}</td>
+        <td className="mffai-mono">{row.ms !== undefined ? fmtDuration(row.ms) : '—'}</td>
         <td className="mffai-mono">{row.changed !== undefined ? `${row.changed} 个文件` : '—'}</td>
         <td className="mffai-mono" title={path}>{row.worktree?.bytes !== undefined ? fmtBytes(row.worktree.bytes) : '—'}</td>
         <td>

@@ -328,7 +328,7 @@ describe('TasksPage', () => {
     expect(row.querySelector('.mffai-rlogo')).not.toBeNull()
     expect(within(row).getByRole('button', { name: 'one' })).toHaveClass('mffai-tlink')
     expect(within(row).getByText('timeout')).toBeInTheDocument()
-    expect(within(row).getByText('1.5 s')).toBeInTheDocument()
+    expect(within(row).getByText('00:01')).toBeInTheDocument()
     expect(within(row).getByText('3.0 MB')).toBeInTheDocument()
     expect(document.querySelector('[data-tcard="ended"] .mffai-chip')).toHaveTextContent('worktree 1 / 20')
     expect(within(row).getByRole('button', { name: '合并' })).toHaveClass('mffai-primary')
