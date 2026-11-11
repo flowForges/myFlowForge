@@ -5,6 +5,7 @@
 import { useEffect, useRef, type ReactNode } from 'react'
 import { Chip } from '../ui/Chip'
 import { Icon } from '../shell/icons'
+import { useInertOutside } from '../ui/inert'
 import { ACT_PANEL_ID } from './ChatHeader'
 import type { ApprovalItem, RunItem, SessionView, TurnView } from './reduce'
 
@@ -40,6 +41,9 @@ export function ActivityPanel({ view, scope, onScope, drawer, onClose, renderApp
   onJumpTail(turnId: string): void
 }) {
   const ref = useRef<HTMLElement>(null)
+  const scrim = useRef<HTMLDivElement>(null)
+  // 抽屉打开:rail、会话列、对话列 inert,Tab 出不去
+  useInertOutside(ref, drawer, [scrim])
   // 抽屉打开:焦点进面板(关上时 SessionPane 把它还给「活动」)
   useEffect(() => { if (drawer) ref.current?.focus() }, [drawer])
   useEffect(() => {
@@ -88,7 +92,7 @@ export function ActivityPanel({ view, scope, onScope, drawer, onClose, renderApp
 
   return (
     <>
-      {drawer && <div className="mffai-scrim" onClick={onClose} />}
+      {drawer && <div ref={scrim} className="mffai-scrim" onClick={onClose} />}
       <aside ref={ref} id={ACT_PANEL_ID} className={`mffai-act${drawer ? ' drawer' : ''}`} aria-label="活动" tabIndex={-1}>
         <div className="mffai-act-head">
           <span className="mffai-act-title">活动</span>

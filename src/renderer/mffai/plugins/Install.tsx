@@ -16,7 +16,7 @@ import { PText } from '../ui/PText'
 import { Icon } from '../shell/icons'
 import { Consent, CWD_LABEL } from './Consent'
 import { diffMarks } from './ConsentSection'
-import { useInertOutside } from './UpgradeModal'
+import { useInertOutside } from '../ui/inert'
 import { Grants, initialGrants, upgradeGrants } from './Grants'
 import { FailChip, failureOf, useAction, type Failure } from './action'
 

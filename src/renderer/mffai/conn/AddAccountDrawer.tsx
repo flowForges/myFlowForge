@@ -2,6 +2,7 @@
 // 没有提交的 key 也跟着没了。侧板是模态对话框:焦点进第一个输入项,Tab 在里面转圈,关掉回到原处。
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { Icon } from '../shell/icons'
+import { useInertOutside } from '../ui/inert'
 
 const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
 const FIELD = 'input:not([disabled]), select:not([disabled]), textarea:not([disabled])'
@@ -17,6 +18,8 @@ function headTop(el: HTMLElement | null): number | null {
 
 export function AddAccountDrawer({ open, onClose, children }: { open: boolean; onClose: () => void; children: ReactNode }) {
   const ref = useRef<HTMLElement>(null)
+  const dim = useRef<HTMLDivElement>(null)
+  useInertOutside(ref, open, [dim])
   const close = useRef(onClose)
   close.current = onClose
   const [top, setTop] = useState<number | null>(null)
@@ -51,7 +54,7 @@ export function AddAccountDrawer({ open, onClose, children }: { open: boolean; o
   const pos = top === null ? undefined : { top }
   return (
     <>
-      <div className="mffai-drawer-dim" style={pos} onClick={onClose} />
+      <div ref={dim} className="mffai-drawer-dim" style={pos} onClick={onClose} />
       <aside ref={ref} className="mffai-drawer" role="dialog" aria-modal="true" aria-label="添加账号" tabIndex={-1} style={pos} onKeyDown={trap}>
         <div className="mffai-drawer-head">
           <Icon name="plus" size={15} />
