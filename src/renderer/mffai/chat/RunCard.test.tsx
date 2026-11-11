@@ -30,8 +30,9 @@ describe('RunCard head at the 368px panel width', () => {
   it('the head does not wrap; the chips shrink and ellipsize; 停止 keeps its width on one line', () => {
     expect(rule('.mffai-act .mffai-rcard-h')).toMatch(/flex-wrap:\s*nowrap/)
     expect(rule('.mffai-chat-body .mffai-rcard-h')).toMatch(/flex-wrap:\s*nowrap/)
-    expect(rule('.mffai-rcard-h .mffai-chip')).toMatch(/min-width:\s*0/)
-    expect(rule('.mffai-rcard-h .mffai-chip')).toMatch(/text-overflow:\s*ellipsis/)
+    expect(rule('.mffai-rcard-h .mffai-chip.sq')).toMatch(/min-width:\s*0/)
+    expect(rule('.mffai-rcard-h .mffai-chip.sq')).toMatch(/text-overflow:\s*ellipsis/)
+    expect(rule('.mffai-rcard-h .mffai-chip:not(.sq)')).toMatch(/flex:\s*0 0 auto/)
     const stop = rule('.mffai-rcard-h > .set-btn')
     expect(stop).toMatch(/flex:\s*0 0 auto/)
     expect(stop).toMatch(/white-space:\s*nowrap/)

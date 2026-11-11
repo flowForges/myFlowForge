@@ -215,7 +215,9 @@
 .mffai-chat-body .mffai-rcard.live, .mffai-act .mffai-rcard.live { border-color: var(--mffai-acc-line); }
 .mffai-chat-body .mffai-rcard-h, .mffai-act .mffai-rcard-h { gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); border-radius: 11px 11px 0 0; }
 .mffai-chat-body .mffai-rcard-h, .mffai-act .mffai-rcard-h { flex-wrap: nowrap; }
-.mffai-rcard-h .mffai-chip { display: inline-block; flex: 0 1 auto; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 20px; }
+.mffai-rcard-h .mffai-chip:not(.sq) { flex: 0 0 auto; }
+.mffai-rcard-h .mffai-tool { flex: 0 0 auto; white-space: nowrap; }
+.mffai-rcard-h .mffai-chip.sq { display: inline-block; flex: 0 1 auto; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 20px; }
 .mffai-rcard-h .mffai-chip .mffai-i { vertical-align: -2px; margin-right: 4px; }
 .mffai-rcard-h .mffai-facts { flex: 0 1 auto; min-width: 0; flex-wrap: nowrap; overflow: hidden; white-space: nowrap; }
 .mffai-rcard-h > .set-btn { flex: 0 0 auto; white-space: nowrap; }
