@@ -180,6 +180,7 @@
 
 .mffai-anchor { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px 0 10px; border: 1px solid transparent; border-radius: 99px; font-size: 12px; font-weight: 600; }
 .mffai-anchor.warn { color: var(--warn); background: var(--mffai-warn-dim); border-color: var(--mffai-warn-line); }
+.mffai-anchor.bad { color: var(--err); background: var(--mffai-err-dim); border-color: var(--mffai-err-line); }
 .mffai-anchor.run { color: var(--accent); background: var(--accent-dim); border-color: var(--mffai-acc-line); }
 .mffai-anchor:focus-visible, .mffai-actbtn:focus-visible, .mffai-act-close:focus-visible, .mffai-act-jump:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 

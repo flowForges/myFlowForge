@@ -260,6 +260,19 @@ describe('MffaiComposer', () => {
       expect(b.querySelector('.slash-tag')!.textContent).toBe('zed')
     })
 
+    it('the / menu row: argumentHint, name and plugin go through visibleChars; the hint stays in a CodeChip', async () => {
+      f.script({ 'plugins.commands': { commands: [{ name: 'zed:\u202Ez', plugin: 'pl\u200Bg', description: 'd', argumentHint: '<a\u2066b>' }] } })
+      mount()
+      type('/')
+      await waitFor(() => expect(options()).toHaveLength(1))
+      const row = options()[0]
+      expect(row.querySelector('code')!.textContent).toBe('<a\\u{2066}b>')
+      expect(row.querySelector('code .mffai-esc')).not.toBeNull()
+      expect(row.querySelector('.mffai-slash-name .mffai-esc')!.textContent).toBe('\\u{202E}')
+      expect(row.querySelector('.slash-tag .mffai-esc')!.textContent).toBe('\\u{200B}')
+      expect(row.innerHTML).not.toMatch(/[\u202E\u200B\u2066]/)
+    })
+
     it('read-only: a dashed source bar with the origin icon and chip; 挂起 above it, inside .mffai-composer', () => {
       mount({ session: { id: 's1', origin: 'im' }, imName: 'Alice', canStop: true, parked: { running: 1 } })
       const ro = document.querySelector('.mffai-composer.mffai-composer-ro')!

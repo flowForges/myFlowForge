@@ -92,7 +92,7 @@ function Cards({ turn, rows, placement, onOpen, host }: {
     const anchors = [
       ...turn.approvals.filter(isPending).map((a) => ({
         seq: a.seq,
-        node: <InlineAnchor key={`a${a.approvalId}`} tone="warn" name={a.tool} state="待审批" onOpen={() => onOpen({ turnId: turn.turnId, attr: 'data-approval', id: a.approvalId })} />,
+        node: <InlineAnchor key={`a${a.approvalId}`} tone={a.unsandboxed ? 'bad' : 'warn'} name={a.tool} state="待审批" onOpen={() => onOpen({ turnId: turn.turnId, attr: 'data-approval', id: a.approvalId })} />,
       })),
       ...[...turn.runs.values()].filter((r) => r.phase !== 'ended' || unmerged(r, rows.get(r.runId))).map((r) => ({
         seq: r.seq,

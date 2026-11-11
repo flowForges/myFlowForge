@@ -45,6 +45,15 @@ describe('activity panel at main width 1440', () => {
     expect(before(anchors[0], body$().querySelector('.mffai-tail[data-turn="t1"]')!)).toBe(true)
   })
 
+  it('an unsandboxed pending approval gets a red anchor, a sandboxed one the amber', async () => {
+    const evs = panelEvents().map((e) => (e.type === 'approval.requested' ? { ...e, payload: { ...(e.payload as object), unsandboxed: true } } : e)) as ReturnType<typeof panelEvents>
+    const m = await mountPanel(1440, panelCalls(evs)); done = m.done
+    await waitFor(() => expect(body$().querySelectorAll('button.mffai-anchor')).toHaveLength(3))
+    const a = [...body$().querySelectorAll('button.mffai-anchor')].find((x) => x.textContent === 'shell 待审批')!
+    expect(a.classList.contains('bad')).toBe(true)
+    expect(a.classList.contains('warn')).toBe(false)
+  })
+
   it('click 活动 → closed is stored, cards go back inline after their turn tail in seq order, anchors gone; again → open', async () => {
     const m = await mountPanel(1440); done = m.done
     expect(actBtn().getAttribute('aria-expanded')).toBe('true')
