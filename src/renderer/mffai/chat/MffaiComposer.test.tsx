@@ -180,6 +180,12 @@ describe('MffaiComposer', () => {
     expect(p.onStop).toHaveBeenCalled()
   })
 
+  it('parked with 0 running shows only 挂起', () => {
+    mount({ canStop: true, parked: { running: 0 } })
+    expect(screen.getByText('挂起')).toBeInTheDocument()
+    expect(screen.queryByText(/运行中/)).toBeNull()
+  })
+
   it('parked without a known run count shows 挂起', () => {
     mount({ canStop: true, parked: {} })
     expect(screen.getByText('挂起')).toBeInTheDocument()

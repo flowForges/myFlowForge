@@ -139,7 +139,7 @@ export function MffaiComposer({ session, imName, onSend, onCommand, onStop, canS
     }
   }
 
-  const parkedChip = parked && <Chip tone="warn">{parked.running !== undefined ? `挂起 · ${parked.running} 运行中` : '挂起'}</Chip>
+  const parkedChip = parked && <Chip tone="warn">{parked.running ? `挂起 · ${parked.running} 运行中` : '挂起'}</Chip>
 
   const origin: SessionOrigin = originKind(session.origin)
   if (origin !== 'app') {

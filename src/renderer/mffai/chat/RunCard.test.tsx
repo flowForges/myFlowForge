@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import type { ExecutorRunEndedPayload } from '@mffai/protocol'
 import { RunCard } from './RunCard'
@@ -19,6 +21,22 @@ const kept = runRow('r1', S, { worktree: { path: '/wt/r1', present: true }, chan
 const btn = (name: string) => screen.queryByRole('button', { name }) as HTMLButtonElement | null
 const dialog = () => screen.getByRole('dialog')
 const rows = () => [...dialog().querySelectorAll('.mffai-confirm-row')].map((r) => [...r.querySelectorAll('span')].map((c) => c.textContent))
+
+describe('RunCard head at the 368px panel width', () => {
+  const rule = (sel: string) => {
+    const css = readFileSync(resolve(__dirname, '../styles/chat.css'), 'utf8')
+    return [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)].filter((m) => m[1].split(',').some((s) => s.trim() === sel)).map((m) => m[2]).join(';')
+  }
+  it('the head does not wrap; the chips shrink and ellipsize; 停止 keeps its width on one line', () => {
+    expect(rule('.mffai-act .mffai-rcard-h')).toMatch(/flex-wrap:\s*nowrap/)
+    expect(rule('.mffai-chat-body .mffai-rcard-h')).toMatch(/flex-wrap:\s*nowrap/)
+    expect(rule('.mffai-rcard-h .mffai-chip')).toMatch(/min-width:\s*0/)
+    expect(rule('.mffai-rcard-h .mffai-chip')).toMatch(/text-overflow:\s*ellipsis/)
+    const stop = rule('.mffai-rcard-h > .set-btn')
+    expect(stop).toMatch(/flex:\s*0 0 auto/)
+    expect(stop).toMatch(/white-space:\s*nowrap/)
+  })
+})
 
 describe('RunCard', () => {
   it('head: executor, 排队 #N, 只读, isolation, 规则未翻译 N', () => {
