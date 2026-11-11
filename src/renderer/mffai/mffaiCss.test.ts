@@ -408,4 +408,20 @@ describe('mff-ai CSS guard', () => {
       }
     }
   })
+  it('the switch off-track has at least 3:1 against the surfaces it sits on, dark and light', () => {
+    const base = parse('styles/base.css', readFileSync(join(HERE, 'styles/base.css'), 'utf8')).rules
+    const rule = base.find((r) => r.selector.replace(/\s+/g, ' ') === '.mffai-switch input[type="checkbox"]')!
+    const bg = rule.decls.find((d) => d.prop === 'background')!.value
+    expect(bg).toBe('var(--mffai-switch-off)')
+    for (const theme of ['dark', 'light'] as const) {
+      for (const surface of ['--bg', '--bg-2', '--surface', '--sidebar']) {
+        const ratio = contrast(resolveColour(bg, theme), resolveColour(`var(${surface})`, theme))
+        expect(ratio, `${theme} off-track on ${surface}: ${ratio.toFixed(2)}`).toBeGreaterThanOrEqual(3)
+      }
+    }
+  })
+  it('the dim and scrim backdrops are derived from --fg in light theme, where --sidebar is lighter than the page', () => {
+    const th = parse(THEME, readFileSync(join(HERE, THEME), 'utf8')).rules.filter((r) => r.selector.replace(/\s+/g, ' ') === '[data-theme="light"] .mffai-page').flatMap((r) => r.decls)
+    for (const v of ['--mffai-dim', '--mffai-scrim']) expect(th.find((d) => d.prop === v)?.value, v).toMatch(/var\(--fg\)/)
+  })
 })

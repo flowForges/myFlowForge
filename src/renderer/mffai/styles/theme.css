@@ -27,6 +27,7 @@
   --mffai-panel-bg: var(--bg-2);
   --mffai-scrim: color-mix(in oklab, var(--sidebar) 60%, transparent);
   --mffai-dim: color-mix(in oklab, var(--sidebar) 35%, transparent);
+  --mffai-switch-off: var(--muted);
   --mffai-shadow: var(--shadow);
   /* 页头的默认高度(min-height 52 + 底边 1);抽屉量得到页头时用量到的 */
   --mffai-head-h: 53px;
@@ -61,6 +62,8 @@
 [data-theme="light"] .mffai-page {
   --mffai-on-status: var(--mffai-knob);
   --mffai-on-warn: var(--fg);
+  --mffai-scrim: color-mix(in oklab, var(--fg) 38%, transparent);
+  --mffai-dim: color-mix(in oklab, var(--fg) 22%, transparent);
 }
 [data-glass="on"] .mffai-page {
   --mffai-rail-bg: var(--glass-sidebar);

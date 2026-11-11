@@ -75,7 +75,7 @@
 .mffai-spin { flex: 0 0 auto; width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--mffai-spin-track); border-top-color: var(--accent); animation: mffai-spin .8s linear infinite; }
 
 /* 开关:复选框画成 34×20 的拨钮,圆钮是 --mffai-knob */
-.mffai-switch input[type="checkbox"] { appearance: none; -webkit-appearance: none; position: relative; flex: 0 0 34px; width: 34px; height: 20px; margin: 0; border: 0; border-radius: 99px; background: var(--surface-2); cursor: pointer; transition: background .16s; }
+.mffai-switch input[type="checkbox"] { appearance: none; -webkit-appearance: none; position: relative; flex: 0 0 34px; width: 34px; height: 20px; margin: 0; border: 0; border-radius: 99px; background: var(--mffai-switch-off); cursor: pointer; transition: background .16s; }
 .mffai-switch input[type="checkbox"]::before { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--mffai-knob); box-shadow: var(--mffai-knob-shadow); transition: transform .16s; }
 .mffai-switch input[type="checkbox"]:checked { background: var(--accent); }
 .mffai-switch input[type="checkbox"]:checked::before { transform: translateX(14px); }
