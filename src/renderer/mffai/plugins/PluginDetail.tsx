@@ -146,7 +146,7 @@ export function PluginDetail({ plugin, showNewSession, onEnabled, onClose }: {
         {head}
         {/* 升级同意在弹窗里(B)。key:每次暂存一个新的 Staging,旧暂存的状态、consentHash、授权不会带到新暂存上 */}
         <UpgradeModal onClose={() => { if (!stagingBusy.current) setStaging(null) }}>
-          <Staging key={staging} stagingId={staging} current={detail!.grants} onClose={() => setStaging(null)}
+          <Staging key={staging} stagingId={staging} current={detail!.grants} wasEnabled={plugin.enabled} onClose={() => setStaging(null)}
             onBusy={(b) => { stagingBusy.current = b }}
             onInstalled={(pid, enabled) => { setStaging(null); onEnabled(pid, enabled); load() }} />
         </UpgradeModal>

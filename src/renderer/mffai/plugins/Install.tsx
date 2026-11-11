@@ -22,10 +22,12 @@ import { FailChip, failureOf, useAction, type Failure } from './action'
 
 const POLL_MS = 1000
 
-export function Staging({ stagingId, current, onClose, onInstalled, onBusy }: {
+export function Staging({ stagingId, current, wasEnabled, onClose, onInstalled, onBusy }: {
   stagingId: string
   /** 升级:当前的授权。起点是它和新声明的交集(后台对发来的服务整份替换,不能从默认开始) */
   current?: GrantsT
+  /** 升级:插件现在是停用的 → 主按钮写 升级并启用(照旧发 enable:true) */
+  wasEnabled?: boolean
   onClose: () => void
   onInstalled: (id: string, enabled: boolean) => void
   /** 确认或取消在路上:升级弹窗这时不理 Esc(Esc 会卸载暂存、发取消,和确认抢) */
@@ -156,7 +158,7 @@ export function Staging({ stagingId, current, onClose, onInstalled, onBusy }: {
             <FailChip failure={failure} />
             <button className="set-btn" disabled={busy} onClick={cancel}>取消</button>
             <button className="set-btn" disabled={busy} onClick={() => confirm(false)}>升级但停用</button>
-            <button className="set-btn mffai-primary" disabled={busy} onClick={() => confirm(true)}><Icon name="check" size={13} />升级</button>
+            <button className="set-btn mffai-primary" disabled={busy} onClick={() => confirm(true)}><Icon name="check" size={13} />{wasEnabled === false ? '升级并启用' : '升级'}</button>
           </div>
         </>
       )}

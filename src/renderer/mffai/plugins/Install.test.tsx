@@ -259,6 +259,20 @@ describe('Staging 08b: first install is a full review page', () => {
   })
 })
 
+describe('Staging upgrade primary label', () => {
+  it('is 升级 for an enabled plugin and 升级并启用 for a disabled one; both send enable:true', async () => {
+    for (const [wasEnabled, label] of [[true, '升级'], [false, '升级并启用']] as const) {
+      const f = installFakeForge({ calls: { 'plugins.install.status': READY, 'plugins.install.confirm': { ok: true, id: 'zed-tools' } } })
+      const { unmount } = render(<Staging stagingId="st1" current={{ servers: {} }} wasEnabled={wasEnabled} onClose={() => {}} onInstalled={() => {}} />)
+      const b = await screen.findByRole('button', { name: label })
+      expect(screen.getByRole('button', { name: '升级但停用' })).toBeInTheDocument()
+      await act(async () => { fireEvent.click(b) })
+      expect(f.callsOf('plugins.install.confirm')[0]).toMatchObject({ enable: true })
+      unmount()
+    }
+  })
+})
+
 describe('Staging 08b: the page makes what it covers inert', () => {
   it('while the review page is up, everything around it inside .mffai-plugins is inert; after 取消 nothing is', async () => {
     const f = installFakeForge({ calls: { 'plugins.install.status': READY, 'plugins.install.cancel': { ok: true } } })
