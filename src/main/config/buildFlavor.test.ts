@@ -103,7 +103,10 @@ describe('test build flavor', () => {
     expect(sh).toContain('-c.appId=com.zghua.myflowforge.test')
     expect(sh).toContain('-c.directories.output=release-test')
     expect(sh).toMatch(/unset APPLE_SIGN_IDENTITY/)
-    expect(sh).not.toContain('.signing.local.sh')
+    // 签名配置只在显式 MFF_TEST_SIGN=1 时读;默认仍是 ad-hoc
+    const signBlock = sh.slice(sh.indexOf('if [ "${MFF_TEST_SIGN:-}" = 1 ]'), sh.indexOf('\nfi\n', sh.indexOf('if [ "${MFF_TEST_SIGN:-}" = 1 ]')))
+    expect(signBlock).toContain('.signing.local.sh')
+    expect(sh.replace(signBlock, '')).not.toContain('.signing.local.sh')
     expect(read('scripts/build-mac-all.sh')).not.toMatch(/MFF_TEST_BUILD|MFF_SYS_DIR_NAME/)
   })
 })
