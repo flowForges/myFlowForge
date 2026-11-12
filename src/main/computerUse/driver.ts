@@ -1,4 +1,6 @@
 import type { Mod } from '@shared/computerUse'
+import { spawn as nodeSpawn } from 'node:child_process'
+import { helperDriver, type SpawnLike } from './helperDriver'
 
 export interface Pt { x: number; y: number }
 export interface Rect { x: number; y: number; w: number; h: number }
@@ -68,4 +70,15 @@ export function unsupportedDriver(reason: 'platform' | 'headless'): ComputerDriv
     release: no, idleSeconds: no, runningApps: no, abort: no,
     kill() {}, dispose() {},
   }
+}
+
+export function createDriver(
+  platform: NodeJS.Platform,
+  o: { helperPath: () => string | null; ownerPid: number; spawn?: SpawnLike; log?: (m: string) => void },
+): ComputerDriver {
+  if (platform !== 'darwin') return unsupportedDriver('platform')
+  return helperDriver({
+    helperPath: o.helperPath, ownerPid: o.ownerPid, log: o.log,
+    spawn: o.spawn ?? (nodeSpawn as unknown as SpawnLike),
+  })
 }
