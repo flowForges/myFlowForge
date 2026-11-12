@@ -10,6 +10,8 @@ export interface DriverStatus {
   osVersion: string; osOK: boolean; screen: boolean; ax: boolean
   locked: boolean; onConsole: boolean; asleep: boolean; secureInput: boolean
   display: DisplaySig
+  /** forge-cu can disclaim agent spawns (responsibility_spawnattrs_setdisclaim present); false → computer use refuses */
+  disclaim?: boolean
 }
 export interface WinHit { pid: number; bundleId?: string; name?: string; layer: number; windowId?: number; inMenuBar?: boolean }
 

@@ -193,7 +193,53 @@ describe('helperDriver', () => {
       await vi.advanceTimersByTimeAsync(1)
       expect(await ab).toBe('killed')
       expect(children[0].kill).toHaveBeenCalledWith('SIGKILL')
-      expect(await p).toMatchObject({ ok: false })
+      // (8) the post that was in flight reports stopped, not helper_failed
+      expect(await p).toEqual({ ok: false, code: 'stopped' })
+    })
+
+    it('(1) a stopped EVENT while a post is pending: SIGKILL the helper and resolve the post as stopped', async () => {
+      // the race: SIGUSR1 landed after the post was written but before the helper began it
+      vi.useFakeTimers()
+      const { d, children } = setup()
+      const p = d.post({ kind: 'click', x: 1, y: 1, button: 'left', count: 1, mods: [] }, guard)
+      await flush()
+      const ab = d.abort()
+      children[0].reply({ event: 'stopped' })
+      expect(await p).toEqual({ ok: false, code: 'stopped' })
+      expect(children[0].kill).toHaveBeenCalledWith('SIGKILL')
+      expect(await ab).toBe('killed')
+      // a late reply from the dead child changes nothing; the next call runs on a fresh helper
+      children[0].reply({ id: children[0].written()[0].id, ok: true })
+      const n = d.idleSeconds()
+      await flush()
+      expect(children).toHaveLength(2)
+      const w = children[1].written()
+      expect(w.map((r: any) => r.op)).toEqual(['idle'])
+      children[1].reply({ id: w[0].id, ok: true, seconds: 2 })
+      expect(await n).toBe(2)
+    })
+
+    it('(1) after an idle abort the next request is preceded by clearAbort on the same helper', async () => {
+      vi.useFakeTimers()
+      const { d, children } = setup()
+      const first = d.idleSeconds()
+      await flush()
+      children[0].reply({ id: children[0].written()[0].id, ok: true, seconds: 1 })
+      await first
+      const ab = d.abort()
+      children[0].reply({ event: 'stopped' })
+      expect(await ab).toBe('stopped')
+      const p = d.post({ kind: 'move', x: 1, y: 1 }, guard)
+      await flush()
+      let w = children[0].written()
+      expect(w.map((r: any) => r.op)).toEqual(['idle', 'clearAbort'])
+      children[0].reply({ id: w[1].id, ok: true, wasAborted: true })
+      await flush()
+      w = children[0].written()
+      expect(w.map((r: any) => r.op)).toEqual(['idle', 'clearAbort', 'post'])
+      children[0].reply({ id: w[2].id, ok: true })
+      expect(await p).toEqual({ ok: true })
+      expect(children[0].kill).not.toHaveBeenCalledWith('SIGKILL')
     })
 
     it('with no running child resolves stopped without spawning', async () => {
@@ -201,6 +247,52 @@ describe('helperDriver', () => {
       expect(await d.abort()).toBe('stopped')
       expect(spawn).not.toHaveBeenCalled()
     })
+  })
+
+  it('(7) a post that times out is followed by release{mods,button} on the respawned helper', async () => {
+    vi.useFakeTimers()
+    const { d, children } = setup()
+    const p = d.post({ kind: 'click', x: 1, y: 1, button: 'right', count: 1, mods: ['cmd', 'shift'] }, guard)
+    await flush()
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(await p).toEqual({ ok: false, code: 'helper_failed' })
+    expect(children[0].kill).toHaveBeenCalledWith('SIGKILL')
+    await flush()
+    expect(children).toHaveLength(2)
+    expect(children[1].written()[0]).toMatchObject({ op: 'release', mods: ['cmd', 'shift'], button: 'right' })
+  })
+
+  it('(9) type text is made well-formed before it is sent (lone surrogates → U+FFFD)', async () => {
+    vi.useFakeTimers()
+    const { d, children } = setup()
+    void d.post({ kind: 'type', text: 'a\uD800b\uDC00c😀' }, guard)
+    await flush()
+    expect(children[0].written()[0].action.text).toBe('a\uFFFDb\uFFFDc😀')
+  })
+
+  it('(9) an id-less error line fails the pending request', async () => {
+    vi.useFakeTimers()
+    const { d, children } = setup()
+    const a = d.activate(5).catch((e) => e)
+    await flush()
+    children[0].reply({ ok: false, code: 'invalid_args', message: 'bad request' })
+    expect(await a).toMatchObject({ code: 'invalid_args' })
+    const p = d.post({ kind: 'move', x: 1, y: 1 }, guard)
+    await flush()
+    children[0].reply({ ok: false, code: 'invalid_args' })
+    expect(await p).toEqual({ ok: false, code: 'helper_failed' })
+  })
+
+  it('(10) stdout is decoded as UTF-8 across chunk boundaries', async () => {
+    vi.useFakeTimers()
+    const { d, children } = setup()
+    const p = d.front()
+    await flush()
+    const line = Buffer.from(JSON.stringify({ id: children[0].written()[0].id, ok: true, front: { pid: 3, layer: 0, name: '备忘录' } }) + '\n')
+    const cut = line.indexOf(Buffer.from('忘')) + 1 // inside the multi-byte sequence
+    children[0].stdout.write(line.subarray(0, cut))
+    children[0].stdout.write(line.subarray(cut))
+    expect(await p).toMatchObject({ name: '备忘录' })
   })
 
   it('kill() SIGKILLs now and the next call respawns', async () => {

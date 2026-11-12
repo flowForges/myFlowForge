@@ -10,6 +10,7 @@ const ALLOW = new Set([
   'src/main/computerUse/buildScript.test.ts',
   'src/main/agents/procGroup.disclaim.test.ts',
   'scripts/afterPack.test.mjs',
+  'scripts/cuHelperCheck.test.mjs', // codesigns temp copies of the helper; never runs it
 ])
 
 function walk(dir: string, out: string[] = []): string[] {
@@ -40,8 +41,10 @@ export function callArgs(src: string, name: string): string[] {
 export function scanTestSource(rel: string, src: string): string[] {
   const bad: string[] = []
   if (!ALLOW.has(rel)) {
-    for (const a of callArgs(src, 'helperDriver')) {
-      if (!/\bspawn\b/.test(a)) bad.push(`${rel}: helperDriver( without spawn:`)
+    for (const fn of ['helperDriver', 'createDriver']) {
+      for (const a of callArgs(src, fn)) {
+        if (!/\bspawn\b/.test(a)) bad.push(`${rel}: ${fn}( without spawn:`)
+      }
     }
     for (const fn of ['spawn', 'execa', 'execFile', 'execFileSync', 'execSync', 'spawnSync']) {
       for (const a of callArgs(src, fn)) {
@@ -56,6 +59,9 @@ describe('no real driver is reachable from tests', () => {
   it('no test builds helperDriver without an injected spawn or runs the helper binary', () => {
     const files = [...walk(join(ROOT, 'src')), ...walk(join(ROOT, 'scripts'))]
       .filter((f) => /\.test\.(ts|tsx|mjs)$/.test(f))
+    // (13) the walk must really have found the tree, or an empty scan passes vacuously
+    expect(files.length).toBeGreaterThan(100)
+    expect(files.map((f) => relative(ROOT, f))).toContain('src/main/computerUse/helperDriver.test.ts')
     const bad = files.flatMap((f) => scanTestSource(relative(ROOT, f), readFileSync(f, 'utf8')))
     expect(bad).toEqual([])
   })
@@ -65,6 +71,8 @@ describe('no real driver is reachable from tests', () => {
     expect(scanTestSource('src/main/computerUse/planted.test.ts', planted)).toHaveLength(1)
     const ok = `const d = helperDriver({ helperPath: () => '/x', ownerPid: 1, spawn })\n`
     expect(scanTestSource('src/main/computerUse/ok.test.ts', ok)).toEqual([])
+    expect(scanTestSource('src/main/x/planted.test.ts', `const d = createDriver('darwin', { helperPath: () => '/x', ownerPid: 1 })`)).toHaveLength(1)
+    expect(scanTestSource('src/main/x/ok.test.ts', `const d = createDriver('darwin', { helperPath: () => '/x', ownerPid: 1, spawn })`)).toEqual([])
   })
 
   it('plant: spawning or execa-ing the helper path is flagged outside the allowlist', () => {

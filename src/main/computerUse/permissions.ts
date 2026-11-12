@@ -22,13 +22,15 @@ export function createPermissionProbe(o: {
       if (o.helperPath() === null) return { supported: true, osOK: true, helper: 'missing', screen: false, ax: false }
       try {
         const s = await o.driver.status()
-        return { supported: true, osOK: s.osOK, helper: 'ok', screen: s.screen, ax: s.ax, osVersion: s.osVersion }
+        const helper = s.disclaim === false ? 'failed' : 'ok'
+        return { supported: true, osOK: s.osOK, helper, screen: s.screen, ax: s.ax, osVersion: s.osVersion }
       } catch (e) {
-        // `unsupported` is the feature being unavailable; any other failure is a helper hiccup, not a missing feature.
+        // `unsupported` is the feature being unavailable; any other failure (exit 2 from the caller check, a crash,
+        // a timeout) means the helper can't be used: a distinct state, never `ok` with false grants.
         if (e instanceof CuDriverError && e.code === 'unsupported') {
           return { supported: false, osOK: false, helper: 'ok', screen: false, ax: false }
         }
-        return { supported: true, osOK: true, helper: 'ok', screen: false, ax: false }
+        return { supported: true, osOK: true, helper: 'failed', screen: false, ax: false }
       }
     },
     request: (kind) => o.driver.request(kind),

@@ -40,7 +40,8 @@ export function providerSupportsComputerUse(id: string): boolean {
 export interface CuStatus {
   supported: boolean
   osOK: boolean
-  helper: 'ok' | 'missing'
+  /** failed = the helper won't start or answer (caller check, crash) or can't disclaim agent spawns */
+  helper: 'ok' | 'missing' | 'failed'
   screen: boolean
   ax: boolean
   osVersion?: string
@@ -61,6 +62,7 @@ export function computerUseConflict(a: { mode: ComputerUseMode; perm: Permission
   if (!s.supported) return '当前系统暂不支持电脑操作'
   if (!s.osOK) return '电脑操作需要 macOS 14 或更新的系统'
   if (s.helper === 'missing') return '电脑操作组件缺失 · 请重新安装应用'
+  if (s.helper === 'failed') return '电脑操作组件无法启动 · 请重新安装或重启应用'
   if (!s.screen) return '未授权屏幕录制 · 请到设置里的「电脑操作」授权'
   if (!s.ax) return '未授权辅助功能 · 请到设置里的「电脑操作」授权'
   return null

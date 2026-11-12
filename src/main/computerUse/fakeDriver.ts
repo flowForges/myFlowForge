@@ -24,7 +24,7 @@ export interface FakeDriverScript {
 export function fakeDriver(script: FakeDriverScript = {}) {
   let status: DriverStatus = {
     osVersion: '14.5', osOK: true, screen: true, ax: true, locked: false, onConsole: true, asleep: false,
-    secureInput: false, display: DISPLAY, ...script.status,
+    secureInput: false, display: DISPLAY, disclaim: true, ...script.status,
   }
   let front: WinHit | null = script.front ?? null
   let hits: HitMap = script.hits ?? null

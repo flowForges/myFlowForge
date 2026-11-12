@@ -49,11 +49,17 @@ describe('PermissionProbe', () => {
     expect(await probe.status()).toMatchObject({ supported: false, screen: false, ax: false })
   })
 
-  it('a failing helper leaves the feature supported but ungranted', async () => {
+  it('(14) a failing helper (e.g. exit 2 → helper_failed) is a distinct helper:failed state', async () => {
     const driver = fakeDriver()
     driver.status = async () => { throw new CuDriverError('helper_failed') }
     const { probe } = mk({ driver })
-    expect(await probe.status()).toMatchObject({ supported: true, helper: 'ok', screen: false, ax: false })
+    expect(await probe.status()).toMatchObject({ supported: true, helper: 'failed', screen: false, ax: false })
+  })
+
+  it('(15) a helper without the disclaim SPI is helper:failed (computer use refuses to set up)', async () => {
+    const { probe, driver } = mk()
+    driver.setStatus({ disclaim: false })
+    expect(await probe.status()).toMatchObject({ helper: 'failed' })
   })
 
   it('request forwards to the driver', async () => {

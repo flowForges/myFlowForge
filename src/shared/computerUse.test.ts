@@ -60,9 +60,10 @@ describe('computerUseConflict', () => {
       computerUseConflict({ ...base, status: { ...okStatus, osOK: false } }),
       computerUseConflict({ ...base, status: { ...okStatus, helper: 'missing' } }),
       computerUseConflict({ ...base, status: { ...okStatus, supported: false } }),
+      computerUseConflict({ ...base, status: { ...okStatus, helper: 'failed' } }),
     ]
     for (const m of msgs) expect(typeof m).toBe('string')
-    expect(new Set(msgs).size).toBe(5)
+    expect(new Set(msgs).size).toBe(6)
   })
 })
 

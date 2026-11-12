@@ -8,8 +8,8 @@ import {
 /** The slice of a ChildProcess the driver uses. Injected so tests never start a real helper. */
 export interface ChildLike {
   stdin: Pick<Writable, 'write' | 'end' | 'on'>
-  stdout: Pick<Readable, 'on'>
-  stderr: Pick<Readable, 'on'> | null
+  stdout: Pick<Readable, 'on'> & { setEncoding?: (e: BufferEncoding) => unknown }
+  stderr: (Pick<Readable, 'on'> & { setEncoding?: (e: BufferEncoding) => unknown }) | null
   kill(signal?: NodeJS.Signals | number): boolean
   on(ev: 'exit' | 'error', cb: (...a: any[]) => void): unknown
 }
@@ -17,12 +17,27 @@ export type SpawnLike = (exe: string, args: string[], opts: Record<string, unkno
 
 interface Pending {
   id: string
+  op: string
   timer: ReturnType<typeof setTimeout>
   resolve: (r: Record<string, any>) => void
   reject: (e: CuDriverError) => void
 }
 
 const ABORT_GRACE_MS = 300
+const POST_CODES = new Set(['target_changed', 'helper_failed', 'stopped'])
+
+/** Lone surrogates → U+FFFD (String.prototype.toWellFormed, without needing the ES2024 lib). */
+export function wellFormed(s: string): string {
+  return s.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\uFFFD')
+}
+
+/** What a post may leave pressed if the helper died mid-way. */
+function heldBy(a: PostAction): { mods: Mod[]; button?: Button } | null {
+  if (a.kind === 'click') return { mods: a.mods, button: a.button }
+  if (a.kind === 'drag') return { mods: a.mods, button: a.button }
+  if (a.kind === 'key') return a.mods.length ? { mods: a.mods } : null
+  return null
+}
 
 export function helperDriver(o: {
   helperPath: () => string | null
@@ -41,9 +56,12 @@ export function helperDriver(o: {
   let aborting = false
   let abortWaiters: ((r: 'stopped' | 'killed') => void)[] = []
   let abortTimer: ReturnType<typeof setTimeout> | null = null
+  /** The helper latches an abort until told otherwise; the next request must clear it first. */
+  let needClear = false
 
   const settleAbort = (r: 'stopped' | 'killed') => {
     if (abortTimer) { clearTimeout(abortTimer); abortTimer = null }
+    if (r === 'stopped' && child) needClear = true
     const ws = abortWaiters; abortWaiters = []
     aborting = false
     for (const w of ws) w(r)
@@ -61,9 +79,31 @@ export function helperDriver(o: {
     let m: any
     try { m = JSON.parse(line) } catch { return }
     if (!m || typeof m !== 'object') return
-    if (m.event === 'stopped') { settleAbort('stopped'); return }
+    if (m.event === 'stopped') {
+      const p = pending
+      if (p && p.op === 'post') {
+        // The helper was idle when SIGUSR1 landed, yet a post is in flight: the signal raced the post's
+        // write. Never let that post run — kill the helper and report the post as stopped.
+        pending = null
+        clearTimeout(p.timer)
+        p.resolve({ ok: false, code: 'stopped' })
+        killChild('stopped')
+        settleAbort('killed')
+        return
+      }
+      settleAbort('stopped')
+      return
+    }
     const p = pending
-    if (!p || m.id !== p.id) return
+    if (!p) return
+    // an id-less error answers whatever is in flight (a line the helper couldn't parse or that was too long)
+    if (m.id === undefined && m.ok === false) {
+      pending = null
+      clearTimeout(p.timer)
+      p.resolve(m)
+      return
+    }
+    if (m.id !== p.id) return
     pending = null
     clearTimeout(p.timer)
     if (m.code === 'stopped') settleAbort('stopped')
@@ -77,6 +117,9 @@ export function helperDriver(o: {
     if (!path) throw new CuDriverError('helper_failed', 'helper missing')
     const c = o.spawn(path, ['--owner-pid', String(o.ownerPid)], { stdio: ['pipe', 'pipe', 'pipe'] })
     child = c
+    needClear = false // a fresh helper has nothing latched
+    c.stdout.setEncoding?.('utf8')
+    c.stderr?.setEncoding?.('utf8')
     let buf = ''
     c.stdout.on('data', (b: Buffer | string) => {
       buf += b.toString()
@@ -111,12 +154,12 @@ export function helperDriver(o: {
     if (aborting) settleAbort('killed')
   }
 
-  const killChild = () => {
+  const killChild = (code: 'helper_failed' | 'stopped' = 'helper_failed') => {
     const c = child
     if (!c) return
     child = null
     try { c.kill('SIGKILL') } catch { /* already gone */ }
-    failPending(new CuDriverError('helper_failed', 'killed'))
+    failPending(new CuDriverError(code, 'killed'))
     if (aborting) settleAbort('killed')
   }
 
@@ -129,7 +172,7 @@ export function helperDriver(o: {
         log(`forge-cu timeout (${op})`)
         killChild()
       }, timeoutMs)
-      pending = { id, timer, resolve, reject }
+      pending = { id, op, timer, resolve, reject }
       try {
         c.stdin.write(JSON.stringify({ id, op, ...body }) + '\n')
       } catch {
@@ -139,7 +182,13 @@ export function helperDriver(o: {
 
   /** One request in flight at a time. */
   const call = (op: string, body: Record<string, unknown> = {}, timeoutMs = timeouts.other): Promise<Record<string, any>> => {
-    const next = chain.then(() => run(op, body, timeoutMs))
+    const next = chain.then(async () => {
+      if (needClear && child) {
+        needClear = false
+        await run('clearAbort', {}, timeouts.other).catch(() => {})
+      }
+      return run(op, body, timeoutMs)
+    })
     chain = next.catch(() => {})
     return next
   }
@@ -166,12 +215,20 @@ export function helperDriver(o: {
     async post(action: PostAction, guard: PostGuard): Promise<PostResult> {
       // long text takes longer to type: 20 units per ~8 ms chunk, with slack
       const extra = action.kind === 'type' ? action.text.length * 2 : 0
+      const wire = action.kind === 'type' ? { ...action, text: wellFormed(action.text) } : action
       try {
-        const r = await call('post', { action, guard }, timeouts.other + extra)
-        if (r.ok === false) return { ok: false, code: r.code, ...(typeof r.typed === 'number' ? { typed: r.typed } : {}) } as PostResult
+        const r = await call('post', { action: wire, guard }, timeouts.other + extra)
+        if (r.ok === false) {
+          const code = POST_CODES.has(r.code) ? r.code : 'helper_failed'
+          return { ok: false, code, ...(typeof r.typed === 'number' ? { typed: r.typed } : {}) } as PostResult
+        }
         return { ok: true }
-      } catch {
-        return { ok: false, code: aborting ? 'stopped' : 'helper_failed' }
+      } catch (e) {
+        if ((e instanceof CuDriverError && e.code === 'stopped') || aborting) return { ok: false, code: 'stopped' }
+        // timed out or died mid-post: whatever it pressed may still be down — lift it on the next helper
+        const held = heldBy(action)
+        if (held && !disposed) void call('release', { ...held }).catch(() => {})
+        return { ok: false, code: 'helper_failed' }
       }
     },
     async activate(pid: number) { await strict('activate', { pid }) },
@@ -186,7 +243,7 @@ export function helperDriver(o: {
         if (aborting) return
         aborting = true
         try { c.kill('SIGUSR1') } catch { /* gone */ }
-        abortTimer = setTimeout(() => { abortTimer = null; killChild(); settleAbort('killed') }, ABORT_GRACE_MS)
+        abortTimer = setTimeout(() => { abortTimer = null; killChild('stopped'); settleAbort('killed') }, ABORT_GRACE_MS)
       })
     },
     kill() { killChild() },
