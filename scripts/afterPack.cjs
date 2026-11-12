@@ -17,7 +17,16 @@
 const { execFileSync } = require('node:child_process')
 const { join, basename, resolve } = require('node:path')
 const { existsSync } = require('node:fs')
-const { signingPlan, machOFilesUnder, signBinary } = require('./macSigning.cjs')
+const { signingPlan, machOFilesUnder, signBinary, ENTITLEMENTS } = require('./macSigning.cjs')
+
+// forge-cu (computer use) gets the EMPTY entitlements: the app's set (allow-dyld-environment-variables,
+// disable-library-validation) would make the helper that posts input DYLD-injectable (spec V13).
+// Every other naked Mach-O (node-pty's spawn-helper) keeps the app's entitlements, unchanged.
+const CU_ENTITLEMENTS = 'build/entitlements.cu.plist'
+function entitlementsFor(file) {
+  return /\/Contents\/Resources\/native\/forge-cu$/.test(file) ? CU_ENTITLEMENTS : ENTITLEMENTS
+}
+exports.entitlementsFor = entitlementsFor
 const { verifyPackagedDeps } = require('./packagedDeps.cjs')
 const { applyWinResources } = require('./winResources.cjs')
 
@@ -103,6 +112,6 @@ exports.default = async function afterPack(context) {
   console.log(`[afterPack] 用 ${plan.identity} 补签 ${naked.length} 个独立二进制：`)
   for (const f of naked) {
     console.log(`[afterPack]   · ${basename(f)}  (${f.slice(appPath.length + 1)})`)
-    signBinary(f, plan.identity)
+    signBinary(f, plan.identity, { entitlements: entitlementsFor(f) })
   }
 }

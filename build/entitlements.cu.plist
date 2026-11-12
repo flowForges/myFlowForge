@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  forge-cu (computer use helper) entitlements: deliberately EMPTY (spec V13).
+  It is signed with hardened runtime and nothing else — no JIT, no DYLD environment variables, no
+  disabled library validation. The app's set (entitlements.mac.plist) would let anyone inject a dylib
+  into the one process that posts input under the user's Accessibility / Screen Recording grant.
+  scripts/afterPack.cjs picks this file for Contents/Resources/native/forge-cu only.
+-->
+<plist version="1.0">
+<dict/>
+</plist>
