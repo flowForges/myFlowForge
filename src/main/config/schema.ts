@@ -467,6 +467,15 @@ export const PushSchema = z.object({
 export type PushConfig = z.infer<typeof PushSchema>
 export const defaultPush = (): PushConfig => ({ enabled: false, gate: true, done: false })
 
+// 电脑操作(macOS)。`provisioned` = 第一次点「授权」或第一次开档后置真并落盘;从此 darwin 上每个 agent CLI
+// 都经 forge-cu exec 断掉授权继承起(spec V3,procGroup.disclaimedSpawnArgs)。Task 4 往这里加其余字段。
+// ★跟设备走(CLIENT_SETTING_KEYS):远程客户端只能写 host 那半边,所以它没法把这台机器的开关拨回去。
+export const ComputerUseSettingsSchema = z.object({
+  provisioned: z.boolean().catch(false).default(false),
+})
+export type ComputerUseSettings = z.infer<typeof ComputerUseSettingsSchema>
+export const defaultComputerUse = (): ComputerUseSettings => ({ provisioned: false })
+
 export const SettingsSchema = z.object({
   appearance: AppearanceSchema,
   // ★Q1:原本一个对象塞了两件事。
@@ -548,6 +557,7 @@ export const SettingsSchema = z.object({
   mobileGateway: MobileGatewaySchema.default(defaultMobileGateway),
   relay: RelaySchema.default(defaultRelay),
   push: PushSchema.default(defaultPush),
+  computerUse: ComputerUseSettingsSchema.catch(defaultComputerUse).default(defaultComputerUse),
 })
 export type Settings = z.infer<typeof SettingsSchema>
 export const defaultSettings = (): Settings => ({
@@ -583,6 +593,7 @@ export const defaultSettings = (): Settings => ({
   mobileGateway: defaultMobileGateway(),
   relay: defaultRelay(),
   push: defaultPush(),
+  computerUse: defaultComputerUse(),
 })
 
 export const ProjectSchema = z.object({
@@ -806,6 +817,7 @@ export const CLIENT_SETTING_KEYS = [
   'defaultOpenerId',      // Q5
   'perfStallToast', 'perfDiagnostics',   // Q6:第二期只做客户端这份,daemon 侧留空实现
   'mobileGateway',        // 这台电脑对手机开不开门 —— 跟设备走,不跟你正在操作哪台机器走
+  'computerUse',          // 电脑操作只驱动面前这块屏幕;远程写不到(config:set-client-settings 是 CLIENT_ONLY)
 ] as const
 
 /** 跟机器走:你操作的是哪台机器,这些就该是哪台的。 */

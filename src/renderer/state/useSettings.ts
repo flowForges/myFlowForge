@@ -37,6 +37,7 @@ const DEFAULTS: Settings = {
   mobileGateway: { enabled: false, host: '0.0.0.0', port: 6789 },
   relay: { enabled: false, url: '', urlHistory: [] },
   push: { enabled: false, gate: true, done: false },
+  computerUse: { provisioned: false },
 }
 
 export interface SettingsUpdate {
@@ -106,6 +107,8 @@ function merge(base: Settings, partial: SettingsUpdate): Settings {
     // Not managed via this update path (see ackFullAccess in config/store.ts) — preserve from the
     // loaded settings on load (cast), else keep base, matching pluginCreds/pinnedWorkspaces above.
     fullAccessAck: (partial as Partial<Settings>).fullAccessAck ?? base.fullAccessAck,
+    // Written only by the main process (授权 / first enable, spec V3) — same preserve rule as above.
+    computerUse: (partial as Partial<Settings>).computerUse ?? base.computerUse,
     memory: { ...base.memory, ...(partial.memory ?? {}) },
     // Managed via the bot:* IPC (connect/regen-pairing/unbind each write settings + broadcast), not
     // this update path — preserve from the loaded settings on load (cast), else base, like pluginCreds.
