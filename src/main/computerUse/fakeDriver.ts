@@ -1,6 +1,6 @@
 import type { Mod } from '@shared/computerUse'
 import type {
-  Button, CaptureOpts, CaptureResult, ComputerDriver, DisplaySig, DriverStatus, PostAction, PostGuard, PostResult,
+  Button, CaptureOpts, CaptureResult, ComputerDriver, CropOpts, DisplaySig, DriverStatus, PostAction, PostGuard, PostResult,
   Pt, Rect, WinHit,
 } from './driver'
 
@@ -32,15 +32,18 @@ export function fakeDriver(script: FakeDriverScript = {}) {
   let postResult: PostResult = script.postResult ?? { ok: true }
   const posts: { action: PostAction; guard: PostGuard }[] = []
   const captures: CaptureOpts[] = []
+  const crops: CropOpts[] = []
+  let cropSig = 'AAAA'
   const activations: number[] = []
   const released: { mods: Mod[]; button?: Button }[] = []
   const requested: ('screen' | 'ax')[] = []
   const f = {
-    posts, captures, activations, released, requested, killed: 0, aborted: 0, disposed: false,
+    posts, captures, crops, activations, released, requested, killed: 0, aborted: 0, disposed: false,
     setStatus(s: Partial<DriverStatus>) { status = { ...status, ...s } },
     setFront(h: WinHit | null) { front = h },
     setHitMap(h: HitMap) { hits = h },
     setIdle(n: number) { idle = n },
+    setCropSig(s: string) { cropSig = s },
     setPostResult(r: PostResult) { postResult = r },
     async status() { return status },
     async request(k: 'screen' | 'ax') { requested.push(k) },
@@ -51,7 +54,7 @@ export function fakeDriver(script: FakeDriverScript = {}) {
         ...script.capture,
       }
     },
-    async crop() { return { jpegBase64: 'ZmFrZQ==', sig: 'AAAA' } },
+    async crop(o: CropOpts) { crops.push(o); return { jpegBase64: 'ZmFrZQ==', sig: cropSig } },
     async hitTest(p: Pt): Promise<WinHit | null> {
       if (typeof hits === 'function') return hits(p)
       if (Array.isArray(hits)) return hits.find((e) => inside(e.rect, p))?.hit ?? null
