@@ -4,6 +4,7 @@
  * 纯函数 + 常量,不碰 electron / node:主进程、forgeMcp(要求不引 electron)、渲染端三处共用。
  * 规格:docs/superpowers/specs/2026-11-12-computer-use-macos-design.md(§5.3 冲突、§6 安全、§9 工具,评审修订 V1–V15 优先)。
  */
+import { z } from 'zod'
 import type { PermissionMode } from './permissions'
 import { collapseWhitespace } from './browserUse'
 import { parseAccelerator } from './keybindings'
@@ -74,6 +75,40 @@ export const COMPUTER_TOOLS = [
   'computer_screenshot', 'computer_click', 'computer_move', 'computer_drag', 'computer_scroll',
   'computer_type', 'computer_key', 'computer_wait', 'computer_cursor', 'computer_front_app',
 ] as const
+
+// ───────────────────────── 参数 schema(forgeMcp 注册工具、执行器校验共用) ─────────────────────────
+
+const coord = z.number().int()
+const xy = z.object({ x: coord, y: coord })
+const mods = z.array(z.enum(['cmd', 'ctrl', 'alt', 'shift'])).max(4).optional()
+const visionCode = z.string().max(16).optional()
+
+/** 每个工具的参数形状(zod raw shape,forgeMcp 的 registerTool 直接用)。坐标都是最近一张全屏截图的像素。 */
+export const CU_SHAPES = {
+  computer_screenshot: { region: z.object({ x: z.number().int().min(0), y: z.number().int().min(0), w: z.number().int().min(1), h: z.number().int().min(1) }).optional() },
+  computer_click: { x: coord, y: coord, button: z.enum(['left', 'right', 'middle']).optional(), clicks: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(), modifiers: mods, visionCode },
+  computer_move: { x: coord, y: coord },
+  computer_drag: { from: xy, to: xy, button: z.literal('left').optional(), modifiers: mods, visionCode },
+  computer_scroll: { x: coord, y: coord, dy: z.number().int().min(-30).max(30).optional(), dx: z.number().int().min(-30).max(30).optional(), visionCode },
+  computer_type: { text: z.string().min(1).max(500), visionCode },
+  computer_key: { combo: z.string().min(1).max(64), repeat: z.number().int().min(1).max(10).optional(), visionCode },
+  computer_wait: { ms: z.number().int().min(100).max(10000) },
+  computer_cursor: {},
+  computer_front_app: {},
+} as const
+
+export const CU_SCHEMAS = {
+  computer_screenshot: z.object(CU_SHAPES.computer_screenshot),
+  computer_click: z.object(CU_SHAPES.computer_click),
+  computer_move: z.object(CU_SHAPES.computer_move),
+  computer_drag: z.object(CU_SHAPES.computer_drag),
+  computer_scroll: z.object(CU_SHAPES.computer_scroll),
+  computer_type: z.object(CU_SHAPES.computer_type),
+  computer_key: z.object(CU_SHAPES.computer_key),
+  computer_wait: z.object(CU_SHAPES.computer_wait),
+  computer_cursor: z.object(CU_SHAPES.computer_cursor),
+  computer_front_app: z.object(CU_SHAPES.computer_front_app),
+} as const
 
 // ───────────────────────── 组合键 ─────────────────────────
 

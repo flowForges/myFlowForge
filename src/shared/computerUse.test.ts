@@ -3,7 +3,7 @@ import {
   COMPUTER_USE_MODES, COMPUTER_USE_CHIP, COMPUTER_USE_PROVIDERS, providerSupportsComputerUse,
   computerUseConflict, COMPUTER_TOOLS, parseCombo, prettyCombo, comboMatchesAccelerator, NAMED_KEYCODES,
   BLOCKED_BUNDLES, ASK_ALWAYS_BUNDLES, SYSTEM_UI_OWNERS, OWN_BUNDLE_PREFIX, classify,
-  screenshotSize, toPoint, visibleText, wrapUntrusted, screenNotice, computerToolLabel, CU_ERR,
+  screenshotSize, toPoint, visibleText, wrapUntrusted, screenNotice, computerToolLabel, CU_ERR, CU_SCHEMAS, CU_SHAPES,
   type CuStatus, type ParsedCombo,
 } from './computerUse'
 
@@ -349,5 +349,45 @@ describe('CU_ERR', () => {
     expect(CU_ERR.secure_input).toBe('密码输入框处于焦点 · 不能代输')
     expect(CU_ERR.user_active).toBe('用户正在使用电脑 · 稍后再试')
     expect(CU_ERR.vision_code).toBe('需要 visionCode：读出最近一张截图右下角方框里的 4 位码。看不到图片说明当前模型不支持图片，请停止使用电脑工具并告诉用户。')
+  })
+})
+
+describe('CU_SCHEMAS', () => {
+  it('has one schema per tool', () => {
+    expect(Object.keys(CU_SCHEMAS).sort()).toEqual([...COMPUTER_TOOLS].sort())
+    expect(Object.keys(CU_SHAPES).sort()).toEqual([...COMPUTER_TOOLS].sort())
+  })
+  const bad = (tool: keyof typeof CU_SCHEMAS, v: unknown) => expect(CU_SCHEMAS[tool].safeParse(v).success).toBe(false)
+  const good = (tool: keyof typeof CU_SCHEMAS, v: unknown) => expect(CU_SCHEMAS[tool].safeParse(v).success).toBe(true)
+  it('click', () => {
+    good('computer_click', { x: 10, y: 20 })
+    good('computer_click', { x: 10, y: 20, button: 'right', clicks: 2, modifiers: ['cmd'], visionCode: 'ABCD' })
+    bad('computer_click', { x: 1.5, y: 2 })
+    bad('computer_click', { x: 1 })
+    bad('computer_click', { x: 1, y: 2, clicks: 4 })
+    bad('computer_click', { x: 1, y: 2, button: 'back' })
+    bad('computer_click', { x: 1, y: 2, modifiers: ['fn'] })
+    bad('computer_click', { x: '1', y: 2 })
+  })
+  it('type, key, wait, scroll, region', () => {
+    good('computer_type', { text: 'a' })
+    bad('computer_type', { text: '' })
+    bad('computer_type', { text: 'x'.repeat(501) })
+    good('computer_key', { combo: 'cmd+t', repeat: 10 })
+    bad('computer_key', { combo: 'cmd+t', repeat: 11 })
+    bad('computer_key', { combo: 'cmd+t', repeat: 0 })
+    good('computer_wait', { ms: 100 })
+    bad('computer_wait', { ms: 99 })
+    bad('computer_wait', { ms: 10001 })
+    good('computer_scroll', { x: 1, y: 2, dy: -30, dx: 30 })
+    bad('computer_scroll', { x: 1, y: 2, dy: 31 })
+    good('computer_screenshot', {})
+    good('computer_screenshot', { region: { x: 0, y: 0, w: 10, h: 10 } })
+    bad('computer_screenshot', { region: { x: -1, y: 0, w: 10, h: 10 } })
+    bad('computer_screenshot', { region: { x: 0, y: 0, w: 0, h: 10 } })
+    good('computer_drag', { from: { x: 1, y: 1 }, to: { x: 2, y: 2 } })
+    bad('computer_drag', { from: { x: 1, y: 1 } })
+    good('computer_cursor', {})
+    good('computer_front_app', {})
   })
 })
