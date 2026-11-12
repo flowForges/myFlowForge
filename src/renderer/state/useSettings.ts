@@ -37,7 +37,7 @@ const DEFAULTS: Settings = {
   mobileGateway: { enabled: false, host: '0.0.0.0', port: 6789 },
   relay: { enabled: false, url: '', urlHistory: [] },
   push: { enabled: false, gate: true, done: false },
-  computerUse: { provisioned: false },
+  computerUse: { provisioned: false, requested: { screen: false, ax: false }, extraBlocked: [], extraAskAlways: [] },
 }
 
 export interface SettingsUpdate {

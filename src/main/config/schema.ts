@@ -468,13 +468,26 @@ export type PushConfig = z.infer<typeof PushSchema>
 export const defaultPush = (): PushConfig => ({ enabled: false, gate: true, done: false })
 
 // 电脑操作(macOS)。`provisioned` = 第一次点「授权」或第一次开档后置真并落盘;从此 darwin 上每个 agent CLI
-// 都经 forge-cu exec 断掉授权继承起(spec V3,procGroup.disclaimedSpawnArgs)。Task 4 往这里加其余字段。
+// 都经 forge-cu exec 断掉授权继承起(spec V3,procGroup.disclaimedSpawnArgs)。
+// `requested` = 用户点过哪一项的「授权」(§8.3:决定显示「授权」还是「打开系统设置」/「授权后需重启」)。
+// `extraBlocked` / `extraAskAlways` = 用户追加的 bundle id(T2/T3);两边都有时按拦截(classify 先判拦截)。
 // ★跟设备走(CLIENT_SETTING_KEYS):远程客户端只能写 host 那半边,所以它没法把这台机器的开关拨回去。
+// 档位本身不在这里 —— 只存内存(R3)。
+const BundleListSchema = z.array(z.unknown()).catch([]).default([])
+  .transform((xs) => [...new Set(xs.filter((x): x is string => typeof x === 'string').map((x) => x.trim()).filter(Boolean))])
 export const ComputerUseSettingsSchema = z.object({
   provisioned: z.boolean().catch(false).default(false),
+  requested: z.object({
+    screen: z.boolean().catch(false).default(false),
+    ax: z.boolean().catch(false).default(false),
+  }).catch({ screen: false, ax: false }).default({ screen: false, ax: false }),
+  extraBlocked: BundleListSchema,
+  extraAskAlways: BundleListSchema,
 })
 export type ComputerUseSettings = z.infer<typeof ComputerUseSettingsSchema>
-export const defaultComputerUse = (): ComputerUseSettings => ({ provisioned: false })
+export const defaultComputerUse = (): ComputerUseSettings => ({
+  provisioned: false, requested: { screen: false, ax: false }, extraBlocked: [], extraAskAlways: [],
+})
 
 export const SettingsSchema = z.object({
   appearance: AppearanceSchema,
