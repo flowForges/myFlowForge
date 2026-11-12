@@ -8,7 +8,7 @@ const ALLOW = new Set([
   'src/main/computerUse/noRealDriver.test.ts',
   'scripts/buildScript.test.mjs',
   'src/main/computerUse/buildScript.test.ts',
-  'src/main/computerUse/procGroup.disclaim.test.ts',
+  'src/main/agents/procGroup.disclaim.test.ts',
   'scripts/afterPack.test.mjs',
 ])
 

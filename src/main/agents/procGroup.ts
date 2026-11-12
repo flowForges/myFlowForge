@@ -1,5 +1,8 @@
 import { execa, type Options, type ResultPromise } from 'execa'
 import { execFileSync } from 'node:child_process'
+import { accessSync, constants, statSync } from 'node:fs'
+import { delimiter, isAbsolute, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 // ── 停止一个 agent = 杀掉它的【整棵进程树】,不是只杀 CLI 自己 ────────────────────────────────
 //
@@ -31,6 +34,65 @@ const live = new Set<KillableChild>()
 /** 确实建过独立进程组的子进程。★ 这是 kill(-pid) 的安全闸门:对一个没有独立进程组的子进程用负 pid,
  *  杀的就是 app 自己所在的组 —— 所以不在这张表里的,一律只许单杀。 */
 const ownGroup = new WeakSet<KillableChild>()
+/** 起的时候有没有经 `forge-cu exec` 断掉授权继承(spec V3)。不在表里 = false。 */
+const disclaimedSet = new WeakSet<KillableChild>()
+
+// ── 断继承(spec V3)────────────────────────────────────────────────────────────────────────────────
+//
+// TCC 按「负责进程」判。myFlowForge 拿到辅助功能 / 屏幕录制之后,它拉起的每个 agent CLI 以及 CLI 派生的
+// shell 都默认借用这份授权 —— agent 的 Bash 跑一句 System Events 就能点我们自己的「允许」。
+// 所以「电脑操作已开通」(settings.computerUse.provisioned)之后,darwin 上每个 agent CLI 都改成
+// `forge-cu exec -- <绝对路径> <args…>` 起:forge-cu 用 POSIX_SPAWN_SETEXEC + disclaim 原地换成目标程序,
+// pid 不变,所以进程组、killTree、execa 的选项全都照旧。
+//
+// ★ 没开通 / 非 darwin / helper 不在 / bin 在 PATH 上找不到 → 原样走 execa(bin, args),与今天字节一致。
+//   找不到 bin 时不包,是为了保留原来的 ENOENT 行为(上层靠它报「没装这个 CLI」)。
+// ★ 这是所有 agent spawn 的唯一入口:spawnAgent 走它,codexAppServer / usage/codexRpc 的默认 spawn 也是
+//   spawnAgent。index.ts 启动时 configureDisclaim(Task 8),在任何 agent spawn 之前。
+
+interface DisclaimConfig { launcher: () => string | null; enabled: () => boolean; platform: NodeJS.Platform }
+let disclaimCfg: DisclaimConfig = { launcher: () => null, enabled: () => false, platform: process.platform }
+
+export function configureDisclaim(o: { launcher: () => string | null; enabled: () => boolean; platform?: NodeJS.Platform }): void {
+  disclaimCfg = { launcher: o.launcher, enabled: o.enabled, platform: o.platform ?? process.platform }
+}
+
+function isExecFile(p: string): boolean {
+  try { accessSync(p, constants.X_OK); return statSync(p).isFile() } catch { return false }
+}
+
+/** bin → 绝对路径,和 spawn 自己找的方式一致:带斜杠的按 cwd 解析,裸名按 PATH 逐段找。找不到 → null。 */
+export function resolveOnPath(bin: string, path: string | undefined, cwd: string = process.cwd()): string | null {
+  if (!bin) return null
+  if (bin.includes('/')) {
+    const abs = isAbsolute(bin) ? bin : resolve(cwd, bin)
+    return isExecFile(abs) ? abs : null
+  }
+  for (const seg of (path ?? '').split(delimiter)) {
+    if (!seg) continue
+    const p = isAbsolute(seg) ? join(seg, bin) : resolve(cwd, seg, bin)   // 相对段:execvp 在子进程的 cwd 里找
+    if (isExecFile(p)) return p
+  }
+  return null
+}
+
+export function disclaimedSpawnArgs(
+  bin: string, args: readonly string[], env: NodeJS.ProcessEnv, cwd?: string,
+): { bin: string; args: string[]; disclaimed: boolean } {
+  const original = { bin, args: [...args], disclaimed: false }
+  try {
+    if (disclaimCfg.platform !== 'darwin') return original
+    if (disclaimCfg.enabled() !== true) return original
+    const launcher = disclaimCfg.launcher()
+    if (!launcher || !isAbsolute(launcher) || !isExecFile(launcher)) return original
+    const abs = resolveOnPath(bin, env.PATH, cwd)
+    if (!abs) return original
+    return { bin: launcher, args: ['exec', '--', abs, ...args], disclaimed: true }
+  } catch {
+    // 读设置 / 找 helper 出了意外:退回今天的行为。开档时 setMode 会因为有未断继承的活进程而 restart_required。
+    return original
+  }
+}
 
 /** 原生 spawn 的调用方(codexAppServer)拿这个去拼选项,好跟 spawnAgent 保持同一套进程组语义。 */
 export function agentSpawnOptions(): { detached?: boolean } {
@@ -39,8 +101,9 @@ export function agentSpawnOptions(): { detached?: boolean } {
 
 /** 把一个自己 spawn 出来的 agent 子进程登记进来(退出兜底 + 允许杀组)。
  *  `ownGroup` 传 false 表示它没有独立进程组(例如测试注入的假 child),killTree 就只会单杀它。 */
-export function trackAgentChild<T extends KillableChild>(child: T, opts: { ownGroup?: boolean } = {}): T {
+export function trackAgentChild<T extends KillableChild>(child: T, opts: { ownGroup?: boolean; disclaimed?: boolean } = {}): T {
   if (opts.ownGroup ?? !WIN) ownGroup.add(child)
+  if (opts.disclaimed) disclaimedSet.add(child)
   live.add(child)
   const drop = () => { live.delete(child) }
   child.once?.('close', drop)
@@ -50,7 +113,18 @@ export function trackAgentChild<T extends KillableChild>(child: T, opts: { ownGr
 
 /** 起一个 agent CLI。除了 execa 的常规选项,POSIX 下额外给它一个独立进程组,好让 killTree 杀干净。 */
 export function spawnAgent(bin: string, args: readonly string[], opts: Options = {}): ResultPromise {
-  return trackAgentChild(execa(bin, args, { ...opts, ...agentSpawnOptions() }) as ResultPromise)
+  // execa 默认 extendEnv:子进程的 PATH = opts.env.PATH ?? process.env.PATH;extendEnv:false 时只有 opts.env。
+  const path = opts.env?.PATH ?? (opts.extendEnv === false ? undefined : process.env.PATH)
+  const cwd = typeof opts.cwd === 'string' ? opts.cwd : opts.cwd instanceof URL ? fileURLToPath(opts.cwd) : undefined
+  const s = disclaimedSpawnArgs(bin, args, { PATH: path }, cwd)
+  return trackAgentChild(execa(s.bin, s.args, { ...opts, ...agentSpawnOptions() }) as ResultPromise, { disclaimed: s.disclaimed })
+}
+
+/** 还活着的 agent 子进程,以及它们是不是断过继承起的。setMode 开档前用它判 restart_required(V3)。 */
+export function liveAgentChildren(): { pid: number; disclaimed: boolean }[] {
+  const out: { pid: number; disclaimed: boolean }[] = []
+  for (const c of live) if (typeof c.pid === 'number') out.push({ pid: c.pid, disclaimed: disclaimedSet.has(c) })
+  return out
 }
 
 // 按 ppid 递归收集 root 的全部后代。
