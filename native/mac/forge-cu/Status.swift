@@ -44,7 +44,7 @@ func statusReply() -> [String: Any] {
     "osVersion": ver, "osOK": ok,
     "screen": CGPreflightScreenCaptureAccess(), "ax": AXIsProcessTrusted(),
     "locked": s.locked, "onConsole": s.onConsole, "asleep": displayAsleep(), "secureInput": secureInputOn(),
-    "display": displaySig(),
+    "display": displaySig(), "disclaim": disclaimAvailable(),
   ]
 }
 

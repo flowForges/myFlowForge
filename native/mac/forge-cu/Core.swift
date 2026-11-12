@@ -37,18 +37,31 @@ func callerAllowed(selfPath: String, ownerPid: Int32, ppid: Int32, parentPath: S
 
 // ───────────────────────── JSON lines ─────────────────────────
 
+/// Splits stdin into lines. A line longer than `maxLine` bytes is discarded up to its newline and
+/// reported once as `nil` (the caller answers `invalid_args`), so a runaway writer can't grow memory.
 final class LineBuffer {
+  let maxLine: Int
   private var buf = Data()
-  func feed(_ d: Data) -> [Data] {
+  private var skipping = false
+  init(maxLine: Int = 1 << 20) { self.maxLine = maxLine }
+  func feed(_ d: Data) -> [Data?] {
     buf.append(d)
-    var out: [Data] = []
-    while let i = buf.firstIndex(of: 0x0A) {
+    var out: [Data?] = []
+    while true {
+      guard let i = buf.firstIndex(of: 0x0A) else {
+        if buf.count > maxLine {
+          if !skipping { out.append(nil); skipping = true }
+          buf = Data()
+        }
+        return out
+      }
       let line = buf[buf.startIndex..<i]
       buf = Data(buf[buf.index(after: i)...])
+      if skipping { skipping = false; continue }
+      if line.count > maxLine { out.append(nil); continue }
       let trimmed = line.filter { $0 != 0x0D }
       if !trimmed.allSatisfy({ $0 == 0x20 || $0 == 0x09 }) { out.append(Data(trimmed)) }
     }
-    return out
   }
 }
 
@@ -184,6 +197,53 @@ func dragEndCheck(_ g: Guard, startPid: Int32?, fromPid: Int32? = nil, end: Hit?
   if startPid == end?.pid { return nil }
   if let f = fromPid, f == end?.pid { return nil }
   return "target_changed"
+}
+
+/// Cross-checks the CG hit with the AX element at the point and with what lies beneath (`under` = every
+/// window containing the point, front to back, alpha 0 included). A click-through overlay (an app's
+/// transparent / floating window over ours) would otherwise make the hit test see the overlay while
+/// the click lands on us.
+func overlayCheck(_ g: Guard, under: [WinInfo], hit: Hit, axPid: Int32?, frontPid: Int32?, bundleOf: (Int32) -> String?) -> String? {
+  guard let ax = axPid else { return "target_changed" }
+  if denied(g, pid: ax, bundle: bundleOf(ax)) { return "target_changed" }
+  if ax != hit.pid {
+    // the menu bar strip belongs to Window Server in CG but to the front app's menu bar in AX
+    let menuOK = hit.inMenuBar && hit.name == "Window Server" && ax == frontPid
+    if !menuOK { return "target_changed" }
+  }
+  let deniedBeneath = under.contains { denied(g, pid: $0.pid, bundle: bundleOf($0.pid)) }
+  if deniedBeneath {
+    guard let top = under.first(where: { $0.alpha > 0 }), top.layer == 0, top.alpha >= 0.99 else { return "target_changed" }
+  }
+  return nil
+}
+
+/// V4 + review: the helper must not be its own responsible process (a disclaimed spawn) and must share
+/// its parent's responsible process.
+func responsibilityOK(selfPid: Int32, respSelf: Int32?, respParent: Int32?) -> Bool {
+  guard let s = respSelf, let p = respParent else { return false }
+  return s != selfPid && s == p
+}
+
+/// `request` (the TCC prompt op) only for a parent that is an app's own executable and is our
+/// responsible process — i.e. the real app spawned us, not a shell or an agent tree.
+func requestAllowed(parentPath: String?, ppid: Int32, respSelf: Int32?) -> Bool {
+  guard let p = parentPath, p.contains(".app/Contents/MacOS/"), let r = respSelf else { return false }
+  return r == ppid
+}
+
+/// First candidate with no denied window (visible or not) under it.
+func neutralPoint(_ wins: [WinInfo], _ g: Guard, bundleOf: (Int32) -> String?, candidates: [CGPoint]) -> CGPoint? {
+  candidates.first { p in !wins.contains { $0.bounds.contains(p) && denied(g, pid: $0.pid, bundle: bundleOf($0.pid)) } }
+}
+
+/// Finite, rounded, clamped — never traps in Int(). Missing / NaN → 0 when in range, else `lo`.
+func clampInt(_ v: Double?, _ lo: Int, _ hi: Int) -> Int {
+  let fallback = (lo...hi).contains(0) ? 0 : lo
+  guard let d = v, !d.isNaN else { return fallback }
+  if d <= Double(lo) { return lo }
+  if d >= Double(hi) { return hi }
+  return Int(d.rounded())
 }
 
 // ───────────────────────── typing ─────────────────────────
@@ -381,21 +441,25 @@ func jpegData(_ img: CGImage, quality: Double) -> Data? {
 
 // ───────────────────────── abort (V7g) ─────────────────────────
 
-/// SIGUSR1 bookkeeping. While idle an abort is answered at once with `{event:'stopped'}`; during a post
-/// it sets `requested`, which the post loop checks between every event.
+/// SIGUSR1 bookkeeping. The flag is LATCHED: once set, every post answers `stopped` without posting
+/// until a request written after the abort was seen (`clearAbort`) clears it. That closes the race
+/// where the signal lands after the app wrote a post but before the helper began it.
+/// While idle an abort is also answered at once with `{event:'stopped'}`.
 final class AbortState {
   private let lock = NSLock()
   private var inPost = false
   private var flag = false
-  /// true → the caller should emit the stopped event now (nothing in flight).
+  /// true → nothing in flight: the caller should emit the stopped event now.
   func signal() -> Bool {
     lock.lock(); defer { lock.unlock() }
-    if inPost { flag = true; return false }
-    return true
+    flag = true
+    return !inPost
   }
   var requested: Bool { lock.lock(); defer { lock.unlock() }; return flag }
-  func beginPost() { lock.lock(); inPost = true; flag = false; lock.unlock() }
-  func endPost() { lock.lock(); inPost = false; flag = false; lock.unlock() }
+  func beginPost() { lock.lock(); inPost = true; lock.unlock() }
+  func endPost() { lock.lock(); inPost = false; lock.unlock() }
+  /// Returns whether an abort had latched, and clears it.
+  func clear() -> Bool { lock.lock(); defer { lock.unlock() }; let f = flag; flag = false; return f }
 }
 
 /// Routes SIGUSR1 to `state` through a dispatch source (handler runs in normal context, not in the signal).

@@ -38,11 +38,26 @@ private func emit(_ o: [String: Any]) {
   }
 }
 
-private func handle(_ r: Request, _ poster: Poster) -> [String: Any] {
+private typealias RespFn = @convention(c) (pid_t) -> pid_t
+
+/// `responsibility_get_pid_responsible_for_pid` (private libsystem SPI, present on macOS 10.14+).
+private func responsiblePid(_ pid: pid_t) -> Int32? {
+  guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "responsibility_get_pid_responsible_for_pid") else { return nil }
+  let r = unsafeBitCast(sym, to: RespFn.self)(pid)
+  return r > 0 ? r : nil
+}
+
+/// Decided once at start: may this helper show the TCC prompts?
+private var mayRequest = false
+
+private func handle(_ r: Request, _ poster: Poster, _ abort: AbortState) -> [String: Any] {
   let b = r.body
   switch r.op {
   case "status": return statusReply()
-  case "request": return requestReply(b)
+  case "clearAbort": return ["wasAborted": abort.clear()]
+  case "request":
+    guard mayRequest else { return errorReply(id: nil, code: "caller_refused") }
+    return requestReply(b)
   case "capture": return captureReply(b)
   case "crop": return cropReply(b)
   case "hitTest":
@@ -58,7 +73,15 @@ private func handle(_ r: Request, _ poster: Poster) -> [String: Any] {
   }
 }
 
+/// Exit path for EOF / parent death: stop any post in flight and lift whatever we hold first.
+private func leave(_ abort: AbortState, _ poster: Poster) -> Never {
+  _ = abort.signal()
+  poster.releaseHeld()
+  exit(0)
+}
+
 private func drive(ownerPid: Int32) -> Never {
+  configureAX()
   signal(SIGPIPE, SIG_IGN)
   let abort = AbortState()
   let poster = Poster(abort: abort)
@@ -70,10 +93,10 @@ private func drive(ownerPid: Int32) -> Never {
     let lines = LineBuffer()
     while true {
       let d = FileHandle.standardInput.availableData
-      if d.isEmpty { exit(0) } // EOF: the app closed our stdin
+      if d.isEmpty { leave(abort, poster) } // EOF: the app closed our stdin
       for line in lines.feed(d) {
-        guard let req = parseRequest(line) else { emit(errorReply(id: nil, code: "invalid_args", message: "bad request")); continue }
-        var reply = handle(req, poster)
+        guard let l = line, let req = parseRequest(l) else { emit(errorReply(id: nil, code: "invalid_args", message: "bad request")); continue }
+        var reply = handle(req, poster, abort)
         if reply["ok"] == nil { reply["ok"] = true }
         if let id = req.id { reply["id"] = id }
         emit(reply)
@@ -83,7 +106,7 @@ private func drive(ownerPid: Int32) -> Never {
   reader.stackSize = 4 << 20
   reader.start()
 
-  let watch = Timer(timeInterval: 1, repeats: true) { _ in if getppid() != ownerPid { exit(0) } }
+  let watch = Timer(timeInterval: 1, repeats: true) { _ in if getppid() != ownerPid { leave(abort, poster) } }
   RunLoop.main.add(watch, forMode: .common)
   withExtendedLifetime(sigSrc) { RunLoop.main.run() }
   exit(0)
@@ -99,9 +122,13 @@ case .drive(let owner):
   // V4 caller check: the parent must be the owner; inside an .app the parent must be that app's binary.
   let me = pidPath(getpid()) ?? realPath(CommandLine.arguments[0])
   let ppid = getppid()
-  guard callerAllowed(selfPath: me, ownerPid: owner, ppid: ppid, parentPath: pidPath(ppid)) else {
+  let parentPath = pidPath(ppid)
+  let respSelf = responsiblePid(getpid())
+  guard callerAllowed(selfPath: me, ownerPid: owner, ppid: ppid, parentPath: parentPath),
+        responsibilityOK(selfPid: getpid(), respSelf: respSelf, respParent: responsiblePid(ppid)) else {
     FileHandle.standardError.write(Data("forge-cu: caller not allowed\n".utf8))
     exit(2)
   }
+  mayRequest = requestAllowed(parentPath: parentPath, ppid: ppid, respSelf: respSelf)
   drive(ownerPid: owner)
 }

@@ -12,6 +12,8 @@ final class Poster {
   private let abort: AbortState
   private var heldMods: [String] = []
   private var heldButton: CGMouseButton?
+  private var heldKey: UInt16?
+  private var lastGuard = Guard()
   private var typed = 0
 
   init(abort: AbortState) { self.abort = abort }
@@ -75,11 +77,28 @@ final class Poster {
 
   private func move(_ p: CGPoint) throws { try send(mouse(.mouseMoved, p, .left, flags: [])) }
 
-  /// Lifts everything this process holds. Bypasses the abort flag on purpose.
-  func releaseHeld() {
+  /// A point with none of the denied windows under it, for lifting a held button: the current
+  /// location, then the action's own points, then the main display's corners and centre.
+  private func neutral(_ g: Guard, prefer: [CGPoint]) -> CGPoint? {
+    let b = mainDisplayBounds()
+    let corners = [CGPoint(x: b.minX + 2, y: b.maxY - 2), CGPoint(x: b.maxX - 2, y: b.maxY - 2), CGPoint(x: b.midX, y: b.midY),
+                   CGPoint(x: b.minX + 2, y: b.minY + 40), CGPoint(x: b.maxX - 2, y: b.minY + 40)]
+    let here = CGEvent(source: nil)?.location ?? .zero
+    return neutralPoint(onScreenWindows(), g, bundleOf: bundleOf, candidates: [here] + prefer + corners)
+  }
+
+  /// Lifts everything this process holds. Bypasses the abort flag on purpose. A held button is
+  /// released only after a hit test: over a denied window the pointer first moves to a neutral point.
+  func releaseHeld(prefer: [CGPoint] = []) {
+    if let k = heldKey {
+      key(k, down: false, flags: modifierFlags(heldMods))?.post(tap: .cghidEventTap)
+      heldKey = nil
+    }
     if let b = heldButton {
-      let loc = CGEvent(source: nil)?.location ?? .zero
-      mouse(mouseTypes(b).up, loc, b, flags: [])?.post(tap: .cghidEventTap)
+      let here = CGEvent(source: nil)?.location ?? .zero
+      let at = neutral(lastGuard, prefer: prefer) ?? here
+      if at != here { mouse(mouseTypes(b).drag, at, b, flags: [])?.post(tap: .cghidEventTap); usleep(15_000) }
+      mouse(mouseTypes(b).up, at, b, flags: [])?.post(tap: .cghidEventTap)
       heldButton = nil
     }
     while let m = heldMods.popLast() {
@@ -92,7 +111,12 @@ final class Poster {
   private func pointerOK(_ g: Guard, at p: CGPoint) -> Bool {
     if inputBlockedBySession() { return false }
     let f = workspaceFront()
-    return pointerCheck(g, hit: hitTest(p), frontPid: f?.processIdentifier, frontBundle: f?.bundleIdentifier) == nil
+    let wins = onScreenWindows()
+    let hit = hitTest(p, wins: wins)
+    if pointerCheck(g, hit: hit, frontPid: f?.processIdentifier, frontBundle: f?.bundleIdentifier) != nil { return false }
+    // nothing under the point (empty desktop) and nothing expected: the AX cross-check has nothing to compare
+    guard let h = hit else { return true }
+    return overlayCheck(g, under: windowsUnder(p, wins), hit: h, axPid: axPidAt(p), frontPid: f?.processIdentifier, bundleOf: bundleOf) == nil
   }
 
   private func keyboardOK(_ g: Guard) -> Bool {
@@ -107,6 +131,7 @@ final class Poster {
   func post(_ body: [String: Any]) -> [String: Any] {
     guard let a = body["action"] as? [String: Any], let kind = a["kind"] as? String else { return errorReply(id: nil, code: "invalid_args") }
     let g = parseGuard(body["guard"])
+    lastGuard = g
     typed = 0
     abort.beginPost()
     defer { abort.endPost() }
@@ -122,10 +147,10 @@ final class Poster {
       }
       return [:]
     } catch is Stopped {
-      releaseHeld()
+      releaseHeld(prefer: [point(a["from"]), point(a)].compactMap { $0 })
       return errorReply(id: nil, code: "stopped", extra: kind == "type" ? ["typed": typed] : [:])
     } catch is Changed {
-      releaseHeld()
+      releaseHeld(prefer: [point(a["from"]), point(a)].compactMap { $0 })
       return errorReply(id: nil, code: "target_changed", extra: kind == "type" ? ["typed": typed] : [:])
     } catch {
       releaseHeld()
@@ -144,7 +169,7 @@ final class Poster {
 
   private func click(_ a: [String: Any], _ g: Guard) throws {
     let p = try pt(a), b = button(a["button"])
-    let count = max(1, min(3, (a["count"] as? NSNumber)?.intValue ?? 1))
+    let count = clampInt(num(a["count"]), 1, 3)
     let mods = a["mods"] as? [String] ?? []
     let flags = modifierFlags(mods)
     guard pointerOK(g, at: p) else { throw Changed() }
@@ -152,6 +177,8 @@ final class Poster {
     try modsDown(mods)
     try send(mouse(.mouseMoved, p, b, flags: flags))
     for i in 1...count {
+      // (5) every extra click of a double / triple click re-checks the target
+      if i > 1 { guard pointerOK(g, at: p) else { throw Changed() } }
       try send(mouse(t.down, p, b, flags: flags, clicks: Int64(i)))
       heldButton = b
       try send(mouse(t.up, p, b, flags: flags, clicks: Int64(i)))
@@ -173,12 +200,15 @@ final class Poster {
     try move(g.pointer ?? p)
     try pause(15)
     guard pointerOK(g, at: g.pointer ?? p) else { throw Changed() }
-    var dy = Int((num(a["dy"]) ?? 0).rounded()), dx = Int((num(a["dx"]) ?? 0).rounded())
+    var dy = clampInt(num(a["dy"]), -1000, 1000), dx = clampInt(num(a["dx"]), -1000, 1000)
+    var first = true
     while dy != 0 || dx != 0 {
+      // (5) re-check between wheel chunks
+      if !first { try pause(15); guard pointerOK(g, at: g.pointer ?? p) else { throw Changed() } }
+      first = false
       let sy = max(-10, min(10, dy)), sx = max(-10, min(10, dx))
       try send(CGEvent(scrollWheelEvent2Source: src, units: .line, wheelCount: 2, wheel1: Int32(sy), wheel2: Int32(sx), wheel3: 0))
       dy -= sy; dx -= sx
-      if dy != 0 || dx != 0 { try pause(15) }
     }
   }
 
@@ -188,7 +218,10 @@ final class Poster {
     let flags = modifierFlags(mods)
     guard pointerOK(g, at: from) else { throw Changed() }
     let fromPid = hitTest(from)?.pid
-    let toPidAtStart = hitTest(to)?.pid
+    let toAtStart = hitTest(to)
+    // (4) a drop point that is already ours is refused before anything is pressed
+    if let t0 = toAtStart, denied(g, pid: t0.pid, bundle: t0.bundleId) { throw Changed() }
+    let toPidAtStart = toAtStart?.pid
     let t = mouseTypes(.left)
     try modsDown(mods)
     try send(mouse(.mouseMoved, from, .left, flags: flags))
@@ -208,9 +241,7 @@ final class Poster {
         let k = CGFloat(i) / 5
         try send(mouse(t.drag, CGPoint(x: to.x + (from.x - to.x) * k, y: to.y + (from.y - to.y) * k), .left, flags: flags))
       }
-      try send(mouse(t.up, from, .left, flags: flags))
-      heldButton = nil
-      try modsUp()
+      // the release happens in releaseHeld after a hit test (neutral point if `from` became ours)
       throw Changed()
     }
     try send(mouse(t.up, to, .left, flags: flags))
@@ -231,9 +262,11 @@ final class Poster {
             down?.keyboardSetUnicodeString(stringLength: p.count, unicodeString: p.baseAddress)
             up?.keyboardSetUnicodeString(stringLength: p.count, unicodeString: p.baseAddress)
           }
-          try send(down); try send(up)
+          try send(down); heldKey = 0
+          try send(up); heldKey = nil
         case .key(let code):
-          try send(key(code, down: true, flags: [])); try send(key(code, down: false, flags: []))
+          try send(key(code, down: true, flags: [])); heldKey = code
+          try send(key(code, down: false, flags: [])); heldKey = nil
         }
         typed += seg.units.count
         try pause(8)
@@ -252,13 +285,13 @@ final class Poster {
     } else {
       throw Changed()
     }
-    let repeatN = max(1, min(100, (a["repeat"] as? NSNumber)?.intValue ?? 1))
+    let repeatN = clampInt(num(a["repeat"]), 1, 100)
     let flags = modifierFlags(mods)
     for i in 0..<repeatN {
       guard keyboardOK(g) else { throw Changed() }
       if i == 0 { try modsDown(mods) }
-      try send(key(code, down: true, flags: flags))
-      try send(key(code, down: false, flags: flags))
+      try send(key(code, down: true, flags: flags)); heldKey = code
+      try send(key(code, down: false, flags: flags)); heldKey = nil
       if i < repeatN - 1 { try pause(30) }
     }
     try modsUp()

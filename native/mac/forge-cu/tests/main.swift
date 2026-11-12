@@ -44,7 +44,7 @@ do {
 do {
   let lb = LineBuffer()
   eq(lb.feed("{\"id\":\"r1\",\"op\":\"st".data(using: .utf8)!).count, 0, "partial line held")
-  let lines = lb.feed("atus\"}\n\n{\"id\":2,\"op\":\"front\"}\n{\"id\":".data(using: .utf8)!)
+  let lines = lb.feed("atus\"}\n\n{\"id\":2,\"op\":\"front\"}\n{\"id\":".data(using: .utf8)!).compactMap { $0 }
   eq(lines.count, 2, "two complete lines, blank skipped")
   let r1 = parseRequest(lines[0])
   eq(r1?.op ?? "", "status", "op")
@@ -67,6 +67,16 @@ do {
   eq(err["code"] as? String ?? "", "target_changed", "error code")
   eq(err["typed"] as? Int ?? -1, 5, "error extra")
   eq(err["id"] as? String ?? "", "r9", "error id")
+
+  // (11) a line over the cap is dropped up to its newline and reported once as nil (→ invalid_args)
+  let cap = LineBuffer(maxLine: 16)
+  eq(cap.feed(Data(repeating: 0x61, count: 10)).count, 0, "under the cap, held")
+  eq(cap.feed(Data(repeating: 0x61, count: 10)).count, 1, "crossing the cap reports at once")
+  eq(cap.feed(Data(repeating: 0x61, count: 50)).count, 0, "the rest of the long line is discarded")
+  let after = cap.feed("zz\n{\"op\":\"x\"}\n".data(using: .utf8)!)
+  eq(after.count, 1, "tail of the long line swallowed, next line intact")
+  eq(after.first.flatMap { $0 }.map { String(decoding: $0, as: UTF8.self) } ?? "", "{\"op\":\"x\"}", "next line")
+  eq(LineBuffer().maxLine, 1 << 20, "default cap 1 MB")
   check(errorReply(id: nil, code: "invalid_args")["id"] == nil, "no id → no id key")
 }
 
@@ -231,19 +241,25 @@ do {
   check(coded != nil && coded!.width == 64, "code drawn without resizing")
 }
 
-// ── abort state (V7g) ─────────────────────────────────────────────────────────
+// ── abort state (V7g): the flag is LATCHED until an explicit clearAbort ───────────
 do {
   let st = AbortState()
   eq(st.signal(), true, "abort while idle → emit the stopped event now")
-  eq(st.requested, false, "idle abort leaves nothing pending")
+  eq(st.requested, true, "idle abort stays latched")
+  // the race: SIGUSR1 lands after TS wrote a post but before beginPost — the post must not run
+  st.beginPost()
+  eq(st.requested, true, "beginPost does not clear the latch")
+  st.endPost()
+  eq(st.requested, true, "endPost does not clear the latch")
+  eq(st.clear(), true, "clearAbort reports that an abort had latched")
+  eq(st.requested, false, "cleared")
+  eq(st.clear(), false, "nothing latched now")
   st.beginPost()
   eq(st.signal(), false, "abort during a post → the post answers")
   eq(st.requested, true, "flag set")
   st.endPost()
-  eq(st.requested, false, "flag cleared after the post")
-  st.beginPost()
-  eq(st.requested, false, "a new post starts clean")
-  st.endPost()
+  eq(st.requested, true, "still latched after the post")
+  _ = st.clear()
 
   // the real SIGUSR1 source: raise it at ourselves and see the idle callback
   let st2 = AbortState()
@@ -251,6 +267,7 @@ do {
   let src = installAbortSignal(st2, queue: DispatchQueue(label: "t")) { sem.signal() }
   kill(getpid(), SIGUSR1)
   check(sem.wait(timeout: .now() + 2) == .success, "SIGUSR1 reached the handler while idle")
+  _ = st2.clear()
   st2.beginPost()
   kill(getpid(), SIGUSR1)
   var waited = 0
@@ -259,6 +276,68 @@ do {
   check(sem.wait(timeout: .now() + 0.2) == .timedOut, "no idle event during a post")
   st2.endPost()
   src.cancel()
+}
+
+// ── (2) click-through overlays: AX element at the point + denied windows beneath ──
+do {
+  let g = parseGuard(["denyPids": [459], "denyBundlePrefixes": ["com.zghua.myflowforge"]])
+  let bundles: (Int32) -> String? = { $0 == 459 ? "com.zghua.myflowforge" : ($0 == 999 ? "com.zghua.myflowforge.test" : nil) }
+  let notes = Hit(pid: 321, bundleId: "com.apple.Notes", name: "Notes", layer: 0, windowId: 9, inMenuBar: false)
+  let normal = WinInfo(pid: 321, windowId: 9, layer: 0, alpha: 1, bounds: CGRect(x: 0, y: 0, width: 500, height: 500), ownerName: "Notes")
+  let ours = WinInfo(pid: 459, windowId: 7, layer: 0, alpha: 1, bounds: CGRect(x: 0, y: 0, width: 300, height: 300), ownerName: "myFlowForge")
+  let overlay = WinInfo(pid: 321, windowId: 11, layer: 3, alpha: 1, bounds: CGRect(x: 0, y: 0, width: 500, height: 500), ownerName: "Notes")
+  let faint = WinInfo(pid: 321, windowId: 12, layer: 0, alpha: 0.5, bounds: CGRect(x: 0, y: 0, width: 500, height: 500), ownerName: "Notes")
+  eq(overlayCheck(g, under: [normal, ours], hit: notes, axPid: 321, frontPid: 321, bundleOf: bundles), nil, "normal window above ours, AX agrees")
+  eq(overlayCheck(g, under: [normal, ours], hit: notes, axPid: 459, frontPid: 321, bundleOf: bundles), "target_changed", "AX says the point is ours")
+  eq(overlayCheck(g, under: [normal], hit: notes, axPid: 322, frontPid: 321, bundleOf: bundles), "target_changed", "AX pid differs")
+  eq(overlayCheck(g, under: [normal], hit: notes, axPid: nil, frontPid: 321, bundleOf: bundles), "target_changed", "AX unknown → fail closed")
+  eq(overlayCheck(g, under: [overlay, ours], hit: notes, axPid: 321, frontPid: 321, bundleOf: bundles), "target_changed", "floating overlay over ours")
+  eq(overlayCheck(g, under: [faint, ours], hit: notes, axPid: 321, frontPid: 321, bundleOf: bundles), "target_changed", "translucent window over ours")
+  let testBuild = WinInfo(pid: 999, windowId: 8, layer: 0, alpha: 1, bounds: CGRect(x: 0, y: 0, width: 300, height: 300), ownerName: "myFlowForge Test")
+  eq(overlayCheck(g, under: [overlay, testBuild], hit: notes, axPid: 321, frontPid: 321, bundleOf: bundles), "target_changed", "denied by bundle prefix beneath")
+  eq(overlayCheck(g, under: [overlay], hit: notes, axPid: 321, frontPid: 321, bundleOf: bundles), nil, "overlay with nothing of ours beneath")
+  // menu bar: Window Server owns the strip, AX reports the front app's menu bar
+  let ws = Hit(pid: 88, bundleId: nil, name: "Window Server", layer: 24, windowId: 1, inMenuBar: true)
+  let wsWin = WinInfo(pid: 88, windowId: 1, layer: 24, alpha: 1, bounds: CGRect(x: 0, y: 0, width: 1792, height: 24), ownerName: "Window Server")
+  eq(overlayCheck(g, under: [wsWin], hit: ws, axPid: 321, frontPid: 321, bundleOf: bundles), nil, "menu bar → front app via AX")
+  eq(overlayCheck(g, under: [wsWin], hit: ws, axPid: 400, frontPid: 321, bundleOf: bundles), "target_changed", "menu bar, AX is neither")
+}
+
+// ── (3) responsibility ─────────────────────────────────────────────────────────
+do {
+  check(responsibilityOK(selfPid: 50, respSelf: 459, respParent: 459), "spawned by the app: app is responsible for both")
+  check(!responsibilityOK(selfPid: 50, respSelf: 50, respParent: 459), "self-responsible (disclaimed) helper refuses")
+  check(!responsibilityOK(selfPid: 50, respSelf: 459, respParent: 460), "different responsible process than the parent")
+  check(!responsibilityOK(selfPid: 50, respSelf: nil, respParent: 459), "unknown → refuse")
+  check(!responsibilityOK(selfPid: 50, respSelf: 459, respParent: nil), "unknown parent → refuse")
+  check(requestAllowed(parentPath: "/Applications/myFlowForge.app/Contents/MacOS/myFlowForge", ppid: 459, respSelf: 459), "real app may request")
+  check(!requestAllowed(parentPath: "/bin/zsh", ppid: 77, respSelf: 77), "a shell may not request")
+  check(!requestAllowed(parentPath: "/Applications/myFlowForge.app/Contents/MacOS/myFlowForge", ppid: 459, respSelf: 12), "app binary that isn't the responsible process")
+  check(!requestAllowed(parentPath: nil, ppid: 459, respSelf: 459), "unknown parent path")
+}
+
+// ── (4) neutral point for releasing a held button ────────────────────────────
+do {
+  let g = parseGuard(["denyPids": [459], "denyBundlePrefixes": []])
+  let ours = WinInfo(pid: 459, windowId: 7, layer: 0, alpha: 1, bounds: CGRect(x: 0, y: 0, width: 300, height: 300), ownerName: "x")
+  let notes = WinInfo(pid: 321, windowId: 9, layer: 0, alpha: 1, bounds: CGRect(x: 300, y: 0, width: 300, height: 300), ownerName: "y")
+  eq(neutralPoint([ours, notes], g, bundleOf: { _ in nil }, candidates: [CGPoint(x: 10, y: 10), CGPoint(x: 400, y: 10)]) ?? .zero,
+     CGPoint(x: 400, y: 10), "skips a point over ours")
+  eq(neutralPoint([ours], g, bundleOf: { _ in nil }, candidates: [CGPoint(x: 500, y: 500)]) ?? .zero, CGPoint(x: 500, y: 500), "empty desktop is neutral")
+  let invisibleOurs = WinInfo(pid: 459, windowId: 7, layer: 0, alpha: 0, bounds: CGRect(x: 0, y: 0, width: 300, height: 300), ownerName: "x")
+  check(neutralPoint([invisibleOurs], g, bundleOf: { _ in nil }, candidates: [CGPoint(x: 10, y: 10)]) == nil, "even an invisible window of ours is not neutral")
+  check(neutralPoint([ours], g, bundleOf: { _ in nil }, candidates: [CGPoint(x: 10, y: 10)]) == nil, "no candidate → nil")
+}
+
+// ── (12) clamps before Int() ────────────────────────────────────────────────────
+do {
+  eq(clampInt(1e300, -100, 100), 100, "huge")
+  eq(clampInt(-Double.infinity, -100, 100), -100, "-inf")
+  eq(clampInt(Double.nan, -100, 100), 0, "NaN → 0 (or lo when 0 is out of range)")
+  eq(clampInt(Double.nan, 1, 3), 1, "NaN with range above 0")
+  eq(clampInt(2.6, 1, 3), 3, "rounds")
+  eq(clampInt(nil, 1, 3), 1, "missing → lo")
+  eq(clampInt(nil, -5, 5), 0, "missing → 0 when in range")
 }
 
 print("forge-cu self-test: \(passed) passed, \(failures) failed")

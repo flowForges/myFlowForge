@@ -6,7 +6,7 @@ import ScreenCaptureKit
 private final class Box<T> { var v: T?; init() {} }
 
 /// Captures `srcPt` (global points on the main display) at outW×outH pixels. Error = reply code.
-private func captureMain(srcPt: CGRect, outW: Int, outH: Int) -> Result<CGImage, CaptureError> {
+private func captureMain(srcPt: CGRect, outW: Int, outH: Int, body: [String: Any]) -> Result<CGImage, CaptureError> {
   guard #available(macOS 14.0, *) else { return .failure(CaptureError("os")) }
   // Never let capture be the thing that shows the Screen Recording prompt: only `request` may.
   guard CGPreflightScreenCaptureAccess() else { return .failure(CaptureError("no_permission")) }
@@ -15,7 +15,12 @@ private func captureMain(srcPt: CGRect, outW: Int, outH: Int) -> Result<CGImage,
   let mainId = CGMainDisplayID()
   SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: true) { content, _ in
     guard let display = content?.displays.first(where: { $0.displayID == mainId }) else { sem.signal(); return }
-    let filter = SCContentFilter(display: display, excludingWindows: [])
+    // (17) our own apps are left out of the frame by ScreenCaptureKit itself (macOS 12.3+); the gray
+    // masks painted afterwards still mark where they are
+    let pids = (body["maskPids"] as? [Any] ?? []).compactMap(int32)
+    let prefixes = body["maskBundlePrefixes"] as? [String] ?? []
+    let ours = (content?.applications ?? []).filter { pids.contains($0.processID) || matchesPrefix($0.bundleIdentifier, prefixes) }
+    let filter = SCContentFilter(display: display, excludingApplications: ours, exceptingWindows: [])
     let cfg = SCStreamConfiguration()
     cfg.width = outW
     cfg.height = outH
@@ -49,7 +54,7 @@ func captureReply(_ body: [String: Any]) -> [String: Any] {
   let (w, h) = fitSize(srcW: Int(src.width * backing), srcH: Int(src.height * backing), maxW: maxW, maxH: maxH)
   let before = masks(body)
   let img: CGImage
-  switch captureMain(srcPt: src, outW: w, outH: h) {
+  switch captureMain(srcPt: src, outW: w, outH: h, body: body) {
   case .failure(let e): return errorReply(id: nil, code: e.code)
   case .success(let i): img = i
   }
@@ -80,7 +85,7 @@ func cropReply(_ body: [String: Any]) -> [String: Any] {
   let w = max(1, Int((src.width * backing).rounded())), h = max(1, Int((src.height * backing).rounded()))
   let before = masks(body)
   let img: CGImage
-  switch captureMain(srcPt: src, outW: w, outH: h) {
+  switch captureMain(srcPt: src, outW: w, outH: h, body: body) {
   case .failure(let e): return errorReply(id: nil, code: e.code)
   case .success(let i): img = i
   }

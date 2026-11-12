@@ -29,18 +29,33 @@ func menuBarHeight() -> CGFloat {
 }
 
 /// Front-to-back first visible window containing `p` (global points), with V7 fields.
-func hitTest(_ p: CGPoint) -> Hit? {
-  guard let w = hitWindow(onScreenWindows(), at: p) else { return nil }
+func hitTest(_ p: CGPoint, wins: [WinInfo] = onScreenWindows()) -> Hit? {
+  guard let w = hitWindow(wins, at: p) else { return nil }
   let app = runningApp(w.pid)
   return Hit(pid: w.pid, bundleId: app?.bundleIdentifier, name: w.ownerName ?? app?.localizedName, layer: w.layer,
              windowId: w.windowId, inMenuBar: inMenuBar(p, mainBounds: mainDisplayBounds(), menuBarHeight: menuBarHeight()))
 }
 
+private let axSystem = AXUIElementCreateSystemWide()
+
+/// A hung app must not stall a post: AX calls give up after 0.3 s (then the guard fails closed).
+func configureAX() { AXUIElementSetMessagingTimeout(axSystem, 0.3) }
+
+/// pid owning the AX element at a global point (what a click there would actually reach).
+func axPidAt(_ p: CGPoint) -> Int32? {
+  var el: AXUIElement?
+  guard AXUIElementCopyElementAtPosition(axSystem, Float(p.x), Float(p.y), &el) == .success, let e = el else { return nil }
+  var pid: pid_t = 0
+  return AXUIElementGetPid(e, &pid) == .success ? pid : nil
+}
+
+/// Every on-screen window containing `p`, front to back (alpha 0 included).
+func windowsUnder(_ p: CGPoint, _ wins: [WinInfo]) -> [WinInfo] { wins.filter { $0.bounds.contains(p) } }
+
 /// pid of the system-wide AX element's focused application (nil when AX is unavailable / untrusted).
 func axFocusedPid() -> Int32? {
-  let sys = AXUIElementCreateSystemWide()
   var v: CFTypeRef?
-  guard AXUIElementCopyAttributeValue(sys, kAXFocusedApplicationAttribute as CFString, &v) == .success, let el = v,
+  guard AXUIElementCopyAttributeValue(axSystem, kAXFocusedApplicationAttribute as CFString, &v) == .success, let el = v,
         CFGetTypeID(el) == AXUIElementGetTypeID() else { return nil }
   var pid: pid_t = 0
   guard AXUIElementGetPid(el as! AXUIElement, &pid) == .success else { return nil }
