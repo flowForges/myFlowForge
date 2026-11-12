@@ -447,6 +447,10 @@ export interface ChatSendPayload {
   browserUse?: import('./browserUse').BrowserUseMode
   /** 这一轮用 codex 快速档(会话级设置,一路带到 ChatTask.fast)。 */
   fast?: boolean
+  /**
+   * 这一轮从哪来。只有主进程在入口处盖章,缺省按非本机 —— 电脑操作只对 'local' 的轮次开放(默认拒绝)。
+   */
+  origin?: 'local' | 'remote' | 'bot' | 'pet' | 'workflow'
 }
 export interface ChatQueueEvent { workspacePath: string; busy: boolean; queue: { id: string; text: string; source: string; sessionId: string }[]; running: { id: string; text: string; sessionId: string } | null; runningTurns: { id: string; text: string; sessionId: string }[]; runningSessionId: string | null; runningSessionIds: string[]; backgroundTasks?: Record<string, number> }
 export type ChatEvent = { workspacePath: string; sessionId: string } & (
