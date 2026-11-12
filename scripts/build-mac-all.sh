@@ -125,5 +125,9 @@ check_arch mac x86_64
 check_arch mac-arm64 arm64
 
 echo ""
+echo "▸ 验收:forge-cu 不带任何 entitlements(V13)"
+node scripts/cuHelperCheck.cjs release/mac/myFlowForge.app release/mac-arm64/myFlowForge.app
+
+echo ""
 echo "▸ built dmgs:"
 ls -1 release/*.dmg

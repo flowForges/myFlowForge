@@ -88,6 +88,8 @@ describe('packaging wiring', () => {
     expect(b).toBeGreaterThan(-1)
     expect(h).toBeGreaterThan(b)
     expect(sh.slice(b + 1, h).some((l) => l.startsWith('npx electron-builder'))).toBe(false)
+    // (16) after packaging, the shipped helper is checked to carry no entitlements
+    expect(sh).toContain('node scripts/cuHelperCheck.cjs release/mac/myFlowForge.app release/mac-arm64/myFlowForge.app')
   })
 
   it('package.json has build:cu-helper', () => {
