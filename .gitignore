@@ -6,6 +6,8 @@ out/
 ~/
 docs
 release/
+# forge-cu (computer use) universal binary, built by scripts/build-cu-helper.mjs
+build/native/
 # superpowers brainstorm/plan artifacts — kept local, never published
 .superpowers/
 # codex pet-build run artifacts (intermediate frames / 3d-import scratch) — never publish

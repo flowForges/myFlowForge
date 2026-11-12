@@ -12,6 +12,7 @@
     "dist:win": "node scripts/build-win.mjs x64",
     "dist:win-arm64": "node scripts/build-win.mjs arm64",
     "make-win-icon": "node scripts/make-win-icon.mjs",
+    "build:cu-helper": "node scripts/build-cu-helper.mjs",
     "test": "vitest run",
     "check:daemon": "FORGE_DAEMON_CHECK=1 vitest run src/main/daemon/daemonProcess.test.ts",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",

@@ -74,6 +74,13 @@ mac:
   target:
     - dmg
     - dir
+  # computer-use helper forge-cu (built by scripts/build-cu-helper.mjs). Platform-level list: it is
+  # merged with the top-level extraResources above (Task 12 checks the pet pack / icons / plugins survive).
+  extraResources:
+    - from: build/native/darwin
+      to: native
+      filter:
+        - "forge-cu"
   # ★默认不签名。afterPack 随后打一个 ad-hoc 签名(codesign --sign -)，好让 macOS 通知能登记并弹出。
   # Gatekeeper 仍会拦（身份不明的开发者）—— 右键→打开，或 `xattr -dr com.apple.quarantine`。
   #

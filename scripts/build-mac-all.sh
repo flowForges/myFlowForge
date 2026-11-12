@@ -80,6 +80,11 @@ ARM_DIST="$(node scripts/electronDist.mjs darwin arm64)"
 echo "▸ compiling renderer/main (electron-vite build)…"
 npm run build
 
+# computer-use helper (universal Swift binary → build/native/darwin/forge-cu → Resources/native/forge-cu).
+# --require: a dist without swiftc must fail here, not ship an app whose helper is missing.
+echo "▸ forge-cu helper (swiftc x86_64 + arm64 → lipo)…"
+node scripts/build-cu-helper.mjs --require
+
 echo "▸ x64 dmg (dist: ${X64_DIST})…"
 npx electron-builder --mac --x64 -c.electronDist="${X64_DIST}" "${SIGN_ARGS[@]+"${SIGN_ARGS[@]}"}"
 
