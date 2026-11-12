@@ -65,7 +65,24 @@ export function readSettings(): Settings {
   // 而不是让整份设置回落默认值。
   const client = safeParse(ClientSettingsSchema, overlay(pickClient(d) as never, clientSrc), () => pickClient(d))
   const host = safeParse(HostSettingsSchema, overlay(pickHost(d) as never, hostSrc), () => pickHost(d))
-  return { ...d, ...host, ...client }
+  return latchProvisioned({ ...d, ...host, ...client })
+}
+
+// ★C-1:`computerUse.provisioned` 只增不减(本次运行内)。它一旦为真,每个 agent CLI 都经 forge-cu exec 断掉
+//  授权继承(spec V3);若能被拨回 false,agent 的 Bash 就又能借 app 的辅助功能去点我们自己的「允许」。
+//  所以:读到过一次 true 就锁存,之后 client.json 被改写 / 损坏、渲染层带着旧快照写回,都读成 true、写回 true。
+//  跨重启的那一半(启动前就被改写的文件)见 spec V16 的残留。
+let provisionedSeen = false
+/** 测试专用:模拟一次新的 app 运行。 */
+export function resetProvisionedLatchForTest(): void { provisionedSeen = false }
+function latchProvisioned(s: Settings): Settings {
+  if (s.computerUse?.provisioned === true) provisionedSeen = true
+  if (!provisionedSeen || s.computerUse?.provisioned === true) return s
+  return { ...s, computerUse: { ...s.computerUse, provisioned: true } }
+}
+function storedProvisioned(): boolean {
+  const raw = readRaw(clientFile()) as { computerUse?: { provisioned?: unknown } } | null
+  return raw?.computerUse?.provisioned === true
 }
 
 function safeParse<T>(schema: z.ZodType<T>, value: unknown, fallback: () => T): T {
@@ -96,7 +113,10 @@ function overlay(base: Record<string, unknown>, over: unknown): Record<string, u
 }
 
 export function writeSettings(s: Settings) {
-  const parsed = SettingsSchema.parse(s)
+  let parsed = SettingsSchema.parse(s)
+  // C-1 写的一侧:与已落盘的值、与本次运行的锁存取 OR —— 没有任何写入能把它清掉。
+  if (parsed.computerUse.provisioned !== true && storedProvisioned()) provisionedSeen = true
+  parsed = latchProvisioned(parsed)
   writeJson(hostFile(), pickHost(parsed))
   writeJson(clientFile(), pickClient(parsed))
 }

@@ -54,7 +54,15 @@ interface DisclaimConfig { launcher: () => string | null; enabled: () => boolean
 let disclaimCfg: DisclaimConfig = { launcher: () => null, enabled: () => false, platform: process.platform }
 
 export function configureDisclaim(o: { launcher: () => string | null; enabled: () => boolean; platform?: NodeJS.Platform }): void {
-  disclaimCfg = { launcher: o.launcher, enabled: o.enabled, platform: o.platform ?? process.platform }
+  // ★C-1 读的一侧:enabled() 一旦答过 true 就锁存到下一次 configureDisclaim(= 下一次 app 启动)。
+  //  设置文件之后被改写成 false、或读的时候抛错,都不会让后面的 agent 重新继承授权。
+  let latched = false
+  const enabled = () => {
+    if (latched) return true
+    try { if (o.enabled() === true) latched = true } catch { /* 没锁存时按原样:不断继承 */ }
+    return latched
+  }
+  disclaimCfg = { launcher: o.launcher, enabled, platform: o.platform ?? process.platform }
 }
 
 function isExecFile(p: string): boolean {

@@ -127,6 +127,32 @@ describe('disclaimedSpawnArgs', () => {
   })
 })
 
+// C-1: the reader side. Once enabled() has said true in this run, the seam stays on even if the settings read
+// later says false (client.json rewritten) or throws (corrupted), until configureDisclaim runs again (app start).
+describe('enabled() is latched', () => {
+  it('true once → stays true when the source flips to false or throws', () => {
+    let src: () => boolean = () => false
+    on({ enabled: () => src() })
+    expect(disclaimedSpawnArgs('claude', [], { PATH: binDir }).disclaimed).toBe(false)
+    src = () => true
+    expect(disclaimedSpawnArgs('claude', [], { PATH: binDir }).disclaimed).toBe(true)
+    src = () => false
+    expect(disclaimedSpawnArgs('claude', [], { PATH: binDir }).disclaimed).toBe(true)
+    src = () => { throw new Error('corrupt') }
+    expect(disclaimedSpawnArgs('claude', [], { PATH: binDir }).disclaimed).toBe(true)
+  })
+
+  it('a non-boolean truthy value does not latch', () => {
+    on({ enabled: () => 'yes' as unknown as boolean })
+    expect(disclaimedSpawnArgs('claude', [], { PATH: binDir }).disclaimed).toBe(false)
+  })
+
+  it('a throwing source before any true stays off (today\'s behaviour)', () => {
+    on({ enabled: () => { throw new Error('x') } })
+    expect(disclaimedSpawnArgs('claude', [], { PATH: binDir }).disclaimed).toBe(false)
+  })
+})
+
 describe('spawnAgent goes through the seam', () => {
   it('provisioned: execa(launcher, [exec, --, abs claude, …args]) with the same options + process group', () => {
     on()
