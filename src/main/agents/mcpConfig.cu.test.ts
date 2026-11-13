@@ -3,7 +3,9 @@ import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { COMPUTER_TOOLS } from '@shared/computerUse'
-import { forgeCodexConfigArgs, forgeMcpArgs, forgeMcpConfigFile } from './mcpConfig'
+import { CU_TOOL_TIMEOUT_SEC, forgeCodexConfigArgs, forgeMcpArgs, forgeMcpConfigFile } from './mcpConfig'
+import { CU_QUEUE_MAX, GATE_TIMEOUT_MS } from '../computerUse/service'
+import { MAX_RATE_WAIT_MS } from '../computerUse/executor'
 
 // I-1: a computer-use token (`cu.…`) must not show up in argv (`ps` shows every process's args to every local
 // user) or in a directory listing. Non-cu agent ids keep today's behaviour (mcpConfig.test.ts is unchanged).
@@ -58,7 +60,14 @@ describe('codex: -c overrides for a cu token', () => {
 // Review Focus 6: computer tools wait on the user's approval (up to 5 min) — codex's default MCP tool timeout is
 // far shorter, so a long one is set, and only when computer tools are named.
 describe('codex: tool_timeout_sec for computer tools', () => {
-  const TIMEOUT = 'mcp_servers.forge.tool_timeout_sec=600'
+  const TIMEOUT = `mcp_servers.forge.tool_timeout_sec=${CU_TOOL_TIMEOUT_SEC}`
+  it('exceeds the worst-case wait: CU_QUEUE_MAX calls, each up to 3 gates + rate wait + computer_wait + helper ops', () => {
+    // per call: a continue gate, an action gate and its one stale re-open (3 × GATE_TIMEOUT_MS), the pace wait
+    // (MAX_RATE_WAIT_MS), computer_wait's max (10 s), and ≤ 60 s of helper round trips (status ×3, front, 4 hit
+    // tests, 4 crops at 5 s, activate, capture, post); a call waits behind at most CU_QUEUE_MAX - 1 others.
+    const perCallS = (3 * GATE_TIMEOUT_MS + MAX_RATE_WAIT_MS + 10_000) / 1000 + 60
+    expect(CU_TOOL_TIMEOUT_SEC).toBeGreaterThan(CU_QUEUE_MAX * perCallS)
+  })
   it('is added when FORGE_TOOLS names a computer_ tool (cu token or not)', () => {
     expect(forgeCodexConfigArgs(env())).toEqual(expect.arrayContaining(['-c', TIMEOUT]))
     const a = forgeCodexConfigArgs({ ...env(), FORGE_AGENT_ID: 'stage:dev', FORGE_TOOLS: 'forge_ask,computer_click' })

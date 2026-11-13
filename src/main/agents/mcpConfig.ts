@@ -111,6 +111,15 @@ export function forgeAllowedToolNames(env: NodeJS.ProcessEnv): string[] {
 }
 
 /**
+ * codex's timeout for one computer tool call, in seconds. It must outlast the worst wait, or codex gives up on a call
+ * that is still queued or at a gate. Per call: a continue gate, an action gate and its one stale re-open, 3 × 300 s;
+ * the pace wait, 2 s; computer_wait's max, 10 s; and at most 60 s of helper round trips. That is ≈ 972 s per call.
+ * A call waits behind at most 2 others (service CU_QUEUE_MAX = 3), so 3 × 972 = 2916 s, rounded up to 3000.
+ * (A call codex does cancel is dropped by the service, so a timeout never leaves a ghost action queued.)
+ */
+export const CU_TOOL_TIMEOUT_SEC = 3000
+
+/**
  * codex has no `--mcp-config` equivalent; an MCP server can only be registered in-place via
  * `-c mcp_servers.<name>.*` overrides (value parsed as TOML). Returns the three -c overrides
  * registering the forge server, or [] when env is incomplete (no injection).
@@ -118,9 +127,8 @@ export function forgeAllowedToolNames(env: NodeJS.ProcessEnv): string[] {
 export function forgeCodexConfigArgs(env: NodeJS.ProcessEnv): string[] {
   const spec = forgeServerSpec(env)
   if (!spec) return []
-  // A computer tool can wait up to 5 min on the user's approval card; codex's default tool timeout is far shorter.
   const names = (env.FORGE_TOOLS ?? '').split(',').map(t => t.trim())
-  const timeout = names.some(t => t.startsWith('computer_')) ? ['-c', 'mcp_servers.forge.tool_timeout_sec=600'] : []
+  const timeout = names.some(t => t.startsWith('computer_')) ? ['-c', `mcp_servers.forge.tool_timeout_sec=${CU_TOOL_TIMEOUT_SEC}`] : []
   return [...forgeCodexServerArgs(spec), ...timeout]
 }
 
