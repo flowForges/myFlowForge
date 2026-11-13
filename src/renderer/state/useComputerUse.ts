@@ -116,12 +116,16 @@ export function useComputerUse(workspacePath: string, sessionId: string): Comput
     } catch { return 'unsupported' }
   }, [workspacePath, sessionId])
 
+  const thumb = useCallback(async (file: string): Promise<string | null> => {
+    try { return (await bridge()?.thumb({ workspacePath, sessionId, file })) ?? null } catch { return null }
+  }, [workspacePath, sessionId])
+
   return {
     status, mode, busyBy: holder ? { title: holder.title } : undefined, gates, log,
     setMode,
     resolve: (id, d) => { void bridge()?.resolve({ id, decision: d }) },
     stop: () => { void bridge()?.stop({ workspacePath, sessionId }) },
-    thumb: async (file) => { try { return (await bridge()?.thumb({ workspacePath, sessionId, file })) ?? null } catch { return null } },
+    thumb,
     refreshStatus,
   }
 }
