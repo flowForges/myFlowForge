@@ -9,6 +9,8 @@ import { providerSupportsPermissions, providerEnforcesReadonly, providerUsesComm
 import { acpKnownUnavailable, withAcpAvailability } from '../agents/acp/acpAvailability'
 import { isAcpUnavailable } from '../agents/acp/acpChat'
 import { browserPermissionConflict, providerSupportsBrowserUse, DEFAULT_BROWSER_USE, BROWSER_TOOL_PREFIX } from '@shared/browserUse'
+import { cuPreflight, cuBeginTurn } from '../computerUse/chatTurn'
+import { computerUseHandlers } from '../computerUse/ipc'
 import { userMessageOf } from '../chat/userMessage'
 import { expandTilde } from '../config/paths'
 import { buildWorkflow } from '../config/buildWorkflow'
@@ -957,6 +959,22 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         return
       }
     }
+    // ★★电脑操作:同一条「拒绝整轮 + 说清原因、不改任何设置」的路(spec §5.3)。只查本机轮次 —— 别的轮次本来就
+    //  拿不到工具,照常跑。档取载荷与落盘里**更严**的那个:codex 必须两边都已是「完全访问」才放行。
+    const cu = caps.computerUse?.()
+    const cuKey = { workspacePath: payload.workspacePath, sessionId: payload.sessionId }
+    const cuPre = await cuPreflight(cu, cuKey, {
+      origin: payload.origin,
+      agent: payload.agent,
+      perm: stricterPermissionMode(payload.permissionMode ?? DEFAULT_PERMISSION_MODE, getSession(payload.workspacePath, payload.sessionId)?.permissionMode ?? DEFAULT_PERMISSION_MODE),
+    })
+    if (cuPre.conflict) {
+      const um = userMessageOf(payload)
+      appendMessage(payload.workspacePath, payload.sessionId, um)
+      broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: payload.sessionId, type: 'user', message: um })
+      emitNote(payload.workspacePath, payload.sessionId, `⛔ 这一轮没有发出:${cuPre.conflict}`)
+      return
+    }
     const provider = providers[payload.agent] ?? providers['claude'] ?? Object.values(providers)[0]
     const confirm = (req: { title: string; where?: string; questions?: AskQuestion[]; toolName?: string; onAutoAllow?: () => void; background?: boolean }) => new Promise<ConfirmDecision>((resolve) => {
       const id = `cc-${++chatConfirmSeq}`
@@ -1179,6 +1197,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         })
       },
     }
+    // 轮次登记 + 只给本机轮次注入 FORGE_*(V12)。endTurn 在 finally 的第一行。
+    const endCuTurn = cuBeginTurn(cu, cuKey, {
+      origin: payload.origin, agent: payload.agent, armed: cuPre.armed, env, mcpEntry,
+      note: (t) => emitNote(payload.workspacePath, payload.sessionId, t),
+    })
     try {
       const msg = await sendTurn(turnPayload, {
         provider,
@@ -1199,6 +1222,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       return msg
     }
     finally {
+      endCuTurn()
       await authBroker?.close().catch(() => { /* 已经没了 */ })
       // The turn is over. If it ended while a CLI permission gate (confirm) was still open — CLI/turn
       // timeout, error, or the user moved on — drain THIS turn's confirm gates so the pet's 需确认
@@ -1217,10 +1241,24 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   }
   const chatQueue = new ChatQueue(runTurn, broadcast)
   // 归档 / 删除 / 移除:在途的一轮和后台进程都要停,而它们是异步退出的,收尾那一下不能再往里写。
-  const stopWorkspaceChats = (path: string) => {
+  // 会话删除 / 关闭、工作区归档 / 删除 / 移除:档回到关、令牌作废、门按拒绝收掉(service.forget)。
+  //  动作记录只在**删除**时一起删(removeLog);归档 / 移除还能恢复,记录留着。
+  const forgetComputerUse = (wsPath: string, sessionId: string | undefined, removeLog: boolean) => {
+    const cu = caps.computerUse?.()
+    if (!cu) return
+    const keys = sessionId
+      ? [{ workspacePath: wsPath, sessionId }]
+      : cu.service.sessions().filter((s) => s.workspacePath === wsPath).map((s) => ({ workspacePath: wsPath, sessionId: s.sessionId }))
+    for (const key of keys) cu.service.forget(key)
+    if (!removeLog) return
+    const ids = new Set([...keys.map((k) => k.sessionId), ...(sessionId ? [] : readSessions(wsPath).sessions.map((s) => s.id))])
+    for (const id of ids) void cu.log.remove({ workspacePath: wsPath, sessionId: id }).catch(() => { /* 记录本来就没有 */ })
+  }
+  const stopWorkspaceChats = (path: string, opts: { removeCuLog?: boolean } = {}) => {
     sealedWorkspaces.add(path)
     chatQueue.clear(path); chatQueue.stop(path)
     drainChatGates(path)
+    forgetComputerUse(path, undefined, opts.removeCuLog === true)
   }
   on(CH.chatSend, (_e, payload: ChatSendPayload, source?: string) => {
     if (isArchivedWorkspace(payload.workspacePath)) throw new Error('工作区已归档，恢复后才能继续。')
@@ -1238,11 +1276,25 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const via = _e?.client && _e.client.id !== 'local' ? _e.client.label : undefined
     // 快速档是会话级的:载荷没带(手机 / 远程客户端不认识这个开关)就按落盘的会话补上。
     const fast = payload.fast ?? getSession(payload.workspacePath, payload.sessionId)?.fast
-    chatQueue.enqueue({ ...payload, via, fast }, source ?? '你')
+    // ★★发起方由这里盖章,覆盖客户端自报的值:电脑操作只对 'local' 的轮次开放(spec §5.2)。
+    //  远程连接判在宠物之前 —— 远程客户端自称「宠物」也还是远程。
+    const fromRemote = !!(_e?.client && _e.client.id !== 'local')
+    const origin: ChatSendPayload['origin'] = fromRemote ? 'remote' : source === '宠物' ? 'pet' : 'local'
+    chatQueue.enqueue({ ...payload, via, fast, origin }, source ?? '你')
     // CLI 自己那一轮正卡在主代理的门上:拒掉,那一轮收尾了这条消息才轮得到。后台子代理的门不动。
     if (chatQueue.runningAdopted(payload.workspacePath, payload.sessionId)) drainChatGates(payload.workspacePath, { sessionId: payload.sessionId, type: 'confirm', scope: 'turn' })
   })
   on(CH.chatQueueState, (_e, a: { workspacePath: string }) => chatQueue.snapshot(a.workspacePath))
+  // 电脑操作十一条(全部 CLIENT_ONLY,handler 里再查一道本机,见 computerUse/ipc.ts)
+  for (const [ch, fn] of Object.entries(computerUseHandlers({
+    cu: () => caps.computerUse?.(),
+    markRequested: (kind) => {
+      const cur = readSettings()
+      const cus = cur.computerUse
+      writeSettings({ ...cur, computerUse: { ...cus, requested: { ...cus?.requested, [kind]: true } } } as Settings)
+      const next = readSettings(); broadcast(CH.settingsChanged, next); onSettings?.(next)
+    },
+  }))) on(ch, fn)
   // 还挂着的确认/提问门快照。聊天视图每次挂载都拉一次,把主进程仍在阻塞等待的门重建成卡片。
   // 不做任何清理:这里只是【读】,门的生命周期仍由回答 / drainChatGates 负责。
   on(CH.chatGateState, (_e, a: { workspacePath: string }): ChatGateSnapshot => {
@@ -1421,6 +1473,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     if (!file.sessions.some(s => s.id === a.sessionId)) {
       chatQueue.stopBackground(a.workspacePath, a.sessionId)
       drainChatGates(a.workspacePath, { sessionId: a.sessionId })
+      forgetComputerUse(a.workspacePath, a.sessionId, true)   // 档、令牌、门一起作废;会话没了,动作记录也删
     }
     broadcastSessions(a.workspacePath, file)
     return sessionsOut(a.workspacePath, file)
@@ -1480,6 +1533,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       browserUse: getSession(workspacePath, sessionId)?.browserUse,
       // 快速档同理是会话级的(codex.ts 会再按模型有没有快速档兜一层)。
       fast: getSession(workspacePath, sessionId)?.fast,
+      origin: 'workflow',
     }, '工作流')
   }
   on(CH.workflowEnter, (_e, p: LaunchStartConfig) => {
@@ -1686,6 +1740,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       ...(payload as ChatSendPayload),
       browserUse: getSession(payload.workspacePath, payload.sessionId)?.browserUse,
       fast: getSession(payload.workspacePath, payload.sessionId)?.fast,
+      origin: 'bot',   // 覆盖桥带来的任何值:机器人发起的轮次永远拿不到电脑工具
     }, source),
     resolveChatGate: resolveChatGateById,
     resolveRun2Gate: (ws, eventId, decision) => run2Manager.resolveGate(ws, eventId, decision),
@@ -2284,7 +2339,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   })
   on(CH.workspaceDelete, async (_e, path: string) => {
     cancelWorkspaceDelegates(path)   // 删除前先停掉后台 delegate 子代理,避免孤儿进程仍在读/写将被删的目录
-    stopWorkspaceChats(path)
+    stopWorkspaceChats(path, { removeCuLog: true })
     const r = await deleteWorkspace(path)
     broadcast(CH.workspacesChanged, {})
     return { ...r, list: wsList() }

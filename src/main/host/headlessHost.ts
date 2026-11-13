@@ -41,5 +41,7 @@ export function createHeadlessHost(opts: { version: string; onLog?: (m: string) 
     saveFile: async (name) => ({ ok: false, error: cannot(`保存 ${name}`) }),
     notify: (n) => log(`[通知] ${n.title} — ${n.body}`),
     fileIcon: async () => undefined,
+    // 电脑操作驱动的是有人看着的那块屏幕;无头机器上没有
+    computerUse: () => undefined,
   }
 }

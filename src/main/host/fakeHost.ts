@@ -21,6 +21,7 @@ export function fakeHost(over: Partial<HostCapabilities> = {}): HostCapabilities
     saveFile: async () => ({ ok: false, canceled: true }),
     notify: () => {},
     fileIcon: async () => undefined,
+    computerUse: () => undefined,
     ...over,
   }
 }

@@ -436,6 +436,21 @@ export const CH = {
   // Run-state UX fix: delete one run-history entry's saved state (never the workspace's currently
   // live run — see run2Handlers.ts's guard).
   run2DeleteRun: 'run2:delete-run',
+  // Computer use (macOS). All eleven methods are CLIENT_ONLY: they drive the screen in front of you, so they are
+  // answered on this device even while the window views a remote host, and daemonTable() drops them (spec V1).
+  cuStatus: 'computer-use:status',
+  cuState: 'computer-use:state',
+  cuSetMode: 'computer-use:set-mode',
+  cuResolve: 'computer-use:resolve',
+  cuStop: 'computer-use:stop',
+  cuLog: 'computer-use:log',
+  cuThumb: 'computer-use:thumb',
+  cuRequestPermission: 'computer-use:request-permission',
+  cuOpenSettings: 'computer-use:open-settings',
+  cuRunningApps: 'computer-use:running-apps',
+  cuCollapseMain: 'computer-use:collapse-main',
+  // event: local sink only (registry.broadcast), never hub / router (spec V2)
+  cuEvent: 'computer-use:event',
 } as const
 
 // Individual named exports (in addition to the CH object above) so callers can `import * as CH from

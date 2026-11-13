@@ -342,6 +342,25 @@ const api = {
     return () => { ipcRenderer.removeListener(CH.windowMaximizedChanged, listener) }
   },
   appRelaunch: () => ipcRenderer.invoke(CH.appRelaunch),
+  // 电脑操作(本机专属,CLIENT_ONLY)。事件只走本机直推(spec V2)。
+  computerUse: {
+    status: (): Promise<import('@shared/computerUse').CuStatus> => ipcRenderer.invoke(CH.cuStatus),
+    state: () => ipcRenderer.invoke(CH.cuState),
+    setMode: (a: { workspacePath: string; sessionId: string; mode: import('@shared/computerUse').ComputerUseMode }) => ipcRenderer.invoke(CH.cuSetMode, a),
+    resolve: (a: { id: string; decision: 'allow' | 'deny' | 'stop' }) => ipcRenderer.invoke(CH.cuResolve, a),
+    stop: (a?: { workspacePath: string; sessionId: string }) => ipcRenderer.invoke(CH.cuStop, a),
+    log: (a: { workspacePath: string; sessionId: string }) => ipcRenderer.invoke(CH.cuLog, a),
+    thumb: (a: { workspacePath: string; sessionId: string; file: string }): Promise<string | null> => ipcRenderer.invoke(CH.cuThumb, a),
+    requestPermission: (a: { kind: 'screen' | 'ax' }) => ipcRenderer.invoke(CH.cuRequestPermission, a),
+    openSettings: (a: { kind: 'screen' | 'ax' }) => ipcRenderer.invoke(CH.cuOpenSettings, a),
+    runningApps: (): Promise<{ bundleId: string; name: string }[]> => ipcRenderer.invoke(CH.cuRunningApps),
+    collapseMain: () => ipcRenderer.invoke(CH.cuCollapseMain),
+    onEvent: (cb: (e: unknown) => void) => {
+      const listener = (_: unknown, e: unknown) => cb(e)
+      ipcRenderer.on(CH.cuEvent, listener)
+      return () => ipcRenderer.removeListener(CH.cuEvent, listener)
+    },
+  },
   appVibrancyBaseline: (): Promise<number> => ipcRenderer.invoke(CH.appVibrancyBaseline),
   getAppIconOptions: (): Promise<Array<{ id: import('@shared/types').DockIcon; label: string; filename: string; src: string }>> => ipcRenderer.invoke(CH.appIconOptions),
   termCreate: (opts: { termId: string; cwd?: string; cols: number; rows: number }) => ipcRenderer.invoke(CH.termCreate, opts),

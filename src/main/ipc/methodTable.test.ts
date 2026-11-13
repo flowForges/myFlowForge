@@ -78,6 +78,7 @@ describe('方法表', () => {
     // 217 → 227:AI 共商十条(council:start / pause / resume / stop / interject / followup / choose /
     //   list / last-config / projects),全是 host 方法;council:state 是广播,不进表。
     // 227 → 228:council:stop-seat(只停一位席位的这次发言),host 方法。
-    expect(Object.keys(table).length).toBe(228)
+    // 228 → 239:电脑操作十一条 computer-use:*(spec V1),全部 CLIENT_ONLY —— channelRouting 的 client 47 → 58,host 181 不动。
+    expect(Object.keys(table).length).toBe(239)
   })
 })

@@ -63,4 +63,22 @@ export interface HostCapabilities {
 
   /** 提取某个可执行文件的图标,data URL。无头宿主返回 undefined */
   fileIcon(path: string): Promise<string | undefined>
+
+  /**
+   * 电脑操作(只有 darwin 的 Electron 宿主给)。undefined = 这台宿主不支持:IPC 答 `{supported:false}` /
+   * `unsupported`,聊天轮次一个 FORGE_\* 都不加。
+   */
+  computerUse?(): ComputerUseHost | undefined
+}
+
+export interface ComputerUseHost {
+  service: import('../computerUse/service').ComputerUseService
+  probe: import('../computerUse/permissions').PermissionProbe
+  /** the app-lifetime cu socket, started lazily (Task 6 cuBridge) */
+  bridge: () => Promise<{ socketPath: string; configDir: string }>
+  log: import('../computerUse/types').ActionLog
+  /** the settings pane's 添加 list; absent → [] */
+  runningApps?: () => Promise<{ bundleId: string; name: string }[]>
+  /** the overlay's 收起主窗口 (Task 8) */
+  collapseMain?: () => void
 }

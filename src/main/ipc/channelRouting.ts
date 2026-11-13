@@ -42,6 +42,11 @@ export const CLIENT_ONLY: ReadonlySet<string> = new Set([
   // 「应用自身的网络」那条代理的出口检测。测的就是**你面前这台设备**怎么出网(更新/字体/壁纸走它),
   // 跑到主机上测等于答非所问。agent 那条(net:check-exit-ip)反过来,必须走 host。
   'net:check-app-exit-ip',
+  // 电脑操作:驱动的是**面前这块屏幕**。走 host 的话,看远程主机时浮窗的「停止 / 允许」会被转发到别的机器,
+  // 本机的 agent 照样在动(spec V1)。CLIENT_ONLY 同时让 daemonTable 剔掉它们 —— 远程客户端根本调不到。
+  'computer-use:status', 'computer-use:state', 'computer-use:set-mode', 'computer-use:resolve',
+  'computer-use:stop', 'computer-use:log', 'computer-use:thumb', 'computer-use:request-permission',
+  'computer-use:open-settings', 'computer-use:running-apps', 'computer-use:collapse-main',
 ])
 
 /**
