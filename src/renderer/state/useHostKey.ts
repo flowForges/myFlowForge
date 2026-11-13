@@ -11,8 +11,9 @@ export function useHostKey(): string {
 }
 
 /** 同上,但连主机名一起给 —— 设置面板要在标题里说清「是哪台机器」。 */
-export function useHost(): { key: string; label: string } {
-  const [state, setState] = useState({ key: 'local', label: '本机' })
+export function useHost(): { key: string; label: string; known: boolean } {
+  // known = 主进程已经报过一次主机状态。在那之前 key 的 'local' 只是初值,不能拿来当「确认在看本机」。
+  const [state, setState] = useState({ key: 'local', label: '本机', known: false })
   useEffect(() => {
     // 先订阅再拉快照,晚到的快照丢掉(理由见 RemoteBar)。
     // ★`window.forge` 整个可能不存在:宠物窗、以及一堆只渲染局部组件的测试都没有它。
@@ -21,7 +22,7 @@ export function useHost(): { key: string; label: string } {
     const forge = window.forge as typeof window.forge | undefined
     if (!forge?.onHostStatus) return
     let pushed = false
-    const apply = (s: { hostId: string | null; label: string }) => setState({ key: s.hostId ?? 'local', label: s.label })
+    const apply = (s: { hostId: string | null; label: string }) => setState({ key: s.hostId ?? 'local', label: s.label, known: true })
     const off = forge.onHostStatus((s) => { pushed = true; apply(s) })
     void forge.hostsStatus?.().then((s) => { if (!pushed) apply(s) }).catch(() => { /* 拿不到就按本机 */ })
     return off

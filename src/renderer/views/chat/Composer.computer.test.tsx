@@ -77,6 +77,67 @@ describe('电脑操作 chip', () => {
     expect(c2.openSettings).not.toHaveBeenCalled()
   })
 
+  it('a stale 需授权 status is refreshed on click: the grant was given meanwhile, so the menu opens', async () => {
+    const refresh = vi.fn(async () => ok)
+    const c = cu({ status: { ...ok, screen: false }, mode: 'off', refreshStatus: refresh } as never)
+    r(c)
+    expect(chip()!.textContent).toBe('电脑 · 需授权')
+    fireEvent.click(chip()!)
+    await waitFor(() => expect(document.querySelector('#computerMenu.open')).toBeTruthy())
+    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(c.openSettings).not.toHaveBeenCalled()
+  })
+
+  it('mode off with an old good status is also refreshed before the menu opens', async () => {
+    const refresh = vi.fn(async () => ({ ...ok, ax: false }))
+    const c = cu({ status: ok, mode: 'off', refreshStatus: refresh } as never)
+    r(c)
+    fireEvent.click(chip()!)
+    await waitFor(() => expect(c.openSettings).toHaveBeenCalled())
+  })
+
+  it('window focus refreshes the status only when a grant is missing or the mode is on; never for an untouched user', () => {
+    const refresh = vi.fn(async () => ok)
+    r(cu({ status: null, mode: 'off', refreshStatus: refresh } as never))
+    act(() => { window.dispatchEvent(new Event('focus')) })
+    expect(refresh).not.toHaveBeenCalled()
+    document.body.innerHTML = ''
+    const refresh2 = vi.fn(async () => ok)
+    r(cu({ status: { ...ok, ax: false }, mode: 'off', refreshStatus: refresh2 } as never))
+    act(() => { window.dispatchEvent(new Event('focus')) })
+    expect(refresh2).toHaveBeenCalledTimes(1)
+    document.body.innerHTML = ''
+    const refresh3 = vi.fn(async () => ok)
+    r(cu({ status: ok, mode: 'ask', refreshStatus: refresh3 } as never))
+    act(() => { window.dispatchEvent(new Event('focus')) })
+    expect(refresh3).toHaveBeenCalledTimes(1)
+  })
+
+  it('需重启 while a turn is running asks to confirm first; the second click relaunches', async () => {
+    const c = cu({ status: ok, setMode: vi.fn(async () => 'restart_required') as never })
+    r(c, 'claude', 'auto', { busy: true })
+    fireEvent.click(chip()!)
+    await act(async () => { fireEvent.click(screen.getByText('每次询问 · 截屏发给模型')) })
+    await waitFor(() => expect(chip()!.textContent).toBe('电脑 · 需重启'))
+    fireEvent.click(chip()!)
+    expect(relaunch).not.toHaveBeenCalled()
+    expect(chip()!.textContent).toBe('确认重启 · 会中断运行中的任务')
+    fireEvent.click(chip()!)
+    expect(relaunch).toHaveBeenCalledTimes(1)
+  })
+
+  it('the two status-independent conflicts show even while status is unknown', () => {
+    r(cu({ mode: 'ask', status: null }), 'claude', 'readonly')
+    expect(document.querySelector('.browser-conflict-hint')).toBeTruthy()
+    expect((document.querySelector('#sendBtn') as HTMLButtonElement).disabled).toBe(true)
+    document.body.innerHTML = ''
+    r(cu({ mode: 'ask', status: null }), 'codex', 'auto')
+    expect(document.querySelector('.browser-conflict-hint')).toBeTruthy()
+    document.body.innerHTML = ''
+    r(cu({ mode: 'ask', status: null }), 'claude', 'auto')
+    expect(document.querySelector('.browser-conflict-hint')).toBeNull()
+  })
+
   it('busyBy: 电脑 · <title>在用 and disabled', () => {
     r(cu({ busyBy: { title: '整理发票' }, status: ok }))
     expect(chip()!.textContent).toBe('电脑 · 整理发票在用')

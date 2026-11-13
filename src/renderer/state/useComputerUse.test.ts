@@ -98,6 +98,37 @@ describe('useComputerUse', () => {
     expect(result.current.log.map((e) => e.ts)).toEqual([1, 2])
   })
 
+  it('strips textPreview from pulled and pushed entries, and caps the log at 300', async () => {
+    api.log.mockResolvedValue(Array.from({ length: 299 }, (_, i) => ({ ...entry(i + 1), op: 'type', textPreview: 'secret' })))
+    const { result } = renderHook(() => useComputerUse(WS, SID))
+    await waitFor(() => expect(result.current.log).toHaveLength(299))
+    act(() => emit({ type: 'action', key: { workspacePath: WS, sessionId: SID }, entry: { ...entry(1000), textPreview: 'secret' } }))
+    act(() => emit({ type: 'action', key: { workspacePath: WS, sessionId: SID }, entry: entry(1001) }))
+    act(() => emit({ type: 'action', key: { workspacePath: WS, sessionId: SID }, entry: entry(1002) }))
+    expect(result.current.log).toHaveLength(300)
+    expect(result.current.log[0].ts).toBe(3)
+    expect(JSON.stringify(result.current.log)).not.toContain('secret')
+  })
+
+  it('a gate that gate-resolved already removed does not come back from a late state() snapshot', async () => {
+    let finish: (v: unknown) => void = () => {}
+    api.state.mockImplementation(() => new Promise((r) => { finish = r }))
+    const { result } = renderHook(() => useComputerUse(WS, SID))
+    await waitFor(() => expect(api.state).toHaveBeenCalled())
+    act(() => emit({ type: 'gate-resolved', id: 'g1', decision: 'allow' }))
+    await act(async () => { finish({ sessions: [], gates: [gate('g1'), gate('g2')] }) })
+    expect(result.current.gates.map((g) => g.id)).toEqual(['g2'])
+  })
+
+  it('resolve: a refusal from main is kept per gate (gateErrors); success leaves none', async () => {
+    api.resolve.mockResolvedValueOnce({ ok: false, code: 'not_pending' }).mockResolvedValueOnce({ ok: true })
+    const { result } = renderHook(() => useComputerUse(WS, SID))
+    await act(async () => { await result.current.resolve('g1', 'allow') })
+    expect(result.current.gateErrors).toEqual({ g1: 'not_pending' })
+    await act(async () => { await result.current.resolve('g2', 'allow') })
+    expect(result.current.gateErrors).toEqual({ g1: 'not_pending' })
+  })
+
   it('setMode passes the key and returns the refusal code (null on success)', async () => {
     const { result } = renderHook(() => useComputerUse(WS, SID))
     await act(async () => { expect(await result.current.setMode('ask')).toBeNull() })
@@ -108,7 +139,7 @@ describe('useComputerUse', () => {
 
   it('resolve / stop / thumb call the bridge with the session key', async () => {
     const { result } = renderHook(() => useComputerUse(WS, SID))
-    act(() => result.current.resolve('g1', 'deny'))
+    await act(async () => { await result.current.resolve('g1', 'deny') })
     expect(api.resolve).toHaveBeenCalledWith({ id: 'g1', decision: 'deny' })
     act(() => result.current.stop())
     expect(api.stop).toHaveBeenCalledWith({ workspacePath: WS, sessionId: SID })

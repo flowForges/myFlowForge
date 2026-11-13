@@ -474,7 +474,7 @@ describe('approvals', () => {
     await s.ready()
     s.driver.setHitMap((p) => (p.x > 700 ? { ...APP, name: 'Other', bundleId: 'com.other' } : APP))
     await s.run('drag', { from: { x: 100, y: 100 }, to: { x: 1000, y: 300 } })
-    expect(s.gates[0].action).toMatchObject({ kind: 'drag', app: 'Example', toApp: 'Other', at: { x: 100, y: 100 }, to: { x: 1000, y: 300 } })
+    expect(s.gates[0].action).toMatchObject({ kind: 'drag', app: 'Example', toApp: 'Other', toBundle: 'com.other', at: { x: 100, y: 100 }, to: { x: 1000, y: 300 } })
     expect(s.driver.crops[0].marker).toHaveLength(2)
   })
 

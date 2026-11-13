@@ -33,7 +33,7 @@ import { ToolOutputCtx } from './chat/toolOutput'
 import { Composer } from './chat/Composer'
 import { CuStreamTail } from './chat/CuStreamTail'
 import { useComputerUse } from '../state/useComputerUse'
-import { useHostKey } from '../state/useHostKey'
+import { useHost } from '../state/useHostKey'
 import { workflowMenuCommands } from './chat/slashCommands'
 import { SessionTabs } from './chat/SessionTabs'
 import { ChatJumpRail } from './chat/ChatJumpRail'
@@ -321,7 +321,9 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   const localSessions = useSessions(wsPath)
   const sessions = sessionsApi ?? localSessions
   // 电脑操作只属于本机:看远程主机时 hook 空转(不拉状态、不收事件),卡片也不内联渲染,浮窗是唯一的批准面(V2)。
-  const cuRemote = useHostKey() !== 'local'
+  // 主机状态还没确认(初值 'local' 不算)时按「不是本机」处理:宁可晚一拍出现,也不在看远程时露出 chip。
+  const cuHost = useHost()
+  const cuRemote = cuHost.key !== 'local' || !cuHost.known
   const cu = useComputerUse(cuRemote ? '' : (wsPath ?? ''), cuRemote ? '' : (sessions.activeSessionId ?? ''))
   const activeSession = useMemo(
     () => sessions.sessions.find(s => s.id === sessions.activeSessionId),
@@ -1746,7 +1748,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                 />
               )
             })}
-            <CuStreamTail remote={cuRemote} gates={cu.gates} log={cu.log} resolve={cu.resolve} thumb={cu.thumb} />
+            <CuStreamTail remote={cuRemote} gates={cu.gates} gateErrors={cu.gateErrors} log={cu.log} resolve={cu.resolve} thumb={cu.thumb} />
             {chat.asks.map(a => (
               <ReqCard
                 key={a.id}

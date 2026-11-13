@@ -6,7 +6,7 @@ const src = readFileSync(join(__dirname, 'WorkspaceView.tsx'), 'utf8')
 
 describe('WorkspaceView computer-use wiring (source scan)', () => {
   it('the hook is idle while the window views a remote host, and the card tail gets the same flag', () => {
-    expect(src).toMatch(/const cuRemote = useHostKey\(\) !== 'local'/)
+    expect(src).toMatch(/const cuRemote = cuHost\.key !== 'local' \|\| !cuHost\.known/)
     expect(src).toMatch(/useComputerUse\(cuRemote \? '' :/)
     expect(src).toMatch(/<CuStreamTail remote=\{cuRemote\}/)
   })

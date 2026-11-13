@@ -24,18 +24,26 @@ export interface ComputerUseApi {
   busyBy?: { title: string }
   gates: CuGate[]
   log: CuLogEntry[]
+  /** gate id → code main answered when it refused our resolve */
+  gateErrors: Record<string, string>
   setMode(m: ComputerUseMode): Promise<CuSetModeCode | null>
-  resolve(id: string, d: 'allow' | 'deny' | 'stop'): void
+  resolve(id: string, d: 'allow' | 'deny' | 'stop'): Promise<void>
   stop(): void
   thumb(file: string): Promise<string | null>
   refreshStatus(): Promise<CuStatus | null>
 }
+
+const LOG_CAP = 300
+/** typed text lives on the gate card only (spec ruling): the log never keeps the in-memory preview */
+const clean = (e: CuLogEntry): CuLogEntry => { if (e.textPreview === undefined) return e; const { textPreview: _drop, ...rest } = e; return rest }
+const capLog = (l: CuLogEntry[]) => (l.length > LOG_CAP ? l.slice(l.length - LOG_CAP) : l)
 
 export function useComputerUse(workspacePath: string, sessionId: string): ComputerUseApi {
   const [sessions, setSessions] = useState<SessionRow[]>([])
   const [gates, setGates] = useState<CuGate[]>([])
   const [log, setLog] = useState<CuLogEntry[]>([])
   const [status, setStatus] = useState<CuStatus | null>(null)
+  const [gateErrors, setGateErrors] = useState<Record<string, string>>({})
   const same = useCallback((k?: { workspacePath: string; sessionId: string }) => !!k && k.workspacePath === workspacePath && k.sessionId === sessionId, [workspacePath, sessionId])
   const sameRef = useRef(same)
   sameRef.current = same
@@ -51,13 +59,14 @@ export function useComputerUse(workspacePath: string, sessionId: string): Comput
   }, [])
 
   useEffect(() => {
-    setSessions([]); setGates([]); setLog([]); setStatus(null)
+    setSessions([]); setGates([]); setLog([]); setStatus(null); setGateErrors({})
     const b = bridge()
     if (!b || !workspacePath || !sessionId) return
     let alive = true
     let pushedState = false
     let pushedLog = false
     const live: CuLogEntry[] = []
+    const resolved = new Set<string>()
     // 先订阅再拉快照:晚到的快照不覆盖已经推过来的状态。
     const off = b.onEvent((raw) => {
       const e = raw as CuEvent
@@ -71,11 +80,12 @@ export function useComputerUse(workspacePath: string, sessionId: string): Comput
         if (!sameRef.current(e.gate.key)) return
         setGates((g) => (g.some((x) => x.id === e.gate.id) ? g : [...g, e.gate]))
       } else if (e.type === 'gate-resolved') {
+        resolved.add(e.id)
         setGates((g) => (g.some((x) => x.id === e.id) ? g.filter((x) => x.id !== e.id) : g))
       } else if (e.type === 'action') {
         if (!sameRef.current(e.key)) return
-        if (pushedLog) setLog((l) => [...l, e.entry])
-        else live.push(e.entry)
+        if (pushedLog) setLog((l) => capLog([...l, clean(e.entry)]))
+        else live.push(clean(e.entry))
       }
     })
     void b.state().then((s) => {
@@ -86,17 +96,17 @@ export function useComputerUse(workspacePath: string, sessionId: string): Comput
         if (ss.some((x) => x.workspacePath === workspacePath && x.sessionId === sessionId && x.mode !== 'off')) void refreshStatus()
       }
       if (isArr<CuGate>(gs)) {
-        const mine = gs.filter((g) => sameRef.current(g.key))
+        const mine = gs.filter((g) => sameRef.current(g.key) && !resolved.has(g.id))
         setGates((cur) => [...mine.filter((g) => !cur.some((x) => x.id === g.id)), ...cur])
       }
     }).catch(() => {})
     void b.log({ workspacePath, sessionId }).then((l) => {
       if (!alive) return
       pushedLog = true
-      const base = isArr<CuLogEntry>(l) ? l : []
+      const base = isArr<CuLogEntry>(l) ? l.map(clean) : []
       // 拉取期间推来的条目:快照里已有的(同 ts+op)不重复加
       const extra = live.filter((x) => !base.some((y) => y.ts === x.ts && y.op === x.op))
-      setLog([...base, ...extra])
+      setLog(capLog([...base, ...extra]))
     }).catch(() => { pushedLog = true })
     return () => { alive = false; off() }
   }, [workspacePath, sessionId, refreshStatus])
@@ -121,9 +131,14 @@ export function useComputerUse(workspacePath: string, sessionId: string): Comput
   }, [workspacePath, sessionId])
 
   return {
-    status, mode, busyBy: holder ? { title: holder.title } : undefined, gates, log,
+    status, mode, busyBy: holder ? { title: holder.title } : undefined, gates, log, gateErrors,
     setMode,
-    resolve: (id, d) => { void bridge()?.resolve({ id, decision: d }) },
+    resolve: async (id, d) => {
+      try {
+        const r = (await bridge()?.resolve({ id, decision: d })) as { ok?: boolean; code?: string } | undefined
+        if (r && r.ok === false) setGateErrors((m) => ({ ...m, [id]: r.code ?? 'not_pending' }))
+      } catch { /* 门会由主进程的事件收掉 */ }
+    },
     stop: () => { void bridge()?.stop({ workspacePath, sessionId }) },
     thumb,
     refreshStatus,

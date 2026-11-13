@@ -317,21 +317,42 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
   const browserBlocked = !!browserConflict
   // 电脑操作:chip 显示条件 = 平台支持 + provider 在能力表里 + 不是在看远程主机。冲突同样拦整轮发送,横幅沿用浏览器那条。
   const cuShown = !!computerUse && computerUse.supported && !computerUse.remote && providerSupportsComputerUse(agentId)
-  const cuConflict = cuShown && computerUse!.status
-    ? computerUseConflict({ mode: computerUse!.mode, perm: permissionMode, provider: agentId, status: computerUse!.status })
+  // 状态还不知道时按「都正常」算:只读 / codex 非完全访问这两条和 helper 状态无关,不能等状态到了才挡。
+  const cuConflict = cuShown
+    ? computerUseConflict({ mode: computerUse!.mode, perm: permissionMode, provider: agentId, status: computerUse!.status ?? { supported: true, osOK: true, helper: 'ok', screen: true, ax: true } })
     : null
   const cuBlocked = !!cuConflict
   const [cuRestart, setCuRestart] = useState(false)
   const [cuErr, setCuErr] = useState<CuSetModeCode | null>(null)
   const cuNeedsGrant = cuShown && !!computerUse!.status && (!computerUse!.status.screen || !computerUse!.status.ax)
   const cuDisabled = !!readOnly || !!computerUse?.busyBy || (computerUse?.mode === 'off' && permissionMode === 'readonly')
+  const [cuConfirm, setCuConfirm] = useState(false)
+  // 回到窗口时刷新:用户刚去系统设置里授了权。只对已经开过 / 已经看到缺授权的人做,从没用过的人不去碰 helper。
+  const cuRefresh = computerUse?.refreshStatus
+  const cuWatch = cuShown && (computerUse!.mode !== 'off' || cuNeedsGrant)
+  useEffect(() => {
+    if (!cuWatch || !cuRefresh) return
+    const onFocus = () => { void cuRefresh() }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [cuWatch, cuRefresh])
+  useEffect(() => {
+    if (!cuConfirm) return
+    const h = setTimeout(() => setCuConfirm(false), 5000)
+    return () => clearTimeout(h)
+  }, [cuConfirm])
   async function onCuChip() {
     if (!computerUse) return
-    if (cuRestart) { void window.forge.appRelaunch?.(); setOpenMenu(null); return }
+    if (cuRestart) {
+      // 有任务在跑时重启会把它打断:第一下只换成确认,第二下才重启
+      if ((busy || running) && !cuConfirm) { setCuConfirm(true); return }
+      void window.forge.appRelaunch?.(); setOpenMenu(null); return
+    }
     if (openMenu === 'computer') { setOpenMenu(null); return }
     setCuErr(null)
+    // 档位关着或缺授权时缓存的状态可能是旧的(刚去授过权),每次都重新问
     let st = computerUse.status
-    if (!st && computerUse.refreshStatus) st = await computerUse.refreshStatus()
+    if ((!st || computerUse.mode === 'off' || !st.screen || !st.ax) && computerUse.refreshStatus) st = (await computerUse.refreshStatus()) ?? st
     if (st && (!st.screen || !st.ax)) { computerUse.openSettings(); return }
     setOpenMenu('computer')
   }
@@ -341,7 +362,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
     if (code) { setCuErr(code); return }
     setOpenMenu(null)
   }
-  const cuLabel = !computerUse ? '' : computerUse.busyBy ? `电脑 · ${computerUse.busyBy.title}在用` : cuRestart ? '电脑 · 需重启' : cuNeedsGrant ? '电脑 · 需授权' : COMPUTER_USE_CHIP[computerUse.mode]
+  const cuLabel = !computerUse ? '' : computerUse.busyBy ? `电脑 · ${computerUse.busyBy.title}在用` : cuRestart ? (cuConfirm ? '确认重启 · 会中断运行中的任务' : '电脑 · 需重启') : cuNeedsGrant ? '电脑 · 需授权' : COMPUTER_USE_CHIP[computerUse.mode]
 
   function chooseAgent(p: ProviderInfo) {
     const m = p.models[0]?.id ?? ''

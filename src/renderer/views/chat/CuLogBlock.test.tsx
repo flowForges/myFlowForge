@@ -34,11 +34,11 @@ describe('CuLogBlock', () => {
     expect(rows[4].querySelector('.cu-res')?.textContent).toBe('失败')
   })
 
-  it('the live 40-char preview shows inside a marked block with visible control marks', () => {
-    const { container } = render(<CuLogBlock entries={[e({ op: 'type', textLen: 5, textPreview: 'a\nb' })]} thumb={async () => null} />)
-    const t = container.querySelector('.cu-text')!
-    expect(t.textContent).toBe('a⏎b')
-    expect(t.hasAttribute('data-untrusted')).toBe(true)
+  it('typed text never appears in the log: only 输入 N 字, even if an entry still carries a preview', () => {
+    const { container } = render(<CuLogBlock entries={[e({ op: 'type', textLen: 5, textPreview: 'hunter2' })]} thumb={async () => null} />)
+    expect(container.querySelector('.cu-text')).toBeNull()
+    expect(container.textContent).not.toContain('hunter2')
+    expect(container.textContent).toContain('输入 5 字')
   })
 
   it('one block per turn', () => {
@@ -47,7 +47,8 @@ describe('CuLogBlock', () => {
   })
 
   it('fetches a thumb only for rows that have one; clicking it opens the Lightbox with that image', async () => {
-    const thumb = vi.fn(async (f: string) => (f === '00000001.jpg' ? 'data:image/jpeg;base64,ZZZ' : null))
+    // actionLog.thumb() answers raw base64; the block builds the data URL itself
+    const thumb = vi.fn(async (f: string) => (f === '00000001.jpg' ? 'ZZZ' : null))
     const { container } = render(<CuLogBlock entries={[e({ thumb: '00000001.jpg' }), e({ op: 'type' })]} thumb={thumb} />)
     await waitFor(() => expect(container.querySelector('img.cu-thumb')).toBeTruthy())
     expect(thumb).toHaveBeenCalledTimes(1)
@@ -57,6 +58,17 @@ describe('CuLogBlock', () => {
     expect(big.src).toBe('data:image/jpeg;base64,ZZZ')
     fireEvent.click(screen.getByLabelText('关闭'))
     expect(document.querySelector('.lightbox')).toBeNull()
+  })
+
+  it('a thumb answer that is not plain base64 is dropped: no https:, no data: of another type, no quotes', async () => {
+    for (const bad of ['https://evil.example/x.png', 'data:image/svg+xml;base64,AAA', 'AAA" onerror="x', '']) {
+      const thumb = vi.fn(async () => bad)
+      const { container, unmount } = render(<CuLogBlock entries={[e({ thumb: '00000001.jpg' })]} thumb={thumb} />)
+      await waitFor(() => expect(thumb).toHaveBeenCalled())
+      await new Promise((r) => setTimeout(r, 0))
+      expect(container.querySelector('img')).toBeNull()
+      unmount()
+    }
   })
 
   it('no explanatory text', () => {

@@ -447,7 +447,7 @@ export function createExecutor(d: ExecutorDeps): Executor {
         return {
           kind: 'drag', pointer: true, targets: [h1, h2], pts: [from, to], combo: null,
           action: { kind: 'drag', from, to, button: 'left', mods },
-          view: { kind: 'drag', app: h1.name, bundleId: h1.bundleId, at: px(a.from), to: px(a.to), toApp: h2.name, button: 'left', mods },
+          view: { kind: 'drag', app: h1.name, bundleId: h1.bundleId, at: px(a.from), to: px(a.to), toApp: h2.name, toBundle: h2.bundleId, button: 'left', mods },
           done: (app) => `已拖动 (${a.from.x}, ${a.from.y}) → (${a.to.x}, ${a.to.y}) · 目标 ${app}`,
         }
       }

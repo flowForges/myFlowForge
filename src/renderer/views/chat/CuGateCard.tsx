@@ -1,14 +1,17 @@
 // 电脑操作批准卡(spec §10.3、V9)。我们渲染的可信行在上,屏幕裁片在下、带边框,行名 `屏幕`。
 // - 屏幕 / 模型来源的文字(app 名、要输入的文字)只以纯文本出现:压空白、从左截断、不可见字符可见;输入的文字放在带标记的等宽块里。
 // - 按钮不自动聚焦,没有任何键盘处理 —— 键盘上没有东西能批准。
-import type { ReactNode } from 'react'
-import { CU_KIND_LABEL, visibleText, type CuActionView } from '@shared/computerUse'
+import { useRef, type ReactNode } from 'react'
+import { CU_ERR, CU_KIND_LABEL, CU_SET_MODE_ERR, visibleText, type CuActionView } from '@shared/computerUse'
 import type { CuGate } from '../../../main/computerUse/types'
 import { BUTTON_LABEL, MOD_SYM, fmtPt, screenName } from './cuFormat'
 
 const Row = ({ k, children }: { k: string; children: ReactNode }) => (
   <div className="cu-row"><span className="cu-k">{k}</span><span className="cu-colon">: </span><span className="cu-v">{children}</span></div>
 )
+
+/** the bundle id in its own span, so it never runs into the (screen-derived) app name */
+const Bundle = ({ id, lead }: { id?: string; lead?: boolean }) => (id ? <>{lead ? ' · ' : ''}<span className="cu-bundle">{screenName(id)}</span></> : null)
 
 const MODS = new Set(Object.values(MOD_SYM))
 /** `⌘⇧V` → ['⌘','⇧','V'] */
@@ -20,12 +23,11 @@ function keycaps(combo: string): string[] {
   return [...chars.slice(0, i), ...(rest ? [rest] : [])]
 }
 
-const withApp = (p: string, app?: string, bundle?: string) => [p, screenName(app), bundle ? screenName(bundle) : ''].filter(Boolean)
 
 function ActionRows({ a, reason }: { a: CuActionView; reason?: string }) {
   const rows: ReactNode[] = []
   const app = screenName(a.app)
-  if (app || a.bundleId) rows.push(<Row key="app" k="应用">{[app, a.bundleId ? screenName(a.bundleId) : ''].filter(Boolean).join(' · ')}</Row>)
+  if (app || a.bundleId) rows.push(<Row key="app" k="应用">{app}{app && a.bundleId ? ' · ' : ''}<Bundle id={a.bundleId} /></Row>)
   switch (a.kind) {
     case 'click': case 'move': {
       if (a.at) rows.push(<Row key="at" k="位置">{fmtPt(a.at)}</Row>)
@@ -43,8 +45,8 @@ function ActionRows({ a, reason }: { a: CuActionView; reason?: string }) {
       break
     }
     case 'drag':
-      rows.push(<Row key="from" k="从">{withApp(fmtPt(a.at), a.app).join(' · ')}</Row>)
-      rows.push(<Row key="to" k="到">{withApp(fmtPt(a.to), a.toApp).join(' · ')}</Row>)
+      rows.push(<Row key="from" k="从">{[fmtPt(a.at), app].filter(Boolean).join(' · ')}<Bundle id={a.bundleId} lead /></Row>)
+      rows.push(<Row key="to" k="到">{[fmtPt(a.to), screenName(a.toApp)].filter(Boolean).join(' · ')}<Bundle id={a.toBundle} lead /></Row>)
       break
     case 'key': {
       const caps = keycaps(a.combo ?? '')
@@ -72,7 +74,17 @@ function ActionRows({ a, reason }: { a: CuActionView; reason?: string }) {
   return <>{rows}</>
 }
 
-export function CuGateCard({ gate, onResolve }: { gate: CuGate; onResolve: (id: string, d: 'allow' | 'deny' | 'stop') => void }) {
+/** a card ignores clicks this long after it mounts: a double click's second press must not land on the next gate */
+export const ARM_MS = 600
+
+export function CuGateCard({ gate, error, onResolve }: { gate: CuGate; error?: string; onResolve: (id: string, d: 'allow' | 'deny' | 'stop') => void }) {
+  const mountedAt = useRef(Date.now())
+  const done = useRef(false)
+  const answer = (d: 'allow' | 'deny' | 'stop') => () => {
+    if (done.current || Date.now() - mountedAt.current < ARM_MS) return
+    done.current = true
+    onResolve(gate.id, d)
+  }
   const isContinue = gate.kind === 'continue'
   const a = gate.action
   return (
@@ -80,6 +92,7 @@ export function CuGateCard({ gate, onResolve }: { gate: CuGate; onResolve: (id: 
       <div className="cu-head">
         <span className="cu-title">电脑 · {isContinue ? CU_KIND_LABEL.continue : a ? CU_KIND_LABEL[a.kind] : ''}</span>
         {!isContinue && gate.reason && <span className="cu-chip cu-reason">{gate.reason}</span>}
+        {error && <span className="cu-chip cu-code">{(CU_ERR as Record<string, string>)[error] ?? (CU_SET_MODE_ERR as Record<string, string>)[error] ?? error}</span>}
       </div>
       {isContinue && gate.reason && <Row k="原因">{screenName(gate.reason)}</Row>}
       {!isContinue && a && <ActionRows a={a} reason={gate.reason} />}
@@ -92,14 +105,14 @@ export function CuGateCard({ gate, onResolve }: { gate: CuGate; onResolve: (id: 
       <div className="cu-actions">
         {isContinue ? (
           <>
-            <button type="button" className="cu-btn cu-allow" onClick={() => onResolve(gate.id, 'allow')}>继续 100 步</button>
-            <button type="button" className="cu-btn cu-stop" onClick={() => onResolve(gate.id, 'stop')}>停止</button>
+            <button type="button" className="cu-btn cu-allow" onClick={answer('allow')}>继续 100 步</button>
+            <button type="button" className="cu-btn cu-stop" onClick={answer('stop')}>停止</button>
           </>
         ) : (
           <>
-            <button type="button" className="cu-btn cu-allow" onClick={() => onResolve(gate.id, 'allow')}>允许</button>
-            <button type="button" className="cu-btn cu-deny" onClick={() => onResolve(gate.id, 'deny')}>拒绝</button>
-            <button type="button" className="cu-btn cu-stop" onClick={() => onResolve(gate.id, 'stop')}>停止</button>
+            <button type="button" className="cu-btn cu-allow" onClick={answer('allow')}>允许</button>
+            <button type="button" className="cu-btn cu-deny" onClick={answer('deny')}>拒绝</button>
+            <button type="button" className="cu-btn cu-stop" onClick={answer('stop')}>停止</button>
           </>
         )}
       </div>

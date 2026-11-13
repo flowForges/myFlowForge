@@ -476,6 +476,7 @@ export interface CuActionView {
   at?: { x: number; y: number }
   to?: { x: number; y: number }
   toApp?: string
+  toBundle?: string
   button?: 'left' | 'right' | 'middle'
   count?: 1 | 2 | 3
   mods?: Mod[]

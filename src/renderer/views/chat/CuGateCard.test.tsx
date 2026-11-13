@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/react'
 import { CuGateCard } from './CuGateCard'
 import type { CuGate } from '../../../main/computerUse/types'
@@ -10,6 +10,10 @@ const row = (container: HTMLElement, name: string) => {
   if (!r) throw new Error('no row ' + name)
   return r as HTMLElement
 }
+
+beforeEach(() => { vi.useFakeTimers({ toFake: ['Date', 'performance'] }); vi.setSystemTime(1_000_000) })
+afterEach(() => { vi.useRealTimers() })
+const settle = () => vi.setSystemTime(Date.now() + 700)
 
 describe('CuGateCard', () => {
   it('click: trusted rows (app with bundle id, position, button/count/mods) above a bordered crop row named 屏幕', () => {
@@ -74,20 +78,68 @@ describe('CuGateCard', () => {
     expect(container.contains(document.activeElement) && document.activeElement !== document.body).toBe(false)
     container.querySelectorAll('button').forEach((b) => expect(b.hasAttribute('autofocus')).toBe(false))
     fireEvent.keyDown(container.firstChild as Element, { key: 'Enter' })
+    settle()
     expect(onResolve).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: '允许' }))
+    expect(onResolve.mock.calls).toEqual([['g1', 'allow']])
+  })
+
+  it.each([['允许', 'allow'], ['拒绝', 'deny'], ['停止', 'stop']])('%s resolves %s', (name, d) => {
+    const onResolve = vi.fn()
+    render(<CuGateCard gate={mk({ action: { kind: 'click', at: { x: 1, y: 1 } } })} onResolve={onResolve} />)
+    settle()
+    fireEvent.click(screen.getByRole('button', { name }))
+    expect(onResolve.mock.calls).toEqual([['g1', d]])
+  })
+
+  it('a card resolves once: a second click (any button) is ignored', () => {
+    const onResolve = vi.fn()
+    render(<CuGateCard gate={mk({ action: { kind: 'click', at: { x: 1, y: 1 } } })} onResolve={onResolve} />)
+    settle()
+    fireEvent.click(screen.getByRole('button', { name: '允许' }))
+    fireEvent.click(screen.getByRole('button', { name: '允许' }))
     fireEvent.click(screen.getByRole('button', { name: '拒绝' }))
-    fireEvent.click(screen.getByRole('button', { name: '停止' }))
-    expect(onResolve.mock.calls).toEqual([['g1', 'allow'], ['g1', 'deny'], ['g1', 'stop']])
+    expect(onResolve).toHaveBeenCalledTimes(1)
+  })
+
+  it('a double click cannot approve the next gate: card B mounts under the second click and ignores it for ~600 ms', () => {
+    const onResolve = vi.fn()
+    const a = mk({ id: 'A', action: { kind: 'click', at: { x: 1, y: 1 } } })
+    const b = mk({ id: 'B', action: { kind: 'type', text: 'rm -rf' } })
+    const { rerender } = render(<CuGateCard key="A" gate={a} onResolve={onResolve} />)
+    settle()
+    fireEvent.click(screen.getByRole('button', { name: '允许' }))   // first click answers A
+    rerender(<CuGateCard key="B" gate={b} onResolve={onResolve} />)   // B takes its place
+    fireEvent.click(screen.getByRole('button', { name: '允许' }))   // the second click of the double click
+    expect(onResolve.mock.calls).toEqual([['A', 'allow']])
+    vi.setSystemTime(Date.now() + 599)
+    fireEvent.click(screen.getByRole('button', { name: '允许' }))
+    expect(onResolve).toHaveBeenCalledTimes(1)
+    vi.setSystemTime(Date.now() + 5)
+    fireEvent.click(screen.getByRole('button', { name: '允许' }))
+    expect(onResolve.mock.calls).toEqual([['A', 'allow'], ['B', 'allow']])
+  })
+
+  it('shows the refusal code from main as a chip on the card', () => {
+    const { container } = render(<CuGateCard gate={mk({ action: { kind: 'click', at: { x: 1, y: 1 } } })} error="not_pending" onResolve={() => {}} />)
+    expect(container.querySelector('.cu-chip.cu-code')?.textContent).toBeTruthy()
+  })
+
+  it('the 应用 row has the bundle id in its own span; a drag shows the target bundle id too', () => {
+    const a = render(<CuGateCard gate={mk({ action: { kind: 'click', app: 'Safari', bundleId: 'com.apple.Safari', at: { x: 1, y: 1 } } })} onResolve={() => {}} />)
+    expect(row(a.container, '应用').querySelector('.cu-bundle')?.textContent).toBe('com.apple.Safari')
+    const b = render(<CuGateCard gate={mk({ id: 'g9', action: { kind: 'drag', app: 'Finder', bundleId: 'com.apple.finder', toApp: 'Notes', toBundle: 'com.apple.Notes', at: { x: 1, y: 2 }, to: { x: 5, y: 6 } } })} onResolve={() => {}} />)
+    expect(row(b.container, '到').querySelector('.cu-bundle')?.textContent).toBe('com.apple.Notes')
+    expect(row(b.container, '从').querySelector('.cu-bundle')?.textContent).toBe('com.apple.finder')
   })
 
   it('continue gate: 继续 100 步 allows, 停止 stops', () => {
     const onResolve = vi.fn()
     render(<CuGateCard gate={mk({ kind: 'continue', reason: '已执行 100 步' })} onResolve={onResolve} />)
     expect(screen.getByText('电脑 · 继续')).toBeTruthy()
+    settle()
     fireEvent.click(screen.getByRole('button', { name: '继续 100 步' }))
-    fireEvent.click(screen.getByRole('button', { name: '停止' }))
-    expect(onResolve.mock.calls).toEqual([['g1', 'allow'], ['g1', 'stop']])
+    expect(onResolve.mock.calls).toEqual([['g1', 'allow']])
   })
 
   it('no explanatory text: no <p>, no <small>, no hint-like class', () => {
