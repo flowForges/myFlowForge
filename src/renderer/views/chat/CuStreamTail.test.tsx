@@ -10,13 +10,16 @@ beforeEach(() => { vi.useFakeTimers({ toFake: ['Date', 'performance'] }); vi.set
 afterEach(() => { vi.useRealTimers() })
 
 describe('CuStreamTail', () => {
-  it('local view: log block then the pending cards, and 允许 resolves through the hook', () => {
+  it('local view: log block then the pending cards; 拒绝 resolves through the hook, 允许 needs an OS-trusted press (I-2)', () => {
     const resolve = vi.fn()
     const { container } = render(<CuStreamTail remote={false} gates={[gate]} gateErrors={{}} log={[entry]} resolve={resolve} thumb={async () => null} />)
     expect(container.querySelector('.cu-log')).toBeTruthy()
     vi.setSystemTime(Date.now() + 700)
-    fireEvent.click(screen.getByRole('button', { name: '允许' }))
-    expect(resolve).toHaveBeenCalledWith('g1', 'allow')
+    fireEvent.mouseDown(screen.getByRole('button', { name: '允许' }))
+    fireEvent.click(screen.getByRole('button', { name: '允许' }), { detail: 1 })   // jsdom events are isTrusted:false
+    expect(resolve).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '拒绝' }))
+    expect(resolve).toHaveBeenCalledWith('g1', 'deny')
   })
   it('remote view: no inline cards and no log (the overlay is the only surface)', () => {
     const { container } = render(<CuStreamTail remote gates={[gate]} gateErrors={{}} log={[entry]} resolve={vi.fn()} thumb={async () => null} />)

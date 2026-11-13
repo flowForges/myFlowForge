@@ -17,7 +17,9 @@ beforeEach(() => {
 })
 
 type CU = NonNullable<React.ComponentProps<typeof Composer>['computerUse']>
-const cu = (over: Partial<CU> = {}): CU => ({ supported: true, mode: 'off', status: null, remote: false, setMode: vi.fn(), stop: vi.fn(), openSettings: vi.fn(), ...over })
+const cu = (over: Partial<CU> = {}): CU => ({ supported: true, mode: 'off', status: null, remote: false, setMode: vi.fn(), stop: vi.fn(), openSettings: vi.fn(), isPhysical: () => true, ...over })
+/** a press the OS reported: mousedown on the item, then its click with a click count */
+const press = (el: Element) => { fireEvent.mouseDown(el); fireEvent.click(el, { detail: 1 }) }
 const r = (computerUse: CU | undefined, agentId = 'claude', permissionMode: any = 'auto', extra: Record<string, unknown> = {}) =>
   render(
     <Composer providers={providers} disabled={false} onSend={vi.fn()} computerUse={computerUse}
@@ -117,7 +119,7 @@ describe('电脑操作 chip', () => {
     const c = cu({ status: ok, setMode: vi.fn(async () => 'restart_required') as never })
     r(c, 'claude', 'auto', { busy: true })
     fireEvent.click(chip()!)
-    await act(async () => { fireEvent.click(screen.getByText('每次询问 · 截屏发给模型')) })
+    await act(async () => { press(screen.getByText('每次询问 · 截屏发给模型')) })
     await waitFor(() => expect(chip()!.textContent).toBe('电脑 · 需重启'))
     fireEvent.click(chip()!)
     expect(relaunch).not.toHaveBeenCalled()
@@ -159,7 +161,7 @@ describe('电脑操作 chip', () => {
     // status known → opens straight away
     const items = Array.from(document.querySelectorAll('#computerMenu .menu-item')).map((e) => e.textContent)
     expect(items).toEqual(['关闭', '每次询问 · 截屏发给模型', '放行 · 截屏发给模型'])
-    fireEvent.click(screen.getByText('放行 · 截屏发给模型'))
+    press(screen.getByText('放行 · 截屏发给模型'))
     expect(c.setMode).toHaveBeenCalledWith('allow')
   })
 
@@ -177,7 +179,7 @@ describe('电脑操作 chip', () => {
     const c = cu({ status: ok, setMode: vi.fn(async () => 'restart_required') as never })
     r(c)
     fireEvent.click(chip()!)
-    await act(async () => { fireEvent.click(screen.getByText('每次询问 · 截屏发给模型')) })
+    await act(async () => { press(screen.getByText('每次询问 · 截屏发给模型')) })
     await waitFor(() => expect(chip()!.textContent).toBe('电脑 · 需重启'))
     fireEvent.click(chip()!)
     expect(relaunch).toHaveBeenCalledTimes(1)
@@ -188,7 +190,7 @@ describe('电脑操作 chip', () => {
     const c = cu({ status: ok, setMode: vi.fn(async () => 'busy') as never })
     r(c)
     fireEvent.click(chip()!)
-    await act(async () => { fireEvent.click(screen.getByText('放行 · 截屏发给模型')) })
+    await act(async () => { press(screen.getByText('放行 · 截屏发给模型')) })
     await waitFor(() => expect(screen.getByText('另一个会话正在使用电脑操作')).toBeTruthy())
     expect(document.querySelector('#computerMenu.open')).toBeTruthy()
   })
@@ -232,5 +234,48 @@ describe('电脑操作 chip', () => {
     const m = document.querySelector('#computerMenu')!
     expect(m.querySelector('p, small')).toBeNull()
     m.querySelectorAll('*').forEach((el) => expect(String(el.getAttribute('class') ?? '')).not.toMatch(/hint|desc|help|note|tip|caption|pm-d/))
+  })
+
+  describe('I-2: widening picks (off → on, ask → allow) take only a physical press', () => {
+    const item = (id: string) => document.querySelector(`#computerMenu [data-computer="${id}"]`) as HTMLButtonElement
+    it('the default check is isTrusted: a script-dispatched press (jsdom isTrusted:false) does not widen', async () => {
+      const c = cu({ status: ok, isPhysical: undefined })
+      r(c)
+      fireEvent.click(chip()!)
+      await act(async () => { press(item('ask')) })
+      expect(c.setMode).not.toHaveBeenCalled()
+    })
+
+    it.each([['off', 'ask'], ['off', 'allow'], ['ask', 'allow']] as const)('%s → %s: detail 0 (keyboard / AXPress), no mousedown or a mousedown elsewhere does nothing; a press does', async (from, to) => {
+      const c = cu({ status: ok, mode: from })
+      r(c)
+      fireEvent.click(chip()!)
+      expect(item(to).tabIndex).toBe(-1)
+      await act(async () => {
+        fireEvent.mouseDown(item(to)); fireEvent.click(item(to), { detail: 0 })
+        fireEvent.click(item(to), { detail: 1 })
+        fireEvent.mouseDown(item('off')); fireEvent.click(item(to), { detail: 1 })
+      })
+      expect(c.setMode).not.toHaveBeenCalled()
+      await act(async () => { press(item(to)) })
+      expect(c.setMode).toHaveBeenCalledWith(to)
+    })
+
+    it.each([['allow', 'ask'], ['allow', 'off'], ['ask', 'off']] as const)('%s → %s narrows: a keyboard click (detail 0) works and the item stays focusable', async (from, to) => {
+      const c = cu({ status: ok, mode: from, isPhysical: () => false })
+      r(c)
+      fireEvent.click(chip()!)
+      expect(item(to).tabIndex).toBe(0)
+      await act(async () => { fireEvent.click(item(to), { detail: 0 }) })
+      expect(c.setMode).toHaveBeenCalledWith(to)
+    })
+
+    it('停止 takes a keyboard click', () => {
+      const c = cu({ status: ok, mode: 'allow', isPhysical: () => false })
+      r(c)
+      fireEvent.click(chip()!)
+      fireEvent.click(screen.getByText('停止'), { detail: 0 })
+      expect(c.stop).toHaveBeenCalled()
+    })
   })
 })

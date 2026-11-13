@@ -1,10 +1,13 @@
 // 电脑操作批准卡(spec §10.3、V9)。我们渲染的可信行在上,屏幕裁片在下、带边框,行名 `屏幕`。
 // - 屏幕 / 模型来源的文字(app 名、要输入的文字)只以纯文本出现:压空白、从左截断、不可见字符可见;输入的文字放在带标记的等宽块里。
 // - 按钮不自动聚焦,没有任何键盘处理 —— 键盘上没有东西能批准。
-import { useRef, type ReactNode } from 'react'
+// - 允许 / 继续 和浮窗同一道检查(I-2,cuPhysical.ts):真实的鼠标按下 + 带点击次数的 click,tabIndex -1;
+//   键盘、AXPress(System Events 的 click button)、脚本派发都不算。拒绝 / 停止 只会收窄,键盘照样能按。
+import { useRef, type MouseEvent, type ReactNode } from 'react'
 import { CU_ERR, CU_KIND_LABEL, CU_SET_MODE_ERR, visibleText, type CuActionView } from '@shared/computerUse'
 import type { CuGate } from '../../../main/computerUse/types'
 import { BUTTON_LABEL, MOD_SYM, fmtPt, screenName } from './cuFormat'
+import { usePhysicalPress, type IsPhysical } from './cuPhysical'
 
 const Row = ({ k, children }: { k: string; children: ReactNode }) => (
   <div className="cu-row"><span className="cu-k">{k}</span><span className="cu-colon">: </span><span className="cu-v">{children}</span></div>
@@ -77,14 +80,21 @@ function ActionRows({ a, reason }: { a: CuActionView; reason?: string }) {
 /** a card ignores clicks this long after it mounts: a double click's second press must not land on the next gate */
 export const ARM_MS = 600
 
-export function CuGateCard({ gate, error, onResolve }: { gate: CuGate; error?: string; onResolve: (id: string, d: 'allow' | 'deny' | 'stop') => void }) {
+export function CuGateCard({ gate, error, onResolve, isPhysical }: {
+  gate: CuGate; error?: string; onResolve: (id: string, d: 'allow' | 'deny' | 'stop') => void; isPhysical?: IsPhysical
+}) {
   const mountedAt = useRef(Date.now())
   const done = useRef(false)
-  const answer = (d: 'allow' | 'deny' | 'stop') => () => {
+  const press = usePhysicalPress(isPhysical)
+  const allowId = `${gate.id}:allow`
+  const answer = (d: 'allow' | 'deny' | 'stop') => (e: MouseEvent) => {
+    if (d === 'allow' && !press.check(allowId, e)) return
     if (done.current || Date.now() - mountedAt.current < ARM_MS) return
     done.current = true
     onResolve(gate.id, d)
   }
+  const allowProps = { tabIndex: -1, onMouseDown: press.down(allowId), onClick: answer('allow') }
+  const other = (d: 'deny' | 'stop') => ({ onMouseDown: press.down(`${gate.id}:${d}`), onClick: answer(d) })
   const isContinue = gate.kind === 'continue'
   const a = gate.action
   return (
@@ -105,14 +115,14 @@ export function CuGateCard({ gate, error, onResolve }: { gate: CuGate; error?: s
       <div className="cu-actions">
         {isContinue ? (
           <>
-            <button type="button" className="cu-btn cu-allow" onClick={answer('allow')}>继续 100 步</button>
-            <button type="button" className="cu-btn cu-stop" onClick={answer('stop')}>停止</button>
+            <button type="button" className="cu-btn cu-allow" {...allowProps}>继续 100 步</button>
+            <button type="button" className="cu-btn cu-stop" {...other('stop')}>停止</button>
           </>
         ) : (
           <>
-            <button type="button" className="cu-btn cu-allow" onClick={answer('allow')}>允许</button>
-            <button type="button" className="cu-btn cu-deny" onClick={answer('deny')}>拒绝</button>
-            <button type="button" className="cu-btn cu-stop" onClick={answer('stop')}>停止</button>
+            <button type="button" className="cu-btn cu-allow" {...allowProps}>允许</button>
+            <button type="button" className="cu-btn cu-deny" {...other('deny')}>拒绝</button>
+            <button type="button" className="cu-btn cu-stop" {...other('stop')}>停止</button>
           </>
         )}
       </div>

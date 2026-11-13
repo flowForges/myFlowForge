@@ -3,6 +3,7 @@ import type { Attachment, ProviderInfo } from '@shared/types'
 import { getBuiltinProvider } from '@shared/providerCatalog'
 import { PERMISSION_MODES, DEFAULT_PERMISSION_MODE, permissionModeLabel, providerSupportsPermissions, providerEnforcesReadonly, type PermissionMode } from '@shared/permissions'
 import { BROWSER_USE_MODES, DEFAULT_BROWSER_USE, browserUseLabel, providerSupportsBrowserUse, browserPermissionConflict, type BrowserUseMode } from '@shared/browserUse'
+import { usePhysicalPress, type IsPhysical } from './cuPhysical'
 import { COMPUTER_USE_MODES, COMPUTER_USE_CHIP, CU_SET_MODE_ERR, computerUseConflict, providerSupportsComputerUse, type ComputerUseMode, type CuSetModeCode, type CuStatus } from '@shared/computerUse'
 import { isSlashQuery, mergeCommands, type MenuCommand } from './slashCommands'
 import type { ContextUsage } from '@shared/types'
@@ -94,6 +95,8 @@ const MAX_H = 180
 const draftStore: Record<string, { text: string; attachments: Attachment[] }> = {}
 
 /** 电脑操作 chip 的全部输入(档位 / 状态由父组件的 useComputerUse 给)。remote = 窗口正在看远程主机,此时 chip 不出现(spec V2)。 */
+const CU_RANK: Record<ComputerUseMode, number> = { off: 0, ask: 1, allow: 2 }
+
 export interface ComposerComputerUse {
   supported: boolean
   mode: ComputerUseMode
@@ -106,6 +109,8 @@ export interface ComposerComputerUse {
   openSettings(): void
   /** 点开 chip 时才拉 helper 状态(从不挂载时拉) */
   refreshStatus?(): Promise<CuStatus | null>
+  /** 测试注入;默认 isTrusted(cuPhysical.ts) */
+  isPhysical?: IsPhysical
 }
 
 interface Props {
@@ -356,6 +361,9 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
     if (st && (!st.screen || !st.ax)) { computerUse.openSettings(); return }
     setOpenMenu('computer')
   }
+  // I-2:放宽(关→开、询问→放行)和浮窗的「允许」同一道物理按下检查;收窄(→关闭、放行→询问)和停止键盘照样能按
+  const cuPress = usePhysicalPress(computerUse?.isPhysical)
+  const cuWidens = (m: ComputerUseMode) => CU_RANK[m] > CU_RANK[computerUse?.mode ?? 'off']
   async function pickCuMode(m: ComputerUseMode) {
     const code = await computerUse!.setMode(m)
     if (code === 'restart_required') { setCuRestart(true); setOpenMenu(null); return }
@@ -983,7 +991,12 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
                     className={'menu-item' + (cm.id === computerUse!.mode ? ' on' : '')}
                     data-computer={cm.id}
                     key={cm.id}
-                    onClick={() => { void pickCuMode(cm.id) }}
+                    tabIndex={cuWidens(cm.id) ? -1 : undefined}
+                    onMouseDown={cuPress.down(`cu-mode:${cm.id}`)}
+                    onClick={(e) => {
+                      if (!cuPress.check(`cu-mode:${cm.id}`, e) && cuWidens(cm.id)) return
+                      void pickCuMode(cm.id)
+                    }}
                   >
                     <div className="pm-main"><div className="pm-t">{cm.label}</div></div>
                     {CHECK}
