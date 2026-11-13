@@ -388,11 +388,20 @@ function noopSend(_tool: string, _args: Record<string, unknown>): Promise<never>
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
+/**
+ * What the stdio entry reads from the env block its CLI hands it (forgeServerSpec's `env`): the socket, the agent id
+ * (a computer-use token for cu turns) and the tool allowlist. Exported for the env → entry seam test (M-11).
+ */
+export function forgeEntryConfig(env: NodeJS.ProcessEnv): { socketPath?: string; agentId: string; allowed?: Set<string> } {
+  return {
+    socketPath: env.FORGE_SOCKET || undefined,
+    agentId: env.FORGE_AGENT_ID ?? 'unknown',
+    allowed: env.FORGE_TOOLS ? new Set(listForgeTools(env.FORGE_TOOLS)) : undefined,
+  }
+}
+
 async function main() {
-  const socketPath = process.env.FORGE_SOCKET
-  const agentId = process.env.FORGE_AGENT_ID ?? 'unknown'
-  const allowedList = listForgeTools(process.env.FORGE_TOOLS)
-  const allowed = process.env.FORGE_TOOLS ? new Set(allowedList) : undefined
+  const { socketPath, agentId, allowed } = forgeEntryConfig(process.env)
 
   let send: SendFn
   if (socketPath) {
