@@ -506,3 +506,25 @@ export const CU_SET_MODE_ERR: Readonly<Record<CuSetModeCode, string>> = {
 
 /** 设置页「组件」行的 chip。`failed` 是单独一档:组件在,但起不来或不能断继承。 */
 export const CU_HELPER_LABEL: Readonly<Record<CuStatus['helper'], string>> = { ok: '就绪', missing: '缺失', failed: '无法启动' }
+
+// ───────────────────────── 常驻浮窗(cu-overlay)的状态 ─────────────────────────
+
+/** 浮窗迷你卡:只有裁片、一行动作、允许 / 拒绝(§10.3)。 */
+export interface CuOverlayGate {
+  id: string
+  kind: 'action' | 'continue'
+  action?: CuActionView
+  /** base64 jpeg */
+  crop?: string
+  reason?: string
+}
+/** 主进程推给浮窗的全部状态。session 为 null = 没有会话开着电脑操作,浮窗隐藏。 */
+export interface CuOverlayState {
+  session: { workspacePath: string; sessionId: string; title: string; mode: Exclude<ComputerUseMode, 'off'> } | null
+  /** 最早一张挂着的门(同一时刻最多一个调用在跑,V6) */
+  gate: CuOverlayGate | null
+  /** 最近一次动作被我们自己的窗口挡住:显示 `收起主窗口` */
+  ownBlocked: boolean
+  /** 每个动作 +1,浮窗据此闪一下 */
+  actionSeq: number
+}
