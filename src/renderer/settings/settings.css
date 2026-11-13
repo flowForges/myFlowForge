@@ -889,3 +889,12 @@
 }
 .host-locked-v { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .host-locked .set-btn { flex: 0 0 auto; }
+
+/* 电脑操作 */
+.cu-chip { font-size: 12px; padding: 2px 9px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); color: var(--fg-2); }
+.cu-chip.ok { color: var(--ok, #2e9d5b); }
+.cu-chip.bad { color: var(--danger, #d0453b); }
+.cu-chip.warn { color: var(--warn, #c9861a); }
+.cu-apps, .cu-pick { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.cu-app { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 3px 9px; border-radius: 7px; background: var(--surface); border: 1px solid var(--border); color: var(--fg-2); }
+.cu-app.builtin { opacity: .6; }

@@ -250,6 +250,13 @@ const NAV: NavEntry[] = [
     ),
   },
   {
+    key: 'computerUse',
+    label: '电脑操作',
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4M9 8l5 3-2 .8-.8 2z" /></svg>
+    ),
+  },
+  {
     key: 'debug',
     label: '调试日志',
     icon: (
@@ -280,7 +287,8 @@ const NAV: NavEntry[] = [
 ]
 
 export function SettingsModal({ open, onClose, renderPane, initialPane, showNsfw, showPetMarket }: SettingsModalProps) {
-  const nav = NAV.filter(n => (n.key !== 'nsfw' || showNsfw) && (n.key !== 'petMarket' || showPetMarket))
+  const mac = ((window as unknown as { forge?: { platform?: string } }).forge?.platform ?? 'darwin') === 'darwin'
+  const nav = NAV.filter(n => (n.key !== 'nsfw' || showNsfw) && (n.key !== 'petMarket' || showPetMarket) && (n.key !== 'computerUse' || mac))
   const [active, setActive] = useState(initialPane ?? 'appearance')
   const prevOpenRef = useRef(open)
   useEffect(() => {

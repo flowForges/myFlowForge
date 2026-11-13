@@ -63,6 +63,7 @@ import { AboutPane } from './settings/AboutPane'
 import { MemoryPane } from './settings/MemoryPane'
 import { BotPane } from './settings/BotPane'
 import { TokenUsagePane } from './settings/TokenUsagePane'
+import { ComputerUsePane } from './settings/ComputerUsePane'
 import { KeybindingsPane } from './settings/KeybindingsPane'
 import { useKeybindings } from './state/useKeybindings'
 import { UpgradeModal } from './shell/UpgradeModal'
@@ -943,6 +944,7 @@ export function App() {
           case 'plugins': return <PluginPane plugins={pluginsApi.plugins} results={pluginsApi.results} catalog={pluginsApi.catalog} loadCatalog={pluginsApi.loadCatalog} install={pluginsApi.install} uninstall={pluginsApi.uninstall} setEnabled={pluginsApi.setEnabled} refresh={pluginsApi.refresh} installExample={pluginsApi.installExample} installError={pluginsApi.installError} creds={pluginsApi.creds} setCred={pluginsApi.setCred} />
           case 'nsfw': return settings ? <NsfwPane pet={settings.pet} nsfwInstalled={settings.nsfwInstalled ?? {}} codes={settings.nsfwCodes ?? []} onAddCode={() => setUnlockOpen(true)} onRemoveCode={(c) => { const next = (settings.nsfwCodes ?? []).filter(x => x !== c); update({ nsfwCodes: next, nsfwCode: next[next.length - 1] ?? '' }) }} onChangePet={(p) => update({ pet: { ...settings.pet, ...p } })} onChangeAppearance={(p) => update({ appearance: p })} onSetInstalled={(k, ref) => update({ nsfwInstalled: { ...(settings.nsfwInstalled ?? {}), [k]: ref } })} onDisable={() => { update({ nsfwUnlocked: false, nsfwCode: '', nsfwCodes: [] }); setSettingsPane('appearance') }} /> : null
           case 'keybindings': return settings ? <KeybindingsPane keybindings={settings.keybindings} onChange={(kb) => update({ keybindings: kb })} globalFailed={globalFailed} /> : null
+          case 'computerUse': return settings ? <ComputerUsePane computerUse={settings.computerUse} keybindings={settings.keybindings} onChange={(p) => update({ computerUse: p })} /> : null
           case 'sessions': return <SessionImportPane />
           case 'memory': return settings ? <MemoryPane enabled={settings.memory.enabled} onToggle={(v) => update({ memory: { enabled: v } })} wsPath={activeWsId || undefined} sessionId={sessions.activeSessionId ?? undefined} /> : null
           case 'bot': return settings ? <BotPane config={settings.botBridge} onChange={(bb) => update({ botBridge: bb })} /> : null

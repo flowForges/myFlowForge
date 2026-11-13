@@ -46,4 +46,11 @@ describe('SettingsModal tab routing', () => {
     rerender(<SettingsModal open onClose={() => {}} renderPane={renderPane} initialPane="project" />)
     expect(screen.getByTestId('pane').textContent).toBe('project')
   })
+
+  it('has a 电脑操作 nav row that routes to computerUse', () => {
+    const renderPane = vi.fn((key: string) => <div data-testid="pane">{key}</div>)
+    render(<SettingsModal open onClose={() => {}} renderPane={renderPane} />)
+    fireEvent.click(screen.getByText('电脑操作'))
+    expect(screen.getByTestId('pane').textContent).toBe('computerUse')
+  })
 })

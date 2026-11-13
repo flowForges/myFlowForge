@@ -69,6 +69,7 @@ export interface SettingsUpdate {
   // codex 的驱动通路。★'app-server' 才有逐 token 流式('exec' 只在整条消息写完后发一次)——
   //  见 AgentsPane 里那个开关和 providers/codex.ts 的注释。
   codexTransport?: Settings['codexTransport']
+  computerUse?: Partial<Settings['computerUse']>
 }
 
 function merge(base: Settings, partial: SettingsUpdate): Settings {
@@ -108,7 +109,7 @@ function merge(base: Settings, partial: SettingsUpdate): Settings {
     // loaded settings on load (cast), else keep base, matching pluginCreds/pinnedWorkspaces above.
     fullAccessAck: (partial as Partial<Settings>).fullAccessAck ?? base.fullAccessAck,
     // Written only by the main process (授权 / first enable, spec V3) — same preserve rule as above.
-    computerUse: (partial as Partial<Settings>).computerUse ?? base.computerUse,
+    computerUse: { ...base.computerUse, ...(partial.computerUse ?? {}) },
     memory: { ...base.memory, ...(partial.memory ?? {}) },
     // Managed via the bot:* IPC (connect/regen-pairing/unbind each write settings + broadcast), not
     // this update path — preserve from the loaded settings on load (cast), else base, like pluginCreds.
