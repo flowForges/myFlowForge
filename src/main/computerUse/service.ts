@@ -13,9 +13,10 @@ import { randomBytes } from 'node:crypto'
 import { chmodSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ChatSendPayload } from '@shared/types'
-import { CU_ERR, type ComputerUseMode, type CuErrCode, type Mod } from '@shared/computerUse'
+import { CU_ERR, type ComputerUseMode, type CuActionView, type CuErrCode, type Mod } from '@shared/computerUse'
 import type { Settings } from '../config/schema'
-import type { ComputerDriver, PostAction, PostResult } from './driver'
+import { forgeMcpConfigFile } from '../agents/mcpConfig'
+import { CuDriverError, type ComputerDriver, type PostAction, type PostResult } from './driver'
 import type { PermissionProbe } from './permissions'
 import type {
   ActionLog, CallMeta, CuEvent, CuGate, CuOp, CuResult, CuSessionKey, Executor, GateDecision, ServiceInternals, StopWhy,
@@ -40,7 +41,7 @@ const NOTE: Partial<Record<StopWhy, string>> = {
 type Origin = NonNullable<ChatSendPayload['origin']>
 type SetModeResult =
   | { ok: true }
-  | { ok: false; code: 'not_local' | 'busy' | 'unsupported' | 'restart_required' | 'no_physical'; busy?: CuSessionKey & { title: string } }
+  | { ok: false; code: 'not_local' | 'busy' | 'unsupported' | 'restart_required' | 'no_physical' | 'stopped'; busy?: CuSessionKey & { title: string } }
 
 export interface ComputerUseService {
   setMode(key: CuSessionKey, mode: ComputerUseMode, by: { local: boolean }): Promise<SetModeResult>
@@ -100,13 +101,37 @@ function heldBy(a: PostAction): { mods: Mod[]; button?: 'left' | 'right' | 'midd
   return { mods: [] }
 }
 
+const sameMods = (a: readonly Mod[] = [], b: readonly Mod[] = []) =>
+  a.length === b.length && [...a].sort().join('+') === [...b].sort().join('+')
+
+/**
+ * M-1: does an approved CuActionView cover this post? Kind and payload must match (text, button, count, mods,
+ * repeat, scroll amounts). Position is not compared: the view is in screenshot pixels for display, the post in
+ * points, and where the event lands is pinned by the guard's expectPid / expectWindowId (R8, V7f).
+ */
+function viewCovers(v: CuActionView, a: PostAction): boolean {
+  if (v.kind !== a.kind) return false
+  switch (a.kind) {
+    case 'click': return (v.button ?? 'left') === a.button && (v.count ?? 1) === a.count && sameMods(v.mods, a.mods)
+    case 'drag': return (v.button ?? 'left') === a.button && sameMods(v.mods, a.mods)
+    case 'scroll': return (v.dx ?? 0) === a.dx && (v.dy ?? 0) === a.dy
+    case 'type': return v.text === a.text
+    case 'key': return (v.repeat ?? 1) === a.repeat && (v.mods === undefined || sameMods(v.mods, a.mods))
+    case 'move': return true
+  }
+}
+
+/** What the executor gets: the driver minus `request` (a TCC prompt is the user's button, never the agent's, M-3). */
+export type GuardedDriver = Omit<ComputerDriver, 'request'>
+
 interface Sess { key: CuSessionKey; mode: Exclude<ComputerUseMode, 'off'>; token: string; enableSeq: number }
 interface Turn { origin: Origin | undefined; seq: number }
 interface Job {
   key: CuSessionKey; k: string; op: CuOp; args: unknown; meta: CallMeta
   enableSeq: number; turnSeq: number; settled: boolean; settle: (r: CuResult) => void
 }
-interface OpenGate { gate: CuGate; done: (d: GateDecision) => void; cancel: () => void }
+interface OpenGate { gate: CuGate; job: Job; done: (d: GateDecision) => void; cancel: () => void }
+interface Ticket { job: Job; view: CuActionView }
 
 export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUseService {
   const sessions = new Map<string, Sess>()
@@ -117,7 +142,12 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
   const queue: Job[] = []
   let running: Job | null = null
   let inFlight: { action: PostAction; job: Job } | null = null
+  let tickets: Ticket[] = []
+  /** tokens whose first call already arrived: their mcp config file is gone (I-1) */
+  const used = new Set<string>()
   let seq = 0
+  /** I-2: bumped by every stop / lock / off / forget, so a setMode that awaited across one of them gives up */
+  let epoch = 0
   const setTimer = d.setTimer ?? ((fn, ms) => {
     const h = setTimeout(fn, ms)
     h.unref?.()
@@ -148,6 +178,8 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
     if (!g) return false
     gates.delete(id)
     g.cancel()
+    // M-1: an approved action gate leaves a one-shot ticket that only its own call can spend
+    if (decision === 'allow' && g.gate.kind === 'action' && g.gate.action) tickets.push({ job: g.job, view: g.gate.action })
     d.emit({ type: 'gate-resolved', id, decision })
     g.done(decision)
     return true
@@ -167,13 +199,16 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
   }
 
   // ── tokens ──
-  const revoke = (token: string) => {
-    tokens.delete(token)
+  const removeTokenFile = (token: string) => {
     const dir = d.configDir?.()
     if (!dir) return
-    // same sanitising as forgeMcpArgs, so we delete exactly the file it wrote
-    const safe = token.replace(/[^a-zA-Z0-9_-]/g, '_')
-    try { rmSync(join(dir, `mcp.${safe}.json`), { force: true }) } catch { /* best effort */ }
+    // the same name forgeMcpArgs wrote (hashed for cu tokens, I-1)
+    try { rmSync(forgeMcpConfigFile(dir, token), { force: true }) } catch { /* best effort */ }
+  }
+  const revoke = (token: string) => {
+    tokens.delete(token)
+    used.delete(token)
+    removeTokenFile(token)
   }
 
   // ── calls ──
@@ -190,6 +225,14 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
     job.settle(r)
   }
 
+  /** V7g: SIGUSR1 first; the helper lifts what it holds. If it was killed, or the signal failed, release explicitly. */
+  const abortInFlight = (k: string) => {
+    if (!inFlight || inFlight.job.k !== k) return
+    const held = heldBy(inFlight.action)
+    const release = () => d.driver.release(held).catch(() => { /* the helper restarts on the next request */ })
+    d.driver.abort().then((r) => (r === 'killed' ? release() : undefined), () => release())
+  }
+
   /** Turn a session off: revoke, close its gates, drop its queued and running calls, abort its in-flight post. */
   const disable = (k: string, gateDecision: GateDecision): boolean => {
     const s = sessions.get(k)
@@ -203,27 +246,42 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
       settle(job, err('stopped'))
     }
     if (running && running.k === k) settle(running, err('stopped'))
-    if (inFlight && inFlight.job.k === k) {
-      const held = heldBy(inFlight.action)
-      // V7g: SIGUSR1 first; the helper lifts what it holds. If it had to be killed, the respawned one releases.
-      d.driver.abort()
-        .then((r) => (r === 'killed' ? d.driver.release(held) : undefined))
-        .catch(() => { /* the helper restarts on the next request */ })
-    }
+    abortInFlight(k)
     return !!s
   }
 
-  const guarded: ComputerDriver = {
+  const refuseIfCancelled = () => {
+    const job = running
+    if (!job || job.settled || cancelled(job)) throw new CuDriverError('stopped')
+  }
+  const postRefusal = (job: Job | null): PostResult | null => {
+    if (!job || job.settled || cancelled(job)) return { ok: false, code: 'stopped' }
+    if (gates.size > 0) return { ok: false, code: 'target_changed' }
+    return null
+  }
+  const ticketFor = (job: Job, a: PostAction) => tickets.findIndex((t) => t.job === job && viewCovers(t.view, a))
+
+  const guarded: GuardedDriver = {
     status: () => d.driver.status(),
-    request: (kind) => d.driver.request(kind),
     capture: (o) => d.driver.capture(o),
     crop: (o) => d.driver.crop(o),
     hitTest: (p) => d.driver.hitTest(p),
     front: () => d.driver.front(),
     async post(a, g): Promise<PostResult> {
       const job = running
-      if (!job || job.settled || cancelled(job)) return { ok: false, code: 'stopped' }
-      if (gates.size > 0) return { ok: false, code: 'target_changed' }
+      const r0 = postRefusal(job)
+      if (r0 || !job) return r0 ?? { ok: false, code: 'stopped' }
+      // I-4: the screen is re-checked right before every post; any doubt refuses.
+      let st
+      try { st = await d.driver.status() } catch { st = null }
+      const r1 = postRefusal(job)
+      if (r1) return r1
+      if (!st || st.locked || !st.onConsole || st.asleep) return { ok: false, code: 'locked' }
+      // M-6 + M-1: re-read the mode now. In ask, anything but a move must spend a ticket from this call's approval.
+      const mode = modeOf(job.key)
+      const ti = ticketFor(job, a)
+      if (mode === 'ask' && a.kind !== 'move' && ti < 0) return { ok: false, code: 'denied' }
+      if (ti >= 0) tickets.splice(ti, 1)
       const mine = { action: a, job }
       inFlight = mine
       try {
@@ -232,8 +290,13 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
         if (inFlight === mine) inFlight = null
       }
     },
-    activate: (pid) => d.driver.activate(pid),
-    release: (o) => d.driver.release(o),
+    async activate(pid) { refuseIfCancelled(); return d.driver.activate(pid) },
+    async release(o) {
+      // after a stop the service itself releases what the in-flight action held (abortInFlight)
+      const job = running
+      if (!job || job.settled || cancelled(job)) return
+      return d.driver.release(o)
+    },
     idleSeconds: (kind) => d.driver.idleSeconds(kind),
     runningApps: () => d.driver.runningApps(),
     abort: () => d.driver.abort(),
@@ -242,7 +305,8 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
   }
 
   const internals: ServiceInternals = {
-    driver: guarded,
+    // typed as the full driver for Task 5's createExecutor; `request` is absent at runtime (M-3)
+    driver: guarded as ComputerDriver,
     modeOf,
     turnSeq: (key) => {
       const t = turns.get(keyId(key))
@@ -283,6 +347,7 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
       settle(job, await runJob(job))
     } finally {
       running = null
+      tickets = tickets.filter((t) => t.job !== job)
       void pump()
     }
   }
@@ -292,9 +357,12 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
       if (!by.local) return { ok: false, code: 'not_local' }
       const k = keyId(key)
       if (mode === 'off') {
+        epoch++
         if (disable(k, 'deny')) emitState()
         return { ok: true }
       }
+      // I-2: a stop / lock / off that lands during one of the awaits below wins over this call.
+      const epoch0 = epoch
       const cur = modeOf(key)
       if (cur === mode) return { ok: true }
       const holder = () => [...sessions.values()].find((s) => keyId(s.key) !== k)
@@ -313,10 +381,13 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
       // V5: off→on and ask→allow widen what the agent may do; both need a physical press when the switch is on.
       const widening = cur === 'off' || (cur === 'ask' && mode === 'allow')
       if (widening && d.hidIsPhysical() && !(await physicalRecent())) return { ok: false, code: 'no_physical' }
+      if (epoch !== epoch0) return { ok: false, code: 'stopped' }
       // re-read after the awaits: another setMode may have run meanwhile
       const s = sessions.get(k)
       if (s) {
         s.mode = mode
+      } else if (cur !== 'off') {
+        return { ok: false, code: 'stopped' }   // never mint a session on the switch path
       } else {
         const h = holder()
         if (h) return { ok: false, code: 'busy', busy: { ...h.key, title: d.titleOf(h.key) } }
@@ -340,6 +411,7 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
       const k = keyId(key)
       turns.delete(k)
       closeGatesOf(k, 'deny')
+      abortInFlight(k)   // M-2: the turn is over, so is its action
     },
 
     async handle(token, op, args, meta) {
@@ -351,6 +423,8 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
       const t = turns.get(k)
       if (!t || t.origin !== 'local') return err('no_turn')
       if (!isCuOp(op)) return err('invalid_args')
+      // I-1: the CLI has evidently loaded its MCP config, so the file holding the token goes now, not at revoke.
+      if (!used.has(token)) { used.add(token); removeTokenFile(token) }
       return new Promise<CuResult>((resolve) => {
         queue.push({
           key: { ...key }, k, op, args, meta: meta ?? {}, enableSeq: s.enableSeq, turnSeq: t.seq, settled: false, settle: resolve,
@@ -363,10 +437,13 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
       const k = keyId(g.key)
       const t = turns.get(k)
       if (!sessions.has(k) || !t || t.origin !== 'local') return Promise.resolve('deny')
+      // M-4: only the running call of this session, while it is still live, may ask
+      const job = running
+      if (!job || job.k !== k || job.settled || cancelled(job)) return Promise.resolve('deny')
       const gate: CuGate = { ...g, key: { ...g.key }, id: freshId('cug.'), ts: d.now() }
       return new Promise<GateDecision>((done) => {
         const cancel = setTimer(() => { finishGate(gate.id, 'timeout') }, GATE_TIMEOUT_MS)
-        gates.set(gate.id, { gate, done, cancel })
+        gates.set(gate.id, { gate, job, done, cancel })
         d.emit({ type: 'gate', gate })
       })
     },
@@ -393,6 +470,7 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
     pendingGates: () => [...gates.values()].map((g) => g.gate),
 
     stop(key, why = 'user') {
+      epoch++
       const targets: CuSessionKey[] = key ? [key] : [...sessions.values()].map((s) => s.key)
       let changed = false
       for (const t of targets) {

@@ -27,7 +27,8 @@ export interface PostGuard {
   denyPids: number[]; denyBundlePrefixes: string[]
   expectPid?: number; expectWindowId?: number; pointer?: Pt
 }
-export type PostResult = { ok: true } | { ok: false; code: 'target_changed' | 'helper_failed' | 'stopped'; typed?: number }
+/** `locked` / `denied` come only from the service's guarded wrapper (I-4, M-1), never from the helper. */
+export type PostResult = { ok: true } | { ok: false; code: 'target_changed' | 'helper_failed' | 'stopped' | 'locked' | 'denied'; typed?: number }
 
 export interface CaptureOpts {
   maxW: number; maxH: number; quality: number; maskPids: number[]; maskBundlePrefixes: string[]

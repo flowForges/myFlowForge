@@ -9,7 +9,7 @@ import { forgeMcpArgs } from '../agents/mcpConfig'
 import { fakeDriver } from './fakeDriver'
 import type { PostAction, PostResult } from './driver'
 import type { PermissionProbe } from './permissions'
-import type { ActionLog, CuEvent, CuSessionKey, CuResult, Executor, ServiceInternals } from './types'
+import type { ActionLog, CuEvent, CuGate, CuSessionKey, CuResult, Executor, GateDecision, ServiceInternals } from './types'
 import { createComputerUseService, ensurePrivateDir } from './service'
 
 const A: CuSessionKey = { workspacePath: '/w/a', sessionId: 's-a' }
@@ -39,6 +39,7 @@ function setup(o: {
   noExecutor?: boolean
   configDir?: string | null
   random?: () => string
+  probeHold?: Promise<void>
 } = {}) {
   const driver = fakeDriver()
   const idle = { mouseDown: 60, keyDown: 60, any: 60, ...o.idle }
@@ -59,7 +60,7 @@ function setup(o: {
   const runs: { key: CuSessionKey; op: string; args: unknown }[] = []
   let internals: ServiceInternals | null = null
   const probe: PermissionProbe = {
-    status: async () => ({ ...OK_STATUS, ...o.status }),
+    status: async () => { if (o.probeHold) await o.probeHold; return { ...OK_STATUS, ...o.status } },
     request: async () => {}, openPane: async () => {},
   }
   const log: ActionLog = {
@@ -83,6 +84,13 @@ function setup(o: {
       return {
         run: async (key, op, args) => {
           runs.push({ key, op, args })
+          // test hook: a call whose only job is to open one gate (gates can only be opened from inside a call, M-4)
+          const a = args as { __gate?: Omit<CuGate, 'id' | 'ts'>; __onDecision?: (d: GateDecision) => void }
+          if (a && a.__gate) {
+            const dec = await s.openGate(a.__gate)
+            a.__onDecision?.(dec)
+            return { ok: true, text: dec }
+          }
           if (o.run) return o.run(s, key, op, args)
           return { ok: true, text: `ran ${op}` }
         },
@@ -103,13 +111,21 @@ function setup(o: {
     for (const t of timers) if (!t.dead && t.at <= clock) { t.dead = true; t.fn() }
   }
   const jump = (ms: number) => { clock += ms }
+  /** open a gate from inside a running call; resolves to [decision, the call's result] */
+  const gate = async (g: Omit<CuGate, 'id' | 'ts' | 'key'> & { key?: CuSessionKey }) => {
+    const key = g.key ?? A
+    const dd = deferred<GateDecision>()
+    const call = svc.handle(svc.tokenFor(key) as string, 'click', { __gate: { ...g, key }, __onDecision: dd.resolve }, {})
+    await flush(30)
+    return [dd.promise, call] as const
+  }
   const on = async (key = A, mode: 'ask' | 'allow' = 'ask') => {
     const r = await svc.setMode(key, mode, LOCAL)
     expect(r).toEqual({ ok: true })
     return svc.tokenFor(key) as string
   }
   return {
-    svc, driver, events, notes, stoppedTurns, saved, runs, idle, idleCalls, advance, jump, on, live,
+    svc, driver, events, notes, stoppedTurns, saved, runs, idle, idleCalls, advance, jump, gate, on, live,
     get statusCalls() { return statusCalls },
     get internals() { return internals as unknown as ServiceInternals },
     get settings() { return settings },
@@ -276,7 +292,7 @@ describe('beginTurn / endTurn', () => {
     const t = setup()
     await t.on(A)
     t.svc.beginTurn(A, 'local')
-    const p = t.svc.openGate({ key: A, kind: 'action', action: { kind: 'click', at: { x: 1, y: 2 } } })
+    const [p] = await t.gate({ kind: 'action', action: { kind: 'click', at: { x: 1, y: 2 } } })
     expect(t.svc.pendingGates()).toHaveLength(1)
     const id = t.svc.pendingGates()[0].id
     t.svc.endTurn(A)
@@ -443,7 +459,7 @@ describe('gates are app-side (Review Focus 2; V5)', () => {
     const t = setup(o)
     await t.on(A)
     t.svc.beginTurn(A, 'local')
-    const p = t.svc.openGate({ key: A, kind: 'action', action: { kind: 'click', at: { x: 5, y: 6 } }, crop: 'Q1JPUA==' })
+    const [p] = await t.gate({ kind: 'action', action: { kind: 'click', at: { x: 5, y: 6 } }, crop: 'Q1JPUA==' })
     const g = t.svc.pendingGates()[0]
     return { t, p, g }
   }
@@ -525,7 +541,7 @@ describe('gates are app-side (Review Focus 2; V5)', () => {
     const t = setup({ phys: true, idle: { mouseDown: 0.1 } })
     await t.on(A)
     t.svc.beginTurn(A, 'local')
-    const p = t.svc.openGate({ key: A, kind: 'continue', reason: '已执行 100 步' })
+    const [p] = await t.gate({ kind: 'continue', reason: '已执行 100 步' })
     const g = t.svc.pendingGates()[0]
     t.idle.mouseDown = 2
     expect(await t.svc.resolve(g.id, 'allow', LOCAL)).toBe(false)
@@ -544,6 +560,9 @@ describe('gates are app-side (Review Focus 2; V5)', () => {
     const t = setup()
     expect(await t.svc.openGate({ key: A, kind: 'action' })).toBe('deny')
     await t.on(A)
+    expect(await t.svc.openGate({ key: A, kind: 'action' })).toBe('deny')
+    // M-4: even with the mode on and a local turn open, a gate opened outside a running call is denied
+    t.svc.beginTurn(A, 'local')
     expect(await t.svc.openGate({ key: A, kind: 'action' })).toBe('deny')
     expect(t.events.some((e) => e.type === 'gate')).toBe(false)
   })
@@ -610,15 +629,18 @@ describe('one call at a time (Review Focus 20, V6)', () => {
   it('the guarded driver refuses to post while any gate is pending', async () => {
     let res: PostResult | null = null
     const t = setup({
-      run: async (s) => {
+      run: async (s, key) => {
+        void s.openGate({ key, kind: 'action' })   // an executor that forgot to await its gate
         res = await s.driver.post({ kind: 'move', x: 1, y: 1 }, { denyPids: [4242], denyBundlePrefixes: [] })
         return { ok: true, text: 'x' }
       },
     })
     const tok = await t.on(A)
     t.svc.beginTurn(A, 'local')
-    void t.svc.openGate({ key: A, kind: 'action' })   // e.g. a stray gate
-    await t.svc.handle(tok, 'move', {}, {})
+    const call = t.svc.handle(tok, 'move', {}, {})
+    await flush(30)
+    t.svc.endTurn(A)
+    await call
     expect(res).toEqual({ ok: false, code: 'target_changed' })
     expect(t.driver.posts).toEqual([])
   })
@@ -676,19 +698,13 @@ describe('stop', () => {
 
   it('turns the mode off, revokes the token, denies gates, rejects queued calls, aborts, stops the turn, emits and notes', async () => {
     const { t, posting, finishPost } = hanging()
-    const tok = await t.on(A)
+    const tok = await t.on(A, 'allow')
     t.svc.beginTurn(A, 'local')
-    const gate = t.svc.openGate({ key: A, kind: 'action' })
-    // the gate above would block the click's post; answer it so the click can start
-    await t.svc.resolve(t.svc.pendingGates()[0].id, 'deny', LOCAL)
-    expect(await gate).toBe('deny')
     const p1 = t.svc.handle(tok, 'click', {}, {})
     const p2 = t.svc.handle(tok, 'move', {}, {})
     const p3 = t.svc.handle(tok, 'screenshot', {}, {})
     await posting.promise
-    const g2 = t.svc.openGate({ key: A, kind: 'action' })   // a gate pending for the session at stop time
     t.svc.stop(A, 'user')
-    expect(await g2).toBe('stop')
     expect(t.svc.modeOf(A)).toBe('off')
     expect(t.svc.tokenFor(A)).toBeNull()
     expect(await p2).toMatchObject({ ok: false, code: 'stopped' })
@@ -709,7 +725,7 @@ describe('stop', () => {
     for (const outcome of ['stopped', 'killed'] as const) {
       const { t, posting, finishPost } = hanging()
       t.driver.abort = async () => { t.driver.aborted++; return outcome }
-      const tok = await t.on(A)
+      const tok = await t.on(A, 'allow')
       t.svc.beginTurn(A, 'local')
       const p1 = t.svc.handle(tok, 'click', {}, {})
       await posting.promise
@@ -772,7 +788,7 @@ describe('lock', () => {
     const t = setup()
     const tok = await t.on(A)
     t.svc.beginTurn(A, 'local')
-    const g = t.svc.openGate({ key: A, kind: 'action' })
+    const [g] = await t.gate({ kind: 'action' })
     t.svc.onLock()
     expect(await g).toBe('stop')
     expect(t.svc.modeOf(A)).toBe('off')
@@ -815,7 +831,7 @@ describe('emit is the only outlet', () => {
     const t = setup()
     await t.on(A)
     t.svc.beginTurn(A, 'local')
-    const p = t.svc.openGate({ key: A, kind: 'action', action: { kind: 'type', text: 'SECRET-TEXT-MARK' }, crop: 'SECRET-CROP-MARK' })
+    const [p] = await t.gate({ kind: 'action', action: { kind: 'type', text: 'SECRET-TEXT-MARK' }, crop: 'SECRET-CROP-MARK' })
     await t.svc.resolve(t.svc.pendingGates()[0].id, 'allow', LOCAL)
     await p
     t.svc.stop(A, 'user')
@@ -839,5 +855,328 @@ describe('emit is the only outlet', () => {
     await t.on(A)
     t.internals.emitAction(A, { ts: 1, turn: 1, op: 'click', result: 'auto' })
     expect(t.events.at(-1)).toEqual({ type: 'action', key: A, entry: { ts: 1, turn: 1, op: 'click', result: 'auto' } })
+  })
+})
+
+// ───────────────────────── review fixes (I-1, I-2, I-4, M-1 … M-6) ─────────────────────────
+
+const G = { denyPids: [4242], denyBundlePrefixes: [] }
+const CLICK: PostAction = { kind: 'click', x: 1, y: 1, button: 'left', count: 1, mods: [] }
+
+describe('I-1: the token file is short-lived', () => {
+  it('the first call that arrives with the token deletes its mcp config file; a bad token deletes nothing', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cu-first-'))
+    try {
+      const t = setup({ configDir: dir })
+      const tok = await t.on(A)
+      const file = forgeMcpArgs({
+        FORGE_SOCKET: join(dir, 'cu.sock'), FORGE_MCP_DIR: dir, FORGE_AGENT_ID: tok,
+        FORGE_MCP_ENTRY: '/x/forgeMcp.js', FORGE_TOOLS: COMPUTER_TOOLS.join(','),
+      })[1]
+      expect(file).not.toContain(tok.slice(3))
+      t.svc.beginTurn(A, 'local')
+      await t.svc.handle('cu.WRONGWRONGWRONGW', 'cursor', {}, {})
+      expect(existsSync(file)).toBe(true)
+      expect((await t.svc.handle(tok, 'cursor', {}, {})).ok).toBe(true)
+      expect(existsSync(file)).toBe(false)
+      // the token itself keeps working
+      expect((await t.svc.handle(tok, 'cursor', {}, {})).ok).toBe(true)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+})
+
+describe('I-2: stop / lock / off during setMode\'s awaits win', () => {
+  for (const [name, ev] of [
+    ['lock', (t: ReturnType<typeof setup>) => t.svc.onLock()],
+    ['stop (hotkey)', (t: ReturnType<typeof setup>) => t.svc.stop(undefined, 'hotkey')],
+    ['stop (this key)', (t: ReturnType<typeof setup>) => t.svc.stop(A, 'user')],
+    ['off', (t: ReturnType<typeof setup>) => t.svc.setMode(A, 'off', LOCAL)],
+  ] as const) {
+    it(`off→ask: ${name} while the probe is pending leaves it off`, async () => {
+      const hold = deferred<void>()
+      const t = setup({ probeHold: hold.promise })
+      const r = t.svc.setMode(A, 'ask', LOCAL)
+      await flush()
+      await ev(t)
+      hold.resolve()
+      expect(await r).toEqual({ ok: false, code: 'stopped' })
+      expect(t.svc.modeOf(A)).toBe('off')
+      expect(t.svc.tokenFor(A)).toBeNull()
+    })
+
+    it(`ask→allow: ${name} while the physical check is pending leaves it off and mints nothing`, async () => {
+      const t = setup({ phys: true, idle: { mouseDown: 0.1 } })
+      await t.on(A, 'ask')
+      const hold = deferred<number>()
+      t.driver.idleSeconds = async () => hold.promise
+      const r = t.svc.setMode(A, 'allow', LOCAL)
+      await flush()
+      await ev(t)
+      hold.resolve(0.1)
+      expect(await r).toEqual({ ok: false, code: 'stopped' })
+      expect(t.svc.modeOf(A)).toBe('off')
+      expect(t.svc.tokenFor(A)).toBeNull()
+    })
+  }
+})
+
+describe('I-4: every post re-checks the screen', () => {
+  for (const [name, st] of [['locked', { locked: true }], ['onConsole:false', { onConsole: false }], ['asleep', { asleep: true }]] as const) {
+    it(`a screen that became ${name} between the call's start and its post refuses with locked`, async () => {
+      let res: PostResult | null = null
+      const t = setup({
+        run: async (s) => {
+          t.driver.setStatus(st)
+          res = await s.driver.post(CLICK, G)
+          return { ok: true, text: 'x' }
+        },
+      })
+      const tok = await t.on(A, 'allow')
+      t.svc.beginTurn(A, 'local')
+      await t.svc.handle(tok, 'click', {}, {})
+      expect(res).toEqual({ ok: false, code: 'locked' })
+      expect(t.driver.posts).toEqual([])
+    })
+  }
+
+  it('a status read that throws inside post refuses with locked', async () => {
+    let res: PostResult | null = null
+    const t = setup({
+      run: async (s) => {
+        t.driver.status = async () => { throw new Error('gone') }
+        res = await s.driver.post(CLICK, G)
+        return { ok: true, text: 'x' }
+      },
+    })
+    const tok = await t.on(A, 'allow')
+    t.svc.beginTurn(A, 'local')
+    await t.svc.handle(tok, 'click', {}, {})
+    expect(res).toEqual({ ok: false, code: 'locked' })
+    expect(t.driver.posts).toEqual([])
+  })
+
+  it('a stop that lands while post awaits status still prevents the post', async () => {
+    let res: PostResult | null = null
+    const hold = deferred<void>()
+    const t = setup({
+      run: async (s) => {
+        const real = t.driver.status
+        let n = 0
+        t.driver.status = async () => { if (n++ === 0) await hold.promise; return real() }
+        res = await s.driver.post(CLICK, G)
+        return { ok: true, text: 'x' }
+      },
+    })
+    const tok = await t.on(A, 'allow')
+    t.svc.beginTurn(A, 'local')
+    const call = t.svc.handle(tok, 'click', {}, {})
+    await flush(30)
+    t.svc.stop(A, 'user')
+    hold.resolve()
+    await call
+    await flush(30)
+    expect(res).toEqual({ ok: false, code: 'stopped' })
+    expect(t.driver.posts).toEqual([])
+  })
+})
+
+describe('M-1: in ask mode a post needs a matching one-shot approval ticket', () => {
+  function asker(script: (s: ServiceInternals, key: CuSessionKey) => Promise<PostResult[]>) {
+    let out: PostResult[] = []
+    const t = setup({ run: async (s, key) => { out = await script(s, key); return { ok: true, text: 'x' } } })
+    return { t, results: () => out }
+  }
+  const approve = async (t: ReturnType<typeof setup>) => {
+    await flush(30)
+    const g = t.svc.pendingGates()[0]
+    expect(await t.svc.resolve(g.id, 'allow', LOCAL)).toBe(true)
+  }
+
+  it('no approval → denied, no post', async () => {
+    const { t, results } = asker(async (s) => [await s.driver.post(CLICK, G)])
+    const tok = await t.on(A, 'ask')
+    t.svc.beginTurn(A, 'local')
+    await t.svc.handle(tok, 'click', {}, {})
+    expect(results()).toEqual([{ ok: false, code: 'denied' }])
+    expect(t.driver.posts).toEqual([])
+  })
+
+  it('an approved click posts once; the ticket is consumed', async () => {
+    const { t, results } = asker(async (s, key) => {
+      await s.openGate({ key, kind: 'action', action: { kind: 'click', button: 'left', count: 1, mods: [] } })
+      return [await s.driver.post(CLICK, G), await s.driver.post(CLICK, G)]
+    })
+    const tok = await t.on(A, 'ask')
+    t.svc.beginTurn(A, 'local')
+    const call = t.svc.handle(tok, 'click', {}, {})
+    await approve(t)
+    await call
+    expect(results()).toEqual([{ ok: true }, { ok: false, code: 'denied' }])
+    expect(t.driver.posts).toHaveLength(1)
+  })
+
+  it('a ticket for one action does not cover a different one', async () => {
+    const { t, results } = asker(async (s, key) => {
+      await s.openGate({ key, kind: 'action', action: { kind: 'type', text: 'hello' } })
+      return [
+        await s.driver.post(CLICK, G),
+        await s.driver.post({ kind: 'type', text: 'rm -rf ~\n' }, G),
+        await s.driver.post({ kind: 'click', x: 1, y: 1, button: 'right', count: 1, mods: [] }, G),
+        await s.driver.post({ kind: 'type', text: 'hello' }, G),
+      ]
+    })
+    const tok = await t.on(A, 'ask')
+    t.svc.beginTurn(A, 'local')
+    const call = t.svc.handle(tok, 'type', {}, {})
+    await approve(t)
+    await call
+    expect(results()).toEqual([
+      { ok: false, code: 'denied' }, { ok: false, code: 'denied' }, { ok: false, code: 'denied' }, { ok: true },
+    ])
+    expect(t.driver.posts.map((p) => p.action.kind)).toEqual(['type'])
+  })
+
+  it('click mods / count / button and key repeat / mods must match the approved view', async () => {
+    const { t, results } = asker(async (s, key) => {
+      await s.openGate({ key, kind: 'action', action: { kind: 'click', button: 'left', count: 1, mods: [] } })
+      const a = await s.driver.post({ ...CLICK, mods: ['cmd'] } as PostAction, G)
+      const b = await s.driver.post({ ...CLICK, count: 2 } as PostAction, G)
+      await s.openGate({ key, kind: 'action', action: { kind: 'key', combo: '⌘V', repeat: 1, mods: ['cmd'] } })
+      const c = await s.driver.post({ kind: 'key', char: 'v', mods: ['cmd'], repeat: 5 }, G)
+      const d = await s.driver.post({ kind: 'key', char: 'v', mods: ['cmd'], repeat: 1 }, G)
+      return [a, b, c, d]
+    })
+    const tok = await t.on(A, 'ask')
+    t.svc.beginTurn(A, 'local')
+    const call = t.svc.handle(tok, 'click', {}, {})
+    await approve(t)
+    await flush(30)
+    await approve(t)
+    await call
+    expect(results()).toEqual([{ ok: false, code: 'denied' }, { ok: false, code: 'denied' }, { ok: false, code: 'denied' }, { ok: true }])
+  })
+
+  it('move needs no ticket in ask; a continue approval mints none; a leftover ticket dies with its call', async () => {
+    const t = setup({
+      run: async (s, key, op) => {
+        if (op === 'click') {
+          await s.openGate({ key, kind: 'action', action: { kind: 'click', button: 'left', count: 1, mods: [] } })
+          return { ok: true, text: 'approved, never posted' }
+        }
+        if (op === 'key') {
+          await s.openGate({ key, kind: 'continue', reason: '已执行 100 步' })
+          const r = await s.driver.post({ kind: 'key', char: 'a', mods: [], repeat: 1 }, G)
+          return { ok: r.ok, text: JSON.stringify(r) } as CuResult
+        }
+        const m = await s.driver.post({ kind: 'move', x: 1, y: 1 }, G)
+        const c = await s.driver.post(CLICK, G)
+        return { ok: true, text: JSON.stringify([m, c]) }
+      },
+    })
+    const tok = await t.on(A, 'ask')
+    t.svc.beginTurn(A, 'local')
+    const c1 = t.svc.handle(tok, 'click', {}, {})
+    await flush(30)
+    await t.svc.resolve(t.svc.pendingGates()[0].id, 'allow', LOCAL)
+    await c1
+    expect((await t.svc.handle(tok, 'move', {}, {})).text).toBe(JSON.stringify([{ ok: true }, { ok: false, code: 'denied' }]))
+    const c3 = t.svc.handle(tok, 'key', {}, {})
+    await flush(30)
+    await t.svc.resolve(t.svc.pendingGates()[0].id, 'allow', LOCAL)
+    expect((await c3).text).toBe(JSON.stringify({ ok: false, code: 'denied' }))
+  })
+
+  it('allow mode posts without a ticket', async () => {
+    const { t, results } = asker(async (s) => [await s.driver.post(CLICK, G)])
+    const tok = await t.on(A, 'allow')
+    t.svc.beginTurn(A, 'local')
+    await t.svc.handle(tok, 'click', {}, {})
+    expect(results()).toEqual([{ ok: true }])
+  })
+
+  it('M-6: post re-reads the mode — allow switched to ask mid-call now needs a ticket', async () => {
+    let res: PostResult | null = null
+    const t = setup({
+      run: async (s) => {
+        await t.svc.setMode(A, 'ask', LOCAL)
+        res = await s.driver.post(CLICK, G)
+        return { ok: true, text: 'x' }
+      },
+    })
+    const tok = await t.on(A, 'allow')
+    t.svc.beginTurn(A, 'local')
+    await t.svc.handle(tok, 'click', {}, {})
+    expect(res).toEqual({ ok: false, code: 'denied' })
+    expect(t.driver.posts).toEqual([])
+  })
+})
+
+describe('M-2 … M-5', () => {
+  function hangingPost(t: ReturnType<typeof setup>) {
+    const posting = deferred<void>()
+    const finish = deferred<PostResult>()
+    const real = t.driver.post.bind(t.driver)
+    t.driver.post = async (a, g) => { posting.resolve(); await real(a, g); return finish.promise }
+    return { posting, finish }
+  }
+
+  it('M-2: endTurn aborts an in-flight post', async () => {
+    const t = setup({ run: async (s) => { await s.driver.post({ ...CLICK, mods: ['alt'] } as PostAction, G); return { ok: true, text: 'x' } } })
+    const h = hangingPost(t)
+    t.driver.abort = async () => { t.driver.aborted++; return 'killed' }
+    const tok = await t.on(A, 'allow')
+    t.svc.beginTurn(A, 'local')
+    const call = t.svc.handle(tok, 'click', {}, {})
+    await h.posting.promise
+    t.svc.endTurn(A)
+    await flush(20)
+    expect(t.driver.aborted).toBe(1)
+    expect(t.driver.released).toEqual([{ mods: ['alt'], button: 'left' }])
+    h.finish.resolve({ ok: false, code: 'stopped' })
+    expect(await call).toMatchObject({ ok: false, code: 'no_turn' })
+  })
+
+  it('M-3: the executor\'s driver has no request; activate / release after a stop do not reach the helper', async () => {
+    let actErr: unknown = null
+    const t = setup({
+      run: async (s, key) => {
+        expect('request' in s.driver).toBe(false)
+        s.stop(key, 'user')
+        await s.driver.activate(99).catch((e) => { actErr = e })
+        await s.driver.release({ mods: ['cmd'] })
+        return { ok: true, text: 'x' }
+      },
+    })
+    const tok = await t.on(A, 'allow')
+    t.svc.beginTurn(A, 'local')
+    await t.svc.handle(tok, 'click', {}, {})
+    expect(actErr).toMatchObject({ code: 'stopped' })
+    expect(t.driver.activations).toEqual([])
+    expect(t.driver.released).toEqual([])
+  })
+
+  it('M-4: a call whose session was stopped cannot open a gate', async () => {
+    let dec: GateDecision | null = null
+    const t = setup({ run: async (s, key) => { s.stop(key, 'user'); dec = await s.openGate({ key, kind: 'action' }); return { ok: true, text: 'x' } } })
+    const tok = await t.on(A)
+    t.svc.beginTurn(A, 'local')
+    await t.svc.handle(tok, 'click', {}, {})
+    expect(dec).toBe('deny')
+    expect(t.events.some((e) => e.type === 'gate')).toBe(false)
+  })
+
+  it('M-5: release is attempted even when abort() rejects', async () => {
+    const t = setup({ run: async (s) => { await s.driver.post({ kind: 'drag', from: { x: 0, y: 0 }, to: { x: 5, y: 5 }, button: 'left', mods: ['shift'] }, G); return { ok: true, text: 'x' } } })
+    const h = hangingPost(t)
+    t.driver.abort = async () => { throw new Error('signal failed') }
+    const tok = await t.on(A, 'allow')
+    t.svc.beginTurn(A, 'local')
+    const call = t.svc.handle(tok, 'drag', {}, {})
+    await h.posting.promise
+    t.svc.stop(A, 'user')
+    await flush(20)
+    expect(t.driver.released).toEqual([{ mods: ['shift'], button: 'left' }])
+    h.finish.resolve({ ok: false, code: 'stopped' })
+    await call
   })
 })
