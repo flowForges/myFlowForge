@@ -92,6 +92,13 @@ describe('packaging wiring', () => {
     expect(sh).toContain('node scripts/cuHelperCheck.cjs release/mac/myFlowForge.app release/mac-arm64/myFlowForge.app')
   })
 
+  it('M-7: build-mac-all.sh clears MFF_TEST_BUILD / MFF_SYS_DIR_NAME before npm run build', () => {
+    const sh = readFileSync(join(ROOT, 'scripts/build-mac-all.sh'), 'utf8').split('\n').map((l) => l.trim())
+    const u = sh.indexOf('unset MFF_TEST_BUILD MFF_SYS_DIR_NAME')
+    expect(u).toBeGreaterThan(-1)
+    expect(u).toBeLessThan(sh.indexOf('npm run build'))
+  })
+
   it('package.json has build:cu-helper', () => {
     const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
     expect(pkg.scripts['build:cu-helper']).toBe('node scripts/build-cu-helper.mjs')
@@ -130,6 +137,17 @@ describe('build-mac-test.sh (side-by-side test package, Review Focus 18)', () =>
     expect(s).toMatch(/node scripts\/cuHelperCheck\.cjs "\$\{APP\}"/)
     expect(s).toContain('com.zghua.myflowforge.test')
     expect(s).toContain('-c.appId=com.zghua.myflowforge.test')
+  })
+
+  it('M-8 / V14: after packaging, the pet pack, app-icons and example-plugins are in Resources; the pet pack is skipped with a message when assets/pet-packs is absent', () => {
+    const s = sh()
+    const eb = s.indexOf('npx electron-builder --mac')
+    const at = (needle: string) => { const i = s.indexOf(needle); expect(i, needle).toBeGreaterThan(eb); return i }
+    at('"${RES}/builtin-pet-packs/white-catgirl/manifest.json"')
+    at('"${RES}/app-icons"')
+    at('"${RES}/example-plugins"')
+    const gate = at('if [ -d assets/pet-packs ]; then')
+    expect(s.slice(gate, s.indexOf('\n  fi\n', gate))).toMatch(/else\n\s+echo ".*assets\/pet-packs.*跳过/)
   })
 
   it('has no leftovers from the other branch', () => {

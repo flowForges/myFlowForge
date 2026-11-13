@@ -77,6 +77,9 @@ fi
 X64_DIST="$(node scripts/electronDist.mjs darwin x64)"
 ARM_DIST="$(node scripts/electronDist.mjs darwin arm64)"
 
+# M-7:外面 export 过测试包的两个变量(build-mac-test.sh 用的)就会让正式包用上测试数据目录 —— 这里一律清掉
+unset MFF_TEST_BUILD MFF_SYS_DIR_NAME
+
 echo "▸ compiling renderer/main (electron-vite build)…"
 npm run build
 

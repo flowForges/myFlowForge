@@ -107,7 +107,8 @@ describe('test build flavor', () => {
     const signBlock = sh.slice(sh.indexOf('if [ "${MFF_TEST_SIGN:-}" = 1 ]'), sh.indexOf('\nfi\n', sh.indexOf('if [ "${MFF_TEST_SIGN:-}" = 1 ]')))
     expect(signBlock).toContain('.signing.local.sh')
     expect(sh.replace(signBlock, '')).not.toContain('.signing.local.sh')
-    expect(read('scripts/build-mac-all.sh')).not.toMatch(/MFF_TEST_BUILD|MFF_SYS_DIR_NAME/)
+    // M-7: the only mention is the unset that keeps an exported test flavour out of the release build
+    expect(read('scripts/build-mac-all.sh').replace('unset MFF_TEST_BUILD MFF_SYS_DIR_NAME', '')).not.toMatch(/MFF_TEST_BUILD|MFF_SYS_DIR_NAME/)
     expect(read('scripts/build-mac-all.sh')).not.toMatch(/myflowforge\.test/)
   })
 })

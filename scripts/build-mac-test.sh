@@ -86,6 +86,16 @@ for ARCH in ${ARCHS}; do
   cu_archs="$(lipo -archs "${APP}/Contents/Resources/native/forge-cu")"
   case " ${cu_archs} " in *" ${FILE_ARCH} "*) echo "  ✓ forge-cu archs: ${cu_archs}" ;; *) echo "✗ forge-cu 架构不对:${cu_archs}(应含 ${FILE_ARCH})"; exit 1 ;; esac
   node scripts/cuHelperCheck.cjs "${APP}"
+  # V14 / M-8:mac.extraResources 是和顶层列表合并,不是替换 —— 宠物包、app 图标、示例插件都还在
+  RES="${APP}/Contents/Resources"
+  [ -n "$(ls -A "${RES}/app-icons" 2>/dev/null)" ] || { echo "✗ 包里没有 ${RES}/app-icons"; exit 1; }
+  [ -n "$(ls -A "${RES}/example-plugins" 2>/dev/null)" ] || { echo "✗ 包里没有 ${RES}/example-plugins"; exit 1; }
+  if [ -d assets/pet-packs ]; then
+    [ -f "${RES}/builtin-pet-packs/white-catgirl/manifest.json" ] || { echo "✗ 包里没有内置宠物包 manifest"; exit 1; }
+    echo "  ✓ Resources: builtin-pet-packs、app-icons、example-plugins 都在 forge-cu 旁边"
+  else
+    echo "  ▸ 这棵树里没有 assets/pet-packs:跳过内置宠物包检查(app-icons、example-plugins 已验)"
+  fi
   if [ -n "${MFF_TEST_VERSION:-}" ]; then
     grep -q "\"version\": \"${MFF_TEST_VERSION}\"" "${APP}/Contents/Resources/app/package.json" || { echo "✗ 包里的版本不是 ${MFF_TEST_VERSION}"; exit 1; }
   fi
