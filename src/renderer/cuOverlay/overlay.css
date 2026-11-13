@@ -15,7 +15,9 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
 .cuo-pill .cuo-chip + .cuo-stop { margin-left: auto; }
 .cuo-card { margin-top: 4px; box-sizing: border-box; height: 178px; display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: 12px; background: rgba(24, 24, 27, 0.95); border: 1px solid rgba(255, 255, 255, 0.12); }
 .cuo-crop { flex: 1 1 auto; min-height: 0; width: 100%; object-fit: contain; border: 1px solid rgba(255, 255, 255, 0.25); border-radius: 6px; background: #000; }
-.cuo-line { flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cuo-head { flex: none; display: flex; align-items: center; gap: 6px; min-width: 0; }
+.cuo-line { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cuo-bundle { flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.75; font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
 .cuo-actions { flex: none; display: flex; justify-content: flex-end; gap: 8px; }
 .cuo-actions .cuo-allow { background: #2563eb; }
 .cuo-chip-warn { background: rgba(234, 179, 8, 0.3); }

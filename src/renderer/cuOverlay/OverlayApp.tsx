@@ -1,14 +1,17 @@
 // The always-on-top computer-use indicator (spec §10.3/§10.4, V9). A pill `● 电脑 · <title> · <mode>` with 停止; with a
-// pending gate, a mini card: the crop, one action line, 允许 / 拒绝 (or 继续 100 步 / 停止 for the step gate).
+// pending gate, a mini card: the trusted line (reason chip, action, bundle id) above the crop, then 允许 / 拒绝 (or
+// 继续 100 步 / 停止 for the step gate).
 //
 // - No autoFocus and no key handler anywhere: nothing on the keyboard can approve.
 // - 允许 / 继续 only count for a physical press: the OS-reported (isTrusted) mousedown on that same button within the
-//   last second, then its click with a click count. Script-dispatched or keyboard-activated clicks do nothing.
+//   last second, then its click with a click count (cuPhysical.ts, shared with the main card and the mode menu).
+//   Script-dispatched or keyboard-activated clicks do nothing.
 //   Stop / deny / collapse are always safe and take any click.
 // - Screen-derived strings (app names) render as plain text, whitespace collapsed, long values cut from the left.
 import { useEffect, useRef, useState, type MouseEvent } from 'react'
-import { CU_KIND_LABEL, COMPUTER_USE_CHIP, visibleText, type CuActionView, type CuOverlayState, type Mod } from '@shared/computerUse'
-import { collapseWhitespace } from '@shared/browserUse'
+import { CU_KIND_LABEL, COMPUTER_USE_CHIP, visibleText, type CuActionView, type CuOverlayState } from '@shared/computerUse'
+import { BUTTON_LABEL as BUTTON, MOD_SYM, fmtPt as pt, screenName } from '../views/chat/cuFormat'
+import { usePhysicalPress, type IsPhysical } from '../views/chat/cuPhysical'
 import './overlay.css'
 
 export interface CuOverlayApi {
@@ -17,19 +20,6 @@ export interface CuOverlayApi {
   stop(): unknown
   collapseMain(): unknown
 }
-
-const PHYSICAL_MS = 1000
-const NAME_MAX = 40
-const MOD_SYM: Record<Mod, string> = { cmd: '⌘', ctrl: '⌃', alt: '⌥', shift: '⇧' }
-const BUTTON: Record<'left' | 'right' | 'middle', string> = { left: '左键', right: '右键', middle: '中键' }
-
-/** plain, single-line, cut from the left so the distinguishing tail survives */
-function screenName(s: string | undefined): string {
-  if (!s) return ''
-  const t = Array.from(visibleText(collapseWhitespace(s)))
-  return t.length > NAME_MAX ? '…' + t.slice(t.length - (NAME_MAX - 1)).join('') : t.join('')
-}
-const pt = (p?: { x: number; y: number }) => (p ? `(${Math.round(p.x)}, ${Math.round(p.y)})` : '')
 
 /** the mini card's one line */
 export function actionLine(v: CuActionView): string {
@@ -74,12 +64,10 @@ export function actionLine(v: CuActionView): string {
   return parts.join(' · ')
 }
 
-const trusted = (e: MouseEvent) => e.nativeEvent.isTrusted === true
-
-export function OverlayApp({ api, isPhysical = trusted }: { api: CuOverlayApi; isPhysical?: (e: MouseEvent) => boolean }) {
+export function OverlayApp({ api, isPhysical }: { api: CuOverlayApi; isPhysical?: IsPhysical }) {
   const [state, setState] = useState<CuOverlayState | null>(null)
   const [flash, setFlash] = useState(false)
-  const down = useRef<{ id: string; t: number } | null>(null)
+  const press = usePhysicalPress(isPhysical)
   const lastSeq = useRef(0)
 
   useEffect(() => api.onState(setState), [api])
@@ -95,13 +83,9 @@ export function OverlayApp({ api, isPhysical = trusted }: { api: CuOverlayApi; i
   if (!state?.session) return null
   const { session, gate } = state
 
-  const onDown = (id: string) => (e: MouseEvent) => { down.current = isPhysical(e) ? { id, t: performance.now() } : null }
-  const physical = (id: string, e: MouseEvent): boolean => {
-    const d = down.current
-    down.current = null
-    return !!d && d.id === id && isPhysical(e) && e.detail > 0 && performance.now() - d.t <= PHYSICAL_MS
-  }
-  const approve = (gateId: string, btn: string) => (e: MouseEvent) => { if (physical(btn, e)) api.resolve(gateId, 'allow') }
+  const onDown = press.down
+  const approve = (gateId: string, btn: string) => (e: MouseEvent) => { if (press.check(btn, e)) api.resolve(gateId, 'allow') }
+  const bundle = gate?.kind === 'action' ? screenName(gate.action?.bundleId) : ''
 
   return (
     <div className={`cuo${gate ? ' cuo-open' : ''}`}>
@@ -116,8 +100,12 @@ export function OverlayApp({ api, isPhysical = trusted }: { api: CuOverlayApi; i
       </div>
       {gate && (
         <div className="cuo-card">
+          <div className="cuo-head">
+            {gate.kind === 'action' && gate.reason && <span className="cuo-chip cuo-reason">{gate.reason}</span>}
+            <span className="cuo-line">{gate.kind === 'continue' ? (gate.reason ?? '') : gate.action ? actionLine(gate.action) : ''}</span>
+          </div>
+          {bundle && <div className="cuo-bundle">{bundle}</div>}
           {gate.crop && <img className="cuo-crop" alt="" draggable={false} src={`data:image/jpeg;base64,${gate.crop}`} />}
-          <div className="cuo-line">{gate.kind === 'continue' ? (gate.reason ?? '') : gate.action ? actionLine(gate.action) : ''}</div>
           <div className="cuo-actions">
             {gate.kind === 'continue' ? (
               <>

@@ -156,4 +156,28 @@ describe('actionLine', () => {
     expect(actionLine({ kind: 'type', text: 'a\nb\tc', app: 'TextEdit' })).toBe('输入 5 字 · a⏎b⇥c · TextEdit')
     expect(actionLine({ kind: 'key', combo: '⌘⇧T', app: 'Safari' })).toBe('按键 ⌘⇧T · Safari')
   })
+
+  it('M-13: the mini card puts the trusted line (reason chip, action, bundle id) above the crop', () => {
+    const t = harness(true)
+    t.push({ ...CLICK, gate: { ...CLICK.gate!, reason: '终端', action: { ...CLICK.gate!.action!, bundleId: 'com.googlecode.iterm2' } } })
+    const card = t.container.querySelector('.cuo-card')!
+    expect(card.querySelector('.cuo-chip.cuo-reason')!.textContent).toBe('终端')
+    expect(card.querySelector('.cuo-bundle')!.textContent).toBe('com.googlecode.iterm2')
+    const order = Array.from(card.querySelectorAll('.cuo-line, .cuo-bundle, .cuo-reason, img.cuo-crop')).map((e) => e.className.split(' ').at(-1))
+    expect(order.indexOf('cuo-crop')).toBe(order.length - 1)
+    // the continue gate has no reason chip: its reason is the line itself
+    t.push(CONT)
+    expect(t.container.querySelector('.cuo-reason')).toBeNull()
+    expect(t.container.querySelector('.cuo-line')!.textContent).toBe('已执行 100 步 · 继续 100 步')
+  })
+
+  it('M-13: a hostile bundle id is plain text, collapsed and cut from the left', () => {
+    const t = harness(true)
+    const bad = '<b>x</b>\n' + 'y'.repeat(80) + 'TAIL'
+    t.push({ ...CLICK, gate: { ...CLICK.gate!, action: { ...CLICK.gate!.action!, bundleId: bad } } })
+    const v = t.container.querySelector('.cuo-bundle')!.textContent!
+    expect(v.endsWith('TAIL')).toBe(true)
+    expect(v.startsWith('…')).toBe(true)
+    expect(t.container.querySelector('.cuo-card b')).toBeNull()
+  })
 })
