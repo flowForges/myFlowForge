@@ -31,6 +31,9 @@ import { buildTimeline } from './chat/timeline'
 import { windowTimeline, LIVE_WINDOW, LIVE_WINDOW_STEP } from './chat/timelineWindow'
 import { ToolOutputCtx } from './chat/toolOutput'
 import { Composer } from './chat/Composer'
+import { CuStreamTail } from './chat/CuStreamTail'
+import { useComputerUse } from '../state/useComputerUse'
+import { useHostKey } from '../state/useHostKey'
 import { workflowMenuCommands } from './chat/slashCommands'
 import { SessionTabs } from './chat/SessionTabs'
 import { ChatJumpRail } from './chat/ChatJumpRail'
@@ -211,6 +214,8 @@ interface WorkspaceViewProps {
   onOpenTargetChange?: (t: OpenTarget | null) => void
   // Session ids with an in-flight agent turn (App's memo) — pulses the matching session-tab dot.
   runningSessionIds?: ReadonlySet<string>
+  /** 电脑操作 chip 缺授权时:打开设置页「电脑操作」。 */
+  onOpenComputerSettings?: () => void
 }
 
 // A truncated overview value: an INSTANT (CSS) tooltip shows the full text on hover, and clicking
@@ -242,7 +247,7 @@ function Copyable({ text, className }: { text: string; className?: string }) {
   )
 }
 
-export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth, onInspectorHandleDown, inspectorCollapsed, searchSignal, sessionsApi, onEditWorkspace, archived, createdAt, archivedAt, onViewAgentLog, onOpenLog, onOpenTargetChange, runningSessionIds }: WorkspaceViewProps) {
+export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth, onInspectorHandleDown, inspectorCollapsed, searchSignal, sessionsApi, onEditWorkspace, archived, createdAt, archivedAt, onViewAgentLog, onOpenLog, onOpenTargetChange, runningSessionIds, onOpenComputerSettings }: WorkspaceViewProps) {
   const { resolve, cancel } = engine
   const [activeTab, setActiveTab] = useState<TabId>('agents')
   const onViewChanges = useCallback(() => setActiveTab('changes'), [])
@@ -315,6 +320,9 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   }, [run2RunId])
   const localSessions = useSessions(wsPath)
   const sessions = sessionsApi ?? localSessions
+  // 电脑操作只属于本机:看远程主机时 hook 空转(不拉状态、不收事件),卡片也不内联渲染,浮窗是唯一的批准面(V2)。
+  const cuRemote = useHostKey() !== 'local'
+  const cu = useComputerUse(cuRemote ? '' : (wsPath ?? ''), cuRemote ? '' : (sessions.activeSessionId ?? ''))
   const activeSession = useMemo(
     () => sessions.sessions.find(s => s.id === sessions.activeSessionId),
     [sessions.sessions, sessions.activeSessionId],
@@ -1738,6 +1746,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                 />
               )
             })}
+            <CuStreamTail remote={cuRemote} gates={cu.gates} log={cu.log} resolve={cu.resolve} thumb={cu.thumb} />
             {chat.asks.map(a => (
               <ReqCard
                 key={a.id}
@@ -1854,6 +1863,12 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
           fast={activeSession?.fast === true}
           onFastChange={onFastChange}
           council={council}
+          computerUse={{
+            supported: window.forge?.platform === 'darwin',
+            mode: cu.mode, status: cu.status, busyBy: cu.busyBy, remote: cuRemote,
+            setMode: cu.setMode, stop: cu.stop, refreshStatus: cu.refreshStatus,
+            openSettings: () => onOpenComputerSettings?.(),
+          }}
           onSelectionChange={(s) => {
             // Provider switch guard: agent changed AND the old provider already ran this session → don't
             // switch yet; raise a confirm banner (switch loses native context; the new provider will

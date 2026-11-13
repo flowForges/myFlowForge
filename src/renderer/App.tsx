@@ -793,6 +793,7 @@ export function App() {
                 onOpenLog={() => { setAgentLogFilter(null); setLogOpen(true); dock.setFocus('log') }}
                 onOpenTargetChange={setOpenTarget}
                 runningSessionIds={runningSessionIds}
+                onOpenComputerSettings={() => { setSettingsPane('computerUse'); setSettingsOpen(true) }}
               />}
         </div>
       </div>

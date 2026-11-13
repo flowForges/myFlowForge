@@ -15,7 +15,7 @@ type Bridge = {
   thumb(a: { workspacePath: string; sessionId: string; file: string }): Promise<string | null>
   onEvent(cb: (e: unknown) => void): () => void
 }
-const bridge = (): Bridge | undefined => (window.forge as { computerUse?: Bridge } | undefined)?.computerUse
+const bridge = (): Bridge | undefined => (window as unknown as { forge?: { computerUse?: Bridge } }).forge?.computerUse
 const isArr = <T,>(v: unknown): v is T[] => Array.isArray(v)
 
 export interface ComputerUseApi {
@@ -53,7 +53,7 @@ export function useComputerUse(workspacePath: string, sessionId: string): Comput
   useEffect(() => {
     setSessions([]); setGates([]); setLog([]); setStatus(null)
     const b = bridge()
-    if (!b) return
+    if (!b || !workspacePath || !sessionId) return
     let alive = true
     let pushedState = false
     let pushedLog = false

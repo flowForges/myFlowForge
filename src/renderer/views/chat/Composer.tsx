@@ -3,6 +3,7 @@ import type { Attachment, ProviderInfo } from '@shared/types'
 import { getBuiltinProvider } from '@shared/providerCatalog'
 import { PERMISSION_MODES, DEFAULT_PERMISSION_MODE, permissionModeLabel, providerSupportsPermissions, providerEnforcesReadonly, type PermissionMode } from '@shared/permissions'
 import { BROWSER_USE_MODES, DEFAULT_BROWSER_USE, browserUseLabel, providerSupportsBrowserUse, browserPermissionConflict, type BrowserUseMode } from '@shared/browserUse'
+import { COMPUTER_USE_MODES, COMPUTER_USE_CHIP, CU_SET_MODE_ERR, computerUseConflict, providerSupportsComputerUse, type ComputerUseMode, type CuSetModeCode, type CuStatus } from '@shared/computerUse'
 import { isSlashQuery, mergeCommands, type MenuCommand } from './slashCommands'
 import type { ContextUsage } from '@shared/types'
 import { applyListContinuation } from './listContinuation'
@@ -29,6 +30,9 @@ const SHIELD = (
 )
 const BROWSER_IC = (
   <svg className="cb-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><circle cx="12" cy="12" r="9" /><line x1="3" y1="12" x2="21" y2="12" /><path d="M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18z" /></svg>
+)
+const COMPUTER_IC = (
+  <svg className="cb-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><rect x="3" y="4" width="18" height="12" rx="2" /><line x1="8" y1="20" x2="16" y2="20" /><line x1="12" y1="16" x2="12" y2="20" /></svg>
 )
 const SEND_ARROW = (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="19" x2="12" y2="5" /><polyline points="5 12 12 5 19 12" /></svg>
@@ -89,6 +93,21 @@ const MAX_H = 180
 // Composer being remounted on session switch (see the draft note in the component).
 const draftStore: Record<string, { text: string; attachments: Attachment[] }> = {}
 
+/** 电脑操作 chip 的全部输入(档位 / 状态由父组件的 useComputerUse 给)。remote = 窗口正在看远程主机,此时 chip 不出现(spec V2)。 */
+export interface ComposerComputerUse {
+  supported: boolean
+  mode: ComputerUseMode
+  status: CuStatus | null
+  busyBy?: { title: string }
+  remote: boolean
+  /** 返回拒绝码(restart_required 等);成功返回 null / undefined */
+  setMode(m: ComputerUseMode): void | Promise<CuSetModeCode | null | void>
+  stop(): void
+  openSettings(): void
+  /** 点开 chip 时才拉 helper 状态(从不挂载时拉) */
+  refreshStatus?(): Promise<CuStatus | null>
+}
+
 interface Props {
   providers: ProviderInfo[]
   disabled: boolean
@@ -141,9 +160,11 @@ interface Props {
   onFastChange?: (on: boolean) => void
   /** AI 共商(本会话)。给了才出「AI 共商」按钮;进行中时输入框改成插话。 */
   council?: CouncilApi
+  /** 电脑操作 chip(macOS)。不给 = 不出现。 */
+  computerUse?: ComposerComputerUse
 }
 
-export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, backgroundTasks, turnHasOutput, onSend, onPaste, seedText, onSeedConsumed, selection, onSelectionChange, dynamicCommands, onPickWorkflow, onOpenMcp, draftKey, lockedReason, fast, onFastChange, council }: Props) {
+export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, backgroundTasks, turnHasOutput, onSend, onPaste, seedText, onSeedConsumed, selection, onSelectionChange, dynamicCommands, onPickWorkflow, onOpenMcp, draftKey, lockedReason, fast, onFastChange, council, computerUse }: Props) {
   // Per-chat unsent draft, persisted in a module-level store keyed by draftKey. The parent remounts the
   // Composer per session (key={draftKey}), so draftKey is CONSTANT for this instance — no effect reacts
   // to it changing (that caused a re-render storm). We seed from the store on mount and write back on
@@ -242,7 +263,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
   const setModelId = (id: string) => { if (controlled) onSelectionChange?.({ agentId, modelId: id, permissionMode, browserUse }); else setLocalModelId(id) }
   const setPermissionMode = (m: PermissionMode) => { if (controlled) onSelectionChange?.({ agentId, modelId, permissionMode: m, browserUse }); else setLocalPerm(m) }
   const setBrowserUse = (m: BrowserUseMode) => { if (controlled) onSelectionChange?.({ agentId, modelId, permissionMode, browserUse: m }); else setLocalBrowserUse(m) }
-  const [openMenu, setOpenMenu] = useState<'agent' | 'ver' | 'perm' | 'browser' | null>(null)
+  const [openMenu, setOpenMenu] = useState<'agent' | 'ver' | 'perm' | 'browser' | 'computer' | null>(null)
   // Slash-command menu: shown while typing a "/token" (before any space). slashSel = highlighted row;
   // slashDismissed lets Esc close it until the query changes.
   const [slashSel, setSlashSel] = useState(0)
@@ -294,6 +315,33 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
   //  浏览器里的任何动作都没有一道门。拦的是**发送**(输入框照旧能打字,草稿不丢),横幅继续在下面
   //  当解释;两个 chip 都没禁用,改权限档或改浏览器档任意一个就立刻解锁 —— 不替用户改任何一个。
   const browserBlocked = !!browserConflict
+  // 电脑操作:chip 显示条件 = 平台支持 + provider 在能力表里 + 不是在看远程主机。冲突同样拦整轮发送,横幅沿用浏览器那条。
+  const cuShown = !!computerUse && computerUse.supported && !computerUse.remote && providerSupportsComputerUse(agentId)
+  const cuConflict = cuShown && computerUse!.status
+    ? computerUseConflict({ mode: computerUse!.mode, perm: permissionMode, provider: agentId, status: computerUse!.status })
+    : null
+  const cuBlocked = !!cuConflict
+  const [cuRestart, setCuRestart] = useState(false)
+  const [cuErr, setCuErr] = useState<CuSetModeCode | null>(null)
+  const cuNeedsGrant = cuShown && !!computerUse!.status && (!computerUse!.status.screen || !computerUse!.status.ax)
+  const cuDisabled = !!readOnly || !!computerUse?.busyBy || (computerUse?.mode === 'off' && permissionMode === 'readonly')
+  async function onCuChip() {
+    if (!computerUse) return
+    if (cuRestart) { void window.forge.appRelaunch?.(); setOpenMenu(null); return }
+    if (openMenu === 'computer') { setOpenMenu(null); return }
+    setCuErr(null)
+    let st = computerUse.status
+    if (!st && computerUse.refreshStatus) st = await computerUse.refreshStatus()
+    if (st && (!st.screen || !st.ax)) { computerUse.openSettings(); return }
+    setOpenMenu('computer')
+  }
+  async function pickCuMode(m: ComputerUseMode) {
+    const code = await computerUse!.setMode(m)
+    if (code === 'restart_required') { setCuRestart(true); setOpenMenu(null); return }
+    if (code) { setCuErr(code); return }
+    setOpenMenu(null)
+  }
+  const cuLabel = !computerUse ? '' : computerUse.busyBy ? `电脑 · ${computerUse.busyBy.title}在用` : cuRestart ? '电脑 · 需重启' : cuNeedsGrant ? '电脑 · 需授权' : COMPUTER_USE_CHIP[computerUse.mode]
 
   function chooseAgent(p: ProviderInfo) {
     const m = p.models[0]?.id ?? ''
@@ -397,7 +445,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
     }
     if (!agent) return
     // 被拒绝的浏览器档 + 权限档组合:回车这条路也必须拦(按钮禁用只挡鼠标那一半)。
-    if (browserBlocked) return
+    if (browserBlocked || cuBlocked) return
     onSend({ agent: agent.id, agentLabel: agent.displayName, model: modelId, text: t, attachments, permissionMode, browserUse, fast: fastOn })
     lastSentRef.current = t
     resetBox()
@@ -894,6 +942,41 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
               </div>
             </div>
           )}
+          {cuShown && (
+            <div className={'menu' + (openMenu === 'computer' ? ' open' : '')} id="computerMenu">
+              <button
+                type="button"
+                className={'cb-btn cb-computer computer-' + computerUse!.mode}
+                data-menu="computerMenu"
+                disabled={cuDisabled}
+                onClick={() => { void onCuChip() }}
+              >
+                {COMPUTER_IC}
+                <span>{cuLabel}</span>
+                {CHEV_DD}
+              </button>
+              <div className="menu-pop computer-pop">
+                {COMPUTER_USE_MODES.map(cm => (
+                  <button
+                    type="button"
+                    className={'menu-item' + (cm.id === computerUse!.mode ? ' on' : '')}
+                    data-computer={cm.id}
+                    key={cm.id}
+                    onClick={() => { void pickCuMode(cm.id) }}
+                  >
+                    <div className="pm-main"><div className="pm-t">{cm.label}</div></div>
+                    {CHECK}
+                  </button>
+                ))}
+                {computerUse!.mode !== 'off' && (
+                  <button type="button" className="menu-item cu-stop-item" onClick={() => { computerUse!.stop(); setOpenMenu(null) }}>
+                    <div className="pm-main"><div className="pm-t">停止</div></div>
+                  </button>
+                )}
+                {cuErr && <div className="menu-label cu-err">{CU_SET_MODE_ERR[cuErr]}</div>}
+              </div>
+            </div>
+          )}
           {fastAvailable && (
             <button
               className={'cb-btn cb-fast' + (fastOn ? ' on' : '')}
@@ -929,7 +1012,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
           ) : councilGo ? (
             <button className="send council-go" id="sendBtn" title="开始讨论 (回车)" disabled={!councilCanStart} onClick={send}>开始讨论</button>
           ) : (
-            <button className={`send${queueing ? ' queueing' : ''}`} id="sendBtn" title={browserConflict ?? (runQueued ? lockedReason : busy ? '执行中 · 发送将进入队列' : '发送 (回车)')} disabled={effectiveDisabled || readOnly || (browserBlocked && !interjecting)} onClick={send}>{SEND_ARROW}</button>
+            <button className={`send${queueing ? ' queueing' : ''}`} id="sendBtn" title={browserConflict ?? cuConflict ?? (runQueued ? lockedReason : busy ? '执行中 · 发送将进入队列' : '发送 (回车)')} disabled={effectiveDisabled || readOnly || ((browserBlocked || cuBlocked) && !interjecting)} onClick={send}>{SEND_ARROW}</button>
           )}
         </div>
         {/* 「完全访问」+「每次询问」的冲突横幅:紧跟在工具栏(浏览器 chip 所在行)下方。此时发送按钮和
@@ -938,6 +1021,9 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
             的 browserPermissionConflict)。出路是用户自己点那两个 chip 里的任意一个。 */}
         {browserConflict && (
           <div className="composer-queue-hint browser-conflict-hint">⚠️ 已暂停发送:{browserConflict}</div>
+        )}
+        {cuConflict && (
+          <div className="composer-queue-hint browser-conflict-hint">⚠️ 已暂停发送:{cuConflict}</div>
         )}
       </div>
     </div>
