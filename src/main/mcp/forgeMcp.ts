@@ -15,11 +15,12 @@ import { z } from 'zod'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 // Pure shared module (zod + constants, no electron / app code): the entry stays self-contained.
-import { COMPUTER_TOOLS, CU_SHAPES, screenNotice } from '@shared/computerUse'
+import { COMPUTER_TOOLS, CU_ERR, CU_SHAPES, screenNotice } from '@shared/computerUse'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type SendFn = (tool: string, args: Record<string, unknown>) => Promise<unknown>
+/** `signal`: abandon the call (connectBridge rejects at once and tells the other end to drop it). */
+export type SendFn = (tool: string, args: Record<string, unknown>, signal?: AbortSignal) => Promise<unknown>
 
 // ─── toolsToRegister / listForgeTools ────────────────────────────────────────
 
@@ -229,27 +230,34 @@ const CU_WHAT: Record<(typeof COMPUTER_TOOLS)[number], string> = {
 
 const NOTICE_HEAD = '<untrusted_screen shot="'
 const B64 = /^[A-Za-z0-9+/]+={0,2}$/
-const CODE = /^[a-z_]{1,32}$/
+/** Codes the cu socket may answer with: exactly the shared table (the handle path has no codes outside it). */
+const CU_CODES: ReadonlySet<string> = new Set(Object.keys(CU_ERR))
+/** ~6 MB decoded. A 1280-px JPEG at q 0.75 is well under 1 MB; anything near this is not a screenshot. */
+export const CU_IMAGE_MAX_BYTES = 6 * 1024 * 1024
 type CuContent = { type: 'text'; text: string } | { type: 'image'; data: string; mimeType: 'image/jpeg' }
 type ToolReply = { content: CuContent[]; isError?: boolean }
 const cuFailed = (text: string, code: string): ToolReply => ({ isError: true, content: [{ type: 'text', text: `${text}(${code})` }] })
-const HELPER_FAILED = '电脑操作组件出错 · 没有执行'
+/** One sentence for every failure seen only on this side (lost connection, malformed or oversized reply). It must not
+ *  claim the action didn't run: the app side may have acted before the reply was lost. No error text, no paths. */
+const RESULT_LOST = '电脑操作的结果没有传回来 · 这一步可能已经执行，请重新截图确认'
+const lost = (): ToolReply => cuFailed(RESULT_LOST, 'helper_failed')
 
 /** CuResult (from the cu socket) → MCP tool result. Anything malformed is an error, never a success. */
 export function cuToolResult(tool: string, r: unknown): ToolReply {
-  if (!r || typeof r !== 'object') return cuFailed(HELPER_FAILED, 'helper_failed')
+  if (!r || typeof r !== 'object') return lost()
   const o = r as { ok?: unknown; text?: unknown; code?: unknown; image?: unknown }
-  if (typeof o.text !== 'string') return cuFailed(HELPER_FAILED, 'helper_failed')
+  if (typeof o.text !== 'string') return lost()
   if (o.ok === false) {
-    if (typeof o.code !== 'string' || !CODE.test(o.code)) return cuFailed(HELPER_FAILED, 'helper_failed')
+    if (typeof o.code !== 'string' || !CU_CODES.has(o.code)) return lost()
     return cuFailed(o.text, o.code)
   }
-  if (o.ok !== true) return cuFailed(HELPER_FAILED, 'helper_failed')
+  if (o.ok !== true) return lost()
   let text = o.text
   // Review Focus 9: a screenshot's text always opens with the untrusted-screen notice, whatever the app side sent.
   if (tool === 'computer_screenshot' && !text.startsWith(NOTICE_HEAD)) text = `${screenNotice('s')}\n${text}`
   const content: CuContent[] = [{ type: 'text', text }]
   const img = o.image as { data?: unknown; mimeType?: unknown } | undefined
+  if (img && typeof img === 'object' && typeof img.data === 'string' && img.data.length > (CU_IMAGE_MAX_BYTES / 3) * 4 + 4) return lost()
   if (img && typeof img === 'object' && img.mimeType === 'image/jpeg' && typeof img.data === 'string' && B64.test(img.data)) {
     content.push({ type: 'image', data: img.data, mimeType: 'image/jpeg' })
   }
@@ -267,13 +275,13 @@ function registerComputerTools(server: McpServer, send: SendFn, reg: Set<string>
     server.registerTool(
       name,
       { description: CU_WHAT[name] + CU_RULES, inputSchema: CU_SHAPES[name] },
-      async (args: Record<string, unknown>) => {
+      async (args: Record<string, unknown>, extra: { signal?: AbortSignal }) => {
         try {
           const c = client()
-          const r = await send('computer', c ? { op, args, client: c } : { op, args })
+          const r = await send('computer', c ? { op, args, client: c } : { op, args }, extra?.signal)
           return cuToolResult(name, r)
-        } catch (err: unknown) {
-          return cuFailed(errorMessage(err), 'helper_failed')
+        } catch {
+          return lost()
         }
       },
     )
@@ -301,6 +309,7 @@ export function connectBridge(socketPath: string, agentId: string): BridgeHandle
 
   const open = (): Conn => {
     const c: Conn = { socket: net.createConnection(socketPath), pending: new Map(), dead: false }
+    c.socket.setEncoding('utf8')
     let buf = ''
     const die = () => {
       c.dead = true
@@ -309,8 +318,8 @@ export function connectBridge(socketPath: string, agentId: string): BridgeHandle
       c.pending.clear()
       if (conn === c) conn = null
     }
-    c.socket.on('data', (chunk: Buffer) => {
-      buf += chunk.toString()
+    c.socket.on('data', (chunk: string) => {
+      buf += chunk
       let idx: number
       while ((idx = buf.indexOf('\n')) !== -1) {
         const line = buf.slice(0, idx).trim()
@@ -339,15 +348,28 @@ export function connectBridge(socketPath: string, agentId: string): BridgeHandle
   // Connect eagerly (as before), so the first send usually finds the socket ready.
   conn = open()
 
-  const send: SendFn = (tool, args) =>
+  const send: SendFn = (tool, args, signal) =>
     new Promise((resolve, reject) => {
+      if (signal?.aborted) { reject(new Error('cancelled')); return }
       const c = conn && !conn.dead && !conn.socket.destroyed ? conn : (conn = open())
       const id = `fmcp-${Date.now()}-${++seq}`
-      c.pending.set(id, { resolve, reject })
+      const onAbort = () => {
+        if (!c.pending.delete(id)) return
+        reject(new Error('cancelled'))
+        // tell the other end to drop it (a queued call never runs; a gate waiting for it is denied)
+        if (!c.dead && !c.socket.destroyed) c.socket.write(JSON.stringify({ id: `${id}-x`, tool: 'cancel', agentId, args: { id } }) + '\n')
+      }
+      const done = () => signal?.removeEventListener('abort', onAbort)
+      c.pending.set(id, {
+        resolve: (v) => { done(); resolve(v) },
+        reject: (e) => { done(); reject(e) },
+      })
+      signal?.addEventListener('abort', onAbort, { once: true })
       const payload = JSON.stringify({ id, tool, agentId, args }) + '\n'
       // During the connect phase socket.writable is false but socket.connecting is true; Node queues the write.
       c.socket.write(payload, (err) => {
-        if (err && c.pending.delete(id)) reject(err)
+        const h = err ? c.pending.get(id) : undefined
+        if (h) { c.pending.delete(id); h.reject(err!) }
       })
     })
 

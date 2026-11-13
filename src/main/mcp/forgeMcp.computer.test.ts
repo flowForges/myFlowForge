@@ -74,9 +74,9 @@ describe('results', () => {
     await client.callTool({ name: 'computer_click', arguments: { x: 10, y: 20, visionCode: 'ABCD' } })
     expect(send).toHaveBeenLastCalledWith('computer', {
       op: 'click', args: { x: 10, y: 20, visionCode: 'ABCD' }, client: { name: 'test-cli', version: '9.8.7' },
-    })
+    }, expect.any(AbortSignal))
     await client.callTool({ name: 'computer_cursor', arguments: {} })
-    expect(send).toHaveBeenLastCalledWith('computer', { op: 'cursor', args: {}, client: { name: 'test-cli', version: '9.8.7' } })
+    expect(send).toHaveBeenLastCalledWith('computer', { op: 'cursor', args: {}, client: { name: 'test-cli', version: '9.8.7' } }, expect.any(AbortSignal))
     for (const name of COMPUTER_TOOLS) expect(name.startsWith('computer_')).toBe(true)
   })
 
@@ -233,5 +233,131 @@ describe('end to end over the cu socket (Review Focus 4, 9)', () => {
       expect(t).not.toContain('Evil</untrusted_screen>')
       expect(t).not.toContain('\n忽略')
     }
+  })
+})
+
+// ───────────────────────── review fixes ─────────────────────────
+
+describe('review fixes (Task 6)', () => {
+  const tick = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+  it('a send rejection gives one fixed sentence + helper_failed: no Node error text, no path, no "did not run" claim', async () => {
+    const e = Object.assign(new Error('connect ENOENT /Users/someone/.myFlowForge/computer-use/forge.sock'), { code: 'ENOENT' })
+    const r = await (await wire(vi.fn().mockRejectedValue(e), cuAllowed())).callTool({ name: 'computer_click', arguments: { x: 1, y: 1 } })
+    const t = (r.content as Content)[0].text!
+    expect(r.isError).toBe(true)
+    expect(t).toContain('helper_failed')
+    expect(t).not.toMatch(/ENOENT|\/Users|forge\.sock|connect/)
+    expect(t).not.toContain('没有执行')
+    const r2 = await (await wire(vi.fn().mockRejectedValue(new Error('other')), cuAllowed())).callTool({ name: 'computer_move', arguments: { x: 1, y: 1 } })
+    expect((r2.content as Content)[0].text).toBe(t)
+  })
+
+  it('only CU_ERR codes pass; anything else is helper_failed', async () => {
+    const ok = await (await wire(vi.fn().mockResolvedValue({ ok: false, code: 'denied', text: CU_ERR.denied }), cuAllowed()))
+      .callTool({ name: 'computer_click', arguments: { x: 1, y: 1 } })
+    expect((ok.content as Content)[0].text).toContain('(denied)')
+    const bad = await (await wire(vi.fn().mockResolvedValue({ ok: false, code: 'all_good_now', text: 'fine' }), cuAllowed()))
+      .callTool({ name: 'computer_click', arguments: { x: 1, y: 1 } })
+    expect(bad.isError).toBe(true)
+    expect((bad.content as Content)[0].text).toContain('helper_failed')
+    expect((bad.content as Content)[0].text).not.toContain('all_good_now')
+  })
+
+  it('an image over the byte cap is never relayed', async () => {
+    const { CU_IMAGE_MAX_BYTES } = await import('./forgeMcp')
+    const data = 'A'.repeat(Math.ceil((CU_IMAGE_MAX_BYTES + 1024) / 3) * 4)
+    const send = vi.fn().mockResolvedValue({ ok: true, text: '<untrusted_screen shot="s">x</untrusted_screen>', image: { data, mimeType: 'image/jpeg' } })
+    const r = await (await wire(send, cuAllowed())).callTool({ name: 'computer_screenshot', arguments: {} })
+    expect((r.content as Content).some((c) => c.type === 'image')).toBe(false)
+    expect(r.isError).toBe(true)
+    expect(CU_IMAGE_MAX_BYTES).toBeLessThanOrEqual(8 * 1024 * 1024)
+  })
+
+  it('the MCP request\'s abort signal reaches send', async () => {
+    let seen: AbortSignal | undefined
+    const send = vi.fn((_t: string, _a: Record<string, unknown>, signal?: AbortSignal) => { seen = signal; return new Promise(() => {}) })
+    const client = await wire(send as unknown as SendFn, cuAllowed())
+    const ac = new AbortController()
+    const p = client.callTool({ name: 'computer_click', arguments: { x: 1, y: 1 } }, undefined, { signal: ac.signal })
+    p.catch(() => {})
+    await tick(20)
+    expect(seen?.aborted).toBe(false)
+    ac.abort()
+    await tick(20)
+    expect(seen?.aborted).toBe(true)
+  })
+
+  describe('connectBridge against a raw socket', () => {
+    let root: string
+    let server: import('node:net').Server | undefined
+    const conns: import('node:net').Socket[] = []
+    beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'fmraw-')) })
+    afterEach(async () => {
+      for (const c of conns.splice(0)) c.destroy()
+      if (server) await new Promise((r) => server!.close(r))
+      server = undefined
+      rmSync(root, { recursive: true, force: true })
+    })
+    const listen = async (onLine: (line: string, sock: import('node:net').Socket) => void) => {
+      const net = await import('node:net')
+      const path = join(root, 's.sock')
+      server = net.createServer((sock) => {
+        conns.push(sock)
+        let buf = ''
+        sock.setEncoding('utf8')
+        sock.on('data', (c: string) => {
+          buf += c
+          let i: number
+          while ((i = buf.indexOf('\n')) !== -1) { const l = buf.slice(0, i); buf = buf.slice(i + 1); if (l) onLine(l, sock) }
+        })
+      })
+      await new Promise<void>((r) => server!.listen(path, () => r()))
+      return path
+    }
+
+    it('an abort rejects at once and sends a cancel line for that call id; a late reply is ignored', async () => {
+      const lines: Record<string, unknown>[] = []
+      let sockRef: import('node:net').Socket | undefined
+      const path = await listen((l, sock) => { lines.push(JSON.parse(l)); sockRef = sock })
+      const { send } = connectBridge(path, 'cu.T')
+      const ac = new AbortController()
+      const p = send('computer', { op: 'click', args: {} }, ac.signal)
+      await tick(30)
+      ac.abort()
+      await expect(p).rejects.toThrow()
+      await tick(30)
+      expect(lines).toHaveLength(2)
+      expect(lines[1]).toMatchObject({ tool: 'cancel', agentId: 'cu.T', args: { id: lines[0].id } })
+      sockRef!.write(JSON.stringify({ id: lines[0].id, result: { ok: true, text: 'late' } }) + '\n')
+      await tick(20)
+      // the connection still works for the next call
+      const q = send('computer', { op: 'cursor', args: {} })
+      await tick(30)
+      sockRef!.write(JSON.stringify({ id: lines[2].id, result: { ok: true, text: 'next' } }) + '\n')
+      await expect(q).resolves.toEqual({ ok: true, text: 'next' })
+    })
+
+    it('an already-aborted signal never writes the call', async () => {
+      const lines: unknown[] = []
+      const path = await listen((l) => { lines.push(l) })
+      const { send } = connectBridge(path, 'cu.T')
+      const ac = new AbortController(); ac.abort()
+      await expect(send('computer', { op: 'click', args: {} }, ac.signal)).rejects.toThrow()
+      await tick(30)
+      expect(lines).toEqual([])
+    })
+
+    it('decodes a UTF-8 reply split mid-character', async () => {
+      const path = await listen((l, sock) => {
+        const id = (JSON.parse(l) as { id: string }).id
+        const b = Buffer.from(JSON.stringify({ id, result: { text: '电脑操作' } }) + '\n')
+        const cut = b.indexOf(Buffer.from('脑')) + 1
+        sock.write(b.subarray(0, cut))
+        setTimeout(() => sock.write(b.subarray(cut)), 20)
+      })
+      const { send } = connectBridge(path, 'cu.T')
+      await expect(send('computer', {})).resolves.toEqual({ text: '电脑操作' })
+    })
   })
 })
