@@ -37,6 +37,7 @@ function setup(o: {
   const gates: GateIn[] = []
   const decisions: GateDecision[] = []
   let onGate: ((g: GateIn) => void) | undefined
+  let onSleep: (() => void) | undefined
   const stops: { key: CuSessionKey; why: StopWhy }[] = []
   const notes: string[] = []
   const emitted: CuLogEntry[] = []
@@ -61,21 +62,17 @@ function setup(o: {
   }
   const ex = createExecutor({
     svc, driver, now: () => clock,
-    sleep: async (ms) => { sleeps.push(ms); if (advance) clock += ms },
+    sleep: async (ms) => { sleeps.push(ms); onSleep?.(); if (advance) clock += ms },
     settings: () => ({ ...defaultComputerUse(), ...o.settings }),
     ownPid: OWN_PID, ownAccelerators: () => o.accel ?? ['CommandOrControl+Alt+F', 'CommandOrControl+Shift+P', 'Control+Alt+Command+Escape'],
     log: memLog, hidIsPhysical: () => o.physical ?? false,
   })
   const run = (op: Parameters<typeof ex.run>[1], args: unknown = {}) => ex.run(K, op, args, META)
-  const code = async () => {
-    const r = await run('screenshot')
-    expect(r.ok).toBe(true)
-    return ''
-  }
   return {
-    driver, svc, ex, run, st, gates, decisions, stops, notes, emitted, entries, sleeps, code,
+    driver, svc, ex, run, st, gates, decisions, stops, notes, emitted, entries, sleeps,
     clock: () => clock, setClock: (n: number) => { clock = n }, freeze: () => { advance = false },
     onGate: (f: (g: GateIn) => void) => { onGate = f },
+    onSleep: (f: () => void) => { onSleep = f },
     /** a verified session with a full shot, so pointer actions can run */
     async ready() {
       await run('screenshot')
@@ -93,6 +90,7 @@ function setup(o: {
   }
 }
 
+const gateCrops = (s: { driver: { crops: { maxW?: number }[] } }) => s.driver.crops.filter((c) => c.maxW === undefined)
 const roots: string[] = []
 afterEach(() => { for (const r of roots.splice(0)) rmSync(r, { recursive: true, force: true }); vi.restoreAllMocks() })
 
@@ -128,8 +126,9 @@ describe('arguments and enablement', () => {
     ] as const) {
       const s = setup()
       s.driver.setStatus(patch)
+      const argsOf = { screenshot: {}, click: { x: 1, y: 1 }, type: { text: 'a' }, key: { combo: 'a' }, move: { x: 1, y: 1 } }
       for (const op of ['screenshot', 'click', 'type', 'key', 'move'] as const) {
-        const r = await s.run(op, { x: 1, y: 1, text: 'a', combo: 'a' })
+        const r = await s.run(op, argsOf[op])
         expect(r).toMatchObject({ ok: false, code })
       }
       expect(s.driver.posts).toHaveLength(0)
@@ -235,13 +234,6 @@ describe('coordinates', () => {
     expect(p.guard).toMatchObject({ expectPid: 500, expectWindowId: 77 })
   })
 
-  it('clamps out-of-range clicks to the screen', async () => {
-    const s = setup()
-    await s.ready()
-    await s.run('click', { x: 99999, y: 99999 })
-    expect(s.driver.posts[0].action).toMatchObject({ x: 1791, y: 1119 })
-  })
-
   it('scroll carries the pointer and the window id', async () => {
     const s = setup()
     await s.ready()
@@ -285,7 +277,7 @@ describe('vision check', () => {
     expect(CU_ERR.vision_code).toBe('需要 visionCode：读出最近一张截图右下角方框里的 4 位码。看不到图片说明当前模型不支持图片，请停止使用电脑工具并告诉用户。')
     expect(s.driver.posts).toHaveLength(0)
     // a missing code is not a miss
-    for (let i = 0; i < 5; i++) await s.run('type', { text: 'a' })
+    for (let i = 0; i < 2; i++) await s.run('type', { text: 'a' })
     expect(s.stops).toEqual([])
   })
 
@@ -494,7 +486,7 @@ describe('approvals', () => {
     await s.run('key', { combo: 'cmd+shift+t', repeat: 2 })
     expect(s.gates[0].action).toMatchObject({ kind: 'scroll', dx: 2, dy: -3 })
     expect(s.gates[1].action).toMatchObject({ kind: 'type', text: 'a\tb', app: 'Example' })
-    expect(s.gates[2].action).toMatchObject({ kind: 'key', combo: '⌘⇧T', repeat: 2 })
+    expect(s.gates[2].action).toMatchObject({ kind: 'key', combo: '⌘⇧T', repeat: 2, mods: ['cmd', 'shift'] })
   })
 
   it('move opens no gate in ask', async () => {
@@ -530,7 +522,7 @@ describe('approvals', () => {
     const r = await s.run('click', { x: 5, y: 5 })
     expect(r.ok).toBe(true)
     expect(s.gates).toHaveLength(2)
-    expect(s.driver.crops).toHaveLength(2)
+    expect(gateCrops(s)).toHaveLength(2)
     expect(s.driver.posts).toHaveLength(1)
   })
 
@@ -540,7 +532,7 @@ describe('approvals', () => {
     s.onGate(() => s.setClock(s.clock() + 20_000))
     expect((await s.run('click', { x: 5, y: 5 })).ok).toBe(true)
     expect(s.gates).toHaveLength(1)
-    expect(s.driver.crops).toHaveLength(2)
+    expect(gateCrops(s)).toHaveLength(2)
     expect(s.driver.posts).toHaveLength(1)
   })
 
@@ -549,7 +541,7 @@ describe('approvals', () => {
     await s.ready()
     s.onGate(() => s.setClock(s.clock() + 14_000))
     await s.run('click', { x: 5, y: 5 })
-    expect(s.driver.crops).toHaveLength(1)
+    expect(gateCrops(s)).toHaveLength(1)
   })
 
   it('a small signature change under 8% posts', async () => {
@@ -723,9 +715,10 @@ describe('other tools and results', () => {
     await s.run('key', { combo: 'return' })
     await s.run('key', { combo: 'cmd+=', repeat: 3 })
     expect(s.driver.posts[0].action).toEqual({ kind: 'key', code: 36, mods: [], repeat: 1 })
-    expect(s.driver.posts[1].action).toEqual({ kind: 'key', char: '=', mods: ['cmd'], repeat: 3 })
+    expect(s.driver.posts[1].action).toEqual({ kind: 'key', code: 24, mods: ['cmd'], repeat: 3 })
     const bad = await s.run('key', { combo: 'cmd+nonsense' })
     expect(bad).toMatchObject({ ok: false, code: 'invalid_args' })
+    expect(s.driver.posts).toHaveLength(2)
   })
 
   it('a driver that throws on post gives helper_failed', async () => {
@@ -779,6 +772,185 @@ describe('the log and secrets', () => {
     // and no result text echoes it
     const r = await s.run('type', { text: 'MARKER-third' })
     expect(JSON.stringify(r)).not.toContain('MARKER')
+  })
+})
+
+describe('review fixes', () => {
+  const OTHER: WinHit = { pid: 600, bundleId: 'com.other', name: 'Other', layer: 0, windowId: 88 }
+
+  it('I-1: coordinates outside the screenshot are rejected before the driver is touched', async () => {
+    const s = setup()
+    await s.ready()
+    let statuses = 0
+    const real = s.driver.status.bind(s.driver)
+    s.driver.status = async () => { statuses++; return real() }
+    for (const [op, args] of [
+      ['click', { x: 1280, y: 5 }], ['click', { x: 5, y: 800 }], ['click', { x: -1, y: 5 }], ['move', { x: 99999, y: 1 }],
+      ['scroll', { x: 1280, y: 1, dy: 1 }], ['drag', { from: { x: 1, y: 1 }, to: { x: 1280, y: 1 } }],
+      ['drag', { from: { x: -3, y: 1 }, to: { x: 1, y: 1 } }], ['screenshot', { region: { x: 1280, y: 0, w: 5, h: 5 } }],
+    ] as const) {
+      expect(await s.run(op, args)).toMatchObject({ ok: false, code: 'invalid_args' })
+    }
+    expect(statuses).toBe(0)
+    expect(s.driver.posts).toHaveLength(0)
+    expect((await s.run('click', { x: 1279, y: 799 })).ok).toBe(true)
+  })
+
+  it('I-1: the card shows the point that is posted, mapped back', async () => {
+    const s = setup({ mode: 'ask' })
+    await s.ready()
+    await s.run('click', { x: 777, y: 333 })
+    const at = s.gates[0].action!.at!
+    const p = s.driver.posts[0].action as { x: number; y: number }
+    expect(at).toEqual({ x: 777, y: 333 })
+    expect(Math.round(at.x / SCALE)).toBe(p.x)
+    expect(Math.round(at.y / SCALE)).toBe(p.y)
+  })
+
+  it('I-2: a drag pins the window under the drop point in the guard', async () => {
+    const s = setup()
+    await s.ready()
+    s.driver.setHitMap((p) => (p.x > 700 ? OTHER : APP))
+    await s.run('drag', { from: { x: 100, y: 100 }, to: { x: 1000, y: 100 } })
+    expect(s.driver.posts[0].guard).toMatchObject({ expectPid: 500, expectWindowId: 77, expectEndPid: 600, expectEndWindowId: 88 })
+  })
+
+  it('I-2: ask mode, a window appears over the drop point after approval: nothing is posted', async () => {
+    const s = setup({ mode: 'ask' })
+    await s.ready()
+    s.driver.setHitMap((p) => (p.x > 700 ? OTHER : APP))
+    s.onGate(() => s.driver.setHitMap((p) => (p.x > 700 ? { ...OTHER, windowId: 99 } : APP)))
+    expect(await s.run('drag', { from: { x: 100, y: 100 }, to: { x: 1000, y: 100 } })).toMatchObject({ ok: false, code: 'target_changed' })
+    expect(s.driver.posts).toHaveLength(0)
+    expect(s.entries.at(-1)!.e.result).toBe('failed')
+  })
+
+  it('I-2: allow mode, a window appears during the pace wait: nothing is posted', async () => {
+    const s = setup({ mode: 'allow' })
+    await s.ready()
+    s.driver.setHitMap((p) => (p.x > 700 ? OTHER : APP))
+    s.onSleep(() => s.driver.setHitMap((p) => (p.x > 700 ? { ...OTHER, pid: OWN_PID } : APP)))
+    expect(await s.run('drag', { from: { x: 100, y: 100 }, to: { x: 1000, y: 100 } })).toMatchObject({ ok: false })
+    expect(s.driver.posts).toHaveLength(0)
+    expect(s.sleeps.length).toBeGreaterThan(0)
+  })
+
+  it('I-2: a click target that changes during the pace wait is not posted either', async () => {
+    const s = setup({ mode: 'allow' })
+    await s.ready()
+    s.onSleep(() => s.driver.setHitMap({ ...APP, windowId: 78 }))
+    expect(await s.run('click', { x: 5, y: 5 })).toMatchObject({ ok: false, code: 'target_changed' })
+    expect(s.driver.posts).toHaveLength(0)
+  })
+
+  it('I-4: characters outside ASCII are refused, shifted symbols post the ANSI keycode with shift', async () => {
+    const s = setup()
+    await s.ready()
+    expect(await s.run('key', { combo: 'cmd+м' })).toMatchObject({ ok: false, code: 'invalid_args' })
+    expect(await s.run('key', { combo: 'cmd+alt+а' })).toMatchObject({ ok: false, code: 'invalid_args' })
+    expect(s.driver.posts).toHaveLength(0)
+    expect((await s.run('key', { combo: 'alt+!' })).ok).toBe(true)
+    expect(s.driver.posts[0].action).toEqual({ kind: 'key', code: 18, mods: ['alt', 'shift'], repeat: 1 })
+    expect(s.driver.posts.every((p) => p.action.kind !== 'key' || !('char' in p.action))).toBe(true)
+  })
+
+  it('I-4: our accelerators and paste are matched on the resolved key', async () => {
+    const s = setup({ mode: 'allow', accel: ['Command+Shift+1'] })
+    await s.ready()
+    expect(await s.run('key', { combo: 'cmd+!' })).toMatchObject({ ok: false, code: 'own_window' })
+    s.gates.length = 0
+    await s.run('key', { combo: 'cmd+V' })
+    expect(s.gates[0].reason).toBe('剪贴板')
+  })
+
+  it('I-5: refusals spend steps; the 101st refused action opens the continue gate', async () => {
+    const s = setup()
+    await s.ready()
+    s.driver.setHitMap({ ...APP, pid: OWN_PID })
+    // ready() spent one step on its click
+    for (let i = 0; i < 99; i++) expect(await s.run('click', { x: 5, y: 5 })).toMatchObject({ code: 'own_window' })
+    expect(s.gates).toHaveLength(0)
+    s.decisions.push('deny')
+    expect(await s.run('click', { x: 5, y: 5 })).toMatchObject({ ok: false, code: 'step_limit' })
+    expect(s.gates).toHaveLength(1)
+    expect(s.gates[0].kind).toBe('continue')
+  }, 20_000)
+
+  it('I-5: secure_input refusals count too', async () => {
+    const s = setup()
+    await s.ready()
+    s.driver.setStatus({ secureInput: true })
+    for (let i = 0; i < 99; i++) await s.run('type', { text: 'a' })
+    expect(s.gates).toHaveLength(0)
+    await s.run('type', { text: 'a' })
+    expect(s.gates).toHaveLength(1)
+  }, 20_000)
+
+  it('M-3: a rate_limited result after approval is logged', async () => {
+    const s = setup({ mode: 'ask' })
+    await s.ready()
+    expect((await s.run('move', { x: 1, y: 1 })).ok).toBe(true)
+    s.freeze()
+    expect(await s.run('click', { x: 5, y: 5 })).toMatchObject({ ok: false, code: 'rate_limited' })
+    expect(s.entries.at(-1)!.e).toMatchObject({ op: 'click', result: 'failed', code: 'rate_limited' })
+  })
+
+  it('M-4: a code that is missing over and over counts as a miss after 3 repeats', async () => {
+    const s = setup()
+    await s.run('screenshot')
+    for (let i = 0; i < 5; i++) await s.run('type', { text: 'a' })
+    expect(s.stops).toEqual([])
+    await s.run('type', { text: 'a' })
+    expect(s.stops).toEqual([{ key: K, why: 'vision' }])
+  })
+
+  it('M-5: thumbnails are 320 px crops, and move gets none', async () => {
+    const s = setup({ mode: 'ask' })
+    await s.ready()
+    await s.run('click', { x: 5, y: 5 })
+    expect(s.driver.crops.at(-1)!.maxW).toBe(320)
+    expect(gateCrops(s)).toHaveLength(1)
+    s.driver.crops.length = 0
+    s.entries.length = 0
+    await s.run('move', { x: 5, y: 5 })
+    expect(s.driver.crops).toHaveLength(0)
+    expect(s.entries[0].thumb).toBeUndefined()
+  })
+
+  it('M-5: a denied gate still gets a small thumb', async () => {
+    const s = setup({ mode: 'ask' })
+    await s.ready()
+    s.decisions.push('deny')
+    await s.run('click', { x: 5, y: 5 })
+    expect(s.entries[0].thumb).toBe('ZmFrZQ==')
+  })
+
+  it('M-6: a bare key is stored as a dot, modifiers and named keys are kept', async () => {
+    const s = setup()
+    await s.ready()
+    await s.run('key', { combo: 'a' })
+    await s.run('key', { combo: 'cmd+a' })
+    await s.run('key', { combo: 'return' })
+    expect(s.entries.map((e) => e.e.combo)).toEqual(['·', '⌘A', 'Return'])
+  })
+
+  it('M-8: cursor counts toward the screenshot cap', async () => {
+    const s = setup()
+    await s.run('cursor')
+    for (let i = 0; i < 299; i++) expect((await s.run('screenshot')).ok).toBe(true)
+    expect(await s.run('screenshot')).toMatchObject({ ok: false, code: 'step_limit' })
+  })
+
+  it('M-1: the scroll zero case and a bad combo fail in the schema, before the driver', async () => {
+    const s = setup()
+    let statuses = 0
+    const real = s.driver.status.bind(s.driver)
+    s.driver.status = async () => { statuses++; return real() }
+    expect(await s.run('scroll', { x: 1, y: 1, dx: 0, dy: 0 })).toMatchObject({ code: 'invalid_args' })
+    expect(await s.run('key', { combo: 'cmd+м' })).toMatchObject({ code: 'invalid_args' })
+    expect(await s.run('type', { text: 'a\u0000' })).toMatchObject({ code: 'invalid_args' })
+    expect(await s.run('click', { x: 1, y: 1, extra: 1 })).toMatchObject({ code: 'invalid_args' })
+    expect(statuses).toBe(0)
   })
 })
 

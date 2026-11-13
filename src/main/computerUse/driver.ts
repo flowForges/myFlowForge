@@ -26,6 +26,8 @@ export type PostAction =
 export interface PostGuard {
   denyPids: number[]; denyBundlePrefixes: string[]
   expectPid?: number; expectWindowId?: number; pointer?: Pt
+  /** drag only: the window under the drop point that the user approved; the helper checks both at release */
+  expectEndPid?: number; expectEndWindowId?: number
 }
 /** `locked` / `denied` come only from the service's guarded wrapper (I-4, M-1), never from the helper. */
 export type PostResult = { ok: true } | { ok: false; code: 'target_changed' | 'helper_failed' | 'stopped' | 'locked' | 'denied'; typed?: number }
@@ -37,7 +39,7 @@ export interface CaptureOpts {
 export interface CaptureResult {
   width: number; height: number; jpegBase64: string; display: DisplaySig; cursor: Pt; blocked: Rect[]
 }
-export interface CropOpts { rectPt: Rect; marker: Pt[]; maskPids: number[]; maskBundlePrefixes: string[] }
+export interface CropOpts { rectPt: Rect; marker: Pt[]; maskPids: number[]; maskBundlePrefixes: string[]; /** downscale: long edge in px (thumbnails) */ maxW?: number }
 export type Button = 'left' | 'right' | 'middle'
 
 export interface ComputerDriver {

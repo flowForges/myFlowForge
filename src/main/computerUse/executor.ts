@@ -7,8 +7,8 @@
 // for the live session's memory, a 40-character preview (V11). Nothing here logs.
 import { randomInt } from 'node:crypto'
 import {
-  classify, CU_ERR, CU_SCHEMAS, NAMED_KEYCODES, OWN_BUNDLE_PREFIX, parseCombo, prettyCombo, screenNotice, screenshotSize,
-  toPoint, visibleText, wrapUntrusted,
+  classify, CU_ERR, CU_SCHEMAS, OWN_BUNDLE_PREFIX, parseCombo, prettyCombo, screenNotice, screenshotSize,
+  toPoint, visibleText, wrapUntrusted, comboKeycode,
   type CuActionKind, type CuActionView, type CuClass, type CuErrCode, type Mod, type ParsedCombo,
 } from '@shared/computerUse'
 import type { Settings } from '../config/schema'
@@ -50,6 +50,9 @@ const WINDOW_MS = 1000
 const CROP_PHYS_W = 480
 const CROP_PHYS_H = 320
 const PREVIEW_CHARS = 40
+const THUMB_EDGE = 320
+const MISSING_CODE_FREE = 3
+const MAX_STATES = 8
 
 const INPUT_OPS: ReadonlySet<CuOp> = new Set<CuOp>(['click', 'move', 'drag', 'scroll', 'type', 'key'])
 const POINTER_OPS: ReadonlySet<CuOp> = new Set<CuOp>(['click', 'move', 'drag', 'scroll'])
@@ -58,7 +61,7 @@ interface Shot { id: string; widthPt: number; heightPt: number; scale: number; w
 interface State {
   enable: number; turn: number
   shotSeq: number; shot?: Shot
-  code: string; verified: boolean; misses: number
+  code: string; verified: boolean; misses: number; missing: number
   inputsEnable: number
   inputsTurn: number; allowance: number; shotsTurn: number
 }
@@ -92,10 +95,12 @@ export function createExecutor(d: ExecutorDeps): Executor {
     let s = states.get(k)
     if (!s || s.enable !== enable) {
       s = {
-        enable, turn, shotSeq: 0, code: newCode(), verified: false, misses: 0,
+        enable, turn, shotSeq: 0, code: newCode(), verified: false, misses: 0, missing: 0,
         inputsEnable: 0, inputsTurn: 0, allowance: STEP_GATE, shotsTurn: 0,
       }
+      states.delete(k)
       states.set(k, s)
+      while (states.size > MAX_STATES) states.delete(states.keys().next().value as string)
     }
     if (s.turn !== turn) { s.turn = turn; s.inputsTurn = 0; s.allowance = STEP_GATE; s.shotsTurn = 0 }
     return s
@@ -139,9 +144,9 @@ export function createExecutor(d: ExecutorDeps): Executor {
 
   const label = (h: { name?: string; bundleId?: string }) => wrapUntrusted(h.name ?? h.bundleId ?? '未知应用')
 
-  async function tryCrop(rect: Rect, marker: Pt[]) {
+  async function tryCrop(rect: Rect, marker: Pt[], maxW?: number) {
     try {
-      return await d.driver.crop({ rectPt: rect, marker, maskPids: [d.ownPid], maskBundlePrefixes: [OWN_BUNDLE_PREFIX] })
+      return await d.driver.crop({ rectPt: rect, marker, maskPids: [d.ownPid], maskBundlePrefixes: [OWN_BUNDLE_PREFIX], ...(maxW ? { maxW } : {}) })
     } catch { return null }
   }
 
@@ -202,8 +207,10 @@ export function createExecutor(d: ExecutorDeps): Executor {
   }
 
   async function cursor(st: State, display: DisplaySig): Promise<CuResult> {
+    if (st.shotsTurn >= TURN_SHOT_CAP) return fail('step_limit', `本轮截图已达 ${TURN_SHOT_CAP} 张`)
     if (!(await pace(shotTimes, SHOT_PER_S, false))) return fail('rate_limited')
     shotTimes.push(d.now())
+    st.shotsTurn++
     try {
       const r = await d.driver.capture({
         maxW: 16, maxH: 16, quality: 0.3, maskPids: [d.ownPid], maskBundlePrefixes: [OWN_BUNDLE_PREFIX],
@@ -233,6 +240,8 @@ export function createExecutor(d: ExecutorDeps): Executor {
     pts: Pt[]
     pointer: boolean
     combo: ParsedCombo | null
+    /** what may be stored: a bare printable key could be part of typed text (M-6) */
+    logCombo?: string
     done: (app: string) => string
   }
 
@@ -246,25 +255,25 @@ export function createExecutor(d: ExecutorDeps): Executor {
     }
     if (pointer && st.shot && !sameDisplay(st.shot.display, status.display)) return fail('layout_changed')
 
-    // vision check (R9): a wrong code counts, a missing one only asks again
-    if (!st.verified && (op === 'click' || op === 'drag' || op === 'scroll' || op === 'type' || op === 'key')) {
-      const given = typeof a.visionCode === 'string' ? a.visionCode.trim().toUpperCase() : ''
-      if (given && given === st.code) st.verified = true
-      else {
-        if (given) {
-          st.misses++
-          if (st.misses >= 3) d.svc.stop(key, 'vision')
-        }
-        return fail('vision_code')
-      }
-    }
-
-    // step gate (T7)
+    // step gate (T7): refusals spend steps too, so a refused-action loop meets the gate
     if (st.inputsEnable >= ENABLE_INPUT_CAP) return fail('step_limit')
     if (st.inputsTurn >= st.allowance) {
       const dec = await d.svc.openGate({ key, kind: 'continue', reason: `已执行 ${st.inputsTurn} 步 · 继续 ${STEP_GATE} 步` })
       if (dec !== 'allow') return fail('step_limit')
       st.allowance += STEP_GATE
+    }
+
+    // vision check (R9): a wrong code is a miss; a missing one only after it keeps being missing
+    if (!st.verified && op !== 'move') {
+      const given = typeof a.visionCode === 'string' ? a.visionCode.trim().toUpperCase() : ''
+      if (given && given === st.code) st.verified = true
+      else {
+        st.inputsTurn++
+        if (given) st.misses++
+        else if (++st.missing > MISSING_CODE_FREE) st.misses++
+        if (st.misses >= 3) d.svc.stop(key, 'vision')
+        return fail('vision_code')
+      }
     }
 
     // a user who is using the machine (T11)
@@ -291,16 +300,21 @@ export function createExecutor(d: ExecutorDeps): Executor {
       op, app: first.name, bundleId: first.bundleId,
       ...(plan.pointer ? { at: (plan.view.at as Pt) } : {}),
       ...(op === 'type' ? { textLen: Array.from(a.text as string).length, textPreview: preview(a.text as string) } : {}),
-      ...(op === 'key' ? { combo: plan.view.combo } : {}),
+      ...(op === 'key' ? { combo: plan.logCombo } : {}),
     }
     if (block) {
+      st.inputsTurn++
       await record(key, { ...baseEntry, result: 'blocked', code: block.code })
       return fail(block.code)
     }
     if ((op === 'type' || op === 'key') && status.secureInput) {
+      st.inputsTurn++
       await record(key, { ...baseEntry, result: 'blocked', code: 'secure_input' })
       return fail('secure_input')
     }
+
+    const thumbOf = async (): Promise<string | undefined> =>
+      plan.pointer && op !== 'move' ? (await tryCrop(cropRect(plan.pts, status.display.backing), plan.pts, THUMB_EDGE))?.jpegBase64 : undefined
 
     // approval (T3, §5.7)
     const ask = classes.find((c): c is Extract<CuClass, { kind: 'askAlways' }> => c.kind === 'askAlways')
@@ -327,7 +341,7 @@ export function createExecutor(d: ExecutorDeps): Executor {
       }
       const denied = gateFailure(decision)
       if (denied) {
-        await record(key, { ...baseEntry, result: 'denied', code: denied }, crop?.jpegBase64)
+        await record(key, { ...baseEntry, result: 'denied', code: denied }, await thumbOf())
         return fail(denied)
       }
       gated = true
@@ -341,19 +355,35 @@ export function createExecutor(d: ExecutorDeps): Executor {
         await d.sleep(150)
         f = await d.driver.front()
         if (f && f.pid === d.ownPid) {
-          await record(key, { ...baseEntry, result: 'failed', code: 'target_changed' }, crop?.jpegBase64)
+          await record(key, { ...baseEntry, result: 'failed', code: 'target_changed' }, await thumbOf())
           return fail('target_changed')
         }
       }
     }
 
     // atomic execution (R8)
-    if (!(await pace(postTimes, POST_PER_S, true))) return fail('rate_limited')
+    if (!(await pace(postTimes, POST_PER_S, true))) {
+      await record(key, { ...baseEntry, result: 'failed', code: 'rate_limited' }, await thumbOf())
+      return fail('rate_limited')
+    }
+    // I-2: the pace wait can be long; what is under every point must still be what was approved and classified
+    if (plan.pointer) {
+      for (let i = 0; i < plan.pts.length; i++) {
+        const now = await d.driver.hitTest(plan.pts[i])
+        const want = plan.targets[i]
+        if (!now || now.pid !== want.pid || now.windowId !== want.windowId) {
+          await record(key, { ...baseEntry, result: 'failed', code: 'target_changed' }, await thumbOf())
+          return fail('target_changed')
+        }
+      }
+    }
+    const end = op === 'drag' ? plan.targets[1] : undefined
     const guard: PostGuard = {
       denyPids: [d.ownPid], denyBundlePrefixes: [OWN_BUNDLE_PREFIX],
       expectPid: first.pid,
       ...(first.windowId !== undefined ? { expectWindowId: first.windowId } : {}),
       ...(op === 'scroll' ? { pointer: plan.pts[0] } : {}),
+      ...(end ? { expectEndPid: end.pid, ...(end.windowId !== undefined ? { expectEndWindowId: end.windowId } : {}) } : {}),
     }
     const t = d.now()
     postTimes.push(t)
@@ -366,16 +396,14 @@ export function createExecutor(d: ExecutorDeps): Executor {
 
     if (!res.ok) {
       const code: CuErrCode = res.code
-      await record(key, { ...baseEntry, result: 'failed', code }, crop?.jpegBase64)
+      await record(key, { ...baseEntry, result: 'failed', code }, await thumbOf())
       if (code === 'target_changed' && typeof res.typed === 'number') {
         return fail('target_changed', `已输入 ${res.typed} 个字符后目标变了`)
       }
       return fail(code)
     }
 
-    let thumb = crop?.jpegBase64
-    if (!thumb && plan.pointer) thumb = (await tryCrop(cropRect(plan.pts, status.display.backing), plan.pts))?.jpegBase64
-    await record(key, { ...baseEntry, result: gated ? 'allowed' : 'auto' }, thumb)
+    await record(key, { ...baseEntry, result: gated ? 'allowed' : 'auto' }, await thumbOf())
     return { ok: true, text: plan.done(label(first)) }
   }
 
@@ -451,12 +479,11 @@ export function createExecutor(d: ExecutorDeps): Executor {
         if (!front) throw new Reject(fail('target_changed'))
         const repeat = (a.repeat as number | undefined) ?? 1
         const pretty = prettyCombo(c)
-        const action: PostAction = 'named' in c.key
-          ? { kind: 'key', code: NAMED_KEYCODES[c.key.named], mods: c.mods, repeat }
-          : { kind: 'key', char: c.key.char, mods: c.mods, repeat }
+        const action: PostAction = { kind: 'key', code: comboKeycode(c), mods: c.mods, repeat }
         return {
           kind: 'key', pointer: false, targets: [front], pts: [], combo: c, action,
-          view: { kind: 'key', app: front.name, bundleId: front.bundleId, combo: pretty, repeat },
+          logCombo: c.mods.length > 0 || 'named' in c.key ? pretty : '·',
+          view: { kind: 'key', app: front.name, bundleId: front.bundleId, combo: pretty, mods: c.mods, repeat },
           done: () => `已按 ${pretty}${repeat > 1 ? ` ×${repeat}` : ''}`,
         }
       }
@@ -483,6 +510,17 @@ export function createExecutor(d: ExecutorDeps): Executor {
     return { x: (minX + maxX) / 2 - w / 2, y: (minY + maxY) / 2 - h / 2, w, h }
   }
 
+  /** false = something in `a` lies outside the shot's pixel grid */
+  function withinShot(sh: Shot, op: CuOp, a: Record<string, any>): boolean {
+    const inside = (p: { x: number; y: number }) => p.x >= 0 && p.y >= 0 && p.x < sh.width && p.y < sh.height
+    switch (op) {
+      case 'click': case 'move': case 'scroll': return inside(a as Pt)
+      case 'drag': return inside(a.from) && inside(a.to)
+      case 'screenshot': return !a.region || (a.region.x < sh.width && a.region.y < sh.height)
+      default: return true
+    }
+  }
+
   return {
     async run(key, op, rawArgs, _meta: CallMeta): Promise<CuResult> {
       const schema = (CU_SCHEMAS as Record<string, { safeParse(v: unknown): { success: boolean; data?: unknown; error?: { issues: { path: PropertyKey[] }[] } } }>)[`computer_${op}`]
@@ -497,6 +535,10 @@ export function createExecutor(d: ExecutorDeps): Executor {
       if (d.svc.enableSeq(key) === 0 || d.svc.modeOf(key) === 'off') return fail('not_enabled')
       if (d.svc.turnSeq(key) === 0) return fail('no_turn')
       const st = stateFor(key)
+
+      // I-1: a point outside the last screenshot would be clamped on its way to the screen and the card would show
+      // a different place than the one that is hit, so it is refused before anything else happens
+      if (st.shot && !withinShot(st.shot, op, a)) return fail('invalid_args', '坐标超出截图范围')
 
       let status
       try { status = await d.driver.status() } catch (e) { return fromDriverError(e) }
