@@ -6,6 +6,7 @@ out/
 ~/
 docs
 release/
+release-test/
 # forge-cu (computer use) universal binary, built by scripts/build-cu-helper.mjs
 build/native/
 # superpowers brainstorm/plan artifacts — kept local, never published

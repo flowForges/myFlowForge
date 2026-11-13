@@ -103,3 +103,42 @@ describe('packaging wiring', () => {
     expect(p).not.toMatch(/<key>/)
   })
 })
+
+describe('build-mac-test.sh (side-by-side test package, Review Focus 18)', () => {
+  const sh = () => readFileSync(join(ROOT, 'scripts/build-mac-test.sh'), 'utf8')
+  const lines = () => sh().split('\n').map((l) => l.trim())
+
+  it('exists, is wired as dist:mac-test, and has valid shell syntax', async () => {
+    const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
+    expect(pkg.scripts['dist:mac-test']).toBe('bash scripts/build-mac-test.sh')
+    const { spawnSync } = await import('node:child_process')
+    expect(spawnSync('bash', ['-n', join(ROOT, 'scripts/build-mac-test.sh')]).status).toBe(0)
+  })
+
+  it('builds the forge-cu helper with --require right after npm run build', () => {
+    const l = lines()
+    const b = l.indexOf('npm run build')
+    const h = l.indexOf('node scripts/build-cu-helper.mjs --require')
+    expect(b).toBeGreaterThan(-1)
+    expect(h).toBeGreaterThan(b)
+    expect(l.slice(b + 1, h).some((x) => x.startsWith('npx electron-builder'))).toBe(false)
+  })
+
+  it('checks the packaged forge-cu: lipo -archs, no entitlements, bundle id com.zghua.myflowforge.test', () => {
+    const s = sh()
+    expect(s).toContain('lipo -archs "${APP}/Contents/Resources/native/forge-cu"')
+    expect(s).toMatch(/node scripts\/cuHelperCheck\.cjs "\$\{APP\}"/)
+    expect(s).toContain('com.zghua.myflowforge.test')
+    expect(s).toContain('-c.appId=com.zghua.myflowforge.test')
+  })
+
+  it('has no leftovers from the other branch', () => {
+    expect(sh()).not.toMatch(/mff-ai|mffai/i)
+  })
+
+  it('keeps signing, version and arch options; ad-hoc by default', () => {
+    const s = sh()
+    for (const k of ['MFF_TEST_SIGN', 'MFF_TEST_VERSION', 'MFF_TEST_ARCHS']) expect(s).toContain(k)
+    expect(s).toMatch(/unset APPLE_SIGN_IDENTITY/)
+  })
+})
