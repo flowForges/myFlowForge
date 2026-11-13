@@ -81,4 +81,6 @@ export interface ComputerUseHost {
   runningApps?: () => Promise<{ bundleId: string; name: string }[]>
   /** the overlay's 收起主窗口 (Task 8) */
   collapseMain?: () => void
+  /** I-1: 授权 provisions (spec V3): `provisioned:true` through the runtime's settings save, so the next spawn is disclaimed */
+  provision: () => void
 }

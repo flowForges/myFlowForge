@@ -24,6 +24,7 @@ function setup(o: {
   platform?: NodeJS.Platform
   settings?: (s: Settings) => Settings
   screen?: boolean
+  ax?: boolean
   dirExists?: boolean
   onDisclaimUnavailable?: () => void
   bridgeFails?: boolean
@@ -66,6 +67,7 @@ function setup(o: {
     ownAccelerators: () => ['Control+Alt+Command+Escape'],
     liveAgentChildren: () => [],
     screenGranted: () => o.screen ?? false,
+    axGranted: () => o.ax ?? false,
     onDisclaimUnavailable: o.onDisclaimUnavailable,
     collapseMain: collapse,
     now: () => clock,
@@ -299,6 +301,24 @@ describe('disclaim seam (V3, V16 ③, controller notes)', () => {
     await t.rt.startup()
     expect(t.settings.computerUse.provisioned).toBe(true)
     expect(t.rt.disclaimEnabled()).toBe(true)
+  })
+
+  it('I-1 startup latch: Accessibility granted to the app alone → provisioned, persisted, disclaimed', async () => {
+    const t = setup({ ax: true, screen: false })
+    expect(t.rt.disclaimEnabled()).toBe(false)
+    await t.rt.startup()
+    expect(t.settings.computerUse.provisioned).toBe(true)
+    expect(t.rt.disclaimEnabled()).toBe(true)
+  })
+
+  it('I-1: host().provision() saves provisioned:true once (merged, lists kept) and disclaims from the next spawn', () => {
+    const t = setup({ settings: (s) => ({ ...s, computerUse: { ...s.computerUse, extraBlocked: ['com.x'] } }) })
+    expect(t.rt.disclaimEnabled()).toBe(false)
+    t.rt.host()!.provision()
+    expect(t.settings.computerUse).toMatchObject({ provisioned: true, extraBlocked: ['com.x'] })
+    expect(t.rt.disclaimEnabled()).toBe(true)
+    t.rt.host()!.provision()
+    expect(t.writes).toHaveLength(1)
   })
 
   it('I-3: no Screen Recording grant → as today (the dir alone does not latch), nothing built', async () => {

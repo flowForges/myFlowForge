@@ -93,6 +93,8 @@ export interface CuRuntimeDeps {
   liveAgentChildren: () => { disclaimed: boolean }[]
   /** is Screen Recording granted to this app (in-process check, no helper, no prompt) — the startup latch (I-3) */
   screenGranted?: () => boolean
+  /** is Accessibility granted to this app (`isTrustedAccessibilityClient(false)`, no prompt) — the startup latch too (I-1) */
+  axGranted?: () => boolean
   /** the helper answered disclaim:false while spawns were disclaimed: reset configureDisclaim's latch (plain spawns) */
   onDisclaimUnavailable?: () => void
   collapseMain?: () => void
@@ -209,6 +211,7 @@ export function createCuRuntime(d: CuRuntimeDeps): CuRuntime {
       },
       runningApps: () => driver.runningApps(),
       collapseMain: () => d.collapseMain?.(),
+      provision: () => { if (!provisioned()) saveSettings({ provisioned: true }) },
     }
     built = { host, service, driver }
     return built
@@ -224,12 +227,12 @@ export function createCuRuntime(d: CuRuntimeDeps): CuRuntime {
 
     async startup() {
       if (d.platform !== 'darwin') return
-      // V16 ③ / I-3: client.json edited to provisioned:false while the app was closed. Screen Recording granted to this
-      // app (a TCC record no user-level process can rewrite) keeps it provisioned on its own.
+      // V16 ③ / I-3 / I-1: client.json edited to provisioned:false while the app was closed, or a grant given in System
+      // Settings without ever enabling. Screen Recording or Accessibility granted to this app (TCC records no user-level
+      // process can rewrite) keeps it provisioned on its own.
       if (!provisioned()) {
-        let held = false
-        try { held = d.screenGranted?.() === true } catch { held = false }
-        if (held) saveSettings({ provisioned: true })
+        const held = (f?: () => boolean) => { try { return f?.() === true } catch { return false } }
+        if (held(d.screenGranted) || held(d.axGranted)) saveSettings({ provisioned: true })
       }
       if (!provisioned()) return
       try { await build().host.probe.status() } catch { /* stays plain; enabling re-probes */ }

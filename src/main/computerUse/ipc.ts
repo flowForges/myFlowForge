@@ -98,6 +98,8 @@ export function computerUseHandlers(d: ComputerUseIpcDeps): Record<string, Handl
       const kind = kindOf(a)
       if (!kind) return INVALID
       if (!cu) return UNSUPPORTED
+      // I-1: provision before the grant can land, so no agent spawned after this click inherits it (spec V3)
+      cu.provision()
       await cu.probe.request(kind)
       await cu.probe.openPane(kind)
       d.markRequested(kind)

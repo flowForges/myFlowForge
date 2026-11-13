@@ -175,7 +175,10 @@ async function boot(o: { status?: Partial<CuStatus>; noCu?: boolean; gateOnRun?:
   const bridge = vi.fn(async () => ({ socketPath: join(cfgDir, 'forge.sock'), configDir: cfgDir }))
   const collapseMain = vi.fn()
   const runningApps = vi.fn(async () => [{ bundleId: 'com.apple.TextEdit', name: 'TextEdit' }])
-  const cu: ComputerUseHost = { service, probe, bridge, log, collapseMain, runningApps }
+  const order: string[] = []
+  const provision = vi.fn(() => { order.push('provision') })
+  probe.request.mockImplementation(async () => { order.push('request') })
+  const cu: ComputerUseHost = { service, probe, bridge, log, collapseMain, runningApps, provision }
   const broadcast = vi.fn()
   const { registerIpc } = await import('./handlers')
   const table: MethodTable = registerIpc(broadcast, {}, fakeHost(o.noCu ? {} : { computerUse: () => cu }))
@@ -189,7 +192,7 @@ async function boot(o: { status?: Partial<CuStatus>; noCu?: boolean; gateOnRun?:
   const notes = () => broadcast.mock.calls
     .filter((c) => c[0] === CH.chatEvent && c[1]?.type === 'done' && c[1]?.message?.model === '系统')
     .map((c) => c[1].message.text as string)
-  return { call, remote, table, service, probe, log, logRemoved, bridge, collapseMain, runningApps, beginTurn, endTurn, forget, notes, broadcast, gateHolder }
+  return { call, remote, table, service, probe, log, logRemoved, bridge, collapseMain, runningApps, beginTurn, endTurn, forget, notes, broadcast, gateHolder, provision, order }
 }
 
 const lastSend = () => sendTurnMock.mock.calls.at(-1)
@@ -298,7 +301,7 @@ describe('origin stamping and env injection (Review Focus 3)', () => {
     const h = await boot()
     await h.call(CH.cuSetMode)({}, { ...KEY, mode: 'allow' })
     const { cuPreflight, cuBeginTurn } = await import('../computerUse/chatTurn')
-    const cu = (await import('../host/fakeHost')).fakeHost({ computerUse: () => ({ service: h.service, probe: h.probe, bridge: h.bridge, log: h.log }) }).computerUse!()!
+    const cu = (await import('../host/fakeHost')).fakeHost({ computerUse: () => ({ service: h.service, probe: h.probe, bridge: h.bridge, log: h.log, provision: h.provision }) }).computerUse!()!
     const pre = await cuPreflight(cu, KEY, { origin: undefined, agent: 'claude', perm: 'full' })
     expect(pre).toEqual({ conflict: null, armed: null })
     const env: NodeJS.ProcessEnv = {}
@@ -489,6 +492,24 @@ describe('computer-use:* handlers (Review Focus 2, 3, 15)', () => {
     expect(h.probe.openPane).not.toHaveBeenCalled()
     expect(h.runningApps).not.toHaveBeenCalled()
     expect(h.collapseMain).not.toHaveBeenCalled()
+    expect(h.provision).not.toHaveBeenCalled()
+  })
+
+  it('I-1: 授权 provisions through the runtime save before the request runs, for either kind', async () => {
+    const h = await boot()
+    expect(await h.call(CH.cuRequestPermission)({}, { kind: 'ax' })).toEqual({ ok: true })
+    expect(h.order).toEqual(['provision', 'request'])
+    await h.call(CH.cuRequestPermission)({}, { kind: 'screen' })
+    expect(h.order).toEqual(['provision', 'request', 'provision', 'request'])
+    expect(await h.call(CH.cuRequestPermission)({}, { kind: 'camera' })).toEqual({ ok: false, code: 'invalid_args' })
+    expect(h.provision).toHaveBeenCalledTimes(2)
+  })
+
+  it('I-1: a request that rejects still leaves the install provisioned', async () => {
+    const h = await boot()
+    h.probe.request.mockImplementationOnce(async () => { throw new Error('helper_failed') })
+    await expect(Promise.resolve(h.call(CH.cuRequestPermission)({}, { kind: 'ax' }))).rejects.toThrow()
+    expect(h.provision).toHaveBeenCalledTimes(1)
   })
 
   it('set-mode from a remote client leaves the mode off', async () => {

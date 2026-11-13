@@ -53,6 +53,12 @@ describe('index.ts computer-use wiring', () => {
     expect(quit.slice(0, quit.indexOf('\n  })'))).toContain('void cuRuntime?.dispose()')
   })
 
+  it('I-1: the startup latch reads both grants in process, without a prompt (isTrustedAccessibilityClient(false))', () => {
+    expect(SRC).toContain("screenGranted: () => process.platform === 'darwin' && systemPreferences.getMediaAccessStatus('screen') === 'granted',")
+    expect(SRC).toContain("axGranted: () => process.platform === 'darwin' && systemPreferences.isTrustedAccessibilityClient(false),")
+    expect(SRC).not.toMatch(/isTrustedAccessibilityClient\(true\)/)
+  })
+
   it('the startup probe runs (it does nothing unless provisioned)', () => {
     expect(SRC).toContain('void cuRuntime.startup()')
   })
@@ -71,7 +77,7 @@ describe('index.ts computer-use wiring', () => {
 
   it('I-3: the startup latch is Screen Recording granted to the app; M-8: settings changes drop the cache; M-3: hotkey failure reaches the overlay', () => {
     expect(SRC).toContain("screenGranted: () => process.platform === 'darwin' && systemPreferences.getMediaAccessStatus('screen') === 'granted',")
-    expect(SRC).not.toContain('isTrustedAccessibilityClient')
+    expect(SRC).not.toMatch(/isTrustedAccessibilityClient\((true)?\)/)   // I-1 adds the no-prompt form only
     expect(SRC).toContain('cuRuntime?.settingsChanged()')
     expect(SRC).toContain("cuShell?.setHotkeyFailed(failed.includes('computer-use-stop'))")
   })

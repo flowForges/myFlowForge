@@ -771,6 +771,8 @@ app.whenReady().then(() => {
     // 进程内查,不起 helper、不弹框
     // I-3:屏幕录制授给了本 app 就算已开通(TCC 库用户态改不了)。进程内查,不起 helper、不弹框
     screenGranted: () => process.platform === 'darwin' && systemPreferences.getMediaAccessStatus('screen') === 'granted',
+    // I-1:辅助功能同理。参数 false = 只查不弹框
+    axGranted: () => process.platform === 'darwin' && systemPreferences.isTrustedAccessibilityClient(false),
     onDisclaimUnavailable: configureCuDisclaim,
     collapseMain: () => cuOverlay.collapseMain(),
   })
