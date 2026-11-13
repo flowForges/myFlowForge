@@ -1,7 +1,7 @@
 import { app, dialog, shell } from 'electron'
 import { writeFile } from 'node:fs/promises'
 import { showOsNotification } from '../notify/osNotify'
-import type { HostCapabilities, PickOptions, SaveResult } from './capabilities'
+import type { ComputerUseHost, HostCapabilities, PickOptions, SaveResult } from './capabilities'
 
 function properties(o: PickOptions): ('openFile' | 'openDirectory' | 'multiSelections' | 'createDirectory')[] {
   const p: ('openFile' | 'openDirectory' | 'multiSelections' | 'createDirectory')[] =
@@ -11,8 +11,13 @@ function properties(o: PickOptions): ('openFile' | 'openDirectory' | 'multiSelec
   return p
 }
 
-export function createElectronHost(): HostCapabilities {
+/**
+ * `computerUse`: index.ts passes the runtime's getter (darwin builds one, lazily; anywhere else it answers undefined).
+ * Without it the host has no computer use, exactly as before.
+ */
+export function createElectronHost(o: { computerUse?: () => ComputerUseHost | undefined } = {}): HostCapabilities {
   return {
+    computerUse: o.computerUse ?? (() => undefined),
     version: () => app.getVersion(),
     tempDir: () => app.getPath('temp'),
     appPath: () => app.getAppPath(),

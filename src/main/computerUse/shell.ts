@@ -7,7 +7,8 @@
 // - The OS notification for a new gate carries the kind label and nothing else: no typed text, no app name, no crop.
 import { CU_KIND_LABEL, type CuOverlayGate, type CuOverlayState } from '@shared/computerUse'
 import { CH } from '../ipc/channels'
-import type { CuEvent, CuGate } from './types'
+import type { ChatMessage } from '@shared/types'
+import type { CuEvent, CuGate, CuSessionKey } from './types'
 
 export const CU_POWER_EVENTS = ['lock-screen', 'suspend', 'user-did-resign-active', 'shutdown'] as const
 
@@ -116,5 +117,26 @@ export function wireComputerUse(d: CuShellDeps): CuShell {
     active: () => session !== null,
     shortcutHandlers: (): Record<string, () => void> => (session ? { 'computer-use-stop': () => d.stopAll() } : {}),
     reveal: render,
+  }
+}
+
+/**
+ * The service's `note`: a 系统 line in the session, announced the way handlers.ts's emitNote does (assistant-start,
+ * then done), through the normal chat broadcast. The texts are the service's fixed sentences, never screen or typed text.
+ */
+export function cuSystemNote(d: {
+  broadcast: (channel: string, payload: unknown) => void
+  appendMessage: (wsPath: string, sessionId: string, m: ChatMessage) => void
+  now?: () => Date
+}): (key: CuSessionKey, text: string) => void {
+  const now = d.now ?? (() => new Date())
+  return (key, text) => {
+    const at = now()
+    const id = `sys-${at.getTime()}`
+    const base = { workspacePath: key.workspacePath, sessionId: key.sessionId }
+    d.broadcast(CH.chatEvent, { ...base, type: 'assistant-start', id, model: '系统' })
+    const message: ChatMessage = { id, who: 'ai', text, model: '系统', ts: at.toISOString().slice(11, 19) }
+    d.appendMessage(key.workspacePath, key.sessionId, message)
+    d.broadcast(CH.chatEvent, { ...base, type: 'done', message })
   }
 }

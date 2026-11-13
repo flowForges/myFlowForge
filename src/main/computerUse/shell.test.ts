@@ -11,7 +11,7 @@ import { registerGlobalShortcuts, type GlobalShortcutApi } from '../shortcuts/gl
 import { fakeDriver } from './fakeDriver'
 import type { WinHit } from './driver'
 import { createCuRuntime } from './runtime'
-import { attachPowerMonitor, CU_POWER_EVENTS, cuTrayMenuItems, cuTrayTitle, wireComputerUse } from './shell'
+import { attachPowerMonitor, CU_POWER_EVENTS, cuSystemNote, cuTrayMenuItems, cuTrayTitle, wireComputerUse } from './shell'
 import type { CuEvent, CuGate, CuSessionKey } from './types'
 
 const A: CuSessionKey = { workspacePath: '/w/a', sessionId: 's-a' }
@@ -228,5 +228,21 @@ describe('tray, hotkey and lock (Review Focus 12)', () => {
     expect(notes).toEqual(['屏幕已锁定 · 电脑操作已关闭'])
     rt.host()!.service.beginTurn(A, 'local')
     expect(await rt.host()!.service.handle(tok, 'screenshot', {}, {})).toMatchObject({ ok: false, code: 'not_enabled' })
+  })
+})
+
+describe('cuSystemNote', () => {
+  it('appends a 系统 message to the session and announces it like the chat path does (start, then done)', () => {
+    const sent: { channel: string; payload: any }[] = []
+    const appended: any[] = []
+    const note = cuSystemNote({
+      broadcast: (channel, payload) => sent.push({ channel, payload: payload as any }),
+      appendMessage: (ws, sid, m) => appended.push({ ws, sid, m }),
+      now: () => new Date('2026-11-13T08:09:10.000Z'),
+    })
+    note(A, '屏幕已锁定 · 电脑操作已关闭')
+    expect(appended).toEqual([{ ws: '/w/a', sid: 's-a', m: { id: 'sys-1794557350000', who: 'ai', text: '屏幕已锁定 · 电脑操作已关闭', model: '系统', ts: '08:09:10' } }])
+    expect(sent.map((s) => [s.channel, s.payload.type])).toEqual([[CH.chatEvent, 'assistant-start'], [CH.chatEvent, 'done']])
+    expect(sent[1].payload).toMatchObject({ workspacePath: '/w/a', sessionId: 's-a', message: appended[0].m })
   })
 })

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, screen, session, Tray } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, powerMonitor, screen, session, shell, systemPreferences, Tray } from 'electron'
 import { registerGlobalShortcuts, unregisterGlobalShortcuts } from './shortcuts/globalShortcuts'
 import { createMainWindow, builtWindowBlurAmount } from './windows/mainWindow'
 import { createPetWindow, resolvePetLayout, MARGIN, clampPetSprite, petClampRegion } from './windows/petWindow'
@@ -16,7 +16,15 @@ import { createRelayController } from './host/relayController'
 import { openSshTunnel } from './remote/sshTunnel'
 import { readHosts, upsertHost, removeHost, markConnected, exportHosts, importHosts, type RemoteHost } from './remote/hostStore'
 import { registerIpc, shutdownCouncils } from './ipc/handlers'
-import { killAllAgentTrees } from './agents/procGroup'
+import { killAllAgentTrees, configureDisclaim, liveAgentChildren } from './agents/procGroup'
+import { createCuRuntime, ownAccelerators, resolveHelperPath, type CuRuntime } from './computerUse/runtime'
+import { attachPowerMonitor, cuSystemNote, cuTrayMenuItems, cuTrayTitle, wireComputerUse, type CuShell } from './computerUse/shell'
+import { createDriver } from './computerUse/driver'
+import { startCuBridge } from './computerUse/cuBridge'
+import { createCuOverlay, type WinLike } from './windows/cuOverlay'
+import { appendMessage } from './chat/chatStore'
+import { getSession } from './chat/sessionStore'
+import { NOOP_CTX, type MethodTable } from './ipc/invokeCtx'
 import { botBridge } from './bot/botBridge'
 import { showOsNotification, osNotificationsSupported } from './notify/osNotify'
 import { shouldNotify, buildNotification } from './notify/notifier'
@@ -69,6 +77,14 @@ const fixedPath = fixExecPath({ packaged: app.isPackaged, platform: process.plat
 // 必须在任何 TLS 连接之前。见 net/systemCa.ts。
 trustSystemCertificates()
 if (fixedPath) process.env.PATH = fixedPath
+
+// 电脑操作(macOS)。运行时在 whenReady 里建;没开通过电脑操作的机器上它从不启动 helper(computerUse/runtime.ts)。
+let cuRuntime: CuRuntime | null = null
+let cuShell: CuShell | null = null
+// V3:「已开通」之后 agent CLI 经 forge-cu exec 断继承。必须在任何 agent spawn 之前配好。
+// enabled = provisioned && helper 已答过的 status.disclaim !== false;helper 还没答之前照旧普通 spawn
+// (此时开档会因为有未断继承的活进程而 restart_required,见 service.setMode)。
+configureDisclaim({ launcher: () => resolveHelperPath(app.isPackaged), enabled: () => cuRuntime?.disclaimEnabled() === true })
 
 // Single-instance lock: a relaunch (e.g. right after reinstalling) must not spin up a second
 // process. The first instance keeps the lock; any later instance exits immediately and asks the
@@ -279,6 +295,7 @@ app.whenReady().then(() => {
     if (!image) return
     menuBarTray = new Tray(image)
     menuBarTray.setToolTip('myFlowForge')
+    if (process.platform === 'darwin' && cuShell?.active()) menuBarTray.setTitle(cuTrayTitle(true))
     // Left-click opens the app; right-click drops the context menu (新建工作区 / 开关宠物 / 退出).
     menuBarTray.on('click', showMainWindow)
     if (process.platform === 'win32') menuBarTray.setContextMenu(buildAppMenu())
@@ -497,6 +514,8 @@ app.whenReady().then(() => {
     const { failed } = registerGlobalShortcuts(readSettings().keybindings.overrides, {
       'toggle-main-window': toggleMainWindow,
       'toggle-pet': togglePet,
+      // 急停:只在有会话开着电脑操作时向系统注册(没开过电脑操作的人,⌃⌥⌘⎋ 还归系统 / 别的 app)
+      ...(cuShell?.shortcutHandlers() ?? {}),
     })
     globalShortcutFailed = failed
     hub.broadcast(CH.shortcutsStatus, { failed })
@@ -620,6 +639,7 @@ app.whenReady().then(() => {
   function buildAppMenu(): Menu {
     const petEnabled = (() => { try { return readSettings().pet.enabled } catch { return true } })()
     return Menu.buildFromTemplate([
+      ...cuTrayMenuItems(cuShell?.active() ?? false, () => cuRuntime?.stopAll()),
       { label: '新建工作区', click: () => { showMainWindow(); hub.broadcast(CH.menuAction, 'new-workspace') } },
       { label: petEnabled ? '关闭桌面宠物' : '打开桌面宠物', click: () => togglePetEnabled() },
       { type: 'separator' },
@@ -689,7 +709,68 @@ app.whenReady().then(() => {
   })
   // 唯一一处把方法表接到 Electron 上的地方。daemon 侧的 WS 网关遍历的是**同一张表** ——
   // 方法只有一份,所以不存在「本机一条路径、远程另一条路径」的漂移。
-  const methodTable = registerIpc(broadcastWithNotify, buildProviderRegistry(), createElectronHost(), onSettings, termService)
+  // ── 电脑操作(spec §4、§6 T4/T5/T10、V2、V9、V10)。全部惰性:没开过就没有浮窗、没有 helper、没有 socket。
+  //    事件只走 registry.broadcast(本机窗口),不走 hub(远程 sink),也不走 router.localEvent(看远程时会丢)。
+  let methodTableRef: MethodTable | null = null
+  const cuOverlay = createCuOverlay({
+    makeWindow: (o) => {
+      const w = new BrowserWindow(o)
+      try { w.excludedFromShownWindowsMenu = true } catch { /* cosmetic */ }
+      return w as unknown as WinLike
+    },
+    screen,
+    preload: join(__dirname, '../preload/index.js'),
+    loadUrl: (w) => {
+      const bw = w as unknown as BrowserWindow
+      if (process.env['ELECTRON_RENDERER_URL']) void bw.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/cu-overlay.html`)
+      else void bw.loadFile(join(__dirname, '../renderer/cu-overlay.html'))
+    },
+    collapseMain: () => { if (mainWinRef && !mainWinRef.isDestroyed()) parkWindowInDock(mainWinRef, process.platform, !!menuBarTray) },
+  })
+  cuShell = wireComputerUse({
+    localBroadcast: registry.broadcast,
+    overlay: cuOverlay,
+    // 正文只有动作类型,点了打开浮窗(§5.7)
+    notify: (n, onClick) => showOsNotification({ title: n.title, body: n.body, route: { workspacePath: '' } }, onClick),
+    shouldNotify: () => shouldNotify('confirm', readSettings().notifications, isMainFocused()),
+    onActive: (active) => {
+      if (process.platform === 'darwin') { try { menuBarTray?.setTitle(cuTrayTitle(active)) } catch { /* tray gone */ } }
+      refreshDockMenu()
+      // 推到下一拍:急停热键自己的回调里不就地注销 / 重注册
+      setImmediate(applyGlobalShortcuts)
+    },
+    stopAll: () => cuRuntime?.stopAll(),
+  })
+  const cuHelperPath = () => resolveHelperPath(app.isPackaged)
+  cuRuntime = createCuRuntime({
+    platform: process.platform,
+    dir: join(SYS_DIR, 'computer-use'),
+    ownPid: process.pid,
+    helperPath: cuHelperPath,
+    makeDriver: () => createDriver(process.platform, { helperPath: cuHelperPath, ownerPid: process.pid, log: (m) => logInfo('computer-use', m) }),
+    startBridge: startCuBridge,
+    openExternal: (url) => shell.openExternal(url),
+    emit: (e) => cuShell?.emit(e),
+    note: cuSystemNote({ broadcast: broadcastWithNotify, appendMessage }),
+    // 急停 / 视觉校验失败 / 2000 步:停掉那一轮(和界面上的「停止」同一条路)
+    stopTurn: (k) => { void Promise.resolve(methodTableRef?.[CH.chatStop]?.(NOOP_CTX, k)).catch(() => { /* 已经停了 */ }) },
+    titleOf: (k) => { try { return getSession(k.workspacePath, k.sessionId)?.title ?? '' } catch { return '' } },
+    readSettings,
+    writeSettings,
+    onSettingsSaved: (s) => hub.broadcast(CH.settingsChanged, s),
+    ownAccelerators: () => ownAccelerators(readSettings().keybindings.overrides),
+    liveAgentChildren,
+    // 进程内查,不起 helper、不弹框
+    grantsHeld: () => process.platform === 'darwin'
+      && (systemPreferences.isTrustedAccessibilityClient(false) || systemPreferences.getMediaAccessStatus('screen') === 'granted'),
+    collapseMain: () => cuOverlay.collapseMain(),
+  })
+  void cuRuntime.startup().catch(() => { /* 没开通 / helper 起不来:照旧普通 spawn */ })
+  // V10:锁屏、睡眠、快速切换用户、关机 → 所有会话关档
+  if (process.platform === 'darwin') attachPowerMonitor(powerMonitor, () => cuRuntime?.onLock())
+
+  const methodTable = registerIpc(broadcastWithNotify, buildProviderRegistry(), createElectronHost({ computerUse: () => cuRuntime?.host() }), onSettings, termService)
+  methodTableRef = methodTable
 
   // 路由器坐在方法表前面:每一刀由本机接还是转发给远程 host,由它决定(第二期 B)。
   // ★渲染层和 preload 完全不知道有这回事 —— 它们永远只跟主进程说话。
@@ -912,6 +993,9 @@ app.whenReady().then(() => {
     // 网关也一起收:决策 3 说的「同生共死」不是修辞 —— 留一个还在听的端口给一个已经退出的
     // app,连上去只会是一堆永远不 settle 的调用。
     void mobileGw.close()
+    // 电脑操作:helper 进程(driver.dispose)和 cu.sock(bridge.close)
+    void cuRuntime?.dispose()
+    cuOverlay.dispose()
   })
   // 主窗口关掉(mac 上 app 还活着)→ 只收**本机窗口开的**那些终端。
   // ★不能用 killAll:这台机器同时也是别人的 host,连上来的客户端开的终端归它们自己,

@@ -4,7 +4,8 @@ import type { AskAnswers, ChatEvent, ChangesEvent, ChatGateSnapshot, ChatQueueEv
 import type { PluginSnapshot } from '@shared/plugins'
 import type { CouncilConfig, CouncilSeat, CouncilState } from '@shared/council'
 import type { HostInput, HostStatusView, RemoteHostView } from '@shared/remote/hostView'
-import { CU_OVERLAY_ARG, type CuOverlayState } from '@shared/computerUse'
+import { CU_OVERLAY_ARG } from '@shared/cuOverlayArg'
+import type { CuOverlayState } from '@shared/computerUse'
 
 const api = {
   // Which OS this window is drawn on. A plain constant, not an IPC call: the renderer needs it during

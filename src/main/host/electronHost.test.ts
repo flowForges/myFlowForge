@@ -110,4 +110,14 @@ describe('createElectronHost', () => {
     expect(h.isPackaged()).toBe(true)
     expect(showOpenDialog).not.toHaveBeenCalled()
   })
+
+  it('computerUse: absent unless the shell passes its runtime getter, then exactly that (Task 8)', () => {
+    expect(createElectronHost().computerUse?.()).toBeUndefined()
+    const cu = { service: {}, probe: {}, log: {}, bridge: async () => ({ socketPath: '', configDir: '' }) } as never
+    const get = vi.fn(() => cu)
+    const h = createElectronHost({ computerUse: get })
+    expect(get).not.toHaveBeenCalled()
+    expect(h.computerUse!()).toBe(cu)
+    expect(get).toHaveBeenCalledTimes(1)
+  })
 })
