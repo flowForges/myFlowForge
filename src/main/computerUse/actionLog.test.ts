@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import { mkdtempSync, readdirSync, readFileSync, existsSync, rmSync, statSync } from 'node:fs'
+import { mkdirSync, chmodSync, mkdtempSync, writeFileSync, readdirSync, readFileSync, existsSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createActionLog } from './actionLog'
@@ -126,5 +126,59 @@ describe('actionLog', () => {
     appendFileSync(f, 'not json\n{"nope":1}\n')
     await log.append(K, entry({ op: 'key' }))
     expect((await createActionLog(root).list(K)).map((e) => e.op)).toEqual(['click', 'key'])
+  })
+})
+
+describe('actionLog bounds and recovery', () => {
+  it('actions.jsonl is a ring: past the cap only the newest entries remain', async () => {
+    const root = mk()
+    const log = createActionLog(root, undefined, { maxEntries: 5 })
+    for (let i = 0; i < 12; i++) await log.append(K, entry({ ts: i }))
+    expect((await log.list(K)).map((e) => e.ts)).toEqual([7, 8, 9, 10, 11])
+    const f = allFiles(root).find((x) => x.endsWith('actions.jsonl'))!
+    expect(readFileSync(f, 'utf8').trim().split('\n')).toHaveLength(5)
+    const again = createActionLog(root, undefined, { maxEntries: 5 })
+    await again.append(K, entry({ ts: 99 }))
+    expect((await again.list(K)).map((e) => e.ts)).toEqual([8, 9, 10, 11, 99])
+  })
+
+  it('the default cap is 2000', async () => {
+    const { ENTRY_RING } = await import('./actionLog')
+    expect(ENTRY_RING).toBe(2000)
+  })
+
+  it('in-memory previews are bounded, newest kept', async () => {
+    const log = createActionLog(mk(), undefined, { maxPreviews: 3 })
+    for (let i = 0; i < 6; i++) await log.append(K, entry({ ts: i, op: 'type', textLen: 1, textPreview: `p${i}` }))
+    expect((await log.list(K)).map((e) => e.textPreview)).toEqual([undefined, undefined, undefined, 'p3', 'p4', 'p5'])
+  })
+
+  it('previews of many sessions are bounded too', async () => {
+    const log = createActionLog(mk(), undefined, { maxPreviewSessions: 2 })
+    for (const id of ['s-1', 's-2', 's-3']) await log.append({ ...K, sessionId: id }, entry({ op: 'type', textLen: 1, textPreview: 'x' }))
+    expect((await log.list({ ...K, sessionId: 's-1' }))[0].textPreview).toBeUndefined()
+    expect((await log.list({ ...K, sessionId: 's-3' }))[0].textPreview).toBe('x')
+  })
+
+  it('the thumb counter is recovered from actions.jsonl when the thumbs are gone', async () => {
+    const root = mk()
+    const a = createActionLog(root)
+    for (let i = 0; i < 3; i++) await a.append(K, entry(), 'AAAA')
+    for (const f of allFiles(root).filter((x) => x.endsWith('.jpg'))) rmSync(f)
+    const b = createActionLog(root)
+    const n = (await b.append(K, entry(), 'BBBB')).thumb!
+    expect(n).toBe('00000004.jpg')
+  })
+
+  it('existing directories are tightened to 0700', async () => {
+    const root = mk()
+    const { createHash } = await import('node:crypto')
+    const sha = createHash('sha256').update(K.workspacePath).digest('hex').slice(0, 8)
+    const dir = join(root, sha, K.sessionId)
+    mkdirSync(join(dir, 'thumbs'), { recursive: true, mode: 0o755 })
+    chmodSync(root, 0o755); chmodSync(join(root, sha), 0o755); chmodSync(dir, 0o755); chmodSync(join(dir, 'thumbs'), 0o755)
+    writeFileSync(join(dir, 'actions.jsonl'), '', { mode: 0o644 })
+    await createActionLog(root).append(K, entry(), 'AAAA')
+    for (const d of [root, join(root, sha), dir, join(dir, 'thumbs')]) expect(statSync(d).mode & 0o077).toBe(0)
   })
 })

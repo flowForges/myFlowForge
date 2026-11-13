@@ -16,9 +16,15 @@ export interface FsLike {
   writeFile(p: string, data: Buffer | string, o?: { mode?: number }): Promise<void>
   readdir(p: string): Promise<string[]>
   rm(p: string, o: { recursive?: boolean; force?: boolean }): Promise<void>
+  chmod(p: string, mode: number): Promise<void>
 }
 
+export interface ActionLogOpts { maxEntries?: number; maxPreviews?: number; maxPreviewSessions?: number }
+
 export const THUMB_RING = 300
+export const ENTRY_RING = 2000
+export const PREVIEW_RING = 300
+export const PREVIEW_SESSIONS = 8
 const SAFE_ID = /^[A-Za-z0-9_-]{1,128}$/
 const THUMB_NAME = /^\d{8}\.jpg$/
 const sha8 = (s: string) => createHash('sha256').update(s).digest('hex').slice(0, 8)
@@ -48,8 +54,13 @@ function fromDisk(line: string): CuLogEntry | null {
 
 const previewKey = (e: CuLogEntry) => `${e.ts}|${e.turn}|${e.op}|${e.textLen ?? ''}`
 
-export function createActionLog(root: string, fs: FsLike = nodeFs as unknown as FsLike): ActionLog {
-  const previews = new Map<string, Map<string, string[]>>()
+export function createActionLog(root: string, fs: FsLike = nodeFs as unknown as FsLike, opts: ActionLogOpts = {}): ActionLog {
+  const maxEntries = opts.maxEntries ?? ENTRY_RING
+  const maxPreviews = opts.maxPreviews ?? PREVIEW_RING
+  const maxPreviewSessions = opts.maxPreviewSessions ?? PREVIEW_SESSIONS
+  const slack = Math.floor(maxEntries / 10)
+  const counts = new Map<string, number>()
+  const previews = new Map<string, { byKey: Map<string, string[]>; order: string[] }>()
   const rings = new Map<string, { names: string[]; next: number }>()
   const chains = new Map<string, Promise<unknown>>()
 
@@ -64,13 +75,37 @@ export function createActionLog(root: string, fs: FsLike = nodeFs as unknown as 
     return next
   }
 
+  function remember(id: string, pk: string, text: string) {
+    let p = previews.get(id)
+    if (!p) {
+      p = { byKey: new Map(), order: [] }
+      previews.set(id, p)
+      while (previews.size > maxPreviewSessions) previews.delete(previews.keys().next().value as string)
+    }
+    p.byKey.set(pk, [...(p.byKey.get(pk) ?? []), text])
+    p.order.push(pk)
+    while (p.order.length > maxPreviews) {
+      const old = p.order.shift()!
+      const l = p.byKey.get(old)
+      l?.shift()
+      if (l && l.length === 0) p.byKey.delete(old)
+    }
+  }
+
   async function ring(k: CuSessionKey) {
     const id = idOf(k)
     let r = rings.get(id)
     if (!r) {
       let names: string[] = []
       try { names = (await fs.readdir(join(dirOf(k), 'thumbs'))).filter((n) => THUMB_NAME.test(n)).sort() } catch { /* none yet */ }
-      const last = names.length ? parseInt(names[names.length - 1], 10) : 0
+      let last = names.length ? parseInt(names[names.length - 1], 10) : 0
+      // the thumbs may have been wiped while the entries still name them: never reuse those numbers
+      try {
+        for (const line of (await fs.readFile(join(dirOf(k), 'actions.jsonl'))).toString('utf8').split('\n')) {
+          const m = /"thumb":"(\d{8})\.jpg"/.exec(line)
+          if (m) last = Math.max(last, parseInt(m[1], 10))
+        }
+      } catch { /* no log yet */ }
       r = { names, next: last + 1 }
       rings.set(id, r)
     }
@@ -83,6 +118,7 @@ export function createActionLog(root: string, fs: FsLike = nodeFs as unknown as 
       return serial(key, async () => {
         const dir = dirOf(key)
         await fs.mkdir(join(dir, 'thumbs'), { recursive: true, mode: 0o700 })
+        for (const p of [root, join(root, sha8(key.workspacePath)), dir, join(dir, 'thumbs')]) await fs.chmod(p, 0o700).catch(() => undefined)
         const out: CuLogEntry = { ...e }
         delete out.thumb
         if (thumbJpeg) {
@@ -96,13 +132,20 @@ export function createActionLog(root: string, fs: FsLike = nodeFs as unknown as 
           }
           out.thumb = name
         }
-        await fs.appendFile(join(dir, 'actions.jsonl'), JSON.stringify(toDisk(out)) + '\n', { mode: 0o600 })
-        if (e.textPreview !== undefined) {
-          const m = previews.get(idOf(key)) ?? new Map<string, string[]>()
-          previews.set(idOf(key), m)
-          const pk = previewKey(out)
-          m.set(pk, [...(m.get(pk) ?? []), e.textPreview])
+        const file = join(dir, 'actions.jsonl')
+        await fs.appendFile(file, JSON.stringify(toDisk(out)) + '\n', { mode: 0o600 })
+        const id = idOf(key)
+        let n = counts.get(id)
+        if (n === undefined) {
+          try { n = (await fs.readFile(file)).toString('utf8').split('\n').filter(Boolean).length } catch { n = 1 }
+        } else n++
+        if (n > maxEntries + slack) {
+          const lines = (await fs.readFile(file)).toString('utf8').split('\n').filter(Boolean).slice(-maxEntries)
+          await fs.writeFile(file, lines.join('\n') + '\n', { mode: 0o600 })
+          n = lines.length
         }
+        counts.set(id, n)
+        if (e.textPreview !== undefined) remember(id, previewKey(out), e.textPreview)
         return out
       })
     },
@@ -112,18 +155,28 @@ export function createActionLog(root: string, fs: FsLike = nodeFs as unknown as 
       return serial(key, async () => {
         let raw = ''
         try { raw = (await fs.readFile(join(dirOf(key), 'actions.jsonl'))).toString('utf8') } catch { return [] }
-        const seen = new Map<string, number>()
-        const out: CuLogEntry[] = []
+        const entries: CuLogEntry[] = []
         for (const line of raw.split('\n')) {
           if (!line) continue
           const e = fromDisk(line)
-          if (!e) continue
-          const pk = previewKey(e)
-          const i = seen.get(pk) ?? 0
-          seen.set(pk, i + 1)
-          const p = previews.get(idOf(key))?.get(pk)?.[i]
-          if (p !== undefined) e.textPreview = p
-          out.push(e)
+          if (e) entries.push(e)
+        }
+        const out = entries.slice(-maxEntries)
+        // previews line up with the newest occurrences of each key
+        const p = previews.get(idOf(key))
+        if (p) {
+          const total = new Map<string, number>()
+          for (const e of out) total.set(previewKey(e), (total.get(previewKey(e)) ?? 0) + 1)
+          const seen = new Map<string, number>()
+          for (const e of out) {
+            const pk = previewKey(e)
+            const j = seen.get(pk) ?? 0
+            seen.set(pk, j + 1)
+            const l = p.byKey.get(pk)
+            if (!l) continue
+            const t = l[j - (total.get(pk)! - l.length)]
+            if (j - (total.get(pk)! - l.length) >= 0 && t !== undefined) e.textPreview = t
+          }
         }
         return out
       })
@@ -139,6 +192,7 @@ export function createActionLog(root: string, fs: FsLike = nodeFs as unknown as 
       return serial(key, async () => {
         previews.delete(idOf(key))
         rings.delete(idOf(key))
+        counts.delete(idOf(key))
         await fs.rm(dirOf(key), { recursive: true, force: true })
       })
     },
