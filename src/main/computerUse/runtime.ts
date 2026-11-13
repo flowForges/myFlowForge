@@ -106,7 +106,6 @@ export interface CuRuntimeDeps {
 export interface CuRuntime {
   /** undefined off darwin. Cheap: built once, then the same object. */
   host(): ComputerUseHost | undefined
-  isBuilt(): boolean
   /** for configureDisclaim({ enabled }); cached, so a spawn never rereads settings (M-8) */
   disclaimEnabled(): boolean
   /** settings changed somewhere: drop the cached provisioned read */
@@ -219,7 +218,6 @@ export function createCuRuntime(d: CuRuntimeDeps): CuRuntime {
 
   return {
     host: () => (d.platform === 'darwin' ? build().host : undefined),
-    isBuilt: () => built !== null,
     // I-4: fail closed. Once provisioned, spawns are disclaimed from the first one, before the helper has answered; only
     // an explicit disclaim:false (the SPI is missing) turns that off.
     disclaimEnabled: () => provisioned() && disclaimSeen !== false,

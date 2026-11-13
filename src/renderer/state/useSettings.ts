@@ -40,6 +40,10 @@ const DEFAULTS: Settings = {
   computerUse: { provisioned: false, requested: { screen: false, ax: false }, extraBlocked: [], extraAskAlways: [] },
 }
 
+type CuSettings = Settings['computerUse']
+/** M-10: `requested` merges per kind */
+export type ComputerUsePatch = Partial<Omit<CuSettings, 'requested'>> & { requested?: Partial<CuSettings['requested']> }
+
 export interface SettingsUpdate {
   appearance?: Partial<Appearance>
   notifications?: Partial<Notifications>
@@ -69,7 +73,7 @@ export interface SettingsUpdate {
   // codex 的驱动通路。★'app-server' 才有逐 token 流式('exec' 只在整条消息写完后发一次)——
   //  见 AgentsPane 里那个开关和 providers/codex.ts 的注释。
   codexTransport?: Settings['codexTransport']
-  computerUse?: Partial<Settings['computerUse']>
+  computerUse?: ComputerUsePatch
 }
 
 function merge(base: Settings, partial: SettingsUpdate): Settings {
@@ -109,7 +113,11 @@ function merge(base: Settings, partial: SettingsUpdate): Settings {
     // loaded settings on load (cast), else keep base, matching pluginCreds/pinnedWorkspaces above.
     fullAccessAck: (partial as Partial<Settings>).fullAccessAck ?? base.fullAccessAck,
     // Written only by the main process (授权 / first enable, spec V3) — same preserve rule as above.
-    computerUse: { ...base.computerUse, ...(partial.computerUse ?? {}) },
+    // M-10:requested 按项合并 —— 只带一项的补丁不会把另一项打回旧值
+    computerUse: {
+      ...base.computerUse, ...(partial.computerUse ?? {}),
+      requested: { ...base.computerUse.requested, ...(partial.computerUse?.requested ?? {}) },
+    },
     memory: { ...base.memory, ...(partial.memory ?? {}) },
     // Managed via the bot:* IPC (connect/regen-pairing/unbind each write settings + broadcast), not
     // this update path — preserve from the loaded settings on load (cast), else base, like pluginCreds.

@@ -4,7 +4,7 @@
 // - 允许 / 继续 和浮窗同一道检查(I-2,cuPhysical.ts):真实的鼠标按下 + 带点击次数的 click,tabIndex -1;
 //   键盘、AXPress(System Events 的 click button)、脚本派发都不算。拒绝 / 停止 只会收窄,键盘照样能按。
 import { useRef, type MouseEvent, type ReactNode } from 'react'
-import { CU_ERR, CU_KIND_LABEL, CU_SET_MODE_ERR, visibleText, type CuActionView } from '@shared/computerUse'
+import { CU_ERR, CU_KIND_LABEL, CU_RESOLVE_ERR, CU_SET_MODE_ERR, visibleText, type CuActionView } from '@shared/computerUse'
 import type { CuGate } from '../../../main/computerUse/types'
 import { BUTTON_LABEL, MOD_SYM, fmtPt, screenName } from './cuFormat'
 import { usePhysicalPress, type IsPhysical } from './cuPhysical'
@@ -102,7 +102,7 @@ export function CuGateCard({ gate, error, onResolve, isPhysical }: {
       <div className="cu-head">
         <span className="cu-title">电脑 · {isContinue ? CU_KIND_LABEL.continue : a ? CU_KIND_LABEL[a.kind] : ''}</span>
         {!isContinue && gate.reason && <span className="cu-chip cu-reason">{gate.reason}</span>}
-        {error && <span className="cu-chip cu-code">{(CU_ERR as Record<string, string>)[error] ?? (CU_SET_MODE_ERR as Record<string, string>)[error] ?? error}</span>}
+        {error && <span className="cu-chip cu-code">{(CU_ERR as Record<string, string>)[error] ?? (CU_RESOLVE_ERR as Record<string, string>)[error] ?? (CU_SET_MODE_ERR as Record<string, string>)[error] ?? error}</span>}
       </div>
       {isContinue && gate.reason && <Row k="原因">{screenName(gate.reason)}</Row>}
       {!isContinue && a && <ActionRows a={a} reason={gate.reason} />}

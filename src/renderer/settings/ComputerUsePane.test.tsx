@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react'
 import { ComputerUsePane } from './ComputerUsePane'
-import { BLOCKED_BUNDLES, type CuStatus } from '@shared/computerUse'
+import { BLOCKED_BUNDLES, CU_HELPER_LABEL, type CuStatus } from '@shared/computerUse'
 import type { Settings } from '@shared/types'
 
 type ComputerUseSettings = Settings['computerUse']
@@ -67,7 +67,7 @@ describe('ComputerUsePane', () => {
     fireEvent.click(row.querySelector('button')!)
     await waitFor(() => expect(api.requestPermission).toHaveBeenCalledWith({ kind: 'screen' }))
     expect(api.openSettings).not.toHaveBeenCalled()
-    await waitFor(() => expect(h.onChange).toHaveBeenCalledWith({ requested: { screen: true, ax: false } }))
+    await waitFor(() => expect(h.onChange).toHaveBeenCalledWith({ requested: { screen: true } }))   // M-10: this kind only
     await waitFor(() => expect(row.textContent).toContain('授权后需重启'))
   })
 
@@ -145,5 +145,41 @@ describe('ComputerUsePane', () => {
     await screen.findByTestId('cu-row-screen')
     expect(container.querySelector('p, small')).toBeNull()
     for (const el of Array.from(container.querySelectorAll('[class]'))) expect(el.getAttribute('class')).not.toMatch(/hint|desc|help|note|tip|caption/)
+  })
+
+  it.each([['missing', '组件缺失'], ['failed', '无法启动']] as const)('M-9: helper %s: both grant rows show the helper state, not 未授权, and offer no 授权', async (helper, label) => {
+    setup({ status: { helper, screen: false, ax: false } })
+    for (const k of ['screen', 'ax']) {
+      const row = await screen.findByTestId(`cu-row-${k}`)
+      await waitFor(() => expect(row.textContent).toContain(label))
+      expect(row.textContent).not.toContain('未授权')
+      expect(row.querySelector('button')).toBeNull()
+    }
+  })
+
+  it('M-9: a 授权 whose request rejects is caught: no requested flag, the status is re-read', async () => {
+    api.requestPermission.mockImplementationOnce(async () => { throw new Error('helper_failed') })
+    const errs: unknown[] = []
+    const onErr = (e: PromiseRejectionEvent) => { errs.push(e.reason); e.preventDefault() }
+    window.addEventListener('unhandledrejection', onErr)
+    const h = setup({ status: { screen: false } })
+    const row = await screen.findByTestId('cu-row-screen')
+    await waitFor(() => expect(row.textContent).toContain('未授权'))
+    fireEvent.click(row.querySelector('button')!)
+    await waitFor(() => expect(api.status).toHaveBeenCalledTimes(2))
+    expect(h.onChange).not.toHaveBeenCalled()
+    expect(row.textContent).toContain('未授权')
+    await new Promise((r) => setTimeout(r, 0))
+    window.removeEventListener('unhandledrejection', onErr)
+    expect(errs).toEqual([])
+  })
+
+  it('M-14: the helper row uses CU_HELPER_LABEL', async () => {
+    for (const h of ['ok', 'missing', 'failed'] as const) {
+      const { unmount } = setup({ status: { helper: h } })
+      const row = await screen.findByTestId('cu-row-helper')
+      await waitFor(() => expect(row.textContent).toContain(CU_HELPER_LABEL[h]))
+      unmount()
+    }
   })
 })

@@ -127,9 +127,8 @@ describe('host() is cheap (caps.computerUse() runs on every turn and every sessi
     expect(t.notes).toEqual([])
   })
 
-  it('isBuilt / onLock / stopAll / dispose before anything was built build nothing', async () => {
+  it('onLock / stopAll / dispose before anything was built build nothing', async () => {
     const t = setup()
-    expect(t.rt.isBuilt()).toBe(false)
     t.rt.onLock()
     t.rt.stopAll()
     await t.rt.dispose()

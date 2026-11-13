@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { Keybindings, Settings } from '@shared/types'
+import { ASK_ALWAYS_BUNDLES, BLOCKED_BUNDLES, CU_HELPER_LABEL, SYSTEM_UI_OWNERS, type CuStatus } from '@shared/computerUse'
+import type { ComputerUsePatch } from '../state/useSettings'
 
 type ComputerUseSettings = Settings['computerUse']
-import { ASK_ALWAYS_BUNDLES, BLOCKED_BUNDLES, SYSTEM_UI_OWNERS, type CuStatus } from '@shared/computerUse'
 import { effectiveBindings, formatAccelerator } from '@shared/keybindings'
 
 type Kind = 'screen' | 'ax'
@@ -19,14 +20,23 @@ const relaunch = (): void => { void (window as unknown as { forge?: { appRelaunc
 interface Props {
   computerUse: ComputerUseSettings
   keybindings: Keybindings
-  onChange: (patch: Partial<ComputerUseSettings>) => void
+  onChange: (patch: ComputerUsePatch) => void
 }
 
 const KIND_LABEL: Record<Kind, string> = { screen: '屏幕录制', ax: '辅助功能' }
 
-function PermRow({ kind, granted, requested, onRequest, onOpen }: {
-  kind: Kind; granted: boolean | null; requested: boolean; onRequest: () => void; onOpen: () => void
+function PermRow({ kind, granted, requested, helper, onRequest, onOpen }: {
+  kind: Kind; granted: boolean | null; requested: boolean; helper?: CuStatus['helper']; onRequest: () => void; onOpen: () => void
 }) {
+  // M-9:组件缺失 / 起不来时查不出授权,也授不了 —— 显示组件自己的状态,不冒充「未授权」
+  if (helper && helper !== 'ok') {
+    return (
+      <div className="set-row" data-testid={`cu-row-${kind}`}>
+        <div className="info"><div className="t">{KIND_LABEL[kind]}</div></div>
+        <span className="cu-chip bad">{CU_HELPER_LABEL[helper]}</span>
+      </div>
+    )
+  }
   const needsRestart = granted === false && requested
   return (
     <div className="set-row" data-testid={`cu-row-${kind}`}>
@@ -113,15 +123,20 @@ export function ComputerUsePane({ computerUse, keybindings, onChange }: Props) {
   }
 
   const request = async (kind: Kind): Promise<void> => {
-    await bridge()?.requestPermission({ kind })
+    try {
+      await bridge()?.requestPermission({ kind })
+    } catch {
+      refresh()   // M-9: the helper went away; the re-read status shows its own state
+      return
+    }
     setAsked(a => ({ ...a, [kind]: true }))
-    onChange({ requested: { ...computerUse.requested, [kind]: true } })
+    onChange({ requested: { [kind]: true } })   // M-10: this kind only; the settings merge keeps the other
     refresh()
   }
   const openPane = (kind: Kind): void => { void bridge()?.openSettings({ kind }) }
   const requested = (k: Kind): boolean => computerUse.requested[k] || asked[k]
   const accel = effectiveBindings(keybindings.overrides ?? {})['computer-use-stop']
-  const helperLabel = status?.helper === 'ok' ? '正常' : status?.helper === 'missing' ? '组件缺失' : status?.helper === 'failed' ? '无法启动' : '检测中'
+  const helperLabel = status ? CU_HELPER_LABEL[status.helper] : '检测中'
   const helperCls = status?.helper === 'ok' ? 'ok' : status ? 'bad' : ''
 
   return (
@@ -134,8 +149,8 @@ export function ComputerUsePane({ computerUse, keybindings, onChange }: Props) {
             <span className="cu-chip bad">需要 macOS 14 或更新</span>
           </div>
         )}
-        <PermRow kind="screen" granted={status ? status.screen : null} requested={requested('screen')} onRequest={() => void request('screen')} onOpen={() => openPane('screen')} />
-        <PermRow kind="ax" granted={status ? status.ax : null} requested={requested('ax')} onRequest={() => void request('ax')} onOpen={() => openPane('ax')} />
+        <PermRow kind="screen" granted={status ? status.screen : null} requested={requested('screen')} helper={status?.helper} onRequest={() => void request('screen')} onOpen={() => openPane('screen')} />
+        <PermRow kind="ax" granted={status ? status.ax : null} requested={requested('ax')} helper={status?.helper} onRequest={() => void request('ax')} onOpen={() => openPane('ax')} />
         <div className="set-row" data-testid="cu-row-helper">
           <div className="info"><div className="t">操作组件</div></div>
           <span className={`cu-chip ${helperCls}`}>{helperLabel}</span>

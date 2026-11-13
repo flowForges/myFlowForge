@@ -501,7 +501,7 @@ export const CU_KIND_LABEL: Readonly<Record<CuActionKind | 'continue', string>> 
 }
 
 /** `setMode` 的拒绝码。`stopped` = 开档途中被急停 / 锁屏 / 关档抢先。 */
-export type CuSetModeCode = 'not_local' | 'busy' | 'unsupported' | 'restart_required' | 'no_physical' | 'stopped'
+export type CuSetModeCode = 'not_local' | 'busy' | 'unsupported' | 'restart_required' | 'no_physical' | 'stopped' | 'invalid_args'
 export const CU_SET_MODE_ERR: Readonly<Record<CuSetModeCode, string>> = {
   not_local: '只能在本机开启电脑操作',
   busy: '另一个会话正在使用电脑操作',
@@ -509,10 +509,19 @@ export const CU_SET_MODE_ERR: Readonly<Record<CuSetModeCode, string>> = {
   restart_required: CU_ERR.restart_required,
   no_physical: '请直接用鼠标或键盘切换档位',
   stopped: '电脑操作刚被停止 · 请重新开启',
+  invalid_args: CU_ERR.invalid_args,
+}
+
+/** `computer-use:resolve` 的拒绝码(ipc.ts)。卡片上的 chip 用它,不显示原始码。 */
+export type CuResolveCode = 'not_pending' | 'not_local' | 'invalid_args'
+export const CU_RESOLVE_ERR: Readonly<Record<CuResolveCode, string>> = {
+  not_pending: '这一步已经结束 · 不用再批',
+  not_local: '只能在本机批准',
+  invalid_args: CU_ERR.invalid_args,
 }
 
 /** 设置页「组件」行的 chip。`failed` 是单独一档:组件在,但起不来或不能断继承。 */
-export const CU_HELPER_LABEL: Readonly<Record<CuStatus['helper'], string>> = { ok: '就绪', missing: '缺失', failed: '无法启动' }
+export const CU_HELPER_LABEL: Readonly<Record<CuStatus['helper'], string>> = { ok: '正常', missing: '组件缺失', failed: '无法启动' }
 
 // ───────────────────────── 常驻浮窗(cu-overlay)的状态 ─────────────────────────
 

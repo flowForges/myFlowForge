@@ -195,6 +195,14 @@ describe('电脑操作 chip', () => {
     expect(document.querySelector('#computerMenu.open')).toBeTruthy()
   })
 
+  it('M-14: an invalid_args refusal shows its sentence, not a blank line', async () => {
+    const c = cu({ status: ok, setMode: vi.fn(async () => 'invalid_args') as never })
+    r(c)
+    fireEvent.click(chip()!)
+    await act(async () => { press(screen.getByText('放行 · 截屏发给模型')) })
+    await waitFor(() => expect(document.querySelector('#computerMenu .cu-err')?.textContent).toBe('参数不合法'))
+  })
+
   describe('conflicts block sending with the browser banner style', () => {
     it('on + 只读 → banner and send disabled', () => {
       r(cu({ mode: 'ask', status: ok }), 'claude', 'readonly')

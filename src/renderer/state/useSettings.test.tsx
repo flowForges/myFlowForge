@@ -188,4 +188,13 @@ describe('useSettings', () => {
     await waitFor(() => expect((window as any).forge.setSettings).toHaveBeenCalled())
     expect(saved.appIcon).toEqual({ dockIcon: 'cobalt-violet', showMenuBar: true })
   })
+
+  it('M-10: computerUse.requested merges per kind — a patch for one kind keeps the other', async () => {
+    ;(window as any).forge.getSettings = vi.fn(async () => ({ computerUse: { provisioned: true, requested: { screen: true, ax: false }, extraBlocked: ['com.x'], extraAskAlways: [] } }))
+    const { result } = renderHook(() => useSettings())
+    await waitFor(() => expect(result.current.settings).not.toBeNull())
+    act(() => { result.current.update({ computerUse: { requested: { ax: true } } }) })
+    expect(result.current.settings!.computerUse).toMatchObject({ provisioned: true, requested: { screen: true, ax: true }, extraBlocked: ['com.x'] })
+    await waitFor(() => expect(saved?.computerUse?.requested).toEqual({ screen: true, ax: true }))
+  })
 })

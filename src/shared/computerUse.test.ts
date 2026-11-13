@@ -4,7 +4,7 @@ import {
   computerUseConflict, COMPUTER_TOOLS, parseCombo, prettyCombo, comboMatchesAccelerator, NAMED_KEYCODES,
   BLOCKED_BUNDLES, ASK_ALWAYS_BUNDLES, SYSTEM_UI_OWNERS, OWN_BUNDLE_PREFIX, classify,
   screenshotSize, toPoint, visibleText, wrapUntrusted, screenNotice, computerToolLabel, CU_ERR, CU_SCHEMAS, CU_SHAPES, comboKeycode,
-  CU_KIND_LABEL, CU_SET_MODE_ERR, CU_HELPER_LABEL,
+  CU_KIND_LABEL, CU_SET_MODE_ERR, CU_HELPER_LABEL, CU_RESOLVE_ERR,
   type CuStatus, type ParsedCombo, type CuSetModeCode,
 } from './computerUse'
 
@@ -464,7 +464,7 @@ describe('UI labels for codes (Task 8)', () => {
     expect(CU_KIND_LABEL).toEqual({ click: '点击', move: '移动', drag: '拖动', scroll: '滚动', type: '输入', key: '按键', continue: '继续' })
   })
   it('every setMode refusal, including stopped, has its own sentence', () => {
-    const codes: CuSetModeCode[] = ['not_local', 'busy', 'unsupported', 'restart_required', 'no_physical', 'stopped']
+    const codes: CuSetModeCode[] = ['not_local', 'busy', 'unsupported', 'restart_required', 'no_physical', 'stopped', 'invalid_args']
     for (const c of codes) expect(typeof CU_SET_MODE_ERR[c]).toBe('string')
     expect(new Set(codes.map((c) => CU_SET_MODE_ERR[c])).size).toBe(codes.length)
     expect(Object.keys(CU_SET_MODE_ERR).sort()).toEqual([...codes].sort())
@@ -473,6 +473,10 @@ describe('UI labels for codes (Task 8)', () => {
     for (const c of ['locked', 'denied', 'stopped', 'target_changed', 'helper_failed'] as const) expect(CU_ERR[c]).toBeTruthy()
   })
   it('helper:failed has its own label, distinct from missing', () => {
-    expect(CU_HELPER_LABEL).toEqual({ ok: '就绪', missing: '缺失', failed: '无法启动' })
+    expect(CU_HELPER_LABEL).toEqual({ ok: '正常', missing: '组件缺失', failed: '无法启动' })
+  })
+  it('M-14: the resolve refusals from the IPC (not_pending, not_local, invalid_args) have sentences', () => {
+    expect(Object.keys(CU_RESOLVE_ERR).sort()).toEqual(['invalid_args', 'not_local', 'not_pending'])
+    for (const v of Object.values(CU_RESOLVE_ERR)) expect(v).toBeTruthy()
   })
 })

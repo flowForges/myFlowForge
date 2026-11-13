@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/react'
+import { CU_RESOLVE_ERR } from '@shared/computerUse'
 import { CuGateCard } from './CuGateCard'
 import type { CuGate } from '../../../main/computerUse/types'
 
@@ -125,7 +126,7 @@ describe('CuGateCard', () => {
 
   it('shows the refusal code from main as a chip on the card', () => {
     const { container } = render(<CuGateCard isPhysical={yes} gate={mk({ action: { kind: 'click', at: { x: 1, y: 1 } } })} error="not_pending" onResolve={() => {}} />)
-    expect(container.querySelector('.cu-chip.cu-code')?.textContent).toBeTruthy()
+    expect(container.querySelector('.cu-chip.cu-code')?.textContent).toBe(CU_RESOLVE_ERR.not_pending)   // M-14: never the raw code
   })
 
   it('the 应用 row has the bundle id in its own span; a drag shows the target bundle id too', () => {
