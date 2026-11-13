@@ -1180,3 +1180,100 @@ describe('M-2 … M-5', () => {
     await call
   })
 })
+
+// ───────────────────────── abandoned calls (Task 6 review item 2) ─────────────────────────
+
+describe('a call its caller abandoned (meta.signal)', () => {
+  const G = { denyPids: [4242], denyBundlePrefixes: [] }
+
+  it('a queued call is dropped as stopped and never runs', async () => {
+    const first = deferred<void>()
+    const t = setup({ run: async (_s, _k, op) => { if (op === 'click') await first.promise; return { ok: true, text: op } } })
+    const tok = await t.on(A, 'allow')
+    t.svc.beginTurn(A, 'local')
+    const ac = new AbortController()
+    const p1 = t.svc.handle(tok, 'click', {}, {})
+    const p2 = t.svc.handle(tok, 'move', {}, { signal: ac.signal })
+    await flush()
+    ac.abort()
+    expect(await p2).toMatchObject({ ok: false, code: 'stopped' })
+    first.resolve()
+    expect(await p1).toEqual({ ok: true, text: 'click' })
+    await flush()
+    expect(t.runs.map((r) => r.op)).toEqual(['click'])
+    expect(t.svc.modeOf(A)).toBe('allow')   // only that call, not the session
+  })
+
+  it('an already-aborted signal never runs', async () => {
+    const t = setup()
+    const tok = await t.on(A, 'allow')
+    t.svc.beginTurn(A, 'local')
+    const ac = new AbortController(); ac.abort()
+    expect(await t.svc.handle(tok, 'move', {}, { signal: ac.signal })).toMatchObject({ ok: false, code: 'stopped' })
+    expect(t.runs).toEqual([])
+  })
+
+  it('a running call waiting at its gate: the gate is denied, nothing posts', async () => {
+    let decision: GateDecision | null = null
+    const t = setup({
+      run: async (s, key) => {
+        decision = await s.openGate({ key, kind: 'action', action: { kind: 'click' } })
+        const r = await s.driver.post({ kind: 'move', x: 1, y: 1 }, G)
+        return r.ok ? { ok: true, text: 'posted' } : { ok: false, code: 'stopped', text: 'x' }
+      },
+    })
+    const tok = await t.on(A)
+    t.svc.beginTurn(A, 'local')
+    const ac = new AbortController()
+    const p = t.svc.handle(tok, 'click', {}, { signal: ac.signal })
+    await flush(30)
+    expect(t.svc.pendingGates()).toHaveLength(1)
+    ac.abort()
+    expect(await p).toMatchObject({ ok: false, code: 'stopped' })
+    await flush()
+    expect(decision).toBe('deny')
+    expect(t.svc.pendingGates()).toEqual([])
+    expect(t.driver.posts).toEqual([])
+  })
+
+  it('a call already posting finishes (no abort, no release); its result is discarded', async () => {
+    const posting = deferred<void>()
+    const finish = deferred<PostResult>()
+    const t = setup({
+      run: async (s) => {
+        const r = await s.driver.post({ kind: 'move', x: 1, y: 1 }, G)
+        return r.ok ? { ok: true, text: 'posted' } : { ok: false, code: 'helper_failed', text: 'x' }
+      },
+    })
+    const real = t.driver.post.bind(t.driver)
+    t.driver.post = async (a, g) => { await real(a, g); posting.resolve(); return finish.promise }
+    const tok = await t.on(A, 'allow')
+    t.svc.beginTurn(A, 'local')
+    const ac = new AbortController()
+    const p = t.svc.handle(tok, 'move', {}, { signal: ac.signal })
+    await posting.promise
+    ac.abort()
+    finish.resolve({ ok: true })
+    expect(await p).toMatchObject({ ok: false, code: 'stopped' })
+    expect(t.driver.posts).toHaveLength(1)
+    expect(t.driver.aborted).toBe(0)
+    expect(t.driver.released).toEqual([])
+  })
+})
+
+describe('the call queue is bounded', () => {
+  it(`at most CU_QUEUE_MAX outstanding calls; the next is rate_limited at once and never runs`, async () => {
+    const { CU_QUEUE_MAX } = await import('./service')
+    const first = deferred<void>()
+    const t = setup({ run: async (_s, _k, op) => { if (op === 'click') await first.promise; return { ok: true, text: op } } })
+    const tok = await t.on(A, 'allow')
+    t.svc.beginTurn(A, 'local')
+    const ps = [t.svc.handle(tok, 'click', {}, {})]
+    for (let i = 1; i < CU_QUEUE_MAX; i++) ps.push(t.svc.handle(tok, 'cursor', {}, {}))
+    expect(await t.svc.handle(tok, 'move', {}, {})).toMatchObject({ ok: false, code: 'rate_limited' })
+    first.resolve()
+    for (const p of ps) expect((await p).ok).toBe(true)
+    expect(t.runs.map((r) => r.op)).not.toContain('move')
+    expect(CU_QUEUE_MAX).toBeGreaterThanOrEqual(3)
+  })
+})

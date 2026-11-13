@@ -11,7 +11,11 @@ export const CU_OPS: readonly CuOp[] = COMPUTER_TOOLS.map((t) => t.slice('comput
 export const isCuOp = (s: unknown): s is CuOp => typeof s === 'string' && (CU_OPS as readonly string[]).includes(s)
 
 /** What forgeMcp learnt from `initialize` (clientInfo), carried with every call for the log / debug log. */
-export interface CallMeta { client?: { name: string; version: string } }
+export interface CallMeta {
+  client?: { name: string; version: string }
+  /** fires when the MCP caller abandoned the call (its request was cancelled or the connection dropped) */
+  signal?: AbortSignal
+}
 
 export type CuResult =
   | { ok: true; text: string; image?: { data: string; mimeType: 'image/jpeg' } }

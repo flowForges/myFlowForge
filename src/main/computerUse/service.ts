@@ -28,6 +28,9 @@ export type { CuSessionKey, CuGate, CuEvent } from './types'
 export const GATE_TIMEOUT_MS = 5 * 60_000
 /** V5: a physical mouseDown / keyDown at most this long ago. */
 export const PHYSICAL_WINDOW_S = 1.0
+/** Outstanding calls (running + queued) across the service; one more is refused with rate_limited. Bounds the worst
+ *  wait a caller can see, which the codex tool timeout is derived from (mcpConfig CU_TOOL_TIMEOUT_SEC). */
+export const CU_QUEUE_MAX = 3
 
 const NOTE: Partial<Record<StopWhy, string>> = {
   user: '电脑操作已停止',
@@ -47,7 +50,10 @@ export interface ComputerUseService {
   setMode(key: CuSessionKey, mode: ComputerUseMode, by: { local: boolean }): Promise<SetModeResult>
   modeOf(key: CuSessionKey): ComputerUseMode
   tokenFor(key: CuSessionKey): string | null
-  beginTurn(key: CuSessionKey, origin: Origin): { tools: boolean }
+  /** origin undefined = an unstamped payload: non-local (V12) */
+  beginTurn(key: CuSessionKey, origin: Origin | undefined): { tools: boolean }
+  /** the sessions that are on, as in the `state` event */
+  sessions(): { workspacePath: string; sessionId: string; mode: ComputerUseMode; title: string }[]
   endTurn(key: CuSessionKey): void
   handle(token: string, op: string, args: Record<string, unknown>, meta: CallMeta): Promise<CuResult>
   openGate(g: Omit<CuGate, 'id' | 'ts'>): Promise<GateDecision>
@@ -129,6 +135,8 @@ interface Turn { origin: Origin | undefined; seq: number }
 interface Job {
   key: CuSessionKey; k: string; op: CuOp; args: unknown; meta: CallMeta
   enableSeq: number; turnSeq: number; settled: boolean; settle: (r: CuResult) => void
+  /** the caller abandoned it (meta.signal) */
+  abandoned: boolean
 }
 interface OpenGate { gate: CuGate; job: Job; done: (d: GateDecision) => void; cancel: () => void }
 interface Ticket { job: Job; view: CuActionView }
@@ -167,10 +175,8 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
   }
 
   const modeOf = (key: CuSessionKey): ComputerUseMode => sessions.get(keyId(key))?.mode ?? 'off'
-  const emitState = () => d.emit({
-    type: 'state',
-    sessions: [...sessions.values()].map((s) => ({ ...s.key, mode: s.mode, title: d.titleOf(s.key) })),
-  })
+  const sessionList = () => [...sessions.values()].map((s) => ({ ...s.key, mode: s.mode as ComputerUseMode, title: d.titleOf(s.key) }))
+  const emitState = () => d.emit({ type: 'state', sessions: sessionList() })
 
   // ── gates ──
   const finishGate = (id: string, decision: GateDecision): boolean => {
@@ -213,6 +219,7 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
 
   // ── calls ──
   const cancelled = (job: Job): CuErrCode | null => {
+    if (job.abandoned) return 'stopped'
     const s = sessions.get(job.k)
     if (!s || s.enableSeq !== job.enableSeq) return 'stopped'
     const t = turns.get(job.k)
@@ -248,6 +255,17 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
     if (running && running.k === k) settle(running, err('stopped'))
     abortInFlight(k)
     return !!s
+  }
+
+  /** The caller gave up on this one call: drop it if queued; if running, deny its gates and refuse its later posts.
+   *  A post already in the helper finishes (no abort: that would hit the session, not the call); its result is dropped. */
+  const abandon = (job: Job) => {
+    if (job.settled) return
+    job.abandoned = true
+    const qi = queue.indexOf(job)
+    if (qi >= 0) queue.splice(qi, 1)
+    for (const [id, g] of [...gates]) if (g.job === job) finishGate(id, 'deny')
+    settle(job, err('stopped'))
   }
 
   const refuseIfCancelled = () => {
@@ -400,6 +418,7 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
     },
 
     modeOf,
+    sessions: sessionList,
     tokenFor: (key) => sessions.get(keyId(key))?.token ?? null,
 
     beginTurn(key, origin) {
@@ -425,10 +444,16 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
       if (!isCuOp(op)) return err('invalid_args')
       // I-1: the CLI has evidently loaded its MCP config, so the file holding the token goes now, not at revoke.
       if (!used.has(token)) { used.add(token); removeTokenFile(token) }
+      const signal = meta?.signal
+      if (signal?.aborted) return err('stopped')
+      if (queue.length + (running ? 1 : 0) >= CU_QUEUE_MAX) return err('rate_limited')
       return new Promise<CuResult>((resolve) => {
-        queue.push({
+        const job: Job = {
           key: { ...key }, k, op, args, meta: meta ?? {}, enableSeq: s.enableSeq, turnSeq: t.seq, settled: false, settle: resolve,
-        })
+          abandoned: false,
+        }
+        signal?.addEventListener('abort', () => abandon(job), { once: true })
+        queue.push(job)
         void pump()
       })
     },
