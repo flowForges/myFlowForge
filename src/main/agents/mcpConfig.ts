@@ -1,5 +1,21 @@
+import { createHash } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+
+/**
+ * A computer-use token (`cu.…`, spec §4.3) is a bearer secret for the cu socket. It must never appear in argv
+ * (`ps` lists every process's arguments to every local user) or in a file name (a directory listing).
+ */
+const isCuToken = (agentId: string) => agentId.startsWith('cu.')
+
+/** Where forgeMcpArgs writes the per-agent config. cu tokens get a hashed name; others keep `mcp.<safeId>.json`. */
+export function forgeMcpConfigFile(cfgDir: string, agentId: string): string {
+  if (isCuToken(agentId)) {
+    return join(cfgDir, `mcp.cu-${createHash('sha256').update(agentId).digest('hex').slice(0, 24)}.json`)
+  }
+  // Sanitize agentId for use in a filename
+  return join(cfgDir, `mcp.${agentId.replace(/[^a-zA-Z0-9_-]/g, '_')}.json`)
+}
 
 /**
  * TOML value serializers for codex `-c key=value` overrides. codex parses the value
@@ -65,16 +81,15 @@ export function forgeMcpArgs(env: NodeJS.ProcessEnv): string[] {
   const spec = forgeServerSpec(env)
   if (!spec) return []
 
-  // Sanitize agentId for use in a filename
-  const safeId = (env.FORGE_AGENT_ID as string).replace(/[^a-zA-Z0-9_-]/g, '_')
   // NOT dirname(FORGE_SOCKET): on Windows the socket is a named pipe (`\\.\pipe\forge-…`) whose
   // "directory" is not a real one. The bridge hands us a writable directory explicitly.
   const cfgDir = env.FORGE_MCP_DIR || dirname(env.FORGE_SOCKET as string)
-  const cfgFile = join(cfgDir, `mcp.${safeId}.json`)
+  const agentId = env.FORGE_AGENT_ID as string
+  const cfgFile = forgeMcpConfigFile(cfgDir, agentId)
 
   const config = { mcpServers: { forge: spec } }
 
-  writeFileSync(cfgFile, JSON.stringify(config, null, 2), 'utf8')
+  writeFileSync(cfgFile, JSON.stringify(config, null, 2), isCuToken(agentId) ? { encoding: 'utf8', mode: 0o600 } : 'utf8')
   return ['--mcp-config', cfgFile]
 }
 
@@ -103,6 +118,18 @@ export function forgeAllowedToolNames(env: NodeJS.ProcessEnv): string[] {
 export function forgeCodexConfigArgs(env: NodeJS.ProcessEnv): string[] {
   const spec = forgeServerSpec(env)
   if (!spec) return []
+  if (isCuToken(spec.env.FORGE_AGENT_ID ?? '')) {
+    // I-1: keep the token out of argv. codex forwards FORGE_AGENT_ID from its own env (the turn's env) to the
+    // MCP child instead. If a codex build ignores env_vars, the child has no agent id and every call fails
+    // closed (实测 37).
+    const { FORGE_AGENT_ID: _secret, ...rest } = spec.env
+    return [
+      '-c', `mcp_servers.forge.command=${tomlString(spec.command)}`,
+      '-c', `mcp_servers.forge.args=${tomlArray(spec.args)}`,
+      '-c', `mcp_servers.forge.env=${tomlInlineTable(rest)}`,
+      '-c', `mcp_servers.forge.env_vars=${tomlArray(['FORGE_AGENT_ID'])}`,
+    ]
+  }
   return [
     '-c', `mcp_servers.forge.command=${tomlString(spec.command)}`,
     '-c', `mcp_servers.forge.args=${tomlArray(spec.args)}`,
