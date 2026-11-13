@@ -69,4 +69,13 @@ describe('KeybindingsPane', () => {
     fireEvent.click(screen.getByText('全部恢复默认'))
     expect(onChange).toHaveBeenCalledWith({ overrides: {} })
   })
+
+  it('M-5: the 停止电脑操作 row shows on macOS only', () => {
+    renderPane({ overrides: {} })
+    expect(screen.queryByText('停止电脑操作')).toBeNull()
+    cleanup()
+    Object.defineProperty(navigator, 'platform', { value: 'MacIntel', configurable: true })
+    renderPane({ overrides: {} })
+    expect(screen.getByText('停止电脑操作')).toBeTruthy()
+  })
 })

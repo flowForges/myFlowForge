@@ -12,11 +12,15 @@ interface KeybindingsPaneProps {
   globalFailed: string[]
 }
 
+/** actions that exist on macOS only (computer use is darwin-only, M-5) */
+const MAC_ONLY = new Set(['computer-use-stop'])
+
 // Preserve registry order within each group.
-function groupActions(): { group: string; actions: ActionDef[] }[] {
+function groupActions(platform: ReturnType<typeof rendererPlatform>): { group: string; actions: ActionDef[] }[] {
   const order: string[] = []
   const byGroup = new Map<string, ActionDef[]>()
   for (const a of KEYBINDING_ACTIONS) {
+    if (platform !== 'darwin' && MAC_ONLY.has(a.id)) continue
     if (!byGroup.has(a.group)) { byGroup.set(a.group, []); order.push(a.group) }
     byGroup.get(a.group)!.push(a)
   }
@@ -36,7 +40,7 @@ export function KeybindingsPane({ keybindings, onChange, globalFailed }: Keybind
     for (const ids of dups.values()) ids.forEach(id => s.add(id))
     return s
   }, [dups])
-  const groups = useMemo(groupActions, [])
+  const groups = useMemo(() => groupActions(platform), [platform])
 
   const setOverride = (id: string, accel: string) => onChange({ overrides: { ...overrides, [id]: accel } })
   const resetOne = (id: string) => {
