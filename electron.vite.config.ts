@@ -1,9 +1,18 @@
 import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import { resolve } from 'node:path'
+import { buildSysDirName, buildTestFlag } from './src/main/config/sysDirName'
+
+const defineStr = (v: string | undefined) => (v ? JSON.stringify(v) : 'undefined')
 
 export default defineConfig({
   main: {
+    // Side-by-side test package (scripts/build-mac-test.sh): MFF_SYS_DIR_NAME=.myFlowForge-test names the data dir;
+    // MFF_TEST_BUILD=1 turns self-update off and needs MFF_SYS_DIR_NAME. Both unset -> the release build, unchanged.
+    define: {
+      __MFF_SYS_DIR_NAME__: defineStr(buildSysDirName(process.env.MFF_SYS_DIR_NAME)),
+      __MFF_TEST_BUILD__: JSON.stringify(buildTestFlag(process.env.MFF_TEST_BUILD, process.env.MFF_SYS_DIR_NAME)),
+    },
     build: {
       outDir: 'out/main',
       rollupOptions: {

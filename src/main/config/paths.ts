@@ -1,5 +1,6 @@
 import { homedir } from 'node:os'
 import { join, basename } from 'node:path'
+import { DEFAULT_SYS_DIR_NAME, isValidSysDirName } from './sysDirName'
 
 // Expand a leading `~` / `~/...` to the user's home dir. A workspace path typed as
 // `~/work/...` would otherwise be taken literally — creating a real `~` directory
@@ -10,7 +11,13 @@ export function expandTilde(p: string): string {
   return p
 }
 
-export const SYS_DIR = join(homedir(), '.myFlowForge')
+// Side-by-side test package: a build-time constant swaps the app data dir name. Unset or not a plain dot name
+// -> .myFlowForge. The build already rejects bad names; this fallback is only a safety net.
+declare const __MFF_SYS_DIR_NAME__: string | undefined
+export function sysDirName(v: unknown): string {
+  return isValidSysDirName(v) ? v : DEFAULT_SYS_DIR_NAME
+}
+export const SYS_DIR = join(homedir(), sysDirName(typeof __MFF_SYS_DIR_NAME__ === 'string' ? __MFF_SYS_DIR_NAME__ : undefined))
 export const sysFile = (name: string) => join(SYS_DIR, name)
 export const reposDir = () => join(SYS_DIR, 'repos')
 export const mirrorPath = (projectId: string) => join(reposDir(), `${projectId}.git`)

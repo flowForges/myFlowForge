@@ -62,6 +62,7 @@ import { perfSpan } from './perf/perfSpans'
 import { EventLoopMonitor } from './perf/eventLoopMonitor'
 import { StallReporter } from './perf/stallReporter'
 import { startMemoryLog, defaultMemoryLogDeps } from './perf/memoryLog'
+import { APP_USER_MODEL_ID } from './config/buildFlavor'
 import { rememberRelayUrl, forgetRelayUrl, isRelayUrl, canForgetRelayUrl } from '@shared/remote/relayHistory'
 
 // Start the centralized debug log as early as possible so even startup failures are persisted to
@@ -111,7 +112,7 @@ app.on('second-instance', () => {
 // one the installer stamps on the Start-menu shortcut (electron-builder derives that from appId).
 // Without this, toasts are silently dropped — the app looks like it simply never notifies.
 if (process.platform === 'win32') {
-  app.setAppUserModelId('com.zghua.myflowforge')
+  app.setAppUserModelId(APP_USER_MODEL_ID)
   // The window is frameless, so Electron's default menu is never DRAWN on Windows — but its
   // accelerators stay registered. Ctrl+R would reload the renderer out from under a running
   // workflow, and Ctrl+W would close the window, neither of which this app ever asked for. Drop the
