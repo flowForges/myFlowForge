@@ -899,10 +899,11 @@ describe('endTurn deletes the per-token mcp config again (Task 8, V16 ②)', () 
       t.svc.beginTurn(A, 'local')
       expect((await t.svc.handle(tok, 'cursor', {}, {})).ok).toBe(true)
       t.svc.endTurn(A)
-      // turn 2: buildClaudeChatArgs writes the file again before spawning; the first call no longer deletes it
+      // turn 2: buildClaudeChatArgs writes the file again before spawning; whatever the calls do, endTurn leaves none
       const file = write()
       t.svc.beginTurn(A, 'local')
       expect((await t.svc.handle(tok, 'cursor', {}, {})).ok).toBe(true)
+      write()
       expect(existsSync(file)).toBe(true)
       t.svc.endTurn(A)
       expect(existsSync(file)).toBe(false)
