@@ -55,7 +55,7 @@ describe('startCuBridge', () => {
     const r = await sendRecv(s, { id: 'r1', tool: 'computer', agentId: 'cu.TOKEN', args })
     expect(r).toEqual({ id: 'r1', result: { ok: true, text: 'done' } })
     expect(handle).toHaveBeenCalledTimes(1)
-    expect(handle).toHaveBeenCalledWith('cu.TOKEN', 'computer', args)
+    expect(handle).toHaveBeenCalledWith('cu.TOKEN', 'computer', args, expect.any(AbortSignal))
   })
 
   it('every other tool (the forge bridge set included) gives error and never reaches handle', async () => {
@@ -180,5 +180,120 @@ describe('cuServiceHandler', () => {
     const { svc, handle } = svcWith()
     await cuServiceHandler(svc)('cu.T', 'computer', { op: 7, args: null })
     expect(handle).toHaveBeenLastCalledWith('cu.T', '', {}, {})
+  })
+})
+
+// ───────────────────────── review fixes ─────────────────────────
+
+const tick = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+describe('startCuBridge hardening (Task 6 review)', () => {
+  it('a cancel line aborts that call\'s signal on the same connection only, and gets no reply', async () => {
+    const signals: AbortSignal[] = []
+    bridge = await startCuBridge(dir, (_a, _t, _args, signal) => { signals.push(signal!); return new Promise(() => {}) })
+    const s1 = await open(bridge.socketPath)
+    const s2 = await open(bridge.socketPath)
+    let s1Got = ''
+    s1.on('data', (c) => { s1Got += c.toString() })
+    s1.write(JSON.stringify({ id: 'r1', tool: 'computer', agentId: 'cu.T', args: {} }) + '\n')
+    s2.write(JSON.stringify({ id: 'r1', tool: 'computer', agentId: 'cu.T', args: {} }) + '\n')
+    await tick(30)
+    expect(signals).toHaveLength(2)
+    s2.write(JSON.stringify({ id: 'k', tool: 'cancel', agentId: 'cu.T', args: { id: 'nope' } }) + '\n')
+    s1.write(JSON.stringify({ id: 'k', tool: 'cancel', agentId: 'cu.T', args: { id: 'r1' } }) + '\n')
+    await tick(30)
+    const aborted = signals.map((x) => x.aborted)
+    expect(aborted.filter(Boolean)).toHaveLength(1)
+    expect(s1Got).toBe('')
+  })
+
+  it('a dropped connection aborts its calls in flight', async () => {
+    const signals: AbortSignal[] = []
+    bridge = await startCuBridge(dir, (_a, _t, _args, signal) => { signals.push(signal!); return new Promise(() => {}) })
+    const s = await open(bridge.socketPath)
+    s.write(JSON.stringify({ id: 'r', tool: 'computer', agentId: 'cu.T', args: {} }) + '\n')
+    await tick(30)
+    s.destroy()
+    await tick(30)
+    expect(signals[0].aborted).toBe(true)
+  })
+
+  it('keeps a server error listener, so a late server error cannot crash the app', async () => {
+    bridge = await startCuBridge(dir, async () => ({}))
+    expect(bridge.server.listenerCount('error')).toBeGreaterThan(0)
+    expect(() => bridge!.server.emit('error', new Error('late'))).not.toThrow()
+  })
+
+  it('caps connections', async () => {
+    bridge = await startCuBridge(dir, async () => ({ ok: true }), { maxConnections: 2 })
+    await open(bridge.socketPath); await open(bridge.socketPath)
+    const third = await open(bridge.socketPath)
+    const closed = await Promise.race([new Promise((r) => third.once('close', () => r(true))), tick(500).then(() => false)])
+    expect(closed).toBe(true)
+  })
+
+  it('closes an idle connection, but not one with a call in flight', async () => {
+    const gate: { release?: () => void } = {}
+    bridge = await startCuBridge(dir, () => new Promise((r) => { gate.release = () => r({ ok: true }) }), { idleMs: 60 })
+    const idle = await open(bridge.socketPath)
+    const busy = await open(bridge.socketPath)
+    busy.write(JSON.stringify({ id: 'b', tool: 'computer', agentId: 'cu.T', args: {} }) + '\n')
+    const idleClosed = new Promise((r) => idle.once('close', () => r(true)))
+    let busyClosed = false
+    busy.once('close', () => { busyClosed = true })
+    expect(await Promise.race([idleClosed, tick(1000).then(() => false)])).toBe(true)
+    await tick(200)
+    expect(busyClosed).toBe(false)
+    gate.release!()
+  })
+
+  it('stops reading from a client that does not read its replies (backpressure)', async () => {
+    const big = 'x'.repeat(512 * 1024)
+    let calls = 0
+    bridge = await startCuBridge(dir, async () => { calls++; return { ok: true, text: big } })
+    const s = await open(bridge.socketPath)
+    s.pause()
+    for (let i = 0; i < 200; i++) {
+      s.write(JSON.stringify({ id: `p${i}`, tool: 'computer', agentId: 'cu.T', args: {} }) + '\n')
+      await tick(2)
+    }
+    await tick(100)
+    expect(calls).toBeLessThan(200)
+  })
+
+  it('decodes UTF-8 split across chunks', async () => {
+    const got: unknown[] = []
+    bridge = await startCuBridge(dir, async (_a, _t, args) => { got.push(args); return { ok: true } })
+    const s = await open(bridge.socketPath)
+    const line = Buffer.from(JSON.stringify({ id: 'u', tool: 'computer', agentId: 'cu.T', args: { t: '电脑操作' } }) + '\n')
+    const cut = line.indexOf(Buffer.from('脑')) + 1
+    const reply = new Promise((r) => s.once('data', r))
+    s.write(line.subarray(0, cut))
+    await tick(20)
+    s.write(line.subarray(cut))
+    await reply
+    expect(got).toEqual([{ t: '电脑操作' }])
+  })
+
+  it('source: no umask', () => {
+    expect(readFileSync(join(__dirname, 'cuBridge.ts'), 'utf8')).not.toMatch(/umask/)
+  })
+
+  it('a fallback socket path that would still exceed sun_path is refused', async () => {
+    const longTmp = join(root, 'z'.repeat(110))
+    mkdirSync(longTmp, { recursive: true })
+    await expect(startCuBridge(join(root, 'q'.repeat(120)), async () => ({}), { tmpDir: longTmp })).rejects.toThrow()
+  })
+
+  it('the fallback dir is removed at process exit even without close()', async () => {
+    const before = process.listeners('exit')
+    bridge = await startCuBridge(join(root, 'w'.repeat(120)), async () => ({}))
+    const added = process.listeners('exit').filter((l) => !before.includes(l))
+    expect(added).toHaveLength(1)
+    const sockDir = dirname(bridge.socketPath)
+    ;(added[0] as () => void)()
+    expect(existsSync(sockDir)).toBe(false)
+    await bridge.close(); bridge = undefined
+    expect(process.listeners('exit').filter((l) => !before.includes(l))).toHaveLength(0)
   })
 })
