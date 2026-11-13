@@ -31,7 +31,7 @@ export interface WinLike {
   isDestroyed(): boolean
   destroy(): void
   on(event: 'closed', fn: () => void): void
-  webContents: { send(channel: string, payload: unknown): void; on(event: 'did-finish-load', fn: () => void): void }
+  webContents: { id: number; send(channel: string, payload: unknown): void; on(event: 'did-finish-load', fn: () => void): void }
 }
 export interface ScreenLike { getPrimaryDisplay(): { workArea: Bounds } }
 
@@ -40,6 +40,8 @@ export interface CuOverlay {
   hide(): void
   collapseMain: () => void
   dispose(): void
+  /** the live overlay's webContents id, for the I-1 sender check; null when there is none */
+  webContentsId(): number | null
 }
 
 function place(screen: ScreenLike, height: number): Bounds {
@@ -90,6 +92,7 @@ export function createCuOverlay(d: {
       if (win && !win.isDestroyed()) win.hide()
     },
     collapseMain: () => d.collapseMain?.(),
+    webContentsId: () => (win && !win.isDestroyed() ? win.webContents.id : null),
     dispose() {
       const w = win
       win = null

@@ -12,12 +12,16 @@ const at = (needle: string) => { const i = SRC.indexOf(needle); expect(i, needle
 
 describe('index.ts computer-use wiring', () => {
   it('configureDisclaim runs at module load, before app.whenReady and so before any agent spawn, with the runtime as its switch', () => {
-    expect(at('configureDisclaim({ launcher: () => resolveHelperPath(app.isPackaged), enabled: () => cuRuntime?.disclaimEnabled() === true })'))
-      .toBeLessThan(at('app.whenReady().then('))
+    expect(SRC).toContain('const configureCuDisclaim = () => configureDisclaim({ launcher: () => resolveHelperPath(app.isPackaged), enabled: () => cuRuntime?.disclaimEnabled() === true })')
+    expect(at('\nconfigureCuDisclaim()\n')).toBeLessThan(at('app.whenReady().then('))
+    // I-4: an explicit disclaim:false from the helper reconfigures (drops the latch) for plain spawns
+    expect(SRC).toContain('onDisclaimUnavailable: configureCuDisclaim,')
   })
 
-  it('events reach the local sink only: the shell gets registry.broadcast, never hub.broadcast / router.localEvent (V2)', () => {
-    expect(SRC).toContain('localBroadcast: registry.broadcast,')
+  it('events reach the main window only: not the pet (I-1), never hub.broadcast / router.localEvent (V2)', () => {
+    const sink = SRC.slice(at('    localBroadcast: (channel, payload) => {'), at('    overlay: cuOverlay,'))
+    expect(sink).toContain('mainWinRef.webContents.send(channel, payload)')
+    expect(sink).not.toMatch(/registry|petWin|hub/)
     expect(SRC).toContain('emit: (e) => cuShell?.emit(e),')
     expect(SRC).not.toMatch(/(hub\.broadcast|broadcastWithNotify|router\.localEvent)\(CH\.cuEvent/)
     expect(SRC).not.toMatch(/CH\.cuOverlayState/)
@@ -51,5 +55,24 @@ describe('index.ts computer-use wiring', () => {
 
   it('the startup probe runs (it does nothing unless provisioned)', () => {
     expect(SRC).toContain('void cuRuntime.startup()')
+  })
+
+  it('I-1: every method-table channel passes the sender check (main window or overlay) before the router', () => {
+    expect(SRC).toContain('ipcMain.handle(channel, (e, ...args) => cuSenderAllowed(channel, e.sender.id, () => [mainWinRef?.webContents.id, cuOverlay.webContentsId()])')
+    expect(SRC).toContain(': NOT_LOCAL)')
+  })
+
+  it('I-2: before-quit turns every session off and sweeps the token files before disposing', () => {
+    const quit = SRC.slice(at("app.on('before-quit', () => {\n    // ★共商"))
+    const body = quit.slice(0, quit.indexOf('\n  })'))
+    expect(body.indexOf('cuRuntime?.quit()')).toBeGreaterThan(0)
+    expect(body.indexOf('cuRuntime?.quit()')).toBeLessThan(body.indexOf('void cuRuntime?.dispose()'))
+  })
+
+  it('I-3: the startup latch is Screen Recording granted to the app; M-8: settings changes drop the cache; M-3: hotkey failure reaches the overlay', () => {
+    expect(SRC).toContain("screenGranted: () => process.platform === 'darwin' && systemPreferences.getMediaAccessStatus('screen') === 'granted',")
+    expect(SRC).not.toContain('isTrustedAccessibilityClient')
+    expect(SRC).toContain('cuRuntime?.settingsChanged()')
+    expect(SRC).toContain("cuShell?.setHotkeyFailed(failed.includes('computer-use-stop'))")
   })
 })

@@ -18,13 +18,14 @@ import { readHosts, upsertHost, removeHost, markConnected, exportHosts, importHo
 import { registerIpc, shutdownCouncils } from './ipc/handlers'
 import { killAllAgentTrees, configureDisclaim, liveAgentChildren } from './agents/procGroup'
 import { createCuRuntime, ownAccelerators, resolveHelperPath, type CuRuntime } from './computerUse/runtime'
-import { attachPowerMonitor, cuSystemNote, cuTrayMenuItems, cuTrayTitle, wireComputerUse, type CuShell } from './computerUse/shell'
+import { attachPowerMonitor, cuSenderAllowed, cuSystemNote, cuTrayMenuItems, cuTrayTitle, wireComputerUse, type CuShell } from './computerUse/shell'
 import { createDriver } from './computerUse/driver'
 import { startCuBridge } from './computerUse/cuBridge'
 import { createCuOverlay, type WinLike } from './windows/cuOverlay'
 import { appendMessage } from './chat/chatStore'
 import { getSession } from './chat/sessionStore'
 import { NOOP_CTX, type MethodTable } from './ipc/invokeCtx'
+import { NOT_LOCAL } from './computerUse/ipc'
 import { botBridge } from './bot/botBridge'
 import { showOsNotification, osNotificationsSupported } from './notify/osNotify'
 import { shouldNotify, buildNotification } from './notify/notifier'
@@ -82,9 +83,10 @@ if (fixedPath) process.env.PATH = fixedPath
 let cuRuntime: CuRuntime | null = null
 let cuShell: CuShell | null = null
 // V3:「已开通」之后 agent CLI 经 forge-cu exec 断继承。必须在任何 agent spawn 之前配好。
-// enabled = provisioned && helper 已答过的 status.disclaim !== false;helper 还没答之前照旧普通 spawn
-// (此时开档会因为有未断继承的活进程而 restart_required,见 service.setMode)。
-configureDisclaim({ launcher: () => resolveHelperPath(app.isPackaged), enabled: () => cuRuntime?.disclaimEnabled() === true })
+// enabled = provisioned && status.disclaim !== false。I-4:helper 还没答之前也断继承(失败即关);
+// helper 明说没有 disclaim SPI 时重配一次(清掉 configureDisclaim 的锁存),回到普通 spawn。
+const configureCuDisclaim = () => configureDisclaim({ launcher: () => resolveHelperPath(app.isPackaged), enabled: () => cuRuntime?.disclaimEnabled() === true })
+configureCuDisclaim()
 
 // Single-instance lock: a relaunch (e.g. right after reinstalling) must not spin up a second
 // process. The first instance keeps the lock; any later instance exits immediately and asks the
@@ -518,6 +520,7 @@ app.whenReady().then(() => {
       ...(cuShell?.shortcutHandlers() ?? {}),
     })
     globalShortcutFailed = failed
+    cuShell?.setHotkeyFailed(failed.includes('computer-use-stop'))
     hub.broadcast(CH.shortcutsStatus, { failed })
   }
   applyGlobalShortcuts()
@@ -608,6 +611,7 @@ app.whenReady().then(() => {
   ipcMain.handle(CH.appVibrancyBaseline, () => builtWindowBlurAmount())
 
   const onSettings = (s: Settings) => {
+    cuRuntime?.settingsChanged()   // M-8: the disclaim seam's cached provisioned read
     // Window transparency applies LIVE (setOpacity) — the slider updates instantly, no restart.
     applyWindowOpacity(s.appearance.windowOpacity)
     applyFontZoom(s.appearance.fontSize)
@@ -728,7 +732,10 @@ app.whenReady().then(() => {
     collapseMain: () => { if (mainWinRef && !mainWinRef.isDestroyed()) parkWindowInDock(mainWinRef, process.platform, !!menuBarTray) },
   })
   cuShell = wireComputerUse({
-    localBroadcast: registry.broadcast,
+    // I-1:只发主窗口。宠物窗共用 preload,但它不是批准面,不该拿到裁片、输入的文字和门 id。浮窗有自己的 channel。
+    localBroadcast: (channel, payload) => {
+      if (mainWinRef && !mainWinRef.isDestroyed()) { try { mainWinRef.webContents.send(channel, payload) } catch { /* closing */ } }
+    },
     overlay: cuOverlay,
     // 正文只有动作类型,点了打开浮窗(§5.7)
     notify: (n, onClick) => showOsNotification({ title: n.title, body: n.body, route: { workspacePath: '' } }, onClick),
@@ -761,8 +768,9 @@ app.whenReady().then(() => {
     ownAccelerators: () => ownAccelerators(readSettings().keybindings.overrides),
     liveAgentChildren,
     // 进程内查,不起 helper、不弹框
-    grantsHeld: () => process.platform === 'darwin'
-      && (systemPreferences.isTrustedAccessibilityClient(false) || systemPreferences.getMediaAccessStatus('screen') === 'granted'),
+    // I-3:屏幕录制授给了本 app 就算已开通(TCC 库用户态改不了)。进程内查,不起 helper、不弹框
+    screenGranted: () => process.platform === 'darwin' && systemPreferences.getMediaAccessStatus('screen') === 'granted',
+    onDisclaimUnavailable: configureCuDisclaim,
     collapseMain: () => cuOverlay.collapseMain(),
   })
   void cuRuntime.startup().catch(() => { /* 没开通 / helper 起不来:照旧普通 spawn */ })
@@ -810,14 +818,17 @@ app.whenReady().then(() => {
   hub.addSink(router.localEvent)
 
   for (const channel of Object.keys(methodTable)) {
-    ipcMain.handle(channel, (e, ...args) => router.invoke(channel, {
+    ipcMain.handle(channel, (e, ...args) => cuSenderAllowed(channel, e.sender.id, () => [mainWinRef?.webContents.id, cuOverlay.webContentsId()])
+      ? router.invoke(channel, {
       // ctx.emit = 「回给发起这次调用的那个窗口」,不是广播。窗口可能在异步 handler 跑到一半时
       // 被关掉,send 会抛;吞掉即可 —— 原先那两处 e.sender.send 本来就各自套着 try/catch。
       emit: (c, p) => { try { e.sender.send(c, p) } catch { /* window closed */ } },
       // 本机窗口发起的调用。权限门用它区分「我自己答的」和「别的设备答的」——
       // 前者不该在对话里加噪音,后者必须说清楚。
       client: { id: 'local', label: '本机' },
-    }, args))
+    }, args)
+      // I-1:computer-use:* 只认主窗口和浮窗(宠物窗共用 preload)
+      : NOT_LOCAL)
   }
 
   // ── 多主机管理。这些是**客户端自己的**事(这台设备认识哪些机器、现在连着谁),
@@ -993,7 +1004,8 @@ app.whenReady().then(() => {
     // 网关也一起收:决策 3 说的「同生共死」不是修辞 —— 留一个还在听的端口给一个已经退出的
     // app,连上去只会是一堆永远不 settle 的调用。
     void mobileGw.close()
-    // 电脑操作:helper 进程(driver.dispose)和 cu.sock(bridge.close)
+    // 电脑操作:先全部关档(令牌作废、门拒绝),同步删掉所有 mcp.cu-*.json(I-2);再收 helper 进程和 cu.sock
+    cuRuntime?.quit()
     void cuRuntime?.dispose()
     cuOverlay.dispose()
   })

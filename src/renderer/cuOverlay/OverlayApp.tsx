@@ -110,6 +110,7 @@ export function OverlayApp({ api, isPhysical = trusted }: { api: CuOverlayApi; i
         <span className="cuo-title">电脑 · {screenName(session.title)}</span>
         <span className="cuo-sep"> · </span>
         <span className="cuo-chip">{COMPUTER_USE_CHIP[session.mode].replace(/^电脑 · /, '')}</span>
+        {state.hotkeyFailed && <span className="cuo-chip cuo-chip-warn">急停键未注册</span>}
         {state.ownBlocked && <button type="button" tabIndex={-1} className="cuo-btn cuo-collapse" onClick={() => api.collapseMain()}>收起主窗口</button>}
         <button type="button" tabIndex={-1} className="cuo-btn cuo-stop" onClick={() => api.stop()}>停止</button>
       </div>
@@ -120,13 +121,13 @@ export function OverlayApp({ api, isPhysical = trusted }: { api: CuOverlayApi; i
           <div className="cuo-actions">
             {gate.kind === 'continue' ? (
               <>
-                <button type="button" tabIndex={-1} className="cuo-btn cuo-allow" onMouseDown={onDown('allow')} onClick={approve(gate.id, 'allow')}>继续 100 步</button>
-                <button type="button" tabIndex={-1} className="cuo-btn cuo-deny" onMouseDown={onDown('deny')} onClick={() => api.resolve(gate.id, 'stop')}>停止</button>
+                <button type="button" tabIndex={-1} className="cuo-btn cuo-allow" onMouseDown={onDown(`${gate.id}:allow`)} onClick={approve(gate.id, `${gate.id}:allow`)}>继续 100 步</button>
+                <button type="button" tabIndex={-1} className="cuo-btn cuo-deny" onMouseDown={onDown(`${gate.id}:deny`)} onClick={() => api.resolve(gate.id, 'stop')}>停止</button>
               </>
             ) : (
               <>
-                <button type="button" tabIndex={-1} className="cuo-btn cuo-allow" onMouseDown={onDown('allow')} onClick={approve(gate.id, 'allow')}>允许</button>
-                <button type="button" tabIndex={-1} className="cuo-btn cuo-deny" onMouseDown={onDown('deny')} onClick={() => api.resolve(gate.id, 'deny')}>拒绝</button>
+                <button type="button" tabIndex={-1} className="cuo-btn cuo-allow" onMouseDown={onDown(`${gate.id}:allow`)} onClick={approve(gate.id, `${gate.id}:allow`)}>允许</button>
+                <button type="button" tabIndex={-1} className="cuo-btn cuo-deny" onMouseDown={onDown(`${gate.id}:deny`)} onClick={() => api.resolve(gate.id, 'deny')}>拒绝</button>
               </>
             )}
           </div>

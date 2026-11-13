@@ -22,7 +22,7 @@ export type CuResult =
   | { ok: false; code: CuErrCode; text: string }
 
 export type GateDecision = 'allow' | 'deny' | 'stop' | 'timeout'
-export type StopWhy = 'user' | 'hotkey' | 'lock' | 'vision' | 'limit' | 'deleted'
+export type StopWhy = 'user' | 'hotkey' | 'lock' | 'vision' | 'limit' | 'deleted' | 'quit'
 
 export interface CuGate {
   id: string

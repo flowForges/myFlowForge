@@ -13,7 +13,7 @@ function harness(physical = false) {
   return { ...r, api, push: (s: CuOverlayState) => act(() => push(s)) }
 }
 
-const ON: CuOverlayState = { session: { workspacePath: '/w', sessionId: 's', title: '修 bug', mode: 'ask' }, gate: null, ownBlocked: false, actionSeq: 0 }
+const ON: CuOverlayState = { session: { workspacePath: '/w', sessionId: 's', title: '修 bug', mode: 'ask' }, gate: null, ownBlocked: false, actionSeq: 0, hotkeyFailed: false }
 const CLICK: CuOverlayState = {
   ...ON,
   gate: { id: 'cug.1', kind: 'action', crop: 'Y3JvcA==', action: { kind: 'click', at: { x: 812, y: 433 }, app: 'Safari', bundleId: 'com.apple.Safari', button: 'left', count: 2, mods: ['cmd'] } },
@@ -71,6 +71,25 @@ describe('OverlayApp', () => {
     fireEvent.mouseDown(t2.container.querySelector('button.cuo-deny')!)
     fireEvent.click(allow2, { detail: 1 })
     expect(t2.api.resolve).not.toHaveBeenCalled()
+  })
+
+  it('M-1: a press is keyed by the gate: mousedown on one gate\'s 允许, click after the next gate replaced it, does nothing', () => {
+    const t = harness(true)
+    t.push(CLICK)
+    fireEvent.mouseDown(screen.getByText('允许'))
+    t.push({ ...CLICK, gate: { ...CLICK.gate!, id: 'cug.9' } })
+    fireEvent.click(screen.getByText('允许'), { detail: 1 })
+    expect(t.api.resolve).not.toHaveBeenCalled()
+    press(screen.getByText('允许'))
+    expect(t.api.resolve).toHaveBeenCalledWith('cug.9', 'allow')
+  })
+
+  it('M-3: a stop hotkey the OS refused shows as a chip in the pill', () => {
+    const t = harness()
+    t.push(ON)
+    expect(t.container.querySelector('.cuo-chip-warn')).toBeNull()
+    t.push({ ...ON, hotkeyFailed: true })
+    expect(t.container.querySelector('.cuo-chip-warn')!.textContent).toBe('急停键未注册')
   })
 
   it('a stale mousedown (over a second) does not count', () => {

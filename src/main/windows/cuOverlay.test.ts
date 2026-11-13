@@ -27,6 +27,7 @@ function fakeWin() {
     destroy: () => { destroyed = true; for (const f of listeners.closed ?? []) f() },
     on: (ev: string, fn: () => void) => { (listeners[ev] ??= []).push(fn) },
     webContents: {
+      id: 900 + Math.floor(Math.random() * 99),
       send: (channel: string, payload: unknown) => { w.sent.push({ channel, payload }) },
       on: (ev: string, fn: () => void) => { (wcListeners[ev] ??= []).push(fn) },
     },
@@ -52,7 +53,7 @@ function setup() {
   return { ov, wins, opts, loads, collapse, setWork: (w: typeof WORK) => { work = w } }
 }
 
-const ON: CuOverlayState = { session: { workspacePath: '/w', sessionId: 's', title: '会话一', mode: 'ask' }, gate: null, ownBlocked: false, actionSeq: 0 }
+const ON: CuOverlayState = { session: { workspacePath: '/w', sessionId: 's', title: '会话一', mode: 'ask' }, gate: null, ownBlocked: false, actionSeq: 0, hotkeyFailed: false }
 const GATED: CuOverlayState = { ...ON, gate: { id: 'cug.1', kind: 'action', action: { kind: 'click', at: { x: 1, y: 2 } }, crop: 'Y3JvcA==' } }
 
 describe('createCuOverlay', () => {
@@ -120,6 +121,15 @@ describe('createCuOverlay', () => {
     expect(t.wins).toHaveLength(2)
     t.ov.dispose()
     expect(t.wins[1].isDestroyed()).toBe(true)
+  })
+
+  it('webContentsId: null until built, the live window\'s id after, null once destroyed (I-1 sender check)', () => {
+    const t = setup()
+    expect(t.ov.webContentsId()).toBeNull()
+    t.ov.show(ON)
+    expect(t.ov.webContentsId()).toBe(t.wins[0].webContents.id)
+    t.ov.dispose()
+    expect(t.ov.webContentsId()).toBeNull()
   })
 
   it('collapseMain forwards to the shell', () => {

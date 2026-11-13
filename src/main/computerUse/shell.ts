@@ -17,6 +17,15 @@ export function attachPowerMonitor(pm: { on(event: string, fn: () => void): unkn
   for (const ev of CU_POWER_EVENTS) pm.on(ev, () => onLock())
 }
 
+/**
+ * I-1: every computer-use:* call must come from the main window or the overlay. The pet window loads the same preload
+ * (so it has window.forge.computerUse), but it is not an approval surface. Other channels are not this check's concern.
+ */
+export function cuSenderAllowed(channel: string, senderId: number, allowed: () => (number | null | undefined)[]): boolean {
+  if (!channel.startsWith('computer-use:')) return true
+  return allowed().some((id) => typeof id === 'number' && id === senderId)
+}
+
 export const cuTrayTitle = (active: boolean): string => (active ? '●' : '')
 /** Prepended to the tray / Dock menu while any session is on. */
 export function cuTrayMenuItems(active: boolean, stop: () => void): ({ label: string; click: () => void } | { type: 'separator' })[] {
@@ -45,6 +54,8 @@ export interface CuShell {
   shortcutHandlers(): Record<string, () => void>
   /** the notification's click */
   reveal(): void
+  /** M-3: the OS refused the stop accelerator (shown as a chip in the pill) */
+  setHotkeyFailed(failed: boolean): void
 }
 
 const gateView = (g: CuGate): CuOverlayGate => ({
@@ -60,11 +71,12 @@ export function wireComputerUse(d: CuShellDeps): CuShell {
   let ownBlocked = false
   let actionSeq = 0
   let wasActive = false
+  let hotkeyFailed = false
 
   const state = (): CuOverlayState => ({
     session: session ? { ...session } : null,
     gate: gates.length ? gateView(gates[0]) : null,
-    ownBlocked, actionSeq,
+    ownBlocked, actionSeq, hotkeyFailed,
   })
   const render = () => {
     if (session) d.overlay.show(state())
@@ -117,6 +129,11 @@ export function wireComputerUse(d: CuShellDeps): CuShell {
     active: () => session !== null,
     shortcutHandlers: (): Record<string, () => void> => (session ? { 'computer-use-stop': () => d.stopAll() } : {}),
     reveal: render,
+    setHotkeyFailed(failed) {
+      if (failed === hotkeyFailed) return
+      hotkeyFailed = failed
+      if (session) render()
+    },
   }
 }
 

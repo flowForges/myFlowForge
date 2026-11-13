@@ -11,7 +11,7 @@ import { registerGlobalShortcuts, type GlobalShortcutApi } from '../shortcuts/gl
 import { fakeDriver } from './fakeDriver'
 import type { WinHit } from './driver'
 import { createCuRuntime } from './runtime'
-import { attachPowerMonitor, CU_POWER_EVENTS, cuSystemNote, cuTrayMenuItems, cuTrayTitle, wireComputerUse } from './shell'
+import { attachPowerMonitor, CU_POWER_EVENTS, cuSenderAllowed, cuSystemNote, cuTrayMenuItems, cuTrayTitle, wireComputerUse } from './shell'
 import type { CuEvent, CuGate, CuSessionKey } from './types'
 
 const A: CuSessionKey = { workspacePath: '/w/a', sessionId: 's-a' }
@@ -99,7 +99,7 @@ describe('overlay state', () => {
     t.sh.emit(stateOff)
     expect(t.shown).toEqual([])
     t.sh.emit(stateOn)
-    expect(t.shown.at(-1)).toEqual({ session: { ...A, title: '会话一', mode: 'ask' }, gate: null, ownBlocked: false, actionSeq: 0 })
+    expect(t.shown.at(-1)).toEqual({ session: { ...A, title: '会话一', mode: 'ask' }, gate: null, ownBlocked: false, actionSeq: 0, hotkeyFailed: false })
     t.sh.emit(stateOff)
     expect(t.hides).toBe(1)
     expect(t.sh.state().session).toBeNull()
@@ -244,5 +244,36 @@ describe('cuSystemNote', () => {
     expect(appended).toEqual([{ ws: '/w/a', sid: 's-a', m: { id: 'sys-1794557350000', who: 'ai', text: '屏幕已锁定 · 电脑操作已关闭', model: '系统', ts: '08:09:10' } }])
     expect(sent.map((s) => [s.channel, s.payload.type])).toEqual([[CH.chatEvent, 'assistant-start'], [CH.chatEvent, 'done']])
     expect(sent[1].payload).toMatchObject({ workspacePath: '/w/a', sessionId: 's-a', message: appended[0].m })
+  })
+})
+
+describe('I-1: only the main window and the overlay reach computer-use:*', () => {
+  it('a computer-use channel from any other sender (the pet shares the preload) is refused; other channels pass', () => {
+    const allowed = () => [11, 22, undefined, null]
+    expect(cuSenderAllowed('computer-use:resolve', 11, allowed)).toBe(true)
+    expect(cuSenderAllowed('computer-use:stop', 22, allowed)).toBe(true)
+    expect(cuSenderAllowed('computer-use:resolve', 33, allowed)).toBe(false)
+    expect(cuSenderAllowed('computer-use:set-mode', 33, allowed)).toBe(false)
+    expect(cuSenderAllowed('computer-use:thumb', 33, () => [])).toBe(false)
+    expect(cuSenderAllowed('chat:send', 33, allowed)).toBe(true)
+  })
+})
+
+describe('M-3: stop-hotkey registration failure', () => {
+  it('shows in the overlay state while on; cleared when it registers again', () => {
+    const t = shell()
+    t.sh.emit(stateOn)
+    t.sh.setHotkeyFailed(true)
+    expect(t.shown.at(-1)!.hotkeyFailed).toBe(true)
+    t.sh.setHotkeyFailed(false)
+    expect(t.shown.at(-1)!.hotkeyFailed).toBe(false)
+    const n = t.shown.length
+    t.sh.setHotkeyFailed(false)
+    expect(t.shown.length).toBe(n)
+  })
+  it('while off it shows nothing', () => {
+    const t = shell()
+    t.sh.setHotkeyFailed(true)
+    expect(t.shown).toEqual([])
   })
 })

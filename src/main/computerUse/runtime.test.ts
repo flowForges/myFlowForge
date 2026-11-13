@@ -23,8 +23,9 @@ afterEach(() => { for (const r of roots.splice(0)) rmSync(r, { recursive: true, 
 function setup(o: {
   platform?: NodeJS.Platform
   settings?: (s: Settings) => Settings
-  grants?: boolean
+  screen?: boolean
   dirExists?: boolean
+  onDisclaimUnavailable?: () => void
   bridgeFails?: boolean
   driver?: FakeDriver
   random?: () => string
@@ -39,6 +40,7 @@ function setup(o: {
   const notes: { key: CuSessionKey; text: string }[] = []
   const stopped: CuSessionKey[] = []
   let made = 0
+  let reads = 0
   let clock = 1_000_000
   const bridges: { dir: string; closed: boolean }[] = []
   const collapse = vi.fn()
@@ -59,11 +61,12 @@ function setup(o: {
     note: (key, text) => notes.push({ key, text }),
     stopTurn: (key) => stopped.push(key),
     titleOf: (k) => `T-${k.sessionId}`,
-    readSettings: () => settings,
+    readSettings: () => { reads++; return settings },
     writeSettings: (s) => { writes.push(s); settings = s },
     ownAccelerators: () => ['Control+Alt+Command+Escape'],
     liveAgentChildren: () => [],
-    grantsHeld: () => o.grants ?? false,
+    screenGranted: () => o.screen ?? false,
+    onDisclaimUnavailable: o.onDisclaimUnavailable,
     collapseMain: collapse,
     now: () => clock,
     sleep: async (ms) => { clock += ms },
@@ -73,6 +76,7 @@ function setup(o: {
   return {
     rt, driver, dir, events, notes, stopped, writes, bridges, collapse, deps,
     get made() { return made },
+    get reads() { return reads },
     get settings() { return settings },
   }
 }
@@ -256,54 +260,103 @@ describe('disclaim seam (V3, V16 ③, controller notes)', () => {
     expect(t.writes).toEqual([])
   })
 
-  it('provisioned: off until the helper has answered a status; then provisioned && status.disclaim !== false', async () => {
-    const t = setup({ settings: provisioned })
-    expect(t.rt.disclaimEnabled()).toBe(false)
+  it('I-4: provisioned → disclaimed from the first spawn, before any helper status (fail closed); status.disclaim:false falls back to plain once', async () => {
+    const unavailable = vi.fn()
+    const t = setup({ settings: provisioned, onDisclaimUnavailable: unavailable })
+    expect(t.rt.disclaimEnabled()).toBe(true)
+    expect(t.made).toBe(0)
     await t.rt.startup()
     expect(t.rt.disclaimEnabled()).toBe(true)
-    const t2 = setup({ settings: provisioned, driver: fakeDriver({ status: { disclaim: false } }) })
+    expect(unavailable).not.toHaveBeenCalled()
+    const un2 = vi.fn()
+    const t2 = setup({ settings: provisioned, driver: fakeDriver({ status: { disclaim: false } }), onDisclaimUnavailable: un2 })
+    expect(t2.rt.disclaimEnabled()).toBe(true)
     await t2.rt.startup()
     expect(t2.rt.disclaimEnabled()).toBe(false)
+    expect(un2).toHaveBeenCalledTimes(1)
+    await t2.rt.host()!.probe.status()
+    expect(un2).toHaveBeenCalledTimes(1)
   })
 
-  it('a status from setMode (first enable) also arms it', async () => {
+  it('a status from setMode (first enable) keeps it on', async () => {
     const t = setup()
     expect(t.rt.disclaimEnabled()).toBe(false)
     await t.rt.host()!.service.setMode(A, 'ask', LOCAL)
     expect(t.rt.disclaimEnabled()).toBe(true)
   })
 
-  it('a probe that throws leaves it off (agents spawn plainly; enabling is refused by restart_required / the helper conflict)', async () => {
+  it('a probe that throws keeps it on (fail closed: exec mode does not depend on the drive-mode caller check)', async () => {
     const d = fakeDriver()
     d.status = async () => { throw new Error('helper_failed') }
     const t = setup({ settings: provisioned, driver: d })
     await t.rt.startup()
-    expect(t.rt.disclaimEnabled()).toBe(false)
+    expect(t.rt.disclaimEnabled()).toBe(true)
   })
 
-  it('startup latch: provisioned:false but the app holds a grant and the cu dir exists → provisioned again, persisted', async () => {
-    const t = setup({ grants: true, dirExists: true })
+  it('I-3 startup latch: Screen Recording granted to the app alone → provisioned, persisted, disclaimed', async () => {
+    const t = setup({ screen: true, dirExists: false })
+    expect(t.rt.disclaimEnabled()).toBe(false)
     await t.rt.startup()
     expect(t.settings.computerUse.provisioned).toBe(true)
     expect(t.rt.disclaimEnabled()).toBe(true)
   })
 
-  it('startup latch needs both: a grant held for another reason with no cu dir stays as today', async () => {
-    const t = setup({ grants: true, dirExists: false })
+  it('I-3: no Screen Recording grant → as today (the dir alone does not latch), nothing built', async () => {
+    const t = setup({ screen: false, dirExists: true })
     await t.rt.startup()
     expect(t.settings.computerUse.provisioned).toBe(false)
     expect(t.made).toBe(0)
-    const t2 = setup({ grants: false, dirExists: true })
-    await t2.rt.startup()
-    expect(t2.settings.computerUse.provisioned).toBe(false)
-    expect(t2.made).toBe(0)
+    expect(t.rt.disclaimEnabled()).toBe(false)
   })
 
   it('provisioned latches for the run: a later read of false keeps it on', async () => {
     const t = setup({ settings: provisioned })
     await t.rt.startup()
     t.deps.writeSettings({ ...t.settings, computerUse: { ...t.settings.computerUse, provisioned: false } })
+    t.rt.settingsChanged()
     expect(t.rt.disclaimEnabled()).toBe(true)
+  })
+
+  it('M-8: disclaimEnabled reads settings once, not per spawn; settingsChanged() rereads', () => {
+    const t = setup()
+    const before = t.reads
+    for (let i = 0; i < 100; i++) t.rt.disclaimEnabled()
+    expect(t.reads - before).toBe(1)
+    t.deps.writeSettings({ ...t.settings, computerUse: { ...t.settings.computerUse, provisioned: true } })
+    expect(t.rt.disclaimEnabled()).toBe(false)
+    t.rt.settingsChanged()
+    expect(t.rt.disclaimEnabled()).toBe(true)
+  })
+})
+
+describe('I-2: quit', () => {
+  it('stops every session (no note) and removes every mcp.cu-*.json synchronously; other files stay', async () => {
+    const t = setup()
+    const svc = t.rt.host()!.service
+    await svc.setMode(A, 'ask', LOCAL)
+    const tok = svc.tokenFor(A)!
+    const file = forgeMcpArgs({
+      FORGE_SOCKET: join(t.dir, 'cu.sock'), FORGE_MCP_DIR: t.dir, FORGE_AGENT_ID: tok,
+      FORGE_MCP_ENTRY: '/x/forgeMcp.js', FORGE_TOOLS: COMPUTER_TOOLS.join(','),
+    })[1]
+    writeFileSync(join(t.dir, 'mcp.cu-stale000000000000000000.json'), '{}')
+    writeFileSync(join(t.dir, 'keep.json'), '{}')
+    t.rt.quit()
+    expect(existsSync(file)).toBe(false)
+    expect(existsSync(join(t.dir, 'mcp.cu-stale000000000000000000.json'))).toBe(false)
+    expect(existsSync(join(t.dir, 'keep.json'))).toBe(true)
+    expect(svc.modeOf(A)).toBe('off')
+    expect(t.events).toContainEqual({ type: 'stopped', key: A, why: 'quit' })
+    expect(t.notes).toEqual([])
+  })
+
+  it('never built: quit builds nothing and still sweeps leftovers', () => {
+    const t = setup({ dirExists: true })
+    writeFileSync(join(t.dir, 'mcp.cu-old.json'), '{}')
+    t.rt.quit()
+    expect(t.made).toBe(0)
+    expect(existsSync(join(t.dir, 'mcp.cu-old.json'))).toBe(false)
+    setup().rt.quit()   // no dir at all: no throw
   })
 })
 

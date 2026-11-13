@@ -9,7 +9,7 @@
 //   has answered a status saying it can disclaim. Until a status arrives they spawn as today; enabling is still safe
 //   because setMode refuses with restart_required while an undisclaimed agent lives.
 import { randomBytes } from 'node:crypto'
-import { accessSync, constants, existsSync, statSync } from 'node:fs'
+import { accessSync, constants, readdirSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { GLOBAL_ACTIONS, effectiveBindings } from '@shared/keybindings'
 import type { Settings } from '../config/schema'
@@ -91,8 +91,10 @@ export interface CuRuntimeDeps {
   onSettingsSaved?: (s: Settings) => void
   ownAccelerators: () => string[]
   liveAgentChildren: () => { disclaimed: boolean }[]
-  /** does this app already hold Accessibility or Screen Recording (in-process check, no helper, no prompt) */
-  grantsHeld?: () => boolean
+  /** is Screen Recording granted to this app (in-process check, no helper, no prompt) — the startup latch (I-3) */
+  screenGranted?: () => boolean
+  /** the helper answered disclaim:false while spawns were disclaimed: reset configureDisclaim's latch (plain spawns) */
+  onDisclaimUnavailable?: () => void
   collapseMain?: () => void
   now?: () => number
   sleep?: (ms: number) => Promise<void>
@@ -103,8 +105,12 @@ export interface CuRuntime {
   /** undefined off darwin. Cheap: built once, then the same object. */
   host(): ComputerUseHost | undefined
   isBuilt(): boolean
-  /** for configureDisclaim({ enabled }) */
+  /** for configureDisclaim({ enabled }); cached, so a spawn never rereads settings (M-8) */
   disclaimEnabled(): boolean
+  /** settings changed somewhere: drop the cached provisioned read */
+  settingsChanged(): void
+  /** before-quit (I-2): every session off and every mcp.cu-*.json gone, synchronously */
+  quit(): void
   /** at app start: the grant latch, then (only if provisioned) one helper status for the disclaim check */
   startup(): Promise<void>
   /** powerMonitor lock-screen / suspend / user-did-resign-active / shutdown (V10) */
@@ -123,20 +129,34 @@ export function createCuRuntime(d: CuRuntimeDeps): CuRuntime {
   /** the last status the helper answered: undefined = never answered */
   let disclaimSeen: boolean | undefined
   let provisionedLatch = false
+  /** the last settings read, until settingsChanged() (M-8) */
+  let provisionedRead: boolean | null = null
+  let unavailableSent = false
   /** the sessions that are on, as of the last `state` event (stop emits it after calling stopTurn) */
   let on = new Set<string>()
   const idOf = (k: CuSessionKey) => JSON.stringify([k.workspacePath, k.sessionId])
 
   const provisioned = (): boolean => {
     if (provisionedLatch) return true
-    try { if (d.readSettings().computerUse?.provisioned === true) provisionedLatch = true } catch { /* read failed: as stored */ }
+    if (provisionedRead === null) {
+      try { provisionedRead = d.readSettings().computerUse?.provisioned === true } catch { provisionedRead = false }
+    }
+    if (provisionedRead) provisionedLatch = true
     return provisionedLatch
+  }
+  const sweepTokenFiles = () => {
+    let names: string[] = []
+    try { names = readdirSync(d.dir) } catch { return }
+    for (const n of names) {
+      if (/^mcp\.cu-[^/]*\.json$/.test(n)) { try { rmSync(join(d.dir, n), { force: true }) } catch { /* best effort */ } }
+    }
   }
 
   const saveSettings = (patch: Partial<CuSettings>) => {
     const cur = d.readSettings()
     const next = { ...cur, computerUse: mergeComputerUse(cur.computerUse, patch) } as Settings
     d.writeSettings(next)
+    provisionedRead = null
     if (patch.provisioned === true) {
       provisionedLatch = true
       try { ensurePrivateDir(d.dir) } catch { /* the grant latch just won't find it */ }
@@ -157,6 +177,10 @@ export function createCuRuntime(d: CuRuntimeDeps): CuRuntime {
       status: async () => {
         const s = await raw.status()
         disclaimSeen = s.disclaim !== false
+        if (!disclaimSeen && !unavailableSent) {
+          unavailableSent = true
+          try { d.onDisclaimUnavailable?.() } catch { /* best effort */ }
+        }
         return s
       },
     })
@@ -193,16 +217,18 @@ export function createCuRuntime(d: CuRuntimeDeps): CuRuntime {
   return {
     host: () => (d.platform === 'darwin' ? build().host : undefined),
     isBuilt: () => built !== null,
-    disclaimEnabled: () => provisioned() && disclaimSeen === true,
+    // I-4: fail closed. Once provisioned, spawns are disclaimed from the first one, before the helper has answered; only
+    // an explicit disclaim:false (the SPI is missing) turns that off.
+    disclaimEnabled: () => provisioned() && disclaimSeen !== false,
+    settingsChanged: () => { provisionedRead = null },
 
     async startup() {
       if (d.platform !== 'darwin') return
-      // V16 ③: client.json edited to provisioned:false while the app was closed. If this app already holds a grant and
-      // computer use has been used here (its private dir exists), it stays provisioned. A grant held for some other
-      // reason, on a machine that never used computer use, changes nothing.
+      // V16 ③ / I-3: client.json edited to provisioned:false while the app was closed. Screen Recording granted to this
+      // app (a TCC record no user-level process can rewrite) keeps it provisioned on its own.
       if (!provisioned()) {
         let held = false
-        try { held = d.grantsHeld?.() === true && existsSync(d.dir) } catch { held = false }
+        try { held = d.screenGranted?.() === true } catch { held = false }
         if (held) saveSettings({ provisioned: true })
       }
       if (!provisioned()) return
@@ -210,6 +236,10 @@ export function createCuRuntime(d: CuRuntimeDeps): CuRuntime {
     },
 
     onLock() { built?.service.onLock() },
+    quit() {
+      try { built?.service.stop(undefined, 'quit') } catch { /* exiting anyway */ }
+      sweepTokenFiles()
+    },
     stopAll() { built?.service.stop(undefined, 'hotkey' satisfies StopWhy) },
 
     async dispose() {

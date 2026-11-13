@@ -18,3 +18,4 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
 .cuo-line { flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cuo-actions { flex: none; display: flex; justify-content: flex-end; gap: 8px; }
 .cuo-actions .cuo-allow { background: #2563eb; }
+.cuo-chip-warn { background: rgba(234, 179, 8, 0.3); }

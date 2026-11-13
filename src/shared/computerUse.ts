@@ -527,6 +527,8 @@ export interface CuOverlayState {
   ownBlocked: boolean
   /** 每个动作 +1,浮窗据此闪一下 */
   actionSeq: number
+  /** 急停快捷键没注册上(被系统 / 别的 app 占用):胶囊里一个状态 chip */
+  hotkeyFailed: boolean
 }
 
 export { CU_OVERLAY_ARG } from './cuOverlayArg'
