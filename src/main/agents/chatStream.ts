@@ -1,6 +1,7 @@
 import type { ContextUsage } from '@shared/types'
 import type { ChatTask } from './types'
 import { browserToolLabel } from '@shared/browserUse'
+import { computerToolLabel } from '@shared/computerUse'
 
 export type ChatStreamAction =
   | { kind: 'session'; id: string }
@@ -52,6 +53,10 @@ function toolStep(name: string, input: any): string {
   //   哪儿都看不到(和授权门的 where 一起是本功能唯一的可见性)。
   const browser = browserToolLabel(name, input)
   if (browser) return browser
+  // 电脑工具:标题会进 sessions.json 并广播给远程客户端,computer_type 只写字数、绝不带文字(V11)。
+  //  必须在下面的通用分支之前 —— 那几条会把 input 里的字段原样拼进标题。
+  const computer = computerToolLabel(name, input)
+  if (computer) return computer
   const clip = (v: unknown) => { const s = String(v ?? '').replace(/\s+/g, ' ').trim(); return s.length > 200 ? s.slice(0, 200) + '…' : s }
   if (input?.file_path) return `调用 ${name} ${clip(input.file_path)}`
   if (input?.path) return `调用 ${name} ${clip(input.path)}`
