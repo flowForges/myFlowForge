@@ -26,7 +26,7 @@ vi.mock('execa', () => ({
   }),
 }))
 
-const { configureDisclaim, disclaimedSpawnArgs, spawnAgent, liveAgentChildren, trackAgentChild } = await import('./procGroup')
+const { configureDisclaim, disclaimedSpawnArgs, DISCLAIM_REFUSED, spawnAgent, liveAgentChildren, trackAgentChild } = await import('./procGroup')
 const { driveCodexTurn } = await import('./providers/codexAppServer')
 const { fetchCodexUsageViaRpc } = await import('../usage/codexRpc')
 
@@ -77,10 +77,16 @@ describe('disclaimedSpawnArgs', () => {
     expect(disclaimedSpawnArgs('claude', ['-p'], { PATH: binDir })).toEqual({ bin: 'claude', args: ['-p'], disclaimed: false })
   })
 
-  it('launcher missing (null) or not on disk → original', () => {
-    on({ launcher: () => null })
-    expect(disclaimedSpawnArgs('claude', [], { PATH: binDir }).disclaimed).toBe(false)
-    on({ launcher: () => join(dir, 'nope') })
+  it('M-1: provisioned but the launcher is missing (null, not on disk, relative or throwing) → refused, never the plain bin', () => {
+    const refused = { bin: '/bin/sh', args: ['-c', 'printf \'%s\\n\' "$1" >&2; exit 125', 'forge-cu', DISCLAIM_REFUSED], disclaimed: false, refused: true }
+    for (const launcherFn of [() => null, () => join(dir, 'nope'), () => 'launcher', () => { throw new Error('x') }]) {
+      on({ launcher: launcherFn })
+      expect(disclaimedSpawnArgs('claude', ['-p'], { PATH: binDir })).toEqual(refused)
+    }
+  })
+
+  it('M-1: not provisioned with no launcher stays the original call', () => {
+    on({ launcher: () => null, enabled: () => false })
     expect(disclaimedSpawnArgs('claude', [], { PATH: binDir })).toEqual({ bin: 'claude', args: [], disclaimed: false })
   })
 
@@ -113,10 +119,8 @@ describe('disclaimedSpawnArgs', () => {
     expect(disclaimedSpawnArgs('claude', [], { PATH: 'bin' }, dir).args).toEqual(['exec', '--', claudeAbs])
   })
 
-  it('a throwing enabled()/launcher() falls back to the original spawn', () => {
+  it('a throwing enabled() falls back to the original spawn', () => {
     on({ enabled: () => { throw new Error('x') } })
-    expect(disclaimedSpawnArgs('claude', [], { PATH: binDir }).disclaimed).toBe(false)
-    on({ launcher: () => { throw new Error('x') } })
     expect(disclaimedSpawnArgs('claude', [], { PATH: binDir }).disclaimed).toBe(false)
   })
 
@@ -172,6 +176,16 @@ describe('spawnAgent goes through the seam', () => {
     expect(calls[0].bin).toBe('claude')
     expect(calls[0].args).toEqual(['-p'])
     expect(liveAgentChildren()).toContainEqual({ pid: child.pid, disclaimed: false })
+    ;(child as unknown as EventEmitter).emit('close')
+  })
+
+  it('M-1: provisioned and the launcher gone: execa runs the refusal (exit 125 with the reason on stderr), not the agent', () => {
+    on({ launcher: () => null })
+    const child = spawnAgent('claude', ['-p', 'q'], { env: { PATH: binDir }, reject: false })
+    expect(calls).toHaveLength(1)
+    expect(calls[0].bin).toBe('/bin/sh')
+    expect(calls[0].args).not.toContain(claudeAbs)
+    expect(calls[0].args.at(-1)).toBe(DISCLAIM_REFUSED)
     ;(child as unknown as EventEmitter).emit('close')
   })
 

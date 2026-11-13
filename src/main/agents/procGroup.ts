@@ -45,7 +45,8 @@ const disclaimedSet = new WeakSet<KillableChild>()
 // `forge-cu exec -- <绝对路径> <args…>` 起:forge-cu 用 POSIX_SPAWN_SETEXEC + disclaim 原地换成目标程序,
 // pid 不变,所以进程组、killTree、execa 的选项全都照旧。
 //
-// ★ 没开通 / 非 darwin / helper 不在 / bin 在 PATH 上找不到 → 原样走 execa(bin, args),与今天字节一致。
+// ★ 没开通 / 非 darwin / bin 在 PATH 上找不到 → 原样走 execa(bin, args),与今天字节一致。
+//   已开通但 helper 不在 → 拒绝(M-1):跑 /bin/sh 打一行原因、退出 125,agent 不启动。
 //   找不到 bin 时不包,是为了保留原来的 ENOENT 行为(上层靠它报「没装这个 CLI」)。
 // ★ 这是所有 agent spawn 的唯一入口:spawnAgent 走它,codexAppServer / usage/codexRpc 的默认 spawn 也是
 //   spawnAgent。index.ts 启动时 configureDisclaim(Task 8),在任何 agent spawn 之前。
@@ -84,22 +85,30 @@ export function resolveOnPath(bin: string, path: string | undefined, cwd: string
   return null
 }
 
+/** stderr of a refused spawn (M-1); the exit code is 125, the same as forge-cu exec without the disclaim SPI */
+export const DISCLAIM_REFUSED = 'myFlowForge: 电脑操作组件缺失 · 为免 agent 继承本应用的授权,没有启动 · 请重新安装应用'
+
 export function disclaimedSpawnArgs(
   bin: string, args: readonly string[], env: NodeJS.ProcessEnv, cwd?: string,
-): { bin: string; args: string[]; disclaimed: boolean } {
+): { bin: string; args: string[]; disclaimed: boolean; refused?: true } {
   const original = { bin, args: [...args], disclaimed: false }
+  let abs: string | null = null
   try {
     if (disclaimCfg.platform !== 'darwin') return original
     if (disclaimCfg.enabled() !== true) return original
-    const launcher = disclaimCfg.launcher()
-    if (!launcher || !isAbsolute(launcher) || !isExecFile(launcher)) return original
-    const abs = resolveOnPath(bin, env.PATH, cwd)
+    abs = resolveOnPath(bin, env.PATH, cwd)
     if (!abs) return original
-    return { bin: launcher, args: ['exec', '--', abs, ...args], disclaimed: true }
   } catch {
-    // 读设置 / 找 helper 出了意外:退回今天的行为。开档时 setMode 会因为有未断继承的活进程而 restart_required。
+    // 读设置出了意外:没锁存过就是没开通,照今天的行为
     return original
   }
+  // ★M-1 失败即关:已开通、bin 找得到、helper 却不在 → 不起 agent(否则它带着 app 的授权跑),改跑一句报错退出 125
+  let launcher: string | null = null
+  try { launcher = disclaimCfg.launcher() } catch { launcher = null }
+  if (!launcher || !isAbsolute(launcher) || !isExecFile(launcher)) {
+    return { bin: '/bin/sh', args: ['-c', `printf '%s\\n' "$1" >&2; exit 125`, 'forge-cu', DISCLAIM_REFUSED], disclaimed: false, refused: true }
+  }
+  return { bin: launcher, args: ['exec', '--', abs, ...args], disclaimed: true }
 }
 
 /** 原生 spawn 的调用方(codexAppServer)拿这个去拼选项,好跟 spawnAgent 保持同一套进程组语义。 */
