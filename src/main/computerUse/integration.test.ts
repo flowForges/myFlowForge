@@ -224,3 +224,14 @@ describe('stop and lock, end to end', () => {
     expect(t.driver.posts).toHaveLength(0)
   })
 })
+
+describe('never enabled: nothing on disk', () => {
+  it('the renderer\'s mount-time log pull and a session close on a fresh machine create no computer-use dir', async () => {
+    const cuRoot = join(root, 'never', 'computer-use')
+    const log = createActionLog(cuRoot)
+    expect(await log.list(KEY)).toEqual([])
+    expect(await log.thumb(KEY, 't0001.jpg')).toBeNull()
+    await log.remove(KEY)
+    expect(() => statSync(join(root, 'never'))).toThrow()
+  })
+})
