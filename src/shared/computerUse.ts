@@ -485,3 +485,24 @@ export interface CuActionView {
   combo?: string
   repeat?: number
 }
+
+// ───────────────────────── 界面上的码 → 文字(浮窗、系统通知、输入框、设置页共用) ─────────────────────────
+
+/** 动作类型的短标签。系统通知的正文只有它(不带文字内容、不带截图,§5.7)。 */
+export const CU_KIND_LABEL: Readonly<Record<CuActionKind | 'continue', string>> = {
+  click: '点击', move: '移动', drag: '拖动', scroll: '滚动', type: '输入', key: '按键', continue: '继续',
+}
+
+/** `setMode` 的拒绝码。`stopped` = 开档途中被急停 / 锁屏 / 关档抢先。 */
+export type CuSetModeCode = 'not_local' | 'busy' | 'unsupported' | 'restart_required' | 'no_physical' | 'stopped'
+export const CU_SET_MODE_ERR: Readonly<Record<CuSetModeCode, string>> = {
+  not_local: '只能在本机开启电脑操作',
+  busy: '另一个会话正在使用电脑操作',
+  unsupported: CU_ERR.unsupported,
+  restart_required: CU_ERR.restart_required,
+  no_physical: '请直接用鼠标或键盘切换档位',
+  stopped: '电脑操作刚被停止 · 请重新开启',
+}
+
+/** 设置页「组件」行的 chip。`failed` 是单独一档:组件在,但起不来或不能断继承。 */
+export const CU_HELPER_LABEL: Readonly<Record<CuStatus['helper'], string>> = { ok: '就绪', missing: '缺失', failed: '无法启动' }

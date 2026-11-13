@@ -18,6 +18,13 @@ describe('registry', () => {
     expect(GLOBAL_ACTIONS.every(a => a.scope === 'global')).toBe(true)
     expect(APP_ACTIONS.every(a => a.scope === 'app')).toBe(true)
   })
+  it('computer-use-stop: a global action bound to ⌃⌥⌘⎋ by default (spec §6 T5)', () => {
+    expect(KEYBINDING_ACTIONS.find(a => a.id === 'computer-use-stop')).toEqual({
+      id: 'computer-use-stop', scope: 'global', group: '全局', label: '停止电脑操作', desc: '立即关闭所有会话的电脑操作', defaultAccel: 'Control+Alt+Command+Escape',
+    })
+    expect(GLOBAL_ACTIONS.map(a => a.id)).toEqual(['toggle-main-window', 'toggle-pet', 'computer-use-stop'])
+    expect(effectiveBindings({})['computer-use-stop']).toBe('Control+Alt+Command+Escape')
+  })
   it('default bindings have no in-app duplicates', () => {
     const dups = findDuplicates(effectiveBindings({}))
     expect([...dups.keys()]).toEqual([])

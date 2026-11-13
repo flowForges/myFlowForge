@@ -4,7 +4,8 @@ import {
   computerUseConflict, COMPUTER_TOOLS, parseCombo, prettyCombo, comboMatchesAccelerator, NAMED_KEYCODES,
   BLOCKED_BUNDLES, ASK_ALWAYS_BUNDLES, SYSTEM_UI_OWNERS, OWN_BUNDLE_PREFIX, classify,
   screenshotSize, toPoint, visibleText, wrapUntrusted, screenNotice, computerToolLabel, CU_ERR, CU_SCHEMAS, CU_SHAPES, comboKeycode,
-  type CuStatus, type ParsedCombo,
+  CU_KIND_LABEL, CU_SET_MODE_ERR, CU_HELPER_LABEL,
+  type CuStatus, type ParsedCombo, type CuSetModeCode,
 } from './computerUse'
 
 const okStatus: CuStatus = { supported: true, osOK: true, helper: 'ok', screen: true, ax: true, osVersion: '26.6' }
@@ -440,5 +441,24 @@ describe('CU_SCHEMAS hardening (M-1, M-2)', () => {
     bad('computer_type', { text: 'a\ud800b' })
     bad('computer_type', { text: 'a\udc00' })
     good('computer_type', { text: 'a😀b\n' })
+  })
+})
+
+// Task 8: the labels the overlay, the OS notification and the later UI tasks show for codes the service returns.
+describe('UI labels for codes (Task 8)', () => {
+  it('every action kind and the continue gate has a short label', () => {
+    expect(CU_KIND_LABEL).toEqual({ click: '点击', move: '移动', drag: '拖动', scroll: '滚动', type: '输入', key: '按键', continue: '继续' })
+  })
+  it('every setMode refusal, including stopped, has its own sentence', () => {
+    const codes: CuSetModeCode[] = ['not_local', 'busy', 'unsupported', 'restart_required', 'no_physical', 'stopped']
+    for (const c of codes) expect(typeof CU_SET_MODE_ERR[c]).toBe('string')
+    expect(new Set(codes.map((c) => CU_SET_MODE_ERR[c])).size).toBe(codes.length)
+    expect(Object.keys(CU_SET_MODE_ERR).sort()).toEqual([...codes].sort())
+  })
+  it('the post codes from the guarded driver (locked, denied, stopped) have CU_ERR sentences', () => {
+    for (const c of ['locked', 'denied', 'stopped', 'target_changed', 'helper_failed'] as const) expect(CU_ERR[c]).toBeTruthy()
+  })
+  it('helper:failed has its own label, distinct from missing', () => {
+    expect(CU_HELPER_LABEL).toEqual({ ok: '就绪', missing: '缺失', failed: '无法启动' })
   })
 })

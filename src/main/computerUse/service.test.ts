@@ -885,6 +885,47 @@ describe('I-1: the token file is short-lived', () => {
   })
 })
 
+describe('endTurn deletes the per-token mcp config again (Task 8, V16 ②)', () => {
+  it('a later turn rewrites mcp.cu-<hash>.json; endTurn removes it and the token keeps working', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cu-end-'))
+    try {
+      const t = setup({ configDir: dir })
+      const tok = await t.on(A)
+      const write = () => forgeMcpArgs({
+        FORGE_SOCKET: join(dir, 'cu.sock'), FORGE_MCP_DIR: dir, FORGE_AGENT_ID: tok,
+        FORGE_MCP_ENTRY: '/x/forgeMcp.js', FORGE_TOOLS: COMPUTER_TOOLS.join(','),
+      })[1]
+      write()
+      t.svc.beginTurn(A, 'local')
+      expect((await t.svc.handle(tok, 'cursor', {}, {})).ok).toBe(true)
+      t.svc.endTurn(A)
+      // turn 2: buildClaudeChatArgs writes the file again before spawning; the first call no longer deletes it
+      const file = write()
+      t.svc.beginTurn(A, 'local')
+      expect((await t.svc.handle(tok, 'cursor', {}, {})).ok).toBe(true)
+      expect(existsSync(file)).toBe(true)
+      t.svc.endTurn(A)
+      expect(existsSync(file)).toBe(false)
+      expect(t.svc.tokenFor(A)).toBe(tok)
+      t.svc.beginTurn(A, 'local')
+      expect((await t.svc.handle(tok, 'cursor', {}, {})).ok).toBe(true)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('endTurn of a session that is off, or with no config dir, touches nothing', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cu-end-'))
+    try {
+      const t = setup({ configDir: dir })
+      t.svc.beginTurn(B, 'local')
+      expect(() => t.svc.endTurn(B)).not.toThrow()
+      const t2 = setup({ configDir: null })
+      await t2.on(A)
+      t2.svc.beginTurn(A, 'local')
+      expect(() => t2.svc.endTurn(A)).not.toThrow()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+})
+
 describe('I-2: stop / lock / off during setMode\'s awaits win', () => {
   for (const [name, ev] of [
     ['lock', (t: ReturnType<typeof setup>) => t.svc.onLock()],

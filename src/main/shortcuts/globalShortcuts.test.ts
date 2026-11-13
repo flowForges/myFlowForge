@@ -48,4 +48,18 @@ describe('registerGlobalShortcuts', () => {
     const { failed } = registerGlobalShortcuts({}, handlers, gs)
     expect(failed.sort()).toEqual(['toggle-main-window', 'toggle-pet'])
   })
+
+  it('registers the computer-use stop accelerator only when its handler is given (Task 8)', () => {
+    const stop = vi.fn()
+    const gs = fakeGs()
+    expect(registerGlobalShortcuts({}, { ...handlers, 'computer-use-stop': stop }, gs).failed).toEqual([])
+    gs.registered.get('Control+Alt+Command+Escape')!()
+    expect(stop).toHaveBeenCalledTimes(1)
+    const gs2 = fakeGs()
+    registerGlobalShortcuts({}, handlers, gs2)
+    expect(gs2.registered.has('Control+Alt+Command+Escape')).toBe(false)
+    const gs3 = fakeGs()
+    registerGlobalShortcuts({ 'computer-use-stop': 'Control+Alt+Command+F12' }, { 'computer-use-stop': stop }, gs3)
+    expect([...gs3.registered.keys()]).toEqual(['Control+Alt+Command+F12'])
+  })
 })

@@ -429,6 +429,10 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
     endTurn(key) {
       const k = keyId(key)
       turns.delete(k)
+      // V16 ②: buildClaudeChatArgs rewrote mcp.cu-<hash>.json for this turn, and only a token's first call deletes it.
+      // The CLI has long since read it, so it goes now; the next turn writes it again before spawning.
+      const s = sessions.get(k)
+      if (s) removeTokenFile(s.token)
       closeGatesOf(k, 'deny')
       abortInFlight(k)   // M-2: the turn is over, so is its action
     },

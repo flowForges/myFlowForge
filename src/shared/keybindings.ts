@@ -21,6 +21,8 @@ export const KEYBINDING_ACTIONS: ActionDef[] = [
   // ── 系统级(全局,后台也生效) ──────────────────────────────────────────────
   { id: 'toggle-main-window', scope: 'global', group: '全局', label: '显示 / 隐藏主窗口', desc: '一键从后台唤起主窗口,或再次按下收起', defaultAccel: 'CommandOrControl+Alt+F' },
   { id: 'toggle-pet', scope: 'global', group: '全局', label: '显示 / 隐藏宠物', desc: '切换桌面宠物窗口的可见性', defaultAccel: 'CommandOrControl+Shift+P' },
+  // 电脑操作的急停(spec §6 T5)。只在 macOS 上、且有会话开着电脑操作时才向系统注册(index.ts)。
+  { id: 'computer-use-stop', scope: 'global', group: '全局', label: '停止电脑操作', desc: '立即关闭所有会话的电脑操作', defaultAccel: 'Control+Alt+Command+Escape' },
   // ── 应用内(仅主窗口聚焦时生效) ──────────────────────────────────────────
   { id: 'new-workspace', scope: 'app', group: '工作区与会话', label: '新建工作区', desc: '打开新建工作区向导', defaultAccel: 'CommandOrControl+N' },
   { id: 'new-session', scope: 'app', group: '工作区与会话', label: '新建会话', desc: '在当前工作区开一个新会话', defaultAccel: 'CommandOrControl+T' },
