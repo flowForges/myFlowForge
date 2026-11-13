@@ -54,3 +54,26 @@ describe('codex: -c overrides for a cu token', () => {
     expect(args.find((a) => a.startsWith('mcp_servers.forge.env='))).toMatch(/FORGE_AGENT_ID="stage:dev"/)
   })
 })
+
+// Review Focus 6: computer tools wait on the user's approval (up to 5 min) — codex's default MCP tool timeout is
+// far shorter, so a long one is set, and only when computer tools are named.
+describe('codex: tool_timeout_sec for computer tools', () => {
+  const TIMEOUT = 'mcp_servers.forge.tool_timeout_sec=600'
+  it('is added when FORGE_TOOLS names a computer_ tool (cu token or not)', () => {
+    expect(forgeCodexConfigArgs(env())).toEqual(expect.arrayContaining(['-c', TIMEOUT]))
+    const a = forgeCodexConfigArgs({ ...env(), FORGE_AGENT_ID: 'stage:dev', FORGE_TOOLS: 'forge_ask,computer_click' })
+    expect(a.slice(-2)).toEqual(['-c', TIMEOUT])
+  })
+  it('is absent otherwise, and the args are exactly what they were', () => {
+    const base = { FORGE_SOCKET: '/s.sock', FORGE_AGENT_ID: 'develop:projA', FORGE_MCP_ENTRY: '/x/forgeMcp.js' }
+    for (const tools of [undefined, '', 'forge_ask,forge_handoff', 'forge_computer_ish']) {
+      const e = tools === undefined ? base : { ...base, FORGE_TOOLS: tools }
+      const a = forgeCodexConfigArgs(e)
+      expect(a.some((x) => x.includes('tool_timeout_sec'))).toBe(false)
+      expect(a).toHaveLength(6)
+    }
+  })
+  it('is not added when forge is not injected at all', () => {
+    expect(forgeCodexConfigArgs({ FORGE_TOOLS: 'computer_click' })).toEqual([])
+  })
+})

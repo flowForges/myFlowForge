@@ -118,6 +118,13 @@ export function forgeAllowedToolNames(env: NodeJS.ProcessEnv): string[] {
 export function forgeCodexConfigArgs(env: NodeJS.ProcessEnv): string[] {
   const spec = forgeServerSpec(env)
   if (!spec) return []
+  // A computer tool can wait up to 5 min on the user's approval card; codex's default tool timeout is far shorter.
+  const names = (env.FORGE_TOOLS ?? '').split(',').map(t => t.trim())
+  const timeout = names.some(t => t.startsWith('computer_')) ? ['-c', 'mcp_servers.forge.tool_timeout_sec=600'] : []
+  return [...forgeCodexServerArgs(spec), ...timeout]
+}
+
+function forgeCodexServerArgs(spec: ForgeServerSpec): string[] {
   if (isCuToken(spec.env.FORGE_AGENT_ID ?? '')) {
     // I-1: keep the token out of argv. codex forwards FORGE_AGENT_ID from its own env (the turn's env) to the
     // MCP child instead. If a codex build ignores env_vars, the child has no agent id and every call fails
