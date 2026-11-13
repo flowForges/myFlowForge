@@ -144,6 +144,8 @@ func maskRects(_ wins: [WinInfo], bundleOf: (Int32) -> String?, maskPids: [Int32
 struct Guard {
   var denyPids: [Int32] = []; var denyBundlePrefixes: [String] = []
   var expectPid: Int32?; var expectWindowId: Int?; var pointer: CGPoint?
+  /// drag only: the window under the drop point when the app approved it (both required when either is set)
+  var expectEndPid: Int32?; var expectEndWindowId: Int?
 }
 
 func parseGuard(_ v: Any?) -> Guard {
@@ -152,7 +154,9 @@ func parseGuard(_ v: Any?) -> Guard {
                denyBundlePrefixes: d["denyBundlePrefixes"] as? [String] ?? [],
                expectPid: int32(d["expectPid"]),
                expectWindowId: (d["expectWindowId"] as? NSNumber)?.intValue,
-               pointer: point(d["pointer"]))
+               pointer: point(d["pointer"]),
+               expectEndPid: int32(d["expectEndPid"]),
+               expectEndWindowId: (d["expectEndWindowId"] as? NSNumber)?.intValue)
 }
 
 struct Hit: Equatable {
@@ -194,10 +198,21 @@ func keyboardCheck(_ g: Guard, axPid: Int32?, wsPid: Int32?, bundle: String?, se
 /// that app now covers `to`).
 func dragEndCheck(_ g: Guard, startPid: Int32?, fromPid: Int32? = nil, end: Hit?) -> String? {
   if let e = end, denied(g, pid: e.pid, bundle: e.bundleId) { return "target_changed" }
+  if g.expectEndPid != nil || g.expectEndWindowId != nil {
+    // the app approved one window under `to`: pid AND window must still be the ones, at the moment of release.
+    // Exception: a window of the drag's own source app (a window drag puts the dragged window there).
+    guard let e = end else { return "target_changed" }
+    if let f = fromPid, f == e.pid { return nil }
+    guard let ep = g.expectEndPid, let ew = g.expectEndWindowId else { return "target_changed" }
+    return (ep == e.pid && ew == e.windowId) ? nil : "target_changed"
+  }
   if startPid == end?.pid { return nil }
   if let f = fromPid, f == end?.pid { return nil }
   return "target_changed"
 }
+
+/// Spec §9: positive `dy` scrolls down. CGEvent's wheel axis 1 is positive for up, so the sign flips here (once).
+func wheelValue(_ lines: Int) -> Int32 { Int32(-lines) }
 
 /// Cross-checks the CG hit with the AX element at the point and with what lies beneath (`under` = every
 /// window containing the point, front to back, alpha 0 included). A click-through overlay (an app's

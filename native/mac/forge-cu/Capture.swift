@@ -82,7 +82,9 @@ func cropReply(_ body: [String: Any]) -> [String: Any] {
   let src = r.intersection(main)
   guard !src.isNull, src.width >= 1, src.height >= 1 else { return errorReply(id: nil, code: "invalid_args") }
   let backing = backingScale()
-  let w = max(1, Int((src.width * backing).rounded())), h = max(1, Int((src.height * backing).rounded()))
+  var w = max(1, Int((src.width * backing).rounded())), h = max(1, Int((src.height * backing).rounded()))
+  // optional downscale for thumbnails: long edge ≤ maxW, never upscaled
+  if let m = (body["maxW"] as? NSNumber)?.intValue, m > 0 { (w, h) = fitSize(srcW: w, srcH: h, maxW: m, maxH: m) }
   let before = masks(body)
   let img: CGImage
   switch captureMain(srcPt: src, outW: w, outH: h, body: body) {

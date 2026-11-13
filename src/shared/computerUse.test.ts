@@ -3,7 +3,7 @@ import {
   COMPUTER_USE_MODES, COMPUTER_USE_CHIP, COMPUTER_USE_PROVIDERS, providerSupportsComputerUse,
   computerUseConflict, COMPUTER_TOOLS, parseCombo, prettyCombo, comboMatchesAccelerator, NAMED_KEYCODES,
   BLOCKED_BUNDLES, ASK_ALWAYS_BUNDLES, SYSTEM_UI_OWNERS, OWN_BUNDLE_PREFIX, classify,
-  screenshotSize, toPoint, visibleText, wrapUntrusted, screenNotice, computerToolLabel, CU_ERR, CU_SCHEMAS, CU_SHAPES,
+  screenshotSize, toPoint, visibleText, wrapUntrusted, screenNotice, computerToolLabel, CU_ERR, CU_SCHEMAS, CU_SHAPES, comboKeycode,
   type CuStatus, type ParsedCombo,
 } from './computerUse'
 
@@ -83,8 +83,8 @@ describe('parseCombo / prettyCombo', () => {
   })
   it('punctuation keys', () => {
     expect(parseCombo('cmd+=')).toEqual({ mods: ['cmd'], key: { char: '=' } })
-    expect(parseCombo('cmd++')).toEqual({ mods: ['cmd'], key: { char: '+' } })
-    expect(parseCombo('+')).toEqual({ mods: [], key: { char: '+' } })
+    expect(parseCombo('cmd++')).toEqual({ mods: ['cmd', 'shift'], key: { char: '=' } })
+    expect(parseCombo('+')).toEqual({ mods: ['shift'], key: { char: '=' } })
   })
   it('ctrl+alt+cmd+escape', () => {
     expect(parseCombo('ctrl+alt+cmd+escape')).toEqual({ mods: ['cmd', 'ctrl', 'alt'], key: { named: 'escape' } })
@@ -389,5 +389,56 @@ describe('CU_SCHEMAS', () => {
     bad('computer_drag', { from: { x: 1, y: 1 } })
     good('computer_cursor', {})
     good('computer_front_app', {})
+  })
+})
+
+describe('key combos resolve to ANSI keycodes (I-4)', () => {
+  it('shifted symbols become the base key plus shift', () => {
+    expect(parseCombo('alt+!')).toEqual({ mods: ['alt', 'shift'], key: { char: '1' } })
+    expect(parseCombo('cmd+?')).toEqual({ mods: ['cmd', 'shift'], key: { char: '/' } })
+    expect(parseCombo('cmd+shift+!')).toEqual({ mods: ['cmd', 'shift'], key: { char: '1' } })
+  })
+  it('non-ASCII characters are refused, not looked up on the layout', () => {
+    for (const s of ['cmd+м', 'cmd+alt+а', 'é', 'cmd+ß', 'cmd+€']) expect('error' in parseCombo(s)).toBe(true)
+  })
+  it('comboKeycode gives the physical code', () => {
+    const c = (s: string) => comboKeycode(parseCombo(s) as ParsedCombo)
+    expect(c('cmd+t')).toBe(17)
+    expect(c('cmd+=')).toBe(24)
+    expect(c('alt+!')).toBe(18)
+    expect(c('return')).toBe(36)
+    expect(c('cmd+v')).toBe(9)
+  })
+  it('accelerators match on the resolved key and shift', () => {
+    expect(comboMatchesAccelerator(ok(parseCombo('cmd+!')), 'Command+Shift+1')).toBe(true)
+    expect(comboMatchesAccelerator(ok(parseCombo('cmd+1')), 'Command+Shift+1')).toBe(false)
+  })
+  it('paste combos are still recognised', () => {
+    const own = { ownPid: 1, extraBlocked: [], extraAskAlways: [], ownAccelerators: [], frontIsOwn: false }
+    expect(classify({ pid: 2 }, 'key', ok(parseCombo('cmd+V')), own)).toEqual({ kind: 'askAlways', reason: '剪贴板' })
+  })
+})
+
+describe('CU_SCHEMAS hardening (M-1, M-2)', () => {
+  const bad = (tool: keyof typeof CU_SCHEMAS, v: unknown) => expect(CU_SCHEMAS[tool].safeParse(v).success).toBe(false)
+  const good = (tool: keyof typeof CU_SCHEMAS, v: unknown) => expect(CU_SCHEMAS[tool].safeParse(v).success).toBe(true)
+  it('unknown keys are rejected; visionCode is accepted on move', () => {
+    bad('computer_click', { x: 1, y: 2, sneaky: 1 })
+    bad('computer_screenshot', { foo: 1 })
+    good('computer_move', { x: 1, y: 2, visionCode: 'ABCD' })
+  })
+  it('scroll needs a direction; combo must parse', () => {
+    bad('computer_scroll', { x: 1, y: 2 })
+    bad('computer_scroll', { x: 1, y: 2, dx: 0, dy: 0 })
+    good('computer_scroll', { x: 1, y: 2, dx: 1 })
+    bad('computer_key', { combo: 'cmd+nonsense' })
+    bad('computer_key', { combo: 'cmd+м' })
+    good('computer_key', { combo: 'cmd+t' })
+  })
+  it('text refuses NUL and lone surrogates', () => {
+    bad('computer_type', { text: 'a\u0000b' })
+    bad('computer_type', { text: 'a\ud800b' })
+    bad('computer_type', { text: 'a\udc00' })
+    good('computer_type', { text: 'a😀b\n' })
   })
 })

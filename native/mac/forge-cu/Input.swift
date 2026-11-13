@@ -207,7 +207,7 @@ final class Poster {
       if !first { try pause(15); guard pointerOK(g, at: g.pointer ?? p) else { throw Changed() } }
       first = false
       let sy = max(-10, min(10, dy)), sx = max(-10, min(10, dx))
-      try send(CGEvent(scrollWheelEvent2Source: src, units: .line, wheelCount: 2, wheel1: Int32(sy), wheel2: Int32(sx), wheel3: 0))
+      try send(CGEvent(scrollWheelEvent2Source: src, units: .line, wheelCount: 2, wheel1: wheelValue(sy), wheel2: Int32(sx), wheel3: 0))
       dy -= sy; dx -= sx
     }
   }
@@ -235,6 +235,7 @@ final class Poster {
     }
     // V7d: re-check the drop point; on a change drag back to `from` and drop there
     var den = Guard(); den.denyPids = g.denyPids; den.denyBundlePrefixes = g.denyBundlePrefixes
+    den.expectEndPid = g.expectEndPid; den.expectEndWindowId = g.expectEndWindowId
     if inputBlockedBySession() || dragEndCheck(den, startPid: toPidAtStart, fromPid: fromPid, end: hitTest(to)) != nil {
       for i in 1...5 {
         try pause(15)
@@ -275,14 +276,12 @@ final class Poster {
   }
 
   private func keyAction(_ a: [String: Any], _ g: Guard) throws {
-    var mods = a["mods"] as? [String] ?? []
+    let mods = a["mods"] as? [String] ?? []
     let code: UInt16
     if let c = (a["code"] as? NSNumber)?.uint16Value {
       code = c
-    } else if let s = a["char"] as? String, let ch = s.first, let k = layoutKeycode(ch) ?? ansiKeycode(ch) {
-      code = k.code
-      if k.shift && !mods.contains("shift") { mods.append("shift") }
     } else {
+      // the app resolves characters to ANSI keycodes (and the implied shift); the helper never consults the layout for `key`
       throw Changed()
     }
     let repeatN = clampInt(num(a["repeat"]), 1, 100)

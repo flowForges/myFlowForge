@@ -159,6 +159,21 @@ do {
   var moved = notes; moved.pid = 400
   eq(dragEndCheck(open, startPid: 321, fromPid: 400, end: moved), nil, "the dragged app's own window (window drag) is fine")
   eq(dragEndCheck(open, startPid: 321, fromPid: 459, end: ours), "target_changed", "ours even when it is the source")
+
+  // I-2: the approved drop window (pid AND windowId) is pinned at the moment of release
+  let pinned = parseGuard(["denyPids": [459], "denyBundlePrefixes": ["com.zghua.myflowforge"], "expectEndPid": 321, "expectEndWindowId": 9])
+  eq(dragEndCheck(pinned, startPid: 321, end: notes), nil, "pinned drop: same pid and window")
+  var newWin = notes; newWin.windowId = 10
+  eq(dragEndCheck(pinned, startPid: 321, end: newWin), "target_changed", "pinned drop: same pid, a new window appeared")
+  eq(dragEndCheck(pinned, startPid: 321, end: other), "target_changed", "pinned drop: other pid")
+  eq(dragEndCheck(pinned, startPid: 321, end: nil), "target_changed", "pinned drop: nothing there any more")
+  eq(dragEndCheck(pinned, startPid: 321, fromPid: 400, end: moved), nil, "pinned drop: the source app's own dragged window is fine")
+  let half = parseGuard(["denyPids": [459], "expectEndPid": 321])
+  eq(dragEndCheck(half, startPid: 321, end: notes), "target_changed", "pid without window id is refused")
+  // I-3: positive dy scrolls down; CGEvent wheel1 is positive for up
+  eq(wheelValue(3), -3, "dy 3 (down) -> wheel -3")
+  eq(wheelValue(-5), 5, "dy -5 (up) -> wheel 5")
+  eq(wheelValue(0), 0, "no scroll")
 }
 
 // ── typing segments ───────────────────────────────────────────────────────────

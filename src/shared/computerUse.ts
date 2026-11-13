@@ -87,7 +87,7 @@ const visionCode = z.string().max(16).optional()
 export const CU_SHAPES = {
   computer_screenshot: { region: z.object({ x: z.number().int().min(0), y: z.number().int().min(0), w: z.number().int().min(1), h: z.number().int().min(1) }).optional() },
   computer_click: { x: coord, y: coord, button: z.enum(['left', 'right', 'middle']).optional(), clicks: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(), modifiers: mods, visionCode },
-  computer_move: { x: coord, y: coord },
+  computer_move: { x: coord, y: coord, visionCode },
   computer_drag: { from: xy, to: xy, button: z.literal('left').optional(), modifiers: mods, visionCode },
   computer_scroll: { x: coord, y: coord, dy: z.number().int().min(-30).max(30).optional(), dx: z.number().int().min(-30).max(30).optional(), visionCode },
   computer_type: { text: z.string().min(1).max(500), visionCode },
@@ -97,17 +97,26 @@ export const CU_SHAPES = {
   computer_front_app: {},
 } as const
 
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+const strictObj = <T extends z.ZodRawShape>(shape: T) => z.object(shape).strict()
+
 export const CU_SCHEMAS = {
-  computer_screenshot: z.object(CU_SHAPES.computer_screenshot),
-  computer_click: z.object(CU_SHAPES.computer_click),
-  computer_move: z.object(CU_SHAPES.computer_move),
-  computer_drag: z.object(CU_SHAPES.computer_drag),
-  computer_scroll: z.object(CU_SHAPES.computer_scroll),
-  computer_type: z.object(CU_SHAPES.computer_type),
-  computer_key: z.object(CU_SHAPES.computer_key),
-  computer_wait: z.object(CU_SHAPES.computer_wait),
-  computer_cursor: z.object(CU_SHAPES.computer_cursor),
-  computer_front_app: z.object(CU_SHAPES.computer_front_app),
+  computer_screenshot: strictObj(CU_SHAPES.computer_screenshot),
+  computer_click: strictObj(CU_SHAPES.computer_click),
+  computer_move: strictObj(CU_SHAPES.computer_move),
+  computer_drag: strictObj(CU_SHAPES.computer_drag),
+  computer_scroll: strictObj(CU_SHAPES.computer_scroll)
+    .refine((v) => (v.dx ?? 0) !== 0 || (v.dy ?? 0) !== 0, { message: 'dx 和 dy 不能都是 0', path: ['dy'] }),
+  computer_type: strictObj(CU_SHAPES.computer_type)
+    .refine((v) => !v.text.includes('\u0000') && !LONE_SURROGATE.test(v.text), { message: '文字含有不能输入的字符', path: ['text'] }),
+  computer_key: strictObj(CU_SHAPES.computer_key)
+    .superRefine((v, ctx) => {
+      const c = parseCombo(v.combo)
+      if ('error' in c) ctx.addIssue({ code: 'custom', path: ['combo'], message: `${c.error} · 可用的键名:${c.known.join(' ')}` })
+    }),
+  computer_wait: strictObj(CU_SHAPES.computer_wait),
+  computer_cursor: strictObj(CU_SHAPES.computer_cursor),
+  computer_front_app: strictObj(CU_SHAPES.computer_front_app),
 } as const
 
 // ───────────────────────── 组合键 ─────────────────────────
@@ -123,6 +132,26 @@ export const NAMED_KEYCODES = {
   f11: 103, f12: 111, f13: 105, f14: 107, f15: 113, f16: 106, f17: 64, f18: 79, f19: 80, f20: 90,
 } as const
 export type NamedKey = keyof typeof NAMED_KEYCODES
+
+/** US-ANSI 物理键位(kVK_ANSI_*)。`key` 动作永远按这张表发 keycode,不看当前键盘布局。 */
+export const ANSI_KEYCODES: Readonly<Record<string, number>> = {
+  a: 0, s: 1, d: 2, f: 3, h: 4, g: 5, z: 6, x: 7, c: 8, v: 9, b: 11, q: 12, w: 13, e: 14,
+  r: 15, y: 16, t: 17, '1': 18, '2': 19, '3': 20, '4': 21, '6': 22, '5': 23, '=': 24, '9': 25, '7': 26, '-': 27,
+  '8': 28, '0': 29, ']': 30, o: 31, u: 32, '[': 33, i: 34, p: 35, l: 37, j: 38, "'": 39, k: 40, ';': 41,
+  '\\': 42, ',': 43, '/': 44, n: 45, m: 46, '.': 47, '`': 50,
+}
+const ANSI_SHIFTED: Readonly<Record<string, string>> = {
+  '!': '1', '@': '2', '#': '3', '$': '4', '%': '5', '^': '6', '&': '7', '*': '8', '(': '9', ')': '0', _: '-', '+': '=',
+  '{': '[', '}': ']', '|': '\\', ':': ';', '"': "'", '<': ',', '>': '.', '?': '/', '~': '`',
+}
+/** 可打印 ASCII 字符 → 不带 shift 的基础键 + 是否隐含 shift;ASCII 之外 → null。 */
+function ansiResolve(c: string): { char: string; shift: boolean } | null {
+  const l = c.toLowerCase()
+  if (Object.prototype.hasOwnProperty.call(ANSI_KEYCODES, l)) return { char: l, shift: false }
+  if (Object.prototype.hasOwnProperty.call(ANSI_SHIFTED, c)) return { char: ANSI_SHIFTED[c], shift: true }
+  return null
+}
+
 
 export type ParsedCombo = { mods: Mod[]; key: { named: NamedKey } | { char: string } }
 
@@ -188,7 +217,10 @@ export function parseCombo(input: string): ParsedCombo | { error: string; known:
     const c = rest[0]
     if (/[\s\u0000-\u001f\u007f-\u009f]/.test(c)) return fail('按键不是可打印字符')
     if (MOD_NAMES[c]) return fail('只有修饰键，缺少按键')
-    return { mods: sortMods(mods), key: { char: c.toLowerCase() } }
+    const r = ansiResolve(c)
+    if (!r) return fail('按键必须是可打印的 ASCII 字符或命名键')
+    if (r.shift) mods.add('shift')
+    return { mods: sortMods(mods), key: { char: r.char } }
   }
   // 单词形式的修饰键放在末尾:cmd / shift 之类
   if (MOD_NAMES[tok.toLowerCase()]) return fail('只有修饰键，缺少按键')
@@ -213,14 +245,21 @@ export function comboMatchesAccelerator(c: ParsedCombo, accel: string): boolean 
   const p = parseAccelerator(accel, 'darwin')
   if (!p) return false
   const want = sortMods(c.mods)
+  const ar = p.key.length === 1 ? ansiResolve(p.key) : null
   const have = sortMods([
+    ...(ar?.shift ? ['shift' as const] : []),
     ...(p.meta ? ['cmd' as const] : []), ...(p.ctrl ? ['ctrl' as const] : []),
     ...(p.alt ? ['alt' as const] : []), ...(p.shift ? ['shift' as const] : []),
   ])
   if (want.join() !== have.join()) return false
   const named = p.key.length > 1 ? resolveNamed(p.key) : null
   if (named) return 'named' in c.key && c.key.named === named
-  return 'char' in c.key && c.key.char === p.key.toLowerCase()
+  return 'char' in c.key && c.key.char === (ar ? ar.char : p.key.toLowerCase())
+}
+
+/** 组合键的物理 keycode(命名键表或 ANSI 表)。parseCombo 保证存在。 */
+export function comboKeycode(c: ParsedCombo): number {
+  return 'named' in c.key ? NAMED_KEYCODES[c.key.named] : ANSI_KEYCODES[c.key.char]
 }
 
 // ───────────────────────── app 分级 ─────────────────────────
