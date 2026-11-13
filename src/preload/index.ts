@@ -4,6 +4,7 @@ import type { AskAnswers, ChatEvent, ChangesEvent, ChatGateSnapshot, ChatQueueEv
 import type { PluginSnapshot } from '@shared/plugins'
 import type { CouncilConfig, CouncilSeat, CouncilState } from '@shared/council'
 import type { HostInput, HostStatusView, RemoteHostView } from '@shared/remote/hostView'
+import { CU_OVERLAY_ARG, type CuOverlayState } from '@shared/computerUse'
 
 const api = {
   // Which OS this window is drawn on. A plain constant, not an IPC call: the renderer needs it during
@@ -613,5 +614,20 @@ const api = {
     },
   },
 }
-contextBridge.exposeInMainWorld('forge', api)
+// The computer-use overlay (src/main/windows/cuOverlay.ts) loads this same preload with CU_OVERLAY_ARG. It gets these
+// four calls and nothing else: no `window.forge`, so a page in that window can't reach any other channel.
+const cuOverlayApi = {
+  onState: (cb: (s: CuOverlayState) => void) => {
+    const listener = (_: unknown, s: CuOverlayState) => cb(s)
+    ipcRenderer.on(CH.cuOverlayState, listener)
+    return (): void => { ipcRenderer.removeListener(CH.cuOverlayState, listener) }
+  },
+  resolve: (id: string, decision: 'allow' | 'deny' | 'stop') => ipcRenderer.invoke(CH.cuResolve, { id, decision }),
+  // no key: stop every session
+  stop: () => ipcRenderer.invoke(CH.cuStop),
+  collapseMain: () => ipcRenderer.invoke(CH.cuCollapseMain),
+}
+if (process.argv.includes(CU_OVERLAY_ARG)) contextBridge.exposeInMainWorld('cuOverlay', cuOverlayApi)
+else contextBridge.exposeInMainWorld('forge', api)
 export type ForgeApi = typeof api
+export type CuOverlayBridge = typeof cuOverlayApi

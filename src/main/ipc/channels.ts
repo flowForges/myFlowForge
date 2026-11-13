@@ -451,6 +451,8 @@ export const CH = {
   cuCollapseMain: 'computer-use:collapse-main',
   // event: local sink only (registry.broadcast), never hub / router (spec V2)
   cuEvent: 'computer-use:event',
+  // event: main → the overlay window only (webContents.send), never broadcast
+  cuOverlayState: 'computer-use:overlay-state',
 } as const
 
 // Individual named exports (in addition to the CH object above) so callers can `import * as CH from

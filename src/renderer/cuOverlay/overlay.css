@@ -1,0 +1,20 @@
+/* The computer-use indicator: a 420×36 pill at the top centre, a 420×220 window while a gate is pending. */
+html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+#cuo-root { width: 100%; height: 100%; }
+.cuo { box-sizing: border-box; width: 100%; height: 100%; padding: 2px 4px; font: 12px/1.3 -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif; color: #f4f4f5; user-select: none; -webkit-user-select: none; }
+.cuo-pill { display: flex; align-items: center; gap: 6px; height: 32px; box-sizing: border-box; padding: 0 6px 0 12px; border-radius: 16px; background: rgba(24, 24, 27, 0.92); border: 1px solid rgba(255, 255, 255, 0.12); white-space: nowrap; transition: box-shadow 0.3s; }
+.cuo-pill.cuo-flash { box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.75); }
+.cuo-dot { color: #ef4444; flex: none; }
+.cuo-title { overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+.cuo-sep { flex: none; opacity: 0.6; }
+.cuo-chip { flex: none; padding: 1px 6px; border-radius: 8px; background: rgba(255, 255, 255, 0.12); }
+.cuo-btn { flex: none; font: inherit; color: inherit; border: 0; cursor: pointer; padding: 3px 10px; border-radius: 10px; background: rgba(255, 255, 255, 0.14); outline: none; }
+.cuo-pill .cuo-collapse { margin-left: auto; }
+.cuo-pill .cuo-stop { background: #dc2626; }
+.cuo-pill .cuo-collapse + .cuo-stop { margin-left: 0; }
+.cuo-pill .cuo-chip + .cuo-stop { margin-left: auto; }
+.cuo-card { margin-top: 4px; box-sizing: border-box; height: 178px; display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: 12px; background: rgba(24, 24, 27, 0.95); border: 1px solid rgba(255, 255, 255, 0.12); }
+.cuo-crop { flex: 1 1 auto; min-height: 0; width: 100%; object-fit: contain; border: 1px solid rgba(255, 255, 255, 0.25); border-radius: 6px; background: #000; }
+.cuo-line { flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cuo-actions { flex: none; display: flex; justify-content: flex-end; gap: 8px; }
+.cuo-actions .cuo-allow { background: #2563eb; }

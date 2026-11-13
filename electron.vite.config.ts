@@ -25,6 +25,6 @@ export default defineConfig({
     root: 'src/renderer',
     plugins: [react()],
     resolve: { alias: { '@shared': resolve('src/shared') } },
-    build: { outDir: 'out/renderer', rollupOptions: { input: { index: resolve('src/renderer/index.html'), pet: resolve('src/renderer/pet.html') } } }
+    build: { outDir: 'out/renderer', rollupOptions: { input: { index: resolve('src/renderer/index.html'), pet: resolve('src/renderer/pet.html'), cuOverlay: resolve('src/renderer/cu-overlay.html') } } }
   }
 })

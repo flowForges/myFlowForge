@@ -528,3 +528,6 @@ export interface CuOverlayState {
   /** 每个动作 +1,浮窗据此闪一下 */
   actionSeq: number
 }
+
+/** 浮窗渲染进程的启动参数:preload 看到它就只暴露 `cuOverlay` 四个方法,不暴露 `window.forge`。 */
+export const CU_OVERLAY_ARG = '--forge-cu-overlay'
