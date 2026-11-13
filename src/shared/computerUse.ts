@@ -274,12 +274,17 @@ export const BLOCKED_BUNDLES: readonly string[] = [
   'com.bitwarden.desktop', 'com.lastpass.LastPass', 'com.dashlane.Dashlane', 'org.keepassxc.keepassxc',
   'com.apple.systempreferences', 'com.apple.SecurityAgent', 'com.apple.LocalAuthentication.UIAgent',
   'com.apple.loginwindow', 'com.apple.ScreenSaver.Engine',
+  // I-3 授权弹窗:TCC / Gatekeeper 的确认框。owner 的 bundle id 要在真机上核对(实测清单「授权弹窗」那条)。
+  'com.apple.UserNotificationCenter', 'com.apple.CoreServicesUIAgent', 'com.apple.accessibility.universalAccessAuthWarn',
 ]
 
 /** 终端类(含能直接跑代码的脚本 app):agent 在里面打字等于绕过 shell 门。 */
 export const TERMINAL_BUNDLES: readonly string[] = [
   'com.apple.Terminal', 'com.googlecode.iterm2', 'dev.warp.Warp-Stable', 'com.mitchellh.ghostty',
   'net.kovidgoyal.kitty', 'com.github.wez.wezterm',
+  'org.alacritty', 'co.zeit.hyper', 'org.tabby',
+  // 自带终端的编辑器:VS Code、Cursor(Cursor 的 bundle id 是 ToDesktop 打包给的这串)
+  'com.microsoft.VSCode', 'com.todesktop.230313mzl4w4u92',
   'com.apple.ScriptEditor2', 'com.apple.Automator', 'com.apple.shortcuts',
 ]
 
@@ -287,6 +292,7 @@ export const TERMINAL_BUNDLES: readonly string[] = [
 export const ASK_ALWAYS_BUNDLES: readonly string[] = [
   ...TERMINAL_BUNDLES,
   'com.apple.Safari', 'com.google.Chrome', 'com.microsoft.edgemac', 'org.mozilla.firefox', 'company.thebrowser.Browser',
+  'com.brave.Browser', 'com.vivaldi.Vivaldi', 'com.google.Chrome.canary',
   'com.apple.AppStore', 'com.apple.Passbook',
 ]
 

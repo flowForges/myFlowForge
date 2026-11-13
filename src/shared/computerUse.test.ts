@@ -191,6 +191,20 @@ describe('classify', () => {
     }
     expect(classify(t('com.apple.Safari'), 'click', null, o)).toEqual({ kind: 'askAlways', reason: '始终询问' })
   })
+  it('I-3: the TCC / Gatekeeper consent owners are blocked in every mode', () => {
+    for (const b of ['com.apple.UserNotificationCenter', 'com.apple.CoreServicesUIAgent', 'com.apple.accessibility.universalAccessAuthWarn']) {
+      expect(classify(t(b), 'click', null, o), b).toEqual({ kind: 'block', code: 'blocked_app' })
+      expect(classify(t(b), 'type', null, o), b).toEqual({ kind: 'block', code: 'blocked_app' })
+    }
+  })
+  it('M-2: more terminals and editors with a terminal ask as 终端; more Chromium browsers ask as 始终询问', () => {
+    for (const b of ['org.alacritty', 'co.zeit.hyper', 'org.tabby', 'com.microsoft.VSCode', 'com.todesktop.230313mzl4w4u92']) {
+      expect(classify(t(b), 'type', null, o), b).toEqual({ kind: 'askAlways', reason: '终端' })
+    }
+    for (const b of ['com.brave.Browser', 'com.vivaldi.Vivaldi', 'com.google.Chrome.canary']) {
+      expect(classify(t(b), 'click', null, o), b).toEqual({ kind: 'askAlways', reason: '始终询问' })
+    }
+  })
   it('paste combos are clipboard asks, copy is not', () => {
     for (const s of ['cmd+v', 'cmd+shift+v', 'ctrl+v', 'cmd+alt+shift+v']) {
       expect(classify(t('com.apple.finder'), 'key', ok(parseCombo(s)), o)).toEqual({ kind: 'askAlways', reason: '剪贴板' })
