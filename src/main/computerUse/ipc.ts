@@ -16,7 +16,8 @@ const NO_STATUS: CuStatus = { supported: false, osOK: false, helper: 'missing', 
 
 type Handler = (e: InvokeEventLike, ...args: any[]) => unknown
 
-const isLocal = (e: InvokeEventLike | undefined) => !(e?.client && e.client.id !== 'local')
+/** fail closed: only the local window (`client.id === 'local'`) passes; a missing client is refused too */
+const isLocal = (e: InvokeEventLike | undefined) => e?.client?.id === 'local'
 const MODES = new Set<string>(COMPUTER_USE_MODES.map((m) => m.id))
 const DECISIONS = new Set(['allow', 'deny', 'stop'])
 const KINDS = new Set(['screen', 'ax'])

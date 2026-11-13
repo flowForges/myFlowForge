@@ -6,10 +6,12 @@
 // The tools reach a turn only when all of these hold. The server stamped `origin === 'local'` (missing = non-local).
 // The provider is in COMPUTER_USE_PROVIDERS (Tier-2 providers would write the token into project files). The mode was
 // on at preflight, so the conflict check ran and passed, and it's still on at beginTurn.
+import { rmSync } from 'node:fs'
 import { COMPUTER_TOOLS, computerUseConflict, providerSupportsComputerUse, type CuStatus } from '@shared/computerUse'
 import type { ChatSendPayload } from '@shared/types'
 import type { PermissionMode } from '@shared/permissions'
 import type { ComputerUseHost } from '../host/capabilities'
+import { forgeMcpConfigFile } from '../agents/mcpConfig'
 import type { CuSessionKey } from './types'
 
 type Origin = ChatSendPayload['origin']
@@ -19,6 +21,16 @@ const BRIDGE_FAILED = '电脑操作组件无法启动 · 请重新安装或重�
 
 const ORIGIN_LABEL: Record<Exclude<NonNullable<Origin>, 'local'>, string> = {
   remote: '远程设备', bot: '机器人', pet: '宠物', workflow: '工作流',
+}
+
+/** The five keys cuBeginTurn adds. Chat turns carry no other FORGE_* (pure chat, P5). */
+export const CU_ENV_KEYS = ['FORGE_SOCKET', 'FORGE_MCP_DIR', 'FORGE_AGENT_ID', 'FORGE_MCP_ENTRY', 'FORGE_TOOLS'] as const
+
+/** A copy of env without the cu keys: adopted (background) turns run outside any service turn, so they get no tools. */
+export function withoutCuEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out = { ...env }
+  for (const k of CU_ENV_KEYS) delete out[k]
+  return out
 }
 
 export function originNote(origin: Origin): string {
@@ -66,7 +78,9 @@ export function cuBeginTurn(
   const { tools } = cu.service.beginTurn(key, a.origin)
   if (a.origin !== 'local' && cu.service.modeOf(key) !== 'off') a.note(originNote(a.origin))
   const token = cu.service.tokenFor(key)
+  let tokenFile: string | null = null
   if (tools && a.armed && token && a.origin === 'local' && providerSupportsComputerUse(a.agent)) {
+    tokenFile = forgeMcpConfigFile(a.armed.configDir, token)
     a.env.FORGE_SOCKET = a.armed.socketPath
     a.env.FORGE_MCP_DIR = a.armed.configDir
     a.env.FORGE_AGENT_ID = token
@@ -78,5 +92,7 @@ export function cuBeginTurn(
     if (ended) return
     ended = true
     cu.service.endTurn(key)
+    // V16 ②: the spawn path rewrites mcp.cu-<hash>.json every turn; the CLI has read it by now, so it goes.
+    if (tokenFile) { try { rmSync(tokenFile, { force: true }) } catch { /* best effort */ } }
   }
 }

@@ -590,3 +590,84 @@ describe('routing (V1, Review Focus 15)', () => {
     expect(await h.table[CH.cuThumb](NOOP_CTX, { ...KEY, file: 't.jpg' })).toBe('THUMB')
   })
 })
+
+describe('review fixes: token config file, adopted turns, fail-closed local check', () => {
+  const cfgFile = async (token: string) => (await import('../agents/mcpConfig')).forgeMcpConfigFile(cfgDir, token)
+  const writeArgs = async () => {
+    const { buildClaudeChatArgs } = await import('../agents/providers/claude')
+    return buildClaudeChatArgs({ ...lastPayload(), cwd } as any, lastEnv(), 'p')
+  }
+  const holdTurn = () => {
+    let release!: () => void
+    sendTurnMock.mockImplementation(() => new Promise<void>((r) => { release = r }))
+    return () => release()
+  }
+
+  it('a local turn with no computer call: the config file is gone when the turn ends', async () => {
+    const h = await boot()
+    await h.call(CH.cuSetMode)({}, { ...KEY, mode: 'ask' })
+    const release = holdTurn()
+    await h.call(CH.chatSend)({}, msg())
+    await sent()
+    await writeArgs()
+    const f = await cfgFile(h.service.tokenFor(KEY)!)
+    expect(existsSync(f)).toBe(true)
+    release()
+    await vi.waitFor(() => expect(h.endTurn).toHaveBeenCalledTimes(1))
+    expect(existsSync(f)).toBe(false)
+  })
+
+  it('the second local turn: its first computer call deletes the rewritten file again', async () => {
+    const h = await boot()
+    await h.call(CH.cuSetMode)({}, { ...KEY, mode: 'ask' })
+    const token = h.service.tokenFor(KEY)!
+    const f = await cfgFile(token)
+    // turn 1: first call deletes the file
+    let release = holdTurn()
+    await h.call(CH.chatSend)({}, msg())
+    await sent(1)
+    await writeArgs()
+    await h.service.handle(token, 'screenshot', {}, {})
+    expect(existsSync(f)).toBe(false)
+    release()
+    await vi.waitFor(() => expect(h.endTurn).toHaveBeenCalledTimes(1))
+    // turn 2: the spawn path writes it again; the first call of this turn deletes it too
+    release = holdTurn()
+    await h.call(CH.chatSend)({}, msg({ text: 'two' }))
+    await sent(2)
+    await writeArgs()
+    expect(existsSync(f)).toBe(true)
+    await h.service.handle(token, 'screenshot', {}, {})
+    expect(existsSync(f)).toBe(false)
+    release()
+    await vi.waitFor(() => expect(h.endTurn).toHaveBeenCalledTimes(2))
+  })
+
+  it('an adopted turn gets a copy of env without the five FORGE_* keys and writes no config file', async () => {
+    const h = await boot()
+    await h.call(CH.cuSetMode)({}, { ...KEY, mode: 'ask' })
+    await h.call(CH.chatSend)({}, msg())
+    await sent(1)
+    const turnEnv = lastEnv()
+    const background = lastSend()![1].background
+    await vi.waitFor(() => expect(h.endTurn).toHaveBeenCalledTimes(1))
+    background.openTurn(() => {}, () => true)
+    await sent(2)
+    const adoptedEnv = lastEnv()
+    expect(adoptedEnv).not.toBe(turnEnv)
+    for (const k of FORGE_KEYS) expect(adoptedEnv[k], k).toBeUndefined()
+    // the turn's own env is untouched
+    expect(turnEnv.FORGE_AGENT_ID).toBe(h.service.tokenFor(KEY))
+    const { buildClaudeChatArgs } = await import('../agents/providers/claude')
+    const args = buildClaudeChatArgs({ ...lastPayload(), cwd } as any, adoptedEnv, 'p')
+    expect(args).not.toContain('--mcp-config')
+    expect(existsSync(await cfgFile(h.service.tokenFor(KEY)!))).toBe(false)
+  })
+
+  it('a caller with no client at all is refused (fail closed)', async () => {
+    const h = await boot()
+    const bare: InvokeCtx = { emit: () => {} }
+    for (const ch of CU_CHANNELS) expect(await h.table[ch](bare, { ...KEY, mode: 'ask', file: 't', kind: 'ax', id: 'x', decision: 'deny' }), ch).toEqual({ ok: false, code: 'not_local' })
+    expect(h.service.modeOf(KEY)).toBe('off')
+  })
+})

@@ -9,7 +9,7 @@ import { providerSupportsPermissions, providerEnforcesReadonly, providerUsesComm
 import { acpKnownUnavailable, withAcpAvailability } from '../agents/acp/acpAvailability'
 import { isAcpUnavailable } from '../agents/acp/acpChat'
 import { browserPermissionConflict, providerSupportsBrowserUse, DEFAULT_BROWSER_USE, BROWSER_TOOL_PREFIX } from '@shared/browserUse'
-import { cuPreflight, cuBeginTurn } from '../computerUse/chatTurn'
+import { cuPreflight, cuBeginTurn, withoutCuEnv } from '../computerUse/chatTurn'
 import { computerUseHandlers } from '../computerUse/ipc'
 import { userMessageOf } from '../chat/userMessage'
 import { expandTilde } from '../config/paths'
@@ -1192,7 +1192,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
           chatQueue.hasQueued(payload.workspacePath, payload.sessionId) ? Promise.resolve<ConfirmDecision>('deny') : toolConfirm(req)
         chatQueue.adoptTurn(payload.workspacePath, payload.sessionId, payload.agent, async () => {
           if (!isCurrent()) return   // 排队期间已经被用户消息接走了:什么都不开,不占泳道
-          await sendTurn({ ...payload, text: '', attachments: [] }, { provider, env, emit: chatEmit, confirm: adoptedConfirm, onSessionStart, background, adopt: attach, discard: discardTurn })
+          // ★电脑操作的五个 FORGE_* 不带过去:被收养的这一轮不在任何本机轮次里,本来也调不动(no_turn)
+          await sendTurn({ ...payload, text: '', attachments: [] }, { provider, env: withoutCuEnv(env), emit: chatEmit, confirm: adoptedConfirm, onSessionStart, background, adopt: attach, discard: discardTurn })
             .finally(() => drainChatGates(payload.workspacePath, { sessionId: payload.sessionId, type: 'confirm', scope: 'turn' }))
         })
       },

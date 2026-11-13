@@ -423,6 +423,9 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
 
     beginTurn(key, origin) {
       turns.set(keyId(key), { origin, seq: ++seq })
+      // the spawn path rewrites the token's config file every turn: the first call of each turn deletes it again
+      const cur = sessions.get(keyId(key))
+      if (cur) used.delete(cur.token)
       return { tools: origin === 'local' && modeOf(key) !== 'off' }
     },
 

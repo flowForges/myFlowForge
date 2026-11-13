@@ -358,7 +358,7 @@ const api = {
     onEvent: (cb: (e: unknown) => void) => {
       const listener = (_: unknown, e: unknown) => cb(e)
       ipcRenderer.on(CH.cuEvent, listener)
-      return () => ipcRenderer.removeListener(CH.cuEvent, listener)
+      return (): void => { ipcRenderer.removeListener(CH.cuEvent, listener) }
     },
   },
   appVibrancyBaseline: (): Promise<number> => ipcRenderer.invoke(CH.appVibrancyBaseline),
