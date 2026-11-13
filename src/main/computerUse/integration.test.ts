@@ -35,6 +35,9 @@ beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'cu-int-')); clearAppLog() 
 afterEach(async () => {
   if (bridge) await bridge.close()
   bridge = undefined
+  // a stopped / locked call's log append lands after the test returns: let it, then remove the whole root
+  await flush()
+  await new Promise((r) => setTimeout(r, 30))
   rmSync(root, { recursive: true, force: true })
   vi.restoreAllMocks()
 })
