@@ -8,7 +8,9 @@
 // - Built lazily on the first show: with computer use never turned on, no window exists.
 // - State is pushed with webContents.send on its own channel; the overlay is not in the window registry, so it never
 //   receives chat or any other broadcast.
-import type { BrowserWindowConstructorOptions } from 'electron'
+// - No import from electron (coreBoundary.test.ts): index.ts injects the window factory; the options type is the global
+//   `Electron` namespace's.
+type BrowserWindowConstructorOptions = Electron.BrowserWindowConstructorOptions
 import { CU_OVERLAY_ARG, type CuOverlayState } from '@shared/computerUse'
 import { CH } from '../ipc/channels'
 
