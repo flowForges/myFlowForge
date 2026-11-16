@@ -54,7 +54,7 @@ export interface Run2ManagerDeps {
   // ChatQueue holds them via isRunActive). Optional so existing tests/callers keep passing unchanged.
   onRunDone?: (wsPath: string) => void
   // §7.4 ③硬阻塞: threaded straight into RunControllerDeps.mcpEntry (see its doc in controller.ts) —
-  // handlers.ts's `join(__dirname, 'forgeMcp.js')`, the same entry the legacy Orchestrator and
+  // handlers.ts's `mainEntryPath(__dirname, 'forgeMcp.js')` (out/main/forgeMcp.js, also from a chunk), the same entry the legacy Orchestrator and
   // chat/delegate.ts already use. Optional so every existing manager test (none set it) keeps
   // passing unchanged — an unset mcpEntry just means runs from this manager never open a live forge
   // bridge, same as before this field existed.

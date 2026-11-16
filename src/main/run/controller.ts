@@ -76,8 +76,8 @@ export interface RunControllerDeps {
   // Injectable for the same reason as merge/discardTempBranch above; defaults to the real
   // tempBranch.ts parkTempBranch. 同上 4th 参数 snapshotSha。
   parkTempBranch?: (cwd: string, target: string, runId: string, snapshotSha?: string | null) => Promise<void>
-  // §7.4 ③硬阻塞: path to the forge MCP server entry script (handlers.ts's `join(__dirname,
-  // 'forgeMcp.js')`, threaded through from Run2ManagerDeps.mcpEntry). When present, start() opens a
+  // §7.4 ③硬阻塞: path to the forge MCP server entry script (handlers.ts's `mainEntryPath(__dirname,
+  // 'forgeMcp.js')` = out/main/forgeMcp.js, threaded through from Run2ManagerDeps.mcpEntry). When present, start() opens a
   // per-run forge bridge (setupBridge) and provisions its socket into every work order's env
   // (envForOrder) so a stage sub-agent can call forge_ask/forge_read_context/forge_write_artifact/
   // forge_handoff — same mechanism chat/delegate.ts already uses for its own per-batch bridge.

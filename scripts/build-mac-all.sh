@@ -82,6 +82,8 @@ unset MFF_TEST_BUILD MFF_SYS_DIR_NAME
 
 echo "▸ compiling renderer/main (electron-vite build)…"
 npm run build
+# forgeMcp.js / agentShim.js must sit in out/main and no shared chunk may resolve them from its own __dirname
+node scripts/mainEntriesCheck.cjs out/main
 
 # computer-use helper (universal Swift binary → build/native/darwin/forge-cu → Resources/native/forge-cu).
 # --require: a dist without swiftc must fail here, not ship an app whose helper is missing.

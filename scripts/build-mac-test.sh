@@ -45,6 +45,8 @@ ARCHS="${MFF_TEST_ARCHS:-${HOST}}"
 
 echo "▸ compiling (MFF_TEST_BUILD=1, MFF_SYS_DIR_NAME=${MFF_SYS_DIR_NAME})…"
 npm run build
+# forgeMcp.js / agentShim.js must sit in out/main and no shared chunk may resolve them from its own __dirname
+node scripts/mainEntriesCheck.cjs out/main
 
 # computer-use helper (universal Swift binary → build/native/darwin/forge-cu → Resources/native/forge-cu).
 # --require: no swiftc must fail here, not ship a test package without its helper.

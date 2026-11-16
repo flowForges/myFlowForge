@@ -2,6 +2,7 @@ import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import { resolve } from 'node:path'
 import { buildSysDirName, buildTestFlag } from './src/main/config/sysDirName'
+import { MAIN_CHUNK_DIR } from './src/main/agents/mainEntry'
 
 const defineStr = (v: string | undefined) => (v ? JSON.stringify(v) : 'undefined')
 
@@ -25,6 +26,8 @@ export default defineConfig({
           // 以 `electron --run-as-node agentShim.js <命令名> …` 单独拉起,跑在 agent 的环境中。
           agentShim: resolve('src/main/agents/shim/shimMain.ts'),
         },
+        // mainEntryPath finds out/main/<entry>.js from code in this directory; pinned here, checked after every build
+        output: { chunkFileNames: `${MAIN_CHUNK_DIR}/[name]-[hash].js` },
       },
     },
     resolve: { alias: { '@shared': resolve('src/shared') } },
