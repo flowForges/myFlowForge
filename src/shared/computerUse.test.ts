@@ -473,7 +473,7 @@ describe('UI labels for codes (Task 8)', () => {
     for (const c of ['locked', 'denied', 'stopped', 'target_changed', 'helper_failed'] as const) expect(CU_ERR[c]).toBeTruthy()
   })
   it('helper:failed has its own label, distinct from missing', () => {
-    expect(CU_HELPER_LABEL).toEqual({ ok: '正常', missing: '组件缺失', failed: '无法启动' })
+    expect(CU_HELPER_LABEL).toEqual({ ok: '正常', missing: '组件缺失', failed: '组件异常' })
   })
   it('M-14: the resolve refusals from the IPC (not_pending, not_local, invalid_args) have sentences', () => {
     expect(Object.keys(CU_RESOLVE_ERR).sort()).toEqual(['invalid_args', 'not_local', 'not_pending'])

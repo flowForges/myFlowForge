@@ -85,4 +85,6 @@ export interface ComputerUseHost {
   provision: () => void
   /** has computer use ever been enabled on this machine (settings `provisioned`); absent → false */
   provisioned?: () => boolean
+  /** the last status the probe answered this app run (startup included); absent / undefined → never asked */
+  lastStatus?: () => import('@shared/computerUse').CuStatus | undefined
 }

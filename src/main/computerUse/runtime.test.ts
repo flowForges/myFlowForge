@@ -279,6 +279,15 @@ describe('disclaim seam (V3, V16 ③, controller notes)', () => {
     expect(un2).toHaveBeenCalledTimes(1)
   })
 
+  it('C: the startup probe of a refused helper is remembered as helper:failed for the chip (no second spawn needed)', async () => {
+    const d = fakeDriver()
+    d.status = async () => { throw new Error('helper_failed') }
+    const t = setup({ settings: provisioned, driver: d })
+    expect(t.rt.host()!.lastStatus?.()).toBeUndefined()
+    await t.rt.startup()
+    expect(t.rt.host()!.lastStatus?.()).toMatchObject({ helper: 'failed' })
+  })
+
   it('a status from setMode (first enable) keeps it on', async () => {
     const t = setup()
     expect(t.rt.disclaimEnabled()).toBe(false)

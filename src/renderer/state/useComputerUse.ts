@@ -90,7 +90,9 @@ export function useComputerUse(workspacePath: string, sessionId: string): Comput
     })
     void b.state().then((s) => {
       if (!alive || !s || typeof s !== 'object') return
-      const { sessions: ss, gates: gs } = s as { sessions?: unknown; gates?: unknown }
+      const { sessions: ss, gates: gs, status: st } = s as { sessions?: unknown; gates?: unknown; status?: unknown }
+      // C: main's last status (the startup probe): a refused helper shows on the chip without spawning it again
+      if (st && typeof st === 'object' && 'supported' in st && 'helper' in st) setStatus((cur) => cur ?? (st as CuStatus))
       if (!pushedState && isArr<SessionRow>(ss)) {
         setSessions(ss)
         if (ss.some((x) => x.workspacePath === workspacePath && x.sessionId === sessionId && x.mode !== 'off')) void refreshStatus()

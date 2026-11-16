@@ -584,6 +584,14 @@ describe('computer-use:* handlers (Review Focus 2, 3, 15)', () => {
     expect(h.service.modeOf(KEY)).toBe('off')
   })
 
+  it('C: cuState carries the host\'s last helper status when there is one', async () => {
+    const { computerUseHandlers } = await import('../computerUse/ipc')
+    const failed: CuStatus = { supported: true, osOK: true, helper: 'failed', screen: false, ax: false }
+    const cu = { service: { sessions: () => [], pendingGates: () => [] }, lastStatus: () => failed } as unknown as ComputerUseHost
+    const t = computerUseHandlers({ cu: () => cu } as any)
+    expect(await t[CH.cuState]({ client: { id: 'local' } } as any, undefined)).toEqual({ sessions: [], gates: [], status: failed })
+  })
+
   it('local calls reach the service, probe, log and host hooks', async () => {
     const h = await boot()
     expect(await h.call(CH.cuStatus)({})).toEqual(OK)
@@ -591,6 +599,7 @@ describe('computer-use:* handlers (Review Focus 2, 3, 15)', () => {
     const st = await h.call(CH.cuState)({})
     expect(st.sessions).toEqual([{ ...KEY, mode: 'ask', title: 'T-s1' }])
     expect(st.gates).toEqual([])
+    expect(st.status).toBeUndefined()   // the stub host keeps no last status
     expect(await h.call(CH.cuThumb)({}, { ...KEY, file: 't.jpg' })).toBe('THUMB')
     expect(h.log.thumb).toHaveBeenCalledWith(KEY, 't.jpg')
     expect(await h.call(CH.cuLog)({}, KEY)).toEqual([])

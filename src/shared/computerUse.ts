@@ -521,7 +521,7 @@ export const CU_RESOLVE_ERR: Readonly<Record<CuResolveCode, string>> = {
 }
 
 /** 设置页「组件」行的 chip。`failed` 是单独一档:组件在,但起不来或不能断继承。 */
-export const CU_HELPER_LABEL: Readonly<Record<CuStatus['helper'], string>> = { ok: '正常', missing: '组件缺失', failed: '无法启动' }
+export const CU_HELPER_LABEL: Readonly<Record<CuStatus['helper'], string>> = { ok: '正常', missing: '组件缺失', failed: '组件异常' }
 
 // ───────────────────────── 常驻浮窗(cu-overlay)的状态 ─────────────────────────
 

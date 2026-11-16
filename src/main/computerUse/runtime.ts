@@ -12,6 +12,7 @@ import { randomBytes } from 'node:crypto'
 import { accessSync, constants, readdirSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { GLOBAL_ACTIONS, effectiveBindings } from '@shared/keybindings'
+import type { CuStatus } from '@shared/computerUse'
 import type { Settings } from '../config/schema'
 import type { ComputerUseHost } from '../host/capabilities'
 import type { ComputerDriver } from './driver'
@@ -133,6 +134,7 @@ export function createCuRuntime(d: CuRuntimeDeps): CuRuntime {
   /** the last settings read, until settingsChanged() (M-8) */
   let provisionedRead: boolean | null = null
   let unavailableSent = false
+  let lastStatus: CuStatus | undefined
   /** the sessions that are on, as of the last `state` event (stop emits it after calling stopTurn) */
   let on = new Set<string>()
   const idOf = (k: CuSessionKey) => JSON.stringify([k.workspacePath, k.sessionId])
@@ -185,7 +187,8 @@ export function createCuRuntime(d: CuRuntimeDeps): CuRuntime {
         return s
       },
     })
-    const probe = createPermissionProbe({ driver, helperPath: d.helperPath, openExternal: d.openExternal })
+    const rawProbe = createPermissionProbe({ driver, helperPath: d.helperPath, openExternal: d.openExternal })
+    const probe: typeof rawProbe = { ...rawProbe, status: async () => (lastStatus = await rawProbe.status()) }
     const log = createActionLog(d.dir)
     const settings = () => d.readSettings().computerUse
     const hidIsPhysical = () => false   // V5 / R18: off until 实测 20
@@ -212,6 +215,7 @@ export function createCuRuntime(d: CuRuntimeDeps): CuRuntime {
       collapseMain: () => d.collapseMain?.(),
       provision: () => { if (!provisioned()) saveSettings({ provisioned: true }) },
       provisioned: () => provisioned(),
+      lastStatus: () => lastStatus,
     }
     built = { host, service, driver }
     return built

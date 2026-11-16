@@ -61,6 +61,20 @@ describe('电脑操作 chip', () => {
     expect(document.querySelector('#computerMenu.open')).toBeNull()
   })
 
+  it.each(['off', 'ask'] as const)('C: helper refused (mode %s): 电脑 · 组件异常, not 关闭 / 需授权; click opens settings', (mode) => {
+    const c = cu({ status: { ...ok, helper: 'failed', screen: false, ax: false }, mode })
+    r(c)
+    expect(chip()!.textContent).toBe('电脑 · 组件异常')
+    fireEvent.click(chip()!)
+    expect(c.openSettings).toHaveBeenCalledTimes(1)
+    expect(document.querySelector('#computerMenu.open')).toBeNull()
+  })
+
+  it('C: helper missing: 电脑 · 组件缺失', () => {
+    r(cu({ status: { ...ok, helper: 'missing', screen: false, ax: false } }))
+    expect(chip()!.textContent).toBe('电脑 · 组件缺失')
+  })
+
   it('status unknown: opening asks for a fresh status first; no grant then goes to settings, a grant opens the menu', async () => {
     const refresh = vi.fn(async () => ({ ...ok, ax: false }))
     const c = cu({ refreshStatus: refresh } as never)

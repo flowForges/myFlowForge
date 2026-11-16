@@ -4,7 +4,7 @@ import { getBuiltinProvider } from '@shared/providerCatalog'
 import { PERMISSION_MODES, DEFAULT_PERMISSION_MODE, permissionModeLabel, providerSupportsPermissions, providerEnforcesReadonly, type PermissionMode } from '@shared/permissions'
 import { BROWSER_USE_MODES, DEFAULT_BROWSER_USE, browserUseLabel, providerSupportsBrowserUse, browserPermissionConflict, type BrowserUseMode } from '@shared/browserUse'
 import { usePhysicalPress, type IsPhysical } from './cuPhysical'
-import { COMPUTER_USE_MODES, COMPUTER_USE_CHIP, CU_SET_MODE_ERR, computerUseConflict, providerSupportsComputerUse, type ComputerUseMode, type CuSetModeCode, type CuStatus } from '@shared/computerUse'
+import { COMPUTER_USE_MODES, COMPUTER_USE_CHIP, CU_HELPER_LABEL, CU_SET_MODE_ERR, computerUseConflict, providerSupportsComputerUse, type ComputerUseMode, type CuSetModeCode, type CuStatus } from '@shared/computerUse'
 import { isSlashQuery, mergeCommands, type MenuCommand } from './slashCommands'
 import type { ContextUsage } from '@shared/types'
 import { applyListContinuation } from './listContinuation'
@@ -329,6 +329,8 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
   const cuBlocked = !!cuConflict
   const [cuRestart, setCuRestart] = useState(false)
   const [cuErr, setCuErr] = useState<CuSetModeCode | null>(null)
+  // C: a helper that won't start says so (组件异常 / 组件缺失); its screen/ax are false only because nobody could ask
+  const cuHelperBad = cuShown && !!computerUse!.status && computerUse!.status.helper !== 'ok'
   const cuNeedsGrant = cuShown && !!computerUse!.status && (!computerUse!.status.screen || !computerUse!.status.ax)
   const cuDisabled = !!readOnly || !!computerUse?.busyBy || (computerUse?.mode === 'off' && permissionMode === 'readonly')
   const [cuConfirm, setCuConfirm] = useState(false)
@@ -358,7 +360,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
     // 档位关着或缺授权时缓存的状态可能是旧的(刚去授过权),每次都重新问
     let st = computerUse.status
     if ((!st || computerUse.mode === 'off' || !st.screen || !st.ax) && computerUse.refreshStatus) st = (await computerUse.refreshStatus()) ?? st
-    if (st && (!st.screen || !st.ax)) { computerUse.openSettings(); return }
+    if (st && (st.helper !== 'ok' || !st.screen || !st.ax)) { computerUse.openSettings(); return }
     setOpenMenu('computer')
   }
   // I-2:放宽(关→开、询问→放行)和浮窗的「允许」同一道物理按下检查;收窄(→关闭、放行→询问)和停止键盘照样能按
@@ -370,7 +372,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
     if (code) { setCuErr(code); return }
     setOpenMenu(null)
   }
-  const cuLabel = !computerUse ? '' : computerUse.busyBy ? `电脑 · ${computerUse.busyBy.title}在用` : cuRestart ? (cuConfirm ? '确认重启 · 会中断运行中的任务' : '电脑 · 需重启') : cuNeedsGrant ? '电脑 · 需授权' : COMPUTER_USE_CHIP[computerUse.mode]
+  const cuLabel = !computerUse ? '' : computerUse.busyBy ? `电脑 · ${computerUse.busyBy.title}在用` : cuRestart ? (cuConfirm ? '确认重启 · 会中断运行中的任务' : '电脑 · 需重启') : cuHelperBad ? `电脑 · ${CU_HELPER_LABEL[computerUse.status!.helper]}` : cuNeedsGrant ? '电脑 · 需授权' : COMPUTER_USE_CHIP[computerUse.mode]
 
   function chooseAgent(p: ProviderInfo) {
     const m = p.models[0]?.id ?? ''

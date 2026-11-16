@@ -52,7 +52,9 @@ export function computerUseHandlers(d: ComputerUseIpcDeps): Record<string, Handl
 
     [CH.cuState]: local(async (cu) => {
       if (!cu) return { sessions: [], gates: [] }
-      return { sessions: cu.service.sessions(), gates: cu.service.pendingGates() }
+      // C: the startup probe's answer, so a refused helper shows 组件异常 on the chip without spawning it again
+      const status = cu.lastStatus?.()
+      return { sessions: cu.service.sessions(), gates: cu.service.pendingGates(), ...(status ? { status } : {}) }
     }),
 
     [CH.cuSetMode]: local(async (cu, a) => {

@@ -36,6 +36,15 @@ describe('useComputerUse', () => {
     expect(api.status).not.toHaveBeenCalled()
   })
 
+  it('C: a status the state snapshot carries (the startup probe of a refused helper) is adopted without asking the helper', async () => {
+    const failed = { supported: true, osOK: true, helper: 'failed', screen: false, ax: false }
+    api.state.mockResolvedValue({ sessions: [], gates: [], status: failed })
+    const { result } = renderHook(() => useComputerUse(WS, SID))
+    await waitFor(() => expect(result.current.status).toEqual(failed))
+    expect(result.current.mode).toBe('off')
+    expect(api.status).not.toHaveBeenCalled()
+  })
+
   it('queries status when the session is on, or when refreshStatus is called', async () => {
     api.state.mockResolvedValue({ sessions: [{ workspacePath: WS, sessionId: SID, mode: 'ask', title: 'T' }], gates: [] })
     const { result } = renderHook(() => useComputerUse(WS, SID))

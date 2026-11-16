@@ -90,7 +90,7 @@ describe('ComputerUsePane', () => {
   })
 
   it('helper states have their own labels', async () => {
-    for (const [h, label] of [['ok', '正常'], ['missing', '组件缺失'], ['failed', '无法启动']] as const) {
+    for (const [h, label] of [['ok', '正常'], ['missing', '组件缺失'], ['failed', '组件异常']] as const) {
       const { unmount } = setup({ status: { helper: h } })
       const row = await screen.findByTestId('cu-row-helper')
       await waitFor(() => expect(row.textContent).toContain(label))
@@ -147,7 +147,7 @@ describe('ComputerUsePane', () => {
     for (const el of Array.from(container.querySelectorAll('[class]'))) expect(el.getAttribute('class')).not.toMatch(/hint|desc|help|note|tip|caption/)
   })
 
-  it.each([['missing', '组件缺失'], ['failed', '无法启动']] as const)('M-9: helper %s: both grant rows show the helper state, not 未授权, and offer no 授权', async (helper, label) => {
+  it.each([['missing', '组件缺失'], ['failed', '组件异常']] as const)('M-9: helper %s: both grant rows show the helper state, not 未授权, and offer no 授权', async (helper, label) => {
     setup({ status: { helper, screen: false, ax: false } })
     for (const k of ['screen', 'ax']) {
       const row = await screen.findByTestId(`cu-row-${k}`)
