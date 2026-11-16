@@ -11,3 +11,14 @@ export function relaunchOptions(platform: NodeJS.Platform, isPackaged: boolean, 
   if (i < 0) return undefined
   return { execPath: '/usr/bin/open', args: ['-n', execPath.slice(0, i + '.app'.length)] }
 }
+
+/**
+ * What `app:relaunch` does for its argument. Only `{computerUse: true}` (computer use's 需重启) relaunches through
+ * LaunchServices and runs the before-quit cleanup first (app.exit skips before-quit); anything else keeps Electron's
+ * plain relaunch, so people who never use computer use see no change.
+ */
+export function relaunchPlan(arg: unknown, platform: NodeJS.Platform, isPackaged: boolean, execPath: string): { options: { execPath: string; args: string[] } | undefined; cleanup: boolean } {
+  const cu = !!arg && typeof arg === 'object' && (arg as { computerUse?: unknown }).computerUse === true
+  if (!cu) return { options: undefined, cleanup: false }
+  return { options: relaunchOptions(platform, isPackaged, execPath), cleanup: true }
+}

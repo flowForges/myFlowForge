@@ -15,7 +15,7 @@ interface CuBridge {
   runningApps: () => Promise<RunningApp[]>
 }
 const bridge = (): CuBridge | undefined => (window as unknown as { forge?: { computerUse?: CuBridge } }).forge?.computerUse
-const relaunch = (): void => { void (window as unknown as { forge?: { appRelaunch?: () => unknown } }).forge?.appRelaunch?.() }
+const relaunch = (): void => { void (window as unknown as { forge?: { appRelaunch?: (o?: { computerUse?: boolean }) => unknown } }).forge?.appRelaunch?.({ computerUse: true }) }
 
 interface Props {
   computerUse: ComputerUseSettings

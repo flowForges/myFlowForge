@@ -343,7 +343,8 @@ const api = {
     // Braces matter: removeListener returns the IpcRenderer, and a React effect cleanup must return void.
     return () => { ipcRenderer.removeListener(CH.windowMaximizedChanged, listener) }
   },
-  appRelaunch: () => ipcRenderer.invoke(CH.appRelaunch),
+  /** `{computerUse:true}` only from computer use's 需重启 (LaunchServices relaunch + quit cleanup); no argument = plain relaunch */
+  appRelaunch: (opts?: { computerUse?: boolean }) => ipcRenderer.invoke(CH.appRelaunch, opts),
   // 电脑操作(本机专属,CLIENT_ONLY)。事件只走本机直推(spec V2)。
   computerUse: {
     status: (): Promise<import('@shared/computerUse').CuStatus> => ipcRenderer.invoke(CH.cuStatus),

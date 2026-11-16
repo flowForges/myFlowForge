@@ -353,7 +353,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
     if (cuRestart) {
       // 有任务在跑时重启会把它打断:第一下只换成确认,第二下才重启
       if ((busy || running) && !cuConfirm) { setCuConfirm(true); return }
-      void window.forge.appRelaunch?.(); setOpenMenu(null); return
+      void window.forge.appRelaunch?.({ computerUse: true }); setOpenMenu(null); return
     }
     if (openMenu === 'computer') { setOpenMenu(null); return }
     setCuErr(null)

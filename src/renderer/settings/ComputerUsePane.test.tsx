@@ -76,7 +76,7 @@ describe('ComputerUsePane', () => {
     const row = await screen.findByTestId('cu-row-screen')
     await waitFor(() => expect(row.textContent).toContain('授权后需重启'))
     fireEvent.click(screen.getByText('重新启动'))
-    expect(relaunch).toHaveBeenCalled()
+    expect(relaunch).toHaveBeenCalledWith({ computerUse: true })
     fireEvent.click(screen.getByText('打开系统设置'))
     expect(api.openSettings).toHaveBeenCalledWith({ kind: 'screen' })
   })

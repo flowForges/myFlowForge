@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { relaunchOptions } from './relaunch'
+import { relaunchOptions, relaunchPlan } from './relaunch'
 
 // app.relaunch() starts the new instance as a child of Electron's relauncher, so its responsible process is the old
 // instance. Once that dies the SPI answers every pid for itself and forge-cu refuses (self_responsible) for the whole
@@ -18,5 +18,18 @@ describe('relaunchOptions', () => {
     expect(relaunchOptions('linux', true, '/opt/myFlowForge/myflowforge')).toBeUndefined()
     expect(relaunchOptions('win32', true, 'C:\\\\x\\\\myFlowForge.exe')).toBeUndefined()
     expect(relaunchOptions('darwin', true, '/usr/local/bin/electron')).toBeUndefined()
+  })
+})
+
+// Review ruling (1.2.11): only computer use's 需重启 takes the LaunchServices path and the before-quit cleanup;
+// every other caller of app:relaunch (Appearance 立即重启生效 …) keeps plain app.relaunch().
+describe('relaunchPlan', () => {
+  const exe = '/Applications/myFlowForge.app/Contents/MacOS/myFlowForge'
+  it.each([undefined, null, {}, { computerUse: false }, { computerUse: 'yes' }, 'computerUse'])('%j: unchanged app.relaunch(), no cleanup', (a) => {
+    expect(relaunchPlan(a, 'darwin', true, exe)).toEqual({ options: undefined, cleanup: false })
+  })
+  it('{computerUse:true}: open -n and the before-quit cleanup', () => {
+    expect(relaunchPlan({ computerUse: true }, 'darwin', true, exe)).toEqual({ options: { execPath: '/usr/bin/open', args: ['-n', '/Applications/myFlowForge.app'] }, cleanup: true })
+    expect(relaunchPlan({ computerUse: true }, 'darwin', false, exe)).toEqual({ options: undefined, cleanup: true })
   })
 })

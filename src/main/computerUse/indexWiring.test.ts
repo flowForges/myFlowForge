@@ -49,7 +49,7 @@ describe('index.ts computer-use wiring', () => {
   })
 
   it('quit disposes the helper and the socket in the existing before-quit cleanup', () => {
-    const quit = SRC.slice(at("app.on('before-quit', () => {\n    // ★共商"))
+    const quit = SRC.slice(at("const quitCleanup = () => {\n    // ★共商"))
     expect(quit.slice(0, quit.indexOf('\n  })'))).toContain('void cuRuntime?.dispose()')
   })
 
@@ -68,8 +68,18 @@ describe('index.ts computer-use wiring', () => {
     expect(SRC).toContain(': NOT_LOCAL)')
   })
 
+  it('review 3: before-quit and computer use\'s 需重启 run the same cleanup; app:relaunch goes through relaunchPlan', () => {
+    expect(SRC).toContain("app.on('before-quit', quitCleanup)")
+    expect(SRC).toContain('quitCleanupRef = quitCleanup')
+    const h = SRC.slice(at('ipcMain.handle(CH.appRelaunch'))
+    const body = h.slice(0, h.indexOf('\n  })'))
+    expect(body).toContain('relaunchPlan(arg, process.platform, app.isPackaged, process.execPath)')
+    expect(body.indexOf('quitCleanupRef()')).toBeLessThan(body.indexOf('app.relaunch('))
+    expect(body).toContain('else app.relaunch()')
+  })
+
   it('I-2: before-quit turns every session off and sweeps the token files before disposing', () => {
-    const quit = SRC.slice(at("app.on('before-quit', () => {\n    // ★共商"))
+    const quit = SRC.slice(at("const quitCleanup = () => {\n    // ★共商"))
     const body = quit.slice(0, quit.indexOf('\n  })'))
     expect(body.indexOf('cuRuntime?.quit()')).toBeGreaterThan(0)
     expect(body.indexOf('cuRuntime?.quit()')).toBeLessThan(body.indexOf('void cuRuntime?.dispose()'))

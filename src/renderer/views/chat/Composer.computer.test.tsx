@@ -140,6 +140,7 @@ describe('电脑操作 chip', () => {
     expect(chip()!.textContent).toBe('确认重启 · 会中断运行中的任务')
     fireEvent.click(chip()!)
     expect(relaunch).toHaveBeenCalledTimes(1)
+    expect(relaunch).toHaveBeenCalledWith({ computerUse: true })
   })
 
   it('the two status-independent conflicts show even while status is unknown', () => {
@@ -197,6 +198,7 @@ describe('电脑操作 chip', () => {
     await waitFor(() => expect(chip()!.textContent).toBe('电脑 · 需重启'))
     fireEvent.click(chip()!)
     expect(relaunch).toHaveBeenCalledTimes(1)
+    expect(relaunch).toHaveBeenCalledWith({ computerUse: true })
     expect(document.querySelector('#computerMenu.open')).toBeNull()
   })
 

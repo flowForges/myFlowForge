@@ -18,7 +18,7 @@ import { readHosts, upsertHost, removeHost, markConnected, exportHosts, importHo
 import { registerIpc, shutdownCouncils } from './ipc/handlers'
 import { killAllAgentTrees, configureDisclaim, liveAgentChildren } from './agents/procGroup'
 import { createCuRuntime, ownAccelerators, resolveHelperPath, type CuRuntime } from './computerUse/runtime'
-import { relaunchOptions } from './computerUse/relaunch'
+import { relaunchPlan } from './computerUse/relaunch'
 import { attachPowerMonitor, cuSenderAllowed, cuSystemNote, cuTrayMenuItems, cuTrayTitle, wireComputerUse, type CuShell } from './computerUse/shell'
 import { createDriver } from './computerUse/driver'
 import { startCuBridge } from './computerUse/cuBridge'
@@ -98,6 +98,8 @@ let menuBarTray: Tray | null = null
 // True once the app is REALLY quitting (Cmd+Q / menu quit / dialog's 退出应用) — the main window's
 // close interceptor must then let the close through no matter what settings.closeAction says.
 let quitting = false
+/** the before-quit cleanup, set once it is built (computer use's 需重启 runs it before app.exit, which skips before-quit) */
+let quitCleanupRef: () => void = () => {}
 const gotInstanceLock = app.requestSingleInstanceLock()
 if (!gotInstanceLock) app.quit()
 // Privileged custom schemes for serving on-disk pet images / background images / downloaded fonts —
@@ -606,7 +608,14 @@ app.whenReady().then(() => {
   // transparent/vibrancy are construction-time only, so toggling 毛玻璃 needs a full restart to
   // rebuild the window. Let the settings UI trigger it directly. Force-quit past the close-action
   // guard (set quitting) so the app actually exits and relaunches instead of parking in the Dock.
-  ipcMain.handle(CH.appRelaunch, () => { quitting = true; app.relaunch(relaunchOptions(process.platform, app.isPackaged, process.execPath)); app.exit(0) })
+  ipcMain.handle(CH.appRelaunch, (_e, arg?: unknown) => {
+    // Only computer use's 需重启 passes {computerUse:true}: LaunchServices relaunch + the before-quit cleanup (relaunch.ts)
+    const plan = relaunchPlan(arg, process.platform, app.isPackaged, process.execPath)
+    quitting = true
+    if (plan.cleanup) { try { quitCleanupRef() } catch { /* exiting anyway */ } }
+    if (plan.options) app.relaunch(plan.options); else app.relaunch()
+    app.exit(0)
+  })
   // The 磨砂度 the current window was actually built with, so the settings UI only prompts for a restart
   // when a level change crosses into a different vibrancy material (a genuine window rebuild) — not on
   // every blur>0. Returns a raw blurAmount; the renderer buckets it via the shared vibrancyMaterial().
@@ -997,7 +1006,7 @@ app.whenReady().then(() => {
   // killAllAgentTrees:agent CLI 现在是 detached 的独立进程组(见 agents/procGroup.ts),而 execa 自带的
   // 「父进程退出时杀子进程」在 detached 下直接 return —— 不在这里补一刀,退出 app 就会把正在跑的 CLI
   // 连同它派生的 shell 命令一起留在后台。
-  app.on('before-quit', () => {
+  const quitCleanup = () => {
     // ★共商先于 killAllAgentTrees:引擎先把自己标成「已暂停」并落盘,随后席位进程被杀时它不会再记失败、推进度
     shutdownCouncils()
     quitting = true; termService.killAll(); killAllAgentTrees(); scheduler.stop(); unregisterGlobalShortcuts(); stopMemoryLog()
@@ -1012,7 +1021,9 @@ app.whenReady().then(() => {
     cuRuntime?.quit()
     void cuRuntime?.dispose()
     cuOverlay.dispose()
-  })
+  }
+  quitCleanupRef = quitCleanup
+  app.on('before-quit', quitCleanup)
   // 主窗口关掉(mac 上 app 还活着)→ 只收**本机窗口开的**那些终端。
   // ★不能用 killAll:这台机器同时也是别人的 host,连上来的客户端开的终端归它们自己,
   //   由它们那条连接断开时收(见 InvokeCtx.onClose)。
