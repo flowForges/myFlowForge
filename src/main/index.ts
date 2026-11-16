@@ -18,6 +18,7 @@ import { readHosts, upsertHost, removeHost, markConnected, exportHosts, importHo
 import { registerIpc, shutdownCouncils } from './ipc/handlers'
 import { killAllAgentTrees, configureDisclaim, liveAgentChildren } from './agents/procGroup'
 import { createCuRuntime, ownAccelerators, resolveHelperPath, type CuRuntime } from './computerUse/runtime'
+import { relaunchOptions } from './computerUse/relaunch'
 import { attachPowerMonitor, cuSenderAllowed, cuSystemNote, cuTrayMenuItems, cuTrayTitle, wireComputerUse, type CuShell } from './computerUse/shell'
 import { createDriver } from './computerUse/driver'
 import { startCuBridge } from './computerUse/cuBridge'
@@ -605,7 +606,7 @@ app.whenReady().then(() => {
   // transparent/vibrancy are construction-time only, so toggling 毛玻璃 needs a full restart to
   // rebuild the window. Let the settings UI trigger it directly. Force-quit past the close-action
   // guard (set quitting) so the app actually exits and relaunches instead of parking in the Dock.
-  ipcMain.handle(CH.appRelaunch, () => { quitting = true; app.relaunch(); app.exit(0) })
+  ipcMain.handle(CH.appRelaunch, () => { quitting = true; app.relaunch(relaunchOptions(process.platform, app.isPackaged, process.execPath)); app.exit(0) })
   // The 磨砂度 the current window was actually built with, so the settings UI only prompts for a restart
   // when a level change crosses into a different vibrancy material (a genuine window rebuild) — not on
   // every blur>0. Returns a raw blurAmount; the renderer buckets it via the shared vibrancyMaterial().
