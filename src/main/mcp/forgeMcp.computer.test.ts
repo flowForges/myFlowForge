@@ -43,6 +43,15 @@ describe('registration (Review Focus 4)', () => {
     expect(toolsToRegister()).toHaveLength(7)
   })
 
+  it('computer tools carry _meta anthropic/alwaysLoad so claude never defers them behind ToolSearch; forge_* tools don\'t', async () => {
+    const send = vi.fn()
+    const named = await wire(send, new Set(listForgeTools(`forge_ask,${CU}`)))
+    for (const t of (await named.listTools()).tools) {
+      if (t.name.startsWith('computer_')) expect(t._meta?.['anthropic/alwaysLoad'], t.name).toBe(true)
+      else expect(t._meta?.['anthropic/alwaysLoad'], t.name).toBeUndefined()
+    }
+  })
+
   it('createForgeServer registers exactly the ten when they are named, and none by default', async () => {
     const send = vi.fn()
     const named = await wire(send, cuAllowed())

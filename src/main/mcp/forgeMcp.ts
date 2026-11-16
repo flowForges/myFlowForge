@@ -264,6 +264,9 @@ export function cuToolResult(tool: string, r: unknown): ToolReply {
   return { content }
 }
 
+/** Claude Code's per-tool "never defer behind ToolSearch" key (claude 2.1.288+). */
+export const ALWAYS_LOAD = 'anthropic/alwaysLoad'
+
 function registerComputerTools(server: McpServer, send: SendFn, reg: Set<string>) {
   const client = () => {
     const v = server.server.getClientVersion()
@@ -274,7 +277,9 @@ function registerComputerTools(server: McpServer, send: SendFn, reg: Set<string>
     const op = name.slice('computer_'.length)
     server.registerTool(
       name,
-      { description: CU_WHAT[name] + CU_RULES, inputSchema: CU_SHAPES[name] },
+      // Claude Code defers MCP tools behind ToolSearch; the model then went looking for its own computer-use and
+      // concluded it had none (实测 1.3.0-cu.1). This per-tool flag keeps them in the prompt; other clients ignore it.
+      { description: CU_WHAT[name] + CU_RULES, inputSchema: CU_SHAPES[name], _meta: { [ALWAYS_LOAD]: true } },
       async (args: Record<string, unknown>, extra: { signal?: AbortSignal }) => {
         try {
           const c = client()
