@@ -6,6 +6,7 @@ import { makeClaudeProvider, chatSpawnSignature } from './claude'
 import { BG_GRACE_MS } from './claudeBackground'
 import { CHAT_STALL_KILL_MS } from '../idleWatchdog'
 import type { AgentSession, ChatBackgroundHooks, ChatCallbacks } from '../types'
+import { COMPUTER_TOOLS } from '@shared/computerUse'
 
 // 用户 2026-10-30:主代理开了三路后台调研、最后给一张 A/B/C 选项表就输出 result —— 界面一直「运行中」,
 // 用户打的字只能排队;手动停止后排队的消息发出去,回来的是「claude 无输出 (退出码 143)」,只能再发一遍。
@@ -515,6 +516,40 @@ describe('claude chat() — 下一条消息带着不一样的参数', () => {
     expect(spawns('q')).toHaveLength(2)
     expect(spawns('q')[1].argv).toContain('--chrome')
     expect(spawns('q')[1].argv.slice(-2)).toEqual(['--resume', S])
+  })
+})
+
+describe('claude chat() — 电脑操作开关变了(usability fix A)', () => {
+  const cuEnv = (): NodeJS.ProcessEnv => ({
+    ...process.env, FORGE_SOCKET: join(dir, 'cu.sock'), FORGE_MCP_DIR: dir, FORGE_AGENT_ID: 'cu.test-token',
+    FORGE_MCP_ENTRY: '/x/forgeMcp.js', FORGE_TOOLS: COMPUTER_TOOLS.join(','),
+  })
+  const swapScript = (bin: string) => writeFileSync(bin, readFileSync(bin, 'utf8').replace('const script = ', `const script = ${JSON.stringify([replyTurn('OK')])} || `))
+
+  it.each([
+    ['turned on', () => process.env, cuEnv],
+    ['turned off', cuEnv, () => process.env],
+  ] as const)('★%s while a background task runs: the live process (old MCP set) is stopped, the next turn --resumes with the new one', async (_n, first, second) => {
+    const tag = _n === 'turned on' ? 'cuon' : 'cuoff'
+    const bin = scripted(tag, [lingeringTurn])
+    const provider = makeClaudeProvider({ bin, defaultModels: [] })
+    const bgh = hooks()
+    const s1 = provider.chat!(task({ background: bgh.h }), collect().cb, first())
+    lives.push(s1)
+    await settle(s1.done, 30_000)
+    await until(() => bgh.counts.includes(1))
+    swapScript(bin)
+    const two = collect()
+    const env2 = second()
+    const s2 = provider.chat!(task({ id: 'm2', sessionId: S, background: bgh.h }), two.cb, env2)
+    lives.push(s2)
+    expect(await settle(s2.done, 10_000)).toMatchObject({ ok: true })
+    expect(two.st.text).toBe('OK')
+    expect(exitedProc(tag)).toBe(true)
+    expect(spawns(tag)).toHaveLength(2)
+    expect(spawns(tag)[1].argv.includes('--mcp-config')).toBe(env2.FORGE_TOOLS !== undefined)
+    expect(spawns(tag)[1].argv.some((a) => a === 'mcp__forge__computer_screenshot')).toBe(env2.FORGE_TOOLS !== undefined)
+    expect(spawns(tag)[1].argv.slice(-2)).toEqual(['--resume', S])
   })
 })
 

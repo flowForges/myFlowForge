@@ -47,6 +47,8 @@ interface LingeringChat {
   running(): number
   /** spawn 时定死、控制协议改不了的那部分参数。 */
   readonly signature: string
+  /** 这个进程带着的电脑操作工具(cuSpawnKey):变了就不能沿用它,哪怕后台还在跑。 */
+  readonly cuKey: string
   attach(task: ChatTask, cb: ChatCallbacks, prompt: string, flagsDeferred: boolean): AgentSession
   /** 不等下一条消息,现在就把权限档切到这个进程上。返回要告诉用户的话(没有就是 null)。 */
   setPermission(mode: PermissionMode): Promise<string | null>
@@ -71,6 +73,16 @@ export function chatSpawnSignature(args: readonly string[], env: NodeJS.ProcessE
   }
   const envPart = Object.keys(env).filter(k => SPAWN_ENV_KEY.test(k)).sort().map(k => `${k}=${env[k]}`)
   return JSON.stringify([rest, envPart])
+}
+/**
+ * The computer tools a spawn carries: the --mcp-config file (named after the cu token) when --allowedTools grants any
+ * mcp__forge__computer_*, else ''. MCP servers are fixed at spawn, so a live process whose key differs from the next
+ * turn's has the wrong tool set (mode just turned on: no tools; turned off or re-enabled: a revoked token).
+ */
+export function cuSpawnKey(args: readonly string[]): string {
+  if (!args.some((a) => a.startsWith('mcp__forge__computer_'))) return ''
+  const i = args.indexOf('--mcp-config')
+  return i >= 0 ? String(args[i + 1] ?? '') : ''
 }
 /** 权限档从松到严:切严失败时绝不能拿旧的松档继续干活。 */
 const PERM_RANK: Record<string, number> = { plan: 0, acceptEdits: 1, bypassPermissions: 2 }
@@ -418,6 +430,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       let nativeSid: string | null = task.sessionId ?? null
       const self: LingeringChat = {
         signature,
+        cuKey: cuSpawnKey(args),
         stop: () => {
           stopTree()
           return Promise.race([child.then(() => {}, () => {}), new Promise<void>(r => setTimeout(r, LINGER_STOP_WAIT_MS))])
@@ -986,9 +999,12 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
   provider.chat = (task, cb, env) => {
     const prior = task.sessionId ? lingering.get(lingerKey(task.cwd, task.sessionId)) : undefined
     if (!prior) return startChat(task, cb, env)
-    const flagsChanged = prior.signature !== chatSpawnSignature(claudeSpawnArgs(task, env), env)
-    if (prior.alive() && (!flagsChanged || prior.running() > 0)) return prior.attach(task, cb, claudeChatPrompt(task, env), flagsChanged)
-    appLog('info', 'claude', `chat 收掉旧进程后 --resume · ${flagsChanged ? 'spawn 参数变了且后台没活' : '旧进程已在回收'}`)
+    const nextArgs = claudeSpawnArgs(task, env)
+    const flagsChanged = prior.signature !== chatSpawnSignature(nextArgs, env)
+    // ★电脑操作开关变了:沿用活进程就拿不到(或拿着作废的)电脑工具,后台任务也得让路(usability fix A)。
+    const cuChanged = prior.cuKey !== cuSpawnKey(nextArgs)
+    if (prior.alive() && !cuChanged && (!flagsChanged || prior.running() > 0)) return prior.attach(task, cb, claudeChatPrompt(task, env), flagsChanged)
+    appLog('info', 'claude', `chat 收掉旧进程后 --resume · ${cuChanged ? '电脑操作工具变了' : flagsChanged ? 'spawn 参数变了且后台没活' : '旧进程已在回收'}`)
     let inner: AgentSession | null = null
     let cancelled = false
     const done = prior.stop().then(() => {
