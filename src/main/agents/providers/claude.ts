@@ -1002,7 +1002,8 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
     const nextArgs = claudeSpawnArgs(task, env)
     const flagsChanged = prior.signature !== chatSpawnSignature(nextArgs, env)
     // ★电脑操作开关变了:沿用活进程就拿不到(或拿着作废的)电脑工具,后台任务也得让路(usability fix A)。
-    const cuChanged = prior.cuKey !== cuSpawnKey(nextArgs)
+    //  只有本机轮次带得上电脑工具:手机 / 机器人 / 宠物 / 工作流这一轮没有 FORGE_*,那不是开关变了,不能为它杀后台。
+    const cuChanged = task.origin === 'local' && prior.cuKey !== cuSpawnKey(nextArgs)
     if (prior.alive() && !cuChanged && (!flagsChanged || prior.running() > 0)) return prior.attach(task, cb, claudeChatPrompt(task, env), flagsChanged)
     appLog('info', 'claude', `chat 收掉旧进程后 --resume · ${cuChanged ? '电脑操作工具变了' : flagsChanged ? 'spawn 参数变了且后台没活' : '旧进程已在回收'}`)
     let inner: AgentSession | null = null

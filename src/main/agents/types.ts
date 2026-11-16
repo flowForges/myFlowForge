@@ -105,6 +105,8 @@ export interface ChatTask {
   permissionMode?: import('@shared/permissions').PermissionMode
   /** 这一轮允不允许操作浏览器。缺省 = 'off'(见 shared/browserUse.ts)。 */
   browserUse?: import('@shared/browserUse').BrowserUseMode
+  /** 谁发的这一轮(handlers 盖的章)。只有本机轮次能换电脑操作工具:别的来源不算「开关变了」。 */
+  origin?: import('@shared/types').ChatSendPayload['origin']
   /** 这一轮用快速档(codex service tier "priority")。缺省/false = 不覆盖,跟用户自己的 codex 配置走。 */
   fast?: boolean
   /**

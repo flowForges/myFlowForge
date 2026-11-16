@@ -526,6 +526,25 @@ describe('claude chat() — 电脑操作开关变了(usability fix A)', () => {
   })
   const swapScript = (bin: string) => writeFileSync(bin, readFileSync(bin, 'utf8').replace('const script = ', `const script = ${JSON.stringify([replyTurn('OK')])} || `))
 
+  it.each(['remote', 'bot'] as const)('★mode ask, a background subagent alive, a %s turn arrives (no cu env): nothing is killed, it rides the live process', async (origin) => {
+    const tag = `cunl-${origin}`
+    const bin = scripted(tag, [lingeringTurn, replyTurn('OK')])
+    const provider = makeClaudeProvider({ bin, defaultModels: [] })
+    const bgh = hooks()
+    const s1 = provider.chat!(task({ background: bgh.h, origin: 'local' }), collect().cb, cuEnv())
+    lives.push(s1)
+    await settle(s1.done, 30_000)
+    await until(() => bgh.counts.includes(1))
+    const two = collect()
+    const s2 = provider.chat!(task({ id: 'm2', sessionId: S, background: bgh.h, origin }), two.cb, process.env)
+    lives.push(s2)
+    expect(await settle(s2.done, 30_000)).toMatchObject({ ok: true })
+    expect(two.st.text).toBe('OK')
+    expect(spawns(tag)).toHaveLength(1)
+    expect(exitedProc(tag)).toBe(false)
+    expect(bgh.counts).toEqual([1])
+  })
+
   it.each([
     ['turned on', () => process.env, cuEnv],
     ['turned off', cuEnv, () => process.env],
@@ -534,14 +553,14 @@ describe('claude chat() — 电脑操作开关变了(usability fix A)', () => {
     const bin = scripted(tag, [lingeringTurn])
     const provider = makeClaudeProvider({ bin, defaultModels: [] })
     const bgh = hooks()
-    const s1 = provider.chat!(task({ background: bgh.h }), collect().cb, first())
+    const s1 = provider.chat!(task({ background: bgh.h, origin: 'local' }), collect().cb, first())
     lives.push(s1)
     await settle(s1.done, 30_000)
     await until(() => bgh.counts.includes(1))
     swapScript(bin)
     const two = collect()
     const env2 = second()
-    const s2 = provider.chat!(task({ id: 'm2', sessionId: S, background: bgh.h }), two.cb, env2)
+    const s2 = provider.chat!(task({ id: 'm2', sessionId: S, background: bgh.h, origin: 'local' }), two.cb, env2)
     lives.push(s2)
     expect(await settle(s2.done, 10_000)).toMatchObject({ ok: true })
     expect(two.st.text).toBe('OK')
