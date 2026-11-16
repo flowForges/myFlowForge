@@ -61,13 +61,26 @@ describe('电脑操作 chip', () => {
     expect(document.querySelector('#computerMenu.open')).toBeNull()
   })
 
-  it.each(['off', 'ask'] as const)('C: helper refused (mode %s): 电脑 · 组件异常, not 关闭 / 需授权; click opens settings', (mode) => {
-    const c = cu({ status: { ...ok, helper: 'failed', screen: false, ax: false }, mode })
+  it('C: helper refused (mode off): 电脑 · 组件异常, not 关闭 / 需授权; click opens settings', () => {
+    const c = cu({ status: { ...ok, helper: 'failed', screen: false, ax: false }, mode: 'off' })
     r(c)
     expect(chip()!.textContent).toBe('电脑 · 组件异常')
     fireEvent.click(chip()!)
     expect(c.openSettings).toHaveBeenCalledTimes(1)
     expect(document.querySelector('#computerMenu.open')).toBeNull()
+  })
+
+  it.each(['ask', 'allow'] as const)('review: helper refused while the mode is %s: the chip opens the menu, so 关闭 still turns it off', async (mode) => {
+    const setMode = vi.fn(async () => null)
+    const c = cu({ status: { ...ok, helper: 'failed', screen: false, ax: false }, mode, setMode })
+    r(c)
+    expect(chip()!.textContent).toBe('电脑 · 组件异常')
+    fireEvent.click(chip()!)
+    await waitFor(() => expect(document.querySelector('#computerMenu.open')).toBeTruthy())
+    expect(c.openSettings).not.toHaveBeenCalled()
+    const off = Array.from(document.querySelectorAll('#computerMenu .menu-item')).find((e) => e.textContent === '关闭')!
+    press(off)
+    await waitFor(() => expect(setMode).toHaveBeenCalledWith('off'))
   })
 
   it('C: helper missing: 电脑 · 组件缺失', () => {

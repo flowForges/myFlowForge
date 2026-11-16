@@ -360,6 +360,8 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
     // 档位关着或缺授权时缓存的状态可能是旧的(刚去授过权),每次都重新问
     let st = computerUse.status
     if ((!st || computerUse.mode === 'off' || !st.screen || !st.ax) && computerUse.refreshStatus) st = (await computerUse.refreshStatus()) ?? st
+    // a broken helper while the mode is on must not trap the user: the menu still offers 关闭 / 停止
+    if (st && st.helper !== 'ok' && computerUse.mode !== 'off') { setOpenMenu('computer'); return }
     if (st && (st.helper !== 'ok' || !st.screen || !st.ax)) { computerUse.openSettings(); return }
     setOpenMenu('computer')
   }

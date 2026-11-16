@@ -335,7 +335,7 @@ do {
   eq(callerRefusal(selfPath: inApp, ownerPid: 459, ppid: 459, parentPath: nil, selfPid: 50, respSelf: 459, respParent: 459), "parent_not_app", "parent path unknown")
   eq(callerRefusal(selfPath: inApp, ownerPid: 459, ppid: 459, parentPath: appBin, selfPid: 50, respSelf: nil, respParent: 459), "no_spi", "SPI missing / no answer")
   eq(callerRefusal(selfPath: inApp, ownerPid: 459, ppid: 459, parentPath: appBin, selfPid: 50, respSelf: 459, respParent: nil), "no_spi", "no answer for the parent")
-  eq(callerRefusal(selfPath: inApp, ownerPid: 459, ppid: 459, parentPath: appBin, selfPid: 50, respSelf: 50, respParent: 459), "self_responsible", "disclaimed helper")
+  eq(callerRefusal(selfPath: inApp, ownerPid: 459, ppid: 459, parentPath: appBin, selfPid: 50, respSelf: 50, respParent: 300), "self_responsible", "disclaimed helper under an app launched from a terminal (app's responsible = Terminal 300)")
   eq(callerRefusal(selfPath: inApp, ownerPid: 459, ppid: 459, parentPath: appBin, selfPid: 50, respSelf: 459, respParent: 12), "responsible_mismatch", "different responsible process than the parent")
   // An app started by app.relaunch() inherits the old (now dead) instance as its responsible process. Measured on
   // macOS 26: once that pid is gone the SPI answers every pid in the tree for itself, so our helper reads as its own
