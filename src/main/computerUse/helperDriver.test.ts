@@ -345,6 +345,36 @@ describe('helperDriver', () => {
       expect(err.replace(/^[^E]*/, '').length).toBeLessThanOrEqual(200)
     })
 
+    it('C: a refused caller logs its reason code, and a status call fails as helper_failed', async () => {
+      vi.useFakeTimers()
+      const log = vi.fn()
+      const { d, children } = setup({ log })
+      const p = d.status()
+      await flush()
+      const c = children[0]
+      c.stderr.write('forge-cu: caller not allowed (self_responsible)\n')
+      c.emit('exit', 2, null)
+      await expect(p).rejects.toMatchObject({ code: 'helper_failed' })
+      const all = log.mock.calls.map((x) => String(x[0]))
+      expect(all).toContain('forge-cu refused: self_responsible')
+      expect(all.some((m) => m.includes('caller not allowed (self_responsible)'))).toBe(false)
+    })
+
+    it('C: an unknown or path-carrying reason is logged as unknown, never echoed', async () => {
+      vi.useFakeTimers()
+      const log = vi.fn()
+      const { d, children } = setup({ log })
+      const p = d.status()
+      await flush()
+      const c = children[0]
+      c.stderr.write('forge-cu: caller not allowed (/Users/x/y)\n')
+      c.emit('exit', 2, null)
+      await expect(p).rejects.toMatchObject({ code: 'helper_failed' })
+      const all = log.mock.calls.map((x) => String(x[0]))
+      expect(all).toContain('forge-cu refused: unknown')
+      expect(all.join('\n')).not.toContain('/Users/x')
+    })
+
     it('typed text is not logged on timeout either', async () => {
       vi.useFakeTimers()
       const log = vi.fn()

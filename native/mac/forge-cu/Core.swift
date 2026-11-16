@@ -240,6 +240,22 @@ func responsibilityOK(selfPid: Int32, respSelf: Int32?, respParent: Int32?) -> B
   return s != selfPid && s == p
 }
 
+/// Which caller check failed, as a path-free code for stderr (`owner_mismatch`, `parent_not_app`, `no_spi`,
+/// `self_responsible`, `responsible_mismatch`), or nil when the caller is allowed. Same rules as
+/// callerAllowed + responsibilityOK, which stay the authority.
+func callerRefusal(selfPath: String, ownerPid: Int32, ppid: Int32, parentPath: String?,
+                   selfPid: Int32, respSelf: Int32?, respParent: Int32?) -> String? {
+  if ppid != ownerPid { return "owner_mismatch" }
+  if !callerAllowed(selfPath: selfPath, ownerPid: ownerPid, ppid: ppid, parentPath: parentPath) { return "parent_not_app" }
+  guard let s = respSelf, let p = respParent else { return "no_spi" }
+  if s == selfPid { return "self_responsible" }
+  if s != p { return "responsible_mismatch" }
+  return responsibilityOK(selfPid: selfPid, respSelf: respSelf, respParent: respParent) ? nil : "responsible_mismatch"
+}
+
+/// The one stderr line of a refused caller. Only the code: never a path.
+func refusalLine(_ code: String) -> String { "forge-cu: caller not allowed (\(code))\n" }
+
 /// `request` (the TCC prompt op) only for a parent that is an app's own executable and is our
 /// responsible process — i.e. the real app spawned us, not a shell or an agent tree.
 func requestAllowed(parentPath: String?, ppid: Int32, respSelf: Int32?) -> Bool {

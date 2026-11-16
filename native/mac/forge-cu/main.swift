@@ -124,9 +124,9 @@ case .drive(let owner):
   let ppid = getppid()
   let parentPath = pidPath(ppid)
   let respSelf = responsiblePid(getpid())
-  guard callerAllowed(selfPath: me, ownerPid: owner, ppid: ppid, parentPath: parentPath),
-        responsibilityOK(selfPid: getpid(), respSelf: respSelf, respParent: responsiblePid(ppid)) else {
-    FileHandle.standardError.write(Data("forge-cu: caller not allowed\n".utf8))
+  if let code = callerRefusal(selfPath: me, ownerPid: owner, ppid: ppid, parentPath: parentPath,
+                              selfPid: getpid(), respSelf: respSelf, respParent: responsiblePid(ppid)) {
+    FileHandle.standardError.write(Data(refusalLine(code).utf8))
     exit(2)
   }
   mayRequest = requestAllowed(parentPath: parentPath, ppid: ppid, respSelf: respSelf)

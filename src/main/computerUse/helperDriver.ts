@@ -31,6 +31,13 @@ export function wellFormed(s: string): string {
   return s.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\uFFFD')
 }
 
+/** The caller-check codes forge-cu prints (Core.swift callerRefusal). Anything else is `unknown`: never echoed. */
+const REFUSAL_CODES = new Set(['owner_mismatch', 'parent_not_app', 'no_spi', 'self_responsible', 'responsible_mismatch'])
+export function refusalCode(line: string): string {
+  const m = /\(([a-z_]+)\)\s*$/.exec(line)
+  return m && REFUSAL_CODES.has(m[1]) ? m[1] : 'unknown'
+}
+
 /** What a post may leave pressed if the helper died mid-way. */
 function heldBy(a: PostAction): { mods: Mod[]; button?: Button } | null {
   if (a.kind === 'click') return { mods: a.mods, button: a.button }
@@ -137,7 +144,9 @@ export function helperDriver(o: {
       while ((i = ebuf.indexOf('\n')) >= 0) {
         const line = ebuf.slice(0, i).trim()
         ebuf = ebuf.slice(i + 1)
-        if (line) log(`forge-cu: ${line.slice(0, 200)}`)
+        if (!line) continue
+        const refused = /^forge-cu: caller not allowed\b/.test(line) ? refusalCode(line) : null
+        log(refused ? `forge-cu refused: ${refused}` : `forge-cu: ${line.slice(0, 200)}`)
       }
     })
     c.stdin.on('error', () => {})
