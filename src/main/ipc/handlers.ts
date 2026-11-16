@@ -10,6 +10,7 @@ import { acpKnownUnavailable, withAcpAvailability } from '../agents/acp/acpAvail
 import { isAcpUnavailable } from '../agents/acp/acpChat'
 import { browserPermissionConflict, providerSupportsBrowserUse, DEFAULT_BROWSER_USE, BROWSER_TOOL_PREFIX } from '@shared/browserUse'
 import { cuPreflight, cuBeginTurn, withoutCuEnv } from '../computerUse/chatTurn'
+import { mainEntryPath } from '../agents/mainEntry'
 import { computerUseHandlers } from '../computerUse/ipc'
 import { userMessageOf } from '../chat/userMessage'
 import { expandTilde } from '../config/paths'
@@ -190,7 +191,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     }
   }
 
-  const mcpEntry = join(__dirname, 'forgeMcp.js')
+  const mcpEntry = mainEntryPath(__dirname, 'forgeMcp.js')
   // AbortController for the in-flight workspace creation (one at a time), so 取消 can kill its git pulls.
   let setupAbort: AbortController | null = null
 
@@ -1165,7 +1166,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         })
         const shimDir = writeShimDir({
           runDir: store.runDir, socketPath: sockPath, sessionId: payload.sessionId,
-          nodePath: process.execPath, shimJs: join(__dirname, 'agentShim.js'),
+          nodePath: process.execPath, shimJs: mainEntryPath(__dirname, 'agentShim.js'),
         })
         const prevZdotdir = env.ZDOTDIR
         env.PATH = shimmedPath(shimDir, env.PATH)
