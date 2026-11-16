@@ -12,6 +12,7 @@ import type { ChatSendPayload } from '@shared/types'
 import type { PermissionMode } from '@shared/permissions'
 import type { ComputerUseHost } from '../host/capabilities'
 import { forgeMcpConfigFile } from '../agents/mcpConfig'
+import { CU_OFF_HINT_ENV } from '../agents/computerUseDirective'
 import type { CuSessionKey } from './types'
 
 type Origin = ChatSendPayload['origin']
@@ -30,6 +31,7 @@ export const CU_ENV_KEYS = ['FORGE_SOCKET', 'FORGE_MCP_DIR', 'FORGE_AGENT_ID', '
 export function withoutCuEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const out = { ...env }
   for (const k of CU_ENV_KEYS) delete out[k]
+  delete out[CU_OFF_HINT_ENV]
   return out
 }
 
@@ -37,6 +39,8 @@ export function originNote(origin: Origin): string {
   const from = origin && origin !== 'local' ? ORIGIN_LABEL[origin] : '未标明的入口'
   return `这一轮来自 ${from} · 电脑操作只对本机输入框发出的消息生效`
 }
+
+const provisioned = (cu: ComputerUseHost) => { try { return cu.provisioned?.() === true } catch { return false } }
 
 export interface CuArmed { socketPath: string; configDir: string }
 
@@ -86,6 +90,9 @@ export function cuBeginTurn(
     a.env.FORGE_AGENT_ID = token
     a.env.FORGE_MCP_ENTRY = a.mcpEntry
     a.env.FORGE_TOOLS = COMPUTER_TOOLS.join(',')
+  } else if (a.origin === 'local' && providerSupportsComputerUse(a.agent) && cu.service.modeOf(key) === 'off' && provisioned(cu)) {
+    // B: someone who has enabled computer use before, now with the switch off. One model-facing line, never in the UI.
+    a.env[CU_OFF_HINT_ENV] = '1'
   }
   let ended = false
   return () => {

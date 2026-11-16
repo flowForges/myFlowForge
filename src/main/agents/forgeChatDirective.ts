@@ -1,4 +1,5 @@
 import { stageName } from '../config/schema'
+import { computerUseDirective } from './computerUseDirective'
 
 // Same workflow list markdown as forgeWorkflowSkill.ts's workflowListSection, but built from the
 // JSON in env.FORGE_WORKFLOWS ([{id,name,stages:{key,name?}[]}] — see handlers.ts where the chat
@@ -33,7 +34,12 @@ function workflowListSectionFromJson(raw: string | undefined): string {
 // asking clarifying questions. When the chat bridge exposes that tool (env.FORGE_TOOLS), inline
 // the same guidance so the CLI proposes a plan instead. Mirrors src/main/skills/forgeWorkflowSkill.ts,
 // condensed. Fail-open: returns '' when the tool isn't exposed, so behavior is unchanged.
+// The computer-use part (computerUseDirective) rides along when the turn carries the computer tools or the off-hint.
 export function forgeChatDirective(env: NodeJS.ProcessEnv): string {
+  return [workflowDirective(env), computerUseDirective(env)].filter(Boolean).join('\n\n')
+}
+
+function workflowDirective(env: NodeJS.ProcessEnv): string {
   if (!String(env?.FORGE_TOOLS ?? '').includes('forge_propose_plan')) return ''
   return [
     '【Forge 双路径规则】你在一个 Forge 工作区，你是【编排者】：自己一行代码都不读、不写、不改。所有真正读/写/分析这个工作区仓库代码的活，都必须派【真·子代理】去做（独立进程、cd 到项目目录、加载该项目 skills/rules、显示在检查器）。绝对禁止用你 CLI 内置的 Task/subagent 自己把活干了——那不是 Forge 的子代理，违背核心设计。你有两条派活的路径，按"是否跨阶段"判断走哪条：',

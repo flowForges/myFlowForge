@@ -130,7 +130,7 @@ afterEach(() => {
   rmSync(cwd, { recursive: true, force: true })
 })
 
-async function boot(o: { status?: Partial<CuStatus>; noCu?: boolean; gateOnRun?: boolean } = {}) {
+async function boot(o: { status?: Partial<CuStatus>; noCu?: boolean; gateOnRun?: boolean; provisioned?: boolean } = {}) {
   vi.resetModules()
   sendTurnMock.mockReset().mockResolvedValue(undefined)
   for (const k of Object.keys(botDeps)) delete botDeps[k]
@@ -178,7 +178,7 @@ async function boot(o: { status?: Partial<CuStatus>; noCu?: boolean; gateOnRun?:
   const order: string[] = []
   const provision = vi.fn(() => { order.push('provision') })
   probe.request.mockImplementation(async () => { order.push('request') })
-  const cu: ComputerUseHost = { service, probe, bridge, log, collapseMain, runningApps, provision }
+  const cu: ComputerUseHost = { service, probe, bridge, log, collapseMain, runningApps, provision, ...(o.provisioned === undefined ? {} : { provisioned: () => o.provisioned! }) }
   const broadcast = vi.fn()
   const { registerIpc } = await import('./handlers')
   const table: MethodTable = registerIpc(broadcast, {}, fakeHost(o.noCu ? {} : { computerUse: () => cu }))
@@ -207,6 +207,72 @@ const noForge = (env: NodeJS.ProcessEnv) => {
   expect(env.FORGE_MCP_DIR).toBeUndefined()
   expect(String(env.FORGE_TOOLS ?? '')).not.toContain('computer_')
 }
+
+describe('what the model is told (usability fix A/B)', () => {
+  const CU_NAMES = COMPUTER_TOOLS.map((t) => `mcp__forge__${t}`)
+  const argsOf = async () => {
+    const { buildClaudeChatArgs } = await import('../agents/providers/claude')
+    return buildClaudeChatArgs({ ...lastPayload(), cwd } as any, lastEnv(), 'p')
+  }
+  const directive = async () => (await import('../agents/forgeChatDirective')).forgeChatDirective(lastEnv())
+
+  it('mode on: the args carry --mcp-config and the ten allowed tools, the entry is out/main-level forgeMcp.js, and the directive names the tools', async () => {
+    const h = await boot({ provisioned: true })
+    await h.call(CH.cuSetMode)({}, { ...KEY, mode: 'ask' })
+    await h.call(CH.chatSend)({}, msg())
+    await sent()
+    const args = await argsOf()
+    expect(args).toContain('--mcp-config')
+    expect(args.slice(args.indexOf('--allowedTools') + 1).filter((a) => a.startsWith('mcp__forge__'))).toEqual(CU_NAMES)
+    expect(lastEnv().FORGE_MCP_ENTRY).toMatch(/[\\/]forgeMcp\.js$/)
+    expect(lastEnv().FORGE_MCP_ENTRY).not.toMatch(/[\\/]chunks[\\/]/)
+    const d = await directive()
+    for (const n of CU_NAMES) expect(d).toContain(n)
+    expect(d).toContain('先调用 mcp__forge__computer_screenshot')
+    expect(d).toMatch(/osascript/)
+    expect(d).toMatch(/System Events/)
+    expect(d).toMatch(/screencapture/)
+    expect(d).toMatch(/cliclick/)
+    expect(d).toMatch(/辅助功能/)
+    expect(d).toMatch(/屏幕录制/)
+    expect(d).toMatch(/批准/)
+    expect(d).toContain('select:' + CU_NAMES.join(','))
+    expect(d).not.toContain('「电脑」开关')
+    expect(lastEnv().FORGE_CU_OFF_HINT).toBeUndefined()
+  })
+
+  it('mode off on a provisioned machine, local claude turn: no tools, no directive, one off-hint line', async () => {
+    const h = await boot({ provisioned: true })
+    await h.call(CH.chatSend)({}, msg())
+    await sent()
+    noForge(lastEnv())
+    const args = await argsOf()
+    expect(args).not.toContain('--mcp-config')
+    expect(args.some((a) => a.startsWith('mcp__forge__computer_'))).toBe(false)
+    expect(lastEnv().FORGE_CU_OFF_HINT).toBe('1')
+    const d = await directive()
+    expect(d).toContain('「电脑」开关')
+    expect(d).toMatch(/osascript/)
+    expect(d).not.toContain('mcp__forge__computer_')
+    expect(d.split('\n')).toHaveLength(1)
+    expect(h.notes().join('')).not.toContain('「电脑」开关')
+  })
+
+  it.each([
+    ['never provisioned', { provisioned: false }, {}],
+    ['host without the provisioned read', {}, {}],
+    ['a remote turn', { provisioned: true }, { remote: true }],
+    ['an unsupported provider', { provisioned: true }, { agent: 'cursor', permissionMode: 'full' }],
+  ] as const)('mode off, %s: no off-hint', async (_n, b, m) => {
+    const h = await boot(b)
+    const { remote, ...rest } = m as { remote?: boolean; agent?: string; permissionMode?: string }
+    if (remote) await h.table[CH.chatSend](REMOTE_CTX, msg(rest))
+    else await h.call(CH.chatSend)({}, msg(rest))
+    await sent()
+    expect(lastEnv().FORGE_CU_OFF_HINT).toBeUndefined()
+    expect(await directive()).toBe('')
+  })
+})
 
 describe('origin stamping and env injection (Review Focus 3)', () => {
   it('a local composer turn gets the five FORGE_* keys and exactly the computer tools, between beginTurn and endTurn', async () => {

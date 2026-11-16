@@ -313,9 +313,11 @@ describe('disclaim seam (V3, V16 ③, controller notes)', () => {
   it('I-1: host().provision() saves provisioned:true once (merged, lists kept) and disclaims from the next spawn', () => {
     const t = setup({ settings: (s) => ({ ...s, computerUse: { ...s.computerUse, extraBlocked: ['com.x'] } }) })
     expect(t.rt.disclaimEnabled()).toBe(false)
+    expect(t.rt.host()!.provisioned?.()).toBe(false)
     t.rt.host()!.provision()
     expect(t.settings.computerUse).toMatchObject({ provisioned: true, extraBlocked: ['com.x'] })
     expect(t.rt.disclaimEnabled()).toBe(true)
+    expect(t.rt.host()!.provisioned?.()).toBe(true)
     t.rt.host()!.provision()
     expect(t.writes).toHaveLength(1)
   })

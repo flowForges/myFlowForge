@@ -83,4 +83,6 @@ export interface ComputerUseHost {
   collapseMain?: () => void
   /** I-1: 授权 provisions (spec V3): `provisioned:true` through the runtime's settings save, so the next spawn is disclaimed */
   provision: () => void
+  /** has computer use ever been enabled on this machine (settings `provisioned`); absent → false */
+  provisioned?: () => boolean
 }

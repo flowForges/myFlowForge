@@ -57,3 +57,19 @@ describe('forgeChatDirective', () => {
     expect(badJson).not.toContain('本工作区可选工作流')
   })
 })
+
+describe('forgeChatDirective · computer use (usability fix A/B)', () => {
+  const CU = 'computer_screenshot,computer_click,computer_move,computer_drag,computer_scroll,computer_type,computer_key,computer_wait,computer_cursor,computer_front_app'
+  it('computer tools alone (claude and codex share this path): only the computer directive', () => {
+    const d = forgeChatDirective({ FORGE_TOOLS: CU })
+    expect(d.startsWith('【电脑操作】')).toBe(true)
+    expect(d).toContain('mcp__forge__computer_front_app')
+    expect(d).not.toContain('forge_propose_plan')
+  })
+  it('workflow tools keep their text unchanged; the off-hint only with its flag', () => {
+    const wf = forgeChatDirective({ FORGE_TOOLS: 'forge_propose_plan' })
+    expect(wf).not.toContain('电脑')
+    expect(forgeChatDirective({ FORGE_TOOLS: 'forge_propose_plan', FORGE_CU_OFF_HINT: '1' })).toBe(`${wf}\n\n${forgeChatDirective({ FORGE_CU_OFF_HINT: '1' })}`)
+    expect(forgeChatDirective({ FORGE_CU_OFF_HINT: '0' })).toBe('')
+  })
+})

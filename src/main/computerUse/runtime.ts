@@ -211,6 +211,7 @@ export function createCuRuntime(d: CuRuntimeDeps): CuRuntime {
       runningApps: () => driver.runningApps(),
       collapseMain: () => d.collapseMain?.(),
       provision: () => { if (!provisioned()) saveSettings({ provisioned: true }) },
+      provisioned: () => provisioned(),
     }
     built = { host, service, driver }
     return built
