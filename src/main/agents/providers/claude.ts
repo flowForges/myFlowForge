@@ -6,6 +6,7 @@ import type { PermissionMode } from '@shared/permissions'
 import { providerSupportsBrowserUse, BROWSER_TOOL_PREFIX } from '@shared/browserUse'
 import { parseChatStreamActions, buildChatPrompt, extractContextTokens, extractTurnTokens, makeUsageTracker, splitThinkLines } from '../chatStream'
 import { forgeChatDirective } from '../forgeChatDirective'
+import { computerUseDirective } from '../computerUseDirective'
 import { forgeMcpArgs, forgeAllowedToolNames } from '../mcpConfig'
 import { permissionArgs } from '../permissionArgs'
 import { readClaudeModelsLive } from './claudeModels'
@@ -140,24 +141,31 @@ export function buildClaudeChatArgs(task: ChatTask, env: NodeJS.ProcessEnv, chat
   // ★★关的时候**显式**传 `--no-chrome`,不能靠「不传」:用户可能在 ~/.claude/settings.json 里
   //   全局开了 Chrome 集成,那样界面上明明是关的、实际却开着。Forge 的开关必须是权威的。
   const chromeArgs = [task.browserUse === 'ask' || task.browserUse === 'allow' ? '--chrome' : '--no-chrome']
+  // computer use: a system prompt fixed at spawn, not a line repeated in every user message (the CLI transcript)
+  const cuDirective = computerUseDirective(env)
+  const systemArgs = cuDirective ? ['--append-system-prompt', cuDirective] : []
   return [
     '-p', '--output-format', 'stream-json', '--include-partial-messages', '--verbose',
     ...CLAUDE_CONTROL_FLAGS,
     ...permissionArgs('claude', task.permissionMode ?? 'auto'),
     ...allowArgs,
     ...chromeArgs,
+    ...systemArgs,
     '--model', cliModel(task.model),
     ...forgeMcpArgs(env),
   ]
 }
 
+/** The per-turn user message. The computer-use directive is not in it: it rides --append-system-prompt (buildClaudeChatArgs). */
+export function buildClaudeChatPrompt(task: ChatTask, env: NodeJS.ProcessEnv): string {
+  const directive = forgeChatDirective(env, { computerUse: false })
+  return directive ? `${directive}\n\n${buildChatPrompt(task)}` : buildChatPrompt(task)
+}
+
 export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
   const bin = spec.bin ?? 'claude'
   const defaultModels: Model[] = spec.defaultModels ?? []
-  const claudeChatPrompt = (task: ChatTask, env: NodeJS.ProcessEnv) => {
-    const directive = forgeChatDirective(env)
-    return directive ? `${directive}\n\n${buildChatPrompt(task)}` : buildChatPrompt(task)
-  }
+  const claudeChatPrompt = buildClaudeChatPrompt
   const claudeSpawnArgs = (task: ChatTask, env: NodeJS.ProcessEnv) =>
     spec.preArgs ? [...spec.preArgs] : buildClaudeChatArgs(task, env, claudeChatPrompt(task, env))
   const provider: AgentProvider = {

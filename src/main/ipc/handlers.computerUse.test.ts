@@ -239,6 +239,10 @@ describe('what the model is told (usability fix A/B)', () => {
     expect(d).toContain('select:' + CU_NAMES.join(','))
     expect(d).not.toContain('「电脑」开关')
     expect(lastEnv().FORGE_CU_OFF_HINT).toBeUndefined()
+    // review minor: claude gets it as a system prompt, never in the per-turn user message (the CLI transcript)
+    expect(args[args.indexOf('--append-system-prompt') + 1]).toBe(d)
+    const { buildClaudeChatPrompt } = await import('../agents/providers/claude')
+    expect(buildClaudeChatPrompt({ ...lastPayload(), prompt: 'USER_TEXT', cwd } as any, lastEnv())).not.toContain('电脑操作')
   })
 
   it('mode off on a provisioned machine, local claude turn: no tools, no directive, one off-hint line', async () => {
@@ -255,6 +259,7 @@ describe('what the model is told (usability fix A/B)', () => {
     expect(d).toMatch(/osascript/)
     expect(d).not.toContain('mcp__forge__computer_')
     expect(d.split('\n')).toHaveLength(1)
+    expect(args[args.indexOf('--append-system-prompt') + 1]).toBe(d)
     expect(h.notes().join('')).not.toContain('「电脑」开关')
   })
 
@@ -271,6 +276,7 @@ describe('what the model is told (usability fix A/B)', () => {
     await sent()
     expect(lastEnv().FORGE_CU_OFF_HINT).toBeUndefined()
     expect(await directive()).toBe('')
+    expect(await argsOf()).not.toContain('--append-system-prompt')
   })
 })
 

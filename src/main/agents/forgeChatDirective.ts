@@ -35,8 +35,10 @@ function workflowListSectionFromJson(raw: string | undefined): string {
 // the same guidance so the CLI proposes a plan instead. Mirrors src/main/skills/forgeWorkflowSkill.ts,
 // condensed. Fail-open: returns '' when the tool isn't exposed, so behavior is unchanged.
 // The computer-use part (computerUseDirective) rides along when the turn carries the computer tools or the off-hint.
-export function forgeChatDirective(env: NodeJS.ProcessEnv): string {
-  return [workflowDirective(env), computerUseDirective(env)].filter(Boolean).join('\n\n')
+// claude and codex pass `computerUse: false` and send that part as a system prompt / developer_instructions instead,
+// so it isn't repeated in the CLI transcript every turn.
+export function forgeChatDirective(env: NodeJS.ProcessEnv, opts: { computerUse?: boolean } = {}): string {
+  return [workflowDirective(env), opts.computerUse === false ? '' : computerUseDirective(env)].filter(Boolean).join('\n\n')
 }
 
 function workflowDirective(env: NodeJS.ProcessEnv): string {

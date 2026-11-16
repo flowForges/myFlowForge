@@ -601,6 +601,39 @@ process.exit(0)
   })
 })
 
+describe('codex chat() computer-use directive (review minor: out of the transcript)', () => {
+  const ARGV_DUMP = `#!/usr/bin/env node
+require('node:fs').writeFileSync(process.env.ARGV_OUT, JSON.stringify(process.argv.slice(2)))
+process.exit(0)
+`
+  let dumpCli: string, argvOut: string
+  beforeEach(() => {
+    dumpCli = join(dir, 'argvdump4.js'); writeFileSync(dumpCli, ARGV_DUMP); chmodSync(dumpCli, 0o755)
+    argvOut = join(dir, 'argv4.json')
+  })
+  const NOOP_CB = { onSession: () => {}, onAssistantDelta: () => {}, onThinkDelta: () => {}, onDone: () => {}, onError: () => {} }
+  const argv = async (env: Record<string, string>) => {
+    const provider = makeCodexProvider({ bin: dumpCli, defaultModels: [] })
+    const s = provider.chat!({ id: 'a1', prompt: 'PROMPT_BODY', model: 'default', cwd: dir }, NOOP_CB, { ...process.env, ARGV_OUT: argvOut, ...env })
+    await s.done
+    return JSON.parse(readFileSync(argvOut, 'utf8')) as string[]
+  }
+  const devInstr = (a: string[]) => a.find((x) => x.startsWith('developer_instructions='))
+  const CU = 'computer_screenshot,computer_click,computer_move,computer_drag,computer_scroll,computer_type,computer_key,computer_wait,computer_cursor,computer_front_app'
+  it('computer tools: the directive rides -c developer_instructions, the prompt is the user text alone', async () => {
+    const a = await argv({ FORGE_TOOLS: CU })
+    expect(a[a.length - 1]).toBe('PROMPT_BODY')
+    expect(devInstr(a)).toMatch(/^developer_instructions="【电脑操作】/)
+    expect(devInstr(a)).toContain('mcp__forge__computer_screenshot')
+  })
+  it('off-hint: also developer_instructions; nothing without either', async () => {
+    const a = await argv({ FORGE_CU_OFF_HINT: '1' })
+    expect(a[a.length - 1]).toBe('PROMPT_BODY')
+    expect(devInstr(a)).toContain('「电脑」开关')
+    expect(devInstr(await argv({}))).toBeUndefined()
+  })
+})
+
 describe('forgeChatDirective', () => {
   it('returns guidance mentioning forge_propose_plan when the tool is exposed', () => {
     expect(forgeChatDirective({ FORGE_TOOLS: 'forge_propose_plan' } as NodeJS.ProcessEnv)).toContain('forge_propose_plan')

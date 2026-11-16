@@ -5,7 +5,8 @@ import type { TurnPhase } from '@shared/types'
 import { confirmAllowed } from '../types'
 import { createFenceScanner } from '../handoffFence'
 import { buildChatPrompt, extractContextTokens, extractTurnTokens, makeUsageTracker } from '../chatStream'
-import { forgeCodexConfigArgs } from '../mcpConfig'
+import { forgeCodexConfigArgs, tomlString } from '../mcpConfig'
+import { computerUseDirective } from '../computerUseDirective'
 import { forgeChatDirective } from '../forgeChatDirective'
 import { permissionArgs } from '../permissionArgs'
 import { readCodexModelsCache, codexModelHasFastTier, codexDefaultFastTier, CODEX_FAST_TIER } from './codexModels'
@@ -207,6 +208,12 @@ function codexModelConfigArgs(model: string): string[] { return model && model !
 // ★关/缺省 → **什么都不传**,不是传 "default":不覆盖就是让 codex 跟用户自己的配置走。
 // ★exec 传输带 --ignore-user-config,所以那条路上「关」= codex 内置的默认档,不是 config.toml 里写的档。
 function codexServiceTierArgs(fast: boolean | undefined): string[] { return fast ? ['-c', `service_tier="${CODEX_FAST_TIER}"`] : [] }
+
+/** codex's system-side channel (`developer_instructions`, codex 0.154) for the computer-use directive; [] without one. */
+export function codexInstructionArgs(env: NodeJS.ProcessEnv): string[] {
+  const d = computerUseDirective(env)
+  return d ? ['-c', `developer_instructions=${tomlString(d)}`] : []
+}
 
 // The forge_propose_plan chat directive now lives in ../forgeChatDirective (shared with qoder,
 // which also can't see .claude/skills). Re-exported here for existing importers/tests.
@@ -411,7 +418,9 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
       // 会话上的快速开关是存量设置:换到一个没有快速档的模型(含 'default')后不再带它 —— 只在模型自己
       // 在 models_cache 里报了 priority 档时才传。两条传输(exec / app-server)共用这一份。
       const tierArgs = codexServiceTierArgs(task.fast === true && modelHasFastTier(task.model))
-      const directive = forgeChatDirective(env)
+      // computer use goes as developer_instructions (codexInstructionArgs), not into the transcript every turn
+      const directive = forgeChatDirective(env, { computerUse: false })
+      const instrArgs = codexInstructionArgs(env)
       const body = buildChatPrompt(task)
       const prompt = directive ? `${directive}\n\n${body}` : body
       const start = Date.now()
@@ -483,7 +492,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
           { hardMs: CHAT_STALL_KILL_MS, onDeadline: () => { cb.onStatus?.('⚠ 太久没有任何输出，已回收这一轮。'); appHandle?.cancel() } })
         try {
           appHandle = driveCodexTurn(
-            { cwd: task.cwd, prompt, modelArgs: [...codexModelConfigArgs(task.model), ...tierArgs], configArgs: forgeCodexConfigArgs(env), sandbox, approvalPolicy, resumeThreadId: task.sessionId || undefined },
+            { cwd: task.cwd, prompt, modelArgs: [...codexModelConfigArgs(task.model), ...tierArgs], configArgs: [...forgeCodexConfigArgs(env), ...instrArgs], sandbox, approvalPolicy, resumeThreadId: task.sessionId || undefined },
             {
               onEvent: (e) => { wd.beat(); handle(e) },
               // Pause the idle watchdog while the user decides on this approval — awaiting a human is not
@@ -551,7 +560,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         // still works (it lives outside config.toml), and the account's default model is used.
         // sandbox via `-c sandbox_mode` (NOT `-s`): `codex exec resume` rejects the `-s`/`--sandbox`
         // flag ("unexpected argument '-s'"), but accepts the config override — and so does plain `exec`.
-        : [...head, '--ignore-user-config', '--json', '--skip-git-repo-check', ...codexPermArgs, ...codexModelArgs(task.model), ...tierArgs, ...forgeCodexArgs, prompt]
+        : [...head, '--ignore-user-config', '--json', '--skip-git-repo-check', ...codexPermArgs, ...codexModelArgs(task.model), ...tierArgs, ...forgeCodexArgs, ...instrArgs, prompt]
       // stdin: 'ignore' so codex doesn't block reading stdin. A wedged turn is reclaimed by an
       // INACTIVITY watchdog (below) — NOT a hard wall-clock timeout, which used to kill long-but-
       // healthy turns (a big input reads/reasons past 180s → killed with zero output → "chat 无回复").
