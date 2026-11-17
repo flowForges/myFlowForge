@@ -101,6 +101,7 @@ func snapshotOp(_ b: [String: Any], _ abort: AbortState) -> [String: Any] {
   var window: AXUIElement?
   var drill = false
   if let ref = b["root"] as? String {
+    if let p = refTable.get(ref)?.instance.pid, ownOrDenied(b, pid: p) { return errorReply(id: nil, code: "own_window") }
     switch resolveLive(ref, d) {
     case .failure(let e): return e.reply
     case .success(let r):
@@ -113,6 +114,7 @@ func snapshotOp(_ b: [String: Any], _ abort: AbortState) -> [String: Any] {
     case .failure(let e): return e.reply
     case .success(let p): pid = p
     }
+    if ownOrDenied(b, pid: pid) { return errorReply(id: nil, code: "own_window") }
     guard let w = pickWindow(AXUIElementCreateApplication(pid), number: (b["window"] as? NSNumber)?.intValue, d) else {
       return errorReply(id: nil, code: "not_found", message: "no window")
     }
@@ -220,6 +222,8 @@ func actOp(_ b: [String: Any], _ poster: Poster, _ abort: AbortState) -> [String
   guard let ref = b["ref"] as? String, let action = b["action"] as? String else { return errorReply(id: nil, code: "invalid_args") }
   guard axTrusted() else { return errorReply(id: nil, code: "no_permission") }
   let d = Deadline(ms: requestMs(b["deadlineMs"], max: 15000))
+  let nd = ["delivery": Delivery.notDelivered.rawValue]
+  if let p = refTable.get(ref)?.instance.pid, ownOrDenied(b, pid: p) { return errorReply(id: nil, code: "own_window", extra: nd) }
   let r: Resolved
   switch resolveLive(ref, d) {
   case .failure(let e):
@@ -230,11 +234,7 @@ func actOp(_ b: [String: Any], _ poster: Poster, _ abort: AbortState) -> [String
   }
   let pid = r.live.pid
   let g = parseActGuard(b["guard"])
-  let bundle = bundleOf(pid)
-  let nd = ["delivery": Delivery.notDelivered.rawValue]
-  if g.denyPids.contains(pid) || matchesPrefix(bundle, g.denyBundlePrefixes) || isOwnBundle(bundle) {
-    return errorReply(id: nil, code: "own_window", extra: nd)
-  }
+  if ownOrDenied(b, pid: pid) { return errorReply(id: nil, code: "own_window", extra: nd) }
   if let want = g.expectInstance, want != r.live { return errorReply(id: nil, code: "target_changed", extra: nd) }
   if (action == "type" || action == "set") && secureInputOn() { return errorReply(id: nil, code: "secure_input", extra: nd) }
 
@@ -252,7 +252,7 @@ func actOp(_ b: [String: Any], _ poster: Poster, _ abort: AbortState) -> [String
   o = finalizeOutcome(o, expired: ax.hitExpired, aborted: ax.hitAbort || abort.requested, typed: ax.typedPartial)
 
   if physicalEligible(o, action: action, physical: b["physical"] as? Bool ?? false) {
-    return physicalClick(r, g, steps: o.steps, poster, abort)
+    return physicalClick(r, g, steps: o.steps, poster, abort, d)
   }
   return actReply(o, after: o.delivery == .notDelivered ? nil : afterFields(pid, r.element))
 }
@@ -261,7 +261,7 @@ func actOp(_ b: [String: Any], _ poster: Poster, _ abort: AbortState) -> [String
 /// 0.5 pt), pick the first of 5 candidate points whose AX hit is the target or a descendant, re-check
 /// front app / main window / instance, then a guarded physical click through Poster.
 private func physicalClick(_ r: Resolved, _ g: ActGuard, steps: [(String, Delivery)], _ poster: Poster,
-                           _ abort: AbortState) -> [String: Any] {
+                           _ abort: AbortState, _ d: Deadline) -> [String: Any] {
   let pid = r.live.pid
   let stepsJSON = steps.map { ["name": $0.0, "outcome": $0.1.rawValue] }
   func fail(_ code: String) -> [String: Any] {
@@ -269,13 +269,13 @@ private func physicalClick(_ r: Resolved, _ g: ActGuard, steps: [(String, Delive
                                              "physical_delivery_started": false])
   }
   if inputBlockedBySession() { return fail("target_changed") }
-  if let c = focusWindowImpl(pid: pid, windowNumber: r.rec.window, abort) { return fail(c == "not_found" ? "stale_ref" : c) }
-  let d = Deadline(ms: 1500)
+  if let c = focusWindowImpl(pid: pid, windowNumber: r.rec.window, abort, d) { return fail(c == "not_found" ? "stale_ref" : c) }
   let ax = LiveAX(pid: pid, deadline: d)
   var samples: [CGRect] = []
   for i in 0..<3 {
     guard let f = ax.frame(r.element, d) else { return fail("stale_ref") }
     samples.append(f)
+    if let c = postGate(expired: d.expired, aborted: abort.requested) { return fail(c) }
     if i < 2 && !abortableSleep(17, abort) { return fail("stopped") }
   }
   guard boundsStable(samples), let vis = visibleRect(samples[2], clips: ax.clipFrames(r.element, d)) else {
@@ -294,9 +294,10 @@ private func physicalClick(_ r: Resolved, _ g: ActGuard, steps: [(String, Delive
         let win = axElement(r.element, "AXWindow", d), cfBool(axRead(win, "AXMain", d).value) == true else {
     return fail("target_changed")
   }
-  var gd: [String: Any] = ["denyPids": g.denyPids.map { Int($0) }, "denyBundlePrefixes": g.denyBundlePrefixes + [OWN_BUNDLE_PREFIX],
+  var gd: [String: Any] = ["denyPids": (g.denyPids + ownPids).map { Int($0) }, "denyBundlePrefixes": g.denyBundlePrefixes + [OWN_BUNDLE_PREFIX],
                            "expectPid": Int(pid)]
   if let n = r.rec.window { gd["expectWindowId"] = n }
+  if let c = postGate(expired: d.expired, aborted: abort.requested) { return fail(c) }  // never click after the reply is due
   let res = poster.post(["action": ["kind": "click", "x": Double(p.x), "y": Double(p.y)], "guard": gd])
   if let code = res["code"] as? String { return fail(code) }
   let all = stepsJSON + [["name": "physical.click", "outcome": Delivery.deliveredUnverified.rawValue]]
@@ -345,7 +346,11 @@ private final class WaitObserver {
   }
 
   /// true = woken by a notification.
-  func wait(ms: Int) -> Bool { wake.wait(timeout: .now() + .milliseconds(max(0, ms))) == .success }
+  func wait(ms: Int) -> Bool {
+    let woke = wake.wait(timeout: .now() + .milliseconds(max(0, ms))) == .success
+    while wake.wait(timeout: .now()) == .success {}  // a burst counts once
+    return woke
+  }
 
   /// Returns once the thread has removed its notifications (no callback can reach `self` afterwards).
   func stop() {
@@ -365,6 +370,7 @@ func waitForOp(_ b: [String: Any], _ abort: AbortState) -> [String: Any] {
   if ownOrDenied(b, pid: pid) { return errorReply(id: nil, code: "own_window") }
   let end = Deadline(ms: clampInt(num(b["timeoutMs"]) ?? 5000, 0, 30000))
   let ax = LiveAX(pid: pid, deadline: end, abort: abort)
+  ax.identityOnly = true
   let observer = WaitObserver(pid: pid)
   observer.start()
   abort.beginPost()
@@ -376,15 +382,20 @@ func waitForOp(_ b: [String: Any], _ abort: AbortState) -> [String: Any] {
       return gone ? ["found": true] : errorReply(id: nil, code: "not_found", message: "app quit")
     }
     let d = Deadline(ms: max(250, min(ms(end), 2000)))
-    if let win = pickWindow(ax.app, number: nil, d) {
+    let wr = axRead(ax.app, "AXWindows", d)
+    let windowsRead = wr.err == .success && wr.value.map { CFGetTypeID($0) == CFArrayGetTypeID() } == true
+    let windowCount = windowsRead ? CFArrayGetCount((wr.value as! CFArray)) : -1
+    if let win = windowCount == 0 ? nil : pickWindow(ax.app, number: nil, d) {
       let w = walkDetailed(ax, root: win, budget: Budget(maxDepth: 50), deadline: d, interactiveOnly: false, skeleton: false)
       let hits = w.visited.filter { waitMatch($0.0, role: role, name: name, nameContains: contains) }
       if !gone, let (fp, e) = hits.first {
         return foundReply(ax, inst: inst, win: win, fp: fp, e: e, census: w.exhaustive ? w.census : nil)
       }
-      if gone && hits.isEmpty && w.exhaustive { return ["found": true] }
-    } else if gone {
-      return ["found": true]  // no window left at all
+      if gone && goneConfirmed(windowsRead: windowsRead, windowCount: windowCount, walkExhaustive: w.exhaustive, hits: hits.count) {
+        return ["found": true]
+      }
+    } else if gone && goneConfirmed(windowsRead: windowsRead, windowCount: windowCount, walkExhaustive: false, hits: 0) {
+      return ["found": true]  // AXWindows read fine and is empty
     }
     if end.expired { return ["found": false] }
     let t0 = ProcessInfo.processInfo.systemUptime
@@ -397,7 +408,7 @@ func waitForOp(_ b: [String: Any], _ abort: AbortState) -> [String: Any] {
 /// The hit goes into a fresh one-node snapshot so the model can act on it.
 private func foundReply(_ ax: LiveAX, inst: Instance, win: AXUIElement, fp: Fingerprint, e: AXUIElement,
                         census: [Fingerprint]?) -> [String: Any] {
-  let a = ax.attrs(e, deadline: Deadline(ms: 300))
+  let a = ax.readAttrs(e, Deadline(ms: 300), actor: true)  // the full read for the one node handed back
   var states: [String] = []
   if a?.enabled == false { states.append("disabled") }
   if a?.focused == true { states.append("focused") }

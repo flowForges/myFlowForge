@@ -93,6 +93,7 @@ private func leave(_ abort: AbortState, _ poster: Poster) -> Never {
 
 private func drive(ownerPid: Int32) -> Never {
   configureAX()
+  ownPids.insert(ownerPid)  // never a target, guard or not
   signal(SIGPIPE, SIG_IGN)
   let abort = AbortState()
   let poster = Poster(abort: abort)

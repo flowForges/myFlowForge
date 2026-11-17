@@ -18,23 +18,26 @@ func abortableSleep(_ ms: Int, _ abort: AbortState?) -> Bool {
   return abort?.requested != true
 }
 
-/// Polls `cond` every `stepMs` for at most `ms`; true as soon as it holds.
-func pollUntil(ms: Int, stepMs: Int = 10, _ abort: AbortState?, _ cond: () -> Bool) -> Bool {
+/// Polls `cond` every `stepMs` for at most `ms` and never past `d`; true as soon as it holds.
+func pollUntil(ms: Int, stepMs: Int = 10, _ abort: AbortState?, _ d: Deadline, _ cond: () -> Bool) -> Bool {
   var t = 0
   while true {
     if cond() { return true }
-    if t >= ms || !abortableSleep(stepMs, abort) { return false }
+    if t >= ms || d.expired || !abortableSleep(stepMs, abort) { return false }
     t += stepMs
   }
 }
 
+/// myFlowForge's own processes: this helper and its owner (added in main.swift before any request).
+var ownPids: Set<Int32> = [getpid()]
+
+/// Own pid / own bundle / guard-denied: refused whether or not the caller sent a guard.
 func ownOrDenied(_ body: [String: Any], pid: Int32) -> Bool {
-  let b = bundleOf(pid)
-  return isOwnBundle(b) || denied(parseGuard(body["guard"]), pid: pid, bundle: b)
+  ownTarget(parseGuard(body["guard"]), pid: pid, bundle: bundleOf(pid), ownPids: ownPids)
 }
 
-private func axFrontmost(_ pid: Int32) -> Bool {
-  cfBool(axRead(AXUIElementCreateApplication(pid), "AXFrontmost", Deadline(ms: 250)).value) == true
+private func axFrontmost(_ pid: Int32, _ d: Deadline) -> Bool {
+  cfBool(axRead(AXUIElementCreateApplication(pid), "AXFrontmost", d).value) == true
 }
 
 /// Opens `url` with LaunchServices; the completion (which may arrive late, harmlessly) is awaited ≤ `ms`.
@@ -59,50 +62,55 @@ private func openApp(_ url: URL, activate: Bool, ms: Int) -> (app: NSRunningAppl
 /// Two-step activation (spec §6.5): already AXFrontmost → done; activate(options: []) and poll ≤500 ms;
 /// else LaunchServices activation of this very bundle (activates a running instance, never relaunches
 /// one that is still running) and poll ≤500 ms.
-func bringToFront(_ app: NSRunningApplication, _ abort: AbortState?) -> Bool {
+func bringToFront(_ app: NSRunningApplication, _ abort: AbortState?, _ d: Deadline) -> Bool {
   let pid = app.processIdentifier
-  if axFrontmost(pid) { return true }
+  if axFrontmost(pid, d) { return true }
+  if postGate(expired: d.expired, aborted: abort?.requested ?? false) != nil { return false }
   _ = onMain { app.activate(options: []) }
-  if pollUntil(ms: 500, abort, { axFrontmost(pid) }) { return true }
-  guard !onMain({ app.isTerminated }), let url = onMain({ app.bundleURL }) else { return false }
-  _ = openApp(url, activate: true, ms: 250)
-  return pollUntil(ms: 500, abort, { axFrontmost(pid) })
+  if pollUntil(ms: 500, abort, d, { axFrontmost(pid, d) }) { return true }
+  guard postGate(expired: d.expired, aborted: abort?.requested ?? false) == nil,
+        !onMain({ app.isTerminated }), let url = onMain({ app.bundleURL }) else { return false }
+  _ = openApp(url, activate: true, ms: min(250, Int(d.remaining * 1000)))
+  return pollUntil(ms: 500, abort, d, { axFrontmost(pid, d) })
 }
 
-/// spec §6.5 focusWindow. nil = focused; else the error code.
-func focusWindowImpl(pid: Int32, windowNumber: Int?, _ abort: AbortState?) -> String? {
+/// spec §6.5 focusWindow, never past the request deadline `d`. nil = focused; else the error code.
+func focusWindowImpl(pid: Int32, windowNumber: Int?, _ abort: AbortState?, _ d: Deadline) -> String? {
   guard let app = runningApp(pid), !onMain({ app.isTerminated }) else { return "not_found" }
-  guard bringToFront(app, abort) else { return abort?.requested == true ? "stopped" : "focus_failed" }
+  func late() -> String? { postGate(expired: d.expired, aborted: abort?.requested ?? false) }
+  guard bringToFront(app, abort, d) else { return late() ?? "focus_failed" }
   let axApp = AXUIElementCreateApplication(pid)
-  let d = Deadline(ms: 1500)
-  guard let win = pickWindow(axApp, number: windowNumber, d) else { return windowNumber == nil ? nil : "not_found" }
-  let isMain = { cfBool(axRead(win, "AXMain", Deadline(ms: 250)).value) == true }
+  guard let win = pickWindow(axApp, number: windowNumber, d) else { return late() ?? (windowNumber == nil ? nil : "not_found") }
+  let isMain = { cfBool(axRead(win, "AXMain", d).value) == true }
   if !isMain() {
+    if let c = late() { return c }
     AXUIElementSetMessagingTimeout(win, d.writeTimeout())
     let raised = AXUIElementPerformAction(win, "AXRaise" as CFString)
     if axResult(raised) == .notSupported {
       AXUIElementSetMessagingTimeout(win, d.writeTimeout())
       _ = AXUIElementSetAttributeValue(win, "AXMain" as CFString, kCFBooleanTrue)
     }
-    _ = pollUntil(ms: 500, abort, isMain)
+    _ = pollUntil(ms: 500, abort, d, isMain)
   }
   // system-wide AXFocusedApplication → AXFocusedWindow: two reads in a row, 50 ms apart, within 750 ms
   var reads: [Bool] = []
   for _ in 0..<15 {
-    if abort?.requested == true { return "stopped" }
-    let f = axFocusedAppWindow(Deadline(ms: 250))
+    if let c = late() { return c }
+    let f = axFocusedAppWindow(d)
     reads.append(f?.pid == pid && f?.window.map { CFEqual($0, win) } == true)
     if consecutiveHits(reads, need: 2) { return nil }
     _ = abortableSleep(50, abort)
   }
-  return "focus_failed"
+  return late() ?? "focus_failed"
 }
 
 func focusWindowOp(_ b: [String: Any], _ abort: AbortState) -> [String: Any] {
   if abort.requested { return errorReply(id: nil, code: "stopped") }
   guard let pid = int32(b["pid"]) else { return errorReply(id: nil, code: "invalid_args") }
   guard axTrusted() else { return errorReply(id: nil, code: "no_permission") }
-  if let c = focusWindowImpl(pid: pid, windowNumber: (b["windowNumber"] as? NSNumber)?.intValue, abort) {
+  if ownOrDenied(b, pid: pid) { return errorReply(id: nil, code: "own_window") }
+  let d = Deadline(ms: requestMs(b["deadlineMs"], max: 10000))
+  if let c = focusWindowImpl(pid: pid, windowNumber: (b["windowNumber"] as? NSNumber)?.intValue, abort, d) {
     return errorReply(id: nil, code: c)
   }
   return [:]
@@ -140,7 +148,8 @@ func launchOp(_ b: [String: Any], _ abort: AbortState) -> [String: Any] {
   let attached = running.count == 1
   if attached {
     app = running[0]
-    if activate { _ = bringToFront(app, abort) }
+    if ownPids.contains(app.processIdentifier) { return errorReply(id: nil, code: "own_window") }
+    if activate { _ = bringToFront(app, abort, d) }
   } else {
     let r = openApp(appURL, activate: activate, ms: Int(d.remaining * 1000))
     if r.timedOut { return errorReply(id: nil, code: "timeout", extra: ["delivery": Delivery.uncertain.rawValue]) }
@@ -279,8 +288,8 @@ func appKeyOp(_ b: [String: Any], _ abort: AbortState) -> [String: Any] {
   func repeated(_ via: String, _ once: () -> Delivery) -> [String: Any]? {
     var delivered = false
     for i in 0..<repeatN {
-      if abort.requested {
-        return errorReply(id: nil, code: "stopped", extra: ["via": via, "delivery": (delivered ? Delivery.deliveredUnverified : .notDelivered).rawValue])
+      if let c = postGate(expired: d.expired, aborted: abort.requested) {
+        return errorReply(id: nil, code: c, extra: ["via": via, "delivery": (delivered ? Delivery.deliveredUnverified : .notDelivered).rawValue])
       }
       let r = once()
       if r == .notDelivered {
@@ -297,7 +306,7 @@ func appKeyOp(_ b: [String: Any], _ abort: AbortState) -> [String: Any] {
   // 1. a menu item that answers the combo (never for plain keys)
   if !mods.isEmpty, let item = findMenuItem(app, mods: mods, key: keyName, d) {
     if let r = repeated("menu", {
-      AXUIElementSetMessagingTimeout(item, Deadline(ms: 1000).writeTimeout())
+      AXUIElementSetMessagingTimeout(item, d.writeTimeout())
       return pressDelivery(axResult(AXUIElementPerformAction(item, "AXPress" as CFString)))
     }) { return r }
   }
@@ -308,7 +317,7 @@ func appKeyOp(_ b: [String: Any], _ abort: AbortState) -> [String: Any] {
     AXUIElementSetMessagingTimeout(f, d.readTimeout())
     if AXUIElementCopyActionNames(f, &names) == .success, (names as? [String] ?? []).contains(action) {
       if let r = repeated(keyName == "return" ? "confirm" : "cancel", {
-        AXUIElementSetMessagingTimeout(f, Deadline(ms: 1000).writeTimeout())
+        AXUIElementSetMessagingTimeout(f, d.writeTimeout())
         return pressDelivery(axResult(AXUIElementPerformAction(f, action as CFString)))
       }) { return r }
     }
@@ -329,8 +338,8 @@ func appKeyOp(_ b: [String: Any], _ abort: AbortState) -> [String: Any] {
   let src = CGEventSource(stateID: .hidSystemState)
   var sent = 0
   for i in 0..<repeatN {
-    if abort.requested {
-      return errorReply(id: nil, code: "stopped", extra: ["via": "pid", "delivery": (sent > 0 ? Delivery.deliveredUnverified : .notDelivered).rawValue])
+    if let c = postGate(expired: d.expired, aborted: abort.requested) {
+      return errorReply(id: nil, code: c, extra: ["via": "pid", "delivery": (sent > 0 ? Delivery.deliveredUnverified : .notDelivered).rawValue])
     }
     let down = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: true)
     let up = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: false)

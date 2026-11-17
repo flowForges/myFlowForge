@@ -1230,5 +1230,36 @@ do {
   check(!consecutiveHits([true, false, true], need: 2), "reset on a miss")
 }
 
+// ── fix round 1: deadline before posts, own targets, confirmed gone, nested posts ──────────────
+do {
+  check(postGate(expired: false, aborted: false) == nil, "in time: post")
+  eq(postGate(expired: true, aborted: false) ?? "", "timeout", "past the deadline: never post")
+  eq(postGate(expired: true, aborted: true) ?? "", "stopped", "abort wins")
+
+  let none = Guard()
+  check(ownTarget(none, pid: 77, bundle: "com.apple.finder", ownPids: [77, 78]), "owner / self pid always denied, no guard needed")
+  check(ownTarget(none, pid: 5, bundle: "com.zghua.myflowforge.test", ownPids: []), "own bundle prefix")
+  var g = Guard(); g.denyPids = [9]
+  check(ownTarget(g, pid: 9, bundle: nil, ownPids: []), "guard pid")
+  check(!ownTarget(g, pid: 10, bundle: "com.apple.finder", ownPids: [77]), "other app")
+
+  check(goneConfirmed(windowsRead: true, windowCount: 0, walkExhaustive: false, hits: 0), "AXWindows read, empty → gone")
+  check(!goneConfirmed(windowsRead: false, windowCount: 0, walkExhaustive: false, hits: 0), "unreadable windows (timeout) never gone")
+  check(goneConfirmed(windowsRead: true, windowCount: 2, walkExhaustive: true, hits: 0), "exhaustive walk, no hit → gone")
+  check(!goneConfirmed(windowsRead: true, windowCount: 2, walkExhaustive: false, hits: 0), "partial walk proves nothing")
+  check(!goneConfirmed(windowsRead: true, windowCount: 2, walkExhaustive: true, hits: 1), "still there")
+
+  let st = AbortState()
+  st.beginPost(); st.beginPost(); st.endPost()
+  eq(st.signal(), false, "nested post: still in flight after the inner end")
+  st.endPost()
+  _ = st.clear()
+  eq(st.signal(), true, "outer end → idle again")
+  st.endPost()  // extra end never goes negative
+  _ = st.clear(); st.beginPost()
+  eq(st.signal(), false, "counter floor at 0")
+  st.endPost()
+}
+
 print("forge-cu self-test: \(passed) passed, \(failures) failed")
 exit(failures == 0 ? 0 : 1)

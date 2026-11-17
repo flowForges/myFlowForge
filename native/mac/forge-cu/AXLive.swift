@@ -209,6 +209,9 @@ final class LiveAX: AXSource, AXActor {
   private(set) var hitAbort = false
   /// UTF-16 units web typing posted before the focus moved away (set only when typing was cut short).
   private(set) var typedPartial: Int?
+  /// waitFor passes (spec §6.8): source reads keep identity, names and actions only — no AXValue
+  /// except static text (a label), no settable probes.
+  var identityOnly = false
 
   init(pid: Int32, deadline: Deadline, abort: AbortState? = nil) {
     self.pid = pid
@@ -240,16 +243,19 @@ final class LiveAX: AXSource, AXActor {
     if let t = cfElement(slot(14)) { a.titleUIText = titleUIText(t, d) }
     a.numberOfCharacters = cfInt(slot(15))
     let secure = a.role == "AXSecureTextField" || a.subrole == "AXSecureTextField"
+    let lean = identityOnly && !actor
     if let role = a.role, !secure {
-      if let v = axRead(e, "AXValue", d).value, let (s, k) = valueText(v) { a.value = s; a.valueKind = k }
+      if !lean || role == "AXStaticText", let v = axRead(e, "AXValue", d).value, let (s, k) = valueText(v) {
+        a.value = s; a.valueKind = k
+      }
       a.actions = actionNames(e, d)
-      if !staticRoles.contains(role) || actor {
+      if !lean && (!staticRoles.contains(role) || actor) {
         var probe = ["AXValue", "AXFocused", "AXExpanded"]
         if normalizeRole(role: role, subrole: a.subrole) == "textfield" || role == "AXComboBox" { probe.append("AXSelectedText") }
         if actor { probe += actorSettable }
         for attr in probe where isSettable(e, attr, d) { a.settable.insert(attr) }
       }
-    } else if a.role != nil {
+    } else if a.role != nil && !lean {
       a.actions = actionNames(e, d)
       for attr in ["AXFocused"] + (actor ? ["AXSelected"] : []) where isSettable(e, attr, d) { a.settable.insert(attr) }
     }

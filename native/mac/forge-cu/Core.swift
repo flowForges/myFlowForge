@@ -478,17 +478,18 @@ func jpegData(_ img: CGImage, quality: Double) -> Data? {
 /// While idle an abort is also answered at once with `{event:'stopped'}`.
 final class AbortState {
   private let lock = NSLock()
-  private var inPost = false
+  /// Nesting depth of posts in flight (an act may run a Poster post inside itself).
+  private var inPost = 0
   private var flag = false
   /// true → nothing in flight: the caller should emit the stopped event now.
   func signal() -> Bool {
     lock.lock(); defer { lock.unlock() }
     flag = true
-    return !inPost
+    return inPost == 0
   }
   var requested: Bool { lock.lock(); defer { lock.unlock() }; return flag }
-  func beginPost() { lock.lock(); inPost = true; lock.unlock() }
-  func endPost() { lock.lock(); inPost = false; lock.unlock() }
+  func beginPost() { lock.lock(); inPost += 1; lock.unlock() }
+  func endPost() { lock.lock(); inPost = max(0, inPost - 1); lock.unlock() }
   /// Returns whether an abort had latched, and clears it.
   func clear() -> Bool { lock.lock(); defer { lock.unlock() }; let f = flag; flag = false; return f }
 }
@@ -581,3 +582,20 @@ func validBundleId(_ s: String) -> Bool {
 
 /// `deadlineMs` of a request, default 3000, clamped to [50, max].
 func requestMs(_ v: Any?, def: Int = 3000, max hi: Int) -> Int { clampInt(num(v) ?? Double(def), 50, hi) }
+
+/// Right before an input post or AX mutation outside a chain: nil = go, else the error code.
+func postGate(expired: Bool, aborted: Bool) -> String? {
+  if aborted { return "stopped" }
+  return expired ? "timeout" : nil
+}
+
+/// myFlowForge itself (owner pid, this helper, own bundle prefix) or a guard-denied app — always, guard or not.
+func ownTarget(_ g: Guard, pid: Int32, bundle: String?, ownPids: Set<Int32>) -> Bool {
+  ownPids.contains(pid) || isOwnBundle(bundle) || denied(g, pid: pid, bundle: bundle)
+}
+
+/// waitFor `gone`: only on a successful empty AXWindows read, or an exhaustive walk without a hit.
+func goneConfirmed(windowsRead: Bool, windowCount: Int, walkExhaustive: Bool, hits: Int) -> Bool {
+  if windowsRead && windowCount == 0 { return true }
+  return walkExhaustive && hits == 0
+}
