@@ -580,7 +580,9 @@ func observedEffect(before: EffectProbe, after: EffectProbe) -> Bool {
 
 /// One step's grade. `stateChecked` = a readable state was checked (true: reached, false: unchanged);
 /// `readbackRole` = row-like target whose AXSelected decides. Success with no observed effect is
-/// `delivered_unverified` (stops the chain); `delivered_without_effect` only from a checked state.
+/// `delivered_unverified` (stops the chain); `delivered_without_effect` only from a checked state that
+/// didn't change AND no other effect was seen (callers pass `false` only for row/cell AXSelected,
+/// toggle value and AXExpanded, spec §6.4).
 func gradeStep(_ r: AXResult, before: EffectProbe, after: EffectProbe, readbackRole: Bool, stateChecked: Bool?) -> Delivery {
   switch r {
   case .notSupported, .invalidElement, .apiDisabled:
@@ -590,9 +592,14 @@ func gradeStep(_ r: AXResult, before: EffectProbe, after: EffectProbe, readbackR
   case .other:
     return stateChecked == true || observedEffect(before: before, after: after) ? .deliveredVerified : .uncertain
   case .success:
-    if let s = stateChecked { return s ? .deliveredVerified : .deliveredWithoutEffect }
-    if readbackRole, let sel = after.selected { return sel ? .deliveredVerified : .deliveredWithoutEffect }
-    return observedEffect(before: before, after: after) ? .deliveredVerified : .deliveredUnverified
+    if stateChecked == true { return .deliveredVerified }
+    let effect = observedEffect(before: before, after: after)
+    if stateChecked == false { return effect ? .deliveredUnverified : .deliveredWithoutEffect }
+    if readbackRole, let sel = after.selected {
+      if sel { return .deliveredVerified }
+      return effect ? .deliveredUnverified : .deliveredWithoutEffect  // something visibly happened: never again
+    }
+    return effect ? .deliveredVerified : .deliveredUnverified
   }
 }
 
@@ -728,6 +735,17 @@ private final class ChainRunner<A: AXActor> {
     return ActOutcome(delivery: .notDelivered, steps: steps, code: code ?? "unsupported")
   }
 
+  /// A later sub-call of a composite step failed after an earlier one was delivered: never not_delivered.
+  func afterPartial(_ r: AXResult) -> Delivery {
+    switch r {
+    case .success: return .deliveredUnverified
+    case .cannotComplete, .other: return .uncertain
+    case .invalidElement: code = "stale_ref"; halted = true; return .deliveredUnverified
+    case .apiDisabled: code = "no_permission"; halted = true; return .deliveredUnverified
+    case .notSupported: return .deliveredUnverified
+    }
+  }
+
   func fail(_ c: String) -> ActOutcome { ActOutcome(delivery: .notDelivered, steps: [], code: c) }
 
   func performStep(_ x: A.E, _ action: String, name: String? = nil, cap: Int, readback: Bool = false,
@@ -805,12 +823,15 @@ private final class ChainRunner<A: AXActor> {
       guard let item else { return nil }
       let target = self.advertises(item, "AXShowMenu") ? item : self.e
       guard self.advertises(target, "AXShowMenu") else { return nil }
+      var later: AXResult?
       let d = self.attempt(capMs: ActTiming.menuMs, state: open) {
         let r = self.a.set(item, "AXSelected", NSNumber(value: true))
         guard r == .success else { return r }
-        return self.a.perform(target, "AXShowMenu")
+        let m = self.a.perform(target, "AXShowMenu")
+        if m != .success { later = m }
+        return .success
       }
-      return ("AXSelected+AXShowMenu", d)
+      return ("AXSelected+AXShowMenu", later.map { self.afterPartial($0) } ?? d)
     }
     return [show, selectThenShow]
   }
@@ -838,7 +859,17 @@ private final class ChainRunner<A: AXActor> {
             return ("AXSelectedTextRange", d == .notDelivered ? .notDelivered : .uncertain)
           }
         }
-        return ("keys", self.attempt(capMs: ActTiming.settleMs, effect: false, state: contains) { self.a.typeViaKeys(self.e, text) })
+        let focusedHere: () -> Bool? = {
+          guard contains() == true, self.a.probe(self.e).focusedKey == self.a.key(self.e) else { return nil }
+          return true
+        }
+        var keys = AXResult.success
+        let d = self.attempt(capMs: ActTiming.settleMs, effect: false, state: focusedHere) {
+          keys = self.a.typeViaKeys(self.e, text)
+          return keys
+        }
+        if replace && d == .notDelivered && keys != .invalidElement { return ("keys", self.afterPartial(keys)) }
+        return ("keys", d)
       }]
     }
     let exact: () -> Bool? = { [unowned self] in self.a.attrs(self.e)?.value == expect ? true : nil }
@@ -862,11 +893,9 @@ private final class ChainRunner<A: AXActor> {
     default:
       v = want
     }
-    let before = a.attrs(e)?.value
     let readback: () -> Bool? = { [unowned self] in
       let now = self.a.attrs(self.e)?.value
-      if sameValue(now, want, kind: kind) { return true }
-      return now == before ? false : nil
+      return sameValue(now, want, kind: kind) ? true : nil
     }
     let write = setStep(e, "AXValue", { v }, cap: ActTiming.settleMs, effect: false, state: readback)
     let increments: Step = { [unowned self] in
@@ -880,7 +909,7 @@ private final class ChainRunner<A: AXActor> {
         let from = cur
         let d = self.attempt(capMs: ActTiming.settleMs, effect: false, state: {
           guard let n = self.a.attrs(self.e)?.value.flatMap(Double.init) else { return nil }
-          return n != from
+          return n != from ? true : nil
         }) { self.a.perform(self.e, act) }
         guard d == .deliveredVerified, let n = self.a.attrs(self.e)?.value.flatMap(Double.init) else {
           if !moved { return (act, d) }
@@ -955,13 +984,11 @@ private final class ChainRunner<A: AXActor> {
   }
 
   func selectSteps(_ want: String) -> [Step] {
-    let before = a.attrs(e)?.value
     let valueIs: () -> Bool = { [unowned self] in
       self.a.attrs(self.e)?.value?.caseInsensitiveCompare(want) == .orderedSame
     }
-    let write = setStep(e, "AXValue", { want }, cap: ActTiming.menuMs, effect: false, state: { [unowned self] in
-      if valueIs() { return true }
-      return self.a.attrs(self.e)?.value == before ? false : nil
+    let write = setStep(e, "AXValue", { want }, cap: ActTiming.menuMs, effect: false, state: {
+      valueIs() ? true : nil
     })
     let viaMenu: Step = { [unowned self] in
       guard let open = ["AXShowMenu", "AXPress"].first(where: { self.advertises(self.e, $0) }) else { return nil }
@@ -977,12 +1004,12 @@ private final class ChainRunner<A: AXActor> {
       guard let item else {
         cancel()
         self.code = "not_found"
-        return ("\(open)+pick", .deliveredWithoutEffect)
+        return ("\(open)+pick", .deliveredUnverified)
       }
       let p = self.attempt(capMs: ActTiming.menuMs, effect: false, state: {
         valueIs() || !self.a.probe(self.e).menuOpen ? true : nil
       }) { self.a.perform(item, "AXPress") }
-      if p == .notDelivered { cancel(); return ("\(open)+pick", self.halted ? .notDelivered : .deliveredWithoutEffect) }
+      if p == .notDelivered { cancel(); return ("\(open)+pick", .deliveredUnverified) }
       return ("\(open)+pick", p)
     }
     return a.attrs(e)?.role == "AXComboBox" ? [write, viaMenu] : [viaMenu]
@@ -1008,23 +1035,23 @@ private final class ChainRunner<A: AXActor> {
     guard let bar = scrollBar(vertical: dir == "up" || dir == "down") else { return [] }
     let before = a.attrs(bar)?.value
     let moved: () -> Bool? = { [unowned self] in
-      guard let v = self.a.attrs(bar)?.value, before != nil else { return nil }
-      return v != before
+      guard let v = self.a.attrs(bar)?.value, before != nil, v != before else { return nil }
+      return true
     }
     let act = forward ? "AXIncrement" : "AXDecrement"
     let steps: Step = { [unowned self] in
       guard self.advertises(bar, act) else { return nil }
-      var last = AXResult.success, done = 0
+      var later: AXResult?
       let d = self.attempt(capMs: ActTiming.settleMs, effect: false, state: moved) {
-        for _ in 0..<n {
-          last = self.a.perform(bar, act)
-          guard last == .success else { break }
-          done += 1
+        let first = self.a.perform(bar, act)
+        guard first == .success else { return first }
+        for _ in 1..<max(n, 1) {
+          let r = self.a.perform(bar, act)
+          if r != .success { later = r; break }
         }
-        return done > 0 ? .success : last
+        return .success
       }
-      if done > 0 && done < n && d == .deliveredVerified { return (act, .deliveredUnverified) }  // partial
-      return (act, d)
+      return (act, later.map { self.afterPartial($0) } ?? d)  // partial: never verified, never retry-safe
     }
     let value: Step = { [unowned self] in
       guard self.settable(bar, "AXValue"), let cur = before.flatMap(Double.init) else { return nil }

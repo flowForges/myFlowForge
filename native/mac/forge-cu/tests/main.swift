@@ -887,7 +887,7 @@ do {
   // web area → typeViaKeys, never set
   let t2 = FakeActor().add(1, "AXTextField", value: "", settable: ["AXSelectedText", "AXValue"])
   t2.web = true
-  t2.onKeys = { f, s in f.nodes[1]!.attrs.value = s; return .success }
+  t2.onKeys = { f, s in f.nodes[1]!.attrs.value = s; f.focused = 1; return .success }
   let ot2 = runChain(t2, 1, ActRequest(action: "type", text: "hi"))
   eq(t2.writes, ["keys 1"], "web field typed via keys only")
   eq(ot2.delivery, .deliveredVerified, "web read back")
@@ -983,6 +983,66 @@ do {
   se.menuOpen = false
   let ose2 = runChain(se, 1, ActRequest(action: "select", value: "Green"))
   check(ose2.code == "not_found" && se.calls.suffix(2) == ["perform 1 AXPress", "perform 2 AXCancel"], "missing item → AXCancel")
+}
+
+// ── AX core: action chains, fix round 1 (no second act after a visible / partial delivery) ──
+do {
+  // row: AXPress moves focus, AXSelected stays false → it visibly worked: AXOpen never called
+  let r1 = FakeActor().add(1, "AXRow", actions: ["AXPress", "AXOpen"], settable: ["AXSelected"]).add(2, "AXTextField")
+  r1.nodes[1]!.attrs.selected = false
+  r1.onPerform["1:AXPress"] = { $0.focused = 2; return .success }
+  let or1 = runChain(r1, 1, ActRequest(action: "click"))
+  check(or1.delivery == .deliveredUnverified && r1.calls == ["perform 1 AXPress"], "row press with an effect stops")
+  // toggle via press: value unchanged but a menu opened → stop
+  let r2 = FakeActor().add(1, "AXCheckBox", value: "0", actions: ["AXPress", "AXOpen"])
+  r2.onPerform["1:AXPress"] = { $0.menuOpen = true; return .success }
+  check(runChain(r2, 1, ActRequest(action: "toggle")).delivery == .deliveredUnverified && r2.calls.count == 1,
+        "toggle press with an effect stops")
+  let p0 = EffectProbe(focusedKey: nil, selected: false, menuOpen: false, exists: true, value: nil, expanded: nil)
+  var pm = p0; pm.menuOpen = true
+  eq(gradeStep(.success, before: p0, after: pm, readbackRole: true, stateChecked: nil), .deliveredUnverified, "row + effect")
+  eq(gradeStep(.success, before: p0, after: pm, readbackRole: false, stateChecked: false), .deliveredUnverified, "state + effect")
+
+  // lazy scroll bar: increments succeed, value never moves → AXValue write never runs
+  let l1 = FakeActor().add(1, "AXScrollArea").add(2, "AXScrollBar", parent: 1, value: "0", actions: ["AXIncrement"], settable: ["AXValue"])
+  l1.nodes[2]!.attrs.frame = CGRect(x: 0, y: 0, width: 10, height: 300)
+  let ol1 = runChain(l1, 2, ActRequest(action: "scroll", direction: "down", amount: 3))
+  check(ol1.delivery == .deliveredUnverified && l1.writes.isEmpty && l1.calls.count == 3 && ol1.steps.count == 1,
+        "lazy scroll bar: increments only, unverified")
+  // partial failure inside the scroll loop → uncertain
+  let l2 = FakeActor().add(1, "AXScrollArea").add(2, "AXScrollBar", parent: 1, value: "0", actions: ["AXIncrement"], settable: ["AXValue"])
+  var n = 0
+  l2.onPerform["2:AXIncrement"] = { _ in n += 1; return n == 1 ? .success : .cannotComplete }
+  let ol2 = runChain(l2, 2, ActRequest(action: "scroll", direction: "down", amount: 3))
+  check(ol2.delivery == .uncertain && l2.writes.isEmpty && l2.calls.count == 2, "partial scroll failure → uncertain")
+  let l3 = FakeActor().add(1, "AXScrollArea").add(2, "AXScrollBar", parent: 1, value: "0", actions: ["AXIncrement"])
+  var n3 = 0
+  l3.onPerform["2:AXIncrement"] = { _ in n3 += 1; return n3 == 1 ? .success : .notSupported }
+  eq(runChain(l3, 2, ActRequest(action: "scroll", direction: "down", amount: 2)).delivery, .deliveredUnverified,
+     "partial unsupported after a delivered one → unverified, not retry-safe")
+
+  // set: write succeeds, value unchanged → no increment walk
+  let v1 = FakeActor().add(1, "AXSlider", value: "1", actions: ["AXIncrement"], settable: ["AXValue"])
+  v1.nodes[1]!.attrs.valueKind = .number
+  let ov1 = runChain(v1, 1, ActRequest(action: "set", value: "4"))
+  check(ov1.delivery == .deliveredUnverified && v1.calls == ["set 1 AXValue"], "set unchanged → stop")
+  // combobox: write succeeds, value unchanged → no menu pick
+  let v2 = FakeActor().add(1, "AXComboBox", value: "a", actions: ["AXShowMenu"], settable: ["AXValue"])
+  check(runChain(v2, 1, ActRequest(action: "select", value: "b")).delivery == .deliveredUnverified && v2.calls == ["set 1 AXValue"],
+        "combobox write unchanged → stop")
+
+  // menu composite: AXSelected delivered, then AXShowMenu unsupported → not retry-safe
+  let c1 = FakeActor().add(1, "AXRow", actions: ["AXShowMenu"], settable: ["AXSelected"])
+  c1.onPerform["1:AXShowMenu"] = { _ in .notSupported }
+  let oc1 = runChain(c1, 1, ActRequest(action: "menu"))
+  eq(oc1.steps.map { $0.1 }, [.notDelivered, .deliveredUnverified], "select delivered, show failed")
+  eq(oc1.delivery, .deliveredUnverified, "composite never not_delivered after a delivered sub-call")
+
+  // web typing: focus moved away after the keys → unverified even though the value contains the text
+  let w1 = FakeActor().add(1, "AXTextField", value: "").add(2, "AXButton")
+  w1.web = true
+  w1.onKeys = { f, s in f.nodes[1]!.attrs.value = s; f.focused = 2; return .success }
+  eq(runChain(w1, 1, ActRequest(action: "type", text: "hi")).delivery, .deliveredUnverified, "focus left the field")
 }
 
 // ── menu shortcuts + blocked combos ────────────────────────────────────────────────
