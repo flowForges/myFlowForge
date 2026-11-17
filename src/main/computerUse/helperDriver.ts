@@ -24,7 +24,13 @@ interface Pending {
   timer: ReturnType<typeof setTimeout>
   resolve: (r: Record<string, any>) => void
   reject: (e: CuDriverError) => void
+  /** this request's own TS timeout sent the SIGUSR1 that produced a `stopped` reply — rename it to `timeout`
+   *  before resolving so the caller can't mistake our own watchdog abort for a user emergency stop. */
+  softAborted?: boolean
 }
+
+/** Wire fields `strict()` would otherwise drop on an error reply; carried on `CuDriverError.extra` for Task 6. */
+const ERROR_EXTRA_KEYS = ['steps', 'physical_delivery_started', 'candidates', 'via', 'typed'] as const
 
 const ABORT_GRACE_MS = 300
 const POST_CODES = new Set(['target_changed', 'helper_failed', 'stopped'])
@@ -129,7 +135,12 @@ export function helperDriver(o: {
     if (m.id !== p.id) return
     pending = null
     clearTimeout(p.timer)
-    if (m.code === 'stopped') settleAbort('stopped')
+    if (m.code === 'stopped') {
+      settleAbort('stopped')
+      // the helper is answering a SIGUSR1 *we* sent for a TS timeout, not a user's emergency stop — rename it
+      // so callers (the service's stop handling in particular) don't treat a slow op as a session stop.
+      if (p.softAborted) m.code = 'timeout'
+    }
     p.resolve(m)
   }
 
@@ -205,6 +216,10 @@ export function helperDriver(o: {
         // R6: a timed-out AX op aborts the helper (refs survive) instead of killing it outright.
         log(`forge-cu soft timeout (${op}): aborting instead of killing`)
         try { c.kill('SIGUSR1') } catch { /* already gone */ }
+        p.softAborted = true
+        // The helper latches the abort flag whether or not it got to emit anything (e.g. mid-`beginPost`
+        // when the signal landed) — the next request must clear it first, or it wrongly answers `stopped`.
+        needClear = true
         p.timer = setTimeout(() => {
           if (pending !== p) return
           log(`forge-cu timeout (${op}): no reply after the abort, killing`)
@@ -238,7 +253,12 @@ export function helperDriver(o: {
     if (r.ok === false) {
       // wire extras: act errors always carry `delivery` (uncertain / not_delivered / …); surfaced on the error.
       const delivery = typeof r.delivery === 'string' ? (r.delivery as Delivery) : undefined
-      throw new CuDriverError(String(r.code ?? 'helper_failed'), typeof r.message === 'string' ? r.message : undefined, delivery)
+      const extra: Record<string, unknown> = {}
+      for (const k of ERROR_EXTRA_KEYS) if (r[k] !== undefined) extra[k] = r[k]
+      throw new CuDriverError(
+        String(r.code ?? 'helper_failed'), typeof r.message === 'string' ? r.message : undefined, delivery,
+        Object.keys(extra).length ? extra : undefined,
+      )
     }
     return r
   }
@@ -293,8 +313,16 @@ export function helperDriver(o: {
     },
     async act(req: ActRequest, guard: ActGuard): Promise<ActResult> {
       const deadlineMs = DEFAULT_DEADLINE_MS
-      const { id: _i, ok: _o, code: _c, ...r } = await strict('act', { ...req, guard, deadlineMs }, tsTimeoutFor('act', deadlineMs))
-      return r as unknown as ActResult
+      try {
+        const { id: _i, ok: _o, code: _c, ...r } = await strict('act', { ...req, guard, deadlineMs }, tsTimeoutFor('act', deadlineMs))
+        return r as unknown as ActResult
+      } catch (e) {
+        // the helper never got to answer at all (killed after the abort grace, exited, disposed): no wire
+        // reply means no delivery, but act's contract is that every error carries one — nothing was confirmed
+        // delivered, so the safe default is `uncertain`, never left undefined.
+        if (e instanceof CuDriverError && e.delivery === undefined) throw new CuDriverError(e.code, e.message, 'uncertain', e.extra)
+        throw e
+      }
     },
     async waitFor(o: WaitForOpts): Promise<WaitForResult> {
       const timeoutMs = o.timeoutMs ?? 5000

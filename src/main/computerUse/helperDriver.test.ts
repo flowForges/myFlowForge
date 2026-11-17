@@ -453,6 +453,66 @@ describe('helperDriver', () => {
       expect(e).toMatchObject({ code: 'uncertain', delivery: 'uncertain' })
     })
 
+    it('an error reply carries steps/physical_delivery_started on CuDriverError.extra', async () => {
+      vi.useFakeTimers()
+      const { d, children } = setup()
+      const caught = d.act({ ref: '@s1:e2', action: 'click', physical: true }, actGuard).catch((e) => e)
+      await flush()
+      children[0].reply({
+        id: children[0].written()[0].id, ok: false, code: 'target_changed', delivery: 'not_delivered',
+        steps: [{ name: 'click', outcome: 'not_delivered' }], physical_delivery_started: false,
+      })
+      const e = await caught
+      expect(e.extra).toEqual({ steps: [{ name: 'click', outcome: 'not_delivered' }], physical_delivery_started: false })
+    })
+
+    it('appKey/launch error replies carry via/candidates on CuDriverError.extra too', async () => {
+      vi.useFakeTimers()
+      const { d: d1, children: c1 } = setup()
+      const caught1 = d1.appKey({ pid: 1, mods: [], key: { char: 'q' }, repeat: 1 }).catch((e) => e)
+      await flush()
+      c1[0].reply({ id: c1[0].written()[0].id, ok: false, code: 'blocked_combo', via: 'pid' })
+      expect((await caught1).extra).toEqual({ via: 'pid' })
+
+      const { d: d2, children: c2 } = setup()
+      const caught2 = d2.launch({ bundleId: 'com.a', activate: true }).catch((e) => e)
+      await flush()
+      c2[0].reply({ id: c2[0].written()[0].id, ok: false, code: 'ambiguous_target', candidates: [{ pid: 1, start: '1.0' }] })
+      expect((await caught2).extra).toEqual({ candidates: [{ pid: 1, start: '1.0' }] })
+    })
+
+    it('an error reply with no extra fields leaves CuDriverError.extra undefined', async () => {
+      vi.useFakeTimers()
+      const { d, children } = setup()
+      const caught = d.resolve('@s1:e2').catch((e) => e)
+      await flush()
+      children[0].reply({ id: children[0].written()[0].id, ok: false, code: 'stale_ref' })
+      const e = await caught
+      expect(e.extra).toBeUndefined()
+    })
+
+    it('act fills in delivery:uncertain when the helper dies instead of answering (killed after the soft-timeout grace)', async () => {
+      vi.useFakeTimers()
+      const { d, children } = setup()
+      const caught = d.act({ ref: '@s1:e2', action: 'click' }, actGuard).catch((e) => e)
+      await flush()
+      await vi.advanceTimersByTimeAsync(4000) // act's TS timeout: SIGUSR1 sent, no reply
+      await vi.advanceTimersByTimeAsync(2000) // grace elapses with no reply: hard kill
+      expect(children[0].kill).toHaveBeenCalledWith('SIGKILL')
+      const e = await caught
+      expect(e).toMatchObject({ code: 'helper_failed', delivery: 'uncertain' })
+    })
+
+    it('act fills in delivery:uncertain when the helper exits mid-call', async () => {
+      vi.useFakeTimers()
+      const { d, children } = setup()
+      const caught = d.act({ ref: '@s1:e2', action: 'click' }, actGuard).catch((e) => e)
+      await flush()
+      children[0].emit('exit', 1, null)
+      const e = await caught
+      expect(e).toMatchObject({ code: 'helper_failed', delivery: 'uncertain' })
+    })
+
     it('waitFor sends pid/match/gone/timeoutMs; deadlineMs defaults to timeoutMs', async () => {
       vi.useFakeTimers()
       const { d, children } = setup()
@@ -551,7 +611,7 @@ describe('helperDriver', () => {
         expect(children[0].kill).not.toHaveBeenCalledWith('SIGKILL')
       })
 
-      it('a stopped reply inside the 2000 ms grace resolves the op as stopped, never kills', async () => {
+      it('a stopped reply inside the 2000 ms grace is renamed to timeout (it was our own SIGUSR1, not a user stop), delivery kept', async () => {
         vi.useFakeTimers()
         const { d, children } = setup()
         const caught = d.snapshot({ app: { bundleId: 'com.a' }, mode: 'skeleton' }).catch((e) => e)
@@ -559,9 +619,46 @@ describe('helperDriver', () => {
         await vi.advanceTimersByTimeAsync(7000)
         expect(children[0].kill).toHaveBeenCalledWith('SIGUSR1')
         await vi.advanceTimersByTimeAsync(1999) // inside the 2000 ms grace
-        children[0].reply({ id: children[0].written()[0].id, ok: false, code: 'stopped' })
-        expect(await caught).toMatchObject({ code: 'stopped' })
+        children[0].reply({ id: children[0].written()[0].id, ok: false, code: 'stopped', delivery: 'uncertain' })
+        expect(await caught).toMatchObject({ code: 'timeout', delivery: 'uncertain' })
         expect(children[0].kill).not.toHaveBeenCalledWith('SIGKILL')
+      })
+
+      it('a real user abort() while a soft op is in flight still reports stopped (not our own timeout)', async () => {
+        vi.useFakeTimers()
+        const { d, children } = setup()
+        const caught = d.resolve('@s1:e2').catch((e) => e)
+        await flush()
+        const req = children[0].written()[0]
+        const ab = d.abort() // the user's own emergency stop, well before the soft timeout at 4000 ms
+        expect(children[0].kill).toHaveBeenCalledWith('SIGUSR1')
+        children[0].reply({ id: req.id, ok: false, code: 'stopped' })
+        expect(await caught).toMatchObject({ code: 'stopped' })
+        expect(await ab).toBe('stopped')
+      })
+
+      it('after a soft timeout, needClear is set immediately (not only once a stopped reply lands): the next call clearAborts first', async () => {
+        vi.useFakeTimers()
+        const { d, children } = setup()
+        const p = d.resolve('@s1:e2')
+        await flush()
+        const req = children[0].written()[0]
+        await vi.advanceTimersByTimeAsync(4000) // soft timeout: SIGUSR1 sent, no event/reply yet (e.g. mid-beginPost)
+        expect(children[0].kill).toHaveBeenCalledWith('SIGUSR1')
+        // the helper answers ok:true inside the grace — it was just slow, never emitted anything about the abort
+        children[0].reply({ id: req.id, ok: true, instance, bundleId: 'com.a', appName: 'A', role: 'AXButton' })
+        expect(await p).toEqual({ instance, bundleId: 'com.a', appName: 'A', role: 'AXButton' })
+        // the abort flag is still latched on the helper regardless — the next call must clearAbort first
+        const q = d.idleSeconds()
+        await flush()
+        let w = children[0].written()
+        expect(w.map((r: any) => r.op)).toEqual(['resolve', 'clearAbort']) // 'idle' waits on clearAbort's reply
+        children[0].reply({ id: w[1].id, ok: true, wasAborted: true })
+        await flush()
+        w = children[0].written()
+        expect(w.map((r: any) => r.op)).toEqual(['resolve', 'clearAbort', 'idle'])
+        children[0].reply({ id: w[2].id, ok: true, seconds: 1 })
+        expect(await q).toBe(1)
       })
 
       it('no reply for 2000 ms more after the abort: kill and reject helper_failed; refs survive the next call', async () => {

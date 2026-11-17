@@ -133,9 +133,14 @@ export interface ComputerDriver {
   dispose(): void
 }
 
-/** Driver failure with a stable code (helper_failed, unsupported, or whatever code the helper replied with). */
+/** Driver failure with a stable code (helper_failed, unsupported, or whatever code the helper replied with).
+ *  `extra` carries wire fields `strict()` would otherwise drop: `steps`, `physical_delivery_started`,
+ *  `candidates` (ambiguous_target), `via` (appKey), `typed` (a partial type delivery count). */
 export class CuDriverError extends Error {
-  constructor(public readonly code: string, message?: string, public readonly delivery?: Delivery) {
+  constructor(
+    public readonly code: string, message?: string, public readonly delivery?: Delivery,
+    public readonly extra?: Record<string, unknown>,
+  ) {
     super(message ?? code)
     this.name = 'CuDriverError'
   }

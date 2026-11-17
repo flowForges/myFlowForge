@@ -87,9 +87,34 @@ describe('fakeDriver', () => {
 
     it('act returns the scripted ActResult and records ref/action/guard', async () => {
       const d = fakeDriver({ ax: { apps: [app] }, actResult: { delivery: 'delivered_without_effect', steps: [] } })
-      const r = await d.act({ ref: '@s1:e1', action: 'click' }, actGuard)
+      const s = await d.snapshot({ app: { bundleId: 'com.a' }, mode: 'skeleton' })
+      const ref = s.nodes[0].ref!
+      const r = await d.act({ ref, action: 'click' }, actGuard)
       expect(r).toEqual({ delivery: 'delivered_without_effect', steps: [] })
-      expect(d.acts).toEqual([{ req: { ref: '@s1:e1', action: 'click' }, guard: actGuard }])
+      expect(d.acts).toEqual([{ req: { ref, action: 'click' }, guard: actGuard }])
+    })
+
+    it('act on an unknown/made-up ref rejects stale_ref with delivery not_delivered', async () => {
+      const d = fakeDriver({ ax: { apps: [app] } })
+      await expect(d.act({ ref: '@s999:e1', action: 'click' }, actGuard)).rejects.toMatchObject({ code: 'stale_ref', delivery: 'not_delivered' })
+    })
+
+    it('act rejects target_changed when guard.expectInstance no longer matches the world', async () => {
+      const d = fakeDriver({ ax: { apps: [app] } })
+      const s = await d.snapshot({ app: { bundleId: 'com.a' }, mode: 'skeleton' })
+      const ref = s.nodes[0].ref!
+      const staleGuard: ActGuard = { ...actGuard, expectInstance: { pid: 11, start: '2.0' } } // app relaunched since
+      await expect(d.act({ ref, action: 'click' }, staleGuard)).rejects.toMatchObject({ code: 'target_changed', delivery: 'not_delivered' })
+    })
+
+    it('act can be scripted to reject with a code/delivery via setActError', async () => {
+      const d = fakeDriver({ ax: { apps: [app] } })
+      const s = await d.snapshot({ app: { bundleId: 'com.a' }, mode: 'skeleton' })
+      const ref = s.nodes[0].ref!
+      d.setActError({ code: 'secure_input', delivery: 'not_delivered' })
+      await expect(d.act({ ref, action: 'type', text: 'x' }, actGuard)).rejects.toMatchObject({ code: 'secure_input', delivery: 'not_delivered' })
+      d.setActError(null)
+      await expect(d.act({ ref, action: 'click' }, actGuard)).resolves.toMatchObject({ delivery: 'delivered_verified' })
     })
 
     it('waitFor returns the scripted result and records the call', async () => {

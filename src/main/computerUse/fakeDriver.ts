@@ -2,10 +2,10 @@ import type { Mod } from '@shared/computerUse'
 import {
   CuDriverError,
   type ActGuard, type ActRequest, type ActResult, type AppKeyOpts, type AppKeyResult, type Button,
-  type CaptureOpts, type CaptureResult, type ComputerDriver, type CropOpts, type DisplaySig, type DriverStatus,
-  type FocusWindowOpts, type Instance, type LaunchOpts, type LaunchResult, type PostAction, type PostGuard,
-  type PostResult, type Pt, type Rect, type ResolveResult, type SnapNodeWire, type SnapshotOpts, type SnapshotResult,
-  type WaitForOpts, type WaitForResult, type WinHit, type WindowsOpts, type WindowsResult,
+  type CaptureOpts, type CaptureResult, type ComputerDriver, type CropOpts, type Delivery, type DisplaySig,
+  type DriverStatus, type FocusWindowOpts, type Instance, type LaunchOpts, type LaunchResult, type PostAction,
+  type PostGuard, type PostResult, type Pt, type Rect, type ResolveResult, type SnapNodeWire, type SnapshotOpts,
+  type SnapshotResult, type WaitForOpts, type WaitForResult, type WinHit, type WindowsOpts, type WindowsResult,
 } from './driver'
 
 const DISPLAY: DisplaySig = { id: 1, widthPt: 1792, heightPt: 1120, backing: 2 }
@@ -30,6 +30,9 @@ const parseRef = (ref: string): { snapId: string; local: string } | null => {
   const m = /^@(s\d+):(.+)$/.exec(ref)
   return m ? { snapId: m[1], local: m[2] } : null
 }
+const sameInstance = (a: Instance, b: Instance) => a.pid === b.pid && a.start === b.start
+
+export interface AxActError { code: string; message?: string; delivery?: Delivery }
 
 export interface FakeDriverScript {
   status?: Partial<DriverStatus>
@@ -43,6 +46,8 @@ export interface FakeDriverScript {
   /** the programmable AX world: apps snapshot/resolve/act/launch/… can see */
   ax?: { apps: AxApp[] }
   actResult?: ActResult
+  /** when set, act() rejects with this instead of returning actResult (cleared with setActError(null)) */
+  actError?: AxActError | null
   waitForResult?: WaitForResult
   appKeyResult?: AppKeyResult
 }
@@ -68,6 +73,7 @@ export function fakeDriver(script: FakeDriverScript = {}) {
   // AX world state (T4)
   let axApps: AxApp[] = script.ax?.apps ?? []
   let actResult: ActResult = script.actResult ?? { delivery: 'delivered_verified', steps: [{ name: 'act', outcome: 'delivered_verified' }] }
+  let actError: AxActError | null = script.actError ?? null
   let waitForResult: WaitForResult = script.waitForResult ?? { found: true }
   let appKeyResult: AppKeyResult = script.appKeyResult ?? { via: 'pid', delivery: 'delivered_unverified' }
   let snapSeq = 0
@@ -105,6 +111,7 @@ export function fakeDriver(script: FakeDriverScript = {}) {
     setPostResult(r: PostResult) { postResult = r },
     setAxApps(apps: AxApp[]) { axApps = apps },
     setActResult(r: ActResult) { actResult = r },
+    setActError(e: AxActError | null) { actError = e },
     setWaitForResult(r: WaitForResult) { waitForResult = r },
     setAppKeyResult(r: AppKeyResult) { appKeyResult = r },
     async status() { return status },
@@ -149,7 +156,14 @@ export function fakeDriver(script: FakeDriverScript = {}) {
       const { app, node } = hit
       return { instance: app.instance, bundleId: app.bundleId, appName: app.name, role: node.role, name: node.name, bounds: node.bounds }
     },
-    async act(req: ActRequest, guard: ActGuard): Promise<ActResult> { acts.push({ req, guard }); return actResult },
+    async act(req: ActRequest, guard: ActGuard): Promise<ActResult> {
+      acts.push({ req, guard })
+      const hit = lookupRef(req.ref)
+      if (!hit) throw new CuDriverError('stale_ref', undefined, 'not_delivered')
+      if (!sameInstance(guard.expectInstance, hit.app.instance)) throw new CuDriverError('target_changed', undefined, 'not_delivered')
+      if (actError) throw new CuDriverError(actError.code, actError.message, actError.delivery)
+      return actResult
+    },
     async waitFor(o: WaitForOpts): Promise<WaitForResult> { waitFors.push(o); return waitForResult },
     async launch(o: LaunchOpts): Promise<LaunchResult> {
       launches.push(o)

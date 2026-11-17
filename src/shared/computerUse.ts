@@ -575,7 +575,8 @@ export interface SnapNodeWire {
 export interface SnapshotResult {
   snapId: string
   instance: Instance
-  app: { bundleId: string; name: string }
+  /** forge-cu only sends bundleId/name when it could read them (e.g. a just-quit app) */
+  app: { bundleId?: string; name?: string }
   window: { number?: number; title?: string }
   complete: boolean
   nodes: SnapNodeWire[]
@@ -583,8 +584,9 @@ export interface SnapshotResult {
 
 export interface ResolveResult {
   instance: Instance
-  bundleId: string
-  appName: string
+  /** forge-cu only sends these when it could still read them */
+  bundleId?: string
+  appName?: string
   role: string
   name?: string
   bounds?: { x: number; y: number; w: number; h: number }
