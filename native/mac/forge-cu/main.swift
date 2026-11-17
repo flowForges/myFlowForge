@@ -69,6 +69,16 @@ private func handle(_ r: Request, _ poster: Poster, _ abort: AbortState) -> [Str
   case "release": return poster.release(b)
   case "idle": return idleReply(b)
   case "apps": return appsReply()
+  // accessibility-tree ops (AXLive / Apps / Ops); act, waitFor and launch check the abort flag between waits
+  case "snapshot": return snapshotOp(b, abort)
+  case "resolve": return resolveOp(b)
+  case "act": return actOp(b, poster, abort)
+  case "waitFor": return waitForOp(b, abort)
+  case "launch": return launchOp(b, abort)
+  case "focusWindow": return focusWindowOp(b, abort)
+  case "windows": return windowsOp(b)
+  case "appKey": return appKeyOp(b, abort)
+  case "a11yRevert": return a11yRevertOp()
   default: return errorReply(id: nil, code: "invalid_args", message: "unknown op")
   }
 }
@@ -77,6 +87,7 @@ private func handle(_ r: Request, _ poster: Poster, _ abort: AbortState) -> [Str
 private func leave(_ abort: AbortState, _ poster: Poster) -> Never {
   _ = abort.signal()
   poster.releaseHeld()
+  _ = RendererA11y.shared.revertAll()  // AXEnhancedUserInterface we switched on goes back off
   exit(0)
 }
 

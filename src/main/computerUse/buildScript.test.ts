@@ -44,7 +44,7 @@ describe('planSwiftBuild', () => {
     const sources = x.args.slice(4, -2)
     expect(a.args.slice(4, -2)).toEqual(sources)
     expect(sources).toEqual(HELPER_SOURCES)
-    for (const f of ['main', 'Capture', 'Input', 'Windows', 'Status', 'Exec', 'Core', 'AXCore']) {
+    for (const f of ['main', 'Capture', 'Input', 'Windows', 'Status', 'Exec', 'Core', 'AXCore', 'AXLive', 'Apps', 'Ops']) {
       expect(sources).toContain(`${SRC_DIR}/${f}.swift`)
     }
     expect(sources.some((s) => s.includes('/tests/'))).toBe(false)
@@ -57,6 +57,18 @@ describe('planSwiftBuild', () => {
     expect(all).toMatch(/responsibility_spawnattrs_setdisclaim/)
     expect(all).toMatch(/POSIX_SPAWN_SETEXEC/)
     expect(all).toMatch(/SIGUSR1/)
+  })
+
+  it('the live AX binding, app ops and the op dispatch are helper sources; the self-test never links them', async () => {
+    const { HELPER_SOURCES, planSelfTest } = await planner()
+    for (const f of ['AXCore', 'AXLive', 'Apps', 'Ops']) expect(HELPER_SOURCES).toContain(`${SRC_DIR}/${f}.swift`)
+    const swift = planSelfTest({ root: ROOT, arch: 'arm64' })[0].args.filter((a) => a.endsWith('.swift'))
+    for (const f of ['AXLive', 'Apps', 'Ops']) expect(swift).not.toContain(`${SRC_DIR}/${f}.swift`)
+    // no private token API (spec R-2); _AXUIElementGetWindow only through dlsym
+    const all = HELPER_SOURCES.map((s) => readFileSync(join(ROOT, s), 'utf8')).join('\n')
+    expect(all).not.toMatch(/_AXUIElementRemoteTokenCreate|_SLPSSetFrontProcess/)
+    expect(all).toMatch(/dlsym\([^)]*"_AXUIElementGetWindow"\)/)
+    expect(all).not.toMatch(/@_silgen_name\("_AXUIElementGetWindow"\)/)
   })
 
   it('the self-test links only the pure-logic files Core.swift + AXCore.swift and the test harness', async () => {

@@ -91,7 +91,7 @@ func appsReply() -> [String: Any] {
       .filter { $0.activationPolicy == .regular }
       .compactMap { a -> [String: Any]? in
         guard let b = a.bundleIdentifier, seen.insert(b).inserted else { return nil }
-        return ["bundleId": b, "name": a.localizedName ?? b]
+        return ["bundleId": b, "name": a.localizedName ?? b, "pid": Int(a.processIdentifier), "active": a.isActive]
       }
       .sorted { ($0["name"] as? String ?? "") < ($1["name"] as? String ?? "") }
   }

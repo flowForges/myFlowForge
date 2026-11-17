@@ -501,3 +501,83 @@ func installAbortSignal(_ state: AbortState, queue: DispatchQueue, onIdle: @esca
   src.resume()
   return src
 }
+
+// ───────────────────────── apps, keys, geometry (pure parts of Apps / Ops) ─────────────────────────
+
+/// Mirrors NAMED_KEYCODES in src/shared/computerUse.ts.
+private let NAMED_KEYCODES: [String: UInt16] = [
+  "return": 36, "tab": 48, "space": 49, "delete": 51, "escape": 53, "forwarddelete": 117,
+  "home": 115, "end": 119, "pageup": 116, "pagedown": 121,
+  "left": 123, "right": 124, "down": 125, "up": 126,
+  "f1": 122, "f2": 120, "f3": 99, "f4": 118, "f5": 96, "f6": 97, "f7": 98, "f8": 100, "f9": 101, "f10": 109,
+  "f11": 103, "f12": 111, "f13": 105, "f14": 107, "f15": 113, "f16": 106, "f17": 64, "f18": 79, "f19": 80, "f20": 90,
+]
+
+func namedKeycode(_ name: String) -> UInt16? { NAMED_KEYCODES[name.lowercased()] }
+
+/// The bundle-id prefix of myFlowForge itself (and its side-by-side test build): never touched.
+let OWN_BUNDLE_PREFIX = "com.zghua.myflowforge"
+func isOwnBundle(_ b: String?) -> Bool { matchesPrefix(b, [OWN_BUNDLE_PREFIX]) }
+
+/// `<name>.app` in the first directory that has it. The name is a display name, never a path:
+/// empty, `/`, `..`, control characters or only whitespace → nil.
+func findAppBundle(name: String, dirs: [String], exists: (String) -> Bool) -> String? {
+  var n = name
+  if n.lowercased().hasSuffix(".app") { n = String(n.dropLast(4)) }
+  guard !n.trimmingCharacters(in: .whitespaces).isEmpty, !n.contains("/"), !n.contains(".."),
+        !n.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { return nil }
+  return dirs.lazy.map { "\($0)/\(n).app" }.first(where: exists)
+}
+
+/// Entries of `<App>.app/Contents/Frameworks/`: an Electron or CEF app.
+func hasChromiumFramework(_ entries: [String]) -> Bool {
+  entries.contains { $0 == "Electron Framework.framework" || $0 == "Chromium Embedded Framework.framework" }
+}
+
+/// Process instance start, "<sec>.<usec>" with the microseconds zero-padded to 6 digits.
+func instanceStart(sec: UInt64, usec: UInt64) -> String {
+  let u = String(usec)
+  return "\(sec).\(String(repeating: "0", count: max(0, 6 - u.count)))\(u)"
+}
+
+/// Physical click candidates in a visible rect: center, then the four quarter points.
+func clickCandidates(_ r: CGRect) -> [CGPoint] {
+  [(0.5, 0.5), (0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)].map {
+    CGPoint(x: r.minX + r.width * CGFloat($0.0), y: r.minY + r.height * CGFloat($0.1))
+  }
+}
+
+/// ≥3 samples, every one within `tolerance` of the first on x, y, w and h.
+func boundsStable(_ samples: [CGRect], tolerance: CGFloat = 0.5) -> Bool {
+  guard samples.count >= 3, let f = samples.first else { return false }
+  return samples.allSatisfy {
+    abs($0.minX - f.minX) <= tolerance && abs($0.minY - f.minY) <= tolerance
+      && abs($0.width - f.width) <= tolerance && abs($0.height - f.height) <= tolerance
+  }
+}
+
+/// The element's bounds cut by every clipping ancestor; nil when nothing (or no area) is left.
+func visibleRect(_ bounds: CGRect, clips: [CGRect]) -> CGRect? {
+  var r = bounds
+  for c in clips { r = r.intersection(c) }
+  return r.isNull || r.width < 1 || r.height < 1 ? nil : r
+}
+
+/// `need` matching reads in a row anywhere in the sequence.
+func consecutiveHits(_ reads: [Bool], need: Int) -> Bool {
+  var run = 0
+  for r in reads {
+    run = r ? run + 1 : 0
+    if run >= need { return true }
+  }
+  return false
+}
+
+/// A bundle identifier as LaunchServices takes it: `[A-Za-z0-9._-]`, 1–255 chars, no `..`.
+func validBundleId(_ s: String) -> Bool {
+  !s.isEmpty && s.count <= 255 && !s.contains("..")
+    && s.unicodeScalars.allSatisfy { ($0.isASCII && CharacterSet.alphanumerics.contains($0)) || $0 == "." || $0 == "-" || $0 == "_" }
+}
+
+/// `deadlineMs` of a request, default 3000, clamped to [50, max].
+func requestMs(_ v: Any?, def: Int = 3000, max hi: Int) -> Int { clampInt(num(v) ?? Double(def), 50, hi) }

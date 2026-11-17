@@ -1200,3 +1200,91 @@ func isBlockedCombo(mods: Set<String>, key: String) -> Bool {
   let k = canonicalKey(key)
   return blockedCombos.contains { $0.key == k && m.isSuperset(of: $0.mods) }
 }
+
+/// Canonical modifier names (`cmd shift alt ctrl`, that order), deduplicated; nil when one is unknown.
+func canonicalMods(_ mods: [String]) -> [String]? {
+  var set = Set<String>()
+  for m in mods {
+    guard let c = canonicalMod(m) else { return nil }
+    set.insert(c)
+  }
+  return ["cmd", "shift", "alt", "ctrl"].filter(set.contains)
+}
+
+// MARK: - Live actor fail-fast and act outcome shaping
+
+/// Before a mutation of the live actor: past the deadline or after an abort nothing more is done.
+/// Nothing done yet → notSupported (provably not delivered); something already went out → cannotComplete.
+func mutationGate(expired: Bool, aborted: Bool, mutated: Bool) -> AXResult? {
+  guard expired || aborted else { return nil }
+  return mutated ? .cannotComplete : .notSupported
+}
+
+/// `typed` = UTF-16 units posted by web typing before the focus moved away (nil = typing not cut short).
+/// Abort → `stopped`; an undelivered outcome past the deadline → `timeout`.
+func finalizeOutcome(_ o: ActOutcome, expired: Bool, aborted: Bool, typed: Int?) -> ActOutcome {
+  var out = o
+  if let n = typed, n > 0, let i = out.steps.lastIndex(where: { $0.0 == "keys" }) {
+    out.steps[i] = ("typed:\(n)", .deliveredUnverified)
+    out.delivery = .deliveredUnverified
+  }
+  if aborted { out.code = "stopped" }
+  else if expired && out.delivery == .notDelivered { out.code = "timeout" }
+  return out
+}
+
+/// Not delivered, or stopped → error reply carrying the delivery; otherwise ok (a code, if any, rides along).
+func actReply(_ o: ActOutcome, after: [String: Any]?) -> [String: Any] {
+  let steps: [[String: Any]] = o.steps.map { ["name": $0.0, "outcome": $0.1.rawValue] }
+  if o.delivery == .notDelivered || o.code == "stopped" {
+    return errorReply(id: nil, code: o.code ?? "unsupported", extra: ["delivery": o.delivery.rawValue, "steps": steps])
+  }
+  var r: [String: Any] = ["delivery": o.delivery.rawValue, "steps": steps]
+  if let a = after, !a.isEmpty { r["after"] = a }
+  if let c = o.code { r["code"] = c }
+  return r
+}
+
+/// Physical click only for `click` with physical:true when every semantic step proved non-delivery
+/// and nothing else (stale ref, permission, timeout) stopped the chain (spec §6.9).
+func physicalEligible(_ o: ActOutcome, action: String, physical: Bool) -> Bool {
+  physical && action == "click" && o.delivery == .notDelivered && o.code == "unsupported"
+    && o.steps.allSatisfy { $0.1 == .notDelivered }
+}
+
+// MARK: - waitFor and wire nodes
+
+/// role (normalized) ∧ exact name ∧ case-insensitive name substring; an empty match matches nothing.
+func waitMatch(_ fp: Fingerprint, role: String?, name: String?, nameContains: String?) -> Bool {
+  guard role != nil || name != nil || nameContains != nil else { return false }
+  if let r = role, fp.role != r { return false }
+  if let n = name, fp.name != n { return false }
+  if let c = nameContains {
+    guard let n = fp.name, n.range(of: c, options: .caseInsensitive) != nil else { return false }
+  }
+  return true
+}
+
+func snapNodeJSON(_ n: SnapNode, ref: String?) -> [String: Any] {
+  var o: [String: Any] = ["depth": n.depth, "role": n.role, "states": n.states, "actions": n.actions]
+  if let r = ref { o["ref"] = r }
+  if let v = n.name { o["name"] = v }
+  if let v = n.value { o["value"] = v }
+  if let c = n.childrenCount { o["childrenCount"] = c }
+  if n.truncated { o["truncated"] = true }
+  if let b = n.bounds { o["bounds"] = rectJSON(b) }
+  if n.offscreen { o["offscreen"] = true }
+  return o
+}
+
+// MARK: - Electron / Chromium accessibility decisions (spec §6.7)
+
+let rendererBackoffMs = [25, 50, 100, 200, 400]
+
+/// Known Electron / CEF bundle: switch accessibility on before the first snapshot.
+func rendererPreOpen(chromium: Bool, attempted: Bool, own: Bool) -> Bool { chromium && !attempted && !own }
+
+/// After a window walk that saw no web area: only a complete walk proves absence (a cut one proves nothing).
+func rendererFallback(attempted: Bool, own: Bool, windowRooted: Bool, sawWebArea: Bool, complete: Bool) -> Bool {
+  !attempted && !own && windowRooted && !sawWebArea && complete
+}

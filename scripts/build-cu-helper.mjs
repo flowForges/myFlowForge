@@ -17,7 +17,7 @@ import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const SRC = 'native/mac/forge-cu'
-export const HELPER_SOURCES = ['main', 'Core', 'AXCore', 'Capture', 'Input', 'Windows', 'Status', 'Exec'].map((f) => `${SRC}/${f}.swift`)
+export const HELPER_SOURCES = ['main', 'Core', 'AXCore', 'AXLive', 'Apps', 'Ops', 'Capture', 'Input', 'Windows', 'Status', 'Exec'].map((f) => `${SRC}/${f}.swift`)
 export const HELPER_OUT = 'build/native/darwin/forge-cu'
 const TMP = 'build/native/tmp'
 const MIN_OS = 'macos12.0'

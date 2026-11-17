@@ -1079,5 +1079,156 @@ do {
   check(!isBlockedCombo(mods: ["cmd"], key: "delete"), "cmd+delete allowed")
 }
 
+// ── live-binding helpers (pure parts of AXLive / Apps / Ops) ───────────────────────
+do {
+  // web typing: 32 UTF-16 units per chunk, a surrogate pair never split, newline / tab as real keys
+  let long = String(repeating: "a", count: 70)
+  eq(typeSegments(long, chunk: 32).map { $0.units.count }, [32, 32, 6], "32-unit chunks")
+  let emo = String(repeating: "a", count: 31) + "😀b"
+  let es = typeSegments(emo, chunk: 32)
+  eq(es.map { $0.units.count }, [31, 3], "pair moves whole to the next chunk")
+  eq(typeSegments("a\nb", chunk: 32), [.text([97]), .key(kReturn), .text([98])], "newline is Return")
+
+  // deadline / abort fail-fast for the live actor
+  check(mutationGate(expired: false, aborted: false, mutated: false) == nil, "in time: go")
+  eq(mutationGate(expired: true, aborted: false, mutated: false), .notSupported, "expired, nothing done → not delivered")
+  eq(mutationGate(expired: true, aborted: false, mutated: true), .cannotComplete, "expired after a mutation → ambiguous")
+  eq(mutationGate(expired: false, aborted: true, mutated: false), .notSupported, "aborted first")
+  eq(mutationGate(expired: false, aborted: true, mutated: true), .cannotComplete, "aborted after a mutation")
+
+  // outcome post-processing
+  let nd = ActOutcome(delivery: .notDelivered, steps: [("AXPress", .notDelivered)], code: "unsupported")
+  eq(finalizeOutcome(nd, expired: true, aborted: false, typed: nil).code ?? "", "timeout", "expired + not delivered → timeout")
+  eq(finalizeOutcome(nd, expired: true, aborted: true, typed: nil).code ?? "", "stopped", "abort wins")
+  eq(finalizeOutcome(nd, expired: false, aborted: false, typed: nil).code ?? "", "unsupported", "untouched")
+  let un = ActOutcome(delivery: .uncertain, steps: [("AXPress", .uncertain)], code: nil)
+  check(finalizeOutcome(un, expired: true, aborted: false, typed: nil).code == nil, "expired after delivery: no timeout code")
+  let keys = ActOutcome(delivery: .uncertain, steps: [("keys", .uncertain)], code: nil)
+  let pk = finalizeOutcome(keys, expired: false, aborted: false, typed: 12)
+  check(pk.delivery == .deliveredUnverified && pk.steps.count == 1 && pk.steps[0].0 == "typed:12"
+        && pk.steps[0].1 == .deliveredUnverified, "focus moved mid-typing → typed:<n>, delivered_unverified")
+  let pk0 = finalizeOutcome(ActOutcome(delivery: .notDelivered, steps: [("keys", .notDelivered)], code: "unsupported"),
+                            expired: false, aborted: false, typed: 0)
+  eq(pk0.delivery, .notDelivered, "nothing typed stays not_delivered")
+
+  // act reply shape
+  let r1 = actReply(nd, after: nil)
+  check(r1["ok"] as? Bool == false && r1["code"] as? String == "unsupported" && r1["delivery"] as? String == "not_delivered",
+        "not delivered → error with delivery")
+  check((r1["steps"] as? [[String: Any]])?.first?["outcome"] as? String == "not_delivered", "steps on the error")
+  let ok = actReply(ActOutcome(delivery: .deliveredVerified, steps: [("AXPress", .deliveredVerified)], code: nil),
+                    after: ["focused": true])
+  check(ok["ok"] == nil && ok["delivery"] as? String == "delivered_verified" && (ok["after"] as? [String: Any])?["focused"] as? Bool == true,
+        "delivered → ok shape with after")
+  let st = actReply(ActOutcome(delivery: .deliveredUnverified, steps: [("typed:3", .deliveredUnverified)], code: "stopped"), after: nil)
+  check(st["ok"] as? Bool == false && st["code"] as? String == "stopped" && st["delivery"] as? String == "delivered_unverified",
+        "stopped after a partial delivery keeps the delivery")
+  let nf = actReply(ActOutcome(delivery: .deliveredUnverified, steps: [("AXPress+pick", .deliveredUnverified)], code: "not_found"), after: nil)
+  check(nf["ok"] == nil && nf["code"] as? String == "not_found", "delivered with a note stays ok")
+
+  // physical click only when the semantic chain proved nothing happened
+  check(physicalEligible(nd, action: "click", physical: true), "click, all not_delivered, physical → eligible")
+  check(!physicalEligible(nd, action: "click", physical: false), "physical:false never")
+  check(!physicalEligible(nd, action: "type", physical: true), "only click")
+  check(!physicalEligible(un, action: "click", physical: true), "an uncertain step forbids physical")
+  check(!physicalEligible(ActOutcome(delivery: .notDelivered, steps: [], code: "stale_ref"), action: "click", physical: true),
+        "stale_ref forbids physical")
+  check(physicalEligible(ActOutcome(delivery: .notDelivered, steps: [], code: "unsupported"), action: "click", physical: true),
+        "no step at all (nothing advertised) → eligible")
+  check(!physicalEligible(ActOutcome(delivery: .deliveredWithoutEffect, steps: [("AXPress", .deliveredWithoutEffect)], code: nil),
+                          action: "click", physical: true), "delivered_without_effect is a delivery: never physical")
+
+  // mods
+  eq(canonicalMods(["command", "Shift", "cmd", "option"]) ?? [], ["cmd", "shift", "alt"], "aliases folded, deduped, ordered")
+  check(canonicalMods(["hyper"]) == nil, "unknown mod refused")
+  eq(canonicalMods([]) ?? ["x"], [], "no mods")
+
+  // waitFor matching (exact name, case-insensitive contains, normalized role)
+  let fp = Fingerprint(role: "button", subrole: nil, name: "Save As…", description: nil, nativeId: nil, uniqueAtCapture: false)
+  check(waitMatch(fp, role: "button", name: nil, nameContains: nil), "role only")
+  check(waitMatch(fp, role: nil, name: "Save As…", nameContains: nil), "exact name")
+  check(!waitMatch(fp, role: nil, name: "save as…", nameContains: nil), "name is exact")
+  check(waitMatch(fp, role: "button", name: nil, nameContains: "save"), "contains, case-insensitive")
+  check(!waitMatch(fp, role: "link", name: nil, nameContains: "save"), "role mismatch")
+  check(!waitMatch(fp, role: nil, name: nil, nameContains: nil), "empty match never matches")
+  check(!waitMatch(Fingerprint(role: "button", subrole: nil, name: nil, description: nil, nativeId: nil, uniqueAtCapture: false),
+                   role: nil, name: nil, nameContains: "x"), "nameless node vs contains")
+
+  // wire node
+  let n = SnapNode(ref: "e3", depth: 2, role: "button", name: "OK", value: nil, states: ["focused"], actions: ["click"],
+                   childrenCount: nil, truncated: false, bounds: CGRect(x: 1, y: 2, width: 3, height: 4), offscreen: false)
+  let j = snapNodeJSON(n, ref: "@s1:e3")
+  check(j["ref"] as? String == "@s1:e3" && j["depth"] as? Int == 2 && j["role"] as? String == "button" && j["name"] as? String == "OK",
+        "wire node fields")
+  check(j["value"] == nil && j["truncated"] == nil && j["offscreen"] == nil && j["childrenCount"] == nil, "absent / false fields omitted")
+  check((j["bounds"] as? [String: Any])?["w"] as? Double == 3, "bounds as x,y,w,h")
+  var n2 = n; n2.truncated = true; n2.offscreen = true; n2.childrenCount = 7; n2.value = ""
+  let j2 = snapNodeJSON(n2, ref: nil)
+  check(j2["ref"] == nil && j2["truncated"] as? Bool == true && j2["offscreen"] as? Bool == true && j2["childrenCount"] as? Int == 7
+        && j2["value"] as? String == "", "flags and empty value kept")
+
+  // Electron / Chromium
+  check(hasChromiumFramework(["Electron Framework.framework", "Squirrel.framework"]), "electron")
+  check(hasChromiumFramework(["Chromium Embedded Framework.framework"]), "CEF")
+  check(!hasChromiumFramework(["Sparkle.framework", "Electron Framework.frameworkX"]), "exact names only")
+  check(rendererPreOpen(chromium: true, attempted: false, own: false), "chromium, first time → pre-open")
+  check(!rendererPreOpen(chromium: true, attempted: true, own: false), "never twice")
+  check(!rendererPreOpen(chromium: true, attempted: false, own: true), "never our own app")
+  check(!rendererPreOpen(chromium: false, attempted: false, own: false), "not chromium")
+  check(rendererFallback(attempted: false, own: false, windowRooted: true, sawWebArea: false, complete: true), "no webarea in a complete walk")
+  check(!rendererFallback(attempted: false, own: false, windowRooted: true, sawWebArea: true, complete: true), "webarea seen")
+  check(!rendererFallback(attempted: false, own: false, windowRooted: true, sawWebArea: false, complete: false), "cut walk proves nothing")
+  check(!rendererFallback(attempted: false, own: false, windowRooted: false, sawWebArea: false, complete: true), "drill-down never")
+  check(!rendererFallback(attempted: true, own: false, windowRooted: true, sawWebArea: false, complete: true), "once per pid")
+  check(!rendererFallback(attempted: false, own: true, windowRooted: true, sawWebArea: false, complete: true), "never our own")
+  eq(rendererBackoffMs, [25, 50, 100, 200, 400], "backoff")
+  check(isOwnBundle("com.zghua.myflowforge") && isOwnBundle("com.zghua.myflowforge.test") && !isOwnBundle("com.other") && !isOwnBundle(nil),
+        "own bundle prefix")
+
+  // app lookup by name over injected directories
+  let dirs = ["/A", "/S", "/U/Applications"]
+  let have: Set<String> = ["/S/Notes.app", "/U/Applications/Notes.app", "/U/Applications/My App.app"]
+  eq(findAppBundle(name: "Notes", dirs: dirs, exists: { have.contains($0) }) ?? "", "/S/Notes.app", "first directory wins")
+  eq(findAppBundle(name: "Notes.app", dirs: dirs, exists: { have.contains($0) }) ?? "", "/S/Notes.app", ".app suffix accepted")
+  eq(findAppBundle(name: "My App", dirs: dirs, exists: { have.contains($0) }) ?? "", "/U/Applications/My App.app", "spaces ok")
+  check(findAppBundle(name: "Nope", dirs: dirs, exists: { have.contains($0) }) == nil, "missing")
+  for bad in ["", "../Notes", "a/b", "x\u{0}y", "..", ".app", " ", "a\nb"] {
+    check(findAppBundle(name: bad, dirs: dirs, exists: { _ in true }) == nil, "bad name \(bad.debugDescription)")
+  }
+
+  // named keys mirror the TS table
+  eq(namedKeycode("return") ?? 0, 36, "return"); eq(namedKeycode("escape") ?? 0, 53, "escape")
+  eq(namedKeycode("pagedown") ?? 0, 121, "pagedown"); eq(namedKeycode("f20") ?? 0, 90, "f20")
+  eq(namedKeycode("forwarddelete") ?? 0, 117, "forwarddelete"); eq(namedKeycode("left") ?? 0, 123, "left")
+  check(namedKeycode("hyper") == nil, "unknown named key")
+
+  // process instance
+  eq(instanceStart(sec: 1700000000, usec: 42), "1700000000.000042", "usec zero-padded")
+  eq(instanceStart(sec: 5, usec: 999999), "5.999999", "6 digits")
+
+  // physical click geometry
+  let pts = clickCandidates(CGRect(x: 0, y: 0, width: 100, height: 40))
+  eq(pts, [CGPoint(x: 50, y: 20), CGPoint(x: 25, y: 10), CGPoint(x: 75, y: 10), CGPoint(x: 25, y: 30), CGPoint(x: 75, y: 30)],
+     "center then four inset points")
+  let r = CGRect(x: 10, y: 10, width: 50, height: 20)
+  check(boundsStable([r, r.offsetBy(dx: 0.4, dy: 0), r.insetBy(dx: 0.2, dy: 0.2)]), "within 0.5 pt")
+  check(!boundsStable([r, r.offsetBy(dx: 0.6, dy: 0), r]), "moved 0.6 pt")
+  check(!boundsStable([r, r]), "needs 3 samples")
+  eq(visibleRect(CGRect(x: 0, y: 0, width: 100, height: 100), clips: [CGRect(x: 50, y: 50, width: 100, height: 100)]),
+     CGRect(x: 50, y: 50, width: 50, height: 50), "clip intersection")
+  check(visibleRect(CGRect(x: 0, y: 0, width: 10, height: 10), clips: [CGRect(x: 20, y: 20, width: 5, height: 5)]) == nil, "clipped away")
+
+  // bundle ids and request deadlines
+  check(validBundleId("com.apple.TextEdit") && validBundleId("com.todesktop.230313mzl4w4u92") && validBundleId("a-b_c"), "valid ids")
+  for bad in ["", "com/apple", "com..x", "com apple", "cöm.x", "x\u{0}"] { check(!validBundleId(bad), "bad id \(bad.debugDescription)") }
+  eq(requestMs(nil, max: 15000), 3000, "default 3000")
+  eq(requestMs(NSNumber(value: 99999), max: 15000), 15000, "clamped high")
+  eq(requestMs(NSNumber(value: 0), max: 15000), 50, "clamped low")
+
+  // focus confirmation: two consecutive matching reads
+  check(consecutiveHits([false, true, true], need: 2), "two in a row")
+  check(!consecutiveHits([true, false, true], need: 2), "reset on a miss")
+}
+
 print("forge-cu self-test: \(passed) passed, \(failures) failed")
 exit(failures == 0 ? 0 : 1)
