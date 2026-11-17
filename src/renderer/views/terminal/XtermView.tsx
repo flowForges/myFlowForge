@@ -5,6 +5,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
 import { webglCellFits, measureCharWidth } from './webglFit'
+import { applyForgeUnicode } from './unicodeWidth'
 
 export function XtermView({ termId, active, visible, font }: {
   termId: string
@@ -50,6 +51,8 @@ export function XtermView({ termId, active, visible, font }: {
     const el = elRef.current!
     const term = new Terminal({ allowProposedApi: true, fontFamily: font.fontFamily, fontSize: font.fontSize,
       cursorBlink: true, theme: readXtermTheme() })
+    // ★字宽表要和 zsh 的 wcwidth 一致(🔥 = 2 格),而且必须在第一个字节写进来之前切好 —— 见 unicodeWidth.ts。
+    applyForgeUnicode(term)
     const fit = new FitAddon(); term.loadAddon(fit); term.loadAddon(new WebLinksAddon())
     term.open(el)
     // GPU renderer: the default DOM renderer repaints rows as DOM nodes and is slow — with a

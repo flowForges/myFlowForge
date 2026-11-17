@@ -18,6 +18,7 @@ const term = {
   open: vi.fn(), loadAddon: vi.fn(), dispose: vi.fn(), write: vi.fn(),
   onData: vi.fn(), refresh: vi.fn(), focus: vi.fn(), scrollToBottom: vi.fn(),
   options: {} as Record<string, unknown>,
+  unicode: { register: vi.fn(), versions: ['6'] as string[], activeVersion: '6' },
 }
 const fit = {
   // 真实 FitAddon 在高度 0 时会把 rows 算成下限 1 —— 这里照实模拟,否则测的就不是那个 bug。
@@ -42,6 +43,7 @@ beforeEach(() => {
   vi.useFakeTimers()
   host.clientWidth = 800; host.clientHeight = 400
   term.cols = 80; term.rows = 24
+  term.unicode.activeVersion = '6'
   roCallback = null
   class RO { constructor(cb: () => void) { roCallback = cb } observe() {} disconnect() {} }
   ;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = RO
@@ -129,5 +131,14 @@ describe('★重新展开面板', () => {
     rerender(<XtermView termId="t1" active visible font={font} />)
     await act(async () => { vi.advanceTimersByTime(50) })
     expect(termResize).toHaveBeenCalledWith('t1', 80, 24)
+  })
+})
+
+describe('★字宽表:要和 shell 那边的 wcwidth 一致', () => {
+  it('★★挂载时就切到 forge 的字宽表 —— 默认 Unicode 6 把 🔥 算 1 格,zsh 算 2 格,提示符差一格,自动提示就画错位', async () => {
+    const { FORGE_UNICODE_VERSION } = await import('./unicodeWidth')
+    await mount(true)
+    expect(term.unicode.register).toHaveBeenCalled()
+    expect(term.unicode.activeVersion).toBe(FORGE_UNICODE_VERSION)
   })
 })
