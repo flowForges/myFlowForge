@@ -239,13 +239,14 @@ struct Fingerprint: Equatable {
   var nativeId: String?
   var uniqueAtCapture: Bool
 
-  /// role ∧ nativeId? ∧ name? ∧ description?, exact equality; an unrecorded field is not compared.
+  /// role ∧ nativeId ∧ name ∧ description, exact Optional equality: an absent field only matches an
+  /// absent field (no wildcard, spec §6.3).
   func matches(_ live: Fingerprint) -> Bool {
-    live.role == role
-      && (nativeId == nil || live.nativeId == nativeId)
-      && (name == nil || live.name == name)
-      && (description == nil || live.description == description)
+    live.role == role && live.nativeId == nativeId && live.name == name && live.description == description
   }
+
+  /// Nothing but the role to go on: such a ref can never be re-found by a census.
+  var hasIdentity: Bool { name != nil || description != nil || nativeId != nil }
 }
 
 // MARK: - Walker
@@ -418,11 +419,12 @@ func walk<S: AXSource>(_ s: S, root: S.E, budget: Budget, deadline: Deadline, in
   return (r.nodes.map { ($0.0, $0.1) }, r.complete)
 }
 
-/// uniqueAtCapture = exactly one match in an exhaustive whole-window census; no census → none unique.
+/// uniqueAtCapture = has identity beyond the role and exactly one match in an exhaustive whole-window
+/// census; no census → none unique. Uses the same `matches` as the resolve census.
 func markUnique(_ fps: [Fingerprint], census: [Fingerprint]?) -> [Fingerprint] {
   fps.map { fp in
     var f = fp
-    f.uniqueAtCapture = census.map { c in c.lazy.filter { fp.matches($0) }.count == 1 } ?? false
+    f.uniqueAtCapture = fp.hasIdentity && (census.map { c in c.lazy.filter { fp.matches($0) }.count == 1 } ?? false)
     return f
   }
 }
@@ -514,7 +516,7 @@ func resolveRef<S: AXSource>(_ s: S, rec: RefRecord<S.E>, liveInstance: Instance
   } else if deadline.expired {
     return .timeout
   }
-  guard want.uniqueAtCapture, let root = windowRoot else { return .stale }
+  guard want.uniqueAtCapture, want.hasIdentity, let root = windowRoot else { return .stale }
   let w = walkDetailed(s, root: root, budget: Budget(maxDepth: 50), deadline: deadline, interactiveOnly: false, skeleton: false)
   let hits = w.visited.filter { want.matches($0.0) }
   if hits.count >= 2 { return .ambiguous }

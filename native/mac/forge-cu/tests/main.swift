@@ -677,6 +677,30 @@ do {
   // value and bounds never take part in identity
   let sv = world(); sv.nodes[2]!.attrs.value = "changed"; sv.nodes[2]!.attrs.frame = CGRect(x: 1, y: 2, width: 3, height: 4)
   check(isOk(resolveRef(sv, rec: rec, liveInstance: inst, windowRoot: 1, deadline: farFuture), 2), "value / bounds ignored")
+  // exact identity: an absent field is not a wildcard
+  let nameless = RefRecord<Int>(element: 2, instance: inst, window: 7,
+                                fingerprint: Fingerprint(role: "textfield", subrole: nil, name: "Find", description: nil, nativeId: nil, uniqueAtCapture: true),
+                                bounds: nil)
+  let sn = world(); sn.nodes[2] = nil
+  sn.add(9, "AXTextField", title: "Find", description: "Search box"); sn.nodes[1]!.kids = [9, 3]
+  check(isStale(resolveRef(sn, rec: nameless, liveInstance: inst, windowRoot: 1, deadline: farFuture)),
+        "recorded description nil, live one has a description → stale")
+  let noName = RefRecord<Int>(element: 2, instance: inst, window: 7,
+                              fingerprint: Fingerprint(role: "textfield", subrole: nil, name: nil, description: "Box", nativeId: nil, uniqueAtCapture: true),
+                              bounds: nil)
+  let sp = world(); sp.nodes[2] = nil
+  sp.add(9, "AXSecureTextField", description: "Box"); sp.nodes[9]!.attrs.title = "Password"; sp.nodes[1]!.kids = [9, 3]
+  check(isStale(resolveRef(sp, rec: noName, liveInstance: inst, windowRoot: 1, deadline: farFuture)),
+        "nameless unique ref dies, a named element of the same role appears → stale")
+  let bare = RefRecord<Int>(element: 2, instance: inst, window: 7,
+                            fingerprint: Fingerprint(role: "textfield", subrole: nil, name: nil, description: nil, nativeId: nil, uniqueAtCapture: true),
+                            bounds: nil)
+  let sb = world(); sb.nodes[2] = nil
+  sb.add(9, "AXTextField"); sb.nodes[1]!.kids = [9, 3]
+  check(isStale(resolveRef(sb, rec: bare, liveInstance: inst, windowRoot: 1, deadline: farFuture)),
+        "all-identity-nil record whose element dies → stale (even with one identical look-alike)")
+  check(isOk(resolveRef(world(), rec: bare, liveInstance: inst, windowRoot: 1, deadline: farFuture), 2) == false,
+        "all-identity-nil + role mismatch on the fast path → not ok")
   // capture census: walkDetailed marks uniqueness only from an exhaustive whole-window walk
   let sc = world()
   sc.add(4, "AXButton", title: "Other", actions: ["AXPress"]); sc.nodes[1]!.kids = [2, 3, 4]
@@ -686,6 +710,11 @@ do {
   eq(fps.filter { $0.name == "Send" }.map { $0.uniqueAtCapture }, [true], "Send unique")
   eq(fps.filter { $0.name == "Other" }.map { $0.uniqueAtCapture }, [false, false], "twin Other not unique")
   eq(markUnique(w.nodes.map { $0.2 }, census: nil).filter { $0.uniqueAtCapture }.count, 0, "no census → nothing unique")
+  let lone = Fingerprint(role: "textfield", subrole: nil, name: nil, description: nil, nativeId: nil, uniqueAtCapture: false)
+  let named = Fingerprint(role: "textfield", subrole: nil, name: "Password", description: nil, nativeId: nil, uniqueAtCapture: false)
+  eq(markUnique([lone], census: [lone]).map { $0.uniqueAtCapture }, [false], "role-only identity is never unique")
+  eq(markUnique([named], census: [named, lone]).map { $0.uniqueAtCapture }, [true], "nil name doesn't match a recorded name")
+  check(!lone.matches(named) && !named.matches(lone), "absent ≠ present, both directions")
   let wcut = walkDetailed(sc, root: 1, budget: Budget(maxDepth: 0), deadline: farFuture, interactiveOnly: true, skeleton: false)
   check(!wcut.exhaustive, "depth-cut walk is not exhaustive")
 }
