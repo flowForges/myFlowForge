@@ -719,5 +719,297 @@ do {
   check(!wcut.exhaustive, "depth-cut walk is not exhaustive")
 }
 
+// ── AX core: action chains (scripted fake actor) ──────────────────────────────────
+final class FakeActor: AXActor {
+  typealias E = Int
+  struct N { var attrs: NodeAttrs; var kids: [Int] = []; var parent: Int? }
+  var nodes: [Int: N] = [:]
+  var focused: Int?
+  var menuOpen = false
+  var gone = Set<Int>()
+  var web = false
+  var calls: [String] = []
+  var written: [String: Any] = [:]
+  var sleeps = 0
+  var onPerform: [String: (FakeActor) -> AXResult] = [:]   // "<e>:<action>"
+  var onSet: [String: (FakeActor, Any) -> AXResult] = [:]   // "<e>:<attr>"
+  var onKeys: ((FakeActor, String) -> AXResult)?
+
+  @discardableResult
+  func add(_ e: Int, _ role: String, parent: Int? = nil, title: String? = nil, value: String? = nil,
+           actions: [String] = [], settable: Set<String> = []) -> FakeActor {
+    var a = NodeAttrs(); a.role = role; a.title = title; a.value = value; a.actions = actions; a.settable = settable
+    nodes[e] = N(attrs: a, parent: parent)
+    if let p = parent { nodes[p]?.kids.append(e) }
+    return self
+  }
+  func attrs(_ e: Int) -> NodeAttrs? { gone.contains(e) ? nil : nodes[e]?.attrs }
+  func perform(_ e: Int, _ action: String) -> AXResult {
+    calls.append("perform \(e) \(action)")
+    return onPerform["\(e):\(action)"]?(self) ?? .success
+  }
+  func set(_ e: Int, _ attr: String, _ v: Any) -> AXResult {
+    calls.append("set \(e) \(attr)"); written["\(e):\(attr)"] = v
+    return onSet["\(e):\(attr)"]?(self, v) ?? .success
+  }
+  func children(_ e: Int) -> [Int] { nodes[e]?.kids ?? [] }
+  func parent(_ e: Int) -> Int? { nodes[e]?.parent }
+  func key(_ e: Int) -> AnyHashable { e }
+  func probe(_ e: Int) -> EffectProbe {
+    EffectProbe(focusedKey: focused.map { AnyHashable($0) }, selected: attrs(e)?.selected, menuOpen: menuOpen,
+                exists: attrs(e) != nil, value: focused.flatMap { attrs($0)?.value }, expanded: attrs(e)?.expanded)
+  }
+  func sleep(ms: Int) { sleeps += 1 }
+  func typeViaKeys(_ e: Int, _ text: String) -> AXResult {
+    calls.append("keys \(e)")
+    return onKeys?(self, text) ?? .success
+  }
+  func inWebArea(_ e: Int) -> Bool { web }
+  var writes: [String] { calls.filter { $0.hasPrefix("set ") || $0.hasPrefix("keys ") } }
+}
+
+do {
+  // chain stops on unverified: AXPress success, nothing observable changed → no second mutation
+  let f = FakeActor().add(1, "AXButton", title: "Send", actions: ["AXPress", "AXOpen", "AXConfirm"])
+  let o = runChain(f, 1, ActRequest(action: "click"))
+  eq(o.delivery, .deliveredUnverified, "unverified press")
+  eq(o.steps.count, 1, "one step only")
+  eq(f.calls, ["perform 1 AXPress"], "AXOpen / AXConfirm never called")
+  eq(f.sleeps, 10, "polled 40 ms × 10 = 400 ms through a.sleep")
+  eq(Delivery.deliveredUnverified.rawValue, "delivered_unverified", "wire name")
+  eq(Delivery.deliveredWithoutEffect.rawValue, "delivered_without_effect", "wire name")
+  eq(Delivery.notDelivered.rawValue, "not_delivered", "wire name")
+  check(Delivery.notDelivered.retrySafe && !Delivery.uncertain.retrySafe && !Delivery.deliveredVerified.retrySafe, "only not_delivered is retry-safe")
+
+  // an effect (focus moved) → verified
+  let fv = FakeActor().add(1, "AXButton", actions: ["AXPress"]).add(2, "AXTextField")
+  fv.onPerform["1:AXPress"] = { $0.focused = 2; return .success }
+  let ov = runChain(fv, 1, ActRequest(action: "click"))
+  eq(ov.delivery, .deliveredVerified, "focus moved → verified")
+  eq(fv.sleeps, 0, "effect seen at once, no wait")
+
+  // AXPress not advertised, AXOpen advertised → Press never called
+  let f2 = FakeActor().add(1, "AXButton", actions: ["AXOpen"])
+  let o2 = runChain(f2, 1, ActRequest(action: "click"))
+  eq(f2.calls, ["perform 1 AXOpen"], "unadvertised AXPress skipped")
+  eq(o2.steps.map { $0.0 }, ["AXOpen"], "step names")
+
+  // row: AXPress success but AXSelected stays false → without_effect, next step writes AXSelected
+  let f3 = FakeActor().add(1, "AXRow", actions: ["AXPress"], settable: ["AXSelected"])
+  f3.nodes[1]!.attrs.selected = false
+  f3.onSet["1:AXSelected"] = { f, _ in f.nodes[1]!.attrs.selected = true; return .success }
+  let o3 = runChain(f3, 1, ActRequest(action: "click"))
+  eq(o3.steps.map { $0.1 }, [.deliveredWithoutEffect, .deliveredVerified], "row press without effect, then select")
+  eq(o3.delivery, .deliveredVerified, "row selected")
+  eq(f3.calls, ["perform 1 AXPress", "set 1 AXSelected"], "row chain order")
+  check((f3.written["1:AXSelected"] as? NSNumber)?.boolValue == true, "AXSelected written true")
+
+  // row with no further steps: press without effect → chain exhausted → without_effect
+  let f3b = FakeActor().add(1, "AXRow", actions: ["AXPress"])
+  f3b.nodes[1]!.attrs.selected = false
+  eq(runChain(f3b, 1, ActRequest(action: "click")).delivery, .deliveredWithoutEffect, "exhausted after without_effect")
+
+  // row not selectable itself → parent container AXSelectedRows gets [row]
+  let f3c = FakeActor().add(10, "AXTable", settable: ["AXSelectedRows"]).add(1, "AXRow", parent: 10)
+  f3c.nodes[1]!.attrs.selected = false
+  f3c.onSet["10:AXSelectedRows"] = { f, _ in f.nodes[1]!.attrs.selected = true; return .success }
+  let o3c = runChain(f3c, 1, ActRequest(action: "click"))
+  eq(o3c.delivery, .deliveredVerified, "container selection")
+  eq((f3c.written["10:AXSelectedRows"] as? [Int]) ?? [], [1], "one-element array")
+
+  // child fallback: inert treeitem, first child cell has AXOpen
+  let f3d = FakeActor().add(1, "AXOutlineRow").add(2, "AXCell", parent: 1, actions: ["AXOpen"])
+  f3d.onPerform["2:AXOpen"] = { $0.menuOpen = true; return .success }
+  let o3d = runChain(f3d, 1, ActRequest(action: "click"))
+  eq(o3d.steps.map { $0.0 }, ["child1.AXOpen"], "descendant activation")
+  eq(o3d.delivery, .deliveredVerified, "menu appeared")
+
+  // native menu items: AXPress only
+  let f3e = FakeActor().add(1, "AXMenuItem", actions: ["AXPress", "AXConfirm"])
+  f3e.onPerform["1:AXPress"] = { _ in .notSupported }
+  _ = runChain(f3e, 1, ActRequest(action: "click"))
+  eq(f3e.calls, ["perform 1 AXPress"], "menu item: no other step")
+
+  // cannotComplete → uncertain, chain stops
+  let f4 = FakeActor().add(1, "AXButton", actions: ["AXPress", "AXOpen"])
+  f4.onPerform["1:AXPress"] = { _ in .cannotComplete }
+  let o4 = runChain(f4, 1, ActRequest(action: "click"))
+  eq(o4.delivery, .uncertain, "cannotComplete → uncertain")
+  eq(f4.calls, ["perform 1 AXPress"], "stopped after uncertain")
+
+  // all steps notSupported → not_delivered + unsupported
+  let f5 = FakeActor().add(1, "AXButton", actions: ["AXPress", "AXOpen", "AXConfirm"])
+  for x in ["AXPress", "AXOpen", "AXConfirm"] { f5.onPerform["1:\(x)"] = { _ in .notSupported } }
+  let o5 = runChain(f5, 1, ActRequest(action: "click"))
+  eq(o5.delivery, .notDelivered, "all unsupported")
+  eq(o5.code ?? "", "unsupported", "code unsupported")
+  eq(f5.calls.count, 3, "each advertised step tried once")
+  let o5b = runChain(FakeActor().add(1, "AXStaticText"), 1, ActRequest(action: "click"))
+  check(o5b.delivery == .notDelivered && o5b.code == "unsupported" && o5b.steps.isEmpty, "nothing advertised")
+
+  // invalidElement → not_delivered stale_ref, stop
+  let f6 = FakeActor().add(1, "AXButton", actions: ["AXPress", "AXOpen"])
+  f6.onPerform["1:AXPress"] = { _ in .invalidElement }
+  let o6 = runChain(f6, 1, ActRequest(action: "click"))
+  check(o6.delivery == .notDelivered && o6.code == "stale_ref" && f6.calls.count == 1, "invalid element stops, stale_ref")
+  eq(runChain(f6, 99, ActRequest(action: "click")).code ?? "", "stale_ref", "dead element")
+  eq(runChain(FakeActor().add(1, "AXButton"), 1, ActRequest(action: "fly")).code ?? "", "unsupported", "unknown action")
+
+  // gradeStep table
+  let p0 = EffectProbe(focusedKey: nil, selected: false, menuOpen: false, exists: true, value: nil, expanded: nil)
+  var pSel = p0; pSel.selected = true
+  var pGone = p0; pGone.exists = false
+  eq(gradeStep(.success, before: p0, after: p0, readbackRole: false, stateChecked: nil), .deliveredUnverified, "no effect")
+  eq(gradeStep(.success, before: p0, after: pGone, readbackRole: false, stateChecked: nil), .deliveredVerified, "element vanished")
+  eq(gradeStep(.success, before: p0, after: p0, readbackRole: true, stateChecked: nil), .deliveredWithoutEffect, "row still unselected")
+  eq(gradeStep(.success, before: p0, after: pSel, readbackRole: true, stateChecked: nil), .deliveredVerified, "row selected")
+  eq(gradeStep(.success, before: p0, after: p0, readbackRole: false, stateChecked: false), .deliveredWithoutEffect, "state unchanged")
+  eq(gradeStep(.success, before: p0, after: p0, readbackRole: false, stateChecked: true), .deliveredVerified, "state reached")
+  eq(gradeStep(.notSupported, before: p0, after: p0, readbackRole: false, stateChecked: nil), .notDelivered, "unsupported")
+  eq(gradeStep(.apiDisabled, before: p0, after: p0, readbackRole: false, stateChecked: nil), .notDelivered, "api disabled")
+  eq(gradeStep(.cannotComplete, before: p0, after: pGone, readbackRole: false, stateChecked: nil), .uncertain, "cannotComplete")
+  eq(gradeStep(.other(-25200), before: p0, after: p0, readbackRole: false, stateChecked: nil), .uncertain, "failure, no effect")
+  eq(gradeStep(.other(-25200), before: p0, after: pGone, readbackRole: false, stateChecked: nil), .deliveredVerified, "failure but effect seen")
+
+  // type: native field with settable AXSelectedText → insert at caret
+  let t1 = FakeActor().add(1, "AXTextField", value: "ab", settable: ["AXSelectedText", "AXValue"])
+  t1.onSet["1:AXSelectedText"] = { f, v in f.nodes[1]!.attrs.value = "ab" + (v as! String); return .success }
+  let ot1 = runChain(t1, 1, ActRequest(action: "type", text: "cd"))
+  eq(t1.writes, ["set 1 AXSelectedText"], "AXSelectedText write")
+  eq(ot1.delivery, .deliveredVerified, "read back contains")
+  // no AXSelectedText → append to AXValue; replace → whole value
+  let t1b = FakeActor().add(1, "AXTextArea", value: "ab", settable: ["AXValue"])
+  t1b.onSet["1:AXValue"] = { f, v in f.nodes[1]!.attrs.value = v as? String; return .success }
+  eq(runChain(t1b, 1, ActRequest(action: "type", text: "cd")).delivery, .deliveredVerified, "append verified")
+  eq(t1b.written["1:AXValue"] as? String ?? "", "abcd", "appended")
+  _ = runChain(t1b, 1, ActRequest(action: "type", text: "zz", replace: true))
+  eq(t1b.written["1:AXValue"] as? String ?? "", "zz", "replaced")
+  // web area → typeViaKeys, never set
+  let t2 = FakeActor().add(1, "AXTextField", value: "", settable: ["AXSelectedText", "AXValue"])
+  t2.web = true
+  t2.onKeys = { f, s in f.nodes[1]!.attrs.value = s; return .success }
+  let ot2 = runChain(t2, 1, ActRequest(action: "type", text: "hi"))
+  eq(t2.writes, ["keys 1"], "web field typed via keys only")
+  eq(ot2.delivery, .deliveredVerified, "web read back")
+  // secure field → secure_input, no writes
+  let t3 = FakeActor().add(1, "AXSecureTextField", settable: ["AXSelectedText", "AXValue"])
+  let ot3 = runChain(t3, 1, ActRequest(action: "type", text: "pw"))
+  check(ot3.code == "secure_input" && ot3.delivery == .notDelivered && t3.writes.isEmpty, "secure field refused")
+  t3.web = true
+  check(runChain(t3, 1, ActRequest(action: "type", text: "pw")).code == "secure_input" && t3.writes.isEmpty, "secure web field refused")
+  check(runChain(t3, 1, ActRequest(action: "set", value: "pw")).code == "secure_input" && t3.writes.isEmpty, "secure set refused")
+  check(runChain(FakeActor().add(1, "AXButton"), 1, ActRequest(action: "type", text: "x")).code == "unsupported", "type on a button")
+
+  // toggle: already in the target state → verified, no write
+  let g1 = FakeActor().add(1, "AXCheckBox", value: "1", actions: ["AXPress"], settable: ["AXValue"])
+  let og1 = runChain(g1, 1, ActRequest(action: "toggle", value: "on"))
+  check(og1.delivery == .deliveredVerified && g1.calls.isEmpty, "already on")
+  // flip via a settable boolean AXValue
+  g1.onSet["1:AXValue"] = { f, v in f.nodes[1]!.attrs.value = (v as! NSNumber).boolValue ? "1" : "0"; return .success }
+  let og1b = runChain(g1, 1, ActRequest(action: "toggle"))
+  check(og1b.delivery == .deliveredVerified && g1.calls == ["set 1 AXValue"], "flipped by AXValue")
+  // value not settable → click chain, graded by the toggle state
+  let g2 = FakeActor().add(1, "AXCheckBox", value: "0", actions: ["AXPress"])
+  g2.onPerform["1:AXPress"] = { $0.nodes[1]!.attrs.value = "1"; return .success }
+  eq(runChain(g2, 1, ActRequest(action: "toggle", value: "true")).delivery, .deliveredVerified, "toggle via press")
+  // press ignored → without_effect (value read back unchanged)
+  let g3 = FakeActor().add(1, "AXCheckBox", value: "0", actions: ["AXPress"])
+  eq(runChain(g3, 1, ActRequest(action: "toggle")).delivery, .deliveredWithoutEffect, "toggle ignored")
+  eq(g3.sleeps, 15, "toggle settles 600 ms")
+  check(runChain(FakeActor().add(1, "AXRadioButton", value: "1", actions: ["AXPress"]), 1,
+                 ActRequest(action: "toggle", value: "off")).code == "unsupported", "a radio can't be unchecked")
+
+  // set: number → NSNumber, string → String, read back equal → verified
+  let s1 = FakeActor().add(1, "AXSlider", value: "5", settable: ["AXValue"])
+  s1.nodes[1]!.attrs.valueKind = .number
+  s1.onSet["1:AXValue"] = { f, v in f.nodes[1]!.attrs.value = (v as? NSNumber)?.stringValue; return .success }
+  let os1 = runChain(s1, 1, ActRequest(action: "set", value: "7"))
+  check(s1.written["1:AXValue"] is NSNumber && (s1.written["1:AXValue"] as? NSNumber)?.intValue == 7, "numeric write")
+  eq(os1.delivery, .deliveredVerified, "numeric read back")
+  let s2 = FakeActor().add(1, "AXTextField", value: "a", settable: ["AXValue"])
+  s2.nodes[1]!.attrs.valueKind = .string
+  s2.onSet["1:AXValue"] = { f, v in f.nodes[1]!.attrs.value = v as? String; return .success }
+  let os2 = runChain(s2, 1, ActRequest(action: "set", value: "7"))
+  check(s2.written["1:AXValue"] is String && os2.delivery == .deliveredVerified, "string write")
+  check(runChain(s1, 1, ActRequest(action: "set", value: "abc")).code == "invalid_args", "non-number for a number")
+  // not settable → AXIncrement steps toward the target
+  let s3 = FakeActor().add(1, "AXIncrementor", value: "1", actions: ["AXIncrement", "AXDecrement"])
+  s3.onPerform["1:AXIncrement"] = { f in f.nodes[1]!.attrs.value = String(Int(f.nodes[1]!.attrs.value!)! + 1); return .success }
+  let os3 = runChain(s3, 1, ActRequest(action: "set", value: "4"))
+  check(os3.delivery == .deliveredVerified && s3.calls.count == 3, "three increments")
+
+  // expand / collapse
+  let x1 = FakeActor().add(1, "AXOutlineRow", actions: ["AXPress"], settable: ["AXExpanded"])
+  x1.nodes[1]!.attrs.expanded = false
+  x1.onSet["1:AXExpanded"] = { f, v in f.nodes[1]!.attrs.expanded = (v as! NSNumber).boolValue; return .success }
+  let ox1 = runChain(x1, 1, ActRequest(action: "expand"))
+  check(ox1.delivery == .deliveredVerified && x1.calls == ["set 1 AXExpanded"], "expand by attribute")
+  check(runChain(x1, 1, ActRequest(action: "expand")).delivery == .deliveredVerified && x1.calls.count == 1, "already expanded")
+  let x2 = FakeActor().add(1, "AXDisclosureTriangle", actions: ["AXPress"])
+  x2.nodes[1]!.attrs.expanded = true
+  let ox2 = runChain(x2, 1, ActRequest(action: "collapse"))
+  check(ox2.delivery == .deliveredWithoutEffect && x2.sleeps == 5, "collapse ignored, 200 ms settle")
+
+  // menu, focus, submit, scroll, select
+  let m1 = FakeActor().add(1, "AXButton", actions: ["AXShowMenu"])
+  m1.onPerform["1:AXShowMenu"] = { $0.menuOpen = true; return .success }
+  eq(runChain(m1, 1, ActRequest(action: "menu")).delivery, .deliveredVerified, "context menu opened")
+  let m2 = FakeActor().add(1, "AXButton", actions: ["AXShowMenu"])
+  let om2 = runChain(m2, 1, ActRequest(action: "menu"))
+  check(om2.delivery == .deliveredUnverified && m2.calls.count == 1 && m2.sleeps == 15, "no menu seen: unverified, 600 ms, once")
+  let fo = FakeActor().add(1, "AXTextField", settable: ["AXFocused"])
+  fo.onSet["1:AXFocused"] = { f, _ in f.focused = 1; return .success }
+  eq(runChain(fo, 1, ActRequest(action: "focus")).delivery, .deliveredVerified, "focus verified")
+  let fo2 = FakeActor().add(1, "AXGroup", settable: ["AXFocused"]).add(2, "AXTextField", parent: 1)
+  fo2.onSet["1:AXFocused"] = { f, _ in f.focused = 2; return .success }
+  eq(runChain(fo2, 1, ActRequest(action: "focus")).delivery, .deliveredVerified, "focus delegated to a descendant")
+  let sb = FakeActor().add(1, "AXButton", actions: ["AXConfirm"])
+  sb.onPerform["1:AXConfirm"] = { $0.focused = 1; return .success }
+  check(runChain(sb, 1, ActRequest(action: "submit")).delivery == .deliveredUnverified && sb.sleeps == 0, "submit never confirmed")
+  check(runChain(FakeActor().add(1, "AXButton", actions: ["AXPress"]), 1, ActRequest(action: "submit")).code == "unsupported",
+        "submit without AXConfirm: no Enter")
+  let sc = FakeActor().add(1, "AXScrollArea").add(2, "AXScrollBar", parent: 1, value: "0", actions: ["AXIncrement"])
+  sc.nodes[2]!.attrs.frame = CGRect(x: 0, y: 0, width: 10, height: 300)
+  sc.add(3, "AXList", parent: 1)
+  sc.onPerform["2:AXIncrement"] = { f in f.nodes[2]!.attrs.value = "0.5"; return .success }
+  let osc = runChain(sc, 3, ActRequest(action: "scroll", direction: "down", amount: 2))
+  check(osc.delivery == .deliveredVerified && sc.calls == ["perform 2 AXIncrement", "perform 2 AXIncrement"], "scroll via bar")
+  let se = FakeActor().add(1, "AXPopUpButton", value: "A", actions: ["AXPress"]).add(2, "AXMenu", parent: 1, actions: ["AXCancel"])
+  se.add(3, "AXMenuItem", parent: 2, title: "A", actions: ["AXPress"]).add(4, "AXMenuItem", parent: 2, title: "Blue", actions: ["AXPress"])
+  se.onPerform["1:AXPress"] = { $0.menuOpen = true; return .success }
+  se.onPerform["4:AXPress"] = { f in f.menuOpen = false; f.nodes[1]!.attrs.value = "Blue"; return .success }
+  let ose = runChain(se, 1, ActRequest(action: "select", value: "blue"))
+  check(ose.delivery == .deliveredVerified && se.calls == ["perform 1 AXPress", "perform 4 AXPress"], "select from popup")
+  se.menuOpen = false
+  let ose2 = runChain(se, 1, ActRequest(action: "select", value: "Green"))
+  check(ose2.code == "not_found" && se.calls.suffix(2) == ["perform 1 AXPress", "perform 2 AXCancel"], "missing item → AXCancel")
+}
+
+// ── menu shortcuts + blocked combos ────────────────────────────────────────────────
+do {
+  check(menuMatch(cmdChar: "N", cmdModifiers: 0, enabled: true, mods: ["cmd"], key: "n"), "cmd+n")
+  check(menuMatch(cmdChar: "N", cmdModifiers: nil, enabled: true, mods: ["command"], key: "N"), "absent modifiers = cmd only")
+  check(!menuMatch(cmdChar: "N", cmdModifiers: 1, enabled: true, mods: ["cmd"], key: "n"), "1 needs shift")
+  check(menuMatch(cmdChar: "N", cmdModifiers: 1, enabled: true, mods: ["cmd", "shift"], key: "n"), "cmd+shift+n")
+  check(menuMatch(cmdChar: "T", cmdModifiers: 6, enabled: true, mods: ["cmd", "alt", "ctrl"], key: "t"), "opt+ctrl")
+  check(!menuMatch(cmdChar: "N", cmdModifiers: 0, enabled: false, mods: ["cmd"], key: "n"), "disabled")
+  check(!menuMatch(cmdChar: "N", cmdModifiers: 0, enabled: nil, mods: ["cmd"], key: "n"), "enabled unknown")
+  check(!menuMatch(cmdChar: "N", cmdModifiers: 8, enabled: true, mods: ["cmd"], key: "n"), "no-cmd item vs cmd combo")
+  check(menuMatch(cmdChar: "N", cmdModifiers: 12, enabled: true, mods: ["ctrl"], key: "n"), "ctrl-only item")
+  check(!menuMatch(cmdChar: "N", cmdModifiers: 0, enabled: true, mods: ["cmd"], key: "m"), "other key")
+  check(!menuMatch(cmdChar: nil, cmdModifiers: 0, enabled: true, mods: ["cmd"], key: "n"), "no cmd char")
+  check(!menuMatch(cmdChar: "N", cmdModifiers: 8, enabled: true, mods: [], key: "n"), "plain keys never go to the menu")
+
+  for (m, k) in [(["cmd"], "q"), (["cmd", "shift"], "q"), (["cmd", "alt"], "escape"), (["ctrl", "cmd"], "q"),
+                 (["cmd", "shift"], "delete"), (["cmd", "alt", "shift"], "q"), (["cmd", "ctrl", "shift"], "q"),
+                 (["command", "option"], "esc"), (["cmd", "shift"], "backspace"), (["cmd"], "Q")] {
+    check(isBlockedCombo(mods: Set(m), key: k), "blocked \(m)+\(k)")
+  }
+  check(!isBlockedCombo(mods: ["cmd"], key: "w"), "cmd+w allowed")
+  check(!isBlockedCombo(mods: ["shift"], key: "q"), "shift+q allowed")
+  check(!isBlockedCombo(mods: ["cmd"], key: "escape"), "cmd+esc allowed")
+  check(!isBlockedCombo(mods: ["cmd"], key: "delete"), "cmd+delete allowed")
+}
+
 print("forge-cu self-test: \(passed) passed, \(failures) failed")
 exit(failures == 0 ? 0 : 1)

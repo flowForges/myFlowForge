@@ -1,5 +1,5 @@
 // forge-cu · accessibility core, pure logic. Foundation / CoreGraphics only: no ApplicationServices AX
-// calls, no event posting. The real AX binding implements `AXSource` (AXLive.swift); the self-test
+// calls, no event posting. The real AX binding implements `AXSource` / `AXActor` (AXLive.swift); the self-test
 // (tests/main.swift) drives everything here through an in-memory fake tree.
 import Foundation
 import CoreGraphics
@@ -44,6 +44,8 @@ struct NodeAttrs {
   var domIdentifier: String?
   var placeholder: String?
   var value: String?
+  /// CF type of the raw AXValue (CFNumber / CFBoolean / CFString): `set` writes the same type back.
+  var valueKind: AXValueKind?
   var enabled: Bool?
   var focused: Bool?
   var selected: Bool?
@@ -55,6 +57,8 @@ struct NodeAttrs {
   /// Text of the AXTitleUIElement (its title, else a non-secure static text value, else description).
   var titleUIText: String?
 }
+
+enum AXValueKind { case string, number, bool }
 
 /// The tree the walker reads. The live implementation wraps AXUIElement; `key` must identify the
 /// remote element (CFHash + CFEqual), not the local CF object pointer.
@@ -522,4 +526,648 @@ func resolveRef<S: AXSource>(_ s: S, rec: RefRecord<S.E>, liveInstance: Instance
   if hits.count >= 2 { return .ambiguous }
   if !w.exhaustive { return .timeout }
   return hits.first.map { .ok($0.1) } ?? .stale
+}
+
+// MARK: - Delivery and grading
+
+/// How far a mutation provably got (spec §6.4, research 2 §1.1–1.2). Same names on the wire everywhere.
+enum Delivery: String {
+  case notDelivered = "not_delivered"
+  case uncertain
+  case deliveredUnverified = "delivered_unverified"
+  case deliveredWithoutEffect = "delivered_without_effect"
+  case deliveredVerified = "delivered_verified"
+
+  /// Every outcome but these two ends a chain: a second mutation could double-act on an effect nobody saw.
+  var terminates: Bool { self != .notDelivered && self != .deliveredWithoutEffect }
+  /// Only a proven non-delivery may be retried.
+  var retrySafe: Bool { self == .notDelivered }
+}
+
+/// AXError, folded. notSupported = ActionUnsupported / NotImplemented / AttributeUnsupported / IllegalArgument;
+/// `other` = Failure, NoValue and anything unmapped (ambiguous: the action may have run).
+enum AXResult: Equatable {
+  case success, notSupported, cannotComplete, invalidElement, apiDisabled
+  case other(Int32)
+}
+
+/// What the actor can observe around one mutation of a target.
+struct EffectProbe: Equatable {
+  /// Key (CFHash + CFEqual) of the app's AXFocusedUIElement.
+  var focusedKey: AnyHashable?
+  /// The target's AXSelected.
+  var selected: Bool?
+  /// Any AXMenu of the app is open (visible, non-zero bounds).
+  var menuOpen: Bool
+  /// The target still answers.
+  var exists: Bool
+  /// AXValue of the focused element (never a secure field's).
+  var value: String?
+  /// The target's AXExpanded.
+  var expanded: Bool?
+}
+
+/// Focus or the focused value moved, selection went on, a menu opened, the target vanished or (un)folded.
+func observedEffect(before: EffectProbe, after: EffectProbe) -> Bool {
+  if after.focusedKey != before.focusedKey { return true }
+  if after.value != before.value { return true }
+  if before.selected != true && after.selected == true { return true }
+  if !before.menuOpen && after.menuOpen { return true }
+  if before.exists && !after.exists { return true }
+  if let b = before.expanded, let a = after.expanded, a != b { return true }
+  return false
+}
+
+/// One step's grade. `stateChecked` = a readable state was checked (true: reached, false: unchanged);
+/// `readbackRole` = row-like target whose AXSelected decides. Success with no observed effect is
+/// `delivered_unverified` (stops the chain); `delivered_without_effect` only from a checked state.
+func gradeStep(_ r: AXResult, before: EffectProbe, after: EffectProbe, readbackRole: Bool, stateChecked: Bool?) -> Delivery {
+  switch r {
+  case .notSupported, .invalidElement, .apiDisabled:
+    return .notDelivered
+  case .cannotComplete:
+    return .uncertain
+  case .other:
+    return stateChecked == true || observedEffect(before: before, after: after) ? .deliveredVerified : .uncertain
+  case .success:
+    if let s = stateChecked { return s ? .deliveredVerified : .deliveredWithoutEffect }
+    if readbackRole, let sel = after.selected { return sel ? .deliveredVerified : .deliveredWithoutEffect }
+    return observedEffect(before: before, after: after) ? .deliveredVerified : .deliveredUnverified
+  }
+}
+
+// MARK: - Actor protocol and requests
+
+/// The live side of `act`. Every call sets its own messaging timeout from the request deadline (spec C2).
+/// Values handed to `set`: String, NSNumber (CFNumber / CFBoolean), `[E]` (→ CFArray of elements),
+/// NSValue(range:) (→ AXValue CFRange).
+protocol AXActor {
+  associatedtype E
+  func attrs(_ e: E) -> NodeAttrs?
+  func perform(_ e: E, _ action: String) -> AXResult
+  func set(_ e: E, _ attr: String, _ v: Any) -> AXResult
+  func children(_ e: E) -> [E]
+  func parent(_ e: E) -> E?
+  /// Same identity as `EffectProbe.focusedKey` (CFHash + CFEqual).
+  func key(_ e: E) -> AnyHashable
+  func probe(_ e: E) -> EffectProbe
+  /// All waits go through here so the self-test never sleeps.
+  func sleep(ms: Int)
+  /// Web-area typing: AXFocused → wait for focus (≤500 ms) → Unicode key events to the pid in 32-UTF-16
+  /// chunks, focus re-checked before each chunk. Replaces the current selection.
+  func typeViaKeys(_ e: E, _ text: String) -> AXResult
+  /// An AXWebArea among the ancestors (browsers, Electron).
+  func inWebArea(_ e: E) -> Bool
+}
+
+struct ActRequest {
+  var action: String
+  var value: String? = nil
+  var text: String? = nil
+  var replace = false
+  var direction: String? = nil
+  var amount = 1
+}
+
+struct ActOutcome {
+  var delivery: Delivery
+  var steps: [(String, Delivery)]
+  /// unsupported / secure_input / stale_ref / no_permission / invalid_args / not_found
+  var code: String?
+}
+
+enum ActTiming {
+  static let pollMs = 40
+  static let settleMs = 400
+  static let menuMs = 600
+  static let toggleMs = 600
+  static let expandMs = 200
+  static let maxIncrements = 1024
+  static let childAttempts = 4
+  static let selectAncestors = 6
+  static let menuSelectAncestors = 4
+  static let scrollAreaAncestors = 5
+  static let focusDescent = 3
+  static let menuSearchNodes = 2048
+  static let menuSearchDepth = 8
+}
+
+// MARK: - Chain runner
+
+private let rowLikeRoles: Set<String> = ["row", "treeitem", "cell", "tab", "option"]
+private let toggleRoles: Set<String> = ["checkbox", "switch", "radiobutton"]
+
+private func parseBool(_ s: String?) -> Bool? {
+  switch s?.lowercased() {
+  case "1", "true", "on", "yes", "checked": return true
+  case "0", "false", "off", "no", "unchecked": return false
+  default: return nil
+  }
+}
+
+private func sameNumber(_ a: Double, _ b: Double) -> Bool { abs(a - b) <= 1e-6 * max(1, abs(a), abs(b)) }
+
+private func sameValue(_ got: String?, _ want: String, kind: AXValueKind?) -> Bool {
+  guard let got else { return false }
+  switch kind {
+  case .number?: if let g = Double(got), let w = Double(want) { return sameNumber(g, w) }
+  case .bool?: if let g = parseBool(got), let w = parseBool(want) { return g == w }
+  default: break
+  }
+  return got == want
+}
+
+private final class ChainRunner<A: AXActor> {
+  typealias Step = () -> (String, Delivery)?
+  let a: A, e: A.E
+  var steps: [(String, Delivery)] = []
+  var code: String?
+  var halted = false
+
+  init(_ a: A, _ e: A.E) { self.a = a; self.e = e }
+
+  func advertises(_ x: A.E, _ action: String) -> Bool { a.attrs(x)?.actions.contains(action) ?? false }
+  func settable(_ x: A.E, _ attr: String) -> Bool { a.attrs(x)?.settable.contains(attr) ?? false }
+
+  /// One mutation, then poll the target (40 ms, ≤ capMs) until the state is reached / an effect shows.
+  /// `effect: false` = only `state` can verify (value writes, typing, submit).
+  func attempt(capMs: Int, readback: Bool = false, effect: Bool = true, state: (() -> Bool?)? = nil,
+               _ op: () -> AXResult) -> Delivery {
+    let before = a.probe(e)
+    let r = op()
+    switch r {
+    case .invalidElement: code = "stale_ref"; halted = true
+    case .apiDisabled: code = "no_permission"; halted = true
+    default: break
+    }
+    var ran = r == .success
+    if case .other = r { ran = true }
+    guard ran else { return gradeStep(r, before: before, after: before, readbackRole: false, stateChecked: nil) }
+    var after = before, s: Bool? = nil, t = 0
+    while true {
+      after = a.probe(e)
+      s = state?()
+      if s == true || (readback && after.selected == true) || (effect && observedEffect(before: before, after: after)) { break }
+      if t >= capMs { break }
+      a.sleep(ms: ActTiming.pollMs)
+      t += ActTiming.pollMs
+    }
+    return gradeStep(r, before: before, after: effect ? after : before, readbackRole: readback, stateChecked: s)
+  }
+
+  func run(_ chain: [Step]) -> ActOutcome {
+    for step in chain {
+      if halted { break }
+      guard let (name, d) = step() else { continue }
+      steps.append((name, d))
+      if d.terminates { return ActOutcome(delivery: d, steps: steps, code: code) }
+    }
+    if steps.contains(where: { $0.1 == .deliveredWithoutEffect }) {
+      return ActOutcome(delivery: .deliveredWithoutEffect, steps: steps, code: code)
+    }
+    return ActOutcome(delivery: .notDelivered, steps: steps, code: code ?? "unsupported")
+  }
+
+  func fail(_ c: String) -> ActOutcome { ActOutcome(delivery: .notDelivered, steps: [], code: c) }
+
+  func performStep(_ x: A.E, _ action: String, name: String? = nil, cap: Int, readback: Bool = false,
+                   effect: Bool = true, state: (() -> Bool?)? = nil) -> Step {
+    { [unowned self] in
+      guard self.advertises(x, action) else { return nil }
+      return (name ?? action, self.attempt(capMs: cap, readback: readback, effect: effect, state: state) { self.a.perform(x, action) })
+    }
+  }
+
+  func setStep(_ x: A.E, _ attr: String, _ v: @escaping () -> Any, name: String? = nil, cap: Int, effect: Bool = true,
+               state: (() -> Bool?)? = nil) -> Step {
+    { [unowned self] in
+      guard self.settable(x, attr) else { return nil }
+      return (name ?? attr, self.attempt(capMs: cap, effect: effect, state: state) { self.a.set(x, attr, v()) })
+    }
+  }
+
+  func ancestors(_ n: Int) -> [A.E] {
+    var out: [A.E] = [], x = a.parent(e)
+    while let p = x, out.count < n { out.append(p); x = a.parent(p) }
+    return out
+  }
+
+  // MARK: click
+
+  /// AXPress (row-like: AXSelected read back) → AXOpen → first 4 children AXPress/AXOpen →
+  /// AXSelected / container selection → AXConfirm. `state` replaces the effect grading (toggle).
+  func clickSteps(state: (() -> Bool?)? = nil, cap: Int = ActTiming.settleMs) -> [Step] {
+    let at = a.attrs(e)
+    let raw = at?.role ?? ""
+    let rowLike = state == nil && rowLikeRoles.contains(normalizeRole(role: raw, subrole: at?.subrole))
+    let press = performStep(e, "AXPress", cap: cap, readback: rowLike, state: state)
+    if raw == "AXMenuItem" || raw == "AXMenuBarItem" { return [press] }
+    var chain = [press, performStep(e, "AXOpen", cap: cap, state: state)]
+    var kids: [A.E]?
+    for i in 0..<ActTiming.childAttempts {
+      chain.append { [unowned self] in
+        if kids == nil { kids = Array(self.a.children(self.e).prefix(ActTiming.childAttempts)) }
+        guard let ks = kids, i < ks.count else { return nil }
+        let k = ks[i]
+        guard let act = ["AXPress", "AXOpen"].first(where: { self.advertises(k, $0) }) else { return nil }
+        return ("child\(i + 1).\(act)", self.attempt(capMs: cap, state: state) { self.a.perform(k, act) })
+      }
+    }
+    let selected: () -> Bool? = state ?? { [unowned self] in self.a.probe(self.e).selected }
+    chain.append { [unowned self] in
+      if self.settable(self.e, "AXSelected") {
+        return ("AXSelected", self.attempt(capMs: cap, state: selected) { self.a.set(self.e, "AXSelected", NSNumber(value: true)) })
+      }
+      let prefer: [String]
+      switch raw {
+      case "AXCell": prefer = ["AXSelectedCells", "AXSelectedRows", "AXSelectedChildren"]
+      case "AXRow", "AXOutlineRow": prefer = ["AXSelectedRows", "AXSelectedChildren", "AXSelectedCells"]
+      default: prefer = ["AXSelectedChildren", "AXSelectedRows", "AXSelectedCells"]
+      }
+      for p in self.ancestors(ActTiming.selectAncestors) {
+        guard let attr = prefer.first(where: { self.settable(p, $0) }) else { continue }
+        return (attr, self.attempt(capMs: cap, state: selected) { self.a.set(p, attr, [self.e]) })
+      }
+      return nil
+    }
+    chain.append(performStep(e, "AXConfirm", cap: cap, state: state))
+    return chain
+  }
+
+  // MARK: menu
+
+  func menuSteps() -> [Step] {
+    let open: () -> Bool? = { [unowned self] in self.a.probe(self.e).menuOpen ? true : nil }
+    let show = performStep(e, "AXShowMenu", cap: ActTiming.menuMs, state: open)
+    let selectThenShow: Step = { [unowned self] in
+      let item = self.settable(self.e, "AXSelected") ? self.e
+        : self.ancestors(ActTiming.menuSelectAncestors).first(where: { self.settable($0, "AXSelected") })
+      guard let item else { return nil }
+      let target = self.advertises(item, "AXShowMenu") ? item : self.e
+      guard self.advertises(target, "AXShowMenu") else { return nil }
+      let d = self.attempt(capMs: ActTiming.menuMs, state: open) {
+        let r = self.a.set(item, "AXSelected", NSNumber(value: true))
+        guard r == .success else { return r }
+        return self.a.perform(target, "AXShowMenu")
+      }
+      return ("AXSelected+AXShowMenu", d)
+    }
+    return [show, selectThenShow]
+  }
+
+  // MARK: type
+
+  func typeSteps(_ text: String, replace: Bool) -> [Step] {
+    let before = a.attrs(e)?.value
+    let expect = replace ? text : (before ?? "") + text
+    let contains: () -> Bool? = { [unowned self] in
+      guard let v = self.a.attrs(self.e)?.value else { return nil }
+      return (replace ? v == text : v.contains(text)) ? true : nil
+    }
+    if a.inWebArea(e) {
+      return [{ [unowned self] in
+        if replace {
+          guard self.settable(self.e, "AXSelectedTextRange") else { return nil }
+          let n = self.a.attrs(self.e)?.numberOfCharacters ?? (before ?? "").utf16.count
+          let r = self.a.set(self.e, "AXSelectedTextRange", NSValue(range: NSRange(location: 0, length: n)))
+          if r != .success {
+            if r == .invalidElement { self.code = "stale_ref"; self.halted = true }
+            if r == .apiDisabled { self.code = "no_permission"; self.halted = true }
+            let p = self.a.probe(self.e)
+            let d = gradeStep(r, before: p, after: p, readbackRole: false, stateChecked: nil)
+            return ("AXSelectedTextRange", d == .notDelivered ? .notDelivered : .uncertain)
+          }
+        }
+        return ("keys", self.attempt(capMs: ActTiming.settleMs, effect: false, state: contains) { self.a.typeViaKeys(self.e, text) })
+      }]
+    }
+    let exact: () -> Bool? = { [unowned self] in self.a.attrs(self.e)?.value == expect ? true : nil }
+    var chain: [Step] = []
+    if !replace { chain.append(setStep(e, "AXSelectedText", { text }, cap: ActTiming.settleMs, effect: false, state: contains)) }
+    chain.append(setStep(e, "AXValue", { expect }, cap: ActTiming.settleMs, effect: false, state: exact))
+    return chain
+  }
+
+  // MARK: set
+
+  func setSteps(_ want: String, kind: AXValueKind?) -> [Step]? {
+    let v: Any
+    switch kind {
+    case .number?:
+      guard let d = Double(want) else { return nil }
+      v = d == d.rounded() && abs(d) < 1e15 ? NSNumber(value: Int64(d)) : NSNumber(value: d)
+    case .bool?:
+      guard let b = parseBool(want) else { return nil }
+      v = NSNumber(value: b)
+    default:
+      v = want
+    }
+    let before = a.attrs(e)?.value
+    let readback: () -> Bool? = { [unowned self] in
+      let now = self.a.attrs(self.e)?.value
+      if sameValue(now, want, kind: kind) { return true }
+      return now == before ? false : nil
+    }
+    let write = setStep(e, "AXValue", { v }, cap: ActTiming.settleMs, effect: false, state: readback)
+    let increments: Step = { [unowned self] in
+      guard let target = Double(want), var cur = self.a.attrs(self.e)?.value.flatMap(Double.init) else { return nil }
+      var moved = false
+      for _ in 0..<ActTiming.maxIncrements {
+        if sameNumber(cur, target) { break }
+        let up = target > cur
+        let act = up ? "AXIncrement" : "AXDecrement"
+        guard self.advertises(self.e, act) else { break }
+        let from = cur
+        let d = self.attempt(capMs: ActTiming.settleMs, effect: false, state: {
+          guard let n = self.a.attrs(self.e)?.value.flatMap(Double.init) else { return nil }
+          return n != from
+        }) { self.a.perform(self.e, act) }
+        guard d == .deliveredVerified, let n = self.a.attrs(self.e)?.value.flatMap(Double.init) else {
+          if !moved { return (act, d) }
+          return (act, d == .uncertain ? .uncertain : .deliveredUnverified)
+        }
+        moved = true
+        cur = n
+        if (up && n > target && !sameNumber(n, target)) || (!up && n < target && !sameNumber(n, target)) {
+          return (act, .deliveredUnverified)  // overshot: stop, never walk back
+        }
+      }
+      if sameNumber(cur, target) { return (moved ? "AXIncrement/AXDecrement" : "already", .deliveredVerified) }
+      return moved ? ("AXIncrement/AXDecrement", .deliveredUnverified) : nil
+    }
+    return [write, increments]
+  }
+
+  // MARK: focus
+
+  func focusedWithin() -> Bool {
+    if a.attrs(e)?.focused == true { return true }
+    guard let f = a.probe(e).focusedKey else { return false }
+    var level = [e], budget = 64
+    for _ in 0...ActTiming.focusDescent {
+      var next: [A.E] = []
+      for x in level {
+        if a.key(x) == f { return true }
+        budget -= 1
+        if budget <= 0 { return false }
+        next += a.children(x)
+      }
+      level = next
+    }
+    return false
+  }
+
+  // MARK: toggle
+
+  func toggleState() -> Bool? {
+    guard let at = a.attrs(e) else { return nil }
+    if let b = parseBool(at.value) { return b }
+    return nil
+  }
+
+  // MARK: expand
+
+  func expandSteps(_ want: Bool) -> [Step] {
+    let current = a.attrs(e)?.expanded
+    let state: () -> Bool? = { [unowned self] in self.a.attrs(self.e)?.expanded.map { $0 == want } }
+    var chain = [performStep(e, want ? "AXExpand" : "AXCollapse", cap: ActTiming.expandMs, state: state),
+                 setStep(e, "AXExpanded", { NSNumber(value: want) }, cap: ActTiming.expandMs, state: state)]
+    if current == !want { chain.append(performStep(e, "AXPress", cap: ActTiming.expandMs, state: state)) }
+    return chain
+  }
+
+  // MARK: select (dropdown)
+
+  func findMenuItem(_ want: String) -> (item: A.E?, menu: A.E?) {
+    var queue: [(A.E, Int)] = [(e, 0)], seen = Set<AnyHashable>(), n = 0, menu: A.E?
+    while !queue.isEmpty, n < ActTiming.menuSearchNodes {
+      let (x, d) = queue.removeFirst()
+      guard seen.insert(a.key(x)).inserted, let at = a.attrs(x) else { continue }
+      n += 1
+      if at.role == "AXMenu" && menu == nil { menu = x }
+      if at.role == "AXMenuItem", at.actions.contains("AXPress"),
+         [at.title, at.description].contains(where: { $0?.caseInsensitiveCompare(want) == .orderedSame }) {
+        return (x, menu)
+      }
+      if d < ActTiming.menuSearchDepth { queue += a.children(x).map { ($0, d + 1) } }
+    }
+    return (nil, menu)
+  }
+
+  func selectSteps(_ want: String) -> [Step] {
+    let before = a.attrs(e)?.value
+    let valueIs: () -> Bool = { [unowned self] in
+      self.a.attrs(self.e)?.value?.caseInsensitiveCompare(want) == .orderedSame
+    }
+    let write = setStep(e, "AXValue", { want }, cap: ActTiming.menuMs, effect: false, state: { [unowned self] in
+      if valueIs() { return true }
+      return self.a.attrs(self.e)?.value == before ? false : nil
+    })
+    let viaMenu: Step = { [unowned self] in
+      guard let open = ["AXShowMenu", "AXPress"].first(where: { self.advertises(self.e, $0) }) else { return nil }
+      let d = self.attempt(capMs: ActTiming.menuMs, effect: false, state: { self.a.probe(self.e).menuOpen ? true : nil }) {
+        self.a.perform(self.e, open)
+      }
+      guard d == .deliveredVerified else { return (open, d) }  // no menu seen: unverified, stop
+      let (item, menu) = self.findMenuItem(want)
+      let cancel = {
+        if let m = menu, self.advertises(m, "AXCancel") { _ = self.a.perform(m, "AXCancel") }
+        else if self.advertises(self.e, "AXCancel") { _ = self.a.perform(self.e, "AXCancel") }
+      }
+      guard let item else {
+        cancel()
+        self.code = "not_found"
+        return ("\(open)+pick", .deliveredWithoutEffect)
+      }
+      let p = self.attempt(capMs: ActTiming.menuMs, effect: false, state: {
+        valueIs() || !self.a.probe(self.e).menuOpen ? true : nil
+      }) { self.a.perform(item, "AXPress") }
+      if p == .notDelivered { cancel(); return ("\(open)+pick", self.halted ? .notDelivered : .deliveredWithoutEffect) }
+      return ("\(open)+pick", p)
+    }
+    return a.attrs(e)?.role == "AXComboBox" ? [write, viaMenu] : [viaMenu]
+  }
+
+  // MARK: scroll
+
+  func scrollBar(vertical: Bool) -> A.E? {
+    let at = a.attrs(e)
+    if at?.role == "AXScrollBar" { return e }
+    let area = at?.role == "AXScrollArea" ? e
+      : ancestors(ActTiming.scrollAreaAncestors).first(where: { a.attrs($0)?.role == "AXScrollArea" })
+    guard let area else { return nil }
+    return a.children(area).first { k in
+      guard let ka = a.attrs(k), ka.role == "AXScrollBar", let f = ka.frame else { return false }
+      return (f.height > f.width) == vertical
+    }
+  }
+
+  func scrollSteps(_ dir: String, _ n: Int) -> [Step]? {
+    guard ["up", "down", "left", "right"].contains(dir) else { return nil }
+    let forward = dir == "down" || dir == "right"
+    guard let bar = scrollBar(vertical: dir == "up" || dir == "down") else { return [] }
+    let before = a.attrs(bar)?.value
+    let moved: () -> Bool? = { [unowned self] in
+      guard let v = self.a.attrs(bar)?.value, before != nil else { return nil }
+      return v != before
+    }
+    let act = forward ? "AXIncrement" : "AXDecrement"
+    let steps: Step = { [unowned self] in
+      guard self.advertises(bar, act) else { return nil }
+      var last = AXResult.success, done = 0
+      let d = self.attempt(capMs: ActTiming.settleMs, effect: false, state: moved) {
+        for _ in 0..<n {
+          last = self.a.perform(bar, act)
+          guard last == .success else { break }
+          done += 1
+        }
+        return done > 0 ? .success : last
+      }
+      if done > 0 && done < n && d == .deliveredVerified { return (act, .deliveredUnverified) }  // partial
+      return (act, d)
+    }
+    let value: Step = { [unowned self] in
+      guard self.settable(bar, "AXValue"), let cur = before.flatMap(Double.init) else { return nil }
+      let next = min(1, max(0, cur + (forward ? 0.1 : -0.1) * Double(n)))
+      return ("AXValue", self.attempt(capMs: ActTiming.settleMs, effect: false, state: moved) {
+        self.a.set(bar, "AXValue", NSNumber(value: next))
+      })
+    }
+    return [steps, value]
+  }
+}
+
+// MARK: - Action chains
+
+/// Runs one semantic action as a fallback chain (spec §6.4). Never calls an action the element doesn't
+/// advertise nor writes an attribute that isn't settable; only not_delivered / delivered_without_effect
+/// fall through to the next step, so nothing is ever done twice.
+func runChain<A: AXActor>(_ a: A, _ e: A.E, _ r: ActRequest) -> ActOutcome {
+  let c = ChainRunner(a, e)
+  guard let at = a.attrs(e) else { return c.fail("stale_ref") }
+  let raw = at.role ?? ""
+  let role = normalizeRole(role: raw, subrole: at.subrole)
+  let secure = raw == "AXSecureTextField" || at.subrole == "AXSecureTextField"
+
+  switch r.action {
+  case "click":
+    return c.run(c.clickSteps())
+
+  case "menu":
+    return c.run(c.menuSteps())
+
+  case "type":
+    guard role == "textfield" || raw == "AXComboBox" else { return c.fail("unsupported") }
+    if secure { return c.fail("secure_input") }
+    guard let text = r.text, !text.isEmpty else { return c.fail("invalid_args") }
+    return c.run(c.typeSteps(text, replace: r.replace))
+
+  case "set":
+    if secure { return c.fail("secure_input") }
+    guard let want = r.value, let chain = c.setSteps(want, kind: at.valueKind) else { return c.fail("invalid_args") }
+    return c.run(chain)
+
+  case "focus":
+    return c.run([c.setStep(e, "AXFocused", { NSNumber(value: true) }, cap: ActTiming.settleMs, effect: false,
+                            state: { c.focusedWithin() })])
+
+  case "toggle":
+    let toggleable = toggleRoles.contains(role) || at.subrole == "AXToggleButton"
+    guard toggleable else { return c.fail("unsupported") }
+    let current = c.toggleState()
+    var target: Bool?
+    if let v = r.value {
+      guard let b = parseBool(v) else { return c.fail("invalid_args") }
+      target = b
+    } else {
+      target = current.map { !$0 }
+    }
+    if let t = target, current == t { return ActOutcome(delivery: .deliveredVerified, steps: [("already", .deliveredVerified)], code: nil) }
+    if role == "radiobutton" && target == false { return c.fail("unsupported") }
+    guard let want = target else { return c.run(c.clickSteps(cap: ActTiming.toggleMs)) }
+    let state: () -> Bool? = {
+      guard let now = c.toggleState() else { return nil }
+      if now == want { return true }
+      return now == current ? false : nil
+    }
+    let numeric = at.valueKind == .number
+    let write = c.setStep(e, "AXValue", { numeric ? NSNumber(value: want ? 1 : 0) : NSNumber(value: want) },
+                          cap: ActTiming.toggleMs, effect: false, state: state)
+    return c.run([write] + c.clickSteps(state: state, cap: ActTiming.toggleMs))
+
+  case "expand", "collapse":
+    let want = r.action == "expand"
+    if at.expanded == want { return ActOutcome(delivery: .deliveredVerified, steps: [("already", .deliveredVerified)], code: nil) }
+    return c.run(c.expandSteps(want))
+
+  case "select":
+    guard let want = r.value, !want.isEmpty else { return c.fail("invalid_args") }
+    return c.run(c.selectSteps(want))
+
+  case "scroll":
+    guard let chain = c.scrollSteps(r.direction ?? "", min(max(r.amount, 1), 20)) else { return c.fail("invalid_args") }
+    return c.run(chain)
+
+  case "scrollTo":
+    return c.run([c.performStep(e, "AXScrollToVisible", cap: ActTiming.settleMs)])
+
+  case "submit":
+    // AXConfirm or nothing (never a sneaky Return); the effect is not judged.
+    return c.run([c.performStep(e, "AXConfirm", cap: 0, effect: false)])
+
+  default:
+    return c.fail("unsupported")
+  }
+}
+
+// MARK: - Keys: menu shortcuts and blocked combos
+
+private func canonicalMod(_ m: String) -> String? {
+  switch m.lowercased() {
+  case "cmd", "command", "meta": return "cmd"
+  case "shift": return "shift"
+  case "alt", "opt", "option": return "alt"
+  case "ctrl", "control": return "ctrl"
+  default: return nil
+  }
+}
+
+private func canonicalKey(_ k: String) -> String {
+  let l = k.lowercased()
+  switch l {
+  case "esc": return "escape"
+  case "backspace": return "delete"
+  case "enter": return "return"
+  default: return l
+  }
+}
+
+/// A menu item answers the combo: enabled, same AXMenuItemCmdChar (case-insensitive) and an
+/// AXMenuItemCmdModifiers mask equal to the combo's (shift=1, opt=2, ctrl=4, no-cmd=8; absent = 0).
+/// Plain keys (no modifier) never go to the menu bar.
+func menuMatch(cmdChar: String?, cmdModifiers: Int?, enabled: Bool?, mods: Set<String>, key: String) -> Bool {
+  guard enabled == true, !mods.isEmpty, let ch = cmdChar, !ch.isEmpty else { return false }
+  var m = Set<String>()
+  for x in mods {
+    guard let c = canonicalMod(x) else { return false }
+    m.insert(c)
+  }
+  let k = canonicalKey(key)
+  let keyChar = k == "space" ? " " : k
+  guard keyChar.count == 1, ch.lowercased() == keyChar else { return false }
+  let want = (m.contains("shift") ? 1 : 0) | (m.contains("alt") ? 2 : 0) | (m.contains("ctrl") ? 4 : 0) | (m.contains("cmd") ? 0 : 8)
+  return (cmdModifiers ?? 0) == want
+}
+
+/// Quit / log out / force quit / empty trash (spec §6.6). Aliases folded, order-free, superset match.
+/// No override exists.
+private let blockedCombos: [(mods: Set<String>, key: String)] = [
+  (["cmd"], "q"), (["cmd", "shift"], "q"), (["cmd", "alt"], "escape"), (["ctrl", "cmd"], "q"),
+  (["cmd", "shift"], "delete"), (["cmd", "alt", "shift"], "q"),
+]
+
+func isBlockedCombo(mods: Set<String>, key: String) -> Bool {
+  let m = Set(mods.compactMap(canonicalMod))
+  let k = canonicalKey(key)
+  return blockedCombos.contains { $0.key == k && m.isSuperset(of: $0.mods) }
 }
