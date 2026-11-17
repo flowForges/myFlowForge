@@ -237,9 +237,9 @@ describe('service wiring', () => {
   })
 
   it('runningApps comes from the driver; collapseMain from the shell', async () => {
-    const t = setup({ driver: fakeDriver({ apps: [{ bundleId: 'com.a', name: 'A' }] }) })
+    const t = setup({ driver: fakeDriver({ apps: [{ bundleId: 'com.a', name: 'A', pid: 11, active: true }] }) })
     const h = t.rt.host()!
-    expect(await h.runningApps!()).toEqual([{ bundleId: 'com.a', name: 'A' }])
+    expect(await h.runningApps!()).toEqual([{ bundleId: 'com.a', name: 'A', pid: 11, active: true }])
     h.collapseMain!()
     expect(t.collapse).toHaveBeenCalledTimes(1)
   })

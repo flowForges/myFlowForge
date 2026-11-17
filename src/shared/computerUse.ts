@@ -547,4 +547,67 @@ export interface CuOverlayState {
   hotkeyFailed: boolean
 }
 
+// ───────────────────────── 电脑操作 · AX ref 线协议类型(T4 ruling R1;T5 续) ─────────────────────────
+// forge-cu 新 op(snapshot/resolve/act/waitFor/launch/...)的共享类型:纯类型,不碰 node/electron,
+// driver.ts(主进程)导入后重导出 —— 渲染端/共享代码不能导入 driver.ts(它在 main 里)。
+
+/** 送达枚举(全链路同名):只有 `not_delivered` 的 retry 才是 safe。 */
+export type Delivery = 'not_delivered' | 'uncertain' | 'delivered_unverified' | 'delivered_without_effect' | 'delivered_verified'
+
+/** proc_pidinfo(PROC_PIDTBSDINFO)取到的 pid + 启动时刻("<sec>.<usec>"):判断 ref 指向的还是不是原来那个进程。 */
+export interface Instance { pid: number; start: string }
+
+/** snapshot 里一个节点的线上表示:树被摊平成数组,靠 depth 还原层级;ref 只有可操作的叶子才有。 */
+export interface SnapNodeWire {
+  ref?: string
+  depth: number
+  role: string
+  name?: string
+  value?: string
+  states: string[]
+  actions: string[]
+  childrenCount?: number
+  truncated?: boolean
+  bounds?: { x: number; y: number; w: number; h: number }
+  offscreen?: boolean
+}
+
+export interface SnapshotResult {
+  snapId: string
+  instance: Instance
+  app: { bundleId: string; name: string }
+  window: { number?: number; title?: string }
+  complete: boolean
+  nodes: SnapNodeWire[]
+}
+
+export interface ResolveResult {
+  instance: Instance
+  bundleId: string
+  appName: string
+  role: string
+  name?: string
+  bounds?: { x: number; y: number; w: number; h: number }
+}
+
+export type ActAction =
+  | 'click' | 'menu' | 'set' | 'type' | 'focus' | 'toggle' | 'expand' | 'collapse' | 'select' | 'scroll' | 'scrollTo' | 'submit'
+
+export interface ActRequest {
+  ref: string
+  action: ActAction
+  value?: string
+  text?: string
+  replace?: boolean
+  direction?: 'up' | 'down' | 'left' | 'right'
+  amount?: number
+  physical?: boolean
+}
+
+export interface ActResult {
+  delivery: Delivery
+  steps: { name: string; outcome: Delivery }[]
+  after?: { focused?: boolean; value?: string; selected?: boolean; expanded?: boolean }
+}
+
 export { CU_OVERLAY_ARG } from './cuOverlayArg'

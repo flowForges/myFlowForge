@@ -1,8 +1,11 @@
 import type { Readable, Writable } from 'node:stream'
 import type { Mod } from '@shared/computerUse'
 import {
-  CuDriverError, type Button, type CaptureOpts, type CaptureResult, type ComputerDriver, type CropOpts,
-  type DriverStatus, type PostAction, type PostGuard, type PostResult, type Pt, type WinHit,
+  CuDriverError, type ActGuard, type ActRequest, type ActResult, type AppKeyOpts, type AppKeyResult,
+  type Button, type CaptureOpts, type CaptureResult, type ComputerDriver, type CropOpts, type Delivery,
+  type DriverStatus, type FocusWindowOpts, type LaunchOpts, type LaunchResult, type PostAction, type PostGuard,
+  type PostResult, type Pt, type ResolveResult, type SnapshotOpts, type SnapshotResult, type WaitForOpts,
+  type WaitForResult, type WinHit, type WindowsOpts, type WindowsResult,
 } from './driver'
 
 /** The slice of a ChildProcess the driver uses. Injected so tests never start a real helper. */
@@ -25,6 +28,19 @@ interface Pending {
 
 const ABORT_GRACE_MS = 300
 const POST_CODES = new Set(['target_changed', 'helper_failed', 'stopped'])
+
+// ───────────────────────── AX ref ops (T4): TS-side timeout / abort-before-kill ─────────────────────────
+// Ruling R6: default deadlineMs 3000; TS per-op timeout = deadlineMs + 1000, except snapshot = deadlineMs + 4000
+// (Electron activation may extend the helper's own deadline by ≤3 s). On a TS timeout the driver sends SIGUSR1
+// (abort) instead of killing — it waits for the helper's `stopped` reply; only after SOFT_KILL_GRACE_MS more with
+// no reply does it kill + let the next call respawn, exactly like a v1 (hard) timeout.
+export const DEFAULT_DEADLINE_MS = 3000
+const SOFT_KILL_GRACE_MS = 2000
+/** ops that go through the soft (abort-first) timeout path instead of the v1 immediate-kill path. */
+const SOFT_OPS = new Set(['snapshot', 'resolve', 'act', 'waitFor', 'launch', 'focusWindow', 'windows', 'appKey', 'a11yRevert'])
+function tsTimeoutFor(op: string, deadlineMs: number): number {
+  return deadlineMs + (op === 'snapshot' ? 4000 : 1000)
+}
 
 /** Lone surrogates → U+FFFD (String.prototype.toWellFormed, without needing the ES2024 lib). */
 export function wellFormed(s: string): string {
@@ -177,11 +193,26 @@ export function helperDriver(o: {
       let c: ChildLike
       try { c = ensureChild() } catch (e) { reject(e); return }
       const id = `r${++seq}`
-      const timer = setTimeout(() => {
-        log(`forge-cu timeout (${op})`)
-        killChild()
-      }, timeoutMs)
-      pending = { id, op, timer, resolve, reject }
+      const soft = SOFT_OPS.has(op)
+      const p: Pending = { id, op, timer: undefined as unknown as ReturnType<typeof setTimeout>, resolve, reject }
+      const onTimeout = () => {
+        if (pending !== p) return // already answered / failed
+        if (!soft) {
+          log(`forge-cu timeout (${op})`)
+          killChild()
+          return
+        }
+        // R6: a timed-out AX op aborts the helper (refs survive) instead of killing it outright.
+        log(`forge-cu soft timeout (${op}): aborting instead of killing`)
+        try { c.kill('SIGUSR1') } catch { /* already gone */ }
+        p.timer = setTimeout(() => {
+          if (pending !== p) return
+          log(`forge-cu timeout (${op}): no reply after the abort, killing`)
+          killChild()
+        }, SOFT_KILL_GRACE_MS)
+      }
+      p.timer = setTimeout(onTimeout, timeoutMs)
+      pending = p
       try {
         c.stdin.write(JSON.stringify({ id, op, ...body }) + '\n')
       } catch {
@@ -204,7 +235,11 @@ export function helperDriver(o: {
 
   const strict = async (op: string, body?: Record<string, unknown>, t?: number) => {
     const r = await call(op, body, t)
-    if (r.ok === false) throw new CuDriverError(String(r.code ?? 'helper_failed'), typeof r.message === 'string' ? r.message : undefined)
+    if (r.ok === false) {
+      // wire extras: act errors always carry `delivery` (uncertain / not_delivered / …); surfaced on the error.
+      const delivery = typeof r.delivery === 'string' ? (r.delivery as Delivery) : undefined
+      throw new CuDriverError(String(r.code ?? 'helper_failed'), typeof r.message === 'string' ? r.message : undefined, delivery)
+    }
     return r
   }
 
@@ -243,7 +278,56 @@ export function helperDriver(o: {
     async activate(pid: number) { await strict('activate', { pid }) },
     async release(r: { mods: Mod[]; button?: Button }) { await strict('release', { ...r }) },
     async idleSeconds(kind = 'any') { return (await strict('idle', { kind })).seconds as number },
-    async runningApps() { return (await strict('apps')).apps as { bundleId: string; name: string }[] },
+    async runningApps() {
+      return (await strict('apps')).apps as { bundleId: string; name: string; pid: number; active: boolean }[]
+    },
+    async snapshot(o: SnapshotOpts): Promise<SnapshotResult> {
+      const { deadlineMs = DEFAULT_DEADLINE_MS, ...rest } = o
+      const { id: _i, ok: _o, ...r } = await strict('snapshot', { ...rest, deadlineMs }, tsTimeoutFor('snapshot', deadlineMs))
+      return r as unknown as SnapshotResult
+    },
+    async resolve(ref: string): Promise<ResolveResult> {
+      const deadlineMs = DEFAULT_DEADLINE_MS
+      const { id: _i, ok: _o, ...r } = await strict('resolve', { ref, deadlineMs }, tsTimeoutFor('resolve', deadlineMs))
+      return r as unknown as ResolveResult
+    },
+    async act(req: ActRequest, guard: ActGuard): Promise<ActResult> {
+      const deadlineMs = DEFAULT_DEADLINE_MS
+      const { id: _i, ok: _o, code: _c, ...r } = await strict('act', { ...req, guard, deadlineMs }, tsTimeoutFor('act', deadlineMs))
+      return r as unknown as ActResult
+    },
+    async waitFor(o: WaitForOpts): Promise<WaitForResult> {
+      const timeoutMs = o.timeoutMs ?? 5000
+      const deadlineMs = Math.max(o.deadlineMs ?? DEFAULT_DEADLINE_MS, timeoutMs)
+      const { deadlineMs: _d, timeoutMs: _t, ...rest } = o
+      const { id: _i, ok: _o, ...r } =
+        await strict('waitFor', { ...rest, timeoutMs, deadlineMs }, tsTimeoutFor('waitFor', deadlineMs))
+      return r as unknown as WaitForResult
+    },
+    async launch(o: LaunchOpts): Promise<LaunchResult> {
+      const { deadlineMs = DEFAULT_DEADLINE_MS, ...rest } = o
+      const { id: _i, ok: _o, ...r } = await strict('launch', { ...rest, deadlineMs }, tsTimeoutFor('launch', deadlineMs))
+      return r as unknown as LaunchResult
+    },
+    async focusWindow(o: FocusWindowOpts): Promise<void> {
+      const { deadlineMs = DEFAULT_DEADLINE_MS, ...rest } = o
+      await strict('focusWindow', { ...rest, deadlineMs }, tsTimeoutFor('focusWindow', deadlineMs))
+    },
+    async windows(o: WindowsOpts = {}): Promise<WindowsResult> {
+      const { deadlineMs = DEFAULT_DEADLINE_MS, ...rest } = o
+      const { id: _i, ok: _o, ...r } = await strict('windows', { ...rest, deadlineMs }, tsTimeoutFor('windows', deadlineMs))
+      return r as unknown as WindowsResult
+    },
+    async appKey(o: AppKeyOpts): Promise<AppKeyResult> {
+      const { deadlineMs = DEFAULT_DEADLINE_MS, ...rest } = o
+      const { id: _i, ok: _o, ...r } = await strict('appKey', { ...rest, deadlineMs }, tsTimeoutFor('appKey', deadlineMs))
+      return r as unknown as AppKeyResult
+    },
+    async a11yRevert(): Promise<{ reverted: number[] }> {
+      const deadlineMs = DEFAULT_DEADLINE_MS
+      const r = await strict('a11yRevert', {}, tsTimeoutFor('a11yRevert', deadlineMs))
+      return { reverted: r.reverted as number[] }
+    },
     abort() {
       const c = child
       if (!c) return Promise.resolve('stopped' as const)

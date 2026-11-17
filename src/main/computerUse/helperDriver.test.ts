@@ -386,6 +386,218 @@ describe('helperDriver', () => {
       expect(log.mock.calls.map((x) => String(x[0])).join('\n')).not.toContain('hunter2')
     })
   })
+
+  describe('AX ref ops (T4)', () => {
+    const instance = { pid: 7, start: '123.456' }
+    const actGuard = { denyPids: [1], denyBundlePrefixes: ['com.zghua.myflowforge'], expectInstance: instance }
+
+    it('snapshot sends the wire fields with the default deadlineMs and strips id/ok from the reply', async () => {
+      vi.useFakeTimers()
+      const { d, children } = setup()
+      const p = d.snapshot({ app: { bundleId: 'com.a' }, mode: 'skeleton' })
+      await flush()
+      const req = children[0].written()[0]
+      expect(req).toMatchObject({ op: 'snapshot', app: { bundleId: 'com.a' }, mode: 'skeleton', deadlineMs: 3000 })
+      const result = { snapId: 's1', instance, app: { bundleId: 'com.a', name: 'A' }, window: {}, complete: true, nodes: [] }
+      children[0].reply({ id: req.id, ok: true, ...result })
+      expect(await p).toEqual(result)
+    })
+
+    it('snapshot passes an optional guard through untouched', async () => {
+      vi.useFakeTimers()
+      const { d, children } = setup()
+      void d.snapshot({ app: { pid: 7 }, mode: 'full', guard: { denyPids: [1], denyBundlePrefixes: ['x'] } })
+      await flush()
+      expect(children[0].written()[0]).toMatchObject({ guard: { denyPids: [1], denyBundlePrefixes: ['x'] } })
+    })
+
+    it('resolve sends only {ref}', async () => {
+      vi.useFakeTimers()
+      const { d, children } = setup()
+      const p = d.resolve('@s1:e2')
+      await flush()
+      expect(children[0].written()[0]).toMatchObject({ op: 'resolve', ref: '@s1:e2', deadlineMs: 3000 })
+      children[0].reply({ id: children[0].written()[0].id, ok: true, instance, bundleId: 'com.a', appName: 'A', role: 'AXButton' })
+      expect(await p).toEqual({ instance, bundleId: 'com.a', appName: 'A', role: 'AXButton' })
+    })
+
+    it('act sends the request with guard.expectInstance', async () => {
+      vi.useFakeTimers()
+      const { d, children } = setup()
+      const p = d.act({ ref: '@s1:e2', action: 'click' }, actGuard)
+      await flush()
+      const req = children[0].written()[0]
+      expect(req).toMatchObject({ op: 'act', ref: '@s1:e2', action: 'click', guard: { expectInstance: instance }, deadlineMs: 3000 })
+      children[0].reply({ id: req.id, ok: true, delivery: 'delivered_verified', steps: [{ name: 'click', outcome: 'delivered_verified' }] })
+      expect(await p).toEqual({ delivery: 'delivered_verified', steps: [{ name: 'click', outcome: 'delivered_verified' }] })
+    })
+
+    it('act error replies always carry delivery on the rejected CuDriverError', async () => {
+      vi.useFakeTimers()
+      const { d, children } = setup()
+      const caught = d.act({ ref: '@s1:e2', action: 'click' }, actGuard).catch((e) => e)
+      await flush()
+      const req = children[0].written()[0]
+      children[0].reply({ id: req.id, ok: false, code: 'target_changed', delivery: 'not_delivered' })
+      const e = await caught
+      expect(e).toMatchObject({ code: 'target_changed', delivery: 'not_delivered' })
+    })
+
+    it('an uncertain error reply rejects CuDriverError with delivery uncertain', async () => {
+      vi.useFakeTimers()
+      const { d, children } = setup()
+      const caught = d.act({ ref: '@s1:e2', action: 'type', text: 'hi' }, actGuard).catch((e) => e)
+      await flush()
+      children[0].reply({ id: children[0].written()[0].id, ok: false, code: 'uncertain', delivery: 'uncertain' })
+      const e = await caught
+      expect(e).toMatchObject({ code: 'uncertain', delivery: 'uncertain' })
+    })
+
+    it('waitFor sends pid/match/gone/timeoutMs; deadlineMs defaults to timeoutMs', async () => {
+      vi.useFakeTimers()
+      const { d, children } = setup()
+      const p = d.waitFor({ pid: 7, match: { role: 'AXButton' }, gone: false, timeoutMs: 8000 })
+      await flush()
+      expect(children[0].written()[0]).toMatchObject({ op: 'waitFor', pid: 7, match: { role: 'AXButton' }, gone: false, timeoutMs: 8000, deadlineMs: 8000 })
+      children[0].reply({ id: children[0].written()[0].id, ok: true, found: true })
+      expect(await p).toEqual({ found: true })
+    })
+
+    it('launch sends bundleId/activate with an optional guard', async () => {
+      vi.useFakeTimers()
+      const { d, children } = setup()
+      const p = d.launch({ bundleId: 'com.a', activate: true })
+      await flush()
+      expect(children[0].written()[0]).toMatchObject({ op: 'launch', bundleId: 'com.a', activate: true, deadlineMs: 3000 })
+      const result = { instance, bundleId: 'com.a', name: 'A', windows: [{ number: 1 }] }
+      children[0].reply({ id: children[0].written()[0].id, ok: true, ...result })
+      expect(await p).toEqual(result)
+    })
+
+    it('focusWindow sends pid/windowNumber', async () => {
+      vi.useFakeTimers()
+      const { d, children } = setup()
+      const p = d.focusWindow({ pid: 7, windowNumber: 2 })
+      await flush()
+      expect(children[0].written()[0]).toMatchObject({ op: 'focusWindow', pid: 7, windowNumber: 2 })
+      children[0].reply({ id: children[0].written()[0].id, ok: true })
+      await expect(p).resolves.toBeUndefined()
+    })
+
+    it('windows sends an optional pid', async () => {
+      vi.useFakeTimers()
+      const { d, children } = setup()
+      const p = d.windows({ pid: 7 })
+      await flush()
+      expect(children[0].written()[0]).toMatchObject({ op: 'windows', pid: 7 })
+      children[0].reply({ id: children[0].written()[0].id, ok: true, windows: [{ pid: 7, number: 1 }] })
+      expect(await p).toEqual({ windows: [{ pid: 7, number: 1 }] })
+    })
+
+    it('appKey sends pid/mods/key/repeat', async () => {
+      vi.useFakeTimers()
+      const { d, children } = setup()
+      const p = d.appKey({ pid: 7, mods: ['cmd'], key: { char: 'w' }, repeat: 1 })
+      await flush()
+      expect(children[0].written()[0]).toMatchObject({ op: 'appKey', pid: 7, mods: ['cmd'], key: { char: 'w' }, repeat: 1 })
+      children[0].reply({ id: children[0].written()[0].id, ok: true, via: 'pid', delivery: 'delivered_unverified' })
+      expect(await p).toEqual({ via: 'pid', delivery: 'delivered_unverified' })
+    })
+
+    it('a11yRevert sends an empty body and returns reverted pids', async () => {
+      vi.useFakeTimers()
+      const { d, children } = setup()
+      const p = d.a11yRevert()
+      await flush()
+      expect(children[0].written()[0]).toMatchObject({ op: 'a11yRevert' })
+      children[0].reply({ id: children[0].written()[0].id, ok: true, reverted: [9] })
+      expect(await p).toEqual({ reverted: [9] })
+    })
+
+    it('runningApps surfaces pid and active from the forge-cu appsReply', async () => {
+      vi.useFakeTimers()
+      const { d, children } = setup()
+      const p = d.runningApps()
+      await flush()
+      children[0].reply({
+        id: children[0].written()[0].id, ok: true,
+        apps: [{ bundleId: 'com.a', name: 'A', pid: 7, active: true }],
+      })
+      expect(await p).toEqual([{ bundleId: 'com.a', name: 'A', pid: 7, active: true }])
+    })
+
+    describe('timeout aborts instead of kill', () => {
+      it('a non-snapshot op TS-times out at deadlineMs + 1000: SIGUSR1, not SIGKILL', async () => {
+        vi.useFakeTimers()
+        const { d, children } = setup()
+        void d.resolve('@s1:e2').catch(() => {})
+        await flush()
+        await vi.advanceTimersByTimeAsync(3999) // deadlineMs(3000, default) + 1000 - 1
+        expect(children[0].kill).not.toHaveBeenCalled()
+        await vi.advanceTimersByTimeAsync(1)
+        expect(children[0].kill).toHaveBeenCalledWith('SIGUSR1')
+        expect(children[0].kill).not.toHaveBeenCalledWith('SIGKILL')
+      })
+
+      it('snapshot TS-times out at deadlineMs + 4000 (not +1000)', async () => {
+        vi.useFakeTimers()
+        const { d, children } = setup()
+        void d.snapshot({ app: { bundleId: 'com.a' }, mode: 'skeleton', deadlineMs: 3000 }).catch(() => {})
+        await flush()
+        await vi.advanceTimersByTimeAsync(6999) // 3000 + 4000 - 1: still nothing
+        expect(children[0].kill).not.toHaveBeenCalled()
+        await vi.advanceTimersByTimeAsync(1) // hits 7000: abort, not kill
+        expect(children[0].kill).toHaveBeenCalledWith('SIGUSR1')
+        expect(children[0].kill).not.toHaveBeenCalledWith('SIGKILL')
+      })
+
+      it('a stopped reply inside the 2000 ms grace resolves the op as stopped, never kills', async () => {
+        vi.useFakeTimers()
+        const { d, children } = setup()
+        const caught = d.snapshot({ app: { bundleId: 'com.a' }, mode: 'skeleton' }).catch((e) => e)
+        await flush()
+        await vi.advanceTimersByTimeAsync(7000)
+        expect(children[0].kill).toHaveBeenCalledWith('SIGUSR1')
+        await vi.advanceTimersByTimeAsync(1999) // inside the 2000 ms grace
+        children[0].reply({ id: children[0].written()[0].id, ok: false, code: 'stopped' })
+        expect(await caught).toMatchObject({ code: 'stopped' })
+        expect(children[0].kill).not.toHaveBeenCalledWith('SIGKILL')
+      })
+
+      it('no reply for 2000 ms more after the abort: kill and reject helper_failed; refs survive the next call', async () => {
+        vi.useFakeTimers()
+        const { d, spawn, children } = setup()
+        const caught = d.snapshot({ app: { bundleId: 'com.a' }, mode: 'skeleton' }).catch((e) => e)
+        await flush()
+        await vi.advanceTimersByTimeAsync(7000)
+        expect(children[0].kill).toHaveBeenCalledWith('SIGUSR1')
+        await vi.advanceTimersByTimeAsync(1999)
+        expect(children[0].kill).not.toHaveBeenCalledWith('SIGKILL')
+        await vi.advanceTimersByTimeAsync(1)
+        expect(children[0].kill).toHaveBeenCalledWith('SIGKILL')
+        expect(await caught).toMatchObject({ code: 'helper_failed' })
+        const q = d.idleSeconds()
+        await flush()
+        expect(spawn).toHaveBeenCalledTimes(2)
+        children[1].reply({ id: children[1].written()[0].id, ok: true, seconds: 1 })
+        expect(await q).toBe(1)
+      })
+
+      it('a normal reply that lands after the soft timeout but inside the grace resolves normally (no kill)', async () => {
+        vi.useFakeTimers()
+        const { d, children } = setup()
+        const p = d.resolve('@s1:e2')
+        await flush()
+        const req = children[0].written()[0]
+        await vi.advanceTimersByTimeAsync(4000) // soft timeout: SIGUSR1 sent
+        expect(children[0].kill).toHaveBeenCalledWith('SIGUSR1')
+        await vi.advanceTimersByTimeAsync(1500) // still inside the 2000 ms grace
+        children[0].reply({ id: req.id, ok: true, instance, bundleId: 'com.a', appName: 'A', role: 'AXButton' })
+        expect(await p).toEqual({ instance, bundleId: 'com.a', appName: 'A', role: 'AXButton' })
+        expect(children[0].kill).not.toHaveBeenCalledWith('SIGKILL')
+      })
+    })
+  })
 })
 
 describe('createDriver', () => {

@@ -1,6 +1,14 @@
-import type { Mod } from '@shared/computerUse'
+import type { Mod, NamedKey } from '@shared/computerUse'
+import {
+  type ActAction, type ActRequest, type ActResult, type Delivery, type Instance, type ResolveResult,
+  type SnapNodeWire, type SnapshotResult,
+} from '@shared/computerUse'
 import { spawn as nodeSpawn } from 'node:child_process'
 import { helperDriver, type SpawnLike } from './helperDriver'
+
+// Ruling R1: these 8 wire types live in src/shared/computerUse.ts (renderer/shared code must never import this
+// file); re-exported here so every main-side consumer can import them from driver.ts as before.
+export type { ActAction, ActRequest, ActResult, Delivery, Instance, ResolveResult, SnapNodeWire, SnapshotResult }
 
 export interface Pt { x: number; y: number }
 export interface Rect { x: number; y: number; w: number; h: number }
@@ -42,6 +50,62 @@ export interface CaptureResult {
 export interface CropOpts { rectPt: Rect; marker: Pt[]; maskPids: number[]; maskBundlePrefixes: string[]; /** downscale: long edge in px (thumbnails) */ maxW?: number }
 export type Button = 'left' | 'right' | 'middle'
 
+// ───────────────────────── AX ref ops (T4): opts/results around the shared wire types ─────────────────────────
+
+/** Accepted (optional) on snapshot / waitFor / appKey / launch / focusWindow — the own prefix is refused regardless. */
+export interface CuGuard { denyPids: number[]; denyBundlePrefixes: string[] }
+/** act's guard is mandatory and additionally pins the instance the caller resolved against (stale-target check). */
+export interface ActGuard extends CuGuard { expectInstance: Instance }
+
+export interface SnapshotOpts {
+  app: { bundleId: string } | { pid: number }
+  window?: number
+  root?: string
+  mode: 'skeleton' | 'full'
+  maxDepth?: number
+  interactiveOnly?: boolean
+  /** default 3000; the TS timeout is this + 4000 (Electron activation may extend the helper deadline by ≤3 s) */
+  deadlineMs?: number
+  guard?: CuGuard
+}
+
+export interface WaitForMatch { role?: string; name?: string; nameContains?: string }
+export interface WaitForOpts {
+  pid: number
+  match: WaitForMatch
+  gone?: boolean
+  /** default 5000 (mirrors the helper's own default); also seeds the TS timeout unless deadlineMs is longer */
+  timeoutMs?: number
+  deadlineMs?: number
+  guard?: CuGuard
+}
+export interface WaitForResult { found: boolean; snapId?: string; node?: SnapNodeWire }
+
+export interface LaunchOpts {
+  bundleId?: string
+  name?: string
+  activate: boolean
+  deadlineMs?: number
+  guard?: CuGuard
+}
+export interface LaunchResult { instance: Instance; bundleId: string; name: string; windows: { number: number; title?: string }[] }
+
+export interface FocusWindowOpts { pid: number; windowNumber?: number; deadlineMs?: number; guard?: CuGuard }
+
+export interface WindowsOpts { pid?: number; deadlineMs?: number }
+export interface WindowInfo { pid: number; bundleId?: string; name?: string; number: number; title?: string }
+export interface WindowsResult { windows: WindowInfo[] }
+
+export interface AppKeyOpts {
+  pid: number
+  mods: Mod[]
+  key: { named: NamedKey } | { char: string }
+  repeat: number
+  deadlineMs?: number
+  guard?: CuGuard
+}
+export interface AppKeyResult { via: 'menu' | 'confirm' | 'cancel' | 'pid'; delivery: Delivery }
+
 export interface ComputerDriver {
   status(): Promise<DriverStatus>
   request(kind: 'screen' | 'ax'): Promise<void>
@@ -54,7 +118,16 @@ export interface ComputerDriver {
   activate(pid: number): Promise<void>
   release(o: { mods: Mod[]; button?: Button }): Promise<void>
   idleSeconds(kind?: 'any' | 'mouseDown' | 'keyDown'): Promise<number>
-  runningApps(): Promise<{ bundleId: string; name: string }[]>
+  runningApps(): Promise<{ bundleId: string; name: string; pid: number; active: boolean }[]>
+  snapshot(o: SnapshotOpts): Promise<SnapshotResult>
+  resolve(ref: string): Promise<ResolveResult>
+  act(r: ActRequest, guard: ActGuard): Promise<ActResult>
+  waitFor(o: WaitForOpts): Promise<WaitForResult>
+  launch(o: LaunchOpts): Promise<LaunchResult>
+  focusWindow(o: FocusWindowOpts): Promise<void>
+  windows(o: WindowsOpts): Promise<WindowsResult>
+  appKey(o: AppKeyOpts): Promise<AppKeyResult>
+  a11yRevert(): Promise<{ reverted: number[] }>
   abort(): Promise<'stopped' | 'killed'>
   kill(): void
   dispose(): void
@@ -62,7 +135,7 @@ export interface ComputerDriver {
 
 /** Driver failure with a stable code (helper_failed, unsupported, or whatever code the helper replied with). */
 export class CuDriverError extends Error {
-  constructor(public readonly code: string, message?: string) {
+  constructor(public readonly code: string, message?: string, public readonly delivery?: Delivery) {
     super(message ?? code)
     this.name = 'CuDriverError'
   }
@@ -73,6 +146,7 @@ export function unsupportedDriver(reason: 'platform' | 'headless'): ComputerDriv
   return {
     status: no, request: no, capture: no, crop: no, hitTest: no, front: no, post: no, activate: no,
     release: no, idleSeconds: no, runningApps: no, abort: no,
+    snapshot: no, resolve: no, act: no, waitFor: no, launch: no, focusWindow: no, windows: no, appKey: no, a11yRevert: no,
     kill() {}, dispose() {},
   }
 }
