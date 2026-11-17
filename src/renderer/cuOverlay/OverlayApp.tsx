@@ -24,7 +24,7 @@ export interface CuOverlayApi {
 /** the mini card's one line */
 export function actionLine(v: CuActionView): string {
   const parts: string[] = []
-  const app = screenName(v.app)
+  const app = screenName(typeof v.app === 'string' ? v.app : v.app?.name)
   switch (v.kind) {
     case 'click': {
       parts.push(`${CU_KIND_LABEL.click} ${pt(v.at)}`)

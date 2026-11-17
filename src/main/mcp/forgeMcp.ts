@@ -216,13 +216,20 @@ const CU_RULES =
   '动作可能被拦截(myFlowForge 自己的窗口、受保护的应用、密码框),也可能要等用户批准;被拒绝或拦截时不要换个办法绕过,告诉用户。'
 
 const CU_WHAT: Record<(typeof COMPUTER_TOOLS)[number], string> = {
+  computer_apps: '列出正在运行、有窗口的应用:名字、bundle id、是否前台。',
+  computer_launch: '打开或附着一个应用(按名字或 bundle id),可选 activate 切到前台;返回窗口列表。不需要去程序坞找图标。',
+  computer_snapshot: '读取一个应用的控件树,返回带 ref 的紧凑文本。每次界面变化后 ref 会过期,要重新调用。',
+  computer_act: '对一个 ref 发语义动作(点击/菜单/设置/输入/聚焦/切换/展开/收起/选择/滚动/滚到可见/提交)。默认不动鼠标、不切前台;按返回的 delivery 判断是否生效,retry 为 unsafe 时不要重复同一动作,先 snapshot 看结果。',
+  computer_focus: '把应用的窗口调到前台并确认。只有物理操作才需要。',
+  computer_wait_for: '等待一个应用里的控件出现或消失,命中时返回 ref。',
+  computer_windows: '列出窗口(可选只看某个应用)。',
   computer_screenshot: '截取主显示器的屏幕(可选 region 按全屏截图坐标放大一块)。',
   computer_click: '在 (x,y) 点击,可选按键、次数、修饰键。',
   computer_move: '把鼠标指针移到 (x,y)。',
   computer_drag: '按住左键从 from 拖到 to。',
   computer_scroll: '在 (x,y) 滚动 dy / dx 行(dy 正数向下)。',
   computer_type: '在当前焦点处输入一段文字(1–500 字)。',
-  computer_key: '按一个组合键,如 cmd+shift+t、return、f5、cmd+=;可选重复次数。',
+  computer_key: '按一个组合键,如 cmd+shift+t、return、f5、cmd+=;可选重复次数。给了 app 就不切前台:优先按菜单项,再直接发给该 app。',
   computer_wait: '等待 ms 毫秒(100–10000)。',
   computer_cursor: '读出鼠标指针的位置(全屏截图坐标)。',
   computer_front_app: '读出前台应用的名字和 bundle id。',

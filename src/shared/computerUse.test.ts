@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import {
   COMPUTER_USE_MODES, COMPUTER_USE_CHIP, COMPUTER_USE_PROVIDERS, providerSupportsComputerUse,
-  computerUseConflict, COMPUTER_TOOLS, parseCombo, prettyCombo, comboMatchesAccelerator, NAMED_KEYCODES,
+  computerUseConflict, COMPUTER_TOOLS, SEMANTIC_TOOLS, parseCombo, prettyCombo, comboMatchesAccelerator, NAMED_KEYCODES,
   BLOCKED_BUNDLES, ASK_ALWAYS_BUNDLES, SYSTEM_UI_OWNERS, OWN_BUNDLE_PREFIX, classify,
   screenshotSize, toPoint, visibleText, wrapUntrusted, screenNotice, computerToolLabel, CU_ERR, CU_SCHEMAS, CU_SHAPES, comboKeycode,
-  CU_KIND_LABEL, CU_SET_MODE_ERR, CU_HELPER_LABEL, CU_RESOLVE_ERR,
+  CU_KIND_LABEL, CU_SET_MODE_ERR, CU_HELPER_LABEL, CU_RESOLVE_ERR, retryOf, elementPhrase, ROLE_LABEL, ACT_LABEL,
   type CuStatus, type ParsedCombo, type CuSetModeCode,
 } from './computerUse'
 
@@ -30,8 +30,12 @@ describe('modes and providers', () => {
     expect(providerSupportsComputerUse('cursor')).toBe(false)
     expect(providerSupportsComputerUse('toString')).toBe(false)
   })
-  it('ten tools', () => {
-    expect(COMPUTER_TOOLS).toHaveLength(10)
+  it('seventeen tools: 8 semantic + the v1 nine (computer_key shared, not duplicated)', () => {
+    expect(SEMANTIC_TOOLS).toHaveLength(8)
+    expect(COMPUTER_TOOLS).toHaveLength(17)
+    expect(COMPUTER_TOOLS.filter((t) => t === 'computer_key')).toHaveLength(1)
+    expect(new Set(COMPUTER_TOOLS).size).toBe(17)
+    for (const t of SEMANTIC_TOOLS) expect(COMPUTER_TOOLS).toContain(t)
   })
 })
 
@@ -345,8 +349,25 @@ describe('computerToolLabel', () => {
     expect(computerToolLabel('mcp__forge__forge_status')).toBeNull()
     expect(computerToolLabel('Bash')).toBeNull()
   })
-  it('covers all ten COMPUTER_TOOLS', () => {
+  it('covers all seventeen COMPUTER_TOOLS', () => {
     for (const n of COMPUTER_TOOLS) expect(computerToolLabel(p + n)).toMatch(/^电脑 · [^c]/)
+  })
+  it('semantic tools: read / launch / focus / wait_for carry the app name; apps / windows are fixed; act carries the action', () => {
+    expect(computerToolLabel(p + 'computer_snapshot', { app: 'WorkBuddy' })).toBe('电脑 · 读取 WorkBuddy')
+    expect(computerToolLabel(p + 'computer_snapshot')).toBe('电脑 · 读取')
+    expect(computerToolLabel(p + 'computer_launch', { app: 'WorkBuddy' })).toBe('电脑 · 打开 WorkBuddy')
+    expect(computerToolLabel(p + 'computer_focus', { app: 'WorkBuddy' })).toBe('电脑 · 聚焦 WorkBuddy')
+    expect(computerToolLabel(p + 'computer_wait_for', { app: 'WorkBuddy' })).toBe('电脑 · 等待 WorkBuddy')
+    expect(computerToolLabel(p + 'computer_apps')).toBe('电脑 · 应用列表')
+    expect(computerToolLabel(p + 'computer_windows')).toBe('电脑 · 窗口列表')
+    expect(computerToolLabel(p + 'computer_act', { ref: '@s3:e4', action: 'click' })).toBe('电脑 · 点击')
+    expect(computerToolLabel(p + 'computer_act', { ref: '@s3:e9', action: 'type', text: 'hello' })).toBe('电脑 · 输入 5 字')
+    expect(computerToolLabel(p + 'computer_act', { ref: '@s3:e9', action: 'type' })).toBe('电脑 · 输入')
+    expect(computerToolLabel(p + 'computer_act')).toBe('电脑 · 操作')
+  })
+  it('app strings are sanitized the way untrusted screen text is: whitespace collapsed, controls made visible', () => {
+    expect(computerToolLabel(p + 'computer_launch', { app: 'Work\nBuddy' })).toBe('电脑 · 打开 Work Buddy')
+    expect(computerToolLabel(p + 'computer_launch', { app: 'a\u001bb' })).toBe('电脑 · 打开 a␛b')
   })
 })
 
@@ -354,7 +375,8 @@ describe('CU_ERR', () => {
   it('has every stable code with a Chinese sentence', () => {
     const codes = ['not_enabled', 'no_turn', 'locked', 'no_permission', 'need_screenshot', 'layout_changed', 'own_window', 'blocked_app',
       'secure_input', 'denied', 'timeout', 'target_changed', 'rate_limited', 'step_limit', 'vision_code', 'helper_failed', 'stopped',
-      'invalid_args', 'user_active', 'unsupported', 'restart_required']
+      'invalid_args', 'user_active', 'unsupported', 'restart_required',
+      'stale_ref', 'ambiguous_target', 'not_found', 'focus_failed', 'app_unresponsive', 'uncertain', 'blocked_combo']
     expect(Object.keys(CU_ERR).sort()).toEqual([...codes].sort())
     for (const c of codes) expect((CU_ERR as Record<string, string>)[c]).toMatch(/[一-鿿]/)
   })
@@ -364,6 +386,54 @@ describe('CU_ERR', () => {
     expect(CU_ERR.secure_input).toBe('密码输入框处于焦点 · 不能代输')
     expect(CU_ERR.user_active).toBe('用户正在使用电脑 · 稍后再试')
     expect(CU_ERR.vision_code).toBe('需要 visionCode：读出最近一张截图右下角方框里的 4 位码。看不到图片说明当前模型不支持图片，请停止使用电脑工具并告诉用户。')
+  })
+})
+
+describe('retryOf (§8.3): only not_delivered, or no delivery at all, is safe to retry', () => {
+  it('safe', () => {
+    expect(retryOf('not_delivered')).toBe('safe')
+    expect(retryOf(undefined)).toBe('safe')
+  })
+  it('unsafe', () => {
+    expect(retryOf('uncertain')).toBe('unsafe')
+    expect(retryOf('delivered_unverified')).toBe('unsafe')
+    expect(retryOf('delivered_without_effect')).toBe('unsafe')
+    expect(retryOf('delivered_verified')).toBe('unsafe')
+  })
+})
+
+describe('ROLE_LABEL / ACT_LABEL / elementPhrase', () => {
+  it('known roles have a Chinese label, unknown roles fall back to 控件', () => {
+    expect(ROLE_LABEL.button).toBe('按钮')
+    expect(ROLE_LABEL.link).toBe('链接')
+    expect(ROLE_LABEL.textfield).toBe('输入框')
+    expect(ROLE_LABEL.checkbox).toBe('复选框')
+    expect(ROLE_LABEL.menuitem).toBe('菜单项')
+    expect(ROLE_LABEL.tab).toBe('标签页')
+    expect(ROLE_LABEL.row).toBe('行')
+    expect(ROLE_LABEL.cell).toBe('单元格')
+    expect(ROLE_LABEL.list).toBe('列表')
+    expect(ROLE_LABEL.combobox).toBe('下拉框')
+    expect(ROLE_LABEL.switch).toBe('开关')
+    expect(ROLE_LABEL.radiobutton).toBe('单选框')
+    expect(ROLE_LABEL.slider).toBe('滑块')
+    expect(ROLE_LABEL.unknownRole).toBeUndefined()
+  })
+  it('every ActAction has a Chinese verb', () => {
+    expect(ACT_LABEL).toEqual({
+      click: '点击', menu: '右键菜单', set: '设置', type: '输入', focus: '聚焦', toggle: '切换', expand: '展开',
+      collapse: '收起', select: '选择', scroll: '滚动', scrollTo: '滚到可见', submit: '提交',
+    })
+  })
+  it('elementPhrase builds the sentence the spec example shows', () => {
+    expect(elementPhrase({
+      kind: 'act', app: { name: 'WorkBuddy', bundleId: 'x' }, element: { role: 'button', name: '新建会话' }, actLabel: '点击',
+    })).toBe('在 WorkBuddy 中点击 按钮「新建会话」')
+  })
+  it('falls back to 控件 for an unknown role, and tolerates a missing element name', () => {
+    expect(elementPhrase({
+      kind: 'act', app: { name: 'WorkBuddy', bundleId: 'x' }, element: { role: 'weird' }, actLabel: '点击',
+    })).toBe('在 WorkBuddy 中点击 控件')
   })
 })
 
@@ -404,6 +474,40 @@ describe('CU_SCHEMAS', () => {
     bad('computer_drag', { from: { x: 1, y: 1 } })
     good('computer_cursor', {})
     good('computer_front_app', {})
+  })
+  it('semantic tools (§8.1)', () => {
+    good('computer_apps', {})
+    bad('computer_apps', { foo: 1 })
+    good('computer_windows', {})
+    good('computer_windows', { app: 'WorkBuddy' })
+    bad('computer_windows', { app: '' })
+    good('computer_launch', { app: 'WorkBuddy' })
+    good('computer_launch', { app: 'WorkBuddy', activate: true })
+    bad('computer_launch', {})
+    bad('computer_launch', { app: 'x'.repeat(201) })
+    good('computer_snapshot', { app: 'WorkBuddy' })
+    good('computer_snapshot', { app: 'WorkBuddy', window: 1, root: '@s3:e5', depth: 10, full: true })
+    bad('computer_snapshot', { app: 'WorkBuddy', depth: 0 })
+    bad('computer_snapshot', { app: 'WorkBuddy', depth: 11 })
+    bad('computer_snapshot', { app: 'WorkBuddy', root: 'e5' })
+    good('computer_act', { ref: '@s3:e4', action: 'click' })
+    good('computer_act', { ref: '@s3:e9', action: 'type', text: 'hello', replace: true })
+    good('computer_act', { ref: '@s3:e9', action: 'scroll', direction: 'down', amount: 20 })
+    bad('computer_act', { ref: 'e3', action: 'click' })
+    bad('computer_act', { ref: '@s3:e4', action: 'click', force: true })
+    bad('computer_act', { ref: '@s3:e4', action: 'click', amount: 21 })
+    bad('computer_act', { ref: '@s3:e4', action: 'click', text: '' })
+    bad('computer_act', { ref: '@s3:e4', action: 'click', text: 'x'.repeat(2001) })
+    bad('computer_act', { ref: '@s3:e4', action: 'bogus' })
+    good('computer_key', { combo: 'cmd+n', app: 'WorkBuddy' })
+    bad('computer_key', { combo: 'cmd+n', app: '' })
+    good('computer_focus', { app: 'WorkBuddy' })
+    good('computer_focus', { app: 'WorkBuddy', window: 2 })
+    bad('computer_focus', {})
+    good('computer_wait_for', { app: 'WorkBuddy' })
+    good('computer_wait_for', { app: 'WorkBuddy', role: 'button', nameContains: '发送', gone: true, timeoutMs: 30000 })
+    bad('computer_wait_for', { app: 'WorkBuddy', timeoutMs: 99 })
+    bad('computer_wait_for', { app: 'WorkBuddy', timeoutMs: 30001 })
   })
 })
 
@@ -461,7 +565,10 @@ describe('CU_SCHEMAS hardening (M-1, M-2)', () => {
 // Task 8: the labels the overlay, the OS notification and the later UI tasks show for codes the service returns.
 describe('UI labels for codes (Task 8)', () => {
   it('every action kind and the continue gate has a short label', () => {
-    expect(CU_KIND_LABEL).toEqual({ click: '点击', move: '移动', drag: '拖动', scroll: '滚动', type: '输入', key: '按键', continue: '继续' })
+    expect(CU_KIND_LABEL).toEqual({
+      click: '点击', move: '移动', drag: '拖动', scroll: '滚动', type: '输入', key: '按键',
+      act: '操作', launch: '打开', focus: '聚焦', appKey: '按键', continue: '继续',
+    })
   })
   it('every setMode refusal, including stopped, has its own sentence', () => {
     const codes: CuSetModeCode[] = ['not_local', 'busy', 'unsupported', 'restart_required', 'no_physical', 'stopped', 'invalid_args']

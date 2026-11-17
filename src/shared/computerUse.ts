@@ -71,10 +71,20 @@ export function computerUseConflict(a: { mode: ComputerUseMode; perm: Permission
 
 // ───────────────────────── 工具名 ─────────────────────────
 
-export const COMPUTER_TOOLS = [
-  'computer_screenshot', 'computer_click', 'computer_move', 'computer_drag', 'computer_scroll',
-  'computer_type', 'computer_key', 'computer_wait', 'computer_cursor', 'computer_front_app',
+/** 第二版(控件树)的 8 个语义工具(spec §8.1);`computer_key` 的 schema 在下面扩展了可选 `app`。 */
+export const SEMANTIC_TOOLS = [
+  'computer_apps', 'computer_launch', 'computer_snapshot', 'computer_act', 'computer_key',
+  'computer_focus', 'computer_wait_for', 'computer_windows',
 ] as const
+
+/** v1 原 10 个坐标工具(物理后备,§6.9);`computer_key` 已经在 SEMANTIC_TOOLS 里,这里不重复。 */
+const V1_ONLY_TOOLS = [
+  'computer_screenshot', 'computer_click', 'computer_move', 'computer_drag', 'computer_scroll',
+  'computer_type', 'computer_wait', 'computer_cursor', 'computer_front_app',
+] as const
+
+/** 语义工具在前 + v1 原 10 个(`computer_key` 只出现一次)。 */
+export const COMPUTER_TOOLS = [...SEMANTIC_TOOLS, ...V1_ONLY_TOOLS] as const
 
 // ───────────────────────── 参数 schema(forgeMcp 注册工具、执行器校验共用) ─────────────────────────
 
@@ -82,16 +92,39 @@ const coord = z.number().int()
 const xy = z.object({ x: coord, y: coord })
 const mods = z.array(z.enum(['cmd', 'ctrl', 'alt', 'shift'])).max(4).optional()
 const visionCode = z.string().max(16).optional()
+/** 一个 app 名字或 bundleId(模型自己填的,不是坐标)。 */
+const appName = z.string().min(1).max(200)
+/** `@<snapId>:e<N>`,不接受裸 `eN`(spec §6.3)。 */
+const ref = z.string().regex(/^@s\d+:e\d+$/)
 
 /** 每个工具的参数形状(zod raw shape,forgeMcp 的 registerTool 直接用)。坐标都是最近一张全屏截图的像素。 */
 export const CU_SHAPES = {
+  computer_apps: {},
+  computer_launch: { app: appName, activate: z.boolean().optional() },
+  computer_snapshot: {
+    app: appName, window: z.number().int().optional(), root: ref.optional(),
+    depth: z.number().int().min(1).max(10).optional(), full: z.boolean().optional(),
+  },
+  computer_act: {
+    ref, action: z.enum(['click', 'menu', 'set', 'type', 'focus', 'toggle', 'expand', 'collapse', 'select', 'scroll', 'scrollTo', 'submit']),
+    value: z.string().optional(), text: z.string().min(1).max(2000).optional(), replace: z.boolean().optional(),
+    direction: z.enum(['up', 'down', 'left', 'right']).optional(), amount: z.number().int().min(1).max(20).optional(),
+    physical: z.boolean().optional(),
+  },
+  computer_key: { combo: z.string().min(1).max(64), app: appName.optional(), repeat: z.number().int().min(1).max(10).optional(), visionCode },
+  computer_focus: { app: appName, window: z.number().int().optional() },
+  computer_wait_for: {
+    app: appName, role: z.string().min(1).max(64).optional(), name: z.string().min(1).max(200).optional(),
+    nameContains: z.string().min(1).max(200).optional(), gone: z.boolean().optional(),
+    timeoutMs: z.number().int().min(100).max(30000).optional(),
+  },
+  computer_windows: { app: appName.optional() },
   computer_screenshot: { region: z.object({ x: z.number().int().min(0), y: z.number().int().min(0), w: z.number().int().min(1), h: z.number().int().min(1) }).optional() },
   computer_click: { x: coord, y: coord, button: z.enum(['left', 'right', 'middle']).optional(), clicks: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(), modifiers: mods, visionCode },
   computer_move: { x: coord, y: coord, visionCode },
   computer_drag: { from: xy, to: xy, button: z.literal('left').optional(), modifiers: mods, visionCode },
   computer_scroll: { x: coord, y: coord, dy: z.number().int().min(-30).max(30).optional(), dx: z.number().int().min(-30).max(30).optional(), visionCode },
   computer_type: { text: z.string().min(1).max(500), visionCode },
-  computer_key: { combo: z.string().min(1).max(64), repeat: z.number().int().min(1).max(10).optional(), visionCode },
   computer_wait: { ms: z.number().int().min(100).max(10000) },
   computer_cursor: {},
   computer_front_app: {},
@@ -101,6 +134,13 @@ const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[
 const strictObj = <T extends z.ZodRawShape>(shape: T) => z.object(shape).strict()
 
 export const CU_SCHEMAS = {
+  computer_apps: strictObj(CU_SHAPES.computer_apps),
+  computer_launch: strictObj(CU_SHAPES.computer_launch),
+  computer_snapshot: strictObj(CU_SHAPES.computer_snapshot),
+  computer_act: strictObj(CU_SHAPES.computer_act),
+  computer_focus: strictObj(CU_SHAPES.computer_focus),
+  computer_wait_for: strictObj(CU_SHAPES.computer_wait_for),
+  computer_windows: strictObj(CU_SHAPES.computer_windows),
   computer_screenshot: strictObj(CU_SHAPES.computer_screenshot),
   computer_click: strictObj(CU_SHAPES.computer_click),
   computer_move: strictObj(CU_SHAPES.computer_move),
@@ -264,7 +304,7 @@ export function comboKeycode(c: ParsedCombo): number {
 
 // ───────────────────────── app 分级 ─────────────────────────
 
-export type CuActionKind = 'click' | 'move' | 'drag' | 'scroll' | 'type' | 'key'
+export type CuActionKind = 'click' | 'move' | 'drag' | 'scroll' | 'type' | 'key' | 'act' | 'launch' | 'focus' | 'appKey'
 
 export const OWN_BUNDLE_PREFIX = 'com.zghua.myflowforge'
 
@@ -407,6 +447,13 @@ function pt(o: unknown): string | null {
   return `(${Math.round(x)}, ${Math.round(y)})`
 }
 
+/** 工具参数里的 app 字符串给卡标题用:和截图文字一样的脏数据,压空白 + 让不可见字符可见(不加 `<untrusted_screen_text>` 标签,这里不是给模型看的提示块)。 */
+function sanitizeAppText(s: string, max = 80): string {
+  const t = visibleText(collapseWhitespace(s))
+  const chars = Array.from(t)
+  return chars.length > max ? chars.slice(0, max).join('') + '…' : t
+}
+
 /**
  * 工具卡标题。会进 sessions.json 并广播给远程客户端,所以 computer_type 只写字数,绝不带文字(V11)。
  * 不是 computer_* 工具 → null。
@@ -416,6 +463,7 @@ export function computerToolLabel(toolName: string, input?: unknown): string | n
   if (!bare.startsWith('computer_')) return null
   const i = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>
   const withPt = (verb: string, p: string | null) => `电脑 · ${verb}${p ? ' ' + p : ''}`
+  const withApp = (verb: string) => `电脑 · ${verb}${typeof i.app === 'string' && i.app ? ' ' + sanitizeAppText(i.app) : ''}`
   switch (bare) {
     case 'computer_screenshot': return '电脑 · 截图'
     case 'computer_click': return withPt('点击', pt(i))
@@ -436,6 +484,19 @@ export function computerToolLabel(toolName: string, input?: unknown): string | n
     case 'computer_wait': return typeof i.ms === 'number' && Number.isFinite(i.ms) ? `电脑 · 等待 ${Math.round(i.ms)} ms` : '电脑 · 等待'
     case 'computer_cursor': return '电脑 · 光标位置'
     case 'computer_front_app': return '电脑 · 前台应用'
+    case 'computer_apps': return '电脑 · 应用列表'
+    case 'computer_windows': return '电脑 · 窗口列表'
+    case 'computer_launch': return withApp('打开')
+    case 'computer_snapshot': return withApp('读取')
+    case 'computer_focus': return withApp('聚焦')
+    case 'computer_wait_for': return withApp('等待')
+    case 'computer_act': {
+      // R2: built only from the CLI's own tool input (action) — no element name, no executor __label backfill.
+      const action = typeof i.action === 'string' ? i.action : undefined
+      if (action === 'type') return typeof i.text === 'string' ? `电脑 · 输入 ${Array.from(i.text).length} 字` : '电脑 · 输入'
+      const verb = action && (ACT_LABEL as Record<string, string>)[action]
+      return verb ? `电脑 · ${verb}` : '电脑 · 操作'
+    }
     default: return `电脑 · ${bare}`
   }
 }
@@ -447,6 +508,8 @@ export type CuErrCode =
   | 'own_window' | 'blocked_app' | 'secure_input' | 'denied' | 'timeout' | 'target_changed'
   | 'rate_limited' | 'step_limit' | 'vision_code' | 'helper_failed' | 'stopped'
   | 'invalid_args' | 'user_active' | 'unsupported' | 'restart_required'
+  // spec §8.3:控件树路径新增的码。uncertain/blocked_combo 虽然不是 forge-cu 的 errors.code,但走同一张表给模型看。
+  | 'stale_ref' | 'ambiguous_target' | 'not_found' | 'focus_failed' | 'app_unresponsive' | 'uncertain' | 'blocked_combo'
 
 /** 稳定码 → 给模型 / 用户的一句中文。码给日志和测试用。 */
 export const CU_ERR: Readonly<Record<CuErrCode, string>> = {
@@ -471,13 +534,21 @@ export const CU_ERR: Readonly<Record<CuErrCode, string>> = {
   user_active: '用户正在使用电脑 · 稍后再试',
   unsupported: '当前系统暂不支持电脑操作',
   restart_required: '需要重启应用后才能开启电脑操作',
+  stale_ref: 'ref 已过期 · 请重新 snapshot',
+  ambiguous_target: '匹配到多个控件 · 请提供更精确的条件',
+  not_found: '没有找到这个应用',
+  focus_failed: '切换前台失败',
+  app_unresponsive: '目标应用没有响应',
+  uncertain: '不确定这一步是否已经生效 · 不要重复，先重新 snapshot 确认',
+  blocked_combo: '这个组合键被拦截 · 不能发送',
 }
 
 // ───────────────────────── 动作视图(卡片 / 浮窗 / 记录共用) ─────────────────────────
 
 export interface CuActionView {
   kind: CuActionKind
-  app?: string
+  /** v1(坐标)动作:屏幕来源的纯文本 app 名。语义动作(act/launch/focus/appKey):结构化 {name,bundleId}(T5)。 */
+  app?: string | { name: string; bundleId: string }
   bundleId?: string
   at?: { x: number; y: number }
   to?: { x: number; y: number }
@@ -491,13 +562,39 @@ export interface CuActionView {
   text?: string
   combo?: string
   repeat?: number
+  /** 语义动作(act)落在哪个控件上(T5;卡片/elementPhrase 用,不是从模型参数来的) */
+  element?: { role: string; name?: string }
+  /** elementPhrase 用的动词(executor 回填,不是模型参数) */
+  actLabel?: string
 }
 
 // ───────────────────────── 界面上的码 → 文字(浮窗、系统通知、输入框、设置页共用) ─────────────────────────
 
 /** 动作类型的短标签。系统通知的正文只有它(不带文字内容、不带截图,§5.7)。 */
 export const CU_KIND_LABEL: Readonly<Record<CuActionKind | 'continue', string>> = {
-  click: '点击', move: '移动', drag: '拖动', scroll: '滚动', type: '输入', key: '按键', continue: '继续',
+  click: '点击', move: '移动', drag: '拖动', scroll: '滚动', type: '输入', key: '按键',
+  act: '操作', launch: '打开', focus: '聚焦', appKey: '按键', continue: '继续',
+}
+
+/** AX 角色(role) → 中文名(spec §10);没列到的角色一律「控件」。 */
+export const ROLE_LABEL: Readonly<Record<string, string>> = {
+  button: '按钮', link: '链接', textfield: '输入框', checkbox: '复选框', menuitem: '菜单项', tab: '标签页',
+  row: '行', cell: '单元格', list: '列表', combobox: '下拉框', switch: '开关', radiobutton: '单选框', slider: '滑块',
+}
+
+/** `computer_act` 的动作 → 中文动词(computerToolLabel、elementPhrase 共用)。 */
+export const ACT_LABEL: Readonly<Record<ActAction, string>> = {
+  click: '点击', menu: '右键菜单', set: '设置', type: '输入', focus: '聚焦', toggle: '切换', expand: '展开',
+  collapse: '收起', select: '选择', scroll: '滚动', scrollTo: '滚到可见', submit: '提交',
+}
+
+/** 「在 WorkBuddy 中点击 按钮「新建会话」」(spec §10)。app / element 缺省就省掉对应的部分。 */
+export function elementPhrase(view: CuActionView): string {
+  const app = typeof view.app === 'object' ? view.app : undefined
+  const lead = `${app ? `在 ${app.name} 中` : ''}${view.actLabel ?? ''}`
+  const role = view.element ? (ROLE_LABEL[view.element.role] ?? '控件') : ''
+  const name = view.element?.name ? `「${view.element.name}」` : ''
+  return [lead, role + name].filter(Boolean).join(' ')
 }
 
 /** `setMode` 的拒绝码。`stopped` = 开档途中被急停 / 锁屏 / 关档抢先。 */
@@ -553,6 +650,11 @@ export interface CuOverlayState {
 
 /** 送达枚举(全链路同名):只有 `not_delivered` 的 retry 才是 safe。 */
 export type Delivery = 'not_delivered' | 'uncertain' | 'delivered_unverified' | 'delivered_without_effect' | 'delivered_verified'
+
+/** 动作类错误必须带 delivery;没带(读操作等)或 `not_delivered` 才能安全重试,其余一律 unsafe(可能已经送达了)。 */
+export function retryOf(d: Delivery | undefined): 'safe' | 'unsafe' {
+  return d === undefined || d === 'not_delivered' ? 'safe' : 'unsafe'
+}
 
 /** proc_pidinfo(PROC_PIDTBSDINFO)取到的 pid + 启动时刻("<sec>.<usec>"):判断 ref 指向的还是不是原来那个进程。 */
 export interface Instance { pid: number; start: string }

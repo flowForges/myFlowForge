@@ -29,7 +29,7 @@ function keycaps(combo: string): string[] {
 
 function ActionRows({ a, reason }: { a: CuActionView; reason?: string }) {
   const rows: ReactNode[] = []
-  const app = screenName(a.app)
+  const app = screenName(typeof a.app === 'string' ? a.app : a.app?.name)
   if (app || a.bundleId) rows.push(<Row key="app" k="应用">{app}{app && a.bundleId ? ' · ' : ''}<Bundle id={a.bundleId} /></Row>)
   switch (a.kind) {
     case 'click': case 'move': {
