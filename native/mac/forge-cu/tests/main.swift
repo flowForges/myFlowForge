@@ -1043,6 +1043,14 @@ do {
   w1.web = true
   w1.onKeys = { f, s in f.nodes[1]!.attrs.value = s; f.focused = 2; return .success }
   eq(runChain(w1, 1, ActRequest(action: "type", text: "hi")).delivery, .deliveredUnverified, "focus left the field")
+
+  // web replace: range select-all delivered, then the keys hit a dead element → not retry-safe, stale_ref kept
+  let w2 = FakeActor().add(1, "AXTextField", value: "old", settable: ["AXSelectedTextRange"])
+  w2.web = true
+  w2.onKeys = { _, _ in .invalidElement }
+  let ow2 = runChain(w2, 1, ActRequest(action: "type", text: "new", replace: true))
+  check(ow2.delivery == .deliveredUnverified && ow2.code == "stale_ref" && w2.writes == ["set 1 AXSelectedTextRange", "keys 1"],
+        "range delivered, keys invalidElement → unverified + stale_ref")
 }
 
 // ── menu shortcuts + blocked combos ────────────────────────────────────────────────

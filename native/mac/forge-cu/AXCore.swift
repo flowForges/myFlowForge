@@ -622,6 +622,8 @@ protocol AXActor {
   func sleep(ms: Int)
   /// Web-area typing: AXFocused → wait for focus (≤500 ms) → Unicode key events to the pid in 32-UTF-16
   /// chunks, focus re-checked before each chunk. Replaces the current selection.
+  /// Contract: notSupported / invalidElement / apiDisabled only if NO chunk was posted; once any chunk
+  /// went out, a later failure must be reported as cannotComplete or other (ambiguous, never retry-safe).
   func typeViaKeys(_ e: E, _ text: String) -> AXResult
   /// An AXWebArea among the ancestors (browsers, Electron).
   func inWebArea(_ e: E) -> Bool
@@ -868,7 +870,7 @@ private final class ChainRunner<A: AXActor> {
           keys = self.a.typeViaKeys(self.e, text)
           return keys
         }
-        if replace && d == .notDelivered && keys != .invalidElement { return ("keys", self.afterPartial(keys)) }
+        if replace && d == .notDelivered { return ("keys", self.afterPartial(keys)) }  // range already moved
         return ("keys", d)
       }]
     }
