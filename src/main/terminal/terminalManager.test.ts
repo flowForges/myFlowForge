@@ -65,4 +65,40 @@ describe('TerminalManager', () => {
     expect(spawn.mock.results.every((r:any)=>r.value.killed)).toBe(true)
     expect(m.size()).toBe(0)
   })
+
+  // 从 Finder / Dock 起的 app 没有 LANG/LC_*(那是 Terminal.app 自己给 shell 补的),于是 zsh 跑在 C locale 里:
+  // 🔥 算 4 格、❯ 算 3 格,中文按字节显示成 <0081> 这种转义,行编辑整个错位。缺了就补一个 UTF-8 的字符集。
+  describe('locale: a GUI-launched app has no LANG, the shell must still get a UTF-8 charset', () => {
+    const envOf = (spawn: any) => spawn.mock.calls[0][2].env as NodeJS.ProcessEnv
+    it('macOS with no LANG / LC_ALL / LC_CTYPE gets LC_CTYPE=UTF-8 (LANG untouched so messages keep their language)', () => {
+      const { m, spawn } = mk({ env: { SHELL:'/bin/zsh' }, platform: 'darwin' })
+      m.create({ termId:'t1', cwd:'/x', cols:80, rows:24 })
+      expect(envOf(spawn).LC_CTYPE).toBe('UTF-8')
+      expect(envOf(spawn).LANG).toBeUndefined()
+    })
+    it('Linux with no locale gets C.UTF-8 (a bare "UTF-8" is not a locale there)', () => {
+      const { m, spawn } = mk({ env: { SHELL:'/bin/zsh' }, platform: 'linux' })
+      m.create({ termId:'t1', cwd:'/x', cols:80, rows:24 })
+      expect(envOf(spawn).LC_CTYPE).toBe('C.UTF-8')
+    })
+    it('an empty-string LANG counts as missing', () => {
+      const { m, spawn } = mk({ env: { SHELL:'/bin/zsh', LANG:'' }, platform: 'darwin' })
+      m.create({ termId:'t1', cwd:'/x', cols:80, rows:24 })
+      expect(envOf(spawn).LC_CTYPE).toBe('UTF-8')
+    })
+    it('any locale the user already has is left exactly as it is (even an explicit C)', () => {
+      for (const env of [{ LANG:'zh_CN.UTF-8' }, { LC_ALL:'en_US.UTF-8' }, { LC_CTYPE:'C' }, { LANG:'C' }]) {
+        const { m, spawn } = mk({ env: { SHELL:'/bin/zsh', ...env }, platform: 'darwin' })
+        m.create({ termId:'t1', cwd:'/x', cols:80, rows:24 })
+        const got = envOf(spawn)
+        for (const [k, v] of Object.entries(env)) expect(got[k], k).toBe(v)
+        if (!('LC_CTYPE' in env)) expect(got.LC_CTYPE, JSON.stringify(env)).toBeUndefined()
+      }
+    })
+    it('Windows is left alone (no POSIX locale variables there)', () => {
+      const { m, spawn } = mk({ env: { COMSPEC:'C:\\Windows\\System32\\cmd.exe' }, platform: 'win32' })
+      m.create({ termId:'t1', cwd:'/x', cols:80, rows:24 })
+      expect(envOf(spawn).LC_CTYPE).toBeUndefined()
+    })
+  })
 })
