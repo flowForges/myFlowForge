@@ -10,7 +10,11 @@ const SRC_DIR = 'native/mac/forge-cu'
 const OUT = 'build/native/darwin/forge-cu'
 
 type Step = { cmd: string; args: string[]; cwd?: string }
-async function planner(): Promise<{ planSwiftBuild: (o: { root: string }) => Step[]; HELPER_SOURCES: string[] }> {
+async function planner(): Promise<{
+  planSwiftBuild: (o: { root: string }) => Step[]
+  planSelfTest: (o: { root: string; arch?: string }) => Step[]
+  HELPER_SOURCES: string[]
+}> {
   return import(pathToFileURL(join(ROOT, 'scripts/build-cu-helper.mjs')).href)
 }
 
@@ -40,7 +44,7 @@ describe('planSwiftBuild', () => {
     const sources = x.args.slice(4, -2)
     expect(a.args.slice(4, -2)).toEqual(sources)
     expect(sources).toEqual(HELPER_SOURCES)
-    for (const f of ['main', 'Capture', 'Input', 'Windows', 'Status', 'Exec', 'Core']) {
+    for (const f of ['main', 'Capture', 'Input', 'Windows', 'Status', 'Exec', 'Core', 'AXCore']) {
       expect(sources).toContain(`${SRC_DIR}/${f}.swift`)
     }
     expect(sources.some((s) => s.includes('/tests/'))).toBe(false)
@@ -53,6 +57,20 @@ describe('planSwiftBuild', () => {
     expect(all).toMatch(/responsibility_spawnattrs_setdisclaim/)
     expect(all).toMatch(/POSIX_SPAWN_SETEXEC/)
     expect(all).toMatch(/SIGUSR1/)
+  })
+
+  it('the self-test links only the pure-logic files Core.swift + AXCore.swift and the test harness', async () => {
+    const { planSelfTest } = await planner()
+    const [compile, runIt] = planSelfTest({ root: ROOT, arch: 'arm64' })
+    expect(compile.cmd).toBe('xcrun')
+    const swift = compile.args.filter((a) => a.endsWith('.swift'))
+    expect(swift).toEqual([`${SRC_DIR}/Core.swift`, `${SRC_DIR}/AXCore.swift`, `${SRC_DIR}/tests/main.swift`])
+    expect(runIt.cmd).toBe(compile.args.at(-1))
+    // the pure-logic files never import the AX / event frameworks
+    for (const f of ['Core', 'AXCore']) {
+      const imports = [...readFileSync(join(ROOT, `${SRC_DIR}/${f}.swift`), 'utf8').matchAll(/^\s*import\s+(\w+)/gm)].map((m) => m[1])
+      for (const m of imports) expect(['Foundation', 'CoreGraphics', 'ImageIO'], `${f}.swift imports ${m}`).toContain(m)
+    }
   })
 
   it('the helper links only the allowed system frameworks', async () => {

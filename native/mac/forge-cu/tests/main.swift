@@ -1,4 +1,4 @@
-// forge-cu self-test. Compiled ONLY with Core.swift (Foundation / CoreGraphics / ImageIO): this binary
+// forge-cu self-test. Compiled ONLY with Core.swift + AXCore.swift (Foundation / CoreGraphics / ImageIO): this binary
 // has no code that posts input events, captures the screen or touches TCC, so running it is safe.
 // Run: node scripts/build-cu-helper.mjs --self-test
 import Foundation
@@ -373,6 +373,321 @@ do {
   eq(clampInt(2.6, 1, 3), 3, "rounds")
   eq(clampInt(nil, 1, 3), 1, "missing → lo")
   eq(clampInt(nil, -5, 5), 0, "missing → 0 when in range")
+}
+
+// ── AX core: fake tree (AXCore.swift) ───────────────────────────────────────────
+final class FakeSource: AXSource {
+  struct Node { var attrs: NodeAttrs; var kids: [Int]; var changed = false; var kidsTimeout = false }
+  var nodes: [Int: Node] = [:]
+  var attrReads = 0
+  func attrs(_ e: Int, deadline: Deadline) -> NodeAttrs? { attrReads += 1; return nodes[e]?.attrs }
+  func children(_ e: Int, role: String, deadline: Deadline) -> (items: [Int], changed: Bool)? {
+    guard let n = nodes[e], !n.kidsTimeout else { return nil }
+    return (n.kids, n.changed)
+  }
+  func key(_ e: Int) -> AnyHashable { AnyHashable(e) }
+  @discardableResult func add(_ id: Int, _ role: String, subrole: String? = nil, title: String? = nil, value: String? = nil,
+                              description: String? = nil, domId: String? = nil, actions: [String] = [], kids: [Int] = []) -> Int {
+    var a = NodeAttrs()
+    a.role = role; a.subrole = subrole; a.title = title; a.value = value; a.description = description
+    a.domIdentifier = domId; a.actions = actions
+    nodes[id] = Node(attrs: a, kids: kids)
+    return id
+  }
+}
+func attrs(_ role: String, subrole: String? = nil, title: String? = nil, value: String? = nil, description: String? = nil,
+           placeholder: String? = nil, titleUI: String? = nil, actions: [String] = [], settable: Set<String> = []) -> NodeAttrs {
+  var a = NodeAttrs()
+  a.role = role; a.subrole = subrole; a.title = title; a.value = value; a.description = description
+  a.placeholder = placeholder; a.titleUIText = titleUI; a.actions = actions; a.settable = settable
+  return a
+}
+let farFuture = Deadline(ms: 60_000, now: { 0 })
+
+// ── AX core: deadline (injectable clock, never sleeps) ──────────────────────────
+do {
+  var t = 100.0
+  let d = Deadline(ms: 1000, now: { t })
+  eq(d.remaining, 1.0, "full remaining")
+  eq(d.readTimeout(), Float(0.25), "read slice capped at 0.25 s")
+  eq(d.writeTimeout(), Float(0.5), "write = remaining / 2")
+  t = 100.7
+  eq(d.readTimeout(), Float(0.25), "read slice still 0.25 s")
+  eq(d.writeTimeout(), Float(0.25), "write floored at 0.25 s")
+  t = 100.9
+  check(abs(d.readTimeout() - 0.1) < 0.0001, "read = remaining when < 0.25")
+  check(abs(d.writeTimeout() - 0.1) < 0.0001, "write never exceeds remaining")
+  check(!d.expired, "not yet expired")
+  t = 102
+  eq(d.remaining, 0, "remaining never negative")
+  check(d.expired, "expired")
+  check(d.readTimeout() > 0, "an expired deadline never yields 0 (0 = the system default timeout)")
+}
+
+// ── AX core: roles ──────────────────────────────────────────────────────────────
+do {
+  eq(normalizeRole(role: "AXButton", subrole: nil), "button", "AXButton")
+  eq(normalizeRole(role: "AXGroup", subrole: "AXLandmarkMain"), "main", "landmark subrole wins")
+  eq(normalizeRole(role: "AXTextField", subrole: nil), "textfield", "AXTextField")
+  eq(normalizeRole(role: "AXWebArea", subrole: nil), "webarea", "AXWebArea")
+  eq(normalizeRole(role: "AXSecureTextField", subrole: nil), "textfield", "secure field")
+  eq(normalizeRole(role: "AXPopUpButton", subrole: nil), "combobox", "popup")
+  eq(normalizeRole(role: "AXRow", subrole: "AXOutlineRow"), "treeitem", "outline row")
+  eq(normalizeRole(role: "AXCheckBox", subrole: "AXToggle"), "switch", "toggle subrole")
+  eq(normalizeRole(role: "AXCheckBox", subrole: "AXToggleButton"), "checkbox", "toggle button on a checkbox stays checkbox")
+  eq(normalizeRole(role: "AXButton", subrole: "AXToggleButton"), "button", "toggle button")
+  eq(normalizeRole(role: "AXButton", subrole: "AXCloseButton"), "button", "window button")
+  eq(normalizeRole(role: "AXGroup", subrole: "AXApplicationDialog"), "dialog", "aria dialog")
+  eq(normalizeRole(role: "AXWhatever", subrole: nil), "unknown", "unknown role")
+}
+
+// ── AX core: names ──────────────────────────────────────────────────────────────
+do {
+  eq(displayName(attrs("AXButton", title: "T", description: "D", titleUI: "Label"), childTexts: ["c"]) ?? "", "Label", "titleUIElement first")
+  eq(displayName(attrs("AXButton", title: "T", description: "D"), childTexts: ["c"]) ?? "", "T", "then title")
+  eq(displayName(attrs("AXStaticText", value: "hello", description: "D"), childTexts: []) ?? "", "hello", "static text value")
+  eq(displayName(attrs("AXButton", title: "", description: "D"), childTexts: ["c"]) ?? "", "D", "empty title skipped, then description")
+  eq(displayName(attrs("AXButton", actions: ["AXPress"]), childTexts: ["a", "b", "a", "c", "d", "e", "f"]) ?? "", "a b c d e",
+     "interactive: ≤5 unique child texts")
+  check(displayName(attrs("AXGroup"), childTexts: ["a"]) == nil, "non-interactive group: no child label")
+  eq(displayName(attrs("AXTextField", placeholder: "Search"), childTexts: []) ?? "", "Search", "placeholder last")
+  check(displayName(attrs("AXCheckBox", title: "1", value: "1"), childTexts: []) == nil, "checkbox name == value is not a name")
+  eq(displayName(attrs("AXCheckBox", title: "Wrap", value: "1"), childTexts: []) ?? "", "Wrap", "checkbox real title kept")
+  check(displayName(attrs("AXTextField", title: "abc", value: "abc"), childTexts: []) == nil, "textfield name == value dropped")
+}
+
+// ── AX core: action vocabulary / interactive ─────────────────────────────────────
+do {
+  eq(actionVocab(attrs("AXButton", actions: ["AXPress", "AXShowMenu", "AXScrollToVisible"])), ["click", "menu"], "press + menu")
+  eq(actionVocab(attrs("AXSlider", actions: ["AXIncrement", "AXDecrement"])), ["set"], "increment → set")
+  eq(actionVocab(attrs("AXTextField", settable: ["AXValue", "AXFocused", "AXSelectedText"])), ["set", "type", "focus"], "text field")
+  eq(actionVocab(attrs("AXRow", settable: ["AXExpanded"])), ["expand"], "settable expanded")
+  eq(actionVocab(attrs("AXLink", actions: ["AXOpen", "AXConfirm"])), ["click"], "open/confirm → one click")
+  check(isInteractive(role: "button", vocab: []), "button role is interactive")
+  check(isInteractive(role: "group", vocab: ["click"]), "a group with click is interactive")
+  check(!isInteractive(role: "group", vocab: ["menu", "focus"]), "menu/focus alone don't make a node interactive")
+  check(!isInteractive(role: "statictext", vocab: []), "static text is not interactive")
+}
+
+// ── AX core: walker ─────────────────────────────────────────────────────────────
+do {
+  // secure field never carries a value, even when the source hands one over
+  let s = FakeSource()
+  s.add(1, "AXWindow", title: "W", kids: [2, 3])
+  s.add(2, "AXSecureTextField", value: "hunter2", description: "Password")
+  s.add(3, "AXTextField", value: "plain", description: "User")
+  let r = walk(s, root: 1, budget: Budget(maxDepth: 10), deadline: farFuture, interactiveOnly: true, skeleton: false)
+  check(r.complete, "small tree complete")
+  let pw = r.nodes.first { $0.0.name == "Password" }
+  check(pw != nil, "secure field listed")
+  check(pw?.0.value == nil, "secure field value dropped")
+  eq(r.nodes.first { $0.0.name == "User" }?.0.value ?? "", "plain", "plain field value kept")
+  check(pw?.0.ref != nil && pw?.1 == 2, "interactive node gets a ref and its element")
+  eq(r.nodes.first?.0.role ?? "", "window", "root first (pre-order)")
+}
+do {
+  // empty anonymous groups don't consume logical depth
+  let s = FakeSource()
+  s.add(1, "AXWindow", title: "W", kids: [2]); s.add(2, "AXGroup", kids: [3]); s.add(3, "AXGroup", kids: [4])
+  s.add(4, "AXGroup", kids: [5]); s.add(5, "AXButton", title: "Go", actions: ["AXPress"])
+  let r = walk(s, root: 1, budget: Budget(maxDepth: 2), deadline: farFuture, interactiveOnly: true, skeleton: false)
+  check(r.nodes.contains { $0.0.name == "Go" && $0.0.role == "button" }, "button under 3 anonymous groups at maxDepth 2")
+  check(r.complete, "transparent chain walk complete")
+  check(!r.nodes.contains { $0.0.role == "group" }, "interactiveOnly drops nameless groups")
+  // a named group does consume depth
+  s.add(2, "AXGroup", title: "A", kids: [3]); s.add(3, "AXGroup", title: "B", kids: [4]); s.add(4, "AXGroup", title: "C", kids: [5])
+  let r2 = walk(s, root: 1, budget: Budget(maxDepth: 2), deadline: farFuture, interactiveOnly: true, skeleton: false)
+  check(!r2.nodes.contains { $0.0.name == "Go" }, "named groups consume depth: button cut")
+  let b = r2.nodes.first { $0.0.name == "B" }?.0
+  check(b?.truncated == true && b?.childrenCount == 1, "boundary node reports childrenCount + truncated")
+}
+do {
+  // budget truncation: 100-node tree, maxNodes 10
+  let s = FakeSource()
+  s.add(0, "AXWindow", title: "W", kids: Array(1...99))
+  for i in 1...99 { s.add(i, "AXButton", title: "b\(i)", actions: ["AXPress"]) }
+  var b = Budget(maxDepth: 10); b.maxNodes = 10
+  let r = walk(s, root: 0, budget: b, deadline: farFuture, interactiveOnly: true, skeleton: false)
+  check(!r.complete, "node budget → incomplete")
+  check(r.nodes.count <= 10, "≤ 10 nodes (got \(r.nodes.count))")
+  check(r.nodes.count > 0, "partial result returned")
+  eq(Budget(maxDepth: 3).maxNodes, 50_000, "default node budget")
+  eq(Budget(maxDepth: 3).maxChildren, 4096, "default children budget")
+  eq(Budget(maxDepth: 3).maxField, 65_536, "default field budget")
+  eq(Budget(maxDepth: 3).maxDepthHard, 50, "hard depth")
+  eq(Budget(maxDepth: 99).maxDepth, 50, "logical depth clamped to the hard depth")
+  // children per node
+  var bc = Budget(maxDepth: 10); bc.maxChildren = 5
+  let rc = walk(s, root: 0, budget: bc, deadline: farFuture, interactiveOnly: true, skeleton: false)
+  check(!rc.complete && rc.nodes.first?.0.truncated == true, "children budget → truncated, incomplete")
+  eq(rc.nodes.filter { $0.0.role == "button" }.count, 5, "only 5 children walked")
+  // deadline: clock already past → partial, never a hang
+  var t = 0.0
+  let d = Deadline(ms: 10, now: { t })
+  t = 1
+  let rd = walk(s, root: 0, budget: Budget(maxDepth: 10), deadline: d, interactiveOnly: true, skeleton: false)
+  check(!rd.complete, "expired deadline → incomplete")
+  // field cap
+  var bf = Budget(maxDepth: 10); bf.maxField = 4
+  let sf = FakeSource()
+  sf.add(1, "AXButton", title: "abcdefgh", actions: ["AXPress"])
+  eq(walk(sf, root: 1, budget: bf, deadline: farFuture, interactiveOnly: true, skeleton: false).nodes.first?.0.name ?? "", "abcd", "field capped")
+}
+do {
+  // cycle: a child points back to an ancestor
+  let s = FakeSource()
+  s.add(1, "AXWindow", title: "W", kids: [2]); s.add(2, "AXGroup", title: "G", kids: [3])
+  s.add(3, "AXButton", title: "X", actions: ["AXPress"], kids: [1, 2])
+  let r = walk(s, root: 1, budget: Budget(maxDepth: 10), deadline: farFuture, interactiveOnly: false, skeleton: false)
+  check(r.complete, "cycle does not make the walk incomplete")
+  eq(r.nodes.count, 3, "each node once")
+  eq(Set(r.nodes.compactMap { $0.0.name }).count, 3, "no duplicates")
+}
+do {
+  // children changed while reading
+  let s = FakeSource()
+  s.add(1, "AXWindow", title: "W", kids: [2]); s.add(2, "AXList", title: "L", kids: [3])
+  s.add(3, "AXButton", title: "X", actions: ["AXPress"])
+  s.nodes[2]!.changed = true
+  let r = walk(s, root: 1, budget: Budget(maxDepth: 10), deadline: farFuture, interactiveOnly: false, skeleton: false)
+  check(r.nodes.first { $0.0.name == "L" }?.0.truncated == true, "changed children → truncated")
+  check(!r.complete, "changed children → incomplete")
+  check(r.nodes.contains { $0.0.name == "X" }, "children read before the change are still walked")
+  s.nodes[2]!.changed = false; s.nodes[2]!.kidsTimeout = true
+  let r2 = walk(s, root: 1, budget: Budget(maxDepth: 10), deadline: farFuture, interactiveOnly: false, skeleton: false)
+  check(!r2.complete && r2.nodes.first { $0.0.name == "L" }?.0.truncated == true, "children timeout → truncated, incomplete")
+}
+do {
+  // skeleton: boundary containers at depth 3 are drillable
+  let s = FakeSource()
+  s.add(1, "AXWindow", title: "W", kids: [2]); s.add(2, "AXSplitGroup", title: "S", kids: [3])
+  s.add(3, "AXScrollArea", title: "Side", kids: [4]); s.add(4, "AXList", description: "Chats", kids: [5, 6, 7])
+  s.add(5, "AXStaticText", value: "alpha"); s.add(6, "AXStaticText", value: "beta"); s.add(7, "AXStaticText", value: "gamma")
+  let r = walk(s, root: 1, budget: Budget(maxDepth: 3), deadline: farFuture, interactiveOnly: true, skeleton: true)
+  let list = r.nodes.first { $0.0.role == "list" }
+  check(list != nil, "depth-3 list listed")
+  eq(list?.0.depth ?? -1, 3, "list at depth 3")
+  check(list?.0.ref != nil && list?.1 == 4, "boundary container has a drillable ref")
+  eq(list?.0.childrenCount ?? -1, 3, "childrenCount")
+  check(list?.0.truncated == true, "boundary truncated")
+  check(!r.nodes.contains { $0.0.name == "alpha" }, "children below the boundary not listed")
+  // nameless boundary container is named from ≤5 child texts
+  s.add(4, "AXList", kids: [5, 6, 7])
+  let r2 = walk(s, root: 1, budget: Budget(maxDepth: 3), deadline: farFuture, interactiveOnly: true, skeleton: true)
+  eq(r2.nodes.first { $0.0.role == "list" }?.0.name ?? "", "alpha beta gamma", "boundary name from child texts")
+  // without skeleton the boundary gets no ref
+  let r3 = walk(s, root: 1, budget: Budget(maxDepth: 3), deadline: farFuture, interactiveOnly: false, skeleton: false)
+  check(r3.nodes.first { $0.0.role == "list" }?.0.ref == nil, "full-mode boundary: no anchor ref")
+}
+do {
+  // refs: local eN in pre-order; bounds + offscreen against the clip
+  let s = FakeSource()
+  s.add(1, "AXWindow", title: "W", kids: [2, 3]); s.add(2, "AXButton", title: "In", actions: ["AXPress"])
+  s.add(3, "AXButton", title: "Out", actions: ["AXPress"])
+  s.nodes[1]!.attrs.frame = CGRect(x: 0, y: 0, width: 100, height: 100)
+  s.nodes[2]!.attrs.frame = CGRect(x: 10, y: 10, width: 20, height: 20)
+  s.nodes[3]!.attrs.frame = CGRect(x: 500, y: 10, width: 20, height: 20)
+  let r = walk(s, root: 1, budget: Budget(maxDepth: 10), deadline: farFuture, interactiveOnly: true, skeleton: false)
+  eq(r.nodes.compactMap { $0.0.ref }, ["e1", "e2"], "local refs in pre-order")
+  eq(r.nodes.first { $0.0.name == "In" }?.0.offscreen ?? true, false, "inside the window")
+  eq(r.nodes.first { $0.0.name == "Out" }?.0.offscreen ?? false, true, "outside the window clip")
+  eq(r.nodes.first { $0.0.name == "In" }?.0.bounds ?? .zero, CGRect(x: 10, y: 10, width: 20, height: 20), "bounds")
+  s.nodes[2]!.attrs.enabled = false; s.nodes[2]!.attrs.focused = true
+  let r2 = walk(s, root: 1, budget: Budget(maxDepth: 10), deadline: farFuture, interactiveOnly: true, skeleton: false)
+  eq(r2.nodes.first { $0.0.name == "In" }?.0.states ?? [], ["disabled", "focused"], "states")
+}
+
+// ── AX core: ref table ──────────────────────────────────────────────────────────
+do {
+  check(RefTable<Int>.parse("@s3:e12").map { $0.snap == 3 && $0.n == 12 } == true, "parse @s3:e12")
+  check(RefTable<Int>.parse("e12") == nil, "bare eN rejected")
+  check(RefTable<Int>.parse("@s3:e") == nil, "missing n rejected")
+  check(RefTable<Int>.parse("@s:e1") == nil, "missing snap rejected")
+  check(RefTable<Int>.parse("@s3:e12x") == nil, "trailing garbage rejected")
+  check(RefTable<Int>.parse("@s3:e+1") == nil, "sign rejected")
+  let inst = Instance(pid: 42, start: "100.5")
+  let fp = Fingerprint(role: "button", subrole: nil, name: "Go", description: nil, nativeId: nil, uniqueAtCapture: true)
+  func node(_ ref: String?) -> SnapNode {
+    SnapNode(ref: ref, depth: 1, role: "button", name: "Go", value: nil, states: [], actions: ["click"], childrenCount: nil,
+             truncated: false, bounds: nil, offscreen: false)
+  }
+  let t = RefTable<Int>()
+  var ids: [String] = []
+  for i in 0..<9 { ids.append(t.put(instance: inst, window: 7, nodes: [(node("e1"), 100 + i, fp), (node(nil), nil, fp)])) }
+  eq(ids.first ?? "", "s1", "first snapshot id")
+  eq(Set(ids).count, 9, "distinct snapshot ids")
+  check(t.get("@\(ids[0]):e1") == nil, "oldest of 9 evicted (LRU 8)")
+  let last = t.get("@\(ids[8]):e1")
+  eq(last?.element ?? -1, 108, "newest kept")
+  eq(last?.instance ?? Instance(pid: 0, start: ""), inst, "record instance")
+  eq(last?.window ?? -1, 7, "record window")
+  eq(last?.fingerprint ?? fp, fp, "record fingerprint")
+  check(t.get("@\(ids[8]):e2") == nil, "unknown ref → nil")
+  check(t.get("e1") == nil, "bare ref → nil")
+  check(t.get("@\(ids[1]):e1") != nil, "8 kept")
+  t.rebind("@\(ids[8]):e1", to: 555)
+  eq(t.get("@\(ids[8]):e1")?.element ?? -1, 555, "rebind")
+  eq(RefTable<Int>.qualify(snapId: "s4", local: "e2"), "@s4:e2", "qualify")
+}
+
+// ── AX core: strict resolve ─────────────────────────────────────────────────────
+do {
+  let inst = Instance(pid: 42, start: "100.5")
+  func world() -> FakeSource {
+    let s = FakeSource()
+    s.add(1, "AXWindow", title: "W", kids: [2, 3])
+    s.add(2, "AXButton", title: "Send", domId: "send", actions: ["AXPress"])
+    s.add(3, "AXButton", title: "Other", actions: ["AXPress"])
+    return s
+  }
+  let fp = Fingerprint(role: "button", subrole: nil, name: "Send", description: nil, nativeId: "send", uniqueAtCapture: true)
+  let rec = RefRecord<Int>(element: 2, instance: inst, window: 7, fingerprint: fp, bounds: nil)
+  func isOk(_ o: ResolveOutcome<Int>, _ e: Int) -> Bool { if case .ok(let x) = o { return x == e }; return false }
+  func isStale(_ o: ResolveOutcome<Int>) -> Bool { if case .stale = o { return true }; return false }
+  func isAmb(_ o: ResolveOutcome<Int>) -> Bool { if case .ambiguous = o { return true }; return false }
+  func isTimeout(_ o: ResolveOutcome<Int>) -> Bool { if case .timeout = o { return true }; return false }
+
+  let s = world()
+  check(isOk(resolveRef(s, rec: rec, liveInstance: inst, windowRoot: 1, deadline: farFuture), 2), "fast path: same identity → ok")
+  check(isStale(resolveRef(s, rec: rec, liveInstance: Instance(pid: 42, start: "200.0"), windowRoot: 1, deadline: farFuture)),
+        "instance start changed → stale")
+  check(isStale(resolveRef(s, rec: rec, liveInstance: nil, windowRoot: 1, deadline: farFuture)), "process gone → stale")
+  // element died, a look-alike exists once → rebind
+  let s1 = world(); s1.nodes[2] = nil; s1.add(9, "AXButton", title: "Send", domId: "send", actions: ["AXPress"]); s1.nodes[1]!.kids = [9, 3]
+  check(isOk(resolveRef(s1, rec: rec, liveInstance: inst, windowRoot: 1, deadline: farFuture), 9), "dead + 1 match → ok (rebound)")
+  // dead, no match
+  let s0 = world(); s0.nodes[2] = nil; s0.nodes[1]!.kids = [3]
+  check(isStale(resolveRef(s0, rec: rec, liveInstance: inst, windowRoot: 1, deadline: farFuture)), "dead + 0 matches → stale")
+  // dead, two matches
+  let s2 = world(); s2.nodes[2] = nil
+  s2.add(8, "AXButton", title: "Send", domId: "send", actions: ["AXPress"]); s2.add(9, "AXButton", title: "Send", domId: "send", actions: ["AXPress"])
+  s2.nodes[1]!.kids = [8, 9, 3]
+  check(isAmb(resolveRef(s2, rec: rec, liveInstance: inst, windowRoot: 1, deadline: farFuture)), "dead + 2 matches → ambiguous")
+  // dead, re-walk times out
+  let st = world(); st.nodes[2] = nil; st.nodes[1]!.kidsTimeout = true
+  check(isTimeout(resolveRef(st, rec: rec, liveInstance: inst, windowRoot: 1, deadline: farFuture)), "dead + re-walk timeout → timeout")
+  // not unique at capture → no re-walk
+  let notUnique = RefRecord<Int>(element: 2, instance: inst, window: 7,
+                                 fingerprint: Fingerprint(role: "button", subrole: nil, name: "Send", description: nil, nativeId: "send", uniqueAtCapture: false),
+                                 bounds: nil)
+  check(isStale(resolveRef(s1, rec: notUnique, liveInstance: inst, windowRoot: 1, deadline: farFuture)), "not unique + dead → stale")
+  // fast path: role changed under the same element → not accepted as-is
+  let sr = world(); sr.nodes[2]!.attrs.role = "AXStaticText"
+  check(!isOk(resolveRef(sr, rec: rec, liveInstance: inst, windowRoot: 1, deadline: farFuture), 2), "role mismatch is never ok")
+  // value and bounds never take part in identity
+  let sv = world(); sv.nodes[2]!.attrs.value = "changed"; sv.nodes[2]!.attrs.frame = CGRect(x: 1, y: 2, width: 3, height: 4)
+  check(isOk(resolveRef(sv, rec: rec, liveInstance: inst, windowRoot: 1, deadline: farFuture), 2), "value / bounds ignored")
+  // capture census: walkDetailed marks uniqueness only from an exhaustive whole-window walk
+  let sc = world()
+  sc.add(4, "AXButton", title: "Other", actions: ["AXPress"]); sc.nodes[1]!.kids = [2, 3, 4]
+  let w = walkDetailed(sc, root: 1, budget: Budget(maxDepth: 10), deadline: farFuture, interactiveOnly: true, skeleton: false)
+  check(w.exhaustive, "whole small window walked exhaustively")
+  let fps = markUnique(w.nodes.map { $0.2 }, census: w.census)
+  eq(fps.filter { $0.name == "Send" }.map { $0.uniqueAtCapture }, [true], "Send unique")
+  eq(fps.filter { $0.name == "Other" }.map { $0.uniqueAtCapture }, [false, false], "twin Other not unique")
+  eq(markUnique(w.nodes.map { $0.2 }, census: nil).filter { $0.uniqueAtCapture }.count, 0, "no census → nothing unique")
+  let wcut = walkDetailed(sc, root: 1, budget: Budget(maxDepth: 0), deadline: farFuture, interactiveOnly: true, skeleton: false)
+  check(!wcut.exhaustive, "depth-cut walk is not exhaustive")
 }
 
 print("forge-cu self-test: \(passed) passed, \(failures) failed")

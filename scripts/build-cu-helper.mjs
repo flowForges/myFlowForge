@@ -6,8 +6,9 @@
 //   node scripts/build-cu-helper.mjs              dev: no swiftc → one line, exit 0
 //   node scripts/build-cu-helper.mjs --require    dist: no swiftc / a missing arch → exit 1
 //   node scripts/build-cu-helper.mjs --self-test  compile + run the pure-logic self-test (host arch).
-//                                                 That binary links Core.swift only: it cannot post
-//                                                 input, capture the screen or touch TCC.
+//                                                 That binary links Core.swift + AXCore.swift only: it
+//                                                 cannot post input, capture the screen, touch TCC or
+//                                                 make an AX call.
 //
 // Non-darwin hosts do nothing (the helper is mac-only; other platforms get unsupportedDriver).
 import { spawnSync } from 'node:child_process'
@@ -16,7 +17,7 @@ import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const SRC = 'native/mac/forge-cu'
-export const HELPER_SOURCES = ['main', 'Core', 'Capture', 'Input', 'Windows', 'Status', 'Exec'].map((f) => `${SRC}/${f}.swift`)
+export const HELPER_SOURCES = ['main', 'Core', 'AXCore', 'Capture', 'Input', 'Windows', 'Status', 'Exec'].map((f) => `${SRC}/${f}.swift`)
 export const HELPER_OUT = 'build/native/darwin/forge-cu'
 const TMP = 'build/native/tmp'
 const MIN_OS = 'macos12.0'
@@ -36,11 +37,11 @@ export function planSwiftBuild({ root }) {
   ]
 }
 
-/** Pure: compile the self-test (Core.swift + tests/main.swift) for the host arch. */
+/** Pure: compile the self-test (Core.swift + AXCore.swift + tests/main.swift) for the host arch. */
 export function planSelfTest({ root, arch = process.arch === 'arm64' ? 'arm64' : 'x86_64' }) {
   const out = `${TMP}/forge-cu-selftest`
   return [
-    { cmd: 'xcrun', args: ['swiftc', '-target', `${arch}-apple-${MIN_OS}`, `${SRC}/Core.swift`, `${SRC}/tests/main.swift`, '-o', out], cwd: root },
+    { cmd: 'xcrun', args: ['swiftc', '-target', `${arch}-apple-${MIN_OS}`, `${SRC}/Core.swift`, `${SRC}/AXCore.swift`, `${SRC}/tests/main.swift`, '-o', out], cwd: root },
     { cmd: out, args: [], cwd: root },
   ]
 }
