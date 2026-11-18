@@ -27,6 +27,7 @@ export const PREVIEW_RING = 300
 export const PREVIEW_SESSIONS = 8
 const SAFE_ID = /^[A-Za-z0-9_-]{1,128}$/
 const THUMB_NAME = /^\d{8}\.jpg$/
+const DELIVERIES: ReadonlySet<string> = new Set(['not_delivered', 'uncertain', 'delivered_unverified', 'delivered_without_effect', 'delivered_verified'])
 const sha8 = (s: string) => createHash('sha256').update(s).digest('hex').slice(0, 8)
 
 /** Only these fields are ever written. `textPreview` is deliberately absent (V11). */
@@ -37,6 +38,13 @@ function toDisk(e: CuLogEntry): Record<string, unknown> {
   if (e.at !== undefined) o.at = { x: e.at.x, y: e.at.y }
   if (e.textLen !== undefined) o.textLen = e.textLen
   if (e.combo !== undefined) o.combo = e.combo
+  if (e.element && typeof e.element === 'object' && typeof e.element.role === 'string') {
+    o.element = {
+      role: e.element.role.slice(0, 32),
+      ...(typeof e.element.name === 'string' ? { name: Array.from(e.element.name).slice(0, 120).join('') } : {}),
+    }
+  }
+  if (typeof e.delivery === 'string' && DELIVERIES.has(e.delivery)) o.delivery = e.delivery
   if (e.code !== undefined) o.code = e.code
   if (e.thumb !== undefined) o.thumb = e.thumb
   return o

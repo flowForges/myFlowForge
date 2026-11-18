@@ -182,3 +182,16 @@ describe('actionLog bounds and recovery', () => {
     for (const d of [root, join(root, sha), dir, join(dir, 'thumbs')]) expect(statSync(d).mode & 0o077).toBe(0)
   })
 })
+
+describe('semantic entries (Task 6)', () => {
+  it('element, app and delivery survive a reload; a bad delivery or an oversized name does not', async () => {
+    const root = mk()
+    const a = createActionLog(root)
+    await a.append(K, entry({ op: 'act', app: 'WorkBuddy', bundleId: 'com.example.wb', element: { role: 'button', name: '新建会话' }, delivery: 'delivered_verified' }))
+    await a.append(K, entry({ ts: 2000, op: 'act', element: { role: 'button', name: 'n'.repeat(500) }, delivery: 'nope' as never }))
+    const list = await createActionLog(root).list(K)
+    expect(list[0]).toMatchObject({ op: 'act', app: 'WorkBuddy', element: { role: 'button', name: '新建会话' }, delivery: 'delivered_verified' })
+    expect(list[1].delivery).toBeUndefined()
+    expect(list[1].element?.name).toHaveLength(120)
+  })
+})

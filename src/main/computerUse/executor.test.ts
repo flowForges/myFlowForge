@@ -721,14 +721,23 @@ describe('other tools and results', () => {
     expect(s.driver.posts).toHaveLength(2)
   })
 
-  // Fix round 1, finding 3: computer_key's schema accepts an optional `app` (R7 says it's not wired up until
-  // Task 6), so the executor must refuse it explicitly rather than silently ignore it and act on the front app.
-  it('key with an app targets refuses with invalid_args (R7: not wired up until Task 6) and never posts', async () => {
+  // Task 6: computer_key with `app` goes to the semantic appKey path, never to the front app's v1 post
+  it('key with an app goes to driver.appKey (not the front app) and never posts', async () => {
     const s = setup()
     await s.ready()
     const r = await s.run('key', { combo: 'cmd+t', app: 'WorkBuddy' })
-    expect(r).toMatchObject({ ok: false, code: 'invalid_args' })
+    expect(r).toMatchObject({ ok: false, code: 'not_found' })
     expect(s.driver.posts).toHaveLength(0)
+  })
+
+  it('v1 key never sends a blocked quit / log out combo (spec §6.6)', async () => {
+    const s = setup()
+    await s.ready()
+    for (const combo of ['cmd+q', 'cmd+shift+q', 'cmd+alt+shift+q', 'cmd+shift+delete']) {
+      expect(await s.run('key', { combo })).toMatchObject({ ok: false, code: 'blocked_combo' })
+    }
+    expect(s.driver.posts).toHaveLength(0)
+    expect(s.entries.at(-1)?.e).toMatchObject({ op: 'key', result: 'blocked', code: 'blocked_combo' })
   })
 
   it('a driver that throws on post gives helper_failed', async () => {

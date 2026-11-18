@@ -1,5 +1,5 @@
 // Main-side computer-use types shared by the service (Task 4) and the executor / action log (Task 5). Spec V15.
-import type { ComputerUseMode, CuActionView, CuErrCode } from '@shared/computerUse'
+import type { ComputerUseMode, CuActionView, CuErrCode, Delivery } from '@shared/computerUse'
 import { COMPUTER_TOOLS } from '@shared/computerUse'
 import type { ComputerDriver, Pt } from './driver'
 
@@ -17,9 +17,10 @@ export interface CallMeta {
   signal?: AbortSignal
 }
 
+/** `delivery` / `retry` / `label`: the semantic tools' result envelope (spec §8.3); v1 tools leave them out. */
 export type CuResult =
-  | { ok: true; text: string; image?: { data: string; mimeType: 'image/jpeg' } }
-  | { ok: false; code: CuErrCode; text: string }
+  | { ok: true; text: string; image?: { data: string; mimeType: 'image/jpeg' }; delivery?: Delivery; label?: string }
+  | { ok: false; code: CuErrCode; text: string; delivery?: Delivery; retry?: 'safe' | 'unsafe' }
 
 export type GateDecision = 'allow' | 'deny' | 'stop' | 'timeout'
 export type StopWhy = 'user' | 'hotkey' | 'lock' | 'vision' | 'limit' | 'deleted' | 'quit'
@@ -40,6 +41,10 @@ export interface CuLogEntry {
   textPreview?: string
   textLen?: number
   combo?: string
+  /** semantic act: the element it landed on (screen text, capped) */
+  element?: { role: string; name?: string }
+  /** semantic mutations: what forge-cu said about delivery */
+  delivery?: Delivery
   result: 'allowed' | 'auto' | 'denied' | 'blocked' | 'failed'
   code?: CuErrCode
   thumb?: string /* file name */

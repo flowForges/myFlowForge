@@ -13,7 +13,7 @@ import { randomBytes } from 'node:crypto'
 import { chmodSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ChatSendPayload } from '@shared/types'
-import { CU_ERR, type ComputerUseMode, type CuActionView, type CuErrCode, type Mod } from '@shared/computerUse'
+import { ACT_LABEL, CU_ERR, type ActRequest, type ComputerUseMode, type CuActionView, type CuErrCode, type Mod } from '@shared/computerUse'
 import type { Settings } from '../config/schema'
 import { forgeMcpConfigFile } from '../agents/mcpConfig'
 import { CuDriverError, type ComputerDriver, type PostAction, type PostResult } from './driver'
@@ -127,6 +127,29 @@ function viewCovers(v: CuActionView, a: PostAction): boolean {
   }
 }
 
+/**
+ * The semantic counterpart of viewCovers: does an approved view cover this AX mutation? An act must be the same
+ * ref, the same verb and the same text; a launch the same app; an appKey the same mods and repeat.
+ */
+type SemOp =
+  | { kind: 'act'; r: ActRequest }
+  | { kind: 'launch'; bundleId?: string; name?: string }
+  | { kind: 'focus'; pid: number }
+  | { kind: 'appKey'; mods: Mod[]; repeat: number }
+function semCovers(v: CuActionView, o: SemOp): boolean {
+  if (v.kind !== o.kind) return false
+  const app = typeof v.app === 'object' ? v.app : undefined
+  switch (o.kind) {
+    case 'act': {
+      const text = o.r.action === 'type' ? o.r.text : o.r.action === 'set' || o.r.action === 'select' ? o.r.value : undefined
+      return v.ref === o.r.ref && v.actLabel === ACT_LABEL[o.r.action] && v.text === text
+    }
+    case 'launch': return !!app && (o.bundleId ? app.bundleId === o.bundleId : app.name === o.name)
+    case 'focus': return true
+    case 'appKey': return (v.repeat ?? 1) === o.repeat && sameMods(v.mods, o.mods)
+  }
+}
+
 /** What the executor gets: the driver minus `request` (a TCC prompt is the user's button, never the agent's, M-3). */
 export type GuardedDriver = Omit<ComputerDriver, 'request'>
 
@@ -150,6 +173,8 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
   const queue: Job[] = []
   let running: Job | null = null
   let inFlight: { action: PostAction; job: Job } | null = null
+  /** a semantic mutation (act / launch / focus / appKey) in the helper: stop aborts it (no held keys to release) */
+  let semInFlight: Job | null = null
   let tickets: Ticket[] = []
   /** tokens whose first call already arrived: their mcp config file is gone (I-1) */
   const used = new Set<string>()
@@ -234,6 +259,7 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
 
   /** V7g: SIGUSR1 first; the helper lifts what it holds. If it was killed, or the signal failed, release explicitly. */
   const abortInFlight = (k: string) => {
+    if (semInFlight && semInFlight.k === k) d.driver.abort().catch(() => { /* the helper restarts on the next request */ })
     if (!inFlight || inFlight.job.k !== k) return
     const held = heldBy(inFlight.action)
     const release = () => d.driver.release(held).catch(() => { /* the helper restarts on the next request */ })
@@ -270,7 +296,36 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
 
   const refuseIfCancelled = () => {
     const job = running
-    if (!job || job.settled || cancelled(job)) throw new CuDriverError('stopped')
+    if (!job || job.settled || cancelled(job)) throw new CuDriverError('stopped', undefined, 'not_delivered')
+  }
+  /** AX reads: only for the running, live call */
+  const read = <T>(fn: () => Promise<T>): Promise<T> => {
+    try { refuseIfCancelled() } catch (e) { return Promise.reject(e) }
+    return fn()
+  }
+  /**
+   * AX mutations, gated like `post`: the running live call only, no gate pending, the screen re-checked, and in ask
+   * mode a matching one-shot ticket from this call's own approval (M-1, M-6). Every refusal is `not_delivered`.
+   */
+  const mutation = async <T>(op: SemOp, fn: () => Promise<T>): Promise<T> => {
+    const no = (code: string) => new CuDriverError(code, undefined, 'not_delivered')
+    const job = running
+    if (!job || job.settled || cancelled(job)) throw no('stopped')
+    if (gates.size > 0) throw no('target_changed')
+    let st
+    try { st = await d.driver.status() } catch { st = null }
+    if (job.settled || cancelled(job)) throw no('stopped')
+    if (gates.size > 0) throw no('target_changed')
+    if (!st || st.locked || !st.onConsole || st.asleep) throw no('locked')
+    const ti = tickets.findIndex((t) => t.job === job && semCovers(t.view, op))
+    if (modeOf(job.key) === 'ask' && ti < 0) throw no('denied')
+    if (ti >= 0) tickets.splice(ti, 1)
+    semInFlight = job
+    try {
+      return await fn()
+    } finally {
+      if (semInFlight === job) semInFlight = null
+    }
   }
   const postRefusal = (job: Job | null): PostResult | null => {
     if (!job || job.settled || cancelled(job)) return { ok: false, code: 'stopped' }
@@ -317,15 +372,15 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
     },
     idleSeconds: (kind) => d.driver.idleSeconds(kind),
     runningApps: () => d.driver.runningApps(),
-    // T4: plain passthroughs for now — gating these AX ref ops (guard/physical click/approval) is Task 5's job.
-    snapshot: (o) => d.driver.snapshot(o),
-    resolve: (ref) => d.driver.resolve(ref),
-    act: (r, g) => d.driver.act(r, g),
-    waitFor: (o) => d.driver.waitFor(o),
-    launch: (o) => d.driver.launch(o),
-    focusWindow: (o) => d.driver.focusWindow(o),
-    windows: (o) => d.driver.windows(o),
-    appKey: (o) => d.driver.appKey(o),
+    // T6: AX reads need the running live call; AX mutations are gated like post (ask → this call's own ticket)
+    snapshot: (o) => read(() => d.driver.snapshot(o)),
+    resolve: (ref) => read(() => d.driver.resolve(ref)),
+    waitFor: (o) => read(() => d.driver.waitFor(o)),
+    windows: (o) => read(() => d.driver.windows(o)),
+    act: (r, g) => mutation({ kind: 'act', r }, () => d.driver.act(r, g)),
+    launch: (o) => mutation({ kind: 'launch', bundleId: o.bundleId, name: o.name }, () => d.driver.launch(o)),
+    focusWindow: (o) => mutation({ kind: 'focus', pid: o.pid }, () => d.driver.focusWindow(o)),
+    appKey: (o) => mutation({ kind: 'appKey', mods: o.mods, repeat: o.repeat }, () => d.driver.appKey(o)),
     a11yRevert: () => d.driver.a11yRevert(),
     abort: () => d.driver.abort(),
     kill: () => d.driver.kill(),

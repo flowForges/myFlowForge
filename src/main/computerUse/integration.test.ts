@@ -238,3 +238,38 @@ describe('never enabled: nothing on disk', () => {
     expect(() => statSync(join(root, 'never'))).toThrow()
   })
 })
+
+describe('Task 6: the semantic path end to end over MCP (ask mode)', () => {
+  it('snapshot → act on a ref → element gate → local allow → exactly one act on the resolved instance; typed text stays off disk', async () => {
+    const t = await stack()
+    const WB = {
+      instance: { pid: 600, start: '1.5' }, bundleId: 'com.example.workbuddy', name: 'WorkBuddy', windows: [{ number: 3, title: 'WorkBuddy' }],
+      tree: [{ ref: 'e1', depth: 0, role: 'textfield', name: '输入消息', states: [], actions: ['type'] }],
+    }
+    t.driver.setAxApps([WB])
+    ;(t.driver as { runningApps: unknown }).runningApps = async () => [{ bundleId: WB.bundleId, name: 'WorkBuddy', pid: 600, active: false }]
+    expect(await t.svc.setMode(KEY, 'ask', LOCAL)).toEqual({ ok: true })
+    t.svc.beginTurn(KEY, 'local')
+    const c = await t.mcp(t.svc.tokenFor(KEY)!)
+    const snap = await c.callTool({ name: 'computer_snapshot', arguments: { app: 'WorkBuddy' } })
+    expect(snap.isError).toBeFalsy()
+    expect(text(snap).startsWith('<untrusted_screen snap="s1" app="WorkBuddy">')).toBe(true)
+    expect(text(snap)).toContain('@s1:e1')
+    expect(t.gates()).toHaveLength(0)
+
+    const pending = c.callTool({ name: 'computer_act', arguments: { ref: '@s1:e1', action: 'type', text: MARKER } })
+    await vi.waitFor(() => expect(t.gates()).toHaveLength(1))
+    expect(t.gates()[0].action).toMatchObject({ kind: 'act', text: MARKER, element: { role: 'textfield', name: '输入消息' } })
+    expect(t.driver.acts).toHaveLength(0)
+    expect(await t.svc.resolve(t.gates()[0].id, 'allow', LOCAL)).toBe(true)
+    const r = await pending
+    expect(r.isError).toBeFalsy()
+    expect(text(r)).toContain('已确认')
+    expect(t.driver.acts).toHaveLength(1)
+    expect(t.driver.acts[0].guard.expectInstance).toEqual(WB.instance)
+    expect(JSON.stringify(r)).not.toContain(MARKER)
+    for (const f of t.walk(root)) {
+      if (statSync(f).isFile() && !f.endsWith('.sock')) expect(readFileSync(f, 'utf8')).not.toContain(MARKER)
+    }
+  })
+})

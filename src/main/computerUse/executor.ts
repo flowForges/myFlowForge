@@ -8,13 +8,15 @@
 import { randomInt } from 'node:crypto'
 import {
   classify, CU_ERR, CU_SCHEMAS, OWN_BUNDLE_PREFIX, parseCombo, prettyCombo, screenNotice, screenshotSize,
-  toPoint, visibleText, wrapUntrusted, comboKeycode,
+  toPoint, visibleText, wrapUntrusted, comboKeycode, isBlockedCombo, SEMANTIC_TOOLS,
   type CuActionKind, type CuActionView, type CuClass, type CuErrCode, type Mod, type ParsedCombo,
 } from '@shared/computerUse'
 import type { Settings } from '../config/schema'
 import {
-  CuDriverError, type ComputerDriver, type DisplaySig, type PostAction, type PostGuard, type Pt, type Rect, type WinHit,
+  CuDriverError, type ComputerDriver, type DisplaySig, type DriverStatus, type Instance, type PostAction, type PostGuard,
+  type Pt, type Rect, type WinHit,
 } from './driver'
+import { runSemantic, type SemanticTool } from './semantic'
 import type { ActionLog, CallMeta, CuLogEntry, CuOp, CuResult, CuSessionKey, Executor, GateDecision, ServiceInternals } from './types'
 
 export interface ExecutorDeps {
@@ -29,6 +31,8 @@ export interface ExecutorDeps {
   log: ActionLog
   /** V5 / R18: only when true do we pause for a user who is touching the keyboard or mouse */
   hidIsPhysical: () => boolean
+  /** spec §9.1 (Task 8): steps myFlowForge aside before a mutating semantic action; no-op when absent (ruling R3) */
+  hider?: { beforeMutation(target?: Instance): Promise<void> }
 }
 
 /** For `createComputerUseService({ executorFactory })`: builds the executor on the service's guarded driver. */
@@ -58,7 +62,7 @@ const INPUT_OPS: ReadonlySet<CuOp> = new Set<CuOp>(['click', 'move', 'drag', 'sc
 const POINTER_OPS: ReadonlySet<CuOp> = new Set<CuOp>(['click', 'move', 'drag', 'scroll'])
 
 interface Shot { id: string; widthPt: number; heightPt: number; scale: number; width: number; height: number; display: DisplaySig }
-interface State {
+export interface State {
   enable: number; turn: number
   shotSeq: number; shot?: Shot
   code: string; verified: boolean; misses: number; missing: number
@@ -67,7 +71,7 @@ interface State {
 }
 
 const sameDisplay = (a: DisplaySig, b: DisplaySig) => a.id === b.id && a.widthPt === b.widthPt && a.heightPt === b.heightPt && a.backing === b.backing
-const fail = (code: CuErrCode, extra?: string): CuResult => ({ ok: false, code, text: extra ? `${CU_ERR[code]} · ${extra}` : CU_ERR[code] })
+export const fail = (code: CuErrCode, extra?: string): CuResult => ({ ok: false, code, text: extra ? `${CU_ERR[code]} · ${extra}` : CU_ERR[code] })
 const round = (n: number, d = 4) => Math.round(n * 10 ** d) / 10 ** d
 const keyOf = (k: CuSessionKey) => JSON.stringify([k.workspacePath, k.sessionId])
 
@@ -82,7 +86,37 @@ export function sigDiff(a: string, b: string): number {
 
 const newCode = () => Array.from({ length: 4 }, () => VISION_ALPHABET[randomInt(VISION_ALPHABET.length)]).join('')
 
-export function createExecutor(d: ExecutorDeps): Executor {
+/**
+ * What both pipelines share for one executor (v1 coordinates, semantic AX): the per-session counters, the rate
+ * limits, the step gate, the log and the app classes. One per ExecutorDeps, so `runSemantic(d, …)` called on its own
+ * counts against the same turn as `createExecutor(d).run`.
+ */
+export interface ExecCore {
+  stateFor(key: CuSessionKey): State
+  /** Sliding-window limit (+ the post floor). Waits (never errors) up to 2 s in total; false = `rate_limited`. */
+  pace(kind: 'post' | 'shot'): Promise<boolean>
+  /** stamps a post / a shot into its window (a post also moves the floor) */
+  mark(kind: 'post' | 'shot'): void
+  record(key: CuSessionKey, e: Omit<CuLogEntry, 'ts' | 'turn'>, thumb?: string): Promise<void>
+  classOf(h: { pid: number; bundleId?: string; name?: string; inMenuBar?: boolean }, kind: CuActionKind, combo: ParsedCombo | null, frontIsOwn: boolean): CuClass
+  /** T7: the 2000-per-enable cap and the every-100-per-turn continue gate; refusals spend steps too (callers count) */
+  stepGate(key: CuSessionKey, st: State): Promise<CuResult | null>
+  /** one input spent (count it before the driver call) */
+  spendInput(st: State): void
+  /** after the driver call: the 2000-per-enable cap stops the session */
+  capCheck(key: CuSessionKey, st: State): void
+  /** schema, enablement, turn, screen state and permissions (spec §7.1 step 1, same as v1) */
+  prelude(key: CuSessionKey, op: CuOp, rawArgs: unknown, early?: (a: Record<string, any>, st: State) => CuResult | null): Promise<{ a: Record<string, any>; st: State; status: DriverStatus } | { fail: CuResult }>
+}
+
+const cores = new WeakMap<ExecutorDeps, ExecCore>()
+export function coreFor(d: ExecutorDeps): ExecCore {
+  let c = cores.get(d)
+  if (!c) { c = makeCore(d); cores.set(d, c) }
+  return c
+}
+
+function makeCore(d: ExecutorDeps): ExecCore {
   const states = new Map<string, State>()
   const postTimes: number[] = []
   const shotTimes: number[] = []
@@ -106,8 +140,7 @@ export function createExecutor(d: ExecutorDeps): Executor {
     return s
   }
 
-  /** Sliding-window limit + optional floor. Waits (never errors) up to 2 s in total, then gives `rate_limited`. */
-  async function pace(times: number[], perSecond: number, floor: boolean): Promise<boolean> {
+  async function paceIn(times: number[], perSecond: number, floor: boolean): Promise<boolean> {
     let waited = 0
     for (;;) {
       const t = d.now()
@@ -129,11 +162,6 @@ export function createExecutor(d: ExecutorDeps): Executor {
     } catch { /* the log is best effort; it never blocks or leaks */ }
   }
 
-  const fromDriverError = (e: unknown): CuResult => {
-    const code = e instanceof CuDriverError ? e.code : ''
-    return fail(Object.prototype.hasOwnProperty.call(CU_ERR, code) ? (code as CuErrCode) : 'helper_failed')
-  }
-
   function classOf(h: { pid: number; bundleId?: string; name?: string; inMenuBar?: boolean }, kind: CuActionKind, combo: ParsedCombo | null, frontIsOwn: boolean): CuClass {
     const s = d.settings()
     return classify(h, kind, combo, {
@@ -142,6 +170,64 @@ export function createExecutor(d: ExecutorDeps): Executor {
     })
   }
 
+  return {
+    stateFor, record, classOf,
+    pace: (kind) => (kind === 'post' ? paceIn(postTimes, POST_PER_S, true) : paceIn(shotTimes, SHOT_PER_S, false)),
+    mark(kind) {
+      const t = d.now()
+      if (kind === 'post') { postTimes.push(t); lastPost = t } else shotTimes.push(t)
+    },
+    async stepGate(key, st) {
+      if (st.inputsEnable >= ENABLE_INPUT_CAP) return fail('step_limit')
+      if (st.inputsTurn >= st.allowance) {
+        const dec = await d.svc.openGate({ key, kind: 'continue', reason: `已执行 ${st.inputsTurn} 步 · 继续 ${STEP_GATE} 步` })
+        if (dec !== 'allow') return fail('step_limit')
+        st.allowance += STEP_GATE
+      }
+      return null
+    },
+    spendInput(st) { st.inputsTurn++; st.inputsEnable++ },
+    capCheck(key, st) { if (st.inputsEnable >= ENABLE_INPUT_CAP) d.svc.stop(key, 'limit') },
+    async prelude(key, op, rawArgs, early) {
+      const schema = (CU_SCHEMAS as Record<string, { safeParse(v: unknown): { success: boolean; data?: unknown; error?: { issues: { path: PropertyKey[] }[] } } }>)[`computer_${op}`]
+      if (!schema) return { fail: fail('invalid_args') }
+      const parsed = schema.safeParse(rawArgs ?? {})
+      if (!parsed.success) {
+        const where = parsed.error?.issues[0]?.path.map(String).join('.') ?? ''
+        return { fail: fail('invalid_args', where || undefined) }
+      }
+      const a = (parsed.data ?? {}) as Record<string, any>
+      if (d.svc.enableSeq(key) === 0 || d.svc.modeOf(key) === 'off') return { fail: fail('not_enabled') }
+      if (d.svc.turnSeq(key) === 0) return { fail: fail('no_turn') }
+      const st = stateFor(key)
+      const e0 = early?.(a, st)
+      if (e0) return { fail: e0 }
+      let status
+      try { status = await d.driver.status() } catch (e) { return { fail: fromDriverError(e) } }
+      if (status.locked || !status.onConsole || status.asleep) return { fail: fail('locked') }
+      if (!status.osOK) return { fail: fail('unsupported') }
+      if (!status.screen || !status.ax) return { fail: fail('no_permission') }
+      return { a, st, status }
+    },
+  }
+}
+
+const SEMANTIC_OPS: ReadonlySet<string> = new Set(SEMANTIC_TOOLS.map((t) => t.slice('computer_'.length)))
+/** spec §7.1: the semantic tools, and computer_key only when it names an app (without one it is v1's front-app key) */
+const isSemantic = (op: CuOp, raw: unknown): boolean =>
+  SEMANTIC_OPS.has(op) && (op !== 'key' || (!!raw && typeof raw === 'object' && (raw as { app?: unknown }).app !== undefined))
+
+export const gateFailure = (dec: GateDecision): CuErrCode | null =>
+  dec === 'allow' ? null : dec === 'timeout' ? 'timeout' : dec === 'stop' ? 'stopped' : 'denied'
+
+export const fromDriverError = (e: unknown): CuResult => {
+  const code = e instanceof CuDriverError ? e.code : ''
+  return fail(Object.prototype.hasOwnProperty.call(CU_ERR, code) ? (code as CuErrCode) : 'helper_failed')
+}
+
+export function createExecutor(d: ExecutorDeps): Executor {
+  const core = coreFor(d)
+  const { record, classOf } = core
   const label = (h: { name?: string; bundleId?: string }) => wrapUntrusted(h.name ?? h.bundleId ?? '未知应用')
 
   async function tryCrop(rect: Rect, marker: Pt[], maxW?: number) {
@@ -167,8 +253,8 @@ export function createExecutor(d: ExecutorDeps): Executor {
       }
       if (region.w < 1 || region.h < 1) return fail('invalid_args', '区域在屏幕之外')
     }
-    if (!(await pace(shotTimes, SHOT_PER_S, false))) return fail('rate_limited')
-    shotTimes.push(d.now())
+    if (!(await core.pace('shot'))) return fail('rate_limited')
+    core.mark('shot')
     st.shotsTurn++
     const size = screenshotSize(display)
     let r
@@ -208,8 +294,8 @@ export function createExecutor(d: ExecutorDeps): Executor {
 
   async function cursor(st: State, display: DisplaySig): Promise<CuResult> {
     if (st.shotsTurn >= TURN_SHOT_CAP) return fail('step_limit', `本轮截图已达 ${TURN_SHOT_CAP} 张`)
-    if (!(await pace(shotTimes, SHOT_PER_S, false))) return fail('rate_limited')
-    shotTimes.push(d.now())
+    if (!(await core.pace('shot'))) return fail('rate_limited')
+    core.mark('shot')
     st.shotsTurn++
     try {
       const r = await d.driver.capture({
@@ -256,12 +342,8 @@ export function createExecutor(d: ExecutorDeps): Executor {
     if (pointer && st.shot && !sameDisplay(st.shot.display, status.display)) return fail('layout_changed')
 
     // step gate (T7): refusals spend steps too, so a refused-action loop meets the gate
-    if (st.inputsEnable >= ENABLE_INPUT_CAP) return fail('step_limit')
-    if (st.inputsTurn >= st.allowance) {
-      const dec = await d.svc.openGate({ key, kind: 'continue', reason: `已执行 ${st.inputsTurn} 步 · 继续 ${STEP_GATE} 步` })
-      if (dec !== 'allow') return fail('step_limit')
-      st.allowance += STEP_GATE
-    }
+    const limited = await core.stepGate(key, st)
+    if (limited) return limited
 
     // vision check (R9): a wrong code is a miss; a missing one only after it keeps being missing
     if (!st.verified && op !== 'move') {
@@ -306,6 +388,12 @@ export function createExecutor(d: ExecutorDeps): Executor {
       st.inputsTurn++
       await record(key, { ...baseEntry, result: 'blocked', code: block.code })
       return fail(block.code)
+    }
+    // spec §6.6: quit / log out / force quit / empty trash never go out, whatever the target
+    if (plan.combo && isBlockedCombo(plan.combo)) {
+      st.inputsTurn++
+      await record(key, { ...baseEntry, result: 'blocked', code: 'blocked_combo' })
+      return fail('blocked_combo')
     }
     if ((op === 'type' || op === 'key') && status.secureInput) {
       st.inputsTurn++
@@ -362,7 +450,7 @@ export function createExecutor(d: ExecutorDeps): Executor {
     }
 
     // atomic execution (R8)
-    if (!(await pace(postTimes, POST_PER_S, true))) {
+    if (!(await core.pace('post'))) {
       await record(key, { ...baseEntry, result: 'failed', code: 'rate_limited' }, await thumbOf())
       return fail('rate_limited')
     }
@@ -385,14 +473,11 @@ export function createExecutor(d: ExecutorDeps): Executor {
       ...(op === 'scroll' ? { pointer: plan.pts[0] } : {}),
       ...(end ? { expectEndPid: end.pid, ...(end.windowId !== undefined ? { expectEndWindowId: end.windowId } : {}) } : {}),
     }
-    const t = d.now()
-    postTimes.push(t)
-    lastPost = t
-    st.inputsTurn++
-    st.inputsEnable++
+    core.mark('post')
+    core.spendInput(st)
     let res
     try { res = await d.driver.post(plan.action, guard) } catch { res = { ok: false as const, code: 'helper_failed' as const } }
-    if (st.inputsEnable >= ENABLE_INPUT_CAP) d.svc.stop(key, 'limit')
+    core.capCheck(key, st)
 
     if (!res.ok) {
       const code: CuErrCode = res.code
@@ -474,9 +559,7 @@ export function createExecutor(d: ExecutorDeps): Executor {
         }
       }
       case 'key': {
-        // R7: computer_key's schema accepts an optional `app` (semantic path) but nothing wires it up yet
-        // (Task 6) — refuse it explicitly rather than silently ignore it and act on the front app instead.
-        if (a.app !== undefined) throw new Reject(fail('invalid_args', 'app 暂不支持'))
+        // computer_key with `app` never gets here: run() routes it to the semantic appKey path
         const c = parseCombo(a.combo as string)
         if ('error' in c) throw new Reject(fail('invalid_args', `${c.error} · 可用的键名:${c.known.join(' ')}`))
         if (!front) throw new Reject(fail('target_changed'))
@@ -494,9 +577,6 @@ export function createExecutor(d: ExecutorDeps): Executor {
         throw new Reject(fail('invalid_args'))
     }
   }
-
-  const gateFailure = (dec: GateDecision): CuErrCode | null =>
-    dec === 'allow' ? null : dec === 'timeout' ? 'timeout' : dec === 'stop' ? 'stopped' : 'denied'
 
   function preview(text: string): string {
     const chars = Array.from(visibleText(text))
@@ -526,28 +606,13 @@ export function createExecutor(d: ExecutorDeps): Executor {
 
   return {
     async run(key, op, rawArgs, _meta: CallMeta): Promise<CuResult> {
-      const schema = (CU_SCHEMAS as Record<string, { safeParse(v: unknown): { success: boolean; data?: unknown; error?: { issues: { path: PropertyKey[] }[] } } }>)[`computer_${op}`]
-      if (!schema) return fail('invalid_args')
-      const parsed = schema.safeParse(rawArgs ?? {})
-      if (!parsed.success) {
-        const where = parsed.error?.issues[0]?.path.map(String).join('.') ?? ''
-        return fail('invalid_args', where || undefined)
-      }
-      const a = (parsed.data ?? {}) as Record<string, any>
-
-      if (d.svc.enableSeq(key) === 0 || d.svc.modeOf(key) === 'off') return fail('not_enabled')
-      if (d.svc.turnSeq(key) === 0) return fail('no_turn')
-      const st = stateFor(key)
-
+      if (isSemantic(op, rawArgs)) return runSemantic(d, key, `computer_${op}` as SemanticTool, rawArgs, core)
       // I-1: a point outside the last screenshot would be clamped on its way to the screen and the card would show
       // a different place than the one that is hit, so it is refused before anything else happens
-      if (st.shot && !withinShot(st.shot, op, a)) return fail('invalid_args', '坐标超出截图范围')
-
-      let status
-      try { status = await d.driver.status() } catch (e) { return fromDriverError(e) }
-      if (status.locked || !status.onConsole || status.asleep) return fail('locked')
-      if (!status.osOK) return fail('unsupported')
-      if (!status.screen || !status.ax) return fail('no_permission')
+      const pre = await core.prelude(key, op, rawArgs, (a, st) =>
+        (st.shot && !withinShot(st.shot, op, a) ? fail('invalid_args', '坐标超出截图范围') : null))
+      if ('fail' in pre) return pre.fail
+      const { a, st, status } = pre
 
       switch (op) {
         case 'wait':

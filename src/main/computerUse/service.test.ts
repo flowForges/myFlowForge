@@ -1319,3 +1319,114 @@ describe('the call queue is bounded', () => {
     expect(CU_QUEUE_MAX).toBeGreaterThanOrEqual(3)
   })
 })
+
+describe('Task 6: the AX ops are gated like post', () => {
+  const WB = {
+    instance: { pid: 600, start: '1.0' }, bundleId: 'com.example.workbuddy', name: 'WorkBuddy', windows: [],
+    tree: [
+      { ref: 'e1', depth: 0, role: 'button', name: 'a', states: [], actions: ['click'] },
+      { ref: 'e2', depth: 0, role: 'button', name: 'b', states: [], actions: ['click'] },
+    ],
+  }
+  const guard = { denyPids: [4242], denyBundlePrefixes: [], expectInstance: WB.instance }
+  const view = (ref: string) => ({ kind: 'act' as const, ref, actLabel: '点击', app: { name: 'WorkBuddy', bundleId: WB.bundleId } })
+  const settle = (p: Promise<unknown>) => p.then(() => 'ok', (e: { code?: string; delivery?: string }) => `${e.code}/${e.delivery}`)
+  async function world(t: ReturnType<typeof setup>) {
+    t.driver.setAxApps([WB])
+    const snap = await t.driver.snapshot({ app: { pid: 600 }, mode: 'skeleton' })
+    t.driver.acts.length = 0
+    return snap.nodes.map((n) => n.ref!)
+  }
+
+  it('ask: an act needs this call\'s ticket for that very ref; it is spent once', async () => {
+    let refs: string[] = []
+    const out: string[] = []
+    const t = setup({
+      run: async (s, key) => {
+        out.push(await settle(s.driver.act({ ref: refs[0], action: 'click' }, guard)))
+        await s.openGate({ key, kind: 'action', action: view(refs[0]) })
+        out.push(await settle(s.driver.act({ ref: refs[1], action: 'click' }, guard)))
+        out.push(await settle(s.driver.act({ ref: refs[0], action: 'type', text: 'x' }, guard)))
+        out.push(await settle(s.driver.act({ ref: refs[0], action: 'click' }, guard)))
+        out.push(await settle(s.driver.act({ ref: refs[0], action: 'click' }, guard)))
+        return { ok: true, text: 'x' }
+      },
+    })
+    refs = await world(t)
+    const tok = await t.on(A, 'ask')
+    t.svc.beginTurn(A, 'local')
+    const call = t.svc.handle(tok, 'act', {}, {})
+    await flush(30)
+    await t.svc.resolve(t.svc.pendingGates()[0].id, 'allow', LOCAL)
+    await call
+    expect(out).toEqual(['denied/not_delivered', 'denied/not_delivered', 'denied/not_delivered', 'ok', 'denied/not_delivered'])
+    expect(t.driver.acts).toHaveLength(1)
+  })
+
+  it('allow: mutations need no ticket; launch / focus / appKey go through', async () => {
+    let out: string[] = []
+    const t = setup({
+      run: async (s) => {
+        out = [
+          await settle(s.driver.launch({ bundleId: WB.bundleId, activate: false })),
+          await settle(s.driver.focusWindow({ pid: 600 })),
+          await settle(s.driver.appKey({ pid: 600, mods: ['cmd'], key: { char: 't' }, repeat: 1 })),
+        ]
+        return { ok: true, text: 'x' }
+      },
+    })
+    await world(t)
+    const tok = await t.on(A, 'allow')
+    t.svc.beginTurn(A, 'local')
+    await t.svc.handle(tok, 'launch', {}, {})
+    expect(out).toEqual(['ok', 'ok', 'ok'])
+  })
+
+  it('a stopped call can neither read nor act; a locked screen refuses a mutation', async () => {
+    let out: string[] = []
+    let refs: string[] = []
+    const t = setup({
+      run: async (s, key) => {
+        t.driver.setStatus({ locked: true })
+        const locked = await settle(s.driver.act({ ref: refs[0], action: 'click' }, guard))
+        t.driver.setStatus({ locked: false })
+        t.svc.stop(key, 'user')
+        out = [
+          locked,
+          await settle(s.driver.snapshot({ app: { pid: 600 }, mode: 'skeleton' })),
+          await settle(s.driver.resolve(refs[0])),
+          await settle(s.driver.act({ ref: refs[0], action: 'click' }, guard)),
+          await settle(s.driver.waitFor({ pid: 600, match: {} })),
+          await settle(s.driver.windows({})),
+        ]
+        return { ok: true, text: 'x' }
+      },
+    })
+    refs = await world(t)
+    const tok = await t.on(A, 'allow')
+    t.svc.beginTurn(A, 'local')
+    await t.svc.handle(tok, 'act', {}, {})
+    await flush(30)   // stop settles the call at once; the hook finishes after
+    expect(out).toEqual(['locked/not_delivered', 'stopped/not_delivered', 'stopped/not_delivered', 'stopped/not_delivered', 'stopped/not_delivered', 'stopped/not_delivered'])
+    expect(t.driver.acts).toHaveLength(0)
+  })
+
+  it('stop while an act is in the helper aborts it', async () => {
+    const t = setup({
+      run: async (s) => {
+        await settle(s.driver.act({ ref: 'x', action: 'click' }, guard))
+        return { ok: true, text: 'x' }
+      },
+    })
+    let release!: () => void
+    t.driver.act = (() => new Promise<never>((_r, rej) => { release = () => rej(new Error('stopped')) })) as typeof t.driver.act
+    const tok = await t.on(A, 'allow')
+    t.svc.beginTurn(A, 'local')
+    const call = t.svc.handle(tok, 'act', {}, {})
+    await flush(30)
+    t.svc.stop(A, 'user')
+    expect(t.driver.aborted).toBe(1)
+    release()
+    expect(await call).toMatchObject({ ok: false, code: 'stopped' })
+  })
+})

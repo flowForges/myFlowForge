@@ -25,25 +25,56 @@ function escapeForLine(s: string): string {
   return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
 }
 
+/** 文字里长得像 ref 的串(`@s3:e9`)把 `@` 换成全角:模型只能从我们自己写的 ref 位置拿到 ref。 */
+const defangRefs = (s: string) => s.replace(/@(?=s\d+:e\d+)/g, '＠')
+
 /** 名字截 120 字;值截 80 字;先经 sanitizeScreenText(压空白、控制字符可见、掐掉伪造标签的 `<`),再转义。 */
-const fmtName = (s: string) => escapeForLine(sanitizeScreenText(s, 120))
-const fmtValue = (s: string) => escapeForLine(sanitizeScreenText(s, 80))
+const fmtName = (s: string) => escapeForLine(defangRefs(sanitizeScreenText(s, 120)))
+const fmtValue = (s: string) => escapeForLine(defangRefs(sanitizeScreenText(s, 80)))
+
+/** forge-cu 的角色词表(AXCore.swift roleTable / subroleTable 的值 + unknown)。线上数据:表外的一律 `unknown`。 */
+const ROLES: ReadonlySet<string> = new Set([
+  'alert', 'alertdialog', 'application', 'article', 'banner', 'browser', 'button', 'cell', 'checkbox', 'colorwell',
+  'column', 'combobox', 'complementary', 'contentinfo', 'datefield', 'definition', 'dialog', 'disclosure', 'dockitem',
+  'document', 'drawer', 'form', 'grid', 'group', 'handle', 'heading', 'helptag', 'image', 'incrementor', 'layoutitem',
+  'levelindicator', 'link', 'list', 'listbox', 'log', 'main', 'marquee', 'math', 'matte', 'menu', 'menubutton',
+  'menuitem', 'navigation', 'note', 'option', 'outline', 'page', 'paragraph', 'popover', 'progressbar', 'radiobutton',
+  'radiogroup', 'region', 'relevanceindicator', 'row', 'ruler', 'rulermarker', 'scrollarea', 'scrollbar', 'search',
+  'separator', 'sheet', 'slider', 'splitter', 'statictext', 'status', 'switch', 'tab', 'table', 'tablist', 'tabpanel',
+  'term', 'textfield', 'timefield', 'timer', 'toolbar', 'tooltip', 'treeitem', 'unknown', 'webarea', 'window',
+])
+/** 动作词表 = computer_act 的 action;表外的丢掉。 */
+const ACTIONS: ReadonlySet<string> = new Set([
+  'click', 'menu', 'set', 'type', 'focus', 'toggle', 'expand', 'collapse', 'select', 'scroll', 'scrollTo', 'submit',
+])
+const roleOf = (r: unknown) => (typeof r === 'string' && ROLES.has(r) ? r : 'unknown')
+
+/** forge-cu 发的是完整 ref(`@s3:e4`),老测试 / 其它来源可能是本地 id(`e4`);别的快照的 ref、形状不对的一律不出。 */
+function refOf(ref: unknown, snapId: string): string | undefined {
+  if (typeof ref !== 'string') return undefined
+  if (/^e\d+$/.test(ref)) return `@${snapId}:${ref}`
+  const m = /^@(s\d+):e\d+$/.exec(ref)
+  return m && m[1] === snapId ? ref : undefined
+}
 
 function stateWords(n: SnapNodeWire): string[] {
-  const words = n.states.map((s) => STATE_LABEL[s]).filter((w): w is string => !!w)
-  if (n.offscreen && !n.states.includes('offscreen')) words.push(STATE_LABEL.offscreen)
+  const states = Array.isArray(n.states) ? n.states : []
+  const words = states.map((s) => (Object.prototype.hasOwnProperty.call(STATE_LABEL, s) ? STATE_LABEL[s] : '')).filter((w) => !!w)
+  if (n.offscreen === true && !states.includes('offscreen')) words.push(STATE_LABEL.offscreen)
   return words
 }
 
-function renderNode(n: SnapNodeWire, snapId: string): string {
-  const fullRef = n.ref ? `@${snapId}:${n.ref}` : undefined
-  let line = `${'  '.repeat(Math.max(0, n.depth))}- ${n.role}`
-  if (n.name !== undefined) line += ` "${fmtName(n.name)}"`
+function renderNode(n: SnapNodeWire, snapId: string, indent = true): string {
+  const fullRef = refOf(n.ref, snapId)
+  const depth = indent && Number.isInteger(n.depth) ? Math.min(Math.max(0, n.depth), 50) : 0
+  let line = `${'  '.repeat(depth)}- ${roleOf(n.role)}`
+  if (typeof n.name === 'string') line += ` "${fmtName(n.name)}"`
   if (fullRef) line += ` ${fullRef}`
-  if (n.actions.length) line += ` [${n.actions.join(',')}]`
-  if (n.value !== undefined) line += ` 值="${fmtValue(n.value)}"`
+  const actions = (Array.isArray(n.actions) ? n.actions : []).filter((a) => ACTIONS.has(a))
+  if (actions.length) line += ` [${actions.join(',')}]`
+  if (typeof n.value === 'string') line += ` 值="${fmtValue(n.value)}"`
   const words = stateWords(n)
-  if (n.childrenCount !== undefined) {
+  if (typeof n.childrenCount === 'number' && Number.isInteger(n.childrenCount) && n.childrenCount >= 0) {
     const extra = words.length ? `, ${words.join(' ')}` : ''
     const root = fullRef ? ` → root=${fullRef}` : ''
     line += ` (${n.childrenCount} 项${extra}${root})`
@@ -68,8 +99,17 @@ function sliceUnits(s: string, maxUnits: number): string {
  * `窗口「<标题>」 complete|incomplete` + 一行一节点;超过 max(默认 18 000 字符,按 UTF-16 code unit 计)就在整行边界截断,
  * 末行标 `已截断 · 用 root 钻取`。保证返回值长度永远 ≤ max,且不会在代理对中间切开。
  */
+/** 一个节点一行(不缩进);wait_for 命中的节点用。 */
+export function renderNodeLine(n: SnapNodeWire, snapId: string): string {
+  return renderNode(n, snapId, false)
+}
+
+/** 标题里的 「」 换成 『』:标题关不掉我们自己的 「…」;长得像 ref 的串同样去牙。 */
+const fmtTitle = (s: string) => defangRefs(sanitizeScreenText(s, 120)).replace(/「/g, '『').replace(/」/g, '』')
+
 export function renderSnapshot(r: SnapshotResult, max = 18000): string {
-  const title = sanitizeScreenText(r.window.title || r.app.name || '', 120)
+  const raw = typeof r.window.title === 'string' && r.window.title.trim() ? r.window.title : (r.app.name ?? '')
+  const title = fmtTitle(raw)
   const lines = [`窗口「${title}」 ${r.complete ? 'complete' : 'incomplete'}`, ...r.nodes.map((n) => renderNode(n, r.snapId))]
   const out = lines.join('\n')
   if (out.length <= max) return out
