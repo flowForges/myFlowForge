@@ -474,6 +474,9 @@ export function createExecutor(d: ExecutorDeps): Executor {
         }
       }
       case 'key': {
+        // R7: computer_key's schema accepts an optional `app` (semantic path) but nothing wires it up yet
+        // (Task 6) — refuse it explicitly rather than silently ignore it and act on the front app instead.
+        if (a.app !== undefined) throw new Reject(fail('invalid_args', 'app 暂不支持'))
         const c = parseCombo(a.combo as string)
         if ('error' in c) throw new Reject(fail('invalid_args', `${c.error} · 可用的键名:${c.known.join(' ')}`))
         if (!front) throw new Reject(fail('target_changed'))

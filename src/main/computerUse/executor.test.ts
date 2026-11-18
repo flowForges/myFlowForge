@@ -721,6 +721,16 @@ describe('other tools and results', () => {
     expect(s.driver.posts).toHaveLength(2)
   })
 
+  // Fix round 1, finding 3: computer_key's schema accepts an optional `app` (R7 says it's not wired up until
+  // Task 6), so the executor must refuse it explicitly rather than silently ignore it and act on the front app.
+  it('key with an app targets refuses with invalid_args (R7: not wired up until Task 6) and never posts', async () => {
+    const s = setup()
+    await s.ready()
+    const r = await s.run('key', { combo: 'cmd+t', app: 'WorkBuddy' })
+    expect(r).toMatchObject({ ok: false, code: 'invalid_args' })
+    expect(s.driver.posts).toHaveLength(0)
+  })
+
   it('a driver that throws on post gives helper_failed', async () => {
     const s = setup()
     await s.ready()

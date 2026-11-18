@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { COMPUTER_TOOLS } from '@shared/computerUse'
+import { V1_TOOLS } from '@shared/computerUse'
 import { connectBridge, createForgeServer, forgeEntryConfig } from './forgeMcp'
 import { forgeCodexConfigArgs, forgeMcpArgs } from '../agents/mcpConfig'
 import { cuBeginTurn } from '../computerUse/chatTurn'
@@ -62,13 +62,14 @@ describe('env → stdio entry (M-11)', () => {
     const cfg = forgeEntryConfig(child.env)
     expect(cfg.socketPath).toBe(bridge.socketPath)
     expect(cfg.agentId).toBe(TOKEN)
-    expect([...cfg.allowed!].sort()).toEqual([...COMPUTER_TOOLS].sort())
+    // R7: a local turn only grants the v1 (coordinate) tools until Task 6/7 wires up the semantic ones.
+    expect([...cfg.allowed!].sort()).toEqual([...V1_TOOLS].sort())
 
     const server = createForgeServer(connectBridge(cfg.socketPath!, cfg.agentId).send, cfg.allowed)
     const [ct, st] = InMemoryTransport.createLinkedPair()
     const client = new Client({ name: 'claude-code', version: '9.9.9' })
     await Promise.all([server.connect(st), client.connect(ct)])
-    expect((await client.listTools()).tools.map((t) => t.name).sort()).toEqual([...COMPUTER_TOOLS].sort())
+    expect((await client.listTools()).tools.map((t) => t.name).sort()).toEqual([...V1_TOOLS].sort())
     const r = await client.callTool({ name: 'computer_front_app', arguments: {} })
     expect(r.isError).toBeFalsy()
     expect(seen).toEqual([{ agentId: TOKEN, op: 'front_app' }])

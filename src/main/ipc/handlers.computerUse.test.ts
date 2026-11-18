@@ -7,7 +7,7 @@ import { fakeHost } from '../host/fakeHost'
 import { tableCalls } from './testTable'
 import { NOOP_CTX, type InvokeCtx, type MethodTable } from './invokeCtx'
 import { CLIENT_ONLY, daemonTable } from './channelRouting'
-import { COMPUTER_TOOLS, type CuStatus } from '@shared/computerUse'
+import { V1_TOOLS, type CuStatus } from '@shared/computerUse'
 import type { WorkflowSessionState } from '@shared/workflowSession'
 import type { ComputerUseHost } from '../host/capabilities'
 
@@ -209,7 +209,8 @@ const noForge = (env: NodeJS.ProcessEnv) => {
 }
 
 describe('what the model is told (usability fix A/B)', () => {
-  const CU_NAMES = COMPUTER_TOOLS.map((t) => `mcp__forge__${t}`)
+  // R7: the semantic tools aren't wired up until Task 6/7 — a local turn only grants the v1 tools.
+  const CU_NAMES = V1_TOOLS.map((t) => `mcp__forge__${t}`)
   const argsOf = async () => {
     const { buildClaudeChatArgs } = await import('../agents/providers/claude')
     return buildClaudeChatArgs({ ...lastPayload(), cwd } as any, lastEnv(), 'p')
@@ -292,7 +293,7 @@ describe('origin stamping and env injection (Review Focus 3)', () => {
     await sent()
     const env = lastEnv()
     for (const k of FORGE_KEYS) expect(env[k], k).toBeTruthy()
-    expect(env.FORGE_TOOLS).toBe(COMPUTER_TOOLS.join(','))
+    expect(env.FORGE_TOOLS).toBe(V1_TOOLS.join(','))
     expect(env.FORGE_AGENT_ID).toBe(h.service.tokenFor(KEY))
     expect(env.FORGE_MCP_DIR).toBe(cfgDir)
     expect(env.FORGE_SOCKET).toBe(join(cfgDir, 'forge.sock'))
@@ -312,7 +313,7 @@ describe('origin stamping and env injection (Review Focus 3)', () => {
     const i = args.indexOf('--allowedTools')
     expect(i).toBeGreaterThan(-1)
     const allowed = args.slice(i + 1).filter((a) => a.startsWith('mcp__forge__'))
-    expect(allowed).toEqual(COMPUTER_TOOLS.map((t) => `mcp__forge__${t}`))
+    expect(allowed).toEqual(V1_TOOLS.map((t) => `mcp__forge__${t}`))
     const j = args.indexOf('--mcp-config')
     expect(j).toBeGreaterThan(-1)
     expect(args[j + 1].startsWith(cfgDir)).toBe(true)
@@ -468,7 +469,7 @@ describe('conflicts block the whole turn (Review Focus 5)', () => {
     session.permissionMode = 'full'
     await h.call(CH.chatSend)({}, msg({ agent: 'codex', permissionMode: 'full' }))
     await sent()
-    expect(lastEnv().FORGE_TOOLS).toBe(COMPUTER_TOOLS.join(','))
+    expect(lastEnv().FORGE_TOOLS).toBe(V1_TOOLS.join(','))
   })
 
   it('claude on 只读审阅 is blocked', async () => {

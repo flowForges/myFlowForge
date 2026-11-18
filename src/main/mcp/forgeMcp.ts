@@ -229,7 +229,8 @@ const CU_WHAT: Record<(typeof COMPUTER_TOOLS)[number], string> = {
   computer_drag: '按住左键从 from 拖到 to。',
   computer_scroll: '在 (x,y) 滚动 dy / dx 行(dy 正数向下)。',
   computer_type: '在当前焦点处输入一段文字(1–500 字)。',
-  computer_key: '按一个组合键,如 cmd+shift+t、return、f5、cmd+=;可选重复次数。给了 app 就不切前台:优先按菜单项,再直接发给该 app。',
+  // R7: the v1 description — computer_key's new optional `app` isn't wired to anything yet (executor rejects it).
+  computer_key: '按一个组合键,如 cmd+shift+t、return、f5、cmd+=;可选重复次数。',
   computer_wait: '等待 ms 毫秒(100–10000)。',
   computer_cursor: '读出鼠标指针的位置(全屏截图坐标)。',
   computer_front_app: '读出前台应用的名字和 bundle id。',

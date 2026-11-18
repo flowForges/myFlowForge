@@ -77,14 +77,18 @@ export const SEMANTIC_TOOLS = [
   'computer_focus', 'computer_wait_for', 'computer_windows',
 ] as const
 
-/** v1 原 10 个坐标工具(物理后备,§6.9);`computer_key` 已经在 SEMANTIC_TOOLS 里,这里不重复。 */
-const V1_ONLY_TOOLS = [
+/**
+ * v1 原 10 个坐标工具,原样的顺序(物理后备,§6.9)。R7:语义工具的执行器还没接上(Task 6/7),
+ * 这十个是唯一已经真正可用的——chatTurn(FORGE_TOOLS)和 computerUseDirective 只暴露这张表,
+ * 不能用 COMPUTER_TOOLS(那张表已经把 8 个语义工具也列进去了,是给 schema / forgeMcp 注册用的全集)。
+ */
+export const V1_TOOLS = [
   'computer_screenshot', 'computer_click', 'computer_move', 'computer_drag', 'computer_scroll',
-  'computer_type', 'computer_wait', 'computer_cursor', 'computer_front_app',
+  'computer_type', 'computer_key', 'computer_wait', 'computer_cursor', 'computer_front_app',
 ] as const
 
-/** 语义工具在前 + v1 原 10 个(`computer_key` 只出现一次)。 */
-export const COMPUTER_TOOLS = [...SEMANTIC_TOOLS, ...V1_ONLY_TOOLS] as const
+/** 语义工具在前 + v1 原 10 个(`computer_key` 只出现一次)。给 schema / forgeMcp 工具注册用的全集。 */
+export const COMPUTER_TOOLS = [...SEMANTIC_TOOLS, ...V1_TOOLS.filter((t) => t !== 'computer_key')] as const
 
 // ───────────────────────── 参数 schema(forgeMcp 注册工具、执行器校验共用) ─────────────────────────
 
@@ -102,17 +106,17 @@ export const CU_SHAPES = {
   computer_apps: {},
   computer_launch: { app: appName, activate: z.boolean().optional() },
   computer_snapshot: {
-    app: appName, window: z.number().int().optional(), root: ref.optional(),
+    app: appName, window: z.number().int().min(0).optional(), root: ref.optional(),
     depth: z.number().int().min(1).max(10).optional(), full: z.boolean().optional(),
   },
   computer_act: {
     ref, action: z.enum(['click', 'menu', 'set', 'type', 'focus', 'toggle', 'expand', 'collapse', 'select', 'scroll', 'scrollTo', 'submit']),
-    value: z.string().optional(), text: z.string().min(1).max(2000).optional(), replace: z.boolean().optional(),
+    value: z.string().max(2000).optional(), text: z.string().min(1).max(2000).optional(), replace: z.boolean().optional(),
     direction: z.enum(['up', 'down', 'left', 'right']).optional(), amount: z.number().int().min(1).max(20).optional(),
     physical: z.boolean().optional(),
   },
   computer_key: { combo: z.string().min(1).max(64), app: appName.optional(), repeat: z.number().int().min(1).max(10).optional(), visionCode },
-  computer_focus: { app: appName, window: z.number().int().optional() },
+  computer_focus: { app: appName, window: z.number().int().min(0).optional() },
   computer_wait_for: {
     app: appName, role: z.string().min(1).max(64).optional(), name: z.string().min(1).max(200).optional(),
     nameContains: z.string().min(1).max(200).optional(), gone: z.boolean().optional(),
@@ -137,7 +141,12 @@ export const CU_SCHEMAS = {
   computer_apps: strictObj(CU_SHAPES.computer_apps),
   computer_launch: strictObj(CU_SHAPES.computer_launch),
   computer_snapshot: strictObj(CU_SHAPES.computer_snapshot),
-  computer_act: strictObj(CU_SHAPES.computer_act),
+  computer_act: strictObj(CU_SHAPES.computer_act)
+    .superRefine((v, ctx) => {
+      const bad = (s: string) => s.includes('\u0000') || LONE_SURROGATE.test(s)
+      if (v.text !== undefined && bad(v.text)) ctx.addIssue({ code: 'custom', path: ['text'], message: '文字含有不能输入的字符' })
+      if (v.value !== undefined && bad(v.value)) ctx.addIssue({ code: 'custom', path: ['value'], message: '文字含有不能输入的字符' })
+    }),
   computer_focus: strictObj(CU_SHAPES.computer_focus),
   computer_wait_for: strictObj(CU_SHAPES.computer_wait_for),
   computer_windows: strictObj(CU_SHAPES.computer_windows),
@@ -419,15 +428,24 @@ export function visibleText(s: string): string {
 }
 
 /**
- * 屏幕来源的字符串(app 名、窗口标题)给模型前的处理:压空白 → 不可见字符可见 → 掐掉能伪造标签的 `<` → 截断 → 包进标记。
- * 超长从右边截(给模型看;卡片另有从左截的渲染)。
+ * 屏幕 / 模型参数来源的字符串(app 名、窗口标题、控件 name)共用的脏数据处理:压空白(含 \r\n / NEL / U+2028/2029 等,
+ * collapseWhitespace 的 \s 全覆盖)→ 不可见字符可见(visibleText)→ 掐掉能伪造标签的 `<` → 截断(按代码点,不切开代理对)。
+ * 给 wrapUntrusted 包标记用,也给工具卡标题、快照渲染、elementPhrase 这些不加标记的纯文本场合用。
  */
-export function wrapUntrusted(s: string, max = 80): string {
+export function sanitizeScreenText(s: string, max = 80): string {
   let t = visibleText(collapseWhitespace(s))
   t = t.replace(/<(?=\s*\/)/g, '‹').replace(/<(?=\s*untrusted_screen)/gi, '‹')
   const chars = Array.from(t)
   if (chars.length > max) t = chars.slice(0, max).join('') + '…'
-  return `<untrusted_screen_text>${t}</untrusted_screen_text>`
+  return t
+}
+
+/**
+ * 屏幕来源的字符串(app 名、窗口标题)给模型前的处理:sanitizeScreenText 再包进标记。
+ * 超长从右边截(给模型看;卡片另有从左截的渲染)。
+ */
+export function wrapUntrusted(s: string, max = 80): string {
+  return `<untrusted_screen_text>${sanitizeScreenText(s, max)}</untrusted_screen_text>`
 }
 
 /** 每张截图文字块的固定开头(§6 T6)。shotId 只留字母数字,不能把属性引号带出来。 */
@@ -447,13 +465,6 @@ function pt(o: unknown): string | null {
   return `(${Math.round(x)}, ${Math.round(y)})`
 }
 
-/** 工具参数里的 app 字符串给卡标题用:和截图文字一样的脏数据,压空白 + 让不可见字符可见(不加 `<untrusted_screen_text>` 标签,这里不是给模型看的提示块)。 */
-function sanitizeAppText(s: string, max = 80): string {
-  const t = visibleText(collapseWhitespace(s))
-  const chars = Array.from(t)
-  return chars.length > max ? chars.slice(0, max).join('') + '…' : t
-}
-
 /**
  * 工具卡标题。会进 sessions.json 并广播给远程客户端,所以 computer_type 只写字数,绝不带文字(V11)。
  * 不是 computer_* 工具 → null。
@@ -463,7 +474,8 @@ export function computerToolLabel(toolName: string, input?: unknown): string | n
   if (!bare.startsWith('computer_')) return null
   const i = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>
   const withPt = (verb: string, p: string | null) => `电脑 · ${verb}${p ? ' ' + p : ''}`
-  const withApp = (verb: string) => `电脑 · ${verb}${typeof i.app === 'string' && i.app ? ' ' + sanitizeAppText(i.app) : ''}`
+  // 工具参数里的 app 字符串:和截图文字一样的脏数据,sanitizeScreenText(不加 `<untrusted_screen_text>` 标签,这里不是给模型看的提示块)。
+  const withApp = (verb: string) => `电脑 · ${verb}${typeof i.app === 'string' && i.app ? ' ' + sanitizeScreenText(i.app) : ''}`
   switch (bare) {
     case 'computer_screenshot': return '电脑 · 截图'
     case 'computer_click': return withPt('点击', pt(i))
@@ -591,9 +603,10 @@ export const ACT_LABEL: Readonly<Record<ActAction, string>> = {
 /** 「在 WorkBuddy 中点击 按钮「新建会话」」(spec §10)。app / element 缺省就省掉对应的部分。 */
 export function elementPhrase(view: CuActionView): string {
   const app = typeof view.app === 'object' ? view.app : undefined
-  const lead = `${app ? `在 ${app.name} 中` : ''}${view.actLabel ?? ''}`
+  // app / 控件名都是屏幕来源的脏数据(或者至少和屏幕文字同等不可信):同一套处理,120 字封顶(和 cuSnapshotRender 的名字一致)。
+  const lead = `${app ? `在 ${sanitizeScreenText(app.name, 120)} 中` : ''}${view.actLabel ?? ''}`
   const role = view.element ? (ROLE_LABEL[view.element.role] ?? '控件') : ''
-  const name = view.element?.name ? `「${view.element.name}」` : ''
+  const name = view.element?.name ? `「${sanitizeScreenText(view.element.name, 120)}」` : ''
   return [lead, role + name].filter(Boolean).join(' ')
 }
 

@@ -435,6 +435,17 @@ describe('ROLE_LABEL / ACT_LABEL / elementPhrase', () => {
       kind: 'act', app: { name: 'WorkBuddy', bundleId: 'x' }, element: { role: 'weird' }, actLabel: '点击',
     })).toBe('在 WorkBuddy 中点击 控件')
   })
+  // Fix round 1: app name / element name are screen-derived (or at least as untrusted as screen text) and must go
+  // through the same sanitizing + 120-char cap as the snapshot renderer, not appear raw.
+  it('sanitizes and caps the app name and the element name the same way the snapshot renderer does', () => {
+    expect(elementPhrase({
+      kind: 'act', app: { name: 'Work\tBuddy', bundleId: 'x' }, element: { role: 'button', name: 'a\u0000b' }, actLabel: '点击',
+    })).toBe('在 Work Buddy 中点击 按钮「a␀b」')
+    const longName = 'x'.repeat(200)
+    expect(elementPhrase({
+      kind: 'act', app: { name: 'WorkBuddy', bundleId: 'x' }, element: { role: 'button', name: longName }, actLabel: '点击',
+    })).toBe(`在 WorkBuddy 中点击 按钮「${'x'.repeat(120)}…」`)
+  })
 })
 
 describe('CU_SCHEMAS', () => {
@@ -508,6 +519,24 @@ describe('CU_SCHEMAS', () => {
     good('computer_wait_for', { app: 'WorkBuddy', role: 'button', nameContains: '发送', gone: true, timeoutMs: 30000 })
     bad('computer_wait_for', { app: 'WorkBuddy', timeoutMs: 99 })
     bad('computer_wait_for', { app: 'WorkBuddy', timeoutMs: 30001 })
+  })
+  // Fix round 1, finding 4: value needs the same max as text; text/value refuse NUL and lone surrogates like
+  // computer_type does; window must be a non-negative int.
+  it('computer_act.value: capped at 2000, refuses NUL / lone surrogates like text does', () => {
+    good('computer_act', { ref: '@s3:e9', action: 'set', value: 'x'.repeat(2000) })
+    bad('computer_act', { ref: '@s3:e9', action: 'set', value: 'x'.repeat(2001) })
+    bad('computer_act', { ref: '@s3:e9', action: 'type', text: 'a\u0000b' })
+    bad('computer_act', { ref: '@s3:e9', action: 'type', text: 'a\ud800b' })
+    bad('computer_act', { ref: '@s3:e9', action: 'set', value: 'a\u0000b' })
+    bad('computer_act', { ref: '@s3:e9', action: 'set', value: 'a\udc00' })
+    good('computer_act', { ref: '@s3:e9', action: 'type', text: 'a😀b' })
+  })
+  it('computer_snapshot / computer_focus: window must be a non-negative int', () => {
+    good('computer_snapshot', { app: 'WorkBuddy', window: 0 })
+    bad('computer_snapshot', { app: 'WorkBuddy', window: -1 })
+    bad('computer_snapshot', { app: 'WorkBuddy', window: 1.5 })
+    good('computer_focus', { app: 'WorkBuddy', window: 0 })
+    bad('computer_focus', { app: 'WorkBuddy', window: -1 })
   })
 })
 

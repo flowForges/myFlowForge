@@ -1,9 +1,12 @@
-import { COMPUTER_TOOLS } from '@shared/computerUse'
+import { V1_TOOLS } from '@shared/computerUse'
 
 /** Model-facing env flag set by cuBeginTurn: a local turn on a provisioned machine with the mode off. Never shown in the UI. */
 export const CU_OFF_HINT_ENV = 'FORGE_CU_OFF_HINT'
 
-const NAMES = COMPUTER_TOOLS.map((t) => `mcp__forge__${t}`)
+// R7: the semantic (control-tree) tools don't have an executor yet (Task 6/7) — naming them here would send the
+// model at computer_apps/launch/snapshot/act/focus/wait_for/windows and get back a misleading invalid_args. Only
+// the v1 coordinate tools (computer_key included, v1-style) are live, so only they go in the directive.
+const NAMES = V1_TOOLS.map((t) => `mcp__forge__${t}`)
 
 /**
  * What a chat turn's model is told about computer use (spec §4.3; 实测 1.3.0-cu.1: without it the model reached for
