@@ -3,6 +3,7 @@ import { defaultComputerUse, type ComputerUseSettings } from '../config/schema'
 import { fakeDriver, type AxApp } from './fakeDriver'
 import { createExecutor, type ExecutorDeps } from './executor'
 import { runSemantic } from './semantic'
+import { cuHiderFor } from './runtime'
 import type { CuGate, CuLogEntry, CuSessionKey, GateDecision, ServiceInternals } from './types'
 
 const K: CuSessionKey = { workspacePath: '/w/a', sessionId: 's-a' }
@@ -33,7 +34,7 @@ const TERM: AxApp = {
   tree: [{ ref: 'e1', depth: 0, role: 'textfield', name: 'shell', states: [], actions: ['type'] }],
 }
 
-function setup(o: { mode?: 'ask' | 'allow'; settings?: Partial<ComputerUseSettings>; physical?: boolean } = {}) {
+function setup(o: { mode?: 'ask' | 'allow'; settings?: Partial<ComputerUseSettings>; physical?: boolean; realHider?: boolean } = {}) {
   const apps = [WB, OWN, PW, TERM]
   const driver = fakeDriver({
     ax: { apps },
@@ -49,7 +50,9 @@ function setup(o: { mode?: 'ask' | 'allow'; settings?: Partial<ComputerUseSettin
   const st = { mode: o.mode ?? 'allow' as 'ask' | 'allow' | 'off', turn: 1, enable: 1 }
   const entries: CuLogEntry[] = []
   const calls: string[] = []
-  const hider = { beforeMutation: vi.fn(async () => { calls.push('hide') }) }
+  const hider = o.realHider
+    ? cuHiderFor({ driver, ownPid: OWN_PID, windows: () => [] })
+    : { beforeMutation: vi.fn(async () => { calls.push('hide') }) }
   for (const m of ['act', 'launch', 'focusWindow', 'appKey', 'snapshot', 'waitFor'] as const) {
     const real = (driver[m] as (...a: unknown[]) => Promise<unknown>).bind(driver)
     ;(driver as Record<string, unknown>)[m] = async (...a: unknown[]) => { calls.push(m); return real(...a) }
@@ -549,6 +552,37 @@ describe('counting and pacing (spec §7.3)', () => {
     expect(s.hider.beforeMutation).toHaveBeenCalledTimes(1)
     expect(s.hider.beforeMutation).toHaveBeenCalledWith(WB.instance)
     expect(s.calls.slice(-2)).toEqual(['hide', 'act'])
+  })
+})
+
+describe('I1: launch first, then act — the front still leaves us (spec §9.1)', () => {
+  it('launch (no target) → act click → act type: focusWindow(WorkBuddy) exactly once, before the type', async () => {
+    const s = setup({ realHider: true })
+    s.driver.setFront({ pid: OWN_PID, layer: 0 })
+    const real = s.driver.focusWindow.bind(s.driver)
+    ;(s.driver as Record<string, unknown>).focusWindow = async (fo: Parameters<typeof real>[0]) => {
+      s.calls.push(`focus:${fo.pid}`)
+      await real(fo)
+      s.driver.setFront({ pid: fo.pid, layer: 0 })
+    }
+    s.driver.setAxApps([WB])
+    ;(s.driver as Record<string, unknown>).runningApps = async () => []
+    expect((await s.run('launch', { app: WB.bundleId, activate: true })).ok).toBe(true)
+    s.driver.setFront({ pid: OWN_PID, layer: 0 })
+    expect((await s.run('act', { ref: await s.refOf(WB), action: 'click' })).ok).toBe(true)
+    expect((await s.run('act', { ref: await s.refOf(WB, 'e2'), action: 'type', text: 'hi' })).ok).toBe(true)
+    const focuses = s.calls.filter((c) => c.startsWith('focus:'))
+    expect(focuses).toEqual([`focus:${WB.instance.pid}`])
+    expect(s.calls.indexOf(focuses[0])).toBeLessThan(s.calls.lastIndexOf('act'))
+  })
+
+  it('launch with activate:false hands the launched instance to the hider: the front moves to it', async () => {
+    const s = setup({ realHider: true })
+    s.driver.setFront({ pid: OWN_PID, layer: 0 })
+    s.driver.setAxApps([WB])
+    ;(s.driver as Record<string, unknown>).runningApps = async () => []
+    expect((await s.run('launch', { app: WB.bundleId })).ok).toBe(true)
+    expect(s.driver.focusWindows.map((f) => f.pid)).toEqual([WB.instance.pid])
   })
 })
 

@@ -381,6 +381,9 @@ export async function runSemantic(
         if (c.kind === 'block') {
           return { ok: false, code: c.code, delivery: 'delivered_unverified', retry: 'unsafe', text: `${CU_ERR[c.code]} · 应用已经被打开 · 不要再打开它` }
         }
+        // activate:false leaves the front where it was: if that is still us (the windows hidden, nothing to type
+        // into), hand the launched instance to the hider so the front leaves us (spec §9.1). activate:true moved it.
+        if (a.activate !== true) await stepAside(d, r.instance)
         const info = {
           pid: r.instance.pid, bundleId: wrapUntrusted(r.bundleId),
           windows: r.windows.map((w) => ({ window: w.number, title: wrapUntrusted(w.title ?? '') })),

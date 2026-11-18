@@ -3,6 +3,8 @@
 //
 // - Before the first mutating action of a turn (semantic act or physical post): hide() every visible window except the
 //   pet, remember which, and if we are still the front app ask forge-cu to focus the target, so the front leaves us.
+//   Hidden and front-moved are separate latches: a first call without a target (computer_launch) hides but can't move
+//   the front, so a later call in the same turn that carries a target, while we are still front, activates it (once).
 // - restore(): showInactive() only the windows we hid (never activates), then forget them.
 // - The user reopening a window we hid (Dock click, the overlay's 打开主窗口) ends auto-hide until the next turn, and
 //   that window is no longer ours to restore. Show events caused by restore() itself are not a reopen.
@@ -32,6 +34,8 @@ export function createWindowHider(o: {
   const hidden = new Set<number>()
   /** we stepped aside since the last turn start / restore */
   let aside = false
+  /** the front left us (or we asked the target to take it) since the last turn start / restore */
+  let frontMoved = false
   /** the user reopened a window this turn: no more auto-hide */
   let userShown = false
   let restoring = false
@@ -43,25 +47,34 @@ export function createWindowHider(o: {
 
   return {
     async beforeMutation(target) {
-      if (aside || userShown || !isLive()) return
-      aside = true
+      if (userShown || !isLive()) return
       const g = gen
-      for (const w of list()) {
-        if (w.isPet) continue
-        try {
-          if (!w.isVisible()) continue
-          w.hide()
-          hidden.add(w.id)
-        } catch { /* destroyed meanwhile */ }
+      if (!aside) {
+        aside = true
+        for (const w of list()) {
+          if (w.isPet) continue
+          try {
+            if (!w.isVisible()) continue
+            w.hide()
+            hidden.add(w.id)
+          } catch { /* destroyed meanwhile */ }
+        }
+      } else if (frontMoved || !target) {
+        return
       }
-      let front = false
-      try { front = await o.isOwnAppFront() } catch { front = false }
-      if (front && g === gen && isLive()) { try { await o.activateAway(target) } catch { /* semantic actions don't need the front */ } }
+      let front: boolean | null = null
+      try { front = await o.isOwnAppFront() } catch { front = null }
+      if (g !== gen || !isLive() || front === null) return
+      if (!front) { frontMoved = true; return }
+      // no target (launch, a coordinate tool): nothing to activate yet; the next call with a target tries again
+      if (target) frontMoved = true
+      try { await o.activateAway(target) } catch { /* semantic actions don't need the front */ }
     },
 
     restore() {
       gen++
       aside = false
+      frontMoved = false
       if (!hidden.size) return
       const ids = new Set(hidden)
       hidden.clear()
@@ -85,6 +98,7 @@ export function createWindowHider(o: {
     turnStarted() {
       userShown = false
       aside = false
+      frontMoved = false
     },
   }
 }

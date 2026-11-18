@@ -54,6 +54,41 @@ describe('createWindowHider (spec §9.1, §9.3)', () => {
     expect(u.activateAway).not.toHaveBeenCalled()
   })
 
+  it('I1: hidden first without a target (launch), still front → the next mutation with a target activates it, exactly once', async () => {
+    const t = setup({ front: [true] })
+    t.h.turnStarted()
+    await t.h.beforeMutation()
+    expect(t.main.hide).toHaveBeenCalledTimes(1)
+    expect(t.activateAway).not.toHaveBeenCalledWith(T)
+    await t.h.beforeMutation(T)
+    expect(t.main.hide).toHaveBeenCalledTimes(1)
+    expect(t.activateAway).toHaveBeenCalledWith(T)
+    await t.h.beforeMutation(T)
+    await t.h.beforeMutation(T)
+    expect(t.activateAway.mock.calls.filter((c) => c[0] === T)).toHaveLength(1)
+  })
+
+  it('I1: the front already left us → later mutations neither activate nor ask again', async () => {
+    const t = setup({ front: [false] })
+    await t.h.beforeMutation(T)
+    await t.h.beforeMutation(T)
+    expect(t.activateAway).not.toHaveBeenCalled()
+    expect(t.isOwnAppFront).toHaveBeenCalledTimes(1)
+  })
+
+  it('I1: a late targeted call after the turn ended moves nothing; a restore resets the front latch', async () => {
+    let live = true
+    const t = setup({ front: [true], live: () => live })
+    await t.h.beforeMutation(T)
+    expect(t.activateAway).toHaveBeenCalledTimes(1)
+    t.h.restore()
+    await t.h.beforeMutation(T)
+    expect(t.activateAway).toHaveBeenCalledTimes(2)
+    live = false
+    await t.h.beforeMutation(T)
+    expect(t.activateAway).toHaveBeenCalledTimes(2)
+  })
+
   it('the front check runs after the windows are hidden', async () => {
     const t = setup({ front: [true] })
     t.isOwnAppFront.mockImplementation(async () => { expect(t.main.hide).toHaveBeenCalled(); return false })
