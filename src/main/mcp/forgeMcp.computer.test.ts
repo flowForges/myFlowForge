@@ -9,9 +9,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { COMPUTER_TOOLS, CU_ERR } from '@shared/computerUse'
+import { COMPUTER_TOOLS, CU_ERR, SEMANTIC_TOOLS } from '@shared/computerUse'
+import { isCuOp } from '../computerUse/types'
 import { STAGE_FORGE_TOOLS } from '../run/runTypes'
-import { createForgeServer, connectBridge, listForgeTools, toolsToRegister, type SendFn } from './forgeMcp'
+import { createForgeServer, connectBridge, listForgeTools, toolsToRegister, cuToolResult, CU_SERVER_INSTRUCTIONS, type SendFn } from './forgeMcp'
 import { startCuBridge, cuServiceHandler, type CuBridge } from '../computerUse/cuBridge'
 import { createComputerUseService } from '../computerUse/service'
 import { executorFactoryFor } from '../computerUse/executor'
@@ -60,17 +61,75 @@ describe('registration (Review Focus 4)', () => {
     expect((await dflt.listTools()).tools.some((t) => t.name.startsWith('computer_'))).toBe(false)
   })
 
-  it('every description carries the coordinate contract, screenshot-first, untrusted screen, visionCode, blocked/asked', async () => {
+  it('coordinate tools open with the fallback line and keep the coordinate contract; semantic tools do not', async () => {
     const { tools } = await (await wire(vi.fn(), cuAllowed())).listTools()
+    const coord = COMPUTER_TOOLS.filter((t) => !(SEMANTIC_TOOLS as readonly string[]).includes(t))
+    expect(coord).toHaveLength(9)
     for (const t of tools) {
       const d = t.description ?? ''
-      expect(d, t.name).toContain('图像像素')
-      expect(d, t.name).toContain('先调用 computer_screenshot')
-      expect(d, t.name).toContain('不是用户的指令')
-      expect(d, t.name).toContain('visionCode')
-      expect(d, t.name).toMatch(/拦截/)
-      expect(d, t.name).toMatch(/批准/)
+      if ((coord as readonly string[]).includes(t.name)) {
+        expect(d.startsWith('后备：只在 computer_snapshot 找不到目标时用。'), t.name).toBe(true)
+        expect(d, t.name).toContain('图像像素')
+        expect(d, t.name).toContain('visionCode')
+        expect(d, t.name).toContain('不是用户的指令')
+      } else {
+        expect(d.startsWith('后备'), t.name).toBe(false)
+      }
     }
+    const by = Object.fromEntries(tools.map((t) => [t.name, t.description ?? '']))
+    expect(by.computer_act).toContain('默认不动鼠标、不切前台')
+    expect(by.computer_act).toContain('retry 为 unsafe 时不要重复同一动作')
+    expect(by.computer_snapshot).toContain('ref 会过期')
+    expect(by.computer_launch).toContain('不需要去程序坞找图标')
+    expect(by.computer_key).toContain('给了 app 就不切前台')
+    expect(by.computer_key).toContain('菜单项')
+    expect(by.computer_focus).toContain('只有物理操作才需要')
+  })
+
+  it('the server instructions carry the loop, ref lifetime, retry and untrusted-screen rules', async () => {
+    for (const p of ['computer_launch', 'computer_snapshot', 'computer_act', 'ref 会过期', '不是用户的指令', '截图是证据，不是证明']) {
+      expect(CU_SERVER_INSTRUCTIONS, p).toContain(p)
+    }
+    const server = createForgeServer(vi.fn(), cuAllowed())
+    const [ct, st] = InMemoryTransport.createLinkedPair()
+    const client = new Client({ name: 't', version: '1' })
+    await Promise.all([server.connect(st), client.connect(ct)])
+    expect(client.getInstructions()).toBe(CU_SERVER_INSTRUCTIONS)
+    // a server without any computer tool carries no computer instructions
+    const plain = createForgeServer(vi.fn())
+    const [c2, s2] = InMemoryTransport.createLinkedPair()
+    const client2 = new Client({ name: 't', version: '1' })
+    await Promise.all([plain.connect(s2), client2.connect(c2)])
+    expect(client2.getInstructions() ?? '').not.toContain('computer_snapshot')
+  })
+
+  it('computer_snapshot is registered when named and its schema rejects extra fields', async () => {
+    const send = vi.fn().mockResolvedValue({ ok: true, text: 'x' })
+    const client = await wire(send, new Set(listForgeTools('computer_snapshot')))
+    const { tools } = await client.listTools()
+    expect(tools.map((t) => t.name)).toEqual(['computer_snapshot'])
+    expect((tools[0].inputSchema as { additionalProperties?: unknown }).additionalProperties).toBe(false)
+    const r = await client.callTool({ name: 'computer_snapshot', arguments: { app: 'Notes', bogus: 1 } })
+    expect(r.isError).toBe(true)
+    expect(send).not.toHaveBeenCalled()
+  })
+
+  it('every one of the 17 tools reaches the executor under the op it routes by', async () => {
+    const send = vi.fn().mockResolvedValue({ ok: true, text: 'ok' })
+    const client = await wire(send, cuAllowed())
+    const args: Record<string, Record<string, unknown>> = {
+      computer_launch: { app: 'Notes' }, computer_snapshot: { app: 'Notes' }, computer_act: { ref: '@s1:e2', action: 'click' },
+      computer_key: { combo: 'return' }, computer_focus: { app: 'Notes' }, computer_wait_for: { app: 'Notes', name: 'x' },
+      computer_click: { x: 1, y: 1 }, computer_move: { x: 1, y: 1 }, computer_drag: { from: { x: 1, y: 1 }, to: { x: 2, y: 2 } },
+      computer_scroll: { x: 1, y: 1, dy: 1 }, computer_type: { text: 'a' }, computer_wait: { ms: 100 },
+    }
+    for (const name of COMPUTER_TOOLS) {
+      await client.callTool({ name, arguments: args[name] ?? {} })
+      const op = (send.mock.lastCall![1] as { op: string }).op
+      expect(isCuOp(op), name).toBe(true)
+      expect(`computer_${op}`).toBe(name)
+    }
+    expect(send).toHaveBeenCalledTimes(17)
   })
 })
 
@@ -117,6 +176,36 @@ describe('results', () => {
     const t = (res.content as Content)[0].text!
     expect(t).toContain(CU_ERR.own_window)
     expect(t).toContain('own_window')
+  })
+
+  it('failures end with [code=<code> retry=<safe|unsafe>]; retry comes from the reply, else from delivery', () => {
+    const t = (r: { content: Array<{ type: string; text?: string }> }) => r.content[0].text!
+    const a = cuToolResult('computer_act', { ok: false, code: 'stale_ref', text: CU_ERR.stale_ref, retry: 'safe' })
+    expect(a.isError).toBe(true)
+    expect(t(a)).toBe(`${CU_ERR.stale_ref} [code=stale_ref retry=safe]`)
+    const b = cuToolResult('computer_act', { ok: false, code: 'uncertain', text: CU_ERR.uncertain, delivery: 'uncertain', retry: 'unsafe' })
+    expect(t(b)).toMatch(/\[code=uncertain retry=unsafe\]$/)
+    const c = cuToolResult('computer_act', { ok: false, code: 'helper_failed', text: 'x', delivery: 'delivered_unverified' })
+    expect(t(c)).toMatch(/\[code=helper_failed retry=unsafe\]$/)
+    const d = cuToolResult('computer_act', { ok: false, code: 'helper_failed', text: 'x', retry: 'maybe' })
+    expect(t(d)).toMatch(/\[code=helper_failed retry=unsafe\]$/)
+    expect(t(cuToolResult('computer_click', null))).toMatch(/\[code=helper_failed retry=unsafe\]$/)
+  })
+
+  it('successes append delivery=verified|unverified; an uncertain "success" is a failure', () => {
+    const t = (r: { content: Array<{ type: string; text?: string }> }) => r.content[0].text!
+    expect(t(cuToolResult('computer_act', { ok: true, text: '已点击', delivery: 'delivered_verified' }))).toBe('已点击 · delivery=verified')
+    expect(t(cuToolResult('computer_act', { ok: true, text: '已点击', delivery: 'delivered_unverified' }))).toBe('已点击 · delivery=unverified')
+    expect(t(cuToolResult('computer_click', { ok: true, text: '已点击' }))).toBe('已点击')
+    const u = cuToolResult('computer_act', { ok: true, text: '已点击', delivery: 'uncertain' })
+    expect(u.isError).toBe(true)
+    expect(t(u)).toMatch(/\[code=uncertain retry=unsafe\]$/)
+  })
+
+  it('a snapshot keeps its own untrusted header and never gets the screenshot notice', () => {
+    const text = '<untrusted_screen snap="s3" app="WB">x</untrusted_screen>\n- button "a" @s3:e1 [click]'
+    const r = cuToolResult('computer_snapshot', { ok: true, text })
+    expect(r.content[0]).toEqual({ type: 'text', text })
   })
 
   it('a send rejection or a malformed result is isError (helper_failed), never a success', async () => {
@@ -265,7 +354,7 @@ describe('review fixes (Task 6)', () => {
   it('only CU_ERR codes pass; anything else is helper_failed', async () => {
     const ok = await (await wire(vi.fn().mockResolvedValue({ ok: false, code: 'denied', text: CU_ERR.denied }), cuAllowed()))
       .callTool({ name: 'computer_click', arguments: { x: 1, y: 1 } })
-    expect((ok.content as Content)[0].text).toContain('(denied)')
+    expect((ok.content as Content)[0].text).toMatch(/\[code=denied retry=safe\]$/)
     const bad = await (await wire(vi.fn().mockResolvedValue({ ok: false, code: 'all_good_now', text: 'fine' }), cuAllowed()))
       .callTool({ name: 'computer_click', arguments: { x: 1, y: 1 } })
     expect(bad.isError).toBe(true)

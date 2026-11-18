@@ -1,7 +1,7 @@
 /**
  * M-11: the env → stdio-entry seam. A local turn's env (cuBeginTurn) goes through the claude config file
  * (forgeMcpArgs) into the env block the MCP child gets; the entry reads FORGE_SOCKET / FORGE_AGENT_ID / FORGE_TOOLS
- * from exactly that block and serves the ten computer tools over a real cu socket, tagged with the turn's token.
+ * from exactly that block and serves all seventeen computer tools over a real cu socket, tagged with the turn's token.
  * Nothing here spawns a process: the entry's config reader and server run in-process.
  */
 import { describe, it, expect, afterEach } from 'vitest'
@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { V1_TOOLS } from '@shared/computerUse'
+import { COMPUTER_TOOLS } from '@shared/computerUse'
 import { connectBridge, createForgeServer, forgeEntryConfig } from './forgeMcp'
 import { forgeCodexConfigArgs, forgeMcpArgs } from '../agents/mcpConfig'
 import { cuBeginTurn } from '../computerUse/chatTurn'
@@ -52,7 +52,7 @@ async function armedTurn() {
 }
 
 describe('env → stdio entry (M-11)', () => {
-  it('the claude config file hands the entry FORGE_SOCKET / FORGE_AGENT_ID / FORGE_TOOLS; the entry serves the ten tools over the cu socket with the token', async () => {
+  it('the claude config file hands the entry FORGE_SOCKET / FORGE_AGENT_ID / FORGE_TOOLS; the entry serves all seventeen tools over the cu socket with the token', async () => {
     const { env, end, seen, bridge } = await armedTurn()
     const args = forgeMcpArgs(env)
     expect(args[0]).toBe('--mcp-config')
@@ -62,14 +62,13 @@ describe('env → stdio entry (M-11)', () => {
     const cfg = forgeEntryConfig(child.env)
     expect(cfg.socketPath).toBe(bridge.socketPath)
     expect(cfg.agentId).toBe(TOKEN)
-    // R7: a local turn only grants the v1 (coordinate) tools until Task 6/7 wires up the semantic ones.
-    expect([...cfg.allowed!].sort()).toEqual([...V1_TOOLS].sort())
+    expect([...cfg.allowed!].sort()).toEqual([...COMPUTER_TOOLS].sort())
 
     const server = createForgeServer(connectBridge(cfg.socketPath!, cfg.agentId).send, cfg.allowed)
     const [ct, st] = InMemoryTransport.createLinkedPair()
     const client = new Client({ name: 'claude-code', version: '9.9.9' })
     await Promise.all([server.connect(st), client.connect(ct)])
-    expect((await client.listTools()).tools.map((t) => t.name).sort()).toEqual([...V1_TOOLS].sort())
+    expect((await client.listTools()).tools.map((t) => t.name).sort()).toEqual([...COMPUTER_TOOLS].sort())
     const r = await client.callTool({ name: 'computer_front_app', arguments: {} })
     expect(r.isError).toBeFalsy()
     expect(seen).toEqual([{ agentId: TOKEN, op: 'front_app' }])

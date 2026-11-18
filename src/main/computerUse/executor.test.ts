@@ -26,6 +26,7 @@ function setup(o: {
   settings?: Partial<ComputerUseSettings>
   accel?: string[]
   log?: ActionLog
+  hider?: { beforeMutation(target?: unknown): Promise<void> }
 } = {}) {
   const driver = fakeDriver({
     front: o.front === undefined ? APP : o.front, hits: o.hit === undefined ? APP : o.hit,
@@ -66,6 +67,7 @@ function setup(o: {
     settings: () => ({ ...defaultComputerUse(), ...o.settings }),
     ownPid: OWN_PID, ownAccelerators: () => o.accel ?? ['CommandOrControl+Alt+F', 'CommandOrControl+Shift+P', 'Control+Alt+Command+Escape'],
     log: memLog, hidIsPhysical: () => o.physical ?? false,
+    ...(o.hider ? { hider: o.hider } : {}),
   })
   const run = (op: Parameters<typeof ex.run>[1], args: unknown = {}) => ex.run(K, op, args, META)
   return {
@@ -379,7 +381,7 @@ describe('myFlowForge is never driven', () => {
     await s.ready()
     s.driver.setPostResult({ ok: false, code: 'target_changed', typed: 5 })
     const r = await s.run('type', { text: 'hello world' })
-    expect(r).toMatchObject({ ok: false, code: 'target_changed' })
+    expect(r).toMatchObject({ ok: false, code: 'target_changed', retry: 'unsafe' })
     expect(r.text).toContain('5')
   })
 
@@ -515,65 +517,18 @@ describe('approvals', () => {
     }
   })
 
-  it('an approval older than 15 s re-crops; a changed signature re-opens the gate once', async () => {
+  it('P3 gone: a late approval with a changed picture posts without re-cropping or asking again', async () => {
     const s = setup({ mode: 'ask' })
     await s.ready()
-    s.onGate(() => { s.setClock(s.clock() + 20_000); s.driver.setCropSig('/////') })
+    s.onGate(() => { s.setClock(s.clock() + 60_000); s.driver.setCropSig('/////') })
     const r = await s.run('click', { x: 5, y: 5 })
     expect(r.ok).toBe(true)
-    expect(s.gates).toHaveLength(2)
-    expect(gateCrops(s)).toHaveLength(2)
-    expect(s.driver.posts).toHaveLength(1)
-  })
-
-  it('an approval older than 15 s with the same signature posts without asking again', async () => {
-    const s = setup({ mode: 'ask' })
-    await s.ready()
-    s.onGate(() => s.setClock(s.clock() + 20_000))
-    expect((await s.run('click', { x: 5, y: 5 })).ok).toBe(true)
     expect(s.gates).toHaveLength(1)
-    expect(gateCrops(s)).toHaveLength(2)
-    expect(s.driver.posts).toHaveLength(1)
-  })
-
-  it('a fresh approval does not re-crop', async () => {
-    const s = setup({ mode: 'ask' })
-    await s.ready()
-    s.onGate(() => s.setClock(s.clock() + 14_000))
-    await s.run('click', { x: 5, y: 5 })
     expect(gateCrops(s)).toHaveLength(1)
-  })
-
-  it('a small signature change under 8% posts', async () => {
-    const s = setup({ mode: 'ask' })
-    await s.ready()
-    s.driver.setCropSig(Buffer.alloc(1024, 100).toString('base64'))
-    s.onGate(() => { s.setClock(s.clock() + 20_000); s.driver.setCropSig(Buffer.alloc(1024, 110).toString('base64')) })
-    await s.run('click', { x: 5, y: 5 })
-    expect(s.gates).toHaveLength(1)
     expect(s.driver.posts).toHaveLength(1)
   })
 
-  it('after an approval that left us in front, the target is activated before the post', async () => {
-    const s = setup({ mode: 'ask' })
-    await s.ready()
-    const order: string[] = []
-    let ours = true
-    const front = s.driver.front.bind(s.driver)
-    s.driver.front = async () => (ours ? { ...APP, pid: OWN_PID } : front())
-    s.driver.activate = async (pid: number) => { order.push(`activate:${pid}`); ours = false }
-    const post = s.driver.post.bind(s.driver)
-    s.driver.post = async (a, g) => { order.push('post'); return post(a, g) }
-    // the first front() (target) must be real: switch after the gate
-    ours = false
-    s.onGate(() => { ours = true })
-    const r = await s.run('click', { x: 5, y: 5 })
-    expect(r.ok).toBe(true)
-    expect(order).toEqual(['activate:500', 'post'])
-    expect(s.sleeps).toContain(150)
-  })
-
-  it('still ours after activating: target_changed, no post', async () => {
+  it('no refocus after a gate: an approval that left us in front never activates anything', async () => {
     const s = setup({ mode: 'ask' })
     await s.ready()
     let ours = false
@@ -581,9 +536,53 @@ describe('approvals', () => {
     s.driver.front = async () => (ours ? { ...APP, pid: OWN_PID } : front())
     s.onGate(() => { ours = true })
     const r = await s.run('click', { x: 5, y: 5 })
-    expect(r).toMatchObject({ ok: false, code: 'target_changed' })
-    expect(s.driver.activations).toEqual([500])
-    expect(s.driver.posts).toHaveLength(0)
+    expect(r.ok).toBe(true)
+    expect(s.driver.activations).toEqual([])
+    expect(s.driver.posts).toHaveLength(1)
+  })
+})
+
+describe('hider (spec §7.1, §9.1)', () => {
+  const mk = (mode: 'ask' | 'allow' = 'allow') => {
+    const order: string[] = []
+    const hider = { beforeMutation: vi.fn(async (_t?: unknown) => { order.push('hide') }) }
+    const s = setup({ mode, hider })
+    const post = s.driver.post.bind(s.driver)
+    s.driver.post = async (a, g) => { order.push('post'); return post(a, g) }
+    return { s, hider, order }
+  }
+
+  it('every physical coordinate post is preceded by beforeMutation() without a target', async () => {
+    for (const [op, args] of [
+      ['click', { x: 5, y: 5 }], ['drag', { from: { x: 1, y: 1 }, to: { x: 9, y: 9 } }], ['scroll', { x: 5, y: 5, dy: 3 }],
+      ['type', { text: 'hi' }], ['key', { combo: 'return' }],
+    ] as const) {
+      const { s, hider, order } = mk()
+      await s.ready()
+      hider.beforeMutation.mockClear(); order.length = 0
+      expect((await s.run(op, args)).ok, op).toBe(true)
+      expect(hider.beforeMutation, op).toHaveBeenCalledTimes(1)
+      expect(hider.beforeMutation.mock.calls[0], op).toEqual([])
+      expect(order, op).toEqual(['hide', 'post'])
+    }
+  })
+
+  it('move, screenshots and refused or denied actions never hide', async () => {
+    const { s, hider } = mk('ask')
+    await s.ready()
+    hider.beforeMutation.mockClear()
+    await s.run('move', { x: 5, y: 5 })
+    await s.run('screenshot')
+    s.decisions.push('deny')
+    expect(await s.run('click', { x: 5, y: 5 })).toMatchObject({ ok: false, code: 'denied' })
+    expect(hider.beforeMutation).not.toHaveBeenCalled()
+  })
+
+  it('a hider that throws does not stop the post', async () => {
+    const s = setup({ hider: { beforeMutation: async () => { throw new Error('x') } } })
+    await s.ready()
+    expect((await s.run('click', { x: 5, y: 5 })).ok).toBe(true)
+    expect(s.driver.posts).toHaveLength(1)
   })
 })
 

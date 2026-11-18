@@ -7,7 +7,7 @@
 // The provider is in COMPUTER_USE_PROVIDERS (Tier-2 providers would write the token into project files). The mode was
 // on at preflight, so the conflict check ran and passed, and it's still on at beginTurn.
 import { rmSync } from 'node:fs'
-import { V1_TOOLS, computerUseConflict, providerSupportsComputerUse, type CuStatus } from '@shared/computerUse'
+import { COMPUTER_TOOLS, computerUseConflict, providerSupportsComputerUse, type CuStatus } from '@shared/computerUse'
 import type { ChatSendPayload } from '@shared/types'
 import type { PermissionMode } from '@shared/permissions'
 import type { ComputerUseHost } from '../host/capabilities'
@@ -89,8 +89,7 @@ export function cuBeginTurn(
     a.env.FORGE_MCP_DIR = a.armed.configDir
     a.env.FORGE_AGENT_ID = token
     a.env.FORGE_MCP_ENTRY = a.mcpEntry
-    // R7: the semantic (control-tree) tools don't have an executor yet (Task 6/7) — only grant the v1 ones.
-    a.env.FORGE_TOOLS = V1_TOOLS.join(',')
+    a.env.FORGE_TOOLS = COMPUTER_TOOLS.join(',')
   } else if (a.origin === 'local' && providerSupportsComputerUse(a.agent) && cu.service.modeOf(key) === 'off' && provisioned(cu)) {
     // B: someone who has enabled computer use before, now with the switch off. One model-facing line, never in the UI.
     a.env[CU_OFF_HINT_ENV] = '1'

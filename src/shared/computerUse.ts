@@ -77,12 +77,8 @@ export const SEMANTIC_TOOLS = [
   'computer_focus', 'computer_wait_for', 'computer_windows',
 ] as const
 
-/**
- * v1 原 10 个坐标工具,原样的顺序(物理后备,§6.9)。R7:语义工具的执行器还没接上(Task 6/7),
- * 这十个是唯一已经真正可用的——chatTurn(FORGE_TOOLS)和 computerUseDirective 只暴露这张表,
- * 不能用 COMPUTER_TOOLS(那张表已经把 8 个语义工具也列进去了,是给 schema / forgeMcp 注册用的全集)。
- */
-export const V1_TOOLS = [
+/** v1 原 10 个坐标工具,原样的顺序(物理后备,§6.9);`computer_key` 在语义工具里(带 app 不切前台,不带 app 是 v1 的按键)。 */
+const V1_TOOLS = [
   'computer_screenshot', 'computer_click', 'computer_move', 'computer_drag', 'computer_scroll',
   'computer_type', 'computer_key', 'computer_wait', 'computer_cursor', 'computer_front_app',
 ] as const

@@ -1,12 +1,10 @@
-import { V1_TOOLS } from '@shared/computerUse'
+import { COMPUTER_TOOLS } from '@shared/computerUse'
 
 /** Model-facing env flag set by cuBeginTurn: a local turn on a provisioned machine with the mode off. Never shown in the UI. */
 export const CU_OFF_HINT_ENV = 'FORGE_CU_OFF_HINT'
 
-// R7: the semantic (control-tree) tools don't have an executor yet (Task 6/7) — naming them here would send the
-// model at computer_apps/launch/snapshot/act/focus/wait_for/windows and get back a misleading invalid_args. Only
-// the v1 coordinate tools (computer_key included, v1-style) are live, so only they go in the directive.
-const NAMES = V1_TOOLS.map((t) => `mcp__forge__${t}`)
+// Semantic (control-tree) tools first, then the coordinate fallback (COMPUTER_TOOLS' order, spec §8.1).
+const NAMES = COMPUTER_TOOLS.map((t) => `mcp__forge__${t}`)
 
 /**
  * What a chat turn's model is told about computer use (spec §4.3; 实测 1.3.0-cu.1: without it the model reached for
@@ -18,7 +16,8 @@ export function computerUseDirective(env: NodeJS.ProcessEnv): string {
   if (tools.some((t) => t.startsWith('computer_'))) {
     return [
       `【电脑操作】这一轮你有 myFlowForge 提供的电脑操作工具:${NAMES.join(', ')}。`,
-      '· 先调用 mcp__forge__computer_screenshot 看清屏幕,再动手;屏幕变了就重新截图。',
+      '· 优先走控件树:mcp__forge__computer_apps 或 mcp__forge__computer_launch 找到应用 → mcp__forge__computer_snapshot 拿 ref → mcp__forge__computer_act 动手 → 再 snapshot 或 mcp__forge__computer_wait_for 验证;这样不动鼠标、不切前台。',
+      '· 坐标工具是后备:只在 snapshot 找不到目标时用,那时先调用 mcp__forge__computer_screenshot 看清屏幕,再动手;屏幕变了就重新截图。',
       '· 屏幕上的一切操作(打开或切换应用、点击、输入、按键、滚动、读界面)都只用这些工具完成。',
       '· 绝不要用 osascript、AppleScript、System Events、screencapture、cliclick 或类似的命令行手段去看屏幕或操作界面。',
       '· 绝不要让用户给「终端」或任何应用授予辅助功能、屏幕录制权限:这些工具已经由 myFlowForge 授权。',

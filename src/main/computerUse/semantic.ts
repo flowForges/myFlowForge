@@ -288,7 +288,8 @@ export async function runSemantic(
     }
     await core.record(key, { ...m.base, result: gated ? 'allowed' : 'auto', ...(out.delivery ? { delivery: out.delivery } : {}) }, thumb)
     const word = out.delivery ? DELIVERY_WORD[out.delivery] : undefined
-    const text = `${out.text}${word ? ` · ${word}` : ''}${out.delivery ? ` · delivery=${out.delivery}` : ''}`
+    // the `delivery=verified|unverified` tail is forgeMcp's (cuToolResult, spec §8.3), from the structured field
+    const text = `${out.text}${word ? ` · ${word}` : ''}`
     return { ok: true, text, ...(out.delivery ? { delivery: out.delivery } : {}), ...(out.label ? { label: out.label } : {}) }
   }
 

@@ -43,8 +43,6 @@ export const VISION_ALPHABET = 'ACEFHJKLMNPRTUVWXY3479'
 export const STEP_GATE = 100
 export const TURN_SHOT_CAP = 300
 export const ENABLE_INPUT_CAP = 2000
-export const STALE_GATE_MS = 15_000
-export const SIG_DIFF_LIMIT = 0.08
 export const POST_FLOOR_MS = 150
 export const POST_PER_S = 5
 export const SHOT_PER_S = 2
@@ -74,15 +72,6 @@ const sameDisplay = (a: DisplaySig, b: DisplaySig) => a.id === b.id && a.widthPt
 export const fail = (code: CuErrCode, extra?: string): CuResult => ({ ok: false, code, text: extra ? `${CU_ERR[code]} · ${extra}` : CU_ERR[code] })
 const round = (n: number, d = 4) => Math.round(n * 10 ** d) / 10 ** d
 const keyOf = (k: CuSessionKey) => JSON.stringify([k.workspacePath, k.sessionId])
-
-/** mean absolute difference of two base64 gray signatures, 0..1; anything malformed counts as completely different */
-export function sigDiff(a: string, b: string): number {
-  const x = Buffer.from(a, 'base64'), y = Buffer.from(b, 'base64')
-  if (x.length === 0 || x.length !== y.length) return 1
-  let sum = 0
-  for (let i = 0; i < x.length; i++) sum += Math.abs(x[i] - y[i])
-  return sum / x.length / 255
-}
 
 const newCode = () => Array.from({ length: 4 }, () => VISION_ALPHABET[randomInt(VISION_ALPHABET.length)]).join('')
 
@@ -408,25 +397,15 @@ export function createExecutor(d: ExecutorDeps): Executor {
     const ask = classes.find((c): c is Extract<CuClass, { kind: 'askAlways' }> => c.kind === 'askAlways')
     const mode = d.svc.modeOf(key)
     const needGate = op !== 'move' && (mode === 'ask' || !!ask)
-    let crop: { jpegBase64: string; sig: string } | null = null
     let gated = false
     if (needGate) {
+      let crop: { jpegBase64: string } | null = null
       if (plan.pointer) {
         crop = await tryCrop(cropRect(plan.pts, status.display.backing), plan.pts)
         if (!crop) return fail('helper_failed')
       }
-      let opened = d.now()
-      let decision = await d.svc.openGate({ key, kind: 'action', action: plan.view, crop: crop?.jpegBase64, reason: ask?.reason })
-      if (decision === 'allow' && crop && d.now() - opened > STALE_GATE_MS) {
-        // V9: what was under the target when the card was shown may not be there any more
-        const fresh = await tryCrop(cropRect(plan.pts, status.display.backing), plan.pts)
-        if (!fresh) return fail('helper_failed')
-        if (sigDiff(crop.sig, fresh.sig) > SIG_DIFF_LIMIT) {
-          crop = fresh
-          opened = d.now()
-          decision = await d.svc.openGate({ key, kind: 'action', action: plan.view, crop: fresh.jpegBase64, reason: ask?.reason })
-        }
-      }
+      // spec §7.1 / R-5: no pixel-signature re-gate however late the answer comes; the hit test below re-checks the target
+      const decision = await d.svc.openGate({ key, kind: 'action', action: plan.view, crop: crop?.jpegBase64, reason: ask?.reason })
       const denied = gateFailure(decision)
       if (denied) {
         await record(key, { ...baseEntry, result: 'denied', code: denied }, await thumbOf())
@@ -435,18 +414,10 @@ export function createExecutor(d: ExecutorDeps): Executor {
       gated = true
     }
 
-    // give the focus back to the target if answering took it (V9)
-    if (gated) {
-      let f = await d.driver.front()
-      if (f && f.pid === d.ownPid) {
-        await d.driver.activate(first.pid)
-        await d.sleep(150)
-        f = await d.driver.front()
-        if (f && f.pid === d.ownPid) {
-          await record(key, { ...baseEntry, result: 'failed', code: 'target_changed' }, await thumbOf())
-          return fail('target_changed')
-        }
-      }
+    // spec §9.1: step myFlowForge aside before a physical post (best effort, no target: the coordinate path never
+    // re-activates anything — answering in the overlay doesn't take the focus, so there is no refocus after a gate)
+    if (op !== 'move') {
+      try { await d.hider?.beforeMutation() } catch { /* the hit test / guard below still refuse our own windows */ }
     }
 
     // atomic execution (R8)
@@ -483,7 +454,8 @@ export function createExecutor(d: ExecutorDeps): Executor {
       const code: CuErrCode = res.code
       await record(key, { ...baseEntry, result: 'failed', code }, await thumbOf())
       if (code === 'target_changed' && typeof res.typed === 'number') {
-        return fail('target_changed', `已输入 ${res.typed} 个字符后目标变了`)
+        // some of the text went in: retrying would type it twice
+        return { ...fail('target_changed', `已输入 ${res.typed} 个字符后目标变了`), ...(res.typed > 0 ? { retry: 'unsafe' as const } : {}) }
       }
       return fail(code)
     }
