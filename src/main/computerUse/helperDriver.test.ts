@@ -391,13 +391,13 @@ describe('helperDriver', () => {
     const instance = { pid: 7, start: '123.456' }
     const actGuard = { denyPids: [1], denyBundlePrefixes: ['com.zghua.myflowforge'], expectInstance: instance }
 
-    it('snapshot sends the wire fields with the default deadlineMs and strips id/ok from the reply', async () => {
+    it('snapshot sends the wire fields with the default deadlineMs (8000, R9) and strips id/ok from the reply', async () => {
       vi.useFakeTimers()
       const { d, children } = setup()
       const p = d.snapshot({ app: { bundleId: 'com.a' }, mode: 'skeleton' })
       await flush()
       const req = children[0].written()[0]
-      expect(req).toMatchObject({ op: 'snapshot', app: { bundleId: 'com.a' }, mode: 'skeleton', deadlineMs: 3000 })
+      expect(req).toMatchObject({ op: 'snapshot', app: { bundleId: 'com.a' }, mode: 'skeleton', deadlineMs: 8000 })
       const result = { snapId: 's1', instance, app: { bundleId: 'com.a', name: 'A' }, window: {}, complete: true, nodes: [] }
       children[0].reply({ id: req.id, ok: true, ...result })
       expect(await p).toEqual(result)
@@ -528,7 +528,7 @@ describe('helperDriver', () => {
       const { d, children } = setup()
       const p = d.launch({ bundleId: 'com.a', activate: true })
       await flush()
-      expect(children[0].written()[0]).toMatchObject({ op: 'launch', bundleId: 'com.a', activate: true, deadlineMs: 3000 })
+      expect(children[0].written()[0]).toMatchObject({ op: 'launch', bundleId: 'com.a', activate: true, deadlineMs: 15000 })
       const result = { instance, bundleId: 'com.a', name: 'A', windows: [{ number: 1 }] }
       children[0].reply({ id: children[0].written()[0].id, ok: true, ...result })
       expect(await p).toEqual(result)
@@ -599,6 +599,24 @@ describe('helperDriver', () => {
         expect(children[0].kill).not.toHaveBeenCalledWith('SIGKILL')
       })
 
+      it('R9: launch defaults to 15 s (TS timeout 16 s), snapshot to 8 s (TS timeout 12 s)', async () => {
+        vi.useFakeTimers()
+        const a = setup()
+        void a.d.launch({ bundleId: 'com.a', activate: false }).catch(() => {})
+        await flush()
+        await vi.advanceTimersByTimeAsync(15_999)
+        expect(a.children[0].kill).not.toHaveBeenCalled()
+        await vi.advanceTimersByTimeAsync(1)
+        expect(a.children[0].kill).toHaveBeenCalledWith('SIGUSR1')
+        const b = setup()
+        void b.d.snapshot({ app: { bundleId: 'com.a' }, mode: 'skeleton' }).catch(() => {})
+        await flush()
+        await vi.advanceTimersByTimeAsync(11_999)
+        expect(b.children[0].kill).not.toHaveBeenCalled()
+        await vi.advanceTimersByTimeAsync(1)
+        expect(b.children[0].kill).toHaveBeenCalledWith('SIGUSR1')
+      })
+
       it('snapshot TS-times out at deadlineMs + 4000 (not +1000)', async () => {
         vi.useFakeTimers()
         const { d, children } = setup()
@@ -614,7 +632,7 @@ describe('helperDriver', () => {
       it('a stopped reply inside the 2000 ms grace is renamed to timeout (it was our own SIGUSR1, not a user stop), delivery kept', async () => {
         vi.useFakeTimers()
         const { d, children } = setup()
-        const caught = d.snapshot({ app: { bundleId: 'com.a' }, mode: 'skeleton' }).catch((e) => e)
+        const caught = d.snapshot({ app: { bundleId: 'com.a' }, mode: 'skeleton', deadlineMs: 3000 }).catch((e) => e)
         await flush()
         await vi.advanceTimersByTimeAsync(7000)
         expect(children[0].kill).toHaveBeenCalledWith('SIGUSR1')
@@ -664,7 +682,7 @@ describe('helperDriver', () => {
       it('no reply for 2000 ms more after the abort: kill and reject helper_failed; refs survive the next call', async () => {
         vi.useFakeTimers()
         const { d, spawn, children } = setup()
-        const caught = d.snapshot({ app: { bundleId: 'com.a' }, mode: 'skeleton' }).catch((e) => e)
+        const caught = d.snapshot({ app: { bundleId: 'com.a' }, mode: 'skeleton', deadlineMs: 3000 }).catch((e) => e)
         await flush()
         await vi.advanceTimersByTimeAsync(7000)
         expect(children[0].kill).toHaveBeenCalledWith('SIGUSR1')

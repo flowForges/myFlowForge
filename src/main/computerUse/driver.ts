@@ -10,6 +10,11 @@ import { helperDriver, type SpawnLike } from './helperDriver'
 // file); re-exported here so every main-side consumer can import them from driver.ts as before.
 export type { ActAction, ActRequest, ActResult, Delivery, Instance, ResolveResult, SnapNodeWire, SnapshotResult }
 
+/** Ruling R9: a launch waits for a fresh app's window (helper TS timeout +1000), a snapshot may first switch on
+ *  Chromium accessibility (+4000). The other ops keep the 3000 ms default. */
+export const LAUNCH_DEADLINE_MS = 15_000
+export const SNAPSHOT_DEADLINE_MS = 8_000
+
 export interface Pt { x: number; y: number }
 export interface Rect { x: number; y: number; w: number; h: number }
 
@@ -64,7 +69,7 @@ export interface SnapshotOpts {
   mode: 'skeleton' | 'full'
   maxDepth?: number
   interactiveOnly?: boolean
-  /** default 3000; the TS timeout is this + 4000 (Electron activation may extend the helper deadline by ≤3 s) */
+  /** default SNAPSHOT_DEADLINE_MS; the TS timeout is this + 4000 (Electron activation may extend the helper deadline by ≤3 s) */
   deadlineMs?: number
   guard?: CuGuard
 }

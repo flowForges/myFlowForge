@@ -579,6 +579,18 @@ describe('counting and pacing (spec §7.3)', () => {
   })
 })
 
+describe('I3 / R9: launch and snapshot get longer helper deadlines', () => {
+  it('launch asks for 15 s, snapshot for 8 s', async () => {
+    const s = setup()
+    s.driver.setAxApps([WB])
+    ;(s.driver as Record<string, unknown>).runningApps = async () => [{ bundleId: WB.bundleId, name: WB.name, pid: WB.instance.pid, active: false }]
+    expect((await s.run('launch', { app: WB.bundleId })).ok).toBe(true)
+    expect(s.driver.launches[0]).toMatchObject({ deadlineMs: 15_000 })
+    expect((await s.run('snapshot', { app: 'WorkBuddy' })).ok).toBe(true)
+    expect(s.driver.snapshots[0]).toMatchObject({ deadlineMs: 8_000 })
+  })
+})
+
 describe('I1: launch first, then act — the front still leaves us (spec §9.1)', () => {
   it('launch (no target) → act click → act type: focusWindow(WorkBuddy) exactly once, before the type', async () => {
     const s = setup({ realHider: true })

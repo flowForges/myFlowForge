@@ -1,7 +1,7 @@
 import type { Readable, Writable } from 'node:stream'
 import type { Mod } from '@shared/computerUse'
 import {
-  CuDriverError, type ActGuard, type ActRequest, type ActResult, type AppKeyOpts, type AppKeyResult,
+  CuDriverError, LAUNCH_DEADLINE_MS, SNAPSHOT_DEADLINE_MS, type ActGuard, type ActRequest, type ActResult, type AppKeyOpts, type AppKeyResult,
   type Button, type CaptureOpts, type CaptureResult, type ComputerDriver, type CropOpts, type Delivery,
   type DriverStatus, type FocusWindowOpts, type LaunchOpts, type LaunchResult, type PostAction, type PostGuard,
   type PostResult, type Pt, type ResolveResult, type SnapshotOpts, type SnapshotResult, type WaitForOpts,
@@ -302,7 +302,7 @@ export function helperDriver(o: {
       return (await strict('apps')).apps as { bundleId: string; name: string; pid: number; active: boolean }[]
     },
     async snapshot(o: SnapshotOpts): Promise<SnapshotResult> {
-      const { deadlineMs = DEFAULT_DEADLINE_MS, ...rest } = o
+      const { deadlineMs = SNAPSHOT_DEADLINE_MS, ...rest } = o
       const { id: _i, ok: _o, ...r } = await strict('snapshot', { ...rest, deadlineMs }, tsTimeoutFor('snapshot', deadlineMs))
       return r as unknown as SnapshotResult
     },
@@ -333,7 +333,7 @@ export function helperDriver(o: {
       return r as unknown as WaitForResult
     },
     async launch(o: LaunchOpts): Promise<LaunchResult> {
-      const { deadlineMs = DEFAULT_DEADLINE_MS, ...rest } = o
+      const { deadlineMs = LAUNCH_DEADLINE_MS, ...rest } = o
       const { id: _i, ok: _o, ...r } = await strict('launch', { ...rest, deadlineMs }, tsTimeoutFor('launch', deadlineMs))
       return r as unknown as LaunchResult
     },

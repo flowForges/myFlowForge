@@ -14,7 +14,7 @@ import {
   type ActRequest, type CuActionView, type CuClass, type CuErrCode, type Delivery, type Instance, type SEMANTIC_TOOLS,
 } from '@shared/computerUse'
 import { renderNodeLine, renderSnapshot } from '@shared/cuSnapshotRender'
-import { CuDriverError, type CuGuard, type Rect } from './driver'
+import { CuDriverError, LAUNCH_DEADLINE_MS, SNAPSHOT_DEADLINE_MS, type CuGuard, type Rect } from './driver'
 import {
   IDLE_PAUSE_S, TURN_SHOT_CAP, coreFor, fail, fromDriverError, gateFailure, stepAside,
   type ExecCore, type ExecutorDeps,
@@ -189,7 +189,7 @@ export async function runSemantic(
     let r
     try {
       r = await d.driver.snapshot({
-        app: { pid: t.pid }, mode: a.full ? 'full' : 'skeleton', guard: deny(),
+        app: { pid: t.pid }, mode: a.full ? 'full' : 'skeleton', guard: deny(), deadlineMs: SNAPSHOT_DEADLINE_MS,
         ...(a.window !== undefined ? { window: a.window } : {}),
         ...(a.root !== undefined ? { root: a.root } : {}),
         ...(a.depth !== undefined ? { maxDepth: a.depth } : {}),
@@ -374,7 +374,9 @@ export async function runSemantic(
       call: async () => {
         let r
         try {
-          r = await d.driver.launch({ ...(bundleId ? { bundleId } : { name }), activate: a.activate === true, guard: deny() })
+          r = await d.driver.launch({
+            ...(bundleId ? { bundleId } : { name }), activate: a.activate === true, guard: deny(), deadlineMs: LAUNCH_DEADLINE_MS,
+          })
         } catch (e) {
           // the guard lists the blocked bundles; forge-cu answers every guard hit with own_window
           if (e instanceof CuDriverError && e.code === 'own_window') return safe('blocked_app')
