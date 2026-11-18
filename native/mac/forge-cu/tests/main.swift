@@ -891,6 +891,25 @@ do {
   let ot2 = runChain(t2, 1, ActRequest(action: "type", text: "hi"))
   eq(t2.writes, ["keys 1"], "web field typed via keys only")
   eq(ot2.delivery, .deliveredVerified, "web read back")
+  // R8 / I5: a newline in a web field would be a real Return (chat apps send on it) → refused before anything is posted
+  for nl in ["a\nb", "a\rb", "a\r\nb", "\n"] {
+    let tw = FakeActor().add(1, "AXTextField", value: "", settable: ["AXSelectedText", "AXValue"])
+    tw.web = true
+    let ow = runChain(tw, 1, ActRequest(action: "type", text: nl))
+    check(ow.delivery == .notDelivered && ow.code == "invalid_args" && ow.message == "web_newline" && tw.writes.isEmpty,
+          "web newline refused, nothing typed: \(nl.debugDescription)")
+    let rw = actReply(ow, after: nil)
+    check(rw["ok"] as? Bool == false && rw["code"] as? String == "invalid_args" && rw["message"] as? String == "web_newline"
+          && rw["delivery"] as? String == "not_delivered", "web newline reply")
+  }
+  // native fields keep inserting newlines
+  let tn = FakeActor().add(1, "AXTextArea", value: "", settable: ["AXSelectedText", "AXValue"])
+  tn.onSet["1:AXSelectedText"] = { f, v in f.nodes[1]!.attrs.value = v as? String; return .success }
+  eq(runChain(tn, 1, ActRequest(action: "type", text: "a\nb")).delivery, .deliveredVerified, "native newline typed")
+  eq(tn.writes, ["set 1 AXSelectedText"], "native newline via AXSelectedText")
+  eq(webTypeRefusal("a\tb", inWeb: true), nil, "a tab is not a newline")
+  eq(webTypeRefusal("a\nb", inWeb: false), nil, "native: no refusal")
+  eq(webTypeRefusal("a\u{2028}b", inWeb: true), nil, "only CR / LF")
   // secure field → secure_input, no writes
   let t3 = FakeActor().add(1, "AXSecureTextField", settable: ["AXSelectedText", "AXValue"])
   let ot3 = runChain(t3, 1, ActRequest(action: "type", text: "pw"))
@@ -1105,8 +1124,16 @@ do {
   check(finalizeOutcome(un, expired: true, aborted: false, typed: nil).code == nil, "expired after delivery: no timeout code")
   let keys = ActOutcome(delivery: .uncertain, steps: [("keys", .uncertain)], code: nil)
   let pk = finalizeOutcome(keys, expired: false, aborted: false, typed: 12)
-  check(pk.delivery == .deliveredUnverified && pk.steps.count == 1 && pk.steps[0].0 == "typed:12"
-        && pk.steps[0].1 == .deliveredUnverified, "focus moved mid-typing → typed:<n>, delivered_unverified")
+  // M1: a cut-short web typing is not a success: uncertain (retry unsafe), typed carried to TS
+  check(pk.delivery == .uncertain && pk.steps.count == 1 && pk.steps[0].0 == "typed:12"
+        && pk.steps[0].1 == .uncertain, "focus moved mid-typing → typed:<n>, uncertain")
+  eq(pk.typed ?? -1, 12, "typed kept on the outcome")
+  eq(pk.code ?? "", "focus_moved", "focus_moved note")
+  let pkr = actReply(pk, after: nil)
+  check(pkr["ok"] == nil && pkr["delivery"] as? String == "uncertain" && pkr["typed"] as? Int == 12
+        && pkr["code"] as? String == "focus_moved", "partial typing reply: uncertain + typed:<n>")
+  let pks = finalizeOutcome(keys, expired: false, aborted: true, typed: 5)
+  check(pks.code == "stopped" && pks.delivery == .uncertain, "an abort after partial typing stays stopped, uncertain")
   let pk0 = finalizeOutcome(ActOutcome(delivery: .notDelivered, steps: [("keys", .notDelivered)], code: "unsupported"),
                             expired: false, aborted: false, typed: 0)
   eq(pk0.delivery, .notDelivered, "nothing typed stays not_delivered")
@@ -1259,6 +1286,25 @@ do {
   _ = st.clear(); st.beginPost()
   eq(st.signal(), false, "counter floor at 0")
   st.endPost()
+}
+
+// ── launch plan (spec §6.5, I4) ─────────────────────────────────────────────────
+do {
+  let fresh = launchPlan(attached: false, hasWindow: false, activate: false)
+  check(!fresh.reopen && !fresh.bringToFront && fresh.wait && fresh.graceS == 1.5, "fresh, activate:false → wait with the 1.5 s grace")
+  let freshA = launchPlan(attached: false, hasWindow: false, activate: true)
+  check(!freshA.reopen && freshA.wait && freshA.graceS == nil, "fresh, activate:true → wait for a window to the deadline")
+  check(!launchPlan(attached: false, hasWindow: true, activate: true).wait, "fresh with a window: done")
+  let att = launchPlan(attached: true, hasWindow: true, activate: false)
+  check(!att.reopen && !att.bringToFront && !att.wait, "attached with a window, no activate: nothing")
+  let attA = launchPlan(attached: true, hasWindow: true, activate: true)
+  check(!attA.reopen && attA.bringToFront && !attA.wait, "attached with a window, activate → bring to front")
+  for act in [false, true] {
+    let none = launchPlan(attached: true, hasWindow: false, activate: act)
+    check(none.reopen && !none.bringToFront && none.wait && none.graceS == nil,
+          "attached, no window (activate:\(act)) → LaunchServices reopen, wait for a window")
+  }
+  eq(snapshotNoWindowCode, "no_window", "snapshot of an app without a window: its own code")
 }
 
 print("forge-cu self-test: \(passed) passed, \(failures) failed")

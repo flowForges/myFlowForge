@@ -116,7 +116,7 @@ func snapshotOp(_ b: [String: Any], _ abort: AbortState) -> [String: Any] {
     }
     if ownOrDenied(b, pid: pid) { return errorReply(id: nil, code: "own_window") }
     guard let w = pickWindow(AXUIElementCreateApplication(pid), number: (b["window"] as? NSNumber)?.intValue, d) else {
-      return errorReply(id: nil, code: "not_found", message: "no window")
+      return errorReply(id: nil, code: snapshotNoWindowCode)
     }
     root = w; window = w
   }

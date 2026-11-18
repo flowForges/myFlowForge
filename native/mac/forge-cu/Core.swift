@@ -530,6 +530,28 @@ func findAppBundle(name: String, dirs: [String], exists: (String) -> Bool) -> St
   return dirs.lazy.map { "\($0)/\(n).app" }.first(where: exists)
 }
 
+/// What `launch` does once it has the instance (spec §6.5, I4). A running app with no window (an Electron app whose
+/// last window was closed) gets a LaunchServices open — a reopen event, never a relaunch — and is waited on like a
+/// fresh activated launch; `activate` alone would stop at "frontmost" with nothing to show.
+struct LaunchPlan: Equatable {
+  var bringToFront = false
+  var reopen = false
+  var wait = false
+  /// stop waiting this long after isFinishedLaunching (nil: wait for a window until the deadline)
+  var graceS: Double? = nil
+}
+
+func launchPlan(attached: Bool, hasWindow: Bool, activate: Bool) -> LaunchPlan {
+  if attached {
+    return hasWindow ? LaunchPlan(bringToFront: activate) : LaunchPlan(reopen: true, wait: true)
+  }
+  if hasWindow { return LaunchPlan() }
+  return LaunchPlan(wait: true, graceS: activate ? nil : 1.5)
+}
+
+/// snapshot of an app that has no window to read: its own code, not `not_found` (that one means "no such app").
+let snapshotNoWindowCode = "no_window"
+
 /// Entries of `<App>.app/Contents/Frameworks/`: an Electron or CEF app.
 func hasChromiumFramework(_ entries: [String]) -> Bool {
   entries.contains { $0 == "Electron Framework.framework" || $0 == "Chromium Embedded Framework.framework" }

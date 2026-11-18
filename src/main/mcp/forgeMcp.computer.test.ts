@@ -78,6 +78,8 @@ describe('registration (Review Focus 4)', () => {
     const by = Object.fromEntries(tools.map((t) => [t.name, t.description ?? '']))
     expect(by.computer_act).toContain('默认不动鼠标、不切前台')
     expect(by.computer_act).toContain('retry 为 unsafe 时不要重复同一动作')
+    // R8 / I5: a newline in a web field is a Return key
+    expect(by.computer_act).toContain('网页里的输入框 type 不能带换行')
     expect(by.computer_snapshot).toContain('ref 会过期')
     expect(by.computer_launch).toContain('不需要去程序坞找图标')
     expect(by.computer_key).toContain('给了 app 就不切前台')

@@ -643,6 +643,16 @@ struct ActOutcome {
   var steps: [(String, Delivery)]
   /// unsupported / secure_input / stale_ref / no_permission / invalid_args / not_found
   var code: String?
+  /// a refusal's detail on the wire `message` (e.g. `web_newline`)
+  var message: String? = nil
+  /// UTF-16 units web typing posted before the focus moved away (M1): the reply carries it as `typed`
+  var typed: Int? = nil
+}
+
+/// R8 / I5: in a web field a newline is a real Return key, and chat apps send on Return. Refused before anything is
+/// posted (`invalid_args`, message `web_newline`); native AX typing keeps inserting newlines.
+func webTypeRefusal(_ text: String, inWeb: Bool) -> String? {
+  inWeb && text.unicodeScalars.contains(where: { $0 == "\n" || $0 == "\r" }) ? "web_newline" : nil
 }
 
 enum ActTiming {
@@ -1089,6 +1099,11 @@ func runChain<A: AXActor>(_ a: A, _ e: A.E, _ r: ActRequest) -> ActOutcome {
     guard role == "textfield" || raw == "AXComboBox" else { return c.fail("unsupported") }
     if secure { return c.fail("secure_input") }
     guard let text = r.text, !text.isEmpty else { return c.fail("invalid_args") }
+    if let m = webTypeRefusal(text, inWeb: a.inWebArea(e)) {
+      var o = c.fail("invalid_args")
+      o.message = m
+      return o
+    }
     return c.run(c.typeSteps(text, replace: r.replace))
 
   case "set":
@@ -1221,12 +1236,15 @@ func mutationGate(expired: Bool, aborted: Bool, mutated: Bool) -> AXResult? {
 }
 
 /// `typed` = UTF-16 units posted by web typing before the focus moved away (nil = typing not cut short).
+/// A cut-short typing is not a success (M1): `uncertain` (retry unsafe), code `focus_moved`, `typed` on the reply.
 /// Abort → `stopped`; an undelivered outcome past the deadline → `timeout`.
 func finalizeOutcome(_ o: ActOutcome, expired: Bool, aborted: Bool, typed: Int?) -> ActOutcome {
   var out = o
   if let n = typed, n > 0, let i = out.steps.lastIndex(where: { $0.0 == "keys" }) {
-    out.steps[i] = ("typed:\(n)", .deliveredUnverified)
-    out.delivery = .deliveredUnverified
+    out.steps[i] = ("typed:\(n)", .uncertain)
+    out.delivery = .uncertain
+    out.code = "focus_moved"
+    out.typed = n
   }
   if aborted { out.code = "stopped" }
   else if expired && out.delivery == .notDelivered { out.code = "timeout" }
@@ -1237,11 +1255,14 @@ func finalizeOutcome(_ o: ActOutcome, expired: Bool, aborted: Bool, typed: Int?)
 func actReply(_ o: ActOutcome, after: [String: Any]?) -> [String: Any] {
   let steps: [[String: Any]] = o.steps.map { ["name": $0.0, "outcome": $0.1.rawValue] }
   if o.delivery == .notDelivered || o.code == "stopped" {
-    return errorReply(id: nil, code: o.code ?? "unsupported", extra: ["delivery": o.delivery.rawValue, "steps": steps])
+    var extra: [String: Any] = ["delivery": o.delivery.rawValue, "steps": steps]
+    if let t = o.typed { extra["typed"] = t }
+    return errorReply(id: nil, code: o.code ?? "unsupported", message: o.message, extra: extra)
   }
   var r: [String: Any] = ["delivery": o.delivery.rawValue, "steps": steps]
   if let a = after, !a.isEmpty { r["after"] = a }
   if let c = o.code { r["code"] = c }
+  if let t = o.typed { r["typed"] = t }
   return r
 }
 

@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { defaultComputerUse, type ComputerUseSettings } from '../config/schema'
 import { fakeDriver, type AxApp } from './fakeDriver'
 import { createExecutor, type ExecutorDeps } from './executor'
+import { CuDriverError } from './driver'
 import { runSemantic } from './semantic'
 import { cuHiderFor } from './runtime'
 import type { CuGate, CuLogEntry, CuSessionKey, GateDecision, ServiceInternals } from './types'
@@ -588,6 +589,40 @@ describe('I3 / R9: launch and snapshot get longer helper deadlines', () => {
     expect(s.driver.launches[0]).toMatchObject({ deadlineMs: 15_000 })
     expect((await s.run('snapshot', { app: 'WorkBuddy' })).ok).toBe(true)
     expect(s.driver.snapshots[0]).toMatchObject({ deadlineMs: 8_000 })
+  })
+})
+
+describe('I4 / I5 / M1: windowless apps, web newlines, cut-short typing', () => {
+  it('I4: snapshot of a running app without a window → no_window, its own text', async () => {
+    const s = setup()
+    ;(s.driver as Record<string, unknown>).snapshot = async () => { throw new CuDriverError('no_window') }
+    const r = await s.run('snapshot', { app: 'WorkBuddy' })
+    expect(r).toMatchObject({ ok: false, code: 'no_window', retry: 'safe' })
+    if (!r.ok) expect(r.text).toBe('应用没有打开的窗口 · 可以 computer_launch 让它打开一个')
+  })
+
+  it('I5: a web newline refusal (invalid_args / web_newline) says why and how, retry safe', async () => {
+    const s = setup()
+    s.driver.setActError({ code: 'invalid_args', message: 'web_newline', delivery: 'not_delivered' })
+    const r = await s.run('act', { ref: await s.refOf(WB, 'e2'), action: 'type', text: 'a\nb' })
+    expect(r).toMatchObject({ ok: false, code: 'invalid_args', retry: 'safe', delivery: 'not_delivered' })
+    if (!r.ok) expect(r.text).toBe('换行会按回车，可能直接发送 · 分开输入，用 click 发送按钮或 submit · delivery=not_delivered')
+  })
+
+  it('M1: typing cut short by a focus change is a failure: uncertain, unsafe, with the count typed', async () => {
+    const s = setup()
+    s.driver.setActResult({ delivery: 'uncertain', typed: 3, steps: [{ name: 'typed:3', outcome: 'uncertain' }] })
+    const r = await s.run('act', { ref: await s.refOf(WB, 'e2'), action: 'type', text: '你好abc' })
+    expect(r).toMatchObject({ ok: false, code: 'uncertain', retry: 'unsafe', delivery: 'uncertain' })
+    if (!r.ok) expect(r.text).toBe('已输入 3 个字符后焦点变了 · 不要重复，先 snapshot')
+    expect(s.entries.at(-1)).toMatchObject({ op: 'act', result: 'failed', code: 'uncertain', delivery: 'uncertain' })
+  })
+
+  it('M1: typed counts characters, not UTF-16 units', async () => {
+    const s = setup()
+    s.driver.setActResult({ delivery: 'uncertain', typed: 4, steps: [] })
+    const r = await s.run('act', { ref: await s.refOf(WB, 'e2'), action: 'type', text: '😀😀xyz' })
+    if (!r.ok) expect(r.text).toBe('已输入 2 个字符后焦点变了 · 不要重复，先 snapshot')
   })
 })
 

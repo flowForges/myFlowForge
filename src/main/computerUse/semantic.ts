@@ -54,6 +54,12 @@ const DELIVERY_WORD: Partial<Record<Delivery, string>> = {
   delivered_without_effect: '已送达但没有看到效果 · 不要重复，先 snapshot 确认',
 }
 
+const WEB_NEWLINE = '换行会按回车，可能直接发送 · 分开输入，用 click 发送按钮或 submit'
+
+/** M1: web typing cut short after `units` UTF-16 units: the characters typed (the helper counts units) */
+const typedChars = (text: string | undefined, units: number): number =>
+  text === undefined ? units : Array.from(text.slice(0, units)).length
+
 /** A failed (or uncertain) mutation: code, delivery and retry per spec §8.3. */
 function mutationFailure(e: unknown, o: { action?: string; physical?: boolean } = {}): Fail {
   const raw = e instanceof CuDriverError ? e.code : ''
@@ -62,7 +68,8 @@ function mutationFailure(e: unknown, o: { action?: string; physical?: boolean } 
   const code: CuErrCode = raw === 'unsupported' && o.action ? 'action_unsupported' : known(raw) ? raw : 'helper_failed'
   const delivery = e instanceof CuDriverError ? e.delivery : undefined
   const retry: Retry = delivery !== undefined ? retryOf(delivery) : NOTHING_SENT.has(code) ? 'safe' : 'unsafe'
-  let text = CU_ERR[code]
+  // R8 / I5: forge-cu refused a newline in a web field before posting anything
+  let text = code === 'invalid_args' && e instanceof CuDriverError && e.message === 'web_newline' ? WEB_NEWLINE : CU_ERR[code]
   if (delivery) text += ` · delivery=${DELIVERY_SHORT[delivery]}`
   if (retry === 'unsafe' && code !== 'uncertain') text += ' · 可能已经生效 · 不要重复，先重新 snapshot 确认'
   if (retry === 'safe' && code === 'action_unsupported' && !o.physical) {
@@ -348,6 +355,13 @@ export async function runSemantic(
         : undefined,
       call: async () => {
         const res = await d.driver.act(req, { ...deny(), expectInstance: instance })
+        // M1: the focus moved mid-typing: some went in, the rest didn't — never a success, never retried as is
+        if (res.delivery === 'uncertain' && typeof res.typed === 'number' && res.typed > 0) {
+          return {
+            ok: false, code: 'uncertain', delivery: 'uncertain', retry: 'unsafe',
+            text: `已输入 ${typedChars(typeof a.text === 'string' ? a.text : undefined, res.typed)} 个字符后焦点变了 · 不要重复，先 snapshot`,
+          } satisfies Fail
+        }
         // screen text back to the model goes in the untrusted marker (T6); the card uses elementPhrase
         const el = `${ROLE_LABEL[element.role] ?? '控件'}${element.name !== undefined ? ` ${wrapUntrusted(element.name, 120)}` : ''}`
         return { delivery: res.delivery, text: `已${verb} ${el} · 目标 ${wrapUntrusted(appName)}`, label: shortLabel(verb, element) }

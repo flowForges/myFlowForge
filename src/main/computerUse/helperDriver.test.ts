@@ -432,6 +432,16 @@ describe('helperDriver', () => {
       expect(await p).toEqual({ delivery: 'delivered_verified', steps: [{ name: 'click', outcome: 'delivered_verified' }] })
     })
 
+    it('M1: a cut-short web typing (uncertain + typed:N) keeps typed on the result', async () => {
+      vi.useFakeTimers()
+      const { d, children } = setup()
+      const p = d.act({ ref: '@s1:e2', action: 'type', text: 'hello' }, actGuard)
+      await flush()
+      const req = children[0].written()[0]
+      children[0].reply({ id: req.id, ok: true, delivery: 'uncertain', code: 'focus_moved', typed: 3, steps: [{ name: 'typed:3', outcome: 'uncertain' }] })
+      expect(await p).toEqual({ delivery: 'uncertain', typed: 3, steps: [{ name: 'typed:3', outcome: 'uncertain' }] })
+    })
+
     it('act error replies always carry delivery on the rejected CuDriverError', async () => {
       vi.useFakeTimers()
       const { d, children } = setup()

@@ -149,7 +149,6 @@ func launchOp(_ b: [String: Any], _ abort: AbortState) -> [String: Any] {
   if attached {
     app = running[0]
     if ownPids.contains(app.processIdentifier) { return errorReply(id: nil, code: "own_window") }
-    if activate { _ = bringToFront(app, abort, d) }
   } else {
     let r = openApp(appURL, activate: activate, ms: Int(d.remaining * 1000))
     if r.timedOut { return errorReply(id: nil, code: "timeout", extra: ["delivery": Delivery.uncertain.rawValue]) }
@@ -159,17 +158,23 @@ func launchOp(_ b: [String: Any], _ abort: AbortState) -> [String: Any] {
   let pid = app.processIdentifier
   guard let inst = processInstance(pid) else { return errorReply(id: nil, code: "app_unresponsive") }
 
-  // activate:false → isFinishedLaunching + 1.5 s grace (no window is fine); activate:true → a window of
-  // this instance (or the deadline). An instance we only attached to doesn't wait unless activated.
+  // launchPlan: activate:false → isFinishedLaunching + 1.5 s grace (no window is fine); activate:true → a window of
+  // this instance (or the deadline). Attached with a window: only bring it to front if asked. Attached without one:
+  // LaunchServices open (the reopen event; it never relaunches a running instance), then wait for its window.
   var windows = appWindowList(pid, Deadline(ms: 500))
+  let plan = launchPlan(attached: attached, hasWindow: !windows.isEmpty, activate: activate)
+  if plan.bringToFront { _ = bringToFront(app, abort, d) }
+  // the running instance's own bundle URL: another copy's URL would start a second instance
+  if plan.reopen, postGate(expired: d.expired, aborted: abort.requested) == nil, let url = onMain({ app.bundleURL }) {
+    _ = openApp(url, activate: activate, ms: min(2000, Int(d.remaining * 1000)))
+  }
   var finishedAt: Double?
-  let graceS = 1.5
-  while windows.isEmpty && !(attached && !activate) {
+  while windows.isEmpty && plan.wait {
     if abort.requested { return errorReply(id: nil, code: "stopped") }
     if onMain({ app.isTerminated }) || processInstance(pid) != inst { return errorReply(id: nil, code: "app_unresponsive") }
     let now = ProcessInfo.processInfo.systemUptime
     if finishedAt == nil && onMain({ app.isFinishedLaunching }) { finishedAt = now }
-    if let f = finishedAt, (!activate || attached), now - f >= graceS { break }
+    if let f = finishedAt, let g = plan.graceS, now - f >= g { break }
     if d.expired { break }
     _ = abortableSleep(50, abort)
     windows = appWindowList(pid, Deadline(ms: 250))

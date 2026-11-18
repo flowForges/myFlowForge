@@ -237,7 +237,7 @@ const CU_WHAT: Record<(typeof COMPUTER_TOOLS)[number], string> = {
   computer_apps: '列出正在运行、有窗口的应用:名字、bundle id、是否前台。',
   computer_launch: '打开或附着一个应用(名字或 bundle id),返回它的窗口列表;不需要去程序坞找图标。默认不切前台,activate:true 才切。',
   computer_snapshot: '读取一个应用窗口的控件树,每个控件一行、带 ref(如 @s3:e4)。每次界面变化后 ref 会过期,要重新 snapshot;window 选窗口(computer_windows 给的编号),root=某个 ref 只读那一支,depth / full 控制深度。',
-  computer_act: '对 snapshot 给的 ref 发语义动作。set / select 用 value;type 用 text(replace:true 整体替换);scroll 用 direction + amount(1–20);menu 是打开右键菜单,选菜单项要对那一项的 ref 用 click;其余:click/focus/toggle/expand/collapse/scrollTo/submit。默认不动鼠标、不切前台;按返回的 delivery 判断是否生效,retry 为 unsafe 时不要重复同一动作,先 snapshot 看结果。physical:true 只在控件不支持语义动作时用。',
+  computer_act: '对 snapshot 给的 ref 发语义动作。set / select 用 value;type 用 text(replace:true 整体替换);scroll 用 direction + amount(1–20);menu 是打开右键菜单,选菜单项要对那一项的 ref 用 click;其余:click/focus/toggle/expand/collapse/scrollTo/submit。默认不动鼠标、不切前台;按返回的 delivery 判断是否生效,retry 为 unsafe 时不要重复同一动作,先 snapshot 看结果。physical:true 只在控件不支持语义动作时用。网页里的输入框 type 不能带换行(换行会按回车，可能直接发送):分开输入，用 click 发送按钮或 submit。',
   computer_key: '按一个组合键,如 cmd+shift+t、return、f5;可选 repeat。给了 app 就不切前台:优先按菜单项,再直接发给该 app;不给 app 是物理后备,发给前台应用,第一次要带 visionCode。',
   computer_focus: '把应用的窗口调到前台并确认。只有物理操作才需要(坐标工具、physical:true)。',
   computer_wait_for: '等一个应用里的控件出现或消失(gone:true),按 role / name / nameContains 匹配,命中返回 ref;最多等 timeoutMs。',
