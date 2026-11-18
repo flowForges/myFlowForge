@@ -144,6 +144,47 @@ describe('createCuOverlay', () => {
     const t = setup()
     expect('collapseMain' in t.ov).toBe(false)
   })
+
+  it('T10 carry-over: a crashed/killed overlay renderer (render-process-gone) is rebuilt and the last state — including a pending gate — reappears', () => {
+    const t = setup()
+    t.ov.show(GATED)
+    const w = t.wins[0]
+    w.sent.length = 0
+    w.fire('render-process-gone')
+    expect(w.isDestroyed()).toBe(true)
+    expect(t.wins).toHaveLength(2)
+    const w2 = t.wins[1]
+    expect(w2.sent).toContainEqual({ channel: CH.cuOverlayState, payload: GATED })
+    expect(w2.calls).toContainEqual(['showInactive'])
+    expect(t.ov.webContentsId()).toBe(w2.webContents.id)
+  })
+
+  it('render-process-gone with no state shown yet does nothing (no window to rebuild)', () => {
+    const t = setup()
+    t.ov.show(ON)
+    const w = t.wins[0]
+    t.ov.hide()
+    w.sent.length = 0
+    w.fire('render-process-gone')
+    // still rebuilds (last state exists: ON) and resends it
+    expect(t.wins).toHaveLength(2)
+    expect(t.wins[1].sent).toContainEqual({ channel: CH.cuOverlayState, payload: ON })
+  })
+
+  it('a stale render-process-gone from an already-replaced window does not touch the current one', () => {
+    const t = setup()
+    t.ov.show(ON)
+    const w1 = t.wins[0]
+    t.ov.show(GATED) // same window, new state
+    w1.destroy()
+    t.ov.show(ON) // rebuilds (w1 was destroyed)
+    const w2 = t.wins[1]
+    w2.sent.length = 0
+    // a late event from the dead w1 must not rebuild again or touch w2
+    w1.fire('render-process-gone')
+    expect(t.wins).toHaveLength(2)
+    expect(w2.sent).toEqual([])
+  })
 })
 
 // The preload isn't in any vitest project (it's bundled into the renderer), so its source is scanned, as

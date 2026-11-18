@@ -1748,7 +1748,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                 />
               )
             })}
-            <CuStreamTail remote={cuRemote} gates={cu.gates} gateErrors={cu.gateErrors} log={cu.log} resolve={cu.resolve} thumb={cu.thumb} />
+            <CuStreamTail remote={cuRemote} gates={cu.gates} gateErrors={cu.gateErrors} log={cu.log} thumb={cu.thumb} />
             {chat.asks.map(a => (
               <ReqCard
                 key={a.id}

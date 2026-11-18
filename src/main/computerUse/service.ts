@@ -283,9 +283,11 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
     }
     if (running && running.k === k) settle(running, err('stopped'))
     abortInFlight(k)
-    // R4: at most one session is ever on, so this fires once per actual off transition — covers mode off, every
-    // stop() reason (user / hotkey / lock / vision / limit / deleted / quit) and before-quit (runtime.quit() →
-    // stop(undefined,'quit')), never a turn end. Best effort: fire-and-forget, never blocks the caller.
+    // R4: at most one session is ever on, so this fires once per actual off transition — covers mode off and every
+    // stop() reason the app is still around for (user / hotkey / lock / vision / limit / deleted). On quit
+    // (before-quit → stop(undefined,'quit')) the real revert is forge-cu's own stdin-EOF exit path (main.swift
+    // `leave`), which runs even if this process dies before the reply comes back; this JS call there is only
+    // best-effort insurance. Fire-and-forget either way, never blocks the caller.
     if (s) void d.driver.a11yRevert().catch(() => { /* best effort */ })
     return !!s
   }

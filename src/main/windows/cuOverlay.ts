@@ -33,7 +33,7 @@ export interface WinLike {
   isDestroyed(): boolean
   destroy(): void
   on(event: 'closed', fn: () => void): void
-  webContents: { id: number; send(channel: string, payload: unknown): void; on(event: 'did-finish-load', fn: () => void): void }
+  webContents: { id: number; send(channel: string, payload: unknown): void; on(event: 'did-finish-load' | 'render-process-gone', fn: () => void): void }
 }
 export interface ScreenLike { getPrimaryDisplay(): { workArea: Bounds } }
 
@@ -74,20 +74,32 @@ export function createCuOverlay(d: {
     w.setContentProtection(true)
     w.on('closed', () => { if (win === w) win = null })
     w.webContents.on('did-finish-load', () => { if (last && !w.isDestroyed()) w.webContents.send(CH.cuOverlayState, last) })
+    // T10 carry-over: the renderer can crash or be killed by the OS. Rebuild the window and replay whatever state
+    // was last shown, so a pending gate reappears instead of leaving the user with no way to answer it.
+    w.webContents.on('render-process-gone', () => recover(w))
     win = w
     d.loadUrl(w)
     return w
   }
 
+  const present = (state: CuOverlayState) => {
+    last = state
+    const height = state.gate ? OVERLAY_EXPANDED_H : OVERLAY_H
+    const w = ensure(height)
+    w.setBounds(place(d.screen, height))
+    w.webContents.send(CH.cuOverlayState, state)
+    if (!w.isVisible()) w.showInactive()
+  }
+
+  const recover = (dead: WinLike) => {
+    if (win !== dead) return // a stale event from a window that was already replaced: nothing to do
+    win = null
+    try { if (!dead.isDestroyed()) dead.destroy() } catch { /* already gone */ }
+    if (last) present(last)
+  }
+
   return {
-    show(state) {
-      last = state
-      const height = state.gate ? OVERLAY_EXPANDED_H : OVERLAY_H
-      const w = ensure(height)
-      w.setBounds(place(d.screen, height))
-      w.webContents.send(CH.cuOverlayState, state)
-      if (!w.isVisible()) w.showInactive()
-    },
+    show(state) { present(state) },
     hide() {
       if (win && !win.isDestroyed()) win.hide()
     },

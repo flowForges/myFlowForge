@@ -10,7 +10,6 @@ type Bridge = {
   log(a: { workspacePath: string; sessionId: string }): Promise<unknown>
   status(): Promise<CuStatus>
   setMode(a: { workspacePath: string; sessionId: string; mode: ComputerUseMode }): Promise<unknown>
-  resolve(a: { id: string; decision: 'allow' | 'deny' | 'stop' }): unknown
   stop(a?: { workspacePath: string; sessionId: string }): unknown
   thumb(a: { workspacePath: string; sessionId: string; file: string }): Promise<string | null>
   onEvent(cb: (e: unknown) => void): () => void
@@ -24,10 +23,10 @@ export interface ComputerUseApi {
   busyBy?: { title: string }
   gates: CuGate[]
   log: CuLogEntry[]
-  /** gate id → code main answered when it refused our resolve */
+  /** gate id → code main answered when it refused our (now-removed) resolve; left wired for CuGateCard's `error`
+   *  prop, but nothing sets it any more since the main window has no answer button (spec §9.2) */
   gateErrors: Record<string, string>
   setMode(m: ComputerUseMode): Promise<CuSetModeCode | null>
-  resolve(id: string, d: 'allow' | 'deny' | 'stop'): Promise<void>
   stop(): void
   thumb(file: string): Promise<string | null>
   refreshStatus(): Promise<CuStatus | null>
@@ -135,12 +134,6 @@ export function useComputerUse(workspacePath: string, sessionId: string): Comput
   return {
     status, mode, busyBy: holder ? { title: holder.title } : undefined, gates, log, gateErrors,
     setMode,
-    resolve: async (id, d) => {
-      try {
-        const r = (await bridge()?.resolve({ id, decision: d })) as { ok?: boolean; code?: string } | undefined
-        if (r && r.ok === false) setGateErrors((m) => ({ ...m, [id]: r.code ?? 'not_pending' }))
-      } catch { /* 门会由主进程的事件收掉 */ }
-    },
     stop: () => { void bridge()?.stop({ workspacePath, sessionId }) },
     thumb,
     refreshStatus,

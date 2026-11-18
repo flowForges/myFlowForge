@@ -3,12 +3,12 @@ import type { ComputerUseApi } from '../../state/useComputerUse'
 import { CuGateCard } from './CuGateCard'
 import { CuLogBlock } from './CuLogBlock'
 
-export function CuStreamTail({ remote, gates, gateErrors, log, resolve, thumb }: { remote: boolean } & Pick<ComputerUseApi, 'gates' | 'gateErrors' | 'log' | 'resolve' | 'thumb'>) {
+export function CuStreamTail({ remote, gates, gateErrors, log, thumb }: { remote: boolean } & Pick<ComputerUseApi, 'gates' | 'gateErrors' | 'log' | 'thumb'>) {
   if (remote || (!gates.length && !log.length)) return null
   return (
     <>
       <CuLogBlock entries={log} thumb={thumb} />
-      {gates.map((g) => <CuGateCard key={g.id} gate={g} error={gateErrors[g.id]} onResolve={resolve} />)}
+      {gates.map((g) => <CuGateCard key={g.id} gate={g} error={gateErrors[g.id]} />)}
     </>
   )
 }

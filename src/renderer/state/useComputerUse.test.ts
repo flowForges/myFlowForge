@@ -13,7 +13,6 @@ function install(over: Record<string, unknown> = {}) {
     log: vi.fn(async () => []),
     status: vi.fn(async () => status),
     setMode: vi.fn(async () => ({ ok: true })),
-    resolve: vi.fn(async () => ({ ok: true })),
     stop: vi.fn(async () => ({ ok: true })),
     thumb: vi.fn(async () => 'data:image/jpeg;base64,AAA'),
     onEvent: vi.fn((cb: (e: unknown) => void) => { emit = cb; return () => { emit = () => {} } }),
@@ -129,15 +128,6 @@ describe('useComputerUse', () => {
     expect(result.current.gates.map((g) => g.id)).toEqual(['g2'])
   })
 
-  it('resolve: a refusal from main is kept per gate (gateErrors); success leaves none', async () => {
-    api.resolve.mockResolvedValueOnce({ ok: false, code: 'not_pending' }).mockResolvedValueOnce({ ok: true })
-    const { result } = renderHook(() => useComputerUse(WS, SID))
-    await act(async () => { await result.current.resolve('g1', 'allow') })
-    expect(result.current.gateErrors).toEqual({ g1: 'not_pending' })
-    await act(async () => { await result.current.resolve('g2', 'allow') })
-    expect(result.current.gateErrors).toEqual({ g1: 'not_pending' })
-  })
-
   it('setMode passes the key and returns the refusal code (null on success)', async () => {
     const { result } = renderHook(() => useComputerUse(WS, SID))
     await act(async () => { expect(await result.current.setMode('ask')).toBeNull() })
@@ -146,10 +136,8 @@ describe('useComputerUse', () => {
     await act(async () => { expect(await result.current.setMode('ask')).toBe('restart_required') })
   })
 
-  it('resolve / stop / thumb call the bridge with the session key', async () => {
+  it('stop / thumb call the bridge with the session key', async () => {
     const { result } = renderHook(() => useComputerUse(WS, SID))
-    await act(async () => { await result.current.resolve('g1', 'deny') })
-    expect(api.resolve).toHaveBeenCalledWith({ id: 'g1', decision: 'deny' })
     act(() => result.current.stop())
     expect(api.stop).toHaveBeenCalledWith({ workspacePath: WS, sessionId: SID })
     expect(await result.current.thumb('00000001.jpg')).toBe('data:image/jpeg;base64,AAA')
