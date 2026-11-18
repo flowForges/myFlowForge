@@ -295,12 +295,36 @@ describe('act (spec §7.1): resolve → classify → gate → hide → act', () 
     expect(r2).toMatchObject({ ok: false, code: 'stale_ref', retry: 'safe' })
   })
 
-  it('unsupported without physical hints physical:true', async () => {
+  it('I2: a control without the action → action_unsupported (not "the system can\'t"); click hints physical:true', async () => {
     const s = setup()
     s.driver.setActError({ code: 'unsupported', delivery: 'not_delivered' })
     const r = await s.run('act', { ref: await s.refOf(WB), action: 'click' })
-    expect(r).toMatchObject({ ok: false, code: 'unsupported', retry: 'safe' })
-    if (!r.ok) expect(r.text).toContain('physical:true')
+    expect(r).toMatchObject({ ok: false, code: 'action_unsupported', retry: 'safe' })
+    if (!r.ok) {
+      expect(r.text).toContain('这个控件不支持这个动作')
+      expect(r.text).not.toContain('当前系统')
+      expect(r.text).toContain('physical:true')
+    }
+    expect(s.entries.at(-1)).toMatchObject({ op: 'act', result: 'failed', code: 'action_unsupported' })
+  })
+
+  it('I2: type without the action hints computer_focus or a physical click on the field; other actions get no hint', async () => {
+    const s = setup()
+    s.driver.setActError({ code: 'unsupported', delivery: 'not_delivered' })
+    const t = await s.run('act', { ref: await s.refOf(WB, 'e2'), action: 'type', text: 'x' })
+    expect(t).toMatchObject({ ok: false, code: 'action_unsupported', retry: 'safe' })
+    if (!t.ok) expect(t.text).toBe('这个控件不支持这个动作 · delivery=not_delivered · 先 computer_focus 该应用，或用 physical:true 点一下输入框再输入')
+    const e = await s.run('act', { ref: await s.refOf(WB), action: 'expand' })
+    if (!e.ok) expect(e.text).toBe('这个控件不支持这个动作 · delivery=not_delivered')
+    const p = await s.run('act', { ref: await s.refOf(WB), action: 'click', physical: true })
+    if (!p.ok) expect(p.text).not.toContain('physical:true')
+  })
+
+  it('I2: a not_delivered result (no error) is action_unsupported too', async () => {
+    const s = setup()
+    s.driver.setActResult({ delivery: 'not_delivered', steps: [] })
+    const r = await s.run('act', { ref: await s.refOf(WB), action: 'click' })
+    expect(r).toMatchObject({ ok: false, code: 'action_unsupported', retry: 'safe' })
   })
 
   it('delivered_unverified → ok, 未确认; delivered_verified → ok, 已确认', async () => {

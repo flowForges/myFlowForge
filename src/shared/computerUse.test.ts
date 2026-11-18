@@ -376,7 +376,8 @@ describe('CU_ERR', () => {
     const codes = ['not_enabled', 'no_turn', 'locked', 'no_permission', 'need_screenshot', 'layout_changed', 'own_window', 'blocked_app',
       'secure_input', 'denied', 'timeout', 'target_changed', 'rate_limited', 'step_limit', 'vision_code', 'helper_failed', 'stopped',
       'invalid_args', 'user_active', 'unsupported', 'restart_required',
-      'stale_ref', 'ambiguous_target', 'not_found', 'focus_failed', 'app_unresponsive', 'uncertain', 'blocked_combo']
+      'stale_ref', 'ambiguous_target', 'not_found', 'focus_failed', 'app_unresponsive', 'uncertain', 'blocked_combo',
+      'action_unsupported']
     expect(Object.keys(CU_ERR).sort()).toEqual([...codes].sort())
     for (const c of codes) expect((CU_ERR as Record<string, string>)[c]).toMatch(/[一-鿿]/)
   })
@@ -385,6 +386,8 @@ describe('CU_ERR', () => {
     expect(CU_ERR.need_screenshot).toBe('先调用 computer_screenshot')
     expect(CU_ERR.secure_input).toBe('密码输入框处于焦点 · 不能代输')
     expect(CU_ERR.user_active).toBe('用户正在使用电脑 · 稍后再试')
+    // I2: one control lacking an action is not "this system can't do computer use"
+    expect(CU_ERR.action_unsupported).toBe('这个控件不支持这个动作')
     expect(CU_ERR.vision_code).toBe('需要 visionCode：读出最近一张截图右下角方框里的 4 位码。看不到图片说明当前模型不支持图片，请停止使用电脑工具并告诉用户。')
   })
 })

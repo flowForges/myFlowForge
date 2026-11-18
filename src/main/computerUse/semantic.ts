@@ -38,7 +38,7 @@ const CROP_PAD_PT = 40
 /** Mutation errors that by their nature mean nothing was sent (when forge-cu didn't say). Anything else: unsafe. */
 const NOTHING_SENT: ReadonlySet<CuErrCode> = new Set<CuErrCode>([
   'stale_ref', 'ambiguous_target', 'not_found', 'own_window', 'blocked_app', 'blocked_combo', 'secure_input',
-  'unsupported', 'target_changed', 'no_permission', 'denied', 'invalid_args', 'focus_failed', 'step_limit',
+  'unsupported', 'action_unsupported', 'target_changed', 'no_permission', 'denied', 'invalid_args', 'focus_failed', 'step_limit',
   'rate_limited', 'user_active', 'locked',
 ])
 
@@ -57,13 +57,18 @@ const DELIVERY_WORD: Partial<Record<Delivery, string>> = {
 /** A failed (or uncertain) mutation: code, delivery and retry per spec §8.3. */
 function mutationFailure(e: unknown, o: { action?: string; physical?: boolean } = {}): Fail {
   const raw = e instanceof CuDriverError ? e.code : ''
-  const code: CuErrCode = known(raw) ? raw : 'helper_failed'
+  // forge-cu's act says `unsupported` when the control has none of the chain's actions: that is this control, not the
+  // platform (I2); the platform / helper `unsupported` never comes back from an act
+  const code: CuErrCode = raw === 'unsupported' && o.action ? 'action_unsupported' : known(raw) ? raw : 'helper_failed'
   const delivery = e instanceof CuDriverError ? e.delivery : undefined
   const retry: Retry = delivery !== undefined ? retryOf(delivery) : NOTHING_SENT.has(code) ? 'safe' : 'unsafe'
   let text = CU_ERR[code]
   if (delivery) text += ` · delivery=${DELIVERY_SHORT[delivery]}`
   if (retry === 'unsafe' && code !== 'uncertain') text += ' · 可能已经生效 · 不要重复，先重新 snapshot 确认'
-  if (retry === 'safe' && code === 'unsupported' && o.action && !o.physical) text += ' · 这个控件不支持语义动作，可改用 physical:true'
+  if (retry === 'safe' && code === 'action_unsupported' && !o.physical) {
+    if (o.action === 'click') text += ' · 可改用 physical:true'
+    else if (o.action === 'type') text += ' · 先 computer_focus 该应用，或用 physical:true 点一下输入框再输入'
+  }
   return { ok: false, code, text, ...(delivery ? { delivery } : {}), retry }
 }
 
@@ -281,7 +286,7 @@ export async function runSemantic(
     core.capCheck(key, st)
 
     if (!isFail(out) && out.delivery === 'uncertain') out = mutationFailure(new CuDriverError('uncertain', undefined, 'uncertain'))
-    else if (!isFail(out) && out.delivery === 'not_delivered') out = mutationFailure(new CuDriverError('unsupported', undefined, 'not_delivered'), m.failOpts)
+    else if (!isFail(out) && out.delivery === 'not_delivered') out = mutationFailure(new CuDriverError(m.failOpts?.action ? 'action_unsupported' : 'unsupported', undefined, 'not_delivered'), m.failOpts)
     if (isFail(out)) {
       await core.record(key, { ...m.base, result: out.code === 'blocked_app' || out.code === 'own_window' ? 'blocked' : 'failed', code: out.code, ...(out.delivery ? { delivery: out.delivery } : {}) }, thumb)
       return out

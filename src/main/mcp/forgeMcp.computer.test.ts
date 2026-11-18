@@ -208,6 +208,10 @@ describe('results', () => {
     expect(t(cuToolResult('computer_act', { ok: true, text: '已点击', delivery: 'delivered_unverified' }))).toBe('已点击 · delivery=unverified')
     expect(t(cuToolResult('computer_act', { ok: true, text: '已切换', delivery: 'delivered_without_effect' }))).toBe('已切换 · delivery=unverified')
     expect(t(cuToolResult('computer_click', { ok: true, text: '已点击' }))).toBe('已点击')
+    // I2: a "success" that sent nothing: the control lacks the action, not the platform
+    expect(t(cuToolResult('computer_act', { ok: true, text: '已点击', delivery: 'not_delivered' }))).toBe('已点击 [code=action_unsupported retry=safe]')
+    expect(t(cuToolResult('computer_act', { ok: false, code: 'action_unsupported', text: CU_ERR.action_unsupported, delivery: 'not_delivered' })))
+      .toBe(`${CU_ERR.action_unsupported} [code=action_unsupported retry=safe]`)
     const u = cuToolResult('computer_act', { ok: true, text: '已点击', delivery: 'uncertain' })
     expect(u.isError).toBe(true)
     expect(t(u)).toMatch(/\[code=uncertain retry=unsafe\]$/)

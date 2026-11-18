@@ -538,6 +538,8 @@ export type CuErrCode =
   | 'invalid_args' | 'user_active' | 'unsupported' | 'restart_required'
   // spec §8.3:控件树路径新增的码。uncertain/blocked_combo 虽然不是 forge-cu 的 errors.code,但走同一张表给模型看。
   | 'stale_ref' | 'ambiguous_target' | 'not_found' | 'focus_failed' | 'app_unresponsive' | 'uncertain' | 'blocked_combo'
+  // 一个控件不支持这个动作(forge-cu 的 act 回 unsupported / not_delivered);unsupported 只表示平台 / 组件不支持
+  | 'action_unsupported'
 
 /** 稳定码 → 给模型 / 用户的一句中文。码给日志和测试用。 */
 export const CU_ERR: Readonly<Record<CuErrCode, string>> = {
@@ -569,6 +571,7 @@ export const CU_ERR: Readonly<Record<CuErrCode, string>> = {
   app_unresponsive: '目标应用没有响应',
   uncertain: '不确定这一步是否已经生效 · 不要重复，先重新 snapshot 确认',
   blocked_combo: '这个组合键被拦截 · 不能发送',
+  action_unsupported: '这个控件不支持这个动作',
 }
 
 // ───────────────────────── 动作视图(卡片 / 浮窗 / 记录共用) ─────────────────────────

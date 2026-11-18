@@ -305,7 +305,8 @@ export function cuToolResult(tool: string, r: unknown): ToolReply {
   if (o.ok !== true) return lost()
   // spec §8.3: `uncertain` is reported as a failure (unsafe); a success that sent nothing is not a success either
   if (delivery === 'uncertain') return cuFailed(`${o.text} · ${CU_ERR.uncertain}`, 'uncertain', 'unsafe')
-  if (delivery === 'not_delivered') return cuFailed(o.text, 'unsupported', 'safe')
+  // nothing was sent: the control lacks the action (I2), not the platform
+  if (delivery === 'not_delivered') return cuFailed(o.text, 'action_unsupported', 'safe')
   let text = o.text
   // Review Focus 9: a screenshot's text always opens with the untrusted-screen notice, whatever the app side sent.
   // (A snapshot / wait_for result carries its own `<untrusted_screen snap=…>` header from the executor.)
