@@ -16,7 +16,7 @@ function win(id: number, o: { visible?: boolean; isPet?: boolean } = {}) {
   return w
 }
 
-function setup(o: { front?: boolean[] } = {}) {
+function setup(o: { front?: boolean[]; live?: () => boolean } = {}) {
   const main = win(1)
   const other = win(2)
   const hiddenAlready = win(3, { visible: false })
@@ -25,7 +25,7 @@ function setup(o: { front?: boolean[] } = {}) {
   const fronts = [...(o.front ?? [false])]
   const isOwnAppFront = vi.fn(async () => (fronts.length > 1 ? fronts.shift()! : fronts[0]))
   const activateAway = vi.fn(async (_t?: Instance) => {})
-  const h = createWindowHider({ windows: () => wins as HideableWin[], isOwnAppFront, activateAway })
+  const h = createWindowHider({ windows: () => wins as HideableWin[], isOwnAppFront, activateAway, ...(o.live ? { live: o.live } : {}) })
   return { h, main, other, hiddenAlready, pet, wins, isOwnAppFront, activateAway }
 }
 
@@ -149,5 +149,43 @@ describe('createWindowHider (spec §9.1, §9.3)', () => {
     t.h.restore()
     await t.h.beforeMutation(T)
     expect(t.main.hide).toHaveBeenCalledTimes(2)
+  })
+
+  it('not live (the turn ended / was stopped): a late beforeMutation after restore hides nothing and activates nothing', async () => {
+    let live = true
+    const t = setup({ front: [true], live: () => live })
+    await t.h.beforeMutation(T)
+    t.h.restore()
+    live = false
+    await t.h.beforeMutation(T)
+    expect(t.main.hide).toHaveBeenCalledTimes(1)
+    expect(t.main.isVisible()).toBe(true)
+    expect(t.activateAway).toHaveBeenCalledTimes(1)
+  })
+
+  it('a restore while the front check is pending: no activateAway afterwards, and the windows stay restored', async () => {
+    let answer: (v: boolean) => void = () => {}
+    const t = setup()
+    t.isOwnAppFront.mockImplementationOnce(() => new Promise<boolean>((r) => { answer = r }))
+    const p = t.h.beforeMutation(T)
+    expect(t.main.hide).toHaveBeenCalledTimes(1)
+    t.h.restore()
+    answer(true)
+    await p
+    expect(t.activateAway).not.toHaveBeenCalled()
+    expect(t.main.isVisible()).toBe(true)
+    expect(t.other.isVisible()).toBe(true)
+  })
+
+  it('live turning false while the front check is pending: no activateAway', async () => {
+    let live = true
+    let answer: (v: boolean) => void = () => {}
+    const t = setup({ live: () => live })
+    t.isOwnAppFront.mockImplementationOnce(() => new Promise<boolean>((r) => { answer = r }))
+    const p = t.h.beforeMutation(T)
+    live = false
+    answer(true)
+    await p
+    expect(t.activateAway).not.toHaveBeenCalled()
   })
 })

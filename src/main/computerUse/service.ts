@@ -403,6 +403,7 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
     emitAction: (key, entry) => d.emit({ type: 'action', key: { ...key }, entry }),
     note: (key, text) => d.note(key, text),
     stop: (key, why) => svc.stop(key, why),
+    callLive: () => !!running && !running.settled && !cancelled(running),
   }
   const executor: Executor = d.executorFactory
     ? d.executorFactory(internals)

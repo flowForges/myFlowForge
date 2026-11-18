@@ -16,7 +16,7 @@ import {
 import { renderNodeLine, renderSnapshot } from '@shared/cuSnapshotRender'
 import { CuDriverError, type CuGuard, type Rect } from './driver'
 import {
-  IDLE_PAUSE_S, TURN_SHOT_CAP, coreFor, fail, fromDriverError, gateFailure,
+  IDLE_PAUSE_S, TURN_SHOT_CAP, coreFor, fail, fromDriverError, gateFailure, stepAside,
   type ExecCore, type ExecutorDeps,
 } from './executor'
 import type { CuLogEntry, CuOp, CuSessionKey } from './types'
@@ -268,7 +268,7 @@ export async function runSemantic(
     }
 
     // best effort: semantic actions don't need the foreground, so a failed step-aside doesn't stop them
-    try { await d.hider?.beforeMutation(m.instance) } catch { /* nothing to undo */ }
+    await stepAside(d, m.instance)
 
     if (!(await core.pace('post'))) {
       await core.record(key, { ...m.base, result: 'failed', code: 'rate_limited' }, thumb)

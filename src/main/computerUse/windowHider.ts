@@ -6,6 +6,9 @@
 // - restore(): showInactive() only the windows we hid (never activates), then forget them.
 // - The user reopening a window we hid (Dock click, the overlay's 打开主窗口) ends auto-hide until the next turn, and
 //   that window is no longer ours to restore. Show events caused by restore() itself are not a reopen.
+// - `live()` (the computer-use turn is still on): checked before hiding and again before activating, so a call that
+//   resumes after the turn ended / was stopped (and its restore ran) can neither hide again nor move the front.
+//   A restore while the front check is pending also cancels the activation.
 import type { Instance } from '@shared/computerUse'
 
 export interface HideableWin { id: number; isVisible(): boolean; hide(): void; showInactive(): void; isPet: boolean }
@@ -22,6 +25,8 @@ export function createWindowHider(o: {
   isOwnAppFront: () => Promise<boolean>
   /** focus the target instance (no target → no-op) */
   activateAway: (target?: Instance) => Promise<void>
+  /** the turn that may step aside is still live; absent → always */
+  live?: () => boolean
 }): WindowHider {
   /** the windows we hid and have not restored */
   const hidden = new Set<number>()
@@ -30,13 +35,17 @@ export function createWindowHider(o: {
   /** the user reopened a window this turn: no more auto-hide */
   let userShown = false
   let restoring = false
+  /** bumped by every restore: a beforeMutation that awaited across one gives up */
+  let gen = 0
+  const isLive = () => { try { return o.live ? o.live() : true } catch { return false } }
 
   const list = (): HideableWin[] => { try { return o.windows() } catch { return [] } }
 
   return {
     async beforeMutation(target) {
-      if (aside || userShown) return
+      if (aside || userShown || !isLive()) return
       aside = true
+      const g = gen
       for (const w of list()) {
         if (w.isPet) continue
         try {
@@ -47,10 +56,11 @@ export function createWindowHider(o: {
       }
       let front = false
       try { front = await o.isOwnAppFront() } catch { front = false }
-      if (front) { try { await o.activateAway(target) } catch { /* semantic actions don't need the front */ } }
+      if (front && g === gen && isLive()) { try { await o.activateAway(target) } catch { /* semantic actions don't need the front */ } }
     },
 
     restore() {
+      gen++
       aside = false
       if (!hidden.size) return
       const ids = new Set(hidden)

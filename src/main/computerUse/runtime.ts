@@ -71,9 +71,10 @@ export function ownAccelerators(overrides: Record<string, string>): string[] {
 
 /** spec §9.1 / §9.3 (ruling R3): the hider on this driver. Front = the front window is ours; activateAway focuses the
  *  target instance's app (forge-cu's two-step activation), no target → nothing. */
-export function cuHiderFor(o: { driver: ComputerDriver; ownPid: number; windows: () => HideableWin[] }): WindowHider {
+export function cuHiderFor(o: { driver: ComputerDriver; ownPid: number; windows: () => HideableWin[]; live?: () => boolean }): WindowHider {
   return createWindowHider({
     windows: o.windows,
+    ...(o.live ? { live: o.live } : {}),
     isOwnAppFront: async () => (await o.driver.front())?.pid === o.ownPid,
     activateAway: async (target?: Instance) => { if (target) await o.driver.focusWindow({ pid: target.pid }) },
   })
@@ -143,6 +144,8 @@ export function createCuRuntime(d: CuRuntimeDeps): CuRuntime {
   const sleep = d.sleep ?? ((ms: number) => new Promise<void>((r) => { const h = setTimeout(r, ms); h.unref?.() }))
   let built: { host: ComputerUseHost; service: ComputerUseService; driver: ComputerDriver; hider: WindowHider } | null = null
   let hiderRef: WindowHider | null = null
+  /** the computer-use turn the hider may step aside for: set at an armed beginTurn, cleared at its end / stop / off */
+  let liveTurn: string | null = null
   let bridge: Promise<BridgeLike> | null = null
   let bridgeOpen: BridgeLike | null = null
   /** the last status the helper answered: undefined = never answered */
@@ -191,8 +194,12 @@ export function createCuRuntime(d: CuRuntimeDeps): CuRuntime {
       // a session went off (mode off / stop / lock): our windows come back
       if ([...on].some((id) => !next.has(id))) restore()
       on = next
+      if (liveTurn && !on.has(liveTurn)) liveTurn = null
     }
-    if (e.type === 'stopped') restore()
+    if (e.type === 'stopped') {
+      if (!e.key || idOf(e.key) === liveTurn) liveTurn = null
+      restore()
+    }
     d.emit(e)
   }
 
@@ -216,7 +223,7 @@ export function createCuRuntime(d: CuRuntimeDeps): CuRuntime {
     const log = createActionLog(d.dir)
     const settings = () => d.readSettings().computerUse
     const hidIsPhysical = () => false   // V5 / R18: off until 实测 20
-    const hider = cuHiderFor({ driver, ownPid: d.ownPid, windows: () => d.windows?.() ?? [] })
+    const hider = cuHiderFor({ driver, ownPid: d.ownPid, windows: () => d.windows?.() ?? [], live: () => liveTurn !== null })
     hiderRef = hider
     const service = createComputerUseService({
       driver, probe, now, random: d.random ?? (() => cuRandom()),
@@ -232,13 +239,16 @@ export function createCuRuntime(d: CuRuntimeDeps): CuRuntime {
       ...service,
       beginTurn: (key, origin) => {
         const r = service.beginTurn(key, origin)
-        if (r.tools) hider.turnStarted()
+        if (r.tools) { liveTurn = idOf(key); hider.turnStarted() }
+        else if (liveTurn === idOf(key)) liveTurn = null
         return r
       },
       endTurn: (key) => {
+        const wasLive = liveTurn === idOf(key)
+        if (wasLive) liveTurn = null
         const wasOn = service.modeOf(key) !== 'off'
         service.endTurn(key)
-        if (wasOn) restore()
+        if (wasOn || wasLive) restore()
       },
     }
     const host: ComputerUseHost = {
@@ -285,10 +295,12 @@ export function createCuRuntime(d: CuRuntimeDeps): CuRuntime {
     },
 
     onLock() {
+      liveTurn = null
       built?.service.onLock()
       restore()
     },
     quit() {
+      liveTurn = null
       try { built?.service.stop(undefined, 'quit') } catch { /* exiting anyway */ }
       restore()
       sweepTokenFiles()

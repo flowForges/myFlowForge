@@ -36,6 +36,16 @@ export interface ExecutorDeps {
 }
 
 /** For `createComputerUseService({ executorFactory })`: builds the executor on the service's guarded driver. */
+/** spec §9.1: step myFlowForge aside — only for a call that is still live (a call that resumes after a stop / turn end
+ *  must not hide the windows the restore just brought back). Best effort: a failure never stops the action. */
+export async function stepAside(d: Pick<ExecutorDeps, 'svc' | 'hider'>, target?: Instance): Promise<void> {
+  if (!d.hider) return
+  try {
+    if (d.svc.callLive && !d.svc.callLive()) return
+    await (target ? d.hider.beforeMutation(target) : d.hider.beforeMutation())
+  } catch { /* the hit test / guard still refuse our own windows */ }
+}
+
 export const executorFactoryFor = (rest: Omit<ExecutorDeps, 'svc' | 'driver'>) => (svc: ServiceInternals): Executor =>
   createExecutor({ ...rest, svc, driver: svc.driver })
 
@@ -353,6 +363,10 @@ export function createExecutor(d: ExecutorDeps): Executor {
       if (idle < IDLE_PAUSE_S) return fail('user_active')
     }
 
+    // spec §9.1: step myFlowForge aside before the target is worked out, so `front` (type / key) and the hit test see
+    // what is under our windows, not them (no target: the coordinate path never re-activates anything)
+    if (op !== 'move') await stepAside(d)
+
     // target
     const front = await d.driver.front()
     const frontIsOwn = !!front && front.pid === d.ownPid
@@ -412,12 +426,6 @@ export function createExecutor(d: ExecutorDeps): Executor {
         return fail(denied)
       }
       gated = true
-    }
-
-    // spec §9.1: step myFlowForge aside before a physical post (best effort, no target: the coordinate path never
-    // re-activates anything — answering in the overlay doesn't take the focus, so there is no refocus after a gate)
-    if (op !== 'move') {
-      try { await d.hider?.beforeMutation() } catch { /* the hit test / guard below still refuse our own windows */ }
     }
 
     // atomic execution (R8)

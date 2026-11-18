@@ -85,4 +85,6 @@ export interface ServiceInternals {
   emitAction(key: CuSessionKey, entry: CuLogEntry): void
   note(key: CuSessionKey, text: string): void
   stop(key: CuSessionKey, why: StopWhy): void
+  /** the running call is still live (not settled, stopped, abandoned, or past its turn); absent → assumed live */
+  callLive?(): boolean
 }

@@ -552,4 +552,41 @@ describe('window hider wiring (spec §9.1, §9.3)', () => {
     await ex.beforeMutation({ pid: 500, start: '1.2' })
     expect(driver.focusWindows).toHaveLength(1)
   })
+
+  // review fix 1: a call that resumes after its turn ended / was stopped must not hide the windows again
+  for (const [name, end] of [
+    ['turn end', (t: ReturnType<typeof setup>) => t.rt.host()!.service.endTurn(A)],
+    ['停止', (t: ReturnType<typeof setup>) => t.rt.stopAll()],
+  ] as const) {
+    it(`a click paused in a read across ${name} never hides afterwards`, async () => {
+      const t = setup()
+      const svc = t.rt.host()!.service
+      await svc.setMode(A, 'allow', LOCAL)
+      svc.beginTurn(A, 'local')
+      const tok = svc.tokenFor(A)!
+      expect((await svc.handle(tok, 'screenshot', {}, {})).ok).toBe(true)
+      const code = t.driver.captures[0].code!
+      // first click: steps aside; turn end restores; a new turn
+      expect((await svc.handle(tok, 'click', { x: 100, y: 100, visionCode: code }, {})).ok).toBe(true)
+      svc.endTurn(A)
+      svc.beginTurn(A, 'local')
+      expect((await svc.handle(tok, 'screenshot', {}, {})).ok).toBe(true)
+      // hold the executor's prelude status read (the second status of the job; the first is the service's own)
+      const status = t.driver.status.bind(t.driver)
+      let n = 0
+      let release: () => void = () => {}
+      t.driver.status = async () => {
+        if (++n === 2) await new Promise<void>((r) => { release = r })
+        return status()
+      }
+      const call = svc.handle(tok, 'click', { x: 100, y: 100, visionCode: t.driver.captures.at(-1)!.code! }, {})
+      await flush()
+      end(t)
+      release()
+      await call
+      await flush()
+      for (const w of t.wins) expect(w.isVisible()).toBe(true)
+      expect(t.wins[0].hide).toHaveBeenCalledTimes(1)
+    })
+  }
 })

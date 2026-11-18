@@ -567,14 +567,51 @@ describe('hider (spec §7.1, §9.1)', () => {
     }
   })
 
-  it('move, screenshots and refused or denied actions never hide', async () => {
+  it('move, screenshots and a wrong vision code never hide', async () => {
     const { s, hider } = mk('ask')
     await s.ready()
     hider.beforeMutation.mockClear()
     await s.run('move', { x: 5, y: 5 })
     await s.run('screenshot')
-    s.decisions.push('deny')
-    expect(await s.run('click', { x: 5, y: 5 })).toMatchObject({ ok: false, code: 'denied' })
+    expect(hider.beforeMutation).not.toHaveBeenCalled()
+    const t = mk('allow')
+    await t.s.run('screenshot')
+    t.hider.beforeMutation.mockClear()
+    expect(await t.s.run('click', { x: 5, y: 5, visionCode: 'ZZZZ' })).toMatchObject({ ok: false, code: 'vision_code' })
+    expect(t.hider.beforeMutation).not.toHaveBeenCalled()
+  })
+
+  it('review fix 2: it steps aside before the target is worked out (front / hit test) and before the ask gate', async () => {
+    const { s, hider, order } = mk('ask')
+    await s.ready()
+    hider.beforeMutation.mockClear(); order.length = 0
+    const front = s.driver.front.bind(s.driver)
+    const hit = s.driver.hitTest.bind(s.driver)
+    s.driver.front = async () => { order.push('front'); return front() }
+    s.driver.hitTest = async (p) => { order.push('hit'); return hit(p) }
+    s.onGate(() => { order.push('gate') })
+    expect((await s.run('click', { x: 5, y: 5 })).ok).toBe(true)
+    expect(order[0]).toBe('hide')
+    expect(order.indexOf('gate')).toBeGreaterThan(0)
+    expect(order.filter((x) => x === 'hide')).toHaveLength(1)
+  })
+
+  it('review fix 2: our window in front when the turn starts — type hides it first and goes to the app under it', async () => {
+    const own: WinHit = { ...APP, pid: OWN_PID, bundleId: 'com.myflowforge.app', name: 'myFlowForge' }
+    const s = setup({ front: own, hit: own, hider: { beforeMutation: async () => { s.driver.setFront(APP); s.driver.setHitMap(APP) } } })
+    await s.ready()
+    const r = await s.run('type', { text: 'hi' })
+    expect(r).toMatchObject({ ok: true })
+    expect(s.driver.posts).toHaveLength(1)
+  })
+
+  it('review fix 1: a call that is no longer live never hides', async () => {
+    const hider = { beforeMutation: vi.fn(async () => {}) }
+    const s = setup({ hider })
+    await s.ready()
+    hider.beforeMutation.mockClear()
+    s.svc.callLive = () => false
+    await s.run('click', { x: 5, y: 5 })
     expect(hider.beforeMutation).not.toHaveBeenCalled()
   })
 
