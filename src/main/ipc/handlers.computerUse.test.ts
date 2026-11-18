@@ -103,6 +103,8 @@ const CU_CHANNELS = [
 ]
 const FORGE_KEYS = ['FORGE_SOCKET', 'FORGE_MCP_DIR', 'FORGE_AGENT_ID', 'FORGE_MCP_ENTRY', 'FORGE_TOOLS']
 const REMOTE_CTX: InvokeCtx = { emit: () => {}, client: { id: 'phone-1', label: '手机' } }
+/** the overlay's own webContents (spec §9.2): the only sender that may answer allow / deny on computer-use:resolve */
+const OVERLAY_CTX: InvokeCtx = { emit: () => {}, client: { id: 'local', label: '本机', fromOverlay: true } }
 
 const chattingWorkflow = (): WorkflowSessionState => ({
   flowId: 'f1', flowName: '需求开发',
@@ -189,10 +191,11 @@ async function boot(o: { status?: Partial<CuStatus>; noCu?: boolean; gateOnRun?:
     return c[1]
   }
   const remote = (ch: string, ...a: unknown[]) => table[ch](REMOTE_CTX, ...a)
+  const overlay = (ch: string, ...a: unknown[]) => table[ch](OVERLAY_CTX, ...a)
   const notes = () => broadcast.mock.calls
     .filter((c) => c[0] === CH.chatEvent && c[1]?.type === 'done' && c[1]?.message?.model === '系统')
     .map((c) => c[1].message.text as string)
-  return { call, remote, table, service, probe, log, logRemoved, bridge, openMain, runningApps, beginTurn, endTurn, forget, notes, broadcast, gateHolder, provision, order }
+  return { call, remote, overlay, table, service, probe, log, logRemoved, bridge, openMain, runningApps, beginTurn, endTurn, forget, notes, broadcast, gateHolder, provision, order }
 }
 
 const lastSend = () => sendTurnMock.mock.calls.at(-1)
@@ -642,7 +645,7 @@ describe('computer-use:* handlers (Review Focus 2, 3, 15)', () => {
     expect(await h.call(CH.cuThumb)({}, { ...KEY, file: 't.jpg' })).toBeNull()
   })
 
-  it('gates: remote resolve, chatResolve, the bot bridge and 完全访问 can not answer one; local resolve can', async () => {
+  it('gates: remote resolve, chatResolve, the bot bridge, 完全访问 and the main window can not answer one; the overlay can', async () => {
     const h = await boot({ gateOnRun: true })
     session.permissionMode = 'full'
     await h.call(CH.cuSetMode)({}, { ...KEY, mode: 'ask' })
@@ -656,6 +659,9 @@ describe('computer-use:* handlers (Review Focus 2, 3, 15)', () => {
     const id = h.service.pendingGates()[0].id
 
     expect(await h.remote(CH.cuResolve, { id, decision: 'allow' })).toEqual({ ok: false, code: 'not_local' })
+    // §9.2: the main window is local but is not the overlay — allow/deny from it is refused the same as remote
+    expect(await h.call(CH.cuResolve)({}, { id, decision: 'allow' })).toEqual({ ok: false, code: 'not_local' })
+    expect(h.service.pendingGates().map((g) => g.id)).toEqual([id])
     expect(botDeps.resolveChatGate(id, 'allow')).toBe(false)
     await h.call(CH.chatResolve)({}, { id, decision: 'allow', workspacePath: WS })
     const snap = await h.call(CH.chatGateState)({}, { workspacePath: WS })
@@ -666,8 +672,25 @@ describe('computer-use:* handlers (Review Focus 2, 3, 15)', () => {
     // the chat confirm path was never asked
     expect(h.broadcast.mock.calls.some((c) => c[1]?.type === 'confirm-request')).toBe(false)
 
-    expect(await h.call(CH.cuResolve)({}, { id, decision: 'allow' })).toEqual({ ok: true })
+    expect(await h.overlay(CH.cuResolve, { id, decision: 'allow' })).toEqual({ ok: true })
     expect(await call).toEqual({ ok: true, text: 'allow' })
+    release()
+  })
+
+  it('§9.2: stop is not a gate answer — it still works from the main window, unlike allow/deny', async () => {
+    const h = await boot({ gateOnRun: true })
+    await h.call(CH.cuSetMode)({}, { ...KEY, mode: 'ask' })
+    let release!: () => void
+    sendTurnMock.mockImplementation(() => new Promise<void>((r) => { release = r }))
+    await h.call(CH.chatSend)({}, msg())
+    await sent()
+    const call = h.service.handle(h.service.tokenFor(KEY)!, 'click', { x: 1, y: 1 }, {})
+    await vi.waitFor(() => expect(h.service.pendingGates()).toHaveLength(1))
+    const id = h.service.pendingGates()[0].id
+
+    expect(await h.call(CH.cuResolve)({}, { id, decision: 'stop' })).toEqual({ ok: true })
+    expect(h.service.modeOf(KEY)).toBe('off')
+    expect((await call).ok).toBe(false)   // the stop aborted the running call too
     release()
   })
 })

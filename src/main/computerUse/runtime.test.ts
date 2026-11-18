@@ -12,7 +12,7 @@ import type { CuEvent, CuGate, CuSessionKey } from './types'
 
 const A: CuSessionKey = { workspacePath: '/w/a', sessionId: 's-a' }
 const B: CuSessionKey = { workspacePath: '/w/b', sessionId: 's-b' }
-const LOCAL = { local: true }
+const LOCAL = { local: true, fromOverlay: true }
 const APP: WinHit = { pid: 500, bundleId: 'com.example.app', name: 'Example', layer: 0, windowId: 77 }
 type FakeWin = { id: number; isPet: boolean; isVisible(): boolean; hide: Mock<() => void>; showInactive: Mock<() => void> }
 function fakeWin(id: number, isPet = false): FakeWin {

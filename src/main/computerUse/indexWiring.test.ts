@@ -43,9 +43,14 @@ describe('index.ts computer-use wiring', () => {
     expect(SRC).toContain('menuBarTray?.setTitle(cuTrayTitle(active))')
   })
 
-  it('the OS notification goes through osNotify with the shell-built title and body only (Review Focus 10)', () => {
-    expect(SRC).toContain("notify: (n, onClick) => showOsNotification({ title: n.title, body: n.body, route: { workspacePath: '' } }, onClick),")
-    expect(SRC).toContain("shouldNotify: () => shouldNotify('confirm', readSettings().notifications, isMainFocused()),")
+  it('门只在浮窗上答(spec §9.2):没有「有一道门等着你」的系统通知接线', () => {
+    const wire = SRC.slice(at('  cuShell = wireComputerUse({'), at('  const cuHelperPath ='))
+    expect(wire).not.toMatch(/notify:|shouldNotify:/)
+    expect(SRC).not.toContain('电脑操作待批准')
+  })
+
+  it('I-1: every local call carries fromOverlay, true only when the sender is the overlay webContents', () => {
+    expect(SRC).toContain("client: { id: 'local', label: '本机', fromOverlay: e.sender.id === cuOverlay.webContentsId() },")
   })
 
   it('quit disposes the helper and the socket in the existing before-quit cleanup', () => {

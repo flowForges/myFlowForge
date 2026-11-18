@@ -22,7 +22,7 @@ import { clearAppLog, formatAppLog } from '../log/appLog'
 import type { CuEvent, CuGate, CuSessionKey } from './types'
 
 const KEY: CuSessionKey = { workspacePath: '/w/int', sessionId: 's-int' }
-const LOCAL = { local: true }
+const LOCAL = { local: true, fromOverlay: true }
 const NOTES = { pid: 777, bundleId: 'com.example.notes', name: 'Notes', layer: 0, windowId: 9 }
 const MARKER = 'MARKER-hunter2-MARKER'
 type Content = Array<{ type: string; text?: string; data?: string; mimeType?: string }>

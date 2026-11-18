@@ -754,9 +754,8 @@ app.whenReady().then(() => {
       if (mainWinRef && !mainWinRef.isDestroyed()) { try { mainWinRef.webContents.send(channel, payload) } catch { /* closing */ } }
     },
     overlay: cuOverlay,
-    // 正文只有动作类型,点了打开浮窗(§5.7)
-    notify: (n, onClick) => showOsNotification({ title: n.title, body: n.body, route: { workspacePath: '' } }, onClick),
-    shouldNotify: () => shouldNotify('confirm', readSettings().notifications, isMainFocused()),
+    // 门只在浮窗上答(spec §9.2、§6.7):不再有「有一道门等着你」的系统通知,免得人从通知点进主窗口去按一个
+    // 主窗口上根本按不动的按钮。
     onActive: (active) => {
       if (process.platform === 'darwin') { try { menuBarTray?.setTitle(cuTrayTitle(active)) } catch { /* tray gone */ } }
       refreshDockMenu()
@@ -852,7 +851,9 @@ app.whenReady().then(() => {
       emit: (c, p) => { try { e.sender.send(c, p) } catch { /* window closed */ } },
       // 本机窗口发起的调用。权限门用它区分「我自己答的」和「别的设备答的」——
       // 前者不该在对话里加噪音,后者必须说清楚。
-      client: { id: 'local', label: '本机' },
+      // fromOverlay:电脑操作的门只在浮窗上答(spec §9.2):主窗口和浮窗都是本机(id:'local'),
+      // 但 computer-use:resolve 的 allow/deny 只认浮窗这一个 webContents。
+      client: { id: 'local', label: '本机', fromOverlay: e.sender.id === cuOverlay.webContentsId() },
     }, args)
       // I-1:computer-use:* 只认主窗口和浮窗(宠物窗共用 preload)
       : NOT_LOCAL)

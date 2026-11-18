@@ -1184,10 +1184,6 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
 .cu-crop-row { align-items: flex-start; }
 .cu-crop { display: block; max-width: 100%; max-height: 220px; border: 2px solid var(--border); border-radius: 6px; }
 .cu-actions { display: flex; gap: 8px; margin-top: 4px; }
-.cu-btn { padding: 5px 14px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--fg); font-size: 12.5px; cursor: pointer; }
-.cu-btn:hover { background: color-mix(in oklab, var(--fg) 8%, transparent); }
-.cu-allow { background: var(--accent); color: var(--on-accent); border-color: transparent; }
-.cu-allow:hover { background: var(--accent); filter: brightness(1.08); }
 
 .cu-log { margin: 8px 0; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; font-size: 12px; }
 .cu-log-head { padding: 6px 12px; color: var(--muted); font-weight: 600; background: color-mix(in oklab, var(--fg) 4%, transparent); }

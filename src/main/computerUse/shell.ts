@@ -1,11 +1,12 @@
-// What the desktop shell does with computer-use events (spec §5.7, §6 T4/T5/T10, §10.4, V2, V9, V10). No electron in
-// here: index.ts hands in registry.broadcast, the overlay, the OS notifier and the tray / shortcut refresh.
+// What the desktop shell does with computer-use events (spec §5.7, §6 T4/T5/T10, §9.2, §10.4, V2, V9, V10). No
+// electron in here: index.ts hands in registry.broadcast, the overlay and the tray / shortcut refresh.
 //
 // - Every event goes to `localBroadcast` (registry.broadcast: this machine's windows) and nowhere else. Never
 //   hub.broadcast (remote sinks) and never router.localEvent (it drops events while the window views a remote host,
 //   and then the overlay would be the only approval surface with nothing on it).
-// - The OS notification for a new gate carries the kind label and nothing else: no typed text, no app name, no crop.
-import { CU_KIND_LABEL, type CuOverlayGate, type CuOverlayState } from '@shared/computerUse'
+// - No OS notification for a pending gate (spec §9.2): the overlay is already on screen with the card; main
+//   window has no button for it to point at, so a notification would only be a dead click.
+import type { CuOverlayGate, CuOverlayState } from '@shared/computerUse'
 import { CH } from '../ipc/channels'
 import type { ChatMessage } from '@shared/types'
 import type { CuEvent, CuGate, CuSessionKey } from './types'
@@ -37,9 +38,6 @@ export interface CuOverlayLike { show(s: CuOverlayState): void; hide(): void }
 export interface CuShellDeps {
   localBroadcast: (channel: string, payload: unknown) => void
   overlay: CuOverlayLike
-  notify: (n: { title: string; body: string }, onClick: () => void) => void
-  /** main window unfocused and the user's notification switches allow it */
-  shouldNotify: () => boolean
   /** any session went on / everything went off: tray title, menus, the stop hotkey */
   onActive: (active: boolean) => void
   /** the stop hotkey's target (runtime.stopAll) */
@@ -94,11 +92,9 @@ export function wireComputerUse(d: CuShellDeps): CuShell {
         break
       }
       case 'gate':
+        // 门只在浮窗上答(spec §9.2、§6.7):不再弹「有一道门等着你」的系统通知 —— 浮窗本身
+        // 已经在屏幕上展开了,通知只会多一条无处可点的噪音(主窗口上没有按钮)。
         gates.push(e.gate)
-        if (d.shouldNotify()) {
-          const kind = e.gate.kind === 'continue' ? 'continue' : e.gate.action?.kind
-          d.notify({ title: '电脑操作待批准', body: kind ? CU_KIND_LABEL[kind] : CU_KIND_LABEL.continue }, () => render())
-        }
         break
       case 'gate-resolved':
         gates = gates.filter((g) => g.id !== e.id)

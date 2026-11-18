@@ -15,7 +15,7 @@ import { attachPowerMonitor, CU_POWER_EVENTS, cuSenderAllowed, cuSystemNote, cuT
 import type { CuEvent, CuGate, CuSessionKey } from './types'
 
 const A: CuSessionKey = { workspacePath: '/w/a', sessionId: 's-a' }
-const LOCAL = { local: true }
+const LOCAL = { local: true, fromOverlay: true }
 const APP: WinHit = { pid: 500, bundleId: 'com.example.app', name: 'Example', layer: 0, windowId: 77 }
 const MARKER = 'SECRET-MARKER-7f3a'
 const flush = async (n = 30) => { for (let i = 0; i < n; i++) await Promise.resolve() }
@@ -23,22 +23,19 @@ const flush = async (n = 30) => { for (let i = 0; i < n; i++) await Promise.reso
 const roots: string[] = []
 afterEach(() => { for (const r of roots.splice(0)) rmSync(r, { recursive: true, force: true }) })
 
-function shell(o: { focused?: boolean; notifyOn?: boolean } = {}) {
+function shell() {
   const local: { channel: string; payload: unknown }[] = []
   const shown: CuOverlayState[] = []
   let hides = 0
-  const notes: { title: string; body: string; onClick: () => void }[] = []
   const active: boolean[] = []
   const stopAll = vi.fn()
   const sh = wireComputerUse({
     localBroadcast: (channel, payload) => local.push({ channel, payload }),
     overlay: { show: (s) => shown.push(s), hide: () => { hides++ } },
-    notify: (n, onClick) => notes.push({ ...n, onClick }),
-    shouldNotify: () => (o.notifyOn ?? true) && !(o.focused ?? false),
     onActive: (a) => active.push(a),
     stopAll,
   })
-  return { sh, local, shown, notes, active, stopAll, get hides() { return hides } }
+  return { sh, local, shown, active, stopAll, get hides() { return hides } }
 }
 
 const stateOn: CuEvent = { type: 'state', sessions: [{ ...A, mode: 'ask', title: '会话一' }] }
@@ -60,7 +57,7 @@ describe('events go to the local sink only (Review Focus 15, V2)', () => {
     hub.addSink(routerLocal)
     const registry = vi.fn()
     const sh = wireComputerUse({
-      localBroadcast: registry, overlay: { show: () => {}, hide: () => {} }, notify: () => {}, shouldNotify: () => true,
+      localBroadcast: registry, overlay: { show: () => {}, hide: () => {} },
       onActive: () => {}, stopAll: () => {},
     })
     const driver = fakeDriver({ front: APP, hits: APP, capture: { width: 1280, height: 800 } })
@@ -132,29 +129,12 @@ describe('overlay state', () => {
   })
 })
 
-describe('OS notification (Review Focus 10)', () => {
-  it('a new gate while the main window is not focused: title 电脑操作待批准, body only the kind label; click shows the overlay', () => {
+describe('no OS notification for a pending gate (spec §9.2)', () => {
+  it('a new gate still reaches the overlay; wireComputerUse takes no notify / shouldNotify dep to drive one', () => {
     const t = shell()
     t.sh.emit(stateOn)
     t.sh.emit({ type: 'gate', gate: gate({ action: { kind: 'type', text: MARKER, app: MARKER } }) })
-    expect(t.notes).toHaveLength(1)
-    expect(t.notes[0].title).toBe('电脑操作待批准')
-    expect(t.notes[0].body).toBe('输入')
-    expect(JSON.stringify(t.notes)).not.toContain(MARKER)
-    const before = t.shown.length
-    t.notes[0].onClick()
-    expect(t.shown.length).toBe(before + 1)
-    t.sh.emit({ type: 'gate', gate: gate({ id: 'cug.2', kind: 'continue', action: undefined, reason: '已执行 100 步 · 继续 100 步' }) })
-    expect(t.notes[1].body).toBe('继续')
-  })
-
-  it('no notification while the main window is focused or notifications are off', () => {
-    for (const o of [{ focused: true }, { notifyOn: false }]) {
-      const t = shell(o)
-      t.sh.emit(stateOn)
-      t.sh.emit({ type: 'gate', gate: gate() })
-      expect(t.notes).toEqual([])
-    }
+    expect(t.shown.at(-1)!.gate).not.toBeNull()
   })
 })
 

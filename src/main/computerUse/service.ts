@@ -57,7 +57,8 @@ export interface ComputerUseService {
   endTurn(key: CuSessionKey): void
   handle(token: string, op: string, args: Record<string, unknown>, meta: CallMeta): Promise<CuResult>
   openGate(g: Omit<CuGate, 'id' | 'ts'>): Promise<GateDecision>
-  resolve(id: string, decision: 'allow' | 'deny' | 'stop', by: { local: boolean }): Promise<boolean>
+  /** spec §9.2: `allow` / `deny` only count from the overlay (`fromOverlay: true`); `stop` counts from either. */
+  resolve(id: string, decision: 'allow' | 'deny' | 'stop', by: { local: boolean; fromOverlay?: boolean }): Promise<boolean>
   pendingGates(): CuGate[]
   stop(key?: CuSessionKey, why?: StopWhy): void
   onLock(): void
@@ -282,6 +283,10 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
     }
     if (running && running.k === k) settle(running, err('stopped'))
     abortInFlight(k)
+    // R4: at most one session is ever on, so this fires once per actual off transition — covers mode off, every
+    // stop() reason (user / hotkey / lock / vision / limit / deleted / quit) and before-quit (runtime.quit() →
+    // stop(undefined,'quit')), never a turn end. Best effort: fire-and-forget, never blocks the caller.
+    if (s) void d.driver.a11yRevert().catch(() => { /* best effort */ })
     return !!s
   }
 
@@ -550,6 +555,8 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
 
     async resolve(id, decision, by) {
       if (!by.local) return false
+      // §9.2: allow/deny are only answered on the overlay; stop (the emergency path) counts from the main window too.
+      if (decision !== 'stop' && !by.fromOverlay) return false
       const g = gates.get(id)
       if (!g) return false
       const stale = () => d.now() - g.gate.ts >= GATE_TIMEOUT_MS

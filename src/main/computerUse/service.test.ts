@@ -14,7 +14,7 @@ import { createComputerUseService, ensurePrivateDir } from './service'
 
 const A: CuSessionKey = { workspacePath: '/w/a', sessionId: 's-a' }
 const B: CuSessionKey = { workspacePath: '/w/b', sessionId: 's-b' }
-const LOCAL = { local: true }
+const LOCAL = { local: true, fromOverlay: true }
 const REMOTE = { local: false }
 const FIVE_MIN = 5 * 60_000
 
@@ -480,6 +480,17 @@ describe('gates are app-side (Review Focus 2; V5)', () => {
     expect(t.svc.modeOf(A)).toBe('ask')
   })
 
+  it('spec §9.2: allow/deny from the main window (local but not the overlay) are refused; stop still works from it', async () => {
+    const MAIN_WINDOW = { local: true, fromOverlay: false }
+    const { t, p, g } = await gated()
+    expect(await t.svc.resolve(g.id, 'allow', MAIN_WINDOW)).toBe(false)
+    expect(await t.svc.resolve(g.id, 'deny', MAIN_WINDOW)).toBe(false)
+    expect(t.svc.pendingGates()).toHaveLength(1)
+    expect(await t.svc.resolve(g.id, 'stop', MAIN_WINDOW)).toBe(true)
+    expect(await p).toBe('stop')
+    expect(t.svc.modeOf(A)).toBe('off')
+  })
+
   it('a local allow resolves it', async () => {
     const { t, p, g } = await gated()
     expect(await t.svc.resolve(g.id, 'allow', LOCAL)).toBe(true)
@@ -777,6 +788,57 @@ describe('stop', () => {
     const tok = await t.on(A)
     t.svc.beginTurn(A, 'local')
     expect(await t.svc.handle(tok, 'click', {}, {})).toMatchObject({ ok: false, code: 'stopped' })
+    expect(t.svc.modeOf(A)).toBe('off')
+  })
+})
+
+// ───────────────────────── a11yRevert (Task 9, spec §9.2 / §6.7 收尾) ─────────────────────────
+
+describe('Enhanced accessibility (driver.a11yRevert) is reverted on off / stop / quit, never at turn end', () => {
+  it('setMode to off reverts once', async () => {
+    const t = setup()
+    await t.on(A)
+    expect(t.driver.a11yReverts).toBe(0)
+    expect(await t.svc.setMode(A, 'off', LOCAL)).toEqual({ ok: true })
+    expect(t.driver.a11yReverts).toBe(1)
+  })
+
+  it('emergency stop (the hotkey / 停止 path) reverts once', async () => {
+    const t = setup()
+    await t.on(A)
+    t.svc.stop(A, 'user')
+    expect(t.driver.a11yReverts).toBe(1)
+  })
+
+  it('before-quit — runtime.quit() calls stop(undefined, \'quit\') — reverts once', async () => {
+    const t = setup()
+    await t.on(A)
+    t.svc.stop(undefined, 'quit')
+    expect(t.driver.a11yReverts).toBe(1)
+  })
+
+  it('a stop with nothing enabled never reverts', async () => {
+    const t = setup()
+    t.svc.stop(undefined, 'hotkey')
+    expect(t.driver.a11yReverts).toBe(0)
+  })
+
+  it('a turn ending does not revert: the session stays on and Enhanced accessibility stays on with it', async () => {
+    const t = setup()
+    const tok = await t.on(A)
+    t.svc.beginTurn(A, 'local')
+    await t.svc.handle(tok, 'screenshot', {}, {})
+    t.svc.endTurn(A)
+    expect(t.driver.a11yReverts).toBe(0)
+    expect(t.svc.modeOf(A)).toBe('ask')
+  })
+
+  it('a failing a11yRevert is swallowed: stop still turns the session off', async () => {
+    const t = setup()
+    t.driver.a11yRevert = async () => { throw new Error('helper gone') }
+    await t.on(A)
+    expect(() => t.svc.stop(A, 'user')).not.toThrow()
+    await flush()
     expect(t.svc.modeOf(A)).toBe('off')
   })
 })

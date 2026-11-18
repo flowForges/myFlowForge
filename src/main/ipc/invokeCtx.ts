@@ -20,8 +20,12 @@ export type InvokeCtx = {
    * ★★远程连接的 id 是**每条连接唯一**的(`serveConnection` 现场生成),不是固定的 `'remote'`。
    *  终端要靠它认「这个 pty 是谁开的」—— 两台客户端同时连着一台 host 时,固定 id 会让
    *  A 断线把 B 的 shell 一起收掉。既有那两处判断写的是 `id !== 'local'`,不受影响。
+   *
+   * ★★★`fromOverlay`:本机窗口里,是浮窗发的还是主窗口发的。电脑操作的门只在浮窗上答(spec §9.2、
+   *  §6.7) —— 主窗口和浮窗都算「本机」(`id === 'local'`),但只有浮窗该能点「允许」/「拒绝」。
+   *  只在 Electron 宿主里按 `e.sender` 是不是浮窗的 webContents 置位;远程连接永远不会是 true。
    */
-  client?: { id: string; label: string }
+  client?: { id: string; label: string; fromOverlay?: boolean }
   /**
    * 「发起这次调用的那条连接断了」。**只有远程连接会触发** —— 本机窗口活到进程退出为止,
    * Electron 宿主不接这个口子。

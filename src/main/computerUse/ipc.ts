@@ -3,6 +3,9 @@
 // All eleven channels are CLIENT_ONLY, so a remote client can't reach them through daemonTable(). This module is
 // the second line of defence: any caller whose client isn't the local window gets `not_local` and nothing is touched.
 // The check comes before argument validation and before the host is consulted.
+// cuResolve has a third line (spec §9.2): local covers both the main window and the overlay, but allow/deny must
+// come from the overlay's own webContents specifically (`client.fromOverlay`) — stop is the one decision that
+// still works from the main window too, since it is the same emergency path as the chip-menu 停止.
 import { COMPUTER_USE_MODES, type ComputerUseMode, type CuStatus } from '@shared/computerUse'
 import type { InvokeEventLike } from '../ipc/invokeCtx'
 import { CH } from '../ipc/channels'
@@ -65,14 +68,20 @@ export function computerUseHandlers(d: ComputerUseIpcDeps): Record<string, Handl
       return cu.service.setMode(key, mode as ComputerUseMode, { local: true })
     }),
 
-    [CH.cuResolve]: local(async (cu, a) => {
+    // §9.2: allow/deny only land from the overlay's own webContents; the main window's chip-menu 停止 still works
+    // (it is not a gate answer — same channel, decision 'stop' — so it keeps working from either window).
+    [CH.cuResolve]: async (e, a) => {
+      if (!isLocal(e)) return NOT_LOCAL
       const id = a && typeof a === 'object' ? (a as { id?: unknown }).id : undefined
       const decision = a && typeof a === 'object' ? (a as { decision?: unknown }).decision : undefined
       if (typeof id !== 'string' || !id || typeof decision !== 'string' || !DECISIONS.has(decision)) return INVALID
+      const cu = d.cu()
       if (!cu) return UNSUPPORTED
-      const ok = await cu.service.resolve(id, decision as 'allow' | 'deny' | 'stop', { local: true })
+      const fromOverlay = e?.client?.fromOverlay === true
+      if (decision !== 'stop' && !fromOverlay) return NOT_LOCAL
+      const ok = await cu.service.resolve(id, decision as 'allow' | 'deny' | 'stop', { local: true, fromOverlay })
       return ok ? { ok: true } : { ok: false, code: 'not_pending' }
-    }),
+    },
 
     [CH.cuStop]: local(async (cu, a) => {
       if (!cu) return UNSUPPORTED
