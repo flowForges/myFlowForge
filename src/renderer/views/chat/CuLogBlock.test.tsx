@@ -41,6 +41,41 @@ describe('CuLogBlock', () => {
     expect(container.textContent).toContain('输入 5 字')
   })
 
+  it('semantic act row: verb + role + element name, from actLabel/element (Task 10)', () => {
+    const entries = [
+      e({ op: 'act', app: 'WorkBuddy', bundleId: 'com.example.workbuddy', element: { role: 'button', name: '新建会话' }, actLabel: '点击', result: 'auto', delivery: 'delivered_verified' }),
+      e({ op: 'act', app: 'WorkBuddy', element: { role: 'textfield', name: '输入消息' }, actLabel: '输入', result: 'auto', delivery: 'delivered_unverified' }),
+    ]
+    const { container } = render(<CuLogBlock entries={entries} thumb={async () => null} />)
+    const rows = container.querySelectorAll('.cu-log-row')
+    expect(rows[0].textContent).toContain('点击 按钮「新建会话」')
+    expect(rows[0].textContent).toContain('WorkBuddy')
+    expect(rows[0].querySelector('.cu-res')?.textContent).toBe('已确认')
+    expect(rows[1].textContent).toContain('输入 输入框「输入消息」')
+    expect(rows[1].querySelector('.cu-res')?.textContent).toBe('未确认')
+  })
+
+  it('result chip: delivered_without_effect and uncertain also show 未确认; everything else keeps its usual chip', () => {
+    const entries = [
+      e({ op: 'act', result: 'auto', delivery: 'delivered_without_effect' }),
+      e({ op: 'act', result: 'failed', delivery: 'uncertain', code: 'uncertain' }),
+      e({ op: 'launch', result: 'denied' }),
+      e({ op: 'act', result: 'blocked', code: 'blocked_app' }),
+    ]
+    const { container } = render(<CuLogBlock entries={entries} thumb={async () => null} />)
+    const rows = container.querySelectorAll('.cu-log-row')
+    expect(rows[0].querySelector('.cu-res')?.textContent).toBe('未确认')
+    expect(rows[1].querySelector('.cu-res')?.textContent).toBe('未确认')
+    expect(rows[2].querySelector('.cu-res')?.textContent).toBe('已拒绝')
+    expect(rows[3].querySelector('.cu-res')?.textContent).toBe('已拦截')
+  })
+
+  it('element names in the log are plain text too: whitespace collapsed, markup not parsed', () => {
+    const { container } = render(<CuLogBlock entries={[e({ op: 'act', element: { role: 'button', name: 'a\n\n<b>b</b>' }, actLabel: '点击' })]} thumb={async () => null} />)
+    expect(container.querySelector('b')).toBeNull()
+    expect(container.textContent).not.toContain('\n')
+  })
+
   it('one block per turn', () => {
     const { container } = render(<CuLogBlock entries={[e({ turn: 1 }), e({ turn: 2 }), e({ turn: 2 })]} thumb={async () => null} />)
     expect(container.querySelectorAll('.cu-log')).toHaveLength(2)

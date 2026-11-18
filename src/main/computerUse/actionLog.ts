@@ -44,6 +44,8 @@ function toDisk(e: CuLogEntry): Record<string, unknown> {
       ...(typeof e.element.name === 'string' ? { name: Array.from(e.element.name).slice(0, 120).join('') } : {}),
     }
   }
+  // ACT_LABEL values are short fixed Chinese verbs, but cap defensively like every other screen/model-adjacent field
+  if (typeof e.actLabel === 'string') o.actLabel = Array.from(e.actLabel).slice(0, 16).join('')
   if (typeof e.delivery === 'string' && DELIVERIES.has(e.delivery)) o.delivery = e.delivery
   if (e.code !== undefined) o.code = e.code
   if (e.thumb !== undefined) o.thumb = e.thumb

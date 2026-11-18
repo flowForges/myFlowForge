@@ -82,6 +82,50 @@ describe('CuGateCard', () => {
     expect(row(b.container, '从').querySelector('.cu-bundle')?.textContent).toBe('com.apple.finder')
   })
 
+  it('act: 应用 / 控件 / 动作 rows (spec §10)', () => {
+    const { container } = render(<CuGateCard gate={mk({
+      action: {
+        kind: 'act', app: { name: 'WorkBuddy', bundleId: 'com.example.workbuddy' }, bundleId: 'com.example.workbuddy',
+        element: { role: 'button', name: '新建会话' }, actLabel: '点击',
+      },
+    })} />)
+    expect(row(container, '应用').textContent).toContain('WorkBuddy · com.example.workbuddy')
+    expect(row(container, '控件').textContent).toContain('按钮「新建会话」')
+    expect(row(container, '动作').textContent).toContain('点击')
+  })
+
+  it('act type: adds a 文字 block and the N 字 chip', () => {
+    const { container } = render(<CuGateCard gate={mk({
+      action: { kind: 'act', app: { name: 'WorkBuddy', bundleId: 'x' }, element: { role: 'textfield', name: '输入消息' }, actLabel: '输入', text: '你好' },
+    })} />)
+    expect(container.querySelector('.cu-text')?.textContent).toBe('你好')
+    expect(container.querySelector('.cu-chip.cu-count')?.textContent).toBe('2 字')
+  })
+
+  it('act flags: physical → 方式: 移动鼠标点击; replace → 方式: 替换原有内容; scroll → 滚动: 箭头 ×amount', () => {
+    const a = render(<CuGateCard gate={mk({ action: { kind: 'act', element: { role: 'button' }, actLabel: '点击', physical: true } })} />)
+    expect(row(a.container, '方式').textContent).toContain('移动鼠标点击')
+    const b = render(<CuGateCard gate={mk({ id: 'g2', action: { kind: 'act', element: { role: 'textfield' }, actLabel: '设置', replace: true } })} />)
+    expect(row(b.container, '方式').textContent).toContain('替换原有内容')
+    const c = render(<CuGateCard gate={mk({ id: 'g3', action: { kind: 'act', element: { role: 'list' }, actLabel: '滚动', direction: 'down', amount: 3 } })} />)
+    expect(row(c.container, '滚动').textContent).toContain('↓ ×3')
+  })
+
+  it('launch: 动作: 打开应用 row, plus the 应用 row', () => {
+    const { container } = render(<CuGateCard gate={mk({ action: { kind: 'launch', app: { name: 'Terminal', bundleId: 'com.apple.Terminal' } } })} />)
+    expect(row(container, '动作').textContent).toContain('打开应用')
+    expect(row(container, '应用').textContent).toContain('Terminal')
+  })
+
+  it('appKey: keycap chips (reusing the key row) and the 应用 row', () => {
+    const { container } = render(<CuGateCard gate={mk({
+      action: { kind: 'appKey', app: { name: 'Notes', bundleId: 'com.apple.Notes' }, combo: '⌘⇧V', mods: ['cmd', 'shift'] },
+    })} />)
+    const caps = Array.from(row(container, '按键').querySelectorAll('.cu-cap')).map((e) => e.textContent)
+    expect(caps).toEqual(['⌘', '⇧', 'V'])
+    expect(row(container, '应用').textContent).toContain('Notes')
+  })
+
   it('continue gate: 原因 row shows the reason, title is 电脑 · 继续', () => {
     render(<CuGateCard gate={mk({ kind: 'continue', reason: '已执行 100 步' })} />)
     expect(screen.getByText('电脑 · 继续')).toBeTruthy()
@@ -112,13 +156,6 @@ describe('CuGateCard', () => {
       expect(screen.getByText('待批准')).toBeTruthy()
       expect(screen.queryByText('继续 100 步')).toBeNull()
       expect(screen.queryByText('停止')).toBeNull()
-    })
-
-    it('an onResolve prop, if passed (CuStreamTail still wires one), is never called: there is nothing to click', () => {
-      const onResolve = () => { throw new Error('must not be called: the main window has no answer button') }
-      render(<CuGateCard gate={mk({ action: { kind: 'click', at: { x: 1, y: 1 } } })} onResolve={onResolve} />)
-      // merely rendering and finding no buttons is the proof; nothing invokes onResolve
-      expect(screen.queryAllByRole('button')).toHaveLength(0)
     })
   })
 })

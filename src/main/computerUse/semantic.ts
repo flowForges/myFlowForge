@@ -305,14 +305,14 @@ export async function runSemantic(
     const element = { role: r.role, ...(r.name !== undefined ? { name: r.name } : {}) }
     const appName = r.appName || r.bundleId || '未知应用'
     const typed: string | undefined = a.action === 'type' ? a.text : a.action === 'set' || a.action === 'select' ? a.value : undefined
+    const verb = ACT_LABEL[a.action as keyof typeof ACT_LABEL]
     const base: Mutation['base'] = {
-      ...base0, app: appName, ...(r.bundleId ? { bundleId: r.bundleId } : {}), element,
+      ...base0, app: appName, ...(r.bundleId ? { bundleId: r.bundleId } : {}), element, actLabel: verb,
       ...(typed !== undefined ? { textLen: Array.from(typed).length } : {}),
     }
     // fail closed: a write needs to know whose element it is
     if (!r.bundleId) return refuse(base, isOwn(d, { pid: r.instance.pid }) ? 'own_window' : 'blocked_app', '无法确认目标应用')
     if ((a.action === 'type' || a.action === 'set') && status.secureInput) return refuse(base, 'secure_input')
-    const verb = ACT_LABEL[a.action as keyof typeof ACT_LABEL]
     const view: CuActionView = {
       kind: 'act', app: { name: appName, bundleId: r.bundleId }, bundleId: r.bundleId, element, actLabel: verb, ref: a.ref,
       ...(typed !== undefined ? { text: typed } : {}),

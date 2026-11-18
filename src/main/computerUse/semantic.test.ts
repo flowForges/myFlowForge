@@ -227,7 +227,7 @@ describe('act (spec §7.1): resolve → classify → gate → hide → act', () 
     expect(await s.run('act', { ref, action: 'click' })).toMatchObject({ ok: false, code: 'denied', retry: 'safe' })
     expect(s.driver.acts).toHaveLength(0)
     expect(s.hider.beforeMutation).not.toHaveBeenCalled()
-    expect(s.entries.at(-1)).toMatchObject({ op: 'act', result: 'denied', element: { role: 'button', name: '新建会话' } })
+    expect(s.entries.at(-1)).toMatchObject({ op: 'act', result: 'denied', element: { role: 'button', name: '新建会话' }, actLabel: '点击' })
   })
 
   it('allow: Terminal still asks (askAlways); WorkBuddy does not', async () => {
@@ -313,7 +313,7 @@ describe('act (spec §7.1): resolve → classify → gate → hide → act', () 
       expect(b.text).toContain('已确认')
       expect(b.text).toContain('已点击 按钮 <untrusted_screen_text>新建会话</untrusted_screen_text> · 目标 <untrusted_screen_text>WorkBuddy</untrusted_screen_text>')
     }
-    expect(s.entries.at(-1)).toMatchObject({ op: 'act', result: 'auto', app: 'WorkBuddy', bundleId: WB.bundleId, delivery: 'delivered_verified', element: { role: 'button', name: '新建会话' } })
+    expect(s.entries.at(-1)).toMatchObject({ op: 'act', result: 'auto', app: 'WorkBuddy', bundleId: WB.bundleId, delivery: 'delivered_verified', element: { role: 'button', name: '新建会话' }, actLabel: '点击' })
   })
 
   it('an uncertain reply that came back as a result is still a failure, unsafe', async () => {

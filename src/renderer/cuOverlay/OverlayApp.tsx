@@ -9,7 +9,7 @@
 //   Stop / deny / 打开主窗口 are always safe and take any click.
 // - Screen-derived strings (app names) render as plain text, whitespace collapsed, long values cut from the left.
 import { useEffect, useRef, useState, type MouseEvent } from 'react'
-import { CU_KIND_LABEL, COMPUTER_USE_CHIP, visibleText, type CuActionView, type CuOverlayState } from '@shared/computerUse'
+import { CU_KIND_LABEL, COMPUTER_USE_CHIP, elementPhrase, visibleText, type CuActionView, type CuOverlayState } from '@shared/computerUse'
 import { BUTTON_LABEL as BUTTON, MOD_SYM, fmtPt as pt, screenName } from '../views/chat/cuFormat'
 import { usePhysicalPress, type IsPhysical } from '../views/chat/cuPhysical'
 import './overlay.css'
@@ -21,8 +21,10 @@ export interface CuOverlayApi {
   openMain(): unknown
 }
 
-/** the mini card's one line */
+/** the mini card's one line. Semantic kinds (act/launch/focus/appKey, T5) speak in elements (spec §10); the v1
+ *  coordinate kinds below keep their own line. */
 export function actionLine(v: CuActionView): string {
+  if (v.kind === 'act' || v.kind === 'launch' || v.kind === 'focus' || v.kind === 'appKey') return elementPhrase(v)
   const parts: string[] = []
   const app = screenName(typeof v.app === 'string' ? v.app : v.app?.name)
   switch (v.kind) {

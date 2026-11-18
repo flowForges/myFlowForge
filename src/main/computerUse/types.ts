@@ -43,6 +43,8 @@ export interface CuLogEntry {
   combo?: string
   /** semantic act: the element it landed on (screen text, capped) */
   element?: { role: string; name?: string }
+  /** semantic act: the Chinese verb for the action (ACT_LABEL value, not model text; CuLogBlock's row, Task 10) */
+  actLabel?: string
   /** semantic mutations: what forge-cu said about delivery */
   delivery?: Delivery
   result: 'allowed' | 'auto' | 'denied' | 'blocked' | 'failed'

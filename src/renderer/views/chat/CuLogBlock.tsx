@@ -2,7 +2,7 @@
 // 输入的文字只出现在批准卡上,这里只写 `输入 N 字`(不展示预览)。
 // actionLog.thumb() 回的是裸 base64:这里自己拼 data URL,且只认纯 base64,别的值(https: 等)一律丢掉。
 import { useEffect, useRef, useState } from 'react'
-import { CU_ERR, CU_KIND_LABEL } from '@shared/computerUse'
+import { CU_ERR, CU_KIND_LABEL, ROLE_LABEL } from '@shared/computerUse'
 import type { CuLogEntry } from '../../../main/computerUse/types'
 import { Lightbox } from '../../components/Lightbox'
 import { fmtPt, screenName } from './cuFormat'
@@ -11,6 +11,16 @@ const OP_LABEL: Record<string, string> = {
   ...CU_KIND_LABEL, screenshot: '截图', wait: '等待', cursor: '光标位置', front_app: '前台应用',
 }
 const RESULT_LABEL: Record<CuLogEntry['result'], string> = { allowed: '已允许', auto: '自动', denied: '已拒绝', blocked: '已拦截', failed: '失败' }
+
+/** spec §10: delivered_verified → 已确认; delivered_unverified / delivered_without_effect / uncertain → 未确认;
+ *  no delivery (reads, v1 ops, a refusal before anything ran) → the usual result chip. */
+function resultChip(en: CuLogEntry): string {
+  switch (en.delivery) {
+    case 'delivered_verified': return '已确认'
+    case 'delivered_unverified': case 'delivered_without_effect': case 'uncertain': return '未确认'
+    default: return RESULT_LABEL[en.result]
+  }
+}
 
 const two = (n: number) => String(n).padStart(2, '0')
 const clock = (ts: number) => { const d = new Date(ts); return `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}` }
@@ -21,6 +31,12 @@ function describe(en: CuLogEntry): string {
     case 'type': return en.textLen != null ? `${label} ${en.textLen} 字` : label
     case 'key': return en.combo ? `${label} ${en.combo}` : label
     case 'click': case 'move': case 'scroll': return en.at ? `${label} ${fmtPt(en.at)}` : label
+    case 'act': {
+      const el = en.element
+      const role = el ? (ROLE_LABEL[el.role] ?? '控件') : ''
+      const name = el?.name ? `「${screenName(el.name)}」` : ''
+      return [en.actLabel ?? label, (role + name) || undefined].filter(Boolean).join(' ')
+    }
     default: return label
   }
 }
@@ -72,7 +88,7 @@ export function CuLogBlock({ entries, thumb }: { entries: CuLogEntry[]; thumb: (
               <span className="cu-time">{clock(en.ts)}</span>
               <span className="cu-act">{describe(en)}</span>
               {en.app && <span className="cu-app">{screenName(en.app)}</span>}
-              <span className={`cu-chip cu-res cu-res-${en.result}`} title={en.code ? CU_ERR[en.code] : undefined}>{RESULT_LABEL[en.result]}</span>
+              <span className={`cu-chip cu-res cu-res-${en.result}`} title={en.code ? CU_ERR[en.code] : undefined}>{resultChip(en)}</span>
             </div>
           ))}
         </div>

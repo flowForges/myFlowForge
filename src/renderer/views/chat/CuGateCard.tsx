@@ -3,10 +3,9 @@
 // 我们渲染的可信行在上,屏幕裁片在下、带边框,行名 `屏幕`。
 // - 屏幕 / 模型来源的文字(app 名、要输入的文字)只以纯文本出现:压空白、从左截断、不可见字符可见;输入的文字放在带标记的等宽块里。
 import type { ReactNode } from 'react'
-import { CU_ERR, CU_KIND_LABEL, CU_RESOLVE_ERR, CU_SET_MODE_ERR, visibleText, type CuActionView } from '@shared/computerUse'
+import { CU_ERR, CU_KIND_LABEL, CU_RESOLVE_ERR, CU_SET_MODE_ERR, ROLE_LABEL, visibleText, type CuActionView } from '@shared/computerUse'
 import type { CuGate } from '../../../main/computerUse/types'
 import { BUTTON_LABEL, MOD_SYM, fmtPt, screenName } from './cuFormat'
-import type { IsPhysical } from './cuPhysical'
 
 const Row = ({ k, children }: { k: string; children: ReactNode }) => (
   <div className="cu-row"><span className="cu-k">{k}</span><span className="cu-colon">: </span><span className="cu-v">{children}</span></div>
@@ -50,7 +49,8 @@ function ActionRows({ a, reason }: { a: CuActionView; reason?: string }) {
       rows.push(<Row key="from" k="从">{[fmtPt(a.at), app].filter(Boolean).join(' · ')}<Bundle id={a.bundleId} lead /></Row>)
       rows.push(<Row key="to" k="到">{[fmtPt(a.to), screenName(a.toApp)].filter(Boolean).join(' · ')}<Bundle id={a.toBundle} lead /></Row>)
       break
-    case 'key': {
+    // 'appKey' (语义按键,带 app) 的键帽行和 v1 'key' 一样:a.combo 已经是 prettyCombo 的输出。
+    case 'key': case 'appKey': {
       const caps = keycaps(a.combo ?? '')
       rows.push(
         <Row key="keys" k="按键">
@@ -72,15 +72,39 @@ function ActionRows({ a, reason }: { a: CuActionView; reason?: string }) {
       if (reason === '剪贴板') rows.push(<Row key="clip" k="剪贴板">粘贴</Row>)
       break
     }
+    case 'act': {
+      const role = a.element ? (ROLE_LABEL[a.element.role] ?? '控件') : ''
+      const name = a.element?.name ? `「${screenName(a.element.name)}」` : ''
+      if (role || name) rows.push(<Row key="el" k="控件">{role}{name}</Row>)
+      if (a.actLabel) rows.push(<Row key="verb" k="动作">{a.actLabel}</Row>)
+      if (a.text !== undefined) {
+        rows.push(
+          <Row key="text" k="文字">
+            <span className="cu-text" data-untrusted="">{visibleText(a.text)}</span>
+            <span className="cu-chip cu-count">{Array.from(a.text).length} 字</span>
+          </Row>,
+        )
+      }
+      // 这几个标志改变同一个动词的含义(物理点击 / 替换原有内容 / 滚动方向与格数):事实放进「项: 值」行,不写解释。
+      if (a.physical) rows.push(<Row key="phys" k="方式">移动鼠标点击</Row>)
+      if (a.replace) rows.push(<Row key="rep" k="方式">替换原有内容</Row>)
+      if (a.direction) {
+        const arrow = { up: '↑', down: '↓', left: '←', right: '→' }[a.direction]
+        rows.push(<Row key="scroll" k="滚动">{arrow} ×{a.amount ?? 1}</Row>)
+      }
+      break
+    }
+    case 'launch':
+      rows.push(<Row key="verb" k="动作">打开应用</Row>)
+      break
   }
   return <>{rows}</>
 }
 
 export function CuGateCard({ gate, error }: {
-  gate: CuGate; error?: string
-  /** 浮窗才是答这道门的地方(spec §9.2);主窗口的卡片从不调用它,留着这两个 prop 只是不逼 CuStreamTail 跟着改。 */
-  onResolve?: (id: string, d: 'allow' | 'deny' | 'stop') => void
-  isPhysical?: IsPhysical
+  gate: CuGate
+  /** main 答自己的 resolve() 拒绝码(not_pending 之类);浮窗才是答这道门的地方(spec §9.2),这张卡从没有按钮。 */
+  error?: string
 }) {
   const isContinue = gate.kind === 'continue'
   const a = gate.action

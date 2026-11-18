@@ -194,4 +194,14 @@ describe('semantic entries (Task 6)', () => {
     expect(list[1].delivery).toBeUndefined()
     expect(list[1].element?.name).toHaveLength(120)
   })
+
+  it('actLabel (the verb CuLogBlock shows) survives a reload, capped like every other field', async () => {
+    const root = mk()
+    const a = createActionLog(root)
+    await a.append(K, entry({ op: 'act', element: { role: 'button', name: '新建会话' }, actLabel: '点击' }))
+    await a.append(K, entry({ ts: 2000, op: 'act', actLabel: 'x'.repeat(50) }))
+    const list = await createActionLog(root).list(K)
+    expect(list[0].actLabel).toBe('点击')
+    expect(list[1].actLabel).toHaveLength(16)
+  })
 })
