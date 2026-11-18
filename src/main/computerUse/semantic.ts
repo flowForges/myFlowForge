@@ -315,6 +315,11 @@ export async function runSemantic(
     const view: CuActionView = {
       kind: 'act', app: { name: appName, bundleId: r.bundleId }, bundleId: r.bundleId, element, actLabel: verb, ref: a.ref,
       ...(typed !== undefined ? { text: typed } : {}),
+      // what makes the same verb mean something else: a physical click, a replace that clears the field, scroll size
+      ...(a.physical !== undefined ? { physical: a.physical } : {}),
+      ...(a.replace !== undefined ? { replace: a.replace } : {}),
+      ...(a.direction !== undefined ? { direction: a.direction } : {}),
+      ...(a.amount !== undefined ? { amount: a.amount } : {}),
     }
     const req: ActRequest = { ref: a.ref, action: a.action }
     for (const f of ['value', 'text', 'replace', 'direction', 'amount', 'physical'] as const) {
@@ -352,8 +357,11 @@ export async function runSemantic(
     const bundleId = found?.bundleId ?? (looksLikeBundle(a.app) ? a.app : undefined)
     const name = found?.name || a.app
     const base: Mutation['base'] = { op: 'launch', app: name, ...(bundleId ? { bundleId } : {}) }
-    const cls = isOwn(d, { pid: found?.pid ?? -1, bundleId }) ? { kind: 'block' as const, code: 'own_window' as const }
+    const known = isOwn(d, { pid: found?.pid ?? -1, bundleId }) ? { kind: 'block' as const, code: 'own_window' as const }
       : classOf({ pid: found?.pid ?? -1, bundleId, name }, 'launch')
+    // a bare name we can't map to a bundle (not running) could be any app, terminals included: it always asks,
+    // allow mode too, with the name on the card — forge-cu resolves the name and only checks the deny prefixes
+    const cls: CuClass = !bundleId && known.kind === 'normal' ? { kind: 'askAlways', reason: '始终询问' } : known
     return mutate({
       base, cls,
       view: { kind: 'launch', app: { name, bundleId: bundleId ?? '' }, ...(bundleId ? { bundleId } : {}) },
@@ -366,11 +374,12 @@ export async function runSemantic(
           if (e instanceof CuDriverError && e.code === 'own_window') return safe('blocked_app')
           throw e
         }
-        // launched by name: only now do we know what it was
+        // launched by name: only now do we know what it was. It is open by now, so the refusal is not a no-op.
         const t = { pid: r.instance.pid, bundleId: r.bundleId, name: r.name }
-        if (isOwn(d, t)) return safe('own_window')
-        const c = classOf(t, 'launch')
-        if (c.kind === 'block') return safe(c.code)
+        const c: CuClass = isOwn(d, t) ? { kind: 'block', code: 'own_window' } : classOf(t, 'launch')
+        if (c.kind === 'block') {
+          return { ok: false, code: c.code, delivery: 'delivered_unverified', retry: 'unsafe', text: `${CU_ERR[c.code]} · 应用已经被打开 · 不要再打开它` }
+        }
         const info = {
           pid: r.instance.pid, bundleId: wrapUntrusted(r.bundleId),
           windows: r.windows.map((w) => ({ window: w.number, title: wrapUntrusted(w.title ?? '') })),

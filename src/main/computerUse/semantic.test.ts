@@ -361,25 +361,51 @@ describe('launch / focus / key(app)', () => {
     expect(s.driver.launches[0]).toMatchObject({ bundleId: 'com.apple.Terminal', activate: false })
   })
 
-  it('launch by name; the reply lists windows; a plain app in allow is not asked', async () => {
+  it('launch by bundle id; the reply lists windows; a plain app in allow is not asked', async () => {
     const s = setup({ mode: 'allow' })
     s.driver.setAxApps([WB])
     ;(s.driver as Record<string, unknown>).runningApps = async () => []
-    const r = await s.run('launch', { app: 'WorkBuddy', activate: true })
+    const r = await s.run('launch', { app: WB.bundleId, activate: true })
     expect(r.ok).toBe(true)
     if (r.ok) expect(r.text).toContain('WorkBuddy')
-    expect(s.driver.launches[0]).toMatchObject({ name: 'WorkBuddy', activate: true })
+    expect(s.driver.launches[0]).toMatchObject({ bundleId: WB.bundleId, activate: true })
     expect(s.gates).toHaveLength(0)
     expect(s.calls.indexOf('hide')).toBeLessThan(s.calls.indexOf('launch'))
   })
 
-  it('a launch by name that turns out to be a blocked app is withheld', async () => {
+  it('allow: a launch by a bare name that is not running always asks, with the name on the card', async () => {
+    const s = setup({ mode: 'allow' })
+    ;(s.driver as Record<string, unknown>).runningApps = async () => []
+    s.decisions.push('deny')
+    expect(await s.run('launch', { app: 'iTerm' })).toMatchObject({ ok: false, code: 'denied', retry: 'safe' })
+    expect(s.gates[0]).toMatchObject({ kind: 'action', reason: '始终询问', action: { kind: 'launch', app: { name: 'iTerm' } } })
+    expect(s.driver.launches).toHaveLength(0)
+    // allowed, it launches by that name
+    s.driver.setAxApps([WB])
+    expect((await s.run('launch', { app: 'WorkBuddy' })).ok).toBe(true)
+    expect(s.gates).toHaveLength(2)
+    expect(s.driver.launches[0]).toMatchObject({ name: 'WorkBuddy' })
+  })
+
+  it('a launch by name that turns out to be a blocked app is withheld — and unsafe, it is open now', async () => {
     const s = setup({ mode: 'allow' })
     ;(s.driver as Record<string, unknown>).runningApps = async () => []
     const r = await s.run('launch', { app: '1Password' })
-    expect(r).toMatchObject({ ok: false, code: 'blocked_app' })
+    expect(r).toMatchObject({ ok: false, code: 'blocked_app', retry: 'unsafe', delivery: 'delivered_unverified' })
     if (!r.ok) expect(r.text).not.toContain('Vault')
     expect(s.driver.launches[0].guard?.denyBundlePrefixes).toContain('com.1password.1password')
+    expect(s.entries.at(-1)).toMatchObject({ op: 'launch', result: 'blocked', code: 'blocked_app', delivery: 'delivered_unverified' })
+  })
+
+  it('the act card shows physical / replace / direction / amount', async () => {
+    const s = setup({ mode: 'ask' })
+    await s.run('act', { ref: await s.refOf(WB, 'e2'), action: 'type', text: 'x', replace: true })
+    await s.run('act', { ref: await s.refOf(WB), action: 'click', physical: true })
+    await s.run('act', { ref: await s.refOf(WB), action: 'scroll', direction: 'down', amount: 3 })
+    expect(s.gates[0].action).toMatchObject({ kind: 'act', replace: true, text: 'x' })
+    expect(s.gates[1].action).toMatchObject({ kind: 'act', physical: true })
+    expect(s.gates[2].action).toMatchObject({ kind: 'act', direction: 'down', amount: 3 })
+    expect(s.gates[0].action?.physical).toBeUndefined()
   })
 
   it('computer_focus hides us first, then focuses the window', async () => {

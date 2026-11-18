@@ -600,6 +600,11 @@ export interface CuActionView {
   actLabel?: string
   /** 语义动作(act)批准的是哪个 ref:service 的一次性批准凭据按它比对,卡片不显示 */
   ref?: string
+  /** act 的物理点击 / 整体替换 / 滚动方向与格数:卡片上要看得出区别(模型参数原样) */
+  physical?: boolean
+  replace?: boolean
+  direction?: 'up' | 'down' | 'left' | 'right'
+  amount?: number
 }
 
 // ───────────────────────── 界面上的码 → 文字(浮窗、系统通知、输入框、设置页共用) ─────────────────────────

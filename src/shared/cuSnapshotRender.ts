@@ -95,10 +95,6 @@ function sliceUnits(s: string, maxUnits: number): string {
   return s.slice(0, cut)
 }
 
-/**
- * `窗口「<标题>」 complete|incomplete` + 一行一节点;超过 max(默认 18 000 字符,按 UTF-16 code unit 计)就在整行边界截断,
- * 末行标 `已截断 · 用 root 钻取`。保证返回值长度永远 ≤ max,且不会在代理对中间切开。
- */
 /** 一个节点一行(不缩进);wait_for 命中的节点用。 */
 export function renderNodeLine(n: SnapNodeWire, snapId: string): string {
   return renderNode(n, snapId, false)
@@ -107,6 +103,10 @@ export function renderNodeLine(n: SnapNodeWire, snapId: string): string {
 /** 标题里的 「」 换成 『』:标题关不掉我们自己的 「…」;长得像 ref 的串同样去牙。 */
 const fmtTitle = (s: string) => defangRefs(sanitizeScreenText(s, 120)).replace(/「/g, '『').replace(/」/g, '』')
 
+/**
+ * `窗口「<标题>」 complete|incomplete` + 一行一节点;超过 max(默认 18 000 字符,按 UTF-16 code unit 计)就在整行边界截断,
+ * 末行标 `已截断 · 用 root 钻取`。保证返回值长度永远 ≤ max,且不会在代理对中间切开。
+ */
 export function renderSnapshot(r: SnapshotResult, max = 18000): string {
   const raw = typeof r.window.title === 'string' && r.window.title.trim() ? r.window.title : (r.app.name ?? '')
   const title = fmtTitle(raw)

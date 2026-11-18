@@ -143,6 +143,8 @@ function semCovers(v: CuActionView, o: SemOp): boolean {
     case 'act': {
       const text = o.r.action === 'type' ? o.r.text : o.r.action === 'set' || o.r.action === 'select' ? o.r.value : undefined
       return v.ref === o.r.ref && v.actLabel === ACT_LABEL[o.r.action] && v.text === text
+        && !!v.physical === !!o.r.physical && !!v.replace === !!o.r.replace
+        && v.direction === o.r.direction && v.amount === o.r.amount
     }
     case 'launch': return !!app && (o.bundleId ? app.bundleId === o.bundleId : app.name === o.name)
     case 'focus': return true

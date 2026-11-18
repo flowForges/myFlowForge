@@ -1347,6 +1347,7 @@ describe('Task 6: the AX ops are gated like post', () => {
         await s.openGate({ key, kind: 'action', action: view(refs[0]) })
         out.push(await settle(s.driver.act({ ref: refs[1], action: 'click' }, guard)))
         out.push(await settle(s.driver.act({ ref: refs[0], action: 'type', text: 'x' }, guard)))
+        out.push(await settle(s.driver.act({ ref: refs[0], action: 'click', physical: true }, guard)))
         out.push(await settle(s.driver.act({ ref: refs[0], action: 'click' }, guard)))
         out.push(await settle(s.driver.act({ ref: refs[0], action: 'click' }, guard)))
         return { ok: true, text: 'x' }
@@ -1359,7 +1360,7 @@ describe('Task 6: the AX ops are gated like post', () => {
     await flush(30)
     await t.svc.resolve(t.svc.pendingGates()[0].id, 'allow', LOCAL)
     await call
-    expect(out).toEqual(['denied/not_delivered', 'denied/not_delivered', 'denied/not_delivered', 'ok', 'denied/not_delivered'])
+    expect(out).toEqual(['denied/not_delivered', 'denied/not_delivered', 'denied/not_delivered', 'denied/not_delivered', 'ok', 'denied/not_delivered'])
     expect(t.driver.acts).toHaveLength(1)
   })
 
