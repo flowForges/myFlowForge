@@ -10,7 +10,7 @@
 // Secrets: typed text goes to the driver and the gate only; the log gets its length.
 import {
   ACT_LABEL, BLOCKED_BUNDLES, CU_ERR, OWN_BUNDLE_PREFIX, ROLE_LABEL, isBlockedCombo, parseCombo,
-  prettyCombo, retryOf, sanitizeScreenText, snapNotice, wrapUntrusted,
+  prettyCombo, retryOf, DELIVERY_SHORT, sanitizeScreenText, snapNotice, wrapUntrusted,
   type ActRequest, type CuActionView, type CuClass, type CuErrCode, type Delivery, type Instance, type SEMANTIC_TOOLS,
 } from '@shared/computerUse'
 import { renderNodeLine, renderSnapshot } from '@shared/cuSnapshotRender'
@@ -61,7 +61,7 @@ function mutationFailure(e: unknown, o: { action?: string; physical?: boolean } 
   const delivery = e instanceof CuDriverError ? e.delivery : undefined
   const retry: Retry = delivery !== undefined ? retryOf(delivery) : NOTHING_SENT.has(code) ? 'safe' : 'unsafe'
   let text = CU_ERR[code]
-  if (delivery) text += ` · delivery=${delivery}`
+  if (delivery) text += ` · delivery=${DELIVERY_SHORT[delivery]}`
   if (retry === 'unsafe' && code !== 'uncertain') text += ' · 可能已经生效 · 不要重复，先重新 snapshot 确认'
   if (retry === 'safe' && code === 'unsupported' && o.action && !o.physical) text += ' · 这个控件不支持语义动作，可改用 physical:true'
   return { ok: false, code, text, ...(delivery ? { delivery } : {}), retry }

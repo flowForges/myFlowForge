@@ -688,6 +688,15 @@ export interface CuOverlayState {
 export type Delivery = 'not_delivered' | 'uncertain' | 'delivered_unverified' | 'delivered_without_effect' | 'delivered_verified'
 
 /** 动作类错误必须带 delivery;没带(读操作等)或 `not_delivered` 才能安全重试,其余一律 unsafe(可能已经送达了)。 */
+/**
+ * 给模型看的 delivery 短词(spec §8.3,成功和失败同一套):verified / unverified / uncertain / not_delivered。
+ * delivered_without_effect 归 unverified(送到了但没看到效果,要自己核对)。
+ */
+export const DELIVERY_SHORT: Readonly<Record<Delivery, 'verified' | 'unverified' | 'uncertain' | 'not_delivered'>> = {
+  delivered_verified: 'verified', delivered_unverified: 'unverified', delivered_without_effect: 'unverified',
+  uncertain: 'uncertain', not_delivered: 'not_delivered',
+}
+
 export function retryOf(d: Delivery | undefined): 'safe' | 'unsafe' {
   return d === undefined || d === 'not_delivered' ? 'safe' : 'unsafe'
 }

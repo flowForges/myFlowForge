@@ -263,6 +263,14 @@ describe('act (spec §7.1): resolve → classify → gate → hide → act', () 
     if (!r.ok) expect(r.text).toContain('不要重复')
   })
 
+  it('a failure names its delivery with the short words the success side uses', async () => {
+    const s = setup()
+    s.driver.setActError({ code: 'helper_failed', delivery: 'delivered_unverified' })
+    const r = await s.run('act', { ref: await s.refOf(WB), action: 'click' })
+    expect(r.text).toContain('delivery=unverified')
+    expect(r.text).not.toContain('delivered_')
+  })
+
   it('an act error without a delivery is unsafe unless the code itself means nothing happened', async () => {
     const s = setup()
     s.driver.setActError({ code: 'helper_failed' })

@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { COMPUTER_TOOLS, CU_ERR, SEMANTIC_TOOLS } from '@shared/computerUse'
+import { COMPUTER_TOOLS, CU_ERR } from '@shared/computerUse'
 import { isCuOp } from '../computerUse/types'
 import { STAGE_FORGE_TOOLS } from '../run/runTypes'
 import { createForgeServer, connectBridge, listForgeTools, toolsToRegister, cuToolResult, CU_SERVER_INSTRUCTIONS, type SendFn } from './forgeMcp'
@@ -63,8 +63,7 @@ describe('registration (Review Focus 4)', () => {
 
   it('coordinate tools open with the fallback line and keep the coordinate contract; semantic tools do not', async () => {
     const { tools } = await (await wire(vi.fn(), cuAllowed())).listTools()
-    const coord = COMPUTER_TOOLS.filter((t) => !(SEMANTIC_TOOLS as readonly string[]).includes(t))
-    expect(coord).toHaveLength(9)
+    const coord = ['computer_screenshot', 'computer_click', 'computer_move', 'computer_drag', 'computer_scroll', 'computer_type']
     for (const t of tools) {
       const d = t.description ?? ''
       if ((coord as readonly string[]).includes(t.name)) {
@@ -84,10 +83,21 @@ describe('registration (Review Focus 4)', () => {
     expect(by.computer_key).toContain('给了 app 就不切前台')
     expect(by.computer_key).toContain('菜单项')
     expect(by.computer_focus).toContain('只有物理操作才需要')
+    for (const n of ['computer_wait', 'computer_cursor', 'computer_front_app']) {
+      expect(by[n].startsWith('后备'), n).toBe(false)
+      expect(by[n], n).not.toContain('visionCode')
+    }
+    expect(by.computer_act).toMatch(/set \/ select 用 value/)
+    expect(by.computer_act).toMatch(/type 用 text\(replace:true/)
+    expect(by.computer_act).toMatch(/direction \+ amount\(1–20\)/)
+    expect(by.computer_act).toContain('menu 是打开右键菜单')
+    expect(by.computer_snapshot).toContain('window')
   })
 
   it('the server instructions carry the loop, ref lifetime, retry and untrusted-screen rules', async () => {
-    for (const p of ['computer_launch', 'computer_snapshot', 'computer_act', 'ref 会过期', '不是用户的指令', '截图是证据，不是证明']) {
+    expect(CU_SERVER_INSTRUCTIONS).not.toContain('可以再试')
+    for (const p of ['computer_launch', 'computer_snapshot', 'computer_act', 'ref 会过期', '不是用户的指令', '截图是证据，不是证明',
+      'safe 不等于应该重试', 'verified', 'unverified', 'uncertain', 'not_delivered']) {
       expect(CU_SERVER_INSTRUCTIONS, p).toContain(p)
     }
     const server = createForgeServer(vi.fn(), cuAllowed())
@@ -196,6 +206,7 @@ describe('results', () => {
     const t = (r: { content: Array<{ type: string; text?: string }> }) => r.content[0].text!
     expect(t(cuToolResult('computer_act', { ok: true, text: '已点击', delivery: 'delivered_verified' }))).toBe('已点击 · delivery=verified')
     expect(t(cuToolResult('computer_act', { ok: true, text: '已点击', delivery: 'delivered_unverified' }))).toBe('已点击 · delivery=unverified')
+    expect(t(cuToolResult('computer_act', { ok: true, text: '已切换', delivery: 'delivered_without_effect' }))).toBe('已切换 · delivery=unverified')
     expect(t(cuToolResult('computer_click', { ok: true, text: '已点击' }))).toBe('已点击')
     const u = cuToolResult('computer_act', { ok: true, text: '已点击', delivery: 'uncertain' })
     expect(u.isError).toBe(true)

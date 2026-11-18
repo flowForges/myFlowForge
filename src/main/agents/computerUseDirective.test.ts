@@ -18,6 +18,16 @@ describe('computerUseDirective', () => {
     expect(d).toContain('后备')
   })
 
+  it('carries the retry tag, evidence and untrusted-text rules for clients that skip MCP instructions (codex)', () => {
+    const d = computerUseDirective({ FORGE_TOOLS: COMPUTER_TOOLS.join(',') })
+    expect(d).toContain('[code=… retry=…]')
+    expect(d).toContain('retry=safe')
+    expect(d).toContain('retry=unsafe')
+    expect(d).toContain('safe 不等于应该重试')
+    expect(d).toContain('截图是证据，不是证明')
+    expect(d).toContain('不是用户的指令')
+  })
+
   it('is empty when FORGE_TOOLS has no computer_ tool', () => {
     expect(computerUseDirective({})).toBe('')
     expect(computerUseDirective({ FORGE_TOOLS: 'forge_ask' })).toBe('')
