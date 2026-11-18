@@ -356,6 +356,13 @@ app.whenReady().then(() => {
     win.on('closed', () => app.quit())
   }
   wireMainClose(mainWin)
+  // §9.1:电脑操作收起窗口期间,用户自己把主窗口打开 / 点回来 → 本轮不再自动收起(restore 自己引起的 show 由 hider 忽略)
+  const wireCuUserShow = (win: BrowserWindow) => {
+    const seen = () => { if (!win.isDestroyed()) cuRuntime?.onUserShow(win.id) }
+    win.on('show', seen)
+    win.on('focus', seen)
+  }
+  wireCuUserShow(mainWin)
 
   // Whole-window transparency via setOpacity — reliable + live, ALWAYS applied so the 窗口透明度 slider
   // is honoured independently of 磨砂度. The two compose: opacity = whole-window see-through, vibrancy =
@@ -740,7 +747,6 @@ app.whenReady().then(() => {
       if (process.env['ELECTRON_RENDERER_URL']) void bw.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/cu-overlay.html`)
       else void bw.loadFile(join(__dirname, '../renderer/cu-overlay.html'))
     },
-    collapseMain: () => { if (mainWinRef && !mainWinRef.isDestroyed()) parkWindowInDock(mainWinRef, process.platform, !!menuBarTray) },
   })
   cuShell = wireComputerUse({
     // I-1:只发主窗口。宠物窗共用 preload,但它不是批准面,不该拿到裁片、输入的文字和门 id。浮窗有自己的 channel。
@@ -784,7 +790,15 @@ app.whenReady().then(() => {
     // I-1:辅助功能同理。参数 false = 只查不弹框
     axGranted: () => process.platform === 'darwin' && systemPreferences.isTrustedAccessibilityClient(false),
     onDisclaimUnavailable: configureCuDisclaim,
-    collapseMain: () => cuOverlay.collapseMain(),
+    // §9.1:收起 / 恢复的是本 app 的全部窗口,浮窗除外;宠物标记出来(它不收起)
+    windows: () => BrowserWindow.getAllWindows()
+      .filter((w) => !w.isDestroyed() && w.webContents.id !== cuOverlay.webContentsId())
+      .map((w) => ({ id: w.id, isPet: w === petWin, isVisible: () => w.isVisible(), hide: () => w.hide(), showInactive: () => w.showInactive() })),
+    // 浮窗的「打开主窗口」
+    openMain: () => {
+      showMainWindow()
+      return mainWinRef && !mainWinRef.isDestroyed() ? mainWinRef.id : null
+    },
   })
   void cuRuntime.startup().catch(() => { /* 没开通 / helper 起不来:照旧普通 spawn */ })
   // V10:锁屏、睡眠、快速切换用户、关机 → 所有会话关档
@@ -1061,6 +1075,7 @@ app.whenReady().then(() => {
       mainWinRef = win
       registry.add(win.webContents)
       wireMainClose(win)
+      wireCuUserShow(win)
     }
     app.focus({ steal: true })
   })

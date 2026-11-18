@@ -91,4 +91,18 @@ describe('index.ts computer-use wiring', () => {
     expect(SRC).toContain('cuRuntime?.settingsChanged()')
     expect(SRC).toContain("cuShell?.setHotkeyFailed(failed.includes('computer-use-stop'))")
   })
+
+  it('§9.1: the hider gets every window but the overlay (pet flagged), 打开主窗口 shows the main window, its show / focus reach onUserShow; no collapse path', () => {
+    const wins = SRC.slice(at('    windows: () => BrowserWindow.getAllWindows()'), at('    openMain: () => {'))
+    expect(wins).toContain('w.webContents.id !== cuOverlay.webContentsId()')
+    expect(wins).toContain('isPet: w === petWin')
+    expect(wins).toContain('showInactive: () => w.showInactive()')
+    const open = SRC.slice(at('    openMain: () => {'))
+    expect(open.slice(0, open.indexOf('\n    },'))).toContain('showMainWindow()')
+    expect(SRC).toContain("win.on('show', seen)")
+    expect(SRC).toContain("win.on('focus', seen)")
+    expect(SRC).toContain('cuRuntime?.onUserShow(win.id)')
+    expect(SRC.match(/wireCuUserShow\((mainWin|win)\)/g)).toEqual(['wireCuUserShow(mainWin)', 'wireCuUserShow(win)'])
+    expect(SRC).not.toMatch(/collapseMain/)
+  })
 })

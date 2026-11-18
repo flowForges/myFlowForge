@@ -7,13 +7,13 @@ function harness(physical = false) {
   let push: (s: CuOverlayState) => void = () => {}
   const api = {
     onState: (cb: (s: CuOverlayState) => void) => { push = cb; return () => {} },
-    resolve: vi.fn<(id: string, d: 'allow' | 'deny' | 'stop') => void>(), stop: vi.fn<() => void>(), collapseMain: vi.fn<() => void>(),
+    resolve: vi.fn<(id: string, d: 'allow' | 'deny' | 'stop') => void>(), stop: vi.fn<() => void>(), openMain: vi.fn<() => void>(),
   } satisfies CuOverlayApi
   const r = render(<OverlayApp api={api} isPhysical={() => physical} />)
   return { ...r, api, push: (s: CuOverlayState) => act(() => push(s)) }
 }
 
-const ON: CuOverlayState = { session: { workspacePath: '/w', sessionId: 's', title: '修 bug', mode: 'ask' }, gate: null, ownBlocked: false, actionSeq: 0, hotkeyFailed: false }
+const ON: CuOverlayState = { session: { workspacePath: '/w', sessionId: 's', title: '修 bug', mode: 'ask' }, gate: null, actionSeq: 0, hotkeyFailed: false }
 const CLICK: CuOverlayState = {
   ...ON,
   gate: { id: 'cug.1', kind: 'action', crop: 'Y3JvcA==', action: { kind: 'click', at: { x: 812, y: 433 }, app: 'Safari', bundleId: 'com.apple.Safari', button: 'left', count: 2, mods: ['cmd'] } },
@@ -31,10 +31,10 @@ describe('OverlayApp', () => {
     expect(t.container.innerHTML).toBe('')
   })
 
-  it('the pill: ● 电脑 · <title> · <mode chip> and 停止, which stops everything', () => {
+  it('the pill: ● 电脑 · <title> · <mode chip>, 打开主窗口 and 停止, which stops everything', () => {
     const t = harness()
     t.push(ON)
-    expect(t.container.querySelector('.cuo-pill')!.textContent).toBe('●电脑 · 修 bug · 每次询问停止')
+    expect(t.container.querySelector('.cuo-pill')!.textContent).toBe('●电脑 · 修 bug · 每次询问打开主窗口停止')
     expect(t.container.querySelector('.cuo-chip')!.textContent).toBe('每次询问')
     t.push({ ...ON, session: { ...ON.session!, mode: 'allow' } })
     expect(t.container.querySelector('.cuo-chip')!.textContent).toBe('放行')
@@ -117,18 +117,20 @@ describe('OverlayApp', () => {
     expect(t.api.resolve).toHaveBeenLastCalledWith('cug.2', 'stop')
   })
 
-  it('收起主窗口 appears only after an own_window block', () => {
+  it('打开主窗口 is always in the pill and calls openMain; 收起主窗口 is gone', () => {
     const t = harness()
     t.push(ON)
     expect(screen.queryByText('收起主窗口')).toBeNull()
-    t.push({ ...ON, ownBlocked: true })
-    fireEvent.click(screen.getByText('收起主窗口'))
-    expect(t.api.collapseMain).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByText('打开主窗口'))
+    expect(t.api.openMain).toHaveBeenCalledTimes(1)
+    t.push(CLICK)
+    expect(screen.getAllByText('打开主窗口')).toHaveLength(1)
+    expect(screen.queryByText('收起主窗口')).toBeNull()
   })
 
   it('no button has focus after mount, none has autofocus, and no explanatory text elements (Review Focus 17)', () => {
     const t = harness()
-    t.push({ ...CLICK, ownBlocked: true })
+    t.push(CLICK)
     expect(document.activeElement === document.body || document.activeElement === null).toBe(true)
     for (const b of t.container.querySelectorAll('button')) expect(b.hasAttribute('autofocus')).toBe(false)
     expect(t.container.querySelector('p, small')).toBeNull()

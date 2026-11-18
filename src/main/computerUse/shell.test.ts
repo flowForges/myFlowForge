@@ -99,7 +99,7 @@ describe('overlay state', () => {
     t.sh.emit(stateOff)
     expect(t.shown).toEqual([])
     t.sh.emit(stateOn)
-    expect(t.shown.at(-1)).toEqual({ session: { ...A, title: '会话一', mode: 'ask' }, gate: null, ownBlocked: false, actionSeq: 0, hotkeyFailed: false })
+    expect(t.shown.at(-1)).toEqual({ session: { ...A, title: '会话一', mode: 'ask' }, gate: null, actionSeq: 0, hotkeyFailed: false })
     t.sh.emit(stateOff)
     expect(t.hides).toBe(1)
     expect(t.sh.state().session).toBeNull()
@@ -114,13 +114,14 @@ describe('overlay state', () => {
     expect(t.shown.at(-1)!.gate).toBeNull()
   })
 
-  it('the last action blocked by our own window offers 收起主窗口; the next one clears it; each action bumps the flash', () => {
+  it('each action bumps the flash; an own_window block no longer offers anything (收起主窗口 is gone, spec §9.1)', () => {
     const t = shell()
     t.sh.emit(stateOn)
     t.sh.emit({ type: 'action', key: A, entry: { ts: 1, turn: 1, op: 'click', result: 'failed', code: 'own_window' } })
-    expect(t.shown.at(-1)).toMatchObject({ ownBlocked: true, actionSeq: 1 })
+    expect(t.shown.at(-1)).toMatchObject({ actionSeq: 1 })
+    expect(t.shown.at(-1)).not.toHaveProperty('ownBlocked')
     t.sh.emit({ type: 'action', key: A, entry: { ts: 2, turn: 1, op: 'click', result: 'auto' } })
-    expect(t.shown.at(-1)).toMatchObject({ ownBlocked: false, actionSeq: 2 })
+    expect(t.shown.at(-1)).toMatchObject({ actionSeq: 2 })
   })
 
   it('the overlay state never carries the action log text preview', () => {

@@ -99,7 +99,7 @@ const KEY = { workspacePath: WS, sessionId: 's1' }
 const OK: CuStatus = { supported: true, osOK: true, helper: 'ok', screen: true, ax: true }
 const CU_CHANNELS = [
   CH.cuStatus, CH.cuState, CH.cuSetMode, CH.cuResolve, CH.cuStop, CH.cuLog, CH.cuThumb,
-  CH.cuRequestPermission, CH.cuOpenSettings, CH.cuRunningApps, CH.cuCollapseMain,
+  CH.cuRequestPermission, CH.cuOpenSettings, CH.cuRunningApps, CH.cuOpenMain,
 ]
 const FORGE_KEYS = ['FORGE_SOCKET', 'FORGE_MCP_DIR', 'FORGE_AGENT_ID', 'FORGE_MCP_ENTRY', 'FORGE_TOOLS']
 const REMOTE_CTX: InvokeCtx = { emit: () => {}, client: { id: 'phone-1', label: '手机' } }
@@ -173,12 +173,12 @@ async function boot(o: { status?: Partial<CuStatus>; noCu?: boolean; gateOnRun?:
   const endTurn = vi.spyOn(service, 'endTurn')
   const forget = vi.spyOn(service, 'forget')
   const bridge = vi.fn(async () => ({ socketPath: join(cfgDir, 'forge.sock'), configDir: cfgDir }))
-  const collapseMain = vi.fn()
+  const openMain = vi.fn()
   const runningApps = vi.fn(async () => [{ bundleId: 'com.apple.TextEdit', name: 'TextEdit' }])
   const order: string[] = []
   const provision = vi.fn(() => { order.push('provision') })
   probe.request.mockImplementation(async () => { order.push('request') })
-  const cu: ComputerUseHost = { service, probe, bridge, log, collapseMain, runningApps, provision, ...(o.provisioned === undefined ? {} : { provisioned: () => o.provisioned! }) }
+  const cu: ComputerUseHost = { service, probe, bridge, log, openMain, runningApps, provision, ...(o.provisioned === undefined ? {} : { provisioned: () => o.provisioned! }) }
   const broadcast = vi.fn()
   const { registerIpc } = await import('./handlers')
   const table: MethodTable = registerIpc(broadcast, {}, fakeHost(o.noCu ? {} : { computerUse: () => cu }))
@@ -192,7 +192,7 @@ async function boot(o: { status?: Partial<CuStatus>; noCu?: boolean; gateOnRun?:
   const notes = () => broadcast.mock.calls
     .filter((c) => c[0] === CH.chatEvent && c[1]?.type === 'done' && c[1]?.message?.model === '系统')
     .map((c) => c[1].message.text as string)
-  return { call, remote, table, service, probe, log, logRemoved, bridge, collapseMain, runningApps, beginTurn, endTurn, forget, notes, broadcast, gateHolder, provision, order }
+  return { call, remote, table, service, probe, log, logRemoved, bridge, openMain, runningApps, beginTurn, endTurn, forget, notes, broadcast, gateHolder, provision, order }
 }
 
 const lastSend = () => sendTurnMock.mock.calls.at(-1)
@@ -563,7 +563,7 @@ describe('computer-use:* handlers (Review Focus 2, 3, 15)', () => {
     expect(h.probe.request).not.toHaveBeenCalled()
     expect(h.probe.openPane).not.toHaveBeenCalled()
     expect(h.runningApps).not.toHaveBeenCalled()
-    expect(h.collapseMain).not.toHaveBeenCalled()
+    expect(h.openMain).not.toHaveBeenCalled()
     expect(h.provision).not.toHaveBeenCalled()
   })
 
@@ -610,8 +610,8 @@ describe('computer-use:* handlers (Review Focus 2, 3, 15)', () => {
     expect(h.log.thumb).toHaveBeenCalledWith(KEY, 't.jpg')
     expect(await h.call(CH.cuLog)({}, KEY)).toEqual([])
     expect(await h.call(CH.cuRunningApps)({})).toEqual([{ bundleId: 'com.apple.TextEdit', name: 'TextEdit' }])
-    await h.call(CH.cuCollapseMain)({})
-    expect(h.collapseMain).toHaveBeenCalledTimes(1)
+    expect(await h.call(CH.cuOpenMain)({})).toEqual({ ok: true })
+    expect(h.openMain).toHaveBeenCalledTimes(1)
     await h.call(CH.cuOpenSettings)({}, { kind: 'ax' })
     expect(h.probe.openPane).toHaveBeenCalledWith('ax')
     await h.call(CH.cuRequestPermission)({}, { kind: 'screen' })

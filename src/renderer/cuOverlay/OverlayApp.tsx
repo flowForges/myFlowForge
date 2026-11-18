@@ -6,7 +6,7 @@
 // - 允许 / 继续 only count for a physical press: the OS-reported (isTrusted) mousedown on that same button within the
 //   last second, then its click with a click count (cuPhysical.ts, shared with the main card and the mode menu).
 //   Script-dispatched or keyboard-activated clicks do nothing.
-//   Stop / deny / collapse are always safe and take any click.
+//   Stop / deny / 打开主窗口 are always safe and take any click.
 // - Screen-derived strings (app names) render as plain text, whitespace collapsed, long values cut from the left.
 import { useEffect, useRef, useState, type MouseEvent } from 'react'
 import { CU_KIND_LABEL, COMPUTER_USE_CHIP, visibleText, type CuActionView, type CuOverlayState } from '@shared/computerUse'
@@ -18,7 +18,7 @@ export interface CuOverlayApi {
   onState(cb: (s: CuOverlayState) => void): () => void
   resolve(id: string, decision: 'allow' | 'deny' | 'stop'): unknown
   stop(): unknown
-  collapseMain(): unknown
+  openMain(): unknown
 }
 
 /** the mini card's one line */
@@ -95,7 +95,7 @@ export function OverlayApp({ api, isPhysical }: { api: CuOverlayApi; isPhysical?
         <span className="cuo-sep"> · </span>
         <span className="cuo-chip">{COMPUTER_USE_CHIP[session.mode].replace(/^电脑 · /, '')}</span>
         {state.hotkeyFailed && <span className="cuo-chip cuo-chip-warn">急停键未注册</span>}
-        {state.ownBlocked && <button type="button" tabIndex={-1} className="cuo-btn cuo-collapse" onClick={() => api.collapseMain()}>收起主窗口</button>}
+        <button type="button" tabIndex={-1} className="cuo-btn cuo-open-main" onClick={() => api.openMain()}>打开主窗口</button>
         <button type="button" tabIndex={-1} className="cuo-btn cuo-stop" onClick={() => api.stop()}>停止</button>
       </div>
       {gate && (

@@ -68,7 +68,6 @@ const gateView = (g: CuGate): CuOverlayGate => ({
 export function wireComputerUse(d: CuShellDeps): CuShell {
   let session: CuOverlayState['session'] = null
   let gates: CuGate[] = []
-  let ownBlocked = false
   let actionSeq = 0
   let wasActive = false
   let hotkeyFailed = false
@@ -76,7 +75,7 @@ export function wireComputerUse(d: CuShellDeps): CuShell {
   const state = (): CuOverlayState => ({
     session: session ? { ...session } : null,
     gate: gates.length ? gateView(gates[0]) : null,
-    ownBlocked, actionSeq, hotkeyFailed,
+    actionSeq, hotkeyFailed,
   })
   const render = () => {
     if (session) d.overlay.show(state())
@@ -90,7 +89,7 @@ export function wireComputerUse(d: CuShellDeps): CuShell {
       case 'state': {
         const s = e.sessions.find((x) => x.mode !== 'off')
         session = s ? { workspacePath: s.workspacePath, sessionId: s.sessionId, title: s.title, mode: s.mode as 'ask' | 'allow' } : null
-        if (!session) { gates = []; ownBlocked = false }
+        if (!session) gates = []
         else gates = gates.filter((g) => sameKey(g.key, session!))
         break
       }
@@ -105,10 +104,7 @@ export function wireComputerUse(d: CuShellDeps): CuShell {
         gates = gates.filter((g) => g.id !== e.id)
         break
       case 'action':
-        if (session && sameKey(e.key, session)) {
-          ownBlocked = e.entry.code === 'own_window'
-          actionSeq++
-        }
+        if (session && sameKey(e.key, session)) actionSeq++
         break
       case 'stopped':
         gates = e.key ? gates.filter((g) => !sameKey(g.key, e.key!)) : []

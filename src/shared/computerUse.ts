@@ -672,8 +672,6 @@ export interface CuOverlayState {
   session: { workspacePath: string; sessionId: string; title: string; mode: Exclude<ComputerUseMode, 'off'> } | null
   /** 最早一张挂着的门(同一时刻最多一个调用在跑,V6) */
   gate: CuOverlayGate | null
-  /** 最近一次动作被我们自己的窗口挡住:显示 `收起主窗口` */
-  ownBlocked: boolean
   /** 每个动作 +1,浮窗据此闪一下 */
   actionSeq: number
   /** 急停快捷键没注册上(被系统 / 别的 app 占用):胶囊里一个状态 chip */

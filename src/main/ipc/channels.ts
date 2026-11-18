@@ -448,7 +448,7 @@ export const CH = {
   cuRequestPermission: 'computer-use:request-permission',
   cuOpenSettings: 'computer-use:open-settings',
   cuRunningApps: 'computer-use:running-apps',
-  cuCollapseMain: 'computer-use:collapse-main',
+  cuOpenMain: 'computer-use:open-main',
   // event: local sink only (registry.broadcast), never hub / router (spec V2)
   cuEvent: 'computer-use:event',
   // event: main → the overlay window only (webContents.send), never broadcast

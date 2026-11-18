@@ -12,7 +12,7 @@ import { randomBytes } from 'node:crypto'
 import { accessSync, constants, readdirSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { GLOBAL_ACTIONS, effectiveBindings } from '@shared/keybindings'
-import type { CuStatus } from '@shared/computerUse'
+import type { CuStatus, Instance } from '@shared/computerUse'
 import type { Settings } from '../config/schema'
 import type { ComputerUseHost } from '../host/capabilities'
 import type { ComputerDriver } from './driver'
@@ -22,6 +22,7 @@ import { executorFactoryFor } from './executor'
 import { createPermissionProbe } from './permissions'
 import { createComputerUseService, ensurePrivateDir, type ComputerUseService } from './service'
 import type { CuEvent, CuSessionKey, StopWhy } from './types'
+import { createWindowHider, type HideableWin, type WindowHider } from './windowHider'
 
 type CuSettings = Settings['computerUse']
 
@@ -68,6 +69,16 @@ export function ownAccelerators(overrides: Record<string, string>): string[] {
   return GLOBAL_ACTIONS.map((a) => eff[a.id]).filter((a): a is string => !!a)
 }
 
+/** spec §9.1 / §9.3 (ruling R3): the hider on this driver. Front = the front window is ours; activateAway focuses the
+ *  target instance's app (forge-cu's two-step activation), no target → nothing. */
+export function cuHiderFor(o: { driver: ComputerDriver; ownPid: number; windows: () => HideableWin[] }): WindowHider {
+  return createWindowHider({
+    windows: o.windows,
+    isOwnAppFront: async () => (await o.driver.front())?.pid === o.ownPid,
+    activateAway: async (target?: Instance) => { if (target) await o.driver.focusWindow({ pid: target.pid }) },
+  })
+}
+
 interface BridgeLike { socketPath: string; configDir: string; close(): Promise<void> }
 
 export interface CuRuntimeDeps {
@@ -98,7 +109,10 @@ export interface CuRuntimeDeps {
   axGranted?: () => boolean
   /** the helper answered disclaim:false while spawns were disclaimed: reset configureDisclaim's latch (plain spawns) */
   onDisclaimUnavailable?: () => void
-  collapseMain?: () => void
+  /** every app window except the cu-overlay (the pet flagged isPet): what the hider may hide */
+  windows?: () => HideableWin[]
+  /** the overlay's 打开主窗口: show + focus the main window; returns its id */
+  openMain?: () => number | null | undefined
   now?: () => number
   sleep?: (ms: number) => Promise<void>
   random?: () => string
@@ -119,13 +133,16 @@ export interface CuRuntime {
   onLock(): void
   /** the global stop hotkey: every session (R20) */
   stopAll(): void
+  /** the main window was shown / focused (not by the hider's own restore) */
+  onUserShow(winId: number): void
   dispose(): Promise<void>
 }
 
 export function createCuRuntime(d: CuRuntimeDeps): CuRuntime {
   const now = d.now ?? Date.now
   const sleep = d.sleep ?? ((ms: number) => new Promise<void>((r) => { const h = setTimeout(r, ms); h.unref?.() }))
-  let built: { host: ComputerUseHost; service: ComputerUseService; driver: ComputerDriver } | null = null
+  let built: { host: ComputerUseHost; service: ComputerUseService; driver: ComputerDriver; hider: WindowHider } | null = null
+  let hiderRef: WindowHider | null = null
   let bridge: Promise<BridgeLike> | null = null
   let bridgeOpen: BridgeLike | null = null
   /** the last status the helper answered: undefined = never answered */
@@ -167,8 +184,15 @@ export function createCuRuntime(d: CuRuntimeDeps): CuRuntime {
     try { d.onSettingsSaved?.(d.readSettings()) } catch { /* best effort */ }
   }
 
+  const restore = () => { try { hiderRef?.restore() } catch { /* best effort */ } }
   const emit = (e: CuEvent) => {
-    if (e.type === 'state') on = new Set(e.sessions.map(idOf))
+    if (e.type === 'state') {
+      const next = new Set(e.sessions.map(idOf))
+      // a session went off (mode off / stop / lock): our windows come back
+      if ([...on].some((id) => !next.has(id))) restore()
+      on = next
+    }
+    if (e.type === 'stopped') restore()
     d.emit(e)
   }
 
@@ -192,17 +216,33 @@ export function createCuRuntime(d: CuRuntimeDeps): CuRuntime {
     const log = createActionLog(d.dir)
     const settings = () => d.readSettings().computerUse
     const hidIsPhysical = () => false   // V5 / R18: off until 实测 20
+    const hider = cuHiderFor({ driver, ownPid: d.ownPid, windows: () => d.windows?.() ?? [] })
+    hiderRef = hider
     const service = createComputerUseService({
       driver, probe, now, random: d.random ?? (() => cuRandom()),
       emit, note: d.note,
       stopTurn: (k) => { if (on.has(idOf(k))) d.stopTurn(k) },
       titleOf: d.titleOf, settings, ownPid: d.ownPid, ownAccelerators: d.ownAccelerators, log,
-      executorFactory: executorFactoryFor({ now, sleep, settings, ownPid: d.ownPid, ownAccelerators: d.ownAccelerators, log, hidIsPhysical }),
+      executorFactory: executorFactoryFor({ now, sleep, settings, ownPid: d.ownPid, ownAccelerators: d.ownAccelerators, log, hidIsPhysical, hider }),
       liveAgentChildren: d.liveAgentChildren, hidIsPhysical, saveSettings,
       configDir: () => d.dir,
     })
+    // the turn hooks the chat path calls (chatTurn.ts): a computer-use turn starts with auto-hide on and ends restoring
+    const hostService: ComputerUseService = {
+      ...service,
+      beginTurn: (key, origin) => {
+        const r = service.beginTurn(key, origin)
+        if (r.tools) hider.turnStarted()
+        return r
+      },
+      endTurn: (key) => {
+        const wasOn = service.modeOf(key) !== 'off'
+        service.endTurn(key)
+        if (wasOn) restore()
+      },
+    }
     const host: ComputerUseHost = {
-      service, probe, log,
+      service: hostService, probe, log,
       bridge: async () => {
         if (!bridge) {
           bridge = d.startBridge(d.dir, cuServiceHandler(service))
@@ -212,12 +252,15 @@ export function createCuRuntime(d: CuRuntimeDeps): CuRuntime {
         return { socketPath: b.socketPath, configDir: b.configDir }
       },
       runningApps: () => driver.runningApps(),
-      collapseMain: () => d.collapseMain?.(),
+      openMain: () => {
+        const id = d.openMain?.()
+        if (typeof id === 'number') hider.onUserShow(id)
+      },
       provision: () => { if (!provisioned()) saveSettings({ provisioned: true }) },
       provisioned: () => provisioned(),
       lastStatus: () => lastStatus,
     }
-    built = { host, service, driver }
+    built = { host, service, driver, hider }
     return built
   }
 
@@ -241,12 +284,17 @@ export function createCuRuntime(d: CuRuntimeDeps): CuRuntime {
       try { await build().host.probe.status() } catch { /* stays plain; enabling re-probes */ }
     },
 
-    onLock() { built?.service.onLock() },
+    onLock() {
+      built?.service.onLock()
+      restore()
+    },
     quit() {
       try { built?.service.stop(undefined, 'quit') } catch { /* exiting anyway */ }
+      restore()
       sweepTokenFiles()
     },
     stopAll() { built?.service.stop(undefined, 'hotkey' satisfies StopWhy) },
+    onUserShow(winId) { built?.hider.onUserShow(winId) },
 
     async dispose() {
       if (!built) return

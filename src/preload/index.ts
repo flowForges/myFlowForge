@@ -357,7 +357,6 @@ const api = {
     requestPermission: (a: { kind: 'screen' | 'ax' }) => ipcRenderer.invoke(CH.cuRequestPermission, a),
     openSettings: (a: { kind: 'screen' | 'ax' }) => ipcRenderer.invoke(CH.cuOpenSettings, a),
     runningApps: (): Promise<{ bundleId: string; name: string }[]> => ipcRenderer.invoke(CH.cuRunningApps),
-    collapseMain: () => ipcRenderer.invoke(CH.cuCollapseMain),
     onEvent: (cb: (e: unknown) => void) => {
       const listener = (_: unknown, e: unknown) => cb(e)
       ipcRenderer.on(CH.cuEvent, listener)
@@ -627,7 +626,7 @@ const cuOverlayApi = {
   resolve: (id: string, decision: 'allow' | 'deny' | 'stop') => ipcRenderer.invoke(CH.cuResolve, { id, decision }),
   // no key: stop every session
   stop: () => ipcRenderer.invoke(CH.cuStop),
-  collapseMain: () => ipcRenderer.invoke(CH.cuCollapseMain),
+  openMain: () => ipcRenderer.invoke(CH.cuOpenMain),
 }
 if (process.argv.includes(CU_OVERLAY_ARG)) contextBridge.exposeInMainWorld('cuOverlay', cuOverlayApi)
 else contextBridge.exposeInMainWorld('forge', api)

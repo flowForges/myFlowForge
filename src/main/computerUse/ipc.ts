@@ -121,9 +121,9 @@ export function computerUseHandlers(d: ComputerUseIpcDeps): Record<string, Handl
       try { return await cu.runningApps() } catch { return [] }
     }),
 
-    [CH.cuCollapseMain]: local(async (cu) => {
+    [CH.cuOpenMain]: local(async (cu) => {
       if (!cu) return UNSUPPORTED
-      cu.collapseMain?.()
+      cu.openMain?.()
       return { ok: true }
     }),
   }

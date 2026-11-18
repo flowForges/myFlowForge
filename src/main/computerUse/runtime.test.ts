@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, type Mock } from 'vitest'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -7,13 +7,18 @@ import { defaultSettings, type Settings } from '../config/schema'
 import { forgeMcpArgs } from '../agents/mcpConfig'
 import { fakeDriver, type FakeDriver } from './fakeDriver'
 import type { WinHit } from './driver'
-import { createCuRuntime, cuRandom, mergeComputerUse, ownAccelerators, resolveHelperPath, type CuRuntimeDeps } from './runtime'
+import { createCuRuntime, cuHiderFor, cuRandom, mergeComputerUse, ownAccelerators, resolveHelperPath, type CuRuntimeDeps } from './runtime'
 import type { CuEvent, CuGate, CuSessionKey } from './types'
 
 const A: CuSessionKey = { workspacePath: '/w/a', sessionId: 's-a' }
 const B: CuSessionKey = { workspacePath: '/w/b', sessionId: 's-b' }
 const LOCAL = { local: true }
 const APP: WinHit = { pid: 500, bundleId: 'com.example.app', name: 'Example', layer: 0, windowId: 77 }
+type FakeWin = { id: number; isPet: boolean; isVisible(): boolean; hide: Mock<() => void>; showInactive: Mock<() => void> }
+function fakeWin(id: number, isPet = false): FakeWin {
+  let visible = true
+  return { id, isPet, isVisible: () => visible, hide: vi.fn(() => { visible = false }), showInactive: vi.fn(() => { visible = true }) }
+}
 const flush = async (n = 30) => { for (let i = 0; i < n; i++) await Promise.resolve() }
 
 const roots: string[] = []
@@ -30,6 +35,7 @@ function setup(o: {
   bridgeFails?: boolean
   driver?: FakeDriver
   random?: () => string
+  wins?: FakeWin[]
 } = {}) {
   const root = tmp()
   const dir = join(root, 'computer-use')
@@ -44,7 +50,8 @@ function setup(o: {
   let reads = 0
   let clock = 1_000_000
   const bridges: { dir: string; closed: boolean }[] = []
-  const collapse = vi.fn()
+  const wins = o.wins ?? [fakeWin(1), fakeWin(2)]
+  const openMain = vi.fn(() => 1)
   const deps: CuRuntimeDeps = {
     platform: o.platform ?? 'darwin',
     dir,
@@ -69,14 +76,15 @@ function setup(o: {
     screenGranted: () => o.screen ?? false,
     axGranted: () => o.ax ?? false,
     onDisclaimUnavailable: o.onDisclaimUnavailable,
-    collapseMain: collapse,
+    windows: () => wins,
+    openMain,
     now: () => clock,
     sleep: async (ms) => { clock += ms },
     random: o.random,
   }
   const rt = createCuRuntime(deps)
   return {
-    rt, driver, dir, events, notes, stopped, writes, bridges, collapse, deps,
+    rt, driver, dir, events, notes, stopped, writes, bridges, wins, openMain, deps,
     get made() { return made },
     get reads() { return reads },
     get settings() { return settings },
@@ -236,12 +244,13 @@ describe('service wiring', () => {
     expect(t2.driver.disposed).toBe(true)
   })
 
-  it('runningApps comes from the driver; collapseMain from the shell', async () => {
+  it('runningApps comes from the driver; openMain from the shell', async () => {
     const t = setup({ driver: fakeDriver({ apps: [{ bundleId: 'com.a', name: 'A', pid: 11, active: true }] }) })
     const h = t.rt.host()!
     expect(await h.runningApps!()).toEqual([{ bundleId: 'com.a', name: 'A', pid: 11, active: true }])
-    h.collapseMain!()
-    expect(t.collapse).toHaveBeenCalledTimes(1)
+    expect('collapseMain' in h).toBe(false)
+    h.openMain!()
+    expect(t.openMain).toHaveBeenCalledTimes(1)
   })
 
   it('ownAccelerators lists every global binding after overrides, the stop one included', () => {
@@ -435,5 +444,112 @@ describe('integration: the real executor on the real service, ask mode', () => {
     await svc.resolve(g2[1].gate.id, 'allow', LOCAL)
     await call2
     expect(t.driver.posts).toHaveLength(1)
+  })
+})
+
+describe('window hider wiring (spec §9.1, §9.3)', () => {
+  async function hidden(o: Parameters<typeof setup>[0] = {}) {
+    const t = setup({ ...o, settings: (s) => s })
+    const svc = t.rt.host()!.service
+    expect(await svc.setMode(A, 'allow', LOCAL)).toEqual({ ok: true })
+    svc.beginTurn(A, 'local')
+    const tok = svc.tokenFor(A)!
+    const shot = await svc.handle(tok, 'screenshot', {}, {})
+    expect(shot.ok).toBe(true)
+    expect(t.wins[0].hide).not.toHaveBeenCalled()   // a read never steps aside
+    const r = await svc.handle(tok, 'click', { x: 100, y: 100, visionCode: t.driver.captures[0].code! }, {})
+    expect(r.ok).toBe(true)
+    expect(t.wins[0].hide).toHaveBeenCalledTimes(1)
+    expect(t.wins[1].hide).toHaveBeenCalledTimes(1)
+    return { t, svc, tok }
+  }
+  const restored = (t: ReturnType<typeof setup>) => t.wins.every((w) => w.showInactive.mock.calls.length === 1)
+
+  it('the real executor hides our windows before the first physical post', async () => {
+    const order: string[] = []
+    const w = fakeWin(1)
+    w.hide.mockImplementation(() => { order.push('hide') })
+    const driver = fakeDriver({ front: APP, hits: APP, capture: { width: 1280, height: 800 } })
+    const post = driver.post.bind(driver)
+    driver.post = async (a, g) => { order.push('post'); return post(a, g) }
+    await hidden({ driver, wins: [w, fakeWin(2)] })
+    expect(order).toEqual(['hide', 'post'])
+  })
+
+  it('turn end restores', async () => {
+    const { t, svc } = await hidden()
+    expect(restored(t)).toBe(false)
+    svc.endTurn(A)
+    expect(restored(t)).toBe(true)
+  })
+
+  it('the end of another (computer-use-off) session\'s turn does not restore', async () => {
+    const { t, svc } = await hidden()
+    svc.beginTurn(B, 'local')
+    svc.endTurn(B)
+    expect(t.wins[0].showInactive).not.toHaveBeenCalled()
+  })
+
+  it('emergency stop restores', async () => {
+    const { t } = await hidden()
+    t.rt.stopAll()
+    expect(restored(t)).toBe(true)
+  })
+
+  it('mode off restores', async () => {
+    const { t, svc } = await hidden()
+    await svc.setMode(A, 'off', LOCAL)
+    expect(restored(t)).toBe(true)
+  })
+
+  it('a mode switch that keeps the session on does not restore', async () => {
+    const { t, svc } = await hidden()
+    await svc.setMode(A, 'ask', LOCAL)
+    expect(t.wins[0].showInactive).not.toHaveBeenCalled()
+  })
+
+  it('screen lock restores', async () => {
+    const { t } = await hidden()
+    t.rt.onLock()
+    expect(restored(t)).toBe(true)
+  })
+
+  it('openMain (the overlay) counts as the user reopening: that window is not restored, no more hiding this turn', async () => {
+    const { t, svc, tok } = await hidden()
+    t.rt.host()!.openMain!()
+    svc.endTurn(A)
+    expect(t.wins[0].showInactive).not.toHaveBeenCalled()
+    expect(t.wins[1].showInactive).toHaveBeenCalledTimes(1)
+    void tok
+  })
+
+  it('onUserShow from the main window events ends auto-hide until the next turn', async () => {
+    const { t, svc, tok } = await hidden()
+    t.rt.onUserShow(1)
+    const r = await svc.handle(tok, 'click', { x: 100, y: 100, visionCode: t.driver.captures[0].code! }, {})
+    expect(r.ok).toBe(true)
+    expect(t.wins[0].hide).toHaveBeenCalledTimes(1)
+    svc.endTurn(A)
+    svc.beginTurn(A, 'local')
+    const shot = await svc.handle(tok, 'screenshot', {}, {})
+    expect(shot.ok).toBe(true)
+    const code = t.driver.captures.at(-1)!.code!
+    expect((await svc.handle(tok, 'click', { x: 100, y: 100, visionCode: code }, {})).ok).toBe(true)
+    expect(t.wins[1].hide).toHaveBeenCalledTimes(2)
+  })
+
+  it('still our app in front after hiding: activateAway focuses the target instance; no target → nothing', async () => {
+    const own: WinHit = { ...APP, pid: 4242 }
+    const driver = fakeDriver({ front: own, hits: APP, capture: { width: 1280, height: 800 } })
+    const ex = cuHiderFor({ driver, ownPid: 4242, windows: () => [] })
+    await ex.beforeMutation({ pid: 500, start: '1.2' })
+    expect(driver.focusWindows).toEqual([{ pid: 500 }])
+    ex.restore()
+    await ex.beforeMutation()
+    expect(driver.focusWindows).toHaveLength(1)
+    driver.setFront(APP)
+    ex.restore()
+    await ex.beforeMutation({ pid: 500, start: '1.2' })
+    expect(driver.focusWindows).toHaveLength(1)
   })
 })

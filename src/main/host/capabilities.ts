@@ -79,8 +79,8 @@ export interface ComputerUseHost {
   log: import('../computerUse/types').ActionLog
   /** the settings pane's 添加 list; absent → [] */
   runningApps?: () => Promise<{ bundleId: string; name: string }[]>
-  /** the overlay's 收起主窗口 (Task 8) */
-  collapseMain?: () => void
+  /** the overlay's 打开主窗口: shows + focuses the main window, and ends auto-hide for this turn (spec §9.1) */
+  openMain?: () => void
   /** I-1: 授权 provisions (spec V3): `provisioned:true` through the runtime's settings save, so the next spawn is disclaimed */
   provision: () => void
   /** has computer use ever been enabled on this machine (settings `provisioned`); absent → false */

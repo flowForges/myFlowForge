@@ -9,10 +9,9 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
 .cuo-sep { flex: none; opacity: 0.6; }
 .cuo-chip { flex: none; padding: 1px 6px; border-radius: 8px; background: rgba(255, 255, 255, 0.12); }
 .cuo-btn { flex: none; font: inherit; color: inherit; border: 0; cursor: pointer; padding: 3px 10px; border-radius: 10px; background: rgba(255, 255, 255, 0.14); outline: none; }
-.cuo-pill .cuo-collapse { margin-left: auto; }
+.cuo-pill .cuo-open-main { margin-left: auto; }
 .cuo-pill .cuo-stop { background: #dc2626; }
-.cuo-pill .cuo-collapse + .cuo-stop { margin-left: 0; }
-.cuo-pill .cuo-chip + .cuo-stop { margin-left: auto; }
+.cuo-pill .cuo-open-main + .cuo-stop { margin-left: 0; }
 .cuo-card { margin-top: 4px; box-sizing: border-box; height: 178px; display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: 12px; background: rgba(24, 24, 27, 0.95); border: 1px solid rgba(255, 255, 255, 0.12); }
 .cuo-crop { flex: 1 1 auto; min-height: 0; width: 100%; object-fit: contain; border: 1px solid rgba(255, 255, 255, 0.25); border-radius: 6px; background: #000; }
 .cuo-head { flex: none; display: flex; align-items: center; gap: 6px; min-width: 0; }

@@ -26,6 +26,8 @@ export interface WinLike {
   setVisibleOnAllWorkspaces(flag: boolean, o?: { visibleOnFullScreen?: boolean }): void
   setBounds(b: Bounds): void
   showInactive(): void
+  /** macOS: sharingType none, so our own captures never see it */
+  setContentProtection(flag: boolean): void
   hide(): void
   isVisible(): boolean
   isDestroyed(): boolean
@@ -38,7 +40,6 @@ export interface ScreenLike { getPrimaryDisplay(): { workArea: Bounds } }
 export interface CuOverlay {
   show(state: CuOverlayState): void
   hide(): void
-  collapseMain: () => void
   dispose(): void
   /** the live overlay's webContents id, for the I-1 sender check; null when there is none */
   webContentsId(): number | null
@@ -55,8 +56,6 @@ export function createCuOverlay(d: {
   loadUrl: (w: WinLike) => void
   /** the preload script path (the shared one; OVERLAY_ARG narrows what it exposes) */
   preload?: string
-  /** the 收起主窗口 button */
-  collapseMain?: () => void
 }): CuOverlay {
   let win: WinLike | null = null
   let last: CuOverlayState | null = null
@@ -72,6 +71,7 @@ export function createCuOverlay(d: {
     })
     w.setAlwaysOnTop(true, 'screen-saver')
     w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+    w.setContentProtection(true)
     w.on('closed', () => { if (win === w) win = null })
     w.webContents.on('did-finish-load', () => { if (last && !w.isDestroyed()) w.webContents.send(CH.cuOverlayState, last) })
     win = w
@@ -91,7 +91,6 @@ export function createCuOverlay(d: {
     hide() {
       if (win && !win.isDestroyed()) win.hide()
     },
-    collapseMain: () => d.collapseMain?.(),
     webContentsId: () => (win && !win.isDestroyed() ? win.webContents.id : null),
     dispose() {
       const w = win

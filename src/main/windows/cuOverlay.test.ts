@@ -19,6 +19,7 @@ function fakeWin() {
     setVisibleOnAllWorkspaces: (...a: unknown[]) => { calls.push(['setVisibleOnAllWorkspaces', ...a]) },
     setBounds: (b: unknown) => { calls.push(['setBounds', b]) },
     showInactive: () => { calls.push(['showInactive']); visible = true },
+    setContentProtection: (...a: unknown[]) => { calls.push(['setContentProtection', ...a]) },
     show: () => { calls.push(['show']); visible = true },
     focus: () => { calls.push(['focus']) },
     hide: () => { calls.push(['hide']); visible = false },
@@ -40,7 +41,6 @@ function setup() {
   const wins: ReturnType<typeof fakeWin>[] = []
   const opts: unknown[] = []
   const loads: unknown[] = []
-  const collapse = vi.fn()
   let work = WORK
   const screen: ScreenLike = { getPrimaryDisplay: () => ({ workArea: work }) }
   const ov = createCuOverlay({
@@ -48,12 +48,11 @@ function setup() {
     screen,
     loadUrl: (w) => loads.push(w),
     preload: '/out/preload/index.js',
-    collapseMain: collapse,
   })
-  return { ov, wins, opts, loads, collapse, setWork: (w: typeof WORK) => { work = w } }
+  return { ov, wins, opts, loads, setWork: (w: typeof WORK) => { work = w } }
 }
 
-const ON: CuOverlayState = { session: { workspacePath: '/w', sessionId: 's', title: '会话一', mode: 'ask' }, gate: null, ownBlocked: false, actionSeq: 0, hotkeyFailed: false }
+const ON: CuOverlayState = { session: { workspacePath: '/w', sessionId: 's', title: '会话一', mode: 'ask' }, gate: null, actionSeq: 0, hotkeyFailed: false }
 const GATED: CuOverlayState = { ...ON, gate: { id: 'cug.1', kind: 'action', action: { kind: 'click', at: { x: 1, y: 2 } }, crop: 'Y3JvcA==' } }
 
 describe('createCuOverlay', () => {
@@ -132,10 +131,18 @@ describe('createCuOverlay', () => {
     expect(t.ov.webContentsId()).toBeNull()
   })
 
-  it('collapseMain forwards to the shell', () => {
+  it('the overlay window is excluded from screen captures (setContentProtection, spec §9.1)', () => {
     const t = setup()
-    t.ov.collapseMain()
-    expect(t.collapse).toHaveBeenCalledTimes(1)
+    t.ov.show(ON)
+    expect(t.wins[0].calls).toContainEqual(['setContentProtection', true])
+    const i = t.wins[0].calls.findIndex((c) => c[0] === 'setContentProtection')
+    const j = t.wins[0].calls.findIndex((c) => c[0] === 'showInactive')
+    expect(i).toBeLessThan(j)
+  })
+
+  it('no collapseMain any more', () => {
+    const t = setup()
+    expect('collapseMain' in t.ov).toBe(false)
   })
 })
 
@@ -147,10 +154,10 @@ describe('preload: the overlay gets only its four calls', () => {
     expect(SRC).toMatch(/if \(process\.argv\.includes\(CU_OVERLAY_ARG\)\) contextBridge\.exposeInMainWorld\('cuOverlay', cuOverlayApi\)\nelse contextBridge\.exposeInMainWorld\('forge', api\)/)
     expect(SRC.match(/exposeInMainWorld\(/g)).toHaveLength(2)
   })
-  it('the bridge is onState / resolve / stop / collapseMain over the local-only channels', () => {
+  it('the bridge is onState / resolve / stop / openMain over the local-only channels', () => {
     const body = SRC.slice(SRC.indexOf('const cuOverlayApi = {'), SRC.indexOf('if (process.argv.includes(CU_OVERLAY_ARG))'))
-    expect([...body.matchAll(/^  (\w+):/gm)].map((m) => m[1])).toEqual(['onState', 'resolve', 'stop', 'collapseMain'])
-    expect([...body.matchAll(/CH\.(\w+)/g)].map((m) => m[1]).sort()).toEqual(['cuCollapseMain', 'cuOverlayState', 'cuOverlayState', 'cuResolve', 'cuStop'])
+    expect([...body.matchAll(/^  (\w+):/gm)].map((m) => m[1])).toEqual(['onState', 'resolve', 'stop', 'openMain'])
+    expect([...body.matchAll(/CH\.(\w+)/g)].map((m) => m[1]).sort()).toEqual(['cuOpenMain', 'cuOverlayState', 'cuOverlayState', 'cuResolve', 'cuStop'])
     expect(body).not.toMatch(/ipcRenderer\.send\(/)
   })
 })

@@ -46,7 +46,7 @@ export const CLIENT_ONLY: ReadonlySet<string> = new Set([
   // 本机的 agent 照样在动(spec V1)。CLIENT_ONLY 同时让 daemonTable 剔掉它们 —— 远程客户端根本调不到。
   'computer-use:status', 'computer-use:state', 'computer-use:set-mode', 'computer-use:resolve',
   'computer-use:stop', 'computer-use:log', 'computer-use:thumb', 'computer-use:request-permission',
-  'computer-use:open-settings', 'computer-use:running-apps', 'computer-use:collapse-main',
+  'computer-use:open-settings', 'computer-use:running-apps', 'computer-use:open-main',
 ])
 
 /**
