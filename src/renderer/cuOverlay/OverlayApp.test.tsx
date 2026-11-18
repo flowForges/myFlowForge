@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { act, fireEvent, render, screen } from '@testing-library/react'
-import { elementPhrase, type CuOverlayState } from '@shared/computerUse'
+import type { CuOverlayState } from '@shared/computerUse'
 import { OverlayApp, actionLine, type CuOverlayApi } from './OverlayApp'
 
 function harness(physical = false) {
@@ -159,16 +159,29 @@ describe('actionLine', () => {
     expect(actionLine({ kind: 'key', combo: '⌘⇧T', app: 'Safari' })).toBe('按键 ⌘⇧T · Safari')
   })
 
-  it('T10: the semantic kinds (act/launch/focus/appKey) use elementPhrase for the one line, not the v1 switch', () => {
-    const act = { kind: 'act' as const, app: { name: 'WorkBuddy', bundleId: 'x' }, element: { role: 'button', name: '新建会话' }, actLabel: '点击' }
-    expect(actionLine(act)).toBe(elementPhrase(act))
-    expect(actionLine(act)).toBe('在 WorkBuddy 中点击 按钮「新建会话」')
-    const launch = { kind: 'launch' as const, app: { name: 'Terminal', bundleId: 'com.apple.Terminal' } }
-    expect(actionLine(launch)).toBe(elementPhrase(launch))
-    const focus = { kind: 'focus' as const, app: { name: 'Finder', bundleId: 'com.apple.finder' } }
-    expect(actionLine(focus)).toBe(elementPhrase(focus))
-    const appKey = { kind: 'appKey' as const, app: { name: 'Notes', bundleId: 'com.apple.Notes' }, combo: '⌘⇧V' }
-    expect(actionLine(appKey)).toBe(elementPhrase(appKey))
+  it('T10 fix round 1 (reviewer finding 1): the semantic kinds read as a full sentence, not just elementPhrase — launch/focus get a verb, appKey shows its combo, act shows its typed text and flags', () => {
+    expect(actionLine({ kind: 'launch', app: { name: 'Terminal', bundleId: 'com.apple.Terminal' }, actLabel: '打开' })).toBe('打开 Terminal')
+    expect(actionLine({ kind: 'focus', app: { name: 'Finder', bundleId: 'com.apple.finder' }, actLabel: '聚焦' })).toBe('聚焦 Finder')
+
+    const key = actionLine({ kind: 'appKey', app: { name: 'Notes', bundleId: 'com.apple.Notes' }, actLabel: '按键', combo: '⌘⇧V' })
+    expect(key).toBe('在 Notes 中按键 · ⌘⇧V')
+    expect(key).toContain('⌘⇧V')
+
+    const click = actionLine({ kind: 'act', app: { name: 'WorkBuddy', bundleId: 'x' }, element: { role: 'button', name: '新建会话' }, actLabel: '点击' })
+    expect(click).toBe('在 WorkBuddy 中点击 按钮「新建会话」')
+
+    const typed = actionLine({ kind: 'act', app: { name: 'WorkBuddy', bundleId: 'x' }, element: { role: 'textfield', name: '输入消息' }, actLabel: '输入', text: '你好' })
+    expect(typed).toContain('你好')
+    expect(typed).toContain('2 字')
+
+    const physical = actionLine({ kind: 'act', app: { name: 'WorkBuddy', bundleId: 'x' }, element: { role: 'button' }, actLabel: '点击', physical: true })
+    expect(physical).toContain('移动鼠标点击')
+
+    const replace = actionLine({ kind: 'act', app: { name: 'WorkBuddy', bundleId: 'x' }, element: { role: 'textfield' }, actLabel: '设置', replace: true })
+    expect(replace).toContain('替换原有内容')
+
+    const scroll = actionLine({ kind: 'act', app: { name: 'WorkBuddy', bundleId: 'x' }, element: { role: 'list' }, actLabel: '滚动', direction: 'down', amount: 3 })
+    expect(scroll).toContain('↓ ×3')
   })
 
   it('M-13: the mini card puts the trusted line (reason chip, action, bundle id) above the crop', () => {

@@ -446,6 +446,15 @@ describe('ROLE_LABEL / ACT_LABEL / elementPhrase', () => {
       kind: 'act', app: { name: 'WorkBuddy', bundleId: 'x' }, element: { role: 'button', name: longName }, actLabel: '点击',
     })).toBe(`在 WorkBuddy 中点击 按钮「${'x'.repeat(120)}…」`)
   })
+  // T10 fix round 1 (reviewer finding 1): launch/focus act on the whole app, not something inside it — the verb
+  // goes first, no 「在…中」; act/appKey still read as happening inside the app.
+  it('launch / focus read verb-first: 打开 Terminal, 聚焦 Finder — no 在…中', () => {
+    expect(elementPhrase({ kind: 'launch', app: { name: 'Terminal', bundleId: 'com.apple.Terminal' }, actLabel: '打开' })).toBe('打开 Terminal')
+    expect(elementPhrase({ kind: 'focus', app: { name: 'Finder', bundleId: 'com.apple.finder' }, actLabel: '聚焦' })).toBe('聚焦 Finder')
+  })
+  it('appKey still reads 在 X 中<动词> like act (the combo itself is not elementPhrase\'s job)', () => {
+    expect(elementPhrase({ kind: 'appKey', app: { name: 'Notes', bundleId: 'com.apple.Notes' }, actLabel: '按键', combo: '⌘⇧V' })).toBe('在 Notes 中按键')
+  })
 })
 
 describe('CU_SCHEMAS', () => {

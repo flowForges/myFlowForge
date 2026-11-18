@@ -623,11 +623,19 @@ export const ACT_LABEL: Readonly<Record<ActAction, string>> = {
   collapse: '收起', select: '选择', scroll: '滚动', scrollTo: '滚到可见', submit: '提交',
 }
 
-/** 「在 WorkBuddy 中点击 按钮「新建会话」」(spec §10)。app / element 缺省就省掉对应的部分。 */
+/**
+ * 「在 WorkBuddy 中点击 按钮「新建会话」」(spec §10)。app / element 缺省就省掉对应的部分。
+ * launch / focus 动的是整个 app(不是 app 里的某个控件):读成「打开 Terminal」「聚焦 Finder」,动词在前;
+ * 其它(act、appKey)是在 app 里头做事:读成「在 X 中<动词>…」,和原来一样。(Fix round 1,审查意见 1)
+ */
 export function elementPhrase(view: CuActionView): string {
   const app = typeof view.app === 'object' ? view.app : undefined
   // app / 控件名都是屏幕来源的脏数据(或者至少和屏幕文字同等不可信):同一套处理,120 字封顶(和 cuSnapshotRender 的名字一致)。
-  const lead = `${app ? `在 ${sanitizeScreenText(app.name, 120)} 中` : ''}${view.actLabel ?? ''}`
+  const appName = app ? sanitizeScreenText(app.name, 120) : ''
+  const verb = view.actLabel ?? ''
+  const lead = view.kind === 'launch' || view.kind === 'focus'
+    ? [verb, appName].filter(Boolean).join(' ')
+    : `${appName ? `在 ${appName} 中` : ''}${verb}`
   const role = view.element ? (ROLE_LABEL[view.element.role] ?? '控件') : ''
   const name = view.element?.name ? `「${sanitizeScreenText(view.element.name, 120)}」` : ''
   return [lead, role + name].filter(Boolean).join(' ')

@@ -365,7 +365,7 @@ export async function runSemantic(
     const cls: CuClass = !bundleId && known.kind === 'normal' ? { kind: 'askAlways', reason: '始终询问' } : known
     return mutate({
       base, cls,
-      view: { kind: 'launch', app: { name, bundleId: bundleId ?? '' }, ...(bundleId ? { bundleId } : {}) },
+      view: { kind: 'launch', app: { name, bundleId: bundleId ?? '' }, ...(bundleId ? { bundleId } : {}), actLabel: '打开' },
       call: async () => {
         let r
         try {
@@ -400,7 +400,7 @@ export async function runSemantic(
     return mutate({
       base, pausesForUser: true,
       cls: isOwn(d, t) ? { kind: 'block', code: 'own_window' } : classOf(t, 'focus'),
-      view: { kind: 'focus', app: { name: t.name, bundleId: t.bundleId ?? '' }, ...(t.bundleId ? { bundleId: t.bundleId } : {}) },
+      view: { kind: 'focus', app: { name: t.name, bundleId: t.bundleId ?? '' }, ...(t.bundleId ? { bundleId: t.bundleId } : {}), actLabel: '聚焦' },
       call: async () => {
         await d.driver.focusWindow({ pid: t.pid, ...(a.window !== undefined ? { windowNumber: a.window } : {}), guard: deny() })
         return { text: `已切到前台 ${wrapUntrusted(t.name)}` }
@@ -426,7 +426,10 @@ export async function runSemantic(
     return mutate({
       base,
       cls: isOwn(d, t) ? { kind: 'block', code: 'own_window' } : classOf(t, 'appKey', c),
-      view: { kind: 'appKey', app: { name: t.name, bundleId: t.bundleId ?? '' }, ...(t.bundleId ? { bundleId: t.bundleId } : {}), combo: pretty, mods: c.mods, repeat },
+      view: {
+        kind: 'appKey', app: { name: t.name, bundleId: t.bundleId ?? '' }, ...(t.bundleId ? { bundleId: t.bundleId } : {}),
+        combo: pretty, mods: c.mods, repeat, actLabel: '按键',
+      },
       call: async () => {
         const r = await d.driver.appKey({ pid: t.pid, mods: c.mods, key: c.key, repeat, guard: deny() })
         return { delivery: r.delivery, text: `已按 ${pretty}${repeat > 1 ? ` ×${repeat}` : ''} · 目标 ${wrapUntrusted(t.name)} · via=${r.via}` }

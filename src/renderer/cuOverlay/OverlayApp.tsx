@@ -22,9 +22,25 @@ export interface CuOverlayApi {
 }
 
 /** the mini card's one line. Semantic kinds (act/launch/focus/appKey, T5) speak in elements (spec §10); the v1
- *  coordinate kinds below keep their own line. */
+ *  coordinate kinds below keep their own line.
+ *  Fix round 1 (reviewer finding 1): elementPhrase alone drops the facts being approved for act (typed text,
+ *  physical/replace/scroll flags) and appKey (the combo) — this is the only place a gate is answered, so they're
+ *  appended after the phrase, same `·`-joined convention as the v1 kinds below. */
 export function actionLine(v: CuActionView): string {
-  if (v.kind === 'act' || v.kind === 'launch' || v.kind === 'focus' || v.kind === 'appKey') return elementPhrase(v)
+  if (v.kind === 'act' || v.kind === 'launch' || v.kind === 'focus' || v.kind === 'appKey') {
+    const parts = [elementPhrase(v)]
+    if (v.kind === 'act') {
+      if (v.text !== undefined) parts.push(`${Array.from(v.text).length} 字`, visibleText(v.text))
+      if (v.physical) parts.push('移动鼠标点击')
+      if (v.replace) parts.push('替换原有内容')
+      if (v.direction) {
+        const arrow = { up: '↑', down: '↓', left: '←', right: '→' }[v.direction]
+        parts.push(`${arrow} ×${v.amount ?? 1}`)
+      }
+    }
+    if (v.kind === 'appKey' && v.combo) parts.push(v.combo)
+    return parts.join(' · ')
+  }
   const parts: string[] = []
   const app = screenName(typeof v.app === 'string' ? v.app : v.app?.name)
   switch (v.kind) {

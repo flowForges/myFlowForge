@@ -94,12 +94,13 @@ describe('CuGateCard', () => {
     expect(row(container, '动作').textContent).toContain('点击')
   })
 
-  it('act type: adds a 文字 block and the N 字 chip', () => {
+  it('act type: adds a 文字 block and the N 字 chip, in the row keyed 文字', () => {
     const { container } = render(<CuGateCard gate={mk({
       action: { kind: 'act', app: { name: 'WorkBuddy', bundleId: 'x' }, element: { role: 'textfield', name: '输入消息' }, actLabel: '输入', text: '你好' },
     })} />)
-    expect(container.querySelector('.cu-text')?.textContent).toBe('你好')
-    expect(container.querySelector('.cu-chip.cu-count')?.textContent).toBe('2 字')
+    const textRow = row(container, '文字')
+    expect(textRow.querySelector('.cu-text')?.textContent).toBe('你好')
+    expect(textRow.querySelector('.cu-chip.cu-count')?.textContent).toBe('2 字')
   })
 
   it('act flags: physical → 方式: 移动鼠标点击; replace → 方式: 替换原有内容; scroll → 滚动: 箭头 ×amount', () => {

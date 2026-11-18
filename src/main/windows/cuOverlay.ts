@@ -37,6 +37,11 @@ export interface WinLike {
 }
 export interface ScreenLike { getPrimaryDisplay(): { workArea: Bounds } }
 
+/** Fix round 1 (reviewer finding 3): a crash loop (bad renderer bundle, GPU churn, …) must not rebuild forever —
+ *  at most this many rebuilds inside the rolling window, then it gives up until the next explicit `show()`. */
+const REBUILD_LIMIT = 3
+const REBUILD_WINDOW_MS = 10_000
+
 export interface CuOverlay {
   show(state: CuOverlayState): void
   hide(): void
@@ -59,6 +64,12 @@ export function createCuOverlay(d: {
 }): CuOverlay {
   let win: WinLike | null = null
   let last: CuOverlayState | null = null
+  // Fix round 1 (reviewer finding 2): `visible` tracks whether we're supposed to be on screen right now —
+  // cleared by hide(), set by present(). A dead renderer that was already hidden must not come back; the next
+  // explicit show() rebuilds from scratch instead.
+  let visible = false
+  // Fix round 1 (finding 3): timestamps of recent auto-rebuilds, for the crash-loop cap.
+  let rebuilds: number[] = []
 
   const ensure = (height: number): WinLike => {
     if (win && !win.isDestroyed()) return win
@@ -74,9 +85,10 @@ export function createCuOverlay(d: {
     w.setContentProtection(true)
     w.on('closed', () => { if (win === w) win = null })
     w.webContents.on('did-finish-load', () => { if (last && !w.isDestroyed()) w.webContents.send(CH.cuOverlayState, last) })
-    // T10 carry-over: the renderer can crash or be killed by the OS. Rebuild the window and replay whatever state
-    // was last shown, so a pending gate reappears instead of leaving the user with no way to answer it.
-    w.webContents.on('render-process-gone', () => recover(w))
+    // T10 carry-over, fix round 1: the renderer can crash or be killed by the OS. `recover` rebuilds the window
+    // and replays whatever state was last shown, so a pending gate reappears instead of leaving the user with no
+    // way to answer it — but deferred (not run on the crash event's own call stack) and capped (finding 3).
+    w.webContents.on('render-process-gone', () => { setTimeout(() => recover(w), 0) })
     win = w
     d.loadUrl(w)
     return w
@@ -89,22 +101,39 @@ export function createCuOverlay(d: {
     w.setBounds(place(d.screen, height))
     w.webContents.send(CH.cuOverlayState, state)
     if (!w.isVisible()) w.showInactive()
+    visible = true
+  }
+
+  /** at most REBUILD_LIMIT auto-rebuilds per REBUILD_WINDOW_MS; old attempts age out of the window. */
+  const canAutoRebuild = (): boolean => {
+    const now = Date.now()
+    rebuilds = rebuilds.filter((t) => now - t < REBUILD_WINDOW_MS)
+    if (rebuilds.length >= REBUILD_LIMIT) return false
+    rebuilds.push(now)
+    return true
   }
 
   const recover = (dead: WinLike) => {
     if (win !== dead) return // a stale event from a window that was already replaced: nothing to do
     win = null
     try { if (!dead.isDestroyed()) dead.destroy() } catch { /* already gone */ }
-    if (last) present(last)
+    // finding 2: don't resurrect a panel the caller already hid (or that never had a state to show).
+    if (!visible || !last) return
+    // finding 3: a crash loop gives up instead of rebuilding forever; an explicit show() is unaffected by this cap.
+    if (!canAutoRebuild()) return
+    present(last)
   }
 
   return {
     show(state) { present(state) },
     hide() {
+      visible = false
       if (win && !win.isDestroyed()) win.hide()
     },
     webContentsId: () => (win && !win.isDestroyed() ? win.webContents.id : null),
     dispose() {
+      visible = false
+      rebuilds = []
       const w = win
       win = null
       last = null

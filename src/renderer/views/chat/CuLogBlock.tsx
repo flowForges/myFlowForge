@@ -2,7 +2,7 @@
 // 输入的文字只出现在批准卡上,这里只写 `输入 N 字`(不展示预览)。
 // actionLog.thumb() 回的是裸 base64:这里自己拼 data URL,且只认纯 base64,别的值(https: 等)一律丢掉。
 import { useEffect, useRef, useState } from 'react'
-import { CU_ERR, CU_KIND_LABEL, ROLE_LABEL } from '@shared/computerUse'
+import { CU_ERR, CU_KIND_LABEL, ROLE_LABEL, visibleText } from '@shared/computerUse'
 import type { CuLogEntry } from '../../../main/computerUse/types'
 import { Lightbox } from '../../components/Lightbox'
 import { fmtPt, screenName } from './cuFormat'
@@ -35,7 +35,7 @@ function describe(en: CuLogEntry): string {
       const el = en.element
       const role = el ? (ROLE_LABEL[el.role] ?? '控件') : ''
       const name = el?.name ? `「${screenName(el.name)}」` : ''
-      return [en.actLabel ?? label, (role + name) || undefined].filter(Boolean).join(' ')
+      return [visibleText(en.actLabel ?? label), (role + name) || undefined].filter(Boolean).join(' ')
     }
     default: return label
   }

@@ -365,7 +365,7 @@ describe('launch / focus / key(app)', () => {
     const s = setup({ mode: 'allow' })
     const r = await s.run('launch', { app: 'com.apple.Terminal' })
     expect(r.ok).toBe(true)
-    expect(s.gates[0]).toMatchObject({ kind: 'action', action: { kind: 'launch', app: { name: 'Terminal', bundleId: 'com.apple.Terminal' } } })
+    expect(s.gates[0]).toMatchObject({ kind: 'action', action: { kind: 'launch', app: { name: 'Terminal', bundleId: 'com.apple.Terminal' }, actLabel: '打开' } })
     expect(s.driver.launches[0]).toMatchObject({ bundleId: 'com.apple.Terminal', activate: false })
   })
 
@@ -427,7 +427,7 @@ describe('launch / focus / key(app)', () => {
   it('ask: focus asks with a focus view', async () => {
     const s = setup({ mode: 'ask' })
     await s.run('focus', { app: 'WorkBuddy' })
-    expect(s.gates[0].action).toMatchObject({ kind: 'focus', app: { name: 'WorkBuddy' } })
+    expect(s.gates[0].action).toMatchObject({ kind: 'focus', app: { name: 'WorkBuddy' }, actLabel: '聚焦' })
   })
 
   it('computer_key with app → driver.appKey on that pid; without app it stays on the v1 path', async () => {
@@ -460,7 +460,7 @@ describe('launch / focus / key(app)', () => {
   it('ask: key(app) asks with the combo and the app', async () => {
     const s = setup({ mode: 'ask' })
     await s.run('key', { combo: 'cmd+shift+t', app: 'WorkBuddy', repeat: 2 })
-    expect(s.gates[0].action).toMatchObject({ kind: 'appKey', combo: '⌘⇧T', repeat: 2, app: { name: 'WorkBuddy' } })
+    expect(s.gates[0].action).toMatchObject({ kind: 'appKey', combo: '⌘⇧T', repeat: 2, app: { name: 'WorkBuddy' }, actLabel: '按键' })
   })
 
   it('an appKey that may have landed is unsafe', async () => {

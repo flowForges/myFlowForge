@@ -76,7 +76,7 @@ function ActionRows({ a, reason }: { a: CuActionView; reason?: string }) {
       const role = a.element ? (ROLE_LABEL[a.element.role] ?? '控件') : ''
       const name = a.element?.name ? `「${screenName(a.element.name)}」` : ''
       if (role || name) rows.push(<Row key="el" k="控件">{role}{name}</Row>)
-      if (a.actLabel) rows.push(<Row key="verb" k="动作">{a.actLabel}</Row>)
+      if (a.actLabel) rows.push(<Row key="verb" k="动作">{visibleText(a.actLabel)}</Row>)
       if (a.text !== undefined) {
         rows.push(
           <Row key="text" k="文字">

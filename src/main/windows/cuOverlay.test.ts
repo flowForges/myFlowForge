@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { CuOverlayState } from '@shared/computerUse'
@@ -145,45 +145,88 @@ describe('createCuOverlay', () => {
     expect('collapseMain' in t.ov).toBe(false)
   })
 
-  it('T10 carry-over: a crashed/killed overlay renderer (render-process-gone) is rebuilt and the last state — including a pending gate — reappears', () => {
-    const t = setup()
-    t.ov.show(GATED)
-    const w = t.wins[0]
-    w.sent.length = 0
-    w.fire('render-process-gone')
-    expect(w.isDestroyed()).toBe(true)
-    expect(t.wins).toHaveLength(2)
-    const w2 = t.wins[1]
-    expect(w2.sent).toContainEqual({ channel: CH.cuOverlayState, payload: GATED })
-    expect(w2.calls).toContainEqual(['showInactive'])
-    expect(t.ov.webContentsId()).toBe(w2.webContents.id)
-  })
+  // T10 carry-over, fix round 1 (reviewer findings 1-3): render-process-gone recovery is deferred (off the crash
+  // event's own call stack) and the cap/backoff is time-based, so these all run under fake timers.
+  describe('render-process-gone recovery', () => {
+    beforeEach(() => { vi.useFakeTimers() })
+    afterEach(() => { vi.useRealTimers() })
 
-  it('render-process-gone with no state shown yet does nothing (no window to rebuild)', () => {
-    const t = setup()
-    t.ov.show(ON)
-    const w = t.wins[0]
-    t.ov.hide()
-    w.sent.length = 0
-    w.fire('render-process-gone')
-    // still rebuilds (last state exists: ON) and resends it
-    expect(t.wins).toHaveLength(2)
-    expect(t.wins[1].sent).toContainEqual({ channel: CH.cuOverlayState, payload: ON })
-  })
+    it('a crashed/killed overlay renderer is rebuilt and the last state — including a pending gate — reappears', () => {
+      const t = setup()
+      t.ov.show(GATED)
+      const w = t.wins[0]
+      w.sent.length = 0
+      w.fire('render-process-gone')
+      vi.runAllTimers()
+      expect(w.isDestroyed()).toBe(true)
+      expect(t.wins).toHaveLength(2)
+      const w2 = t.wins[1]
+      expect(w2.sent).toContainEqual({ channel: CH.cuOverlayState, payload: GATED })
+      expect(w2.calls).toContainEqual(['showInactive'])
+      expect(t.ov.webContentsId()).toBe(w2.webContents.id)
+    })
 
-  it('a stale render-process-gone from an already-replaced window does not touch the current one', () => {
-    const t = setup()
-    t.ov.show(ON)
-    const w1 = t.wins[0]
-    t.ov.show(GATED) // same window, new state
-    w1.destroy()
-    t.ov.show(ON) // rebuilds (w1 was destroyed)
-    const w2 = t.wins[1]
-    w2.sent.length = 0
-    // a late event from the dead w1 must not rebuild again or touch w2
-    w1.fire('render-process-gone')
-    expect(t.wins).toHaveLength(2)
-    expect(w2.sent).toEqual([])
+    it('the rebuild is deferred off the render-process-gone call stack', () => {
+      const t = setup()
+      t.ov.show(GATED)
+      const w = t.wins[0]
+      w.fire('render-process-gone')
+      // nothing has happened synchronously yet
+      expect(w.isDestroyed()).toBe(false)
+      expect(t.wins).toHaveLength(1)
+      vi.runAllTimers()
+      expect(w.isDestroyed()).toBe(true)
+      expect(t.wins).toHaveLength(2)
+    })
+
+    it('finding 2: a crash after hide() does not resurrect the panel; the next explicit show() rebuilds normally', () => {
+      const t = setup()
+      t.ov.show(GATED)
+      const w = t.wins[0]
+      t.ov.hide()
+      w.sent.length = 0
+      w.fire('render-process-gone')
+      vi.runAllTimers()
+      // no auto-rebuild while hidden
+      expect(t.wins).toHaveLength(1)
+      expect(t.ov.webContentsId()).toBeNull()
+      // an explicit show() still works
+      t.ov.show(ON)
+      expect(t.wins).toHaveLength(2)
+      expect(t.wins[1].sent).toContainEqual({ channel: CH.cuOverlayState, payload: ON })
+    })
+
+    it('a stale render-process-gone from an already-replaced window does not touch the current one', () => {
+      const t = setup()
+      t.ov.show(ON)
+      const w1 = t.wins[0]
+      t.ov.show(GATED) // same window, new state
+      w1.destroy()
+      t.ov.show(ON) // rebuilds (w1 was destroyed)
+      const w2 = t.wins[1]
+      w2.sent.length = 0
+      // a late event from the dead w1 must not rebuild again or touch w2
+      w1.fire('render-process-gone')
+      vi.runAllTimers()
+      expect(t.wins).toHaveLength(2)
+      expect(w2.sent).toEqual([])
+    })
+
+    it('finding 3: a crash loop is capped at 3 rebuilds per 10 s, then it gives up until the next explicit show()', () => {
+      const t = setup()
+      t.ov.show(GATED)
+      for (let i = 0; i < 5; i++) {
+        const w = t.wins[t.wins.length - 1]
+        w.fire('render-process-gone')
+        vi.runAllTimers()
+      }
+      // 1 initial window + 3 allowed auto-rebuilds; the 4th and 5th crash gave up
+      expect(t.wins).toHaveLength(4)
+      expect(t.ov.webContentsId()).toBeNull()
+      // the cap only limits auto-recovery: an explicit show() right after still works
+      t.ov.show(ON)
+      expect(t.wins).toHaveLength(5)
+    })
   })
 })
 
