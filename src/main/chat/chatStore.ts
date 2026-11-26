@@ -42,9 +42,24 @@ export function readMessages(wsPath: string, sessionId: string): ChatMessage[] {
 }
 
 // Resume map is nested by session: { [sessionId]: { [agent]: entry } }.
-// `entry` is normally { resumeId, watermark }, but legacy on-disk data (pre-watermark) stored a bare
-// resumeId string — readResume() below upgrades both shapes to ResumeEntry so callers never see raw JSON.
-interface ResumeEntry { resumeId?: string; watermark?: number }
+// `entry` is normally { resumeId, watermark, ...binding fields }, but legacy on-disk data (pre-watermark) stored a
+// bare resumeId string — readResume() below upgrades both shapes to ResumeEntry so callers never see raw JSON.
+// The binding fields tie the session to the CLI's own transcript (session handoff with the official apps):
+//   origin        'forge' = we started it (default when absent), 'imported' = taken over from the official app
+//   syncedTo      how far into the external transcript we have shown (byte offset + last line fingerprint)
+//   cwd           cwd taken from the external transcript (readers only report it in the range that contains it)
+//   extFile       resolved path of the external transcript, cached
+//   ownLastWriteAt when our own turn last wrote/ended on it — mtime changes right after it are ours, not the app's
+export interface ExtSyncCursor { offset: number; lastId?: string }
+export interface BindingMeta {
+  origin?: 'forge' | 'imported'
+  syncedTo?: ExtSyncCursor
+  cwd?: string
+  extFile?: string
+  ownLastWriteAt?: number
+}
+interface ResumeEntry extends BindingMeta { resumeId?: string; watermark?: number }
+export interface Binding extends BindingMeta { resumeId: string; origin: 'forge' | 'imported'; watermark?: number }
 type RawResumeEntry = string | ResumeEntry
 type RawResumeMap = Record<string, Record<string, RawResumeEntry>>
 type ResumeMap = Record<string, Record<string, ResumeEntry>>
@@ -75,8 +90,28 @@ export function readSession(wsPath: string, sessionId: string, agent: string): s
 export function writeSession(wsPath: string, sessionId: string, agent: string, resumeId: string): void {
   const map = readResume(wsPath)
   const entry = (map[sessionId] ??= {})[agent] ?? {}
-  ;(map[sessionId])[agent] = { ...entry, resumeId }
+  // A different id is a different external transcript: the old position / path no longer apply.
+  const { syncedTo: _s, extFile: _f, ...kept } = entry
+  ;(map[sessionId])[agent] = entry.resumeId !== undefined && entry.resumeId !== resumeId ? { ...kept, resumeId } : { ...entry, resumeId }
   writeResume(wsPath, map)
+}
+/** The session's binding to the CLI transcript for `agent`, or undefined when there is no resume id yet. */
+export function readBinding(wsPath: string, sessionId: string, agent: string): Binding | undefined {
+  const e = readResume(wsPath)[sessionId]?.[agent]
+  if (!e?.resumeId) return undefined
+  return { ...e, resumeId: e.resumeId, origin: e.origin ?? 'forge' }
+}
+/** Merge binding fields; keys whose value is undefined keep their stored value. */
+export function writeBinding(wsPath: string, sessionId: string, agent: string, patch: BindingMeta & { resumeId?: string }): void {
+  const map = readResume(wsPath)
+  const entry = { ...((map[sessionId] ??= {})[agent] ?? {}) } as Record<string, unknown>
+  for (const [k, v] of Object.entries(patch)) if (v !== undefined) entry[k] = v
+  ;(map[sessionId])[agent] = entry as ResumeEntry
+  writeResume(wsPath, map)
+}
+/** Record that our own turn just wrote to / finished on the external transcript (see isOccupied). */
+export function markOwnWrite(wsPath: string, sessionId: string, agent: string, at: number = Date.now()): void {
+  writeBinding(wsPath, sessionId, agent, { ownLastWriteAt: at })
 }
 export function readSessionAgents(wsPath: string, sessionId: string): Record<string, string> {
   const agents = readResume(wsPath)[sessionId] ?? {}
