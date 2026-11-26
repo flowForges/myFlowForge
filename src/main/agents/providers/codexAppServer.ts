@@ -16,7 +16,7 @@ export interface CodexChild {
   stdout: { on(ev: 'data', cb: (c: Buffer) => void): void }
   stderr: { on(ev: 'data', cb: (c: Buffer) => void): void }
   on(ev: 'error' | 'close', cb: (arg?: unknown) => void): void
-  kill(): void
+  kill(signal?: NodeJS.Signals): void
 }
 
 export interface CodexAppServerDeps {
@@ -123,6 +123,14 @@ export const STEER_SETTLE_MS = 3000
 export const HANDSHAKE_TIMEOUT_MS = 20_000
 
 /**
+ * 回落到 exec 之前,等 app-server 子进程**真的退出**:SIGTERM 后最多等 EXIT_WAIT_TERM_MS,还在就 SIGKILL,
+ * 再最多等 EXIT_WAIT_KILL_MS。★不等就起 `codex exec resume <同一个线程>`,一个还活着的 app-server 可能正在
+ * 处理 thread/resume —— 同一个线程两个写者。
+ */
+export const EXIT_WAIT_TERM_MS = 2000
+export const EXIT_WAIT_KILL_MS = 1000
+
+/**
  * codex 会**向我们发起、并等着我们回答**的请求里,能映射成一道「允许 / 拒绝」的那些。
  *
  * ★★每一条的回答形状都不一样(见 codexApproval.ts 的 codexApprovalResponse)。形状错了不会报错,
@@ -180,6 +188,17 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
   let completedTimer: ReturnType<typeof setTimeout> | null = null
   let handshakeTimer: ReturnType<typeof setTimeout> | null = null
   let stderrTail = ''   // 有界的 stderr 尾巴:进程意外退出时给诊断用
+  let turnStartSent = false
+  let noFallback = false   // 这次失败不许回落(turn/start 已发出后的超时)
+  let exited = false    // 子进程已退出('close'),或根本没起来('error')
+  const exitWaiters: (() => void)[] = []
+  const onExited = () => { if (exited) return; exited = true; for (const w of exitWaiters.splice(0)) w() }
+  // 等子进程退出,最多 `ms`;返回是否已退出。
+  const waitExit = (ms: number) => new Promise<boolean>((resolve) => {
+    if (exited) { resolve(true); return }
+    const t = setTimeout(() => resolve(exited), ms)
+    exitWaiters.push(() => { clearTimeout(t); resolve(true) })
+  })
   const pendingSteers = new Map<number, (ok: boolean) => void>()
   let resolveDone!: (v: CodexTurnResult) => void
   const done = new Promise<CodexTurnResult>((resolve) => { resolveDone = resolve })
@@ -192,9 +211,16 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
     killTree(child)   // 杀整棵树:app-server 也会派生 shell 命令,单杀只会留孤儿
     for (const r of pendingSteers.values()) r(false)
     pendingSteers.clear()
-    if (!ok && !began && !cancelled && opts.fallbackOnStartFailure) {
-      const tail = stderrTail.trim()
-      resolveDone({ ok: false, startFailed: true, error: [startError ?? 'codex app-server 没起来', tail].filter(Boolean).join('\n') })
+    if (!ok && !began && !cancelled && !noFallback && opts.fallbackOnStartFailure) {
+      // 调用方拿到 startFailed 就会起 exec 跑同一个线程:先等这个 app-server 真的退出。
+      void (async () => {
+        if (!await waitExit(EXIT_WAIT_TERM_MS)) {
+          killTree(child, 'SIGKILL')
+          await waitExit(EXIT_WAIT_KILL_MS)
+        }
+        const tail = stderrTail.trim()
+        resolveDone({ ok: false, startFailed: true, error: [startError ?? 'codex app-server 没起来', tail].filter(Boolean).join('\n') })
+      })()
     }
     else resolveDone({ ok })
   }
@@ -213,10 +239,11 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
     if (handshakeTimer) { clearTimeout(handshakeTimer); handshakeTimer = null }
   }
 
+  // turn/start 的回话或 turn/started:这一轮开始了;带着 turn id 就记下(steer / interrupt 要用)。
   function markStarted(id: unknown): void {
+    markBegan()
     if (typeof id !== 'string' || !id || activeTurnId) return
     activeTurnId = id
-    markBegan()
     cb.onTurnStarted?.(id)
   }
 
@@ -398,6 +425,7 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
         threadId = msg.result?.thread?.id ?? msg.result?.threadId ?? opts.resumeThreadId
         if (threadId) cb.onSession(threadId)
         turnReqId = ++rpcId
+        turnStartSent = true
         send('turn/start', { threadId, input: [{ type: 'text', text: opts.prompt }] }, turnReqId)
         continue
       }
@@ -409,7 +437,6 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
           continue
         }
         markStarted(msg.result?.turn?.id)
-        markBegan()
         continue
       }
     }
@@ -422,10 +449,12 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
     // synchronous try/catch around driveCodexTurn() cannot catch this (the handle already
     // returned), so the message itself needs to point at the likely cause.
     const m = err instanceof Error ? err.message : String(err)
+    onExited()   // spawn 失败:没有进程可等
     safeError(`codex app-server 启动失败(是否已安装/支持 app-server?): ${m}`)
     settle(false)
   })
   child.on('close', () => {
+    onExited()
     // ★这一轮已经开始、不是用户停的,进程却没了(崩溃 / OOM / 被杀):必须报一句,否则就是一条空白回复。
     if (!settled && began && !cancelled) {
       const tail = stderrTail.trim()
@@ -436,6 +465,14 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
   handshakeTimer = setTimeout(() => {
     handshakeTimer = null
     if (settled || began) return
+    // ★turn/start 已经发出去了:codex 可能已经开始干活,只是慢。这时退回 exec 会和它抢同一个线程、
+    //  把这一轮跑两遍 —— 只能报错收尾,不回落。
+    if (turnStartSent) {
+      cb.onError(`codex app-server 启动超时(${Math.round(HANDSHAKE_TIMEOUT_MS / 1000)}s 内 turn/start 没有回话)`)
+      noFallback = true
+      settle(false)
+      return
+    }
     safeError(`codex app-server 握手超时(${Math.round(HANDSHAKE_TIMEOUT_MS / 1000)}s 没有完成)`)
     settle(false)
   }, HANDSHAKE_TIMEOUT_MS)

@@ -1,8 +1,11 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { driveCodexTurn, HANDSHAKE_TIMEOUT_MS, type CodexChild, type CodexTurnCallbacks } from './codexAppServer'
+import { driveCodexTurn, HANDSHAKE_TIMEOUT_MS, EXIT_WAIT_TERM_MS, EXIT_WAIT_KILL_MS, type CodexChild, type CodexTurnCallbacks } from './codexAppServer'
 
 // Same scriptable fake as codexAppServer.test.ts: capture writes, push stdout lines, fire close/error.
-function fakeChild() {
+// kill(sig) is recorded; by default the fake "exits" (fires close) on any signal, like a real child.
+// ignoreTerm: only SIGKILL makes it exit; exitOnKill:false: never exits on its own (test fires close).
+function fakeChild(o: { ignoreTerm?: boolean; exitOnKill?: boolean } = {}) {
+  const signals: string[] = []
   let onData: ((c: Buffer) => void) | undefined
   let onErr: ((c: Buffer) => void) | undefined
   const listeners: Record<string, ((a?: unknown) => void) | undefined> = {}
@@ -12,10 +15,15 @@ function fakeChild() {
     stdout: { on: (_e, cb) => { onData = cb } },
     stderr: { on: (_e, cb) => { onErr = cb } },
     on: (e, cb) => { listeners[e] = cb },
-    kill: () => {},
+    kill: (sig?: NodeJS.Signals) => {
+      signals.push(sig ?? 'SIGTERM')
+      if (o.exitOnKill === false) return
+      if (o.ignoreTerm && sig !== 'SIGKILL') return
+      queueMicrotask(() => listeners.close?.())
+    },
   }
   const push = (o: any) => onData?.(Buffer.from(JSON.stringify(o) + '\n'))
-  return { child, writes, push, stderr: (t: string) => onErr?.(Buffer.from(t)), close: () => listeners.close?.(), error: (e: unknown) => listeners.error?.(e) }
+  return { child, writes, signals, push, stderr: (t: string) => onErr?.(Buffer.from(t)), close: () => listeners.close?.(), error: (e: unknown) => listeners.error?.(e) }
 }
 
 const OPTS = { cwd: '/ws', prompt: 'go', modelArgs: [], configArgs: [], sandbox: 'read-only', approvalPolicy: 'on-request' }
@@ -256,5 +264,81 @@ describe('driveCodexTurn · 意外退出 / 握手超时', () => {
     expect(settled).toBe(false)
     f.push({ method: 'turn/completed', params: {} })
     expect(await h.done).toEqual({ ok: true })
+  })
+})
+
+describe('driveCodexTurn · 回落前等 app-server 真退出(R5)', () => {
+  afterEach(() => { vi.useRealTimers() })
+  const flush = async () => { for (let i = 0; i < 5; i++) await Promise.resolve() }
+
+  it('turn/start 已发出、没回话时超时 → 报「启动超时」,不回落(否则 exec resume 和还活着的 app-server 抢同一个线程)', async () => {
+    vi.useFakeTimers()
+    const f = fakeChild()
+    const errs: string[] = []
+    const h = driveCodexTurn({ ...OPTS, fallbackOnStartFailure: true }, cbs({ onError: m => errs.push(m) }), { spawn: () => f.child })
+    begin(f)   // thread/start ok → turn/start sent, never acked
+    expect(f.writes.some(w => w.method === 'turn/start')).toBe(true)
+    vi.advanceTimersByTime(HANDSHAKE_TIMEOUT_MS)
+    const r = await h.done
+    expect(r).toEqual({ ok: false })
+    expect(errs).toHaveLength(1)
+    expect(errs[0]).toContain('codex app-server 启动超时')
+  })
+
+  it('turn/start 之前超时 → startFailed,但要等假进程真的退出才交出去', async () => {
+    vi.useFakeTimers()
+    const f = fakeChild({ exitOnKill: false })
+    const h = driveCodexTurn({ ...OPTS, fallbackOnStartFailure: true }, cbs(), { spawn: () => f.child })
+    f.push({ id: f.writes[0].id, result: {} })   // initialize ok, thread/start never answered
+    let settled = false
+    void h.done.then(() => { settled = true })
+    vi.advanceTimersByTime(HANDSHAKE_TIMEOUT_MS)
+    await flush()
+    expect(f.signals).toEqual(['SIGTERM'])
+    expect(settled).toBe(false)
+    vi.advanceTimersByTime(EXIT_WAIT_TERM_MS - 10)
+    await flush()
+    expect(settled).toBe(false)
+    f.close()   // the child's exit event
+    const r = await h.done
+    expect(r.startFailed).toBe(true)
+    expect(f.signals).toEqual(['SIGTERM'])
+  })
+
+  it('不理 SIGTERM 的进程:2s 后补 SIGKILL,退了才交出去', async () => {
+    vi.useFakeTimers()
+    const f = fakeChild({ ignoreTerm: true })
+    const h = driveCodexTurn({ ...OPTS, fallbackOnStartFailure: true }, cbs(), { spawn: () => f.child })
+    f.push({ id: f.writes[0].id, error: { message: 'boom' } })   // handshake error → startFailed path
+    let settled = false
+    void h.done.then(() => { settled = true })
+    await flush()
+    expect(f.signals).toEqual(['SIGTERM'])
+    vi.advanceTimersByTime(EXIT_WAIT_TERM_MS - 1)
+    await flush()
+    expect(f.signals).toEqual(['SIGTERM'])
+    expect(settled).toBe(false)
+    vi.advanceTimersByTime(1)
+    await flush()
+    expect(f.signals).toEqual(['SIGTERM', 'SIGKILL'])
+    const r = await h.done
+    expect(r.startFailed).toBe(true)
+  })
+
+  it('SIGKILL 之后还不退:最多再等 1s 就交出去,不会永远挂住', async () => {
+    vi.useFakeTimers()
+    const f = fakeChild({ exitOnKill: false })
+    const h = driveCodexTurn({ ...OPTS, fallbackOnStartFailure: true }, cbs(), { spawn: () => f.child })
+    f.push({ id: f.writes[0].id, error: { message: 'boom' } })
+    let settled = false
+    void h.done.then(() => { settled = true })
+    vi.advanceTimersByTime(EXIT_WAIT_TERM_MS)
+    await flush()
+    expect(f.signals).toEqual(['SIGTERM', 'SIGKILL'])
+    vi.advanceTimersByTime(EXIT_WAIT_KILL_MS - 1)
+    await flush()
+    expect(settled).toBe(false)
+    vi.advanceTimersByTime(1)
+    expect((await h.done).startFailed).toBe(true)
   })
 })
