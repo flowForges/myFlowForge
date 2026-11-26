@@ -1,6 +1,6 @@
-import { closeSync, existsSync, openSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs'
+import * as nodeFs from 'node:fs'
 import { homedir } from 'node:os'
-import { isAbsolute, resolve } from 'node:path'
+import { posix, resolve, win32 } from 'node:path'
 import { stripFileProtocol, stripHrefSuffix } from '@shared/fileRef'
 import { isInside, resolveFileRef } from './fileRef'
 
@@ -40,6 +40,42 @@ export type ReadImageOpts = {
   allowOutside?: boolean
   /** 测试注入用;默认 os.homedir()。 */
   home?: () => string
+  /** 测试注入用;默认 process.platform(决定 allowOutside 分支按哪套路径规则拒网络路径)。 */
+  platform?: NodeJS.Platform
+  /** 测试注入用:替换个别 fs 调用(模拟检查与读取之间被换文件)。 */
+  fs?: Partial<ImageFs>
+}
+
+type ImageFs = {
+  existsSync: (p: string) => boolean
+  realpathSync: (p: string) => string
+  statSync: (p: string) => nodeFs.Stats
+  openSync: (p: string, flags: number) => number
+  fstatSync: (fd: number) => nodeFs.Stats
+  readSync: (fd: number, buf: Buffer, off: number, len: number, pos: number) => number
+  closeSync: (fd: number) => void
+}
+
+const NODE_FS: ImageFs = {
+  existsSync: p => nodeFs.existsSync(p),
+  realpathSync: p => nodeFs.realpathSync(p),
+  statSync: p => nodeFs.statSync(p),
+  openSync: (p, flags) => nodeFs.openSync(p, flags),
+  fstatSync: fd => nodeFs.fstatSync(fd),
+  readSync: (fd, buf, off, len, pos) => nodeFs.readSync(fd, buf, off, len, pos),
+  closeSync: fd => nodeFs.closeSync(fd),
+}
+
+/**
+ * ★★allowOutside 分支里**碰 fs 之前**必须拒掉的网络路径。Windows 上 `//host/share/a.png` 会被 resolve 成 UNC
+ * `\\host\share\a.png`,existsSync 就去连 SMB(NTLM 哈希外泄);macOS 上 /net/<host>/… 触发 autofs 自动挂载。
+ * win32 只放行本地盘符根(`C:\…`);`\\?\` / `\\.\` 设备路径一并拒。
+ */
+export function isNetworkPath(p: string, platform: NodeJS.Platform): boolean {
+  if (/^[\\/]{2}/.test(p)) return true
+  if (platform === 'win32') return !/^[A-Za-z]:[\\/]/.test(p)
+  if (platform === 'darwin') return /^\/(net|Network)(\/|$)/i.test(p)
+  return false
 }
 
 const extOfPath = (p: string): string => {
@@ -88,10 +124,20 @@ export function readImageRef(bases: string[], href: string, opts: ReadImageOpts 
   const roots = bases.filter(Boolean)
   if (raw === '~' || raw.startsWith('~/')) raw = resolve((opts.home ?? homedir)(), raw.slice(2))
 
+  const fs: ImageFs = { ...NODE_FS, ...opts.fs }
+  const platform = opts.platform ?? process.platform
+  const P = platform === 'win32' ? win32 : posix
+  // file:///C:/x.png 的 pathname 是 `/C:/x.png` —— win32 上先去掉盘符前那条斜杠。
+  if (platform === 'win32' && /^\/[A-Za-z]:[\\/]/.test(raw)) raw = raw.slice(1)
+
   let abs: string
-  if (isAbsolute(raw) && opts.allowOutside) {
-    abs = resolve(raw)
-    if (!existsSync(abs)) return { error: REASON.missing }
+  const outsideBranch = !!opts.allowOutside && P.isAbsolute(raw)
+  if (outsideBranch) {
+    // 原样和 resolve 后各查一遍:`/tmp/../net/h` resolve 后才露出 /net/。
+    if (/^[\\/]{2}/.test(raw)) return { error: REASON.bad }
+    abs = P.resolve(raw)
+    if (isNetworkPath(abs, platform)) return { error: REASON.bad }
+    if (!fs.existsSync(abs)) return { error: REASON.missing }
   } else {
     const r = resolveFileRef(roots, raw)
     if (!r.ok) return { error: REASON[r.reason] }
@@ -99,27 +145,39 @@ export function readImageRef(bases: string[], href: string, opts: ReadImageOpts 
   }
 
   let real: string
-  try { real = realpathSync(abs) } catch { return { error: REASON.missing } }
+  try { real = fs.realpathSync(abs) } catch { return { error: REASON.missing } }
   if (real !== abs) {
+    if (outsideBranch && isNetworkPath(real, platform)) return { error: REASON.bad }
     if (!IMG_MIME[extOfPath(real)]) return { error: '不是支持的图片格式' }
-    if (!opts.allowOutside || !isAbsolute(raw)) {
-      const realRoots = roots.map(b => { try { return realpathSync(b) } catch { return resolve(b) } })
+    if (!outsideBranch) {
+      const realRoots = roots.map(b => { try { return fs.realpathSync(b) } catch { return resolve(b) } })
       if (!realRoots.some(b => isInside(b, real))) return { error: REASON.outside }
     }
   }
 
+  // ★检查和读取必须是**同一个文件**:以前 statSync / openSync 读头 / readFileSync 是三次按路径的调用,
+  // 中间把真身换成指向 ~/.ssh/id_rsa 的符号链接就能把私钥当 data:image 读出去。现在 O_NOFOLLOW 只打开一次,
+  // fstat 的 dev/ino 必须和 statSync(real) 一致,头和体都从这个 fd 读。
+  const max = opts.maxBytes ?? MAX_BYTES
   try {
-    const st = statSync(real)
+    const st = fs.statSync(real)
     if (st.isDirectory()) return { error: REASON.dir }
     if (!st.isFile()) return { error: REASON.bad }
-    if (st.size > (opts.maxBytes ?? MAX_BYTES)) return { error: '图片过大' }
-    const head = Buffer.alloc(32)
-    const fd = openSync(real, 'r')
-    try { readSync(fd, head, 0, 32, 0) } finally { closeSync(fd) }
-    if (!looksLikeImage(extOfPath(real), head)) return { error: '不是图片' }
-    const buf = readFileSync(real)
-    if (buf.length > (opts.maxBytes ?? MAX_BYTES)) return { error: '图片过大' }
-    return { dataUrl: `data:${IMG_MIME[extOfPath(real)]};base64,${buf.toString('base64')}` }
+    if (st.size > max) return { error: '图片过大' }
+    const fd = fs.openSync(real, nodeFs.constants.O_RDONLY | (nodeFs.constants.O_NOFOLLOW ?? 0))
+    try {
+      const fst = fs.fstatSync(fd)
+      if (!fst.isFile() || fst.dev !== st.dev || fst.ino !== st.ino) return { error: '读取失败' }
+      if (fst.size > max) return { error: '图片过大' }
+      // 多读 1 字节:文件在 fstat 之后长大也能察觉到超限。
+      const buf = Buffer.alloc(Math.min(fst.size, max) + 1)
+      let n = 0
+      for (let r; n < buf.length && (r = fs.readSync(fd, buf, n, buf.length - n, n)) > 0;) n += r
+      if (n > max) return { error: '图片过大' }
+      const body = buf.subarray(0, n)
+      if (!looksLikeImage(extOfPath(real), body.subarray(0, 32))) return { error: '不是图片' }
+      return { dataUrl: `data:${IMG_MIME[extOfPath(real)]};base64,${body.toString('base64')}` }
+    } finally { fs.closeSync(fd) }
   } catch {
     return { error: '读取失败' }
   }
@@ -131,4 +189,24 @@ export function readImageRef(bases: string[], href: string, opts: ReadImageOpts 
  */
 export function imageOptsFor(client: { id: string; label?: string; fromOverlay?: boolean } | undefined): ReadImageOpts {
   return { allowOutside: client?.id === 'local' }
+}
+
+/**
+ * 校验调用方传来的 bases。★bases 来自客户端 —— 远程客户端传 `['/']` 就能把整台机器当成「工作区」。
+ * 本机窗口原样放行;其它调用方的**每个** base 都必须是绝对路径,且(解开符号链接后)落在某个已登记工作区之内
+ * (项目 worktree 都建在工作区目录下),有一个不合格就整次拒(返回 null)。
+ */
+export function imageBasesFor(
+  client: { id: string } | undefined, bases: unknown[], knownRoots: () => string[],
+): string[] | null {
+  const list = bases.filter((b): b is string => typeof b === 'string' && b !== '')
+  if (client?.id === 'local') return list
+  if (list.length !== bases.length) return null
+  const real = (p: string) => { try { return nodeFs.realpathSync(p) } catch { return resolve(p) } }
+  const roots = knownRoots().filter(Boolean).map(real)
+  for (const b of list) {
+    if (!posix.isAbsolute(b) && !win32.isAbsolute(b)) return null
+    if (!roots.some(r => isInside(r, real(b)))) return null
+  }
+  return list
 }

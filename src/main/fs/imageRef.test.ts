@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { readImageRef, imageOptsFor } from './imageRef'
+import { readImageRef, imageOptsFor, imageBasesFor } from './imageRef'
 
 // 真目录真文件 —— 越界/存在性/体积这几条在假 fs 上验不出真行为(同 fileRef.test.ts)。
 let root = '', ws = '', outside = ''
@@ -147,5 +147,114 @@ describe('imageOptsFor — 谁能读工作区之外', () => {
   it('★远程连接、未知调用方一律不放行', () => {
     expect(imageOptsFor({ id: 'c-123', label: '手机' }).allowOutside).toBe(false)
     expect(imageOptsFor(undefined).allowOutside).toBe(false)
+  })
+})
+
+// ★★review 2026-11:本机窗口的绝对路径分支以前直接 existsSync(abs)。Windows 上 `![x](//attacker/s/a.png)`
+// 被 resolve 成 UNC `\\attacker\s\a.png`,existsSync 就去连 SMB —— NTLM 哈希外泄;macOS 的 /net/<host>/… 会触发自动挂载。
+// 这些路径必须在**碰文件系统之前**就拒掉。
+describe('readImageRef — 网络路径在碰 fs 之前就拒', () => {
+  const touched: string[] = []
+  const spyFs = {
+    existsSync: (p: string) => { touched.push(p); return true },
+    realpathSync: (p: string) => { touched.push(p); return p },
+  }
+  const win = { allowOutside: true, platform: 'win32' as const, fs: spyFs }
+  const mac = { allowOutside: true, platform: 'darwin' as const, fs: spyFs }
+
+  it('★★win32:`//host/share/a.png` → 拒,且不调用 existsSync', () => {
+    touched.length = 0
+    expect(readImageRef([], '//attacker/s/a.png', win)).toEqual({ error: '路径无效' })
+    expect(touched).toEqual([])
+  })
+  it('★★win32:`\\\\host\\share\\a.png`(UNC 原样)→ 拒', () => {
+    touched.length = 0
+    expect(readImageRef([], '\\\\attacker\\s\\a.png', win)).toEqual({ error: '路径无效' })
+    expect(readImageRef([], 'file:////attacker/s/a.png', win)).toEqual({ error: '路径无效' })
+    expect(touched).toEqual([])
+  })
+  it('★win32:`\\\\?\\` 设备路径、没有盘符的根 → 拒', () => {
+    touched.length = 0
+    expect(readImageRef([], '\\\\?\\C:\\a.png', win)).not.toHaveProperty('dataUrl')
+    expect(readImageRef([], '\\\\.\\pipe\\a.png', win)).toEqual({ error: '路径无效' })
+    expect(touched).toEqual([])
+  })
+  it('win32:本地盘符根照常放行(落到 existsSync)', () => {
+    touched.length = 0
+    readImageRef([], 'C:\\Users\\me\\a.png', win)
+    expect(touched[0]).toBe('C:\\Users\\me\\a.png')
+  })
+  it('★★darwin:`//host/…`、/net/<host>/…、/Network/… → 拒,不碰 fs', () => {
+    touched.length = 0
+    expect(readImageRef([], '//attacker/s/a.png', mac)).toEqual({ error: '路径无效' })
+    expect(readImageRef([], '/net/attacker/s/a.png', mac)).toEqual({ error: '路径无效' })
+    expect(readImageRef([], '/Network/Servers/h/a.png', mac)).toEqual({ error: '路径无效' })
+    expect(readImageRef([], '/tmp/../net/attacker/a.png', mac)).toEqual({ error: '路径无效' })
+    expect(touched).toEqual([])
+  })
+  it('darwin:普通绝对路径照常放行', () => {
+    touched.length = 0
+    readImageRef([], '/tmp/x/a.png', mac)
+    expect(touched[0]).toBe('/tmp/x/a.png')
+  })
+  it('★realpath 解到网络路径也拒(本地符号链接指向 /net/…)', () => {
+    const fs = { existsSync: () => true, realpathSync: () => '/net/attacker/a.png' }
+    expect(readImageRef([], '/tmp/x/a.png', { ...mac, fs })).toEqual({ error: '路径无效' })
+  })
+})
+
+// ★review 2026-11:检查和读取以前是三次独立按路径的调用(statSync / openSync 读头 / readFileSync),
+// 中间把文件换成指向 ~/.ssh/id_rsa 的符号链接,就能把私钥当 data:image 读出去。现在:O_NOFOLLOW 打开一次,
+// fstat 的 dev/ino 必须和 statSync(real) 一致,头和体都从同一个 fd 读。
+describe('readImageRef — 检查与读取之间的竞态', () => {
+  let dir = ''
+  beforeAll(() => {
+    dir = join(root, 'race')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'ok.png'), PNG)
+    writeFileSync(join(dir, 'id_rsa'), Buffer.concat([PNG.subarray(0, 8), Buffer.from('-----BEGIN PRIVATE KEY-----')]))
+    symlinkSync(join(dir, 'id_rsa'), join(dir, 'swapped.png'))
+  })
+  it('★realpath 之后真身被换成符号链接 → O_NOFOLLOW 打开失败,拒', () => {
+    // 模拟:realpath 那一刻 swapped.png 还是普通文件(注入 realpath 原样返回),打开时已是符号链接。
+    const fs = { realpathSync: (p: string) => p }
+    const r = readImageRef([], join(dir, 'swapped.png'), { allowOutside: true, fs })
+    expect(r).toEqual({ error: '读取失败' })
+  })
+  it('★stat 之后文件被换掉(dev/ino 对不上)→ 拒', async () => {
+    const real = await import('node:fs')
+    const fs = { statSync: (p: string) => real.statSync(p.endsWith('/ok.png') ? join(dir, 'id_rsa') : p) }
+    const r = readImageRef([], join(dir, 'ok.png'), { allowOutside: true, fs })
+    expect(r).toEqual({ error: '读取失败' })
+  })
+  it('正常文件仍然读得出(头和体来自同一个 fd)', () => {
+    const r = readImageRef([], join(dir, 'ok.png'), { allowOutside: true })
+    expect((r as { dataUrl: string }).dataUrl).toBe('data:image/png;base64,' + PNG.toString('base64'))
+  })
+})
+
+// ★review 2026-11:bases 是调用方传来的。远程客户端可以直接传 bases: ['/'] 把整台机器当「工作区」。
+// 非本机调用方的每个 base 都必须落在某个已登记工作区(项目 worktree 都建在工作区目录下)之内,否则整次拒。
+describe('imageBasesFor — 远程调用方的 bases 只能是已知工作区', () => {
+  const known = () => [ws]
+  it('★本机窗口原样放行', () => {
+    expect(imageBasesFor({ id: 'local' }, ['/'], known)).toEqual(['/'])
+  })
+  it('★远程:工作区根、工作区里的 worktree → 放行', () => {
+    expect(imageBasesFor({ id: 'c-1' }, [join(ws, 'out'), ws], known)).toEqual([join(ws, 'out'), ws])
+  })
+  it('★★远程:/、工作区之外、`ws/../outside` → 拒(null)', () => {
+    expect(imageBasesFor({ id: 'c-1' }, ['/'], known)).toBeNull()
+    expect(imageBasesFor({ id: 'c-1' }, [ws, outside], known)).toBeNull()
+    expect(imageBasesFor({ id: 'c-1' }, [join(ws, '..', 'outside')], known)).toBeNull()
+    expect(imageBasesFor(undefined, [outside], known)).toBeNull()
+  })
+  it('★远程:工作区里指向外面的符号链接目录 → 拒', () => {
+    symlinkSync(outside, join(ws, 'linkdir'))
+    expect(imageBasesFor({ id: 'c-1' }, [join(ws, 'linkdir')], known)).toBeNull()
+  })
+  it('远程:非字符串 / 相对路径 → 拒', () => {
+    expect(imageBasesFor({ id: 'c-1' }, ['out'], known)).toBeNull()
+    expect(imageBasesFor({ id: 'c-1' }, [42 as unknown as string], known)).toBeNull()
   })
 })
