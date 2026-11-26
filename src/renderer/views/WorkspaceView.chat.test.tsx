@@ -76,8 +76,8 @@ describe('WorkspaceView task-queue panel', () => {
       workspacePath: '/ws',
       busy: true,
       queue: [
-        { id: 'q1', text: '改主色调', source: '你', sessionId: 'default' },
-        { id: 'q2', text: '修复登录', source: '宠物', sessionId: 'default' }
+        { id: 'q1', text: '改主色调', source: '你', sessionId: 'default', interjectable: false },
+        { id: 'q2', text: '修复登录', source: '宠物', sessionId: 'default', interjectable: false }
       ],
       running: null,
       runningTurns: [],
@@ -151,7 +151,7 @@ describe('WorkspaceView background-task strip', () => {
   }
 
   it('renders .bg-strip with "后台 2 个任务在运行" docked above .task-queue, same docked area', async () => {
-    const container = await emit({ queue: [{ id: 'q1', text: '改标题', source: '你', sessionId: 'default' }] })
+    const container = await emit({ queue: [{ id: 'q1', text: '改标题', source: '你', sessionId: 'default', interjectable: false }] })
     await waitFor(() => expect(container.querySelector('.bg-strip')).toBeInTheDocument())
     expect(container.querySelector('.bg-strip')!.textContent).toContain('后台 2 个任务在运行')
     const wraps = Array.from(container.querySelectorAll('.bg-strip-wrap, .tq-wrap'))

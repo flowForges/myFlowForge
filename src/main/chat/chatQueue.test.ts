@@ -79,7 +79,7 @@ describe('ChatQueue', () => {
     q.enqueue(mk('/w', 'A'), '你')
     q.enqueue(mk('/w', 'B'), '宠物')
     expect(lastEvent.workspacePath).toBe('/w')
-    expect(lastEvent.queue).toEqual([{ id: expect.any(String), text: 'B', source: '宠物', sessionId: 's1' }])
+    expect(lastEvent.queue).toEqual([{ id: expect.any(String), text: 'B', source: '宠物', sessionId: 's1', interjectable: false }])
   })
 
   it('running carries {id,text,sessionId} + runningSessionId during execution, null after', async () => {

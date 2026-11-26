@@ -73,6 +73,11 @@ export interface BackgroundGate {
   isRunningTask(id: string): boolean
   /** 下一条用户消息要接到这个进程上了:解除停车、撤掉回收计时,这一轮的 result 再重新判。 */
   unpark(): void
+  /**
+   * 这一轮跑着时又往 stdin 写了一条用户消息(插话)。★★看不出它有没有被这一轮吸收:result 可能早已在管道里,
+   * 那样 CLI 会为它单起一轮。所以这一轮的 result 不杀,停车等一个宽限期 —— 起了新一轮就是它,没起就是已经吸收了。
+   */
+  expectInput(): void
   clear(): void
 }
 
@@ -92,6 +97,7 @@ export function makeBackgroundGate(opts: {
   const undelivered = new Set<string>()      // 主代理后台任务的通知已到、还没被任何请求带走
   let parked = false
   let finished = false
+  let inputPending = false
   let grace: ReturnType<typeof setTimeout> | null = null
 
   const cancelGrace = () => { if (grace) { clearTimeout(grace); grace = null } }
@@ -158,7 +164,9 @@ export function makeBackgroundGate(opts: {
     },
     result() {
       if (finished) return
-      if (running.size === 0 && undelivered.size === 0) { finish(); return }
+      const expecting = inputPending
+      inputPending = false
+      if (running.size === 0 && undelivered.size === 0 && !expecting) { finish(); return }
       if (!parked) { parked = true; opts.onPark?.(running.size) }
       reviewGrace()
     },
@@ -167,6 +175,7 @@ export function makeBackgroundGate(opts: {
     get running() { return running.size },
     isRunningTask: (id) => running.has(id),
     unpark() { if (!finished) { parked = false; cancelGrace() } },
+    expectInput() { if (!finished) inputPending = true },
     clear() { finished = true; parked = false; cancelGrace() },
   }
 }

@@ -563,6 +563,36 @@ describe('registerIpc broadcast wiring', () => {
     expect(q.queue).toEqual([])
   })
 
+  it('chat:interject:本机窗口把排队的那条插进在跑的这一轮;非本机 → not_local;撤回只回 true 一次', async () => {
+    const { registerIpc } = await import('./handlers')
+    const { sendTurn } = await import('../chat/chatService') as any
+    const inj = vi.fn(async () => true)
+    sendTurn.mockReset().mockImplementation((_p: unknown, deps: any) => {
+      deps.onSessionStart?.({ id: 't', cancel: () => {}, done: new Promise(() => {}), interject: inj })
+      return new Promise<void>(() => {})
+    })
+    const sent: [string, unknown][] = []
+    const table = registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {}, fakeHost())
+    const LOCAL = { emit: () => {}, client: { id: 'local', label: '本机' } }
+    const REMOTE = { emit: () => {}, client: { id: 'conn-1', label: 'iPhone' } }
+    const payload = { workspacePath: '/ws/i', sessionId: 's1', agent: 'claude', agentLabel: 'C', model: 'm', text: 't', attachments: [] }
+    table[CH.chatSend](LOCAL, { ...payload, text: 'first' })
+    await new Promise(r => setTimeout(r, 0))
+    table[CH.chatSend](LOCAL, { ...payload, text: 'second' })
+    table[CH.chatSend](LOCAL, { ...payload, text: 'third' })
+    const q = () => sent.filter(([c]) => c === CH.chatQueueEvent).map(([, p]) => p as any).pop()
+    expect(q().queue.map((x: any) => x.interjectable)).toEqual([true, true])
+    const [second, third] = q().queue
+    expect(await table[CH.chatInterject](REMOTE, { workspacePath: '/ws/i', sessionId: 's1', queuedId: second.id })).toEqual({ ok: false, code: 'not_local' })
+    expect(inj).not.toHaveBeenCalled()
+    expect(await table[CH.chatInterject](LOCAL, { workspacePath: '/ws/i', sessionId: 's1', queuedId: second.id })).toEqual({ ok: true })
+    expect(inj).toHaveBeenCalledWith('second', [], undefined)
+    expect(q().queue.map((x: any) => x.text)).toEqual(['third'])
+    expect(await table[CH.chatInterject](LOCAL, { workspacePath: '/ws/i', sessionId: 's1', queuedId: second.id })).toEqual({ ok: false, code: 'gone' })
+    expect(await table[CH.chatCancelQueued](LOCAL, { workspacePath: '/ws/i', id: second.id })).toBe(false)
+    expect(await table[CH.chatCancelQueued](LOCAL, { workspacePath: '/ws/i', id: third.id })).toBe(true)
+  })
+
   it('chatSend forwards source into the queue projection (pet-sourced enqueue)', async () => {
     const { registerIpc } = await import('./handlers')
     const { sendTurn } = await import('../chat/chatService') as any

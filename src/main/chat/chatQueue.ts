@@ -1,9 +1,13 @@
-import type { ChatSendPayload, ChatQueueEvent } from '@shared/types'
+import type { Attachment, ChatSendPayload, ChatQueueEvent, ChatInterjectResult } from '@shared/types'
 import { CH } from '../ipc/channels'
 
 interface QueuedTask { id: string; source: string; payload: ChatSendPayload }
+/** take 取出来的那条,带着它原来在队列里的位置(putBack 放回去用)。 */
+export interface QueuedItem extends QueuedTask { index: number }
+/** 当前这一轮的插话能力(provider 句柄上的 interject,见 AgentSession.interject)。 */
+export type InterjectFn = (text: string, attachments?: Attachment[], via?: string) => Promise<boolean>
 // ★runningPayload 不放进 running:running 原样广播给渲染端/手机,这里只是主进程自己要查的那份载荷。
-interface Lane { busy: boolean; queue: QueuedTask[]; running: { id: string; text: string; sessionId: string; provider: string } | null; runningPayload?: ChatSendPayload; activeCancel: (() => void) | null; background: number; backgroundStop: (() => void) | null; adopted: { provider: string; run: () => Promise<unknown> }[]; runningAdopted: boolean }
+interface Lane { busy: boolean; queue: QueuedTask[]; running: { id: string; text: string; sessionId: string; provider: string } | null; runningPayload?: ChatSendPayload; activeCancel: (() => void) | null; activeInterject: InterjectFn | null; background: number; backgroundStop: (() => void) | null; adopted: { provider: string; run: () => Promise<unknown> }[]; runningAdopted: boolean }
 
 export type RunTurn = (payload: ChatSendPayload) => Promise<unknown>
 export type Broadcast = (channel: string, payload: unknown) => void
@@ -25,7 +29,7 @@ export class ChatQueue {
   private lane(ws: string, sid: string): Lane {
     const m = this.lanes(ws)
     let l = m.get(sid)
-    if (!l) { l = { busy: false, queue: [], running: null, activeCancel: null, background: 0, backgroundStop: null, adopted: [], runningAdopted: false }; m.set(sid, l) }
+    if (!l) { l = { busy: false, queue: [], running: null, activeCancel: null, activeInterject: null, background: 0, backgroundStop: null, adopted: [], runningAdopted: false }; m.set(sid, l) }
     return l
   }
 
@@ -88,12 +92,56 @@ export class ChatQueue {
   // workflow no longer holds chat, so there is nothing to release when it ends.
   runDone(_ws: string): void {}
 
-  cancel(ws: string, id: string): void {
-    const m = this.map.get(ws); if (!m) return
+  /** 撤回一条。true = 真撤回了(界面才回填文字);false = 它已经不在队列里(被调度 / 被插话取走了)。 */
+  cancel(ws: string, id: string): boolean {
+    const m = this.map.get(ws); if (!m) return false
     for (const lane of m.values()) {
       const i = lane.queue.findIndex(t => t.id === id)
-      if (i > -1) { lane.queue.splice(i, 1); this.emit(ws); return }
+      if (i > -1) { lane.queue.splice(i, 1); this.emit(ws); return true }
     }
+    return false
+  }
+
+  /**
+   * 原子地从**这个会话**的队列里取出一条。取不到(已被调度 / 撤回 / 别的会话的)= null。
+   * ★同步完成:和 cancel / pump 都在同一个线程上,谁先到谁拿走,不会两边都成功。
+   */
+  take(ws: string, sid: string, queuedId: string): QueuedItem | null {
+    const lane = this.map.get(ws)?.get(sid); if (!lane) return null
+    const index = lane.queue.findIndex(t => t.id === queuedId)
+    if (index < 0) return null
+    const [task] = lane.queue.splice(index, 1)
+    this.emit(ws)
+    return { ...task, index }
+  }
+
+  /** take 出来没用掉的那条放回原位置(队列变短了就放到末尾)。泳道已经空闲就立刻发出。 */
+  putBack(ws: string, sid: string, item: QueuedItem, index: number): void {
+    const lane = this.lane(ws, sid)
+    const task: QueuedTask = { id: item.id, source: item.source, payload: item.payload }
+    lane.queue.splice(Math.max(0, Math.min(index, lane.queue.length)), 0, task)
+    this.pump(ws, sid)
+    this.emit(ws)
+  }
+
+  /**
+   * 排队的那条并进这个会话正在跑的那一轮。
+   * ★★先取出再问 provider:等回话的这段时间里这一轮可能结束、下一条开跑 —— 它不在队列里,就不会被发第二遍;
+   *  provider 说不行才放回原位置,下一轮照常发。所以只有两种结局:进了这一轮,或者还在队列里。
+   */
+  async interject(ws: string, sid: string, queuedId: string): Promise<ChatInterjectResult> {
+    const lane = this.map.get(ws)?.get(sid)
+    if (!lane || !lane.queue.some(t => t.id === queuedId)) return { ok: false, code: 'gone' }
+    if (!lane.busy) return { ok: false, code: 'not_running' }
+    const fn = lane.activeInterject
+    if (!fn) return { ok: false, code: 'unsupported' }
+    const item = this.take(ws, sid, queuedId)
+    if (!item) return { ok: false, code: 'gone' }
+    let ok = false
+    try { ok = await fn(item.payload.text, item.payload.attachments, item.payload.via) } catch { ok = false }
+    if (ok) return { ok: true }
+    this.putBack(ws, sid, item, item.index)
+    return { ok: false, code: 'not_running' }
   }
 
   clear(ws: string): void {
@@ -103,8 +151,19 @@ export class ChatQueue {
     if (changed) this.emit(ws)
   }
 
-  registerActive(ws: string, sessionId: string, cancel: () => void): void {
-    this.lane(ws, sessionId).activeCancel = cancel
+  /** 这个会话当前那一轮的停止键;interject 是它的插话能力(没有 = 这一轮插不进去)。 */
+  registerActive(ws: string, sessionId: string, cancel: () => void, interject?: InterjectFn): void {
+    const lane = this.lane(ws, sessionId)
+    lane.activeCancel = cancel
+    this.setInterject(ws, sessionId, interject ?? null)
+  }
+
+  /** 单独改这一轮的插话能力(比如 provider 晚一点才知道能不能插)。能力有无变了才广播。 */
+  setInterject(ws: string, sessionId: string, interject: InterjectFn | null): void {
+    const lane = this.lane(ws, sessionId)
+    const had = !!lane.activeInterject
+    lane.activeInterject = interject
+    if (had !== !!interject) this.emit(ws)
   }
 
   // 停止 targets the ACTIVE session's lane only — stopping session A's turn must not kill a concurrently
@@ -157,6 +216,7 @@ export class ChatQueue {
       lane.runningPayload = undefined
       lane.runningAdopted = false
       lane.activeCancel = null
+      lane.activeInterject = null
       this.pump(ws, sid)
       this.emit(ws)
     })
@@ -172,11 +232,11 @@ export class ChatQueue {
   private buildEvent(ws: string): ChatQueueEvent {
     const lanes = [...this.lanes(ws).values()]
     const running = lanes.map(l => l.running).filter((r): r is NonNullable<typeof r> => !!r)
-    const queue = lanes.flatMap(l => l.queue)
+    const queue = lanes.flatMap(l => l.queue.map(t => ({ t, interjectable: l.busy && !!l.activeInterject })))
     return {
       workspacePath: ws,
       busy: running.length > 0,
-      queue: queue.map(t => ({ id: t.id, text: t.payload.text, source: t.source, sessionId: t.payload.sessionId })),
+      queue: queue.map(({ t, interjectable }) => ({ id: t.id, text: t.payload.text, source: t.source, sessionId: t.payload.sessionId, interjectable })),
       running: running[0] ?? null,
       runningTurns: running.map(r => ({ id: r.id, text: r.text, sessionId: r.sessionId })),
       runningSessionId: running[0]?.sessionId ?? null,

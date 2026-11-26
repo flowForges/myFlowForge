@@ -620,11 +620,28 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         clearLingerKey()
         bg.unpark()
       }
+      /**
+       * 插话:这一轮还在跑,就把这条写进 stdin(和正常发送同一个构造),CLI 在下一个工具调用边界把它并进这一轮。
+       * ★这一轮已出 result / 已收尾 / 进程在回收 / 本轮自己的消息还压着没写(CLI 在跑它自己那一轮)→ false。
+       * ★写进去之后这一轮的 result 不杀进程(bg.expectInput):result 若是在吸收之前就出的,CLI 会为它单起一轮,
+       *  那一轮走 openTurn 照常开一条回复 —— 消息不会两头落空。
+       */
+      const interjectInto = (seq: number) => async (text: string, attachments?: ChatTask['attachments']): Promise<boolean> => {
+        if (seq !== turnSeq || detached || dying || exited || turnOk !== null || pendingLine || task.endWithTurn) return false
+        const stdin = child.stdin
+        if (!stdin || stdin.destroyed || !stdin.writable) return false
+        try { stdin.write(userMessageLine(buildChatPrompt({ ...task, prompt: text, attachments })) + '\n') } catch { return false }
+        bg.expectInput()
+        needSep = sawAssistant
+        appLog('info', 'claude', 'chat 插话:写进这一轮的 stdin')
+        return true
+      }
       const sessionFor = (id: string, seq: number, turnDone: Promise<AgentResult>): AgentSession => ({
         id,
         // ★这一轮之后又接了新的一轮:旧句柄不能再杀进程(新的那轮和后台任务都在里面)。
         cancel: () => { if (seq !== turnSeq) return; wd.clear(); hooks.clear(); stopTree() },
         done: turnDone,
+        interject: interjectInto(seq),
       })
       // 下一条消息:写进这个活进程。模型 / 权限档走控制协议现场改;写完 CLI 起一轮,事件照常归这一轮。
       const attach = (next: ChatTask, nextCb: ChatCallbacks, prompt: string, flagsDeferred: boolean): AgentSession => {
@@ -1021,7 +1038,8 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       inner = startChat(task, cb, env)
       return inner.done
     })
-    return { id: task.id, cancel: () => { cancelled = true; inner?.cancel() }, done }
+    // 旧进程还没收完时这一轮还没真正开始:插不进去,调用方放回队列。
+    return { id: task.id, cancel: () => { cancelled = true; inner?.cancel() }, done, interject: (t, a, v) => inner?.interject?.(t, a, v) ?? Promise.resolve(false) }
   }
   provider.setChatPermission = (cwd, sessionId, mode) => liveChats.get(lingerKey(cwd, sessionId))?.setPermission(mode) ?? Promise.resolve(null)
   return provider

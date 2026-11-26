@@ -61,7 +61,8 @@ describe('频道分类', () => {
     //   list / last-config / projects)。引擎、状态文件、会话都在主机上 ⇒ host。
     //   council:state 是广播不是方法,不在这张表里。
     // 180 → 181:council:stop-seat。同上 ⇒ host。
-    expect(host.length).toBe(181)
+    // 181 → 182:chat:interject(排队那条插进在跑的这一轮)。队列在主机上 ⇒ host;handler 里只认本机窗口。
+    expect(host.length).toBe(182)
     expect(client.length + host.length).toBe(keys.length)
   })
 

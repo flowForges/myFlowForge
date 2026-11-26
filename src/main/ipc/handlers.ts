@@ -67,7 +67,7 @@ import { botBridge, genPairing } from '../bot/botBridge'
 import { pushService } from '../push/pushService'
 import type { BotBridgeConfig, BotPlatform } from '../bot/botTypes'
 import { distillModelFor } from '../chat/memory/distillModel'
-import type { CreateWorkspaceOpts, ChatSendPayload, ChatEvent, Attachment, AskAnswers, AskQuestion, ChangesEvent, ChatGateSnapshot, ChatMessage, SessionsFile } from '@shared/types'
+import type { CreateWorkspaceOpts, ChatSendPayload, ChatEvent, Attachment, AskAnswers, AskQuestion, ChangesEvent, ChatGateSnapshot, ChatInterjectResult, ChatMessage, SessionsFile } from '@shared/types'
 import type { AgentProvider, AgentSession, ChatBackgroundHooks, ConfirmDecision } from '../agents/types'
 import { confirmAllowed } from '../agents/types'
 import type { Settings, CustomAgent } from '../config/schema'
@@ -1181,7 +1181,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     }
     sealedWorkspaces.delete(payload.workspacePath)   // 又有人在这里发消息了(比如移除后重新添加)
     const discardTurn = () => sealedWorkspaces.has(payload.workspacePath) || !getSession(payload.workspacePath, payload.sessionId)
-    const onSessionStart = (session: AgentSession) => chatQueue.registerActive(payload.workspacePath, payload.sessionId, () => session.cancel())
+    // 插话能力跟着这一轮的句柄走:provider 支持(claude 常驻进程)才有,没有就不显示插话。
+    const onSessionStart = (session: AgentSession) => chatQueue.registerActive(payload.workspacePath, payload.sessionId, () => session.cancel(),
+      session.interject ? (t, a, v) => session.interject!(t, a, v) : undefined)
     // ★这一轮结束后进程还留着跑后台任务:任务数给输入框那个停止,CLI 自己起的下一轮走同一条泳道、开一条新回复。
     const background: ChatBackgroundHooks = {
       onRunning: (n, stop) => chatQueue.setBackground(payload.workspacePath, payload.sessionId, n, stop),
@@ -1323,6 +1325,12 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     broadcast(CH.chatSeen, { workspacePath: a.workspacePath, sessionId: a.sessionId })
   })
   on(CH.chatCancelQueued, (_e, a: { workspacePath: string; id: string }) => chatQueue.cancel(a.workspacePath, a.id))
+  // ★只接本机窗口(同电脑操作那几条的判定:client.id === 'local',没有 client 也拒)。
+  on(CH.chatInterject, async (_e, a: { workspacePath: string; sessionId: string; queuedId: string }): Promise<ChatInterjectResult> => {
+    if (_e?.client?.id !== 'local') return { ok: false, code: 'not_local' }
+    if (!a || typeof a.workspacePath !== 'string' || typeof a.sessionId !== 'string' || typeof a.queuedId !== 'string') return { ok: false, code: 'gone' }
+    return chatQueue.interject(a.workspacePath, a.sessionId, a.queuedId)
+  })
   on(CH.chatClearQueue, (_e, a: { workspacePath: string }) => chatQueue.clear(a.workspacePath))
   // 「停止」只停当前【会话】的轮次 + 它派发的后台 delegate 子代理 + 它挂起的门(confirm/ask),不动同工作区里
   // 并发跑着的另一个会话(fire-and-forget 的子代理已脱离 chatQueue 的 activeCancel,必须靠 delegate 自己的跨轮

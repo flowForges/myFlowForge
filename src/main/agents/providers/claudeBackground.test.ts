@@ -185,4 +185,29 @@ describe('parseTaskNotification', () => {
     vi.advanceTimersByTime(BG_GRACE_MS * 2)
     expect(finish).not.toHaveBeenCalled()
   })
+
+  it('插话之后的 result:停车等宽限期(CLI 可能为它单起一轮);起了新一轮,那一轮的 result 照常收尾', () => {
+    const finish = vi.fn(); const park = vi.fn()
+    const g = makeBackgroundGate({ onFinish: finish, onPark: park })
+    g.feed(requesting())
+    g.expectInput()
+    g.result()
+    expect(finish).not.toHaveBeenCalled()
+    expect(park).toHaveBeenCalledOnce()
+    g.feed(sys('init'))                       // CLI 为插话那条起了一轮
+    expect(g.parked).toBe(false)
+    g.result()
+    expect(finish).toHaveBeenCalledOnce()
+  })
+
+  it('插话之后的 result、CLI 再没起新一轮:宽限期满回收', () => {
+    const finish = vi.fn()
+    const g = makeBackgroundGate({ onFinish: finish })
+    g.expectInput()
+    g.result()
+    vi.advanceTimersByTime(BG_GRACE_MS - 1)
+    expect(finish).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1)
+    expect(finish).toHaveBeenCalledOnce()
+  })
 })

@@ -296,6 +296,8 @@ export interface ChatMessage {
    *  这条约束有测试钉着(见 `chatVia.test.ts`),别改成拼进 text 里。
    */
   via?: string
+  /** 这条用户消息是在一轮跑着时「插话」并进那一轮的(原本在队列里)。对话里带个 `插话` 小标签。 */
+  interjected?: boolean
   // AI 共商:这条消息在共商里的位置(席位/轮次/阶段);councilResult 是主持人最终的结构化结论。
   council?: CouncilTag
   councilResult?: CouncilResult
@@ -452,7 +454,9 @@ export interface ChatSendPayload {
    */
   origin?: 'local' | 'remote' | 'bot' | 'pet' | 'workflow'
 }
-export interface ChatQueueEvent { workspacePath: string; busy: boolean; queue: { id: string; text: string; source: string; sessionId: string }[]; running: { id: string; text: string; sessionId: string } | null; runningTurns: { id: string; text: string; sessionId: string }[]; runningSessionId: string | null; runningSessionIds: string[]; backgroundTasks?: Record<string, number> }
+/** `chat:interject` 的回话。gone = 那条已经不在队列里(被调度 / 撤回 / 已插过);not_running = 这一轮刚好结束或插不进去,已放回原位置。 */
+export type ChatInterjectResult = { ok: true } | { ok: false; code: 'gone' | 'not_running' | 'unsupported' | 'not_local' }
+export interface ChatQueueEvent { workspacePath: string; busy: boolean; queue: { id: string; text: string; source: string; sessionId: string; interjectable: boolean }[]; running: { id: string; text: string; sessionId: string } | null; runningTurns: { id: string; text: string; sessionId: string }[]; runningSessionId: string | null; runningSessionIds: string[]; backgroundTasks?: Record<string, number> }
 export type ChatEvent = { workspacePath: string; sessionId: string } & (
   | { type: 'user'; message: ChatMessage }
   // council:共商发言带上它在共商里的位置,渲染端在流式阶段就能把它归进共商区块(落盘后 done 的 message 里也有)。

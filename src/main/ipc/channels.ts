@@ -134,6 +134,8 @@ export const CH = {
   chatMarkSeen: 'chat:mark-seen',
   chatSeen: 'chat:seen',
   chatCancelQueued: 'chat:cancel-queued',
+  // 排队的那条并进正在跑的那一轮(只接本机窗口)。回 ChatInterjectResult。
+  chatInterject: 'chat:interject',
   chatClearQueue: 'chat:clear-queue',
   chatStop: 'chat:stop',
   sessionList: 'session:list',

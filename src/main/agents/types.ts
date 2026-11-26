@@ -93,7 +93,17 @@ export interface AgentCallbacks {
   // panel can show it at depth 2. No resumable session id — `id` is the tool_use id.
   onSubagent?(ev: { id: string; phase: 'start' | 'done'; subagentType?: string; description?: string; result?: string; isError?: boolean }): void
 }
-export interface AgentSession { id: string; cancel(): void; done: Promise<AgentResult> }
+export interface AgentSession {
+  id: string
+  cancel(): void
+  done: Promise<AgentResult>
+  /**
+   * 把一条用户消息并进**这一轮**(排队的那条点了「插话」)。true = 已经交给 CLI,它属于这一轮,不能再进下一轮;
+   * false = 这一轮已经结束 / 进程没了 / 现在插不进去 —— 调用方把它放回队列原位置。没有这个方法 = 这个 provider 不支持。
+   * via 只给 chatService 记到用户消息上(谁发的),provider 不看。
+   */
+  interject?(text: string, attachments?: Attachment[], via?: string): Promise<boolean>
+}
 
 export interface ChatTask {
   id: string

@@ -486,11 +486,26 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       if (turnAnswerSinks.get(turnKey(ws, sid)) === answerSink) turnAnswerSinks.delete(turnKey(ws, sid))
     }
     turnAnswerSinks.set(turnKey(ws, sid), answerSink)
-    const wrapSession = (session: AgentSession): AgentSession => ({
-      id: session.id,
-      done: session.done,
-      cancel: () => { aborted = true; flushPaced?.(); session.cancel() },
+    // 插话:provider 收下了才记。用户消息此刻落盘 —— 这一轮的回复要到收尾才落盘,所以它排在这一轮的回复前面,
+    // 重开会话也还在这个位置。这一轮已经收尾(或会话没了)就不再去问 provider:调用方放回队列,下一轮再发。
+    const wrapInterject = (session: AgentSession): AgentSession['interject'] => session.interject && (async (t, attachments, via) => {
+      if (!answersOpen || discarded()) return false
+      const ok = await session.interject!(t, attachments, via)
+      if (!ok) return false
+      const msg: ChatMessage = { ...userMessageOf({ text: t, attachments, via }), interjected: true }
+      persistMessage(msg)
+      emit({ workspacePath: ws, sessionId: sid, type: 'user', message: msg })
+      return true
     })
+    const wrapSession = (session: AgentSession): AgentSession => {
+      const interject = wrapInterject(session)
+      return {
+        id: session.id,
+        done: session.done,
+        cancel: () => { aborted = true; flushPaced?.(); session.cancel() },
+        ...(interject ? { interject } : {}),
+      }
+    }
 
     if (provider.chat) {
       const sessionId = nativeResumeId ?? readSession(ws, sid, payload.agent)

@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { CH } from '../main/ipc/channels'
-import type { AskAnswers, ChatEvent, ChangesEvent, ChatGateSnapshot, ChatQueueEvent, SetupEvent, UpdateInfo, UpdateEvent } from '@shared/types'
+import type { AskAnswers, ChatEvent, ChangesEvent, ChatGateSnapshot, ChatInterjectResult, ChatQueueEvent, SetupEvent, UpdateInfo, UpdateEvent } from '@shared/types'
 import type { PluginSnapshot } from '@shared/plugins'
 import type { CouncilConfig, CouncilSeat, CouncilState } from '@shared/council'
 import type { HostInput, HostStatusView, RemoteHostView } from '@shared/remote/hostView'
@@ -89,7 +89,9 @@ const api = {
   chatQueueState: (a: { workspacePath: string }): Promise<ChatQueueEvent> => ipcRenderer.invoke(CH.chatQueueState, a),
   // 还挂着、等人回答的确认/提问门。聊天视图每次挂载都拉一次 —— 它自己的 state 是空的,门却还在主进程阻塞着。
   chatGateState: (a: { workspacePath: string }): Promise<ChatGateSnapshot> => ipcRenderer.invoke(CH.chatGateState, a),
-  chatCancelQueued: (a: { workspacePath: string; id: string }) => ipcRenderer.invoke(CH.chatCancelQueued, a),
+  // true = 真撤回了(才回填文字);false = 它已经被调度 / 插话取走了。
+  chatCancelQueued: (a: { workspacePath: string; id: string }): Promise<boolean> => ipcRenderer.invoke(CH.chatCancelQueued, a),
+  chatInterject: (a: { workspacePath: string; sessionId: string; queuedId: string }): Promise<ChatInterjectResult> => ipcRenderer.invoke(CH.chatInterject, a),
   chatClearQueue: (a: { workspacePath: string }) => ipcRenderer.invoke(CH.chatClearQueue, a),
   chatStop: (a: { workspacePath: string; sessionId?: string }) => ipcRenderer.invoke(CH.chatStop, a),
   // reproposeWorkflow (old PlanCard workflow-switch → orch.startRun) removed — see channels.ts note.
