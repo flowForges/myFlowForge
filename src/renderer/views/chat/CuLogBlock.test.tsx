@@ -1,13 +1,14 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { CuLogBlock } from './CuLogBlock'
+import { useState } from 'react'
+import { render, screen, fireEvent, waitFor, act, renderHook } from '@testing-library/react'
+import { CuTurnBlock, useCuTurnOpen } from './CuLogBlock'
 import type { CuLogEntry } from '../../../main/computerUse/types'
 
 const e = (over: Partial<CuLogEntry>): CuLogEntry => ({ ts: Date.UTC(2026, 10, 12, 8, 5, 9), turn: 1, op: 'click', result: 'allowed', ...over })
 
 describe('CuLogBlock', () => {
   it('renders nothing for an empty log', () => {
-    const { container } = render(<CuLogBlock entries={[]} thumb={async () => null} />)
+    const { container } = render(<CuTurnBlock open onToggle={() => {}} rows={[]} thumb={async () => null} />)
     expect(container.firstChild).toBeNull()
   })
 
@@ -19,7 +20,7 @@ describe('CuLogBlock', () => {
       e({ op: 'click', result: 'blocked', code: 'blocked_app' }),
       e({ op: 'screenshot', result: 'failed', code: 'user_active' }),
     ]
-    const { container } = render(<CuLogBlock entries={entries} thumb={async () => null} />)
+    const { container } = render(<CuTurnBlock open onToggle={() => {}} rows={entries} thumb={async () => null} />)
     const rows = container.querySelectorAll('.cu-log-row')
     expect(rows).toHaveLength(5)
     expect(rows[0].textContent).toContain('点击 (812, 433)')
@@ -35,7 +36,7 @@ describe('CuLogBlock', () => {
   })
 
   it('typed text never appears in the log: only 输入 N 字, even if an entry still carries a preview', () => {
-    const { container } = render(<CuLogBlock entries={[e({ op: 'type', textLen: 5, textPreview: 'hunter2' })]} thumb={async () => null} />)
+    const { container } = render(<CuTurnBlock open onToggle={() => {}} rows={[e({ op: 'type', textLen: 5, textPreview: 'hunter2' })]} thumb={async () => null} />)
     expect(container.querySelector('.cu-text')).toBeNull()
     expect(container.textContent).not.toContain('hunter2')
     expect(container.textContent).toContain('输入 5 字')
@@ -46,7 +47,7 @@ describe('CuLogBlock', () => {
       e({ op: 'act', app: 'WorkBuddy', bundleId: 'com.example.workbuddy', element: { role: 'button', name: '新建会话' }, actLabel: '点击', result: 'auto', delivery: 'delivered_verified' }),
       e({ op: 'act', app: 'WorkBuddy', element: { role: 'textfield', name: '输入消息' }, actLabel: '输入', result: 'auto', delivery: 'delivered_unverified' }),
     ]
-    const { container } = render(<CuLogBlock entries={entries} thumb={async () => null} />)
+    const { container } = render(<CuTurnBlock open onToggle={() => {}} rows={entries} thumb={async () => null} />)
     const rows = container.querySelectorAll('.cu-log-row')
     expect(rows[0].textContent).toContain('点击 按钮「新建会话」')
     expect(rows[0].textContent).toContain('WorkBuddy')
@@ -62,7 +63,7 @@ describe('CuLogBlock', () => {
       e({ op: 'launch', result: 'denied' }),
       e({ op: 'act', result: 'blocked', code: 'blocked_app' }),
     ]
-    const { container } = render(<CuLogBlock entries={entries} thumb={async () => null} />)
+    const { container } = render(<CuTurnBlock open onToggle={() => {}} rows={entries} thumb={async () => null} />)
     const rows = container.querySelectorAll('.cu-log-row')
     expect(rows[0].querySelector('.cu-res')?.textContent).toBe('未确认')
     expect(rows[1].querySelector('.cu-res')?.textContent).toBe('未确认')
@@ -71,20 +72,16 @@ describe('CuLogBlock', () => {
   })
 
   it('element names in the log are plain text too: whitespace collapsed, markup not parsed', () => {
-    const { container } = render(<CuLogBlock entries={[e({ op: 'act', element: { role: 'button', name: 'a\n\n<b>b</b>' }, actLabel: '点击' })]} thumb={async () => null} />)
+    const { container } = render(<CuTurnBlock open onToggle={() => {}} rows={[e({ op: 'act', element: { role: 'button', name: 'a\n\n<b>b</b>' }, actLabel: '点击' })]} thumb={async () => null} />)
     expect(container.querySelector('b')).toBeNull()
     expect(container.textContent).not.toContain('\n')
   })
 
-  it('one block per turn', () => {
-    const { container } = render(<CuLogBlock entries={[e({ turn: 1 }), e({ turn: 2 }), e({ turn: 2 })]} thumb={async () => null} />)
-    expect(container.querySelectorAll('.cu-log')).toHaveLength(2)
-  })
 
   it('fetches a thumb only for rows that have one; clicking it opens the Lightbox with that image', async () => {
     // actionLog.thumb() answers raw base64; the block builds the data URL itself
     const thumb = vi.fn(async (f: string) => (f === '00000001.jpg' ? 'ZZZ' : null))
-    const { container } = render(<CuLogBlock entries={[e({ thumb: '00000001.jpg' }), e({ op: 'type' })]} thumb={thumb} />)
+    const { container } = render(<CuTurnBlock open onToggle={() => {}} rows={[e({ thumb: '00000001.jpg' }), e({ op: 'type' })]} thumb={thumb} />)
     await waitFor(() => expect(container.querySelector('img.cu-thumb')).toBeTruthy())
     expect(thumb).toHaveBeenCalledTimes(1)
     expect(thumb).toHaveBeenCalledWith('00000001.jpg')
@@ -98,7 +95,7 @@ describe('CuLogBlock', () => {
   it('a thumb answer that is not plain base64 is dropped: no https:, no data: of another type, no quotes', async () => {
     for (const bad of ['https://evil.example/x.png', 'data:image/svg+xml;base64,AAA', 'AAA" onerror="x', '']) {
       const thumb = vi.fn(async () => bad)
-      const { container, unmount } = render(<CuLogBlock entries={[e({ thumb: '00000001.jpg' })]} thumb={thumb} />)
+      const { container, unmount } = render(<CuTurnBlock open onToggle={() => {}} rows={[e({ thumb: '00000001.jpg' })]} thumb={thumb} />)
       await waitFor(() => expect(thumb).toHaveBeenCalled())
       await new Promise((r) => setTimeout(r, 0))
       expect(container.querySelector('img')).toBeNull()
@@ -107,8 +104,47 @@ describe('CuLogBlock', () => {
   })
 
   it('no explanatory text', () => {
-    const { container } = render(<CuLogBlock entries={[e({ app: 'A' })]} thumb={async () => null} />)
+    const { container } = render(<CuTurnBlock open onToggle={() => {}} rows={[e({ app: 'A' })]} thumb={async () => null} />)
     expect(container.querySelector('p, small')).toBeNull()
     container.querySelectorAll('*').forEach((el) => expect(String(el.getAttribute('class') ?? '')).not.toMatch(/hint|desc|help|note|tip|caption/))
+  })
+
+  // rc3 issue 2: the header toggles the block; collapsed shows only the header
+  it('the header is a button (电脑 · N 步 + chevron) with aria-expanded; collapsed renders no rows', () => {
+    const onToggle = vi.fn()
+    const { container, rerender } = render(<CuTurnBlock rows={[e({}), e({})]} open={false} onToggle={onToggle} thumb={async () => null} />)
+    const head = screen.getByRole('button', { name: /电脑 · 2 步/ })
+    expect(head.getAttribute('aria-expanded')).toBe('false')
+    expect(head.querySelector('.cu-log-caret')).toBeTruthy()
+    expect(container.querySelectorAll('.cu-log-row')).toHaveLength(0)
+    fireEvent.click(head)
+    expect(onToggle).toHaveBeenCalledTimes(1)
+    rerender(<CuTurnBlock rows={[e({}), e({})]} open onToggle={onToggle} thumb={async () => null} />)
+    expect(screen.getByRole('button', { name: /电脑 · 2 步/ }).getAttribute('aria-expanded')).toBe('true')
+    expect(container.querySelectorAll('.cu-log-row')).toHaveLength(2)
+  })
+
+  it('useCuTurnOpen: follows the default until the user toggles, then remembers the toggle', () => {
+    const { result } = renderHook(() => useCuTurnOpen())
+    expect(result.current.isOpen('k', true)).toBe(true)
+    expect(result.current.isOpen('k', false)).toBe(false)
+    act(() => result.current.toggle('k', true))
+    expect(result.current.isOpen('k', true)).toBe(false)
+    expect(result.current.isOpen('k', false)).toBe(false) // the running turn finished: the user's choice still wins
+    act(() => result.current.toggle('k', false))
+    expect(result.current.isOpen('k', false)).toBe(true)
+    expect(result.current.isOpen('other', false)).toBe(false)
+  })
+
+  it('a running block collapses on click and stays collapsed (wired through the hook)', () => {
+    function Harness() {
+      const o = useCuTurnOpen()
+      const [n] = useState(0)
+      return <CuTurnBlock rows={[e({ ts: n + 1 })]} open={o.isOpen('t', true)} onToggle={() => o.toggle('t', true)} thumb={async () => null} />
+    }
+    const { container } = render(<Harness />)
+    expect(container.querySelectorAll('.cu-log-row')).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: /电脑 · 1 步/ }))
+    expect(container.querySelectorAll('.cu-log-row')).toHaveLength(0)
   })
 })

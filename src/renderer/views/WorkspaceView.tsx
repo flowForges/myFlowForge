@@ -32,6 +32,8 @@ import { windowTimeline, LIVE_WINDOW, LIVE_WINDOW_STEP } from './chat/timelineWi
 import { ToolOutputCtx } from './chat/toolOutput'
 import { Composer } from './chat/Composer'
 import { CuStreamTail } from './chat/CuStreamTail'
+import { CuTurnBlock, useCuTurnOpen } from './chat/CuLogBlock'
+import { groupCuTurns, weaveCuTurns } from './chat/cuAnchor'
 import { useComputerUse } from '../state/useComputerUse'
 import { useHost } from '../state/useHostKey'
 import { workflowMenuCommands } from './chat/slashCommands'
@@ -1152,6 +1154,12 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     () => windowTimeline(buildTimeline(liveMessages, pending, chat.confirms, chat.plans, mergedLaunchGates, allRunCardEntries), shownCount, liveCouncils),
     [liveMessages, pending, chat.confirms, chat.plans, mergedLaunchGates, allRunCardEntries, shownCount, liveCouncils],
   )
+  // rc3: each turn's computer-use log block sits right after that turn's reply (cuAnchor.ts), not at the tail
+  const cuStream = useMemo(
+    () => weaveCuTurns(liveWindow.visible, cuRemote ? [] : groupCuTurns(cu.log), liveWindow.hiddenCount).items,
+    [liveWindow, cuRemote, cu.log],
+  )
+  const cuOpen = useCuTurnOpen()
 
   // Text-fallback warning: show when this is a continued session that cannot use native --resume.
   // Native resume = same-source provider that supports --resume (claude/cursor/qoder).
@@ -1610,7 +1618,12 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                 加载更早 {liveWindow.hiddenCount} 条
               </button>
             )}
-            {!isReadOnlySession && liveWindow.visible.map(entry => {
+            {!isReadOnlySession && cuStream.map(entry => {
+              if (entry.kind === 'cu-turn') {
+                const t = entry.turn
+                const dflt = entry.latest && chat.busy
+                return <CuTurnBlock key={`cu-${t.key}`} rows={t.rows} open={cuOpen.isOpen(t.key, dflt)} onToggle={() => cuOpen.toggle(t.key, dflt)} thumb={cu.thumb} />
+              }
               if (entry.kind === 'provider-switch') {
                 return (
                   <ProviderSwitchDivider
@@ -1748,7 +1761,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                 />
               )
             })}
-            <CuStreamTail remote={cuRemote} gates={cu.gates} gateErrors={cu.gateErrors} log={cu.log} thumb={cu.thumb} />
+            <CuStreamTail remote={cuRemote} gates={cu.gates} gateErrors={cu.gateErrors} />
             {chat.asks.map(a => (
               <ReqCard
                 key={a.id}

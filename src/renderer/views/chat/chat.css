@@ -1186,7 +1186,10 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
 .cu-actions { display: flex; gap: 8px; margin-top: 4px; }
 
 .cu-log { margin: 8px 0; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; font-size: 12px; }
-.cu-log-head { padding: 6px 12px; color: var(--muted); font-weight: 600; background: color-mix(in oklab, var(--fg) 4%, transparent); }
+.cu-log-head { width: 100%; display: flex; align-items: center; gap: 8px; padding: 6px 12px; border: 0; text-align: left; font: inherit; color: var(--muted); font-weight: 600; background: color-mix(in oklab, var(--fg) 4%, transparent); cursor: pointer; }
+.cu-log-head:hover { background: var(--surface-2); }
+.cu-log-caret { margin-left: auto; flex: 0 0 auto; color: var(--faint); transition: transform .14s; font-size: 11px; }
+.cu-log-caret.open { transform: rotate(90deg); }
 .cu-log-row { display: flex; align-items: center; gap: 10px; padding: 5px 12px; border-top: 1px solid var(--border); min-width: 0; }
 .cu-thumb-slot { flex: none; width: 64px; height: 40px; display: block; }
 .cu-thumb-btn { padding: 0; border: 0; background: none; cursor: zoom-in; display: block; }

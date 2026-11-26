@@ -1,7 +1,8 @@
-// 会话里每轮一块的电脑操作记录(spec §10.5)。行 = 64px 缩略图 + 时间 + 动作 + 目标 app + 结果 chip;缩略图按需取,点开用 Lightbox。
+// 会话里每轮一块的电脑操作记录(spec §10.5)。rc3:块落在它那一轮的回复之后(见 cuAnchor.ts),表头点击折叠/展开。
+//行 = 64px 缩略图 + 时间 + 动作 + 目标 app + 结果 chip;缩略图按需取,点开用 Lightbox。
 // 输入的文字只出现在批准卡上,这里只写 `输入 N 字`(不展示预览)。
 // actionLog.thumb() 回的是裸 base64:这里自己拼 data URL,且只认纯 base64,别的值(https: 等)一律丢掉。
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { CU_ERR, CU_KIND_LABEL, ROLE_LABEL, visibleText } from '@shared/computerUse'
 import type { CuLogEntry } from '../../../main/computerUse/types'
 import { Lightbox } from '../../components/Lightbox'
@@ -68,32 +69,33 @@ function Thumb({ file, load, onOpen }: { file: string; load: (f: string) => Prom
   )
 }
 
-export function CuLogBlock({ entries, thumb }: { entries: CuLogEntry[]; thumb: (file: string) => Promise<string | null> }) {
+/** 每块的展开状态:用户点过的记住(视图挂着期间),没点过的跟默认走(在跑的那轮展开,跑完的收起)。 */
+export function useCuTurnOpen(): { isOpen(key: string, dflt: boolean): boolean; toggle(key: string, dflt: boolean): void } {
+  const [picked, setPicked] = useState<Record<string, boolean>>({})
+  const isOpen = useCallback((key: string, dflt: boolean) => picked[key] ?? dflt, [picked])
+  const toggle = useCallback((key: string, dflt: boolean) => setPicked((m) => ({ ...m, [key]: !(m[key] ?? dflt) })), [])
+  return { isOpen, toggle }
+}
+
+export function CuTurnBlock({ rows, open, onToggle, thumb }: { rows: CuLogEntry[]; open: boolean; onToggle: () => void; thumb: (file: string) => Promise<string | null> }) {
   const [big, setBig] = useState<string | null>(null)
-  if (!entries.length) return null
-  const turns: { turn: number; rows: CuLogEntry[] }[] = []
-  for (const en of entries) {
-    const last = turns[turns.length - 1]
-    if (last && last.turn === en.turn) last.rows.push(en)
-    else turns.push({ turn: en.turn, rows: [en] })
-  }
+  if (!rows.length) return null
   return (
-    <>
-      {turns.map((t, ti) => (
-        <div className="cu-log" key={`${t.turn}-${ti}`}>
-          <div className="cu-log-head">电脑 · {t.rows.length} 步</div>
-          {t.rows.map((en, i) => (
-            <div className="cu-log-row" key={`${en.ts}-${i}`}>
-              {en.thumb ? <Thumb file={en.thumb} load={thumb} onOpen={setBig} /> : <span className="cu-thumb-slot" />}
-              <span className="cu-time">{clock(en.ts)}</span>
-              <span className="cu-act">{describe(en)}</span>
-              {en.app && <span className="cu-app">{screenName(en.app)}</span>}
-              <span className={`cu-chip cu-res cu-res-${en.result}`} title={en.code ? CU_ERR[en.code] : undefined}>{resultChip(en)}</span>
-            </div>
-          ))}
+    <div className="cu-log">
+      <button type="button" className="cu-log-head" aria-expanded={open} onClick={onToggle}>
+        <span>电脑 · {rows.length} 步</span>
+        <span className={`cu-log-caret${open ? ' open' : ''}`} aria-hidden="true">▸</span>
+      </button>
+      {open && rows.map((en, i) => (
+        <div className="cu-log-row" key={`${en.ts}-${i}`}>
+          {en.thumb ? <Thumb file={en.thumb} load={thumb} onOpen={setBig} /> : <span className="cu-thumb-slot" />}
+          <span className="cu-time">{clock(en.ts)}</span>
+          <span className="cu-act">{describe(en)}</span>
+          {en.app && <span className="cu-app">{screenName(en.app)}</span>}
+          <span className={`cu-chip cu-res cu-res-${en.result}`} title={en.code ? CU_ERR[en.code] : undefined}>{resultChip(en)}</span>
         </div>
       ))}
       {big && <Lightbox src={big} onClose={() => setBig(null)} />}
-    </>
+    </div>
   )
 }

@@ -10,6 +10,12 @@ describe('WorkspaceView computer-use wiring (source scan)', () => {
     expect(src).toMatch(/useComputerUse\(cuRemote \? '' :/)
     expect(src).toMatch(/<CuStreamTail remote=\{cuRemote\}/)
   })
+  it('rc3: the per-turn log blocks are woven into the stream (local only), open by default only for the running turn', () => {
+    expect(src).toMatch(/weaveCuTurns\(liveWindow\.visible, cuRemote \? \[\] : groupCuTurns\(cu\.log\), liveWindow\.hiddenCount\)/)
+    expect(src).toMatch(/entry\.kind === 'cu-turn'/)
+    expect(src).toMatch(/const dflt = entry\.latest && chat\.busy/)
+    expect(src).not.toMatch(/log=\{cu\.log\}/)
+  })
   it('the composer chip gets remote, refreshStatus (no status call on mount) and the settings opener', () => {
     expect(src).toMatch(/computerUse=\{\{[\s\S]*remote: cuRemote[\s\S]*refreshStatus: cu\.refreshStatus[\s\S]*openSettings/)
   })
