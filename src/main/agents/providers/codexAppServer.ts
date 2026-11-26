@@ -117,6 +117,12 @@ export interface CodexTurnHandle {
 export const STEER_SETTLE_MS = 3000
 
 /**
+ * 握手(initialize → thread/start|resume → turn/start 回话)最多等这么久。超时按「没起来」算:可回落时退回 exec,
+ * 而不是让这一轮挂在一个不说话的 app-server 上。这一轮开始之后不再计时(之后靠调用方的空闲看门狗)。
+ */
+export const HANDSHAKE_TIMEOUT_MS = 20_000
+
+/**
  * codex 会**向我们发起、并等着我们回答**的请求里,能映射成一道「允许 / 拒绝」的那些。
  *
  * ★★每一条的回答形状都不一样(见 codexApproval.ts 的 codexApprovalResponse)。形状错了不会报错,
@@ -172,6 +178,8 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
   let cancelled = false
   let startError: string | undefined
   let completedTimer: ReturnType<typeof setTimeout> | null = null
+  let handshakeTimer: ReturnType<typeof setTimeout> | null = null
+  let stderrTail = ''   // 有界的 stderr 尾巴:进程意外退出时给诊断用
   const pendingSteers = new Map<number, (ok: boolean) => void>()
   let resolveDone!: (v: CodexTurnResult) => void
   const done = new Promise<CodexTurnResult>((resolve) => { resolveDone = resolve })
@@ -180,10 +188,14 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
     if (settled) return
     settled = true
     if (completedTimer) { clearTimeout(completedTimer); completedTimer = null }
+    if (handshakeTimer) { clearTimeout(handshakeTimer); handshakeTimer = null }
     killTree(child)   // 杀整棵树:app-server 也会派生 shell 命令,单杀只会留孤儿
     for (const r of pendingSteers.values()) r(false)
     pendingSteers.clear()
-    if (!ok && !began && !cancelled && opts.fallbackOnStartFailure) resolveDone({ ok: false, startFailed: true, error: startError ?? 'codex app-server 没起来' })
+    if (!ok && !began && !cancelled && opts.fallbackOnStartFailure) {
+      const tail = stderrTail.trim()
+      resolveDone({ ok: false, startFailed: true, error: [startError ?? 'codex app-server 没起来', tail].filter(Boolean).join('\n') })
+    }
     else resolveDone({ ok })
   }
 
@@ -196,10 +208,15 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
     cb.onError(message)
   }
 
+  function markBegan(): void {
+    began = true
+    if (handshakeTimer) { clearTimeout(handshakeTimer); handshakeTimer = null }
+  }
+
   function markStarted(id: unknown): void {
     if (typeof id !== 'string' || !id || activeTurnId) return
     activeTurnId = id
-    began = true
+    markBegan()
     cb.onTurnStarted?.(id)
   }
 
@@ -392,12 +409,13 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
           continue
         }
         markStarted(msg.result?.turn?.id)
-        began = true
+        markBegan()
         continue
       }
     }
   })
-  child.stderr.on('data', () => {}) // drain so the child never blocks on a full pipe
+  // drain so the child never blocks on a full pipe; keep a bounded tail for the crash diagnostic
+  child.stderr.on('data', (c) => { stderrTail = (stderrTail + c.toString()).slice(-1500) })
   child.on('error', (err) => {
     // Actionable hint: this fires for an ASYNC spawn failure (e.g. codex missing, or an old
     // codex build that doesn't understand the `app-server` subcommand) — the caller-side
@@ -407,7 +425,20 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
     safeError(`codex app-server 启动失败(是否已安装/支持 app-server?): ${m}`)
     settle(false)
   })
-  child.on('close', () => settle(false))
+  child.on('close', () => {
+    // ★这一轮已经开始、不是用户停的,进程却没了(崩溃 / OOM / 被杀):必须报一句,否则就是一条空白回复。
+    if (!settled && began && !cancelled) {
+      const tail = stderrTail.trim()
+      safeError(tail ? `codex app-server 意外退出:\n${tail}` : 'codex app-server 意外退出')
+    }
+    settle(false)
+  })
+  handshakeTimer = setTimeout(() => {
+    handshakeTimer = null
+    if (settled || began) return
+    safeError(`codex app-server 握手超时(${Math.round(HANDSHAKE_TIMEOUT_MS / 1000)}s 没有完成)`)
+    settle(false)
+  }, HANDSHAKE_TIMEOUT_MS)
 
   send('initialize', { clientInfo: { name: 'myFlowForge', version: '1.0.0' } }, initId)
 

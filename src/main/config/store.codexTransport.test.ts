@@ -42,4 +42,15 @@ describe('codexTransport 默认值', () => {
     host({ codexTransport: 'bogus', codexTransportChosen: true })
     expect(readSettings().codexTransport).toBe('app-server')
   })
+  it('★升级前就打开过 app-server(老默认是 exec,所以只能是亲手拨的)、没有标记 → 算选过,工作流也走 app-server', () => {
+    host({ codexTransport: 'app-server' })
+    const s = readSettings()
+    expect(s.codexTransport).toBe('app-server')
+    expect(s.codexTransportChosen).toBe(true)
+  })
+
+  it('坏值被 .catch 兜成默认时,「选过」也一并清掉', () => {
+    host({ codexTransport: 'bogus', codexTransportChosen: true })
+    expect(readSettings().codexTransportChosen).toBe(false)
+  })
 })

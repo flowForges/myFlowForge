@@ -65,7 +65,15 @@ export function readSettings(): Settings {
   // 而不是让整份设置回落默认值。
   const client = safeParse(ClientSettingsSchema, overlay(pickClient(d) as never, clientSrc), () => pickClient(d))
   const host = safeParse(HostSettingsSchema, overlay(pickHost(d) as never, hostSrc), () => pickHost(d))
-  // 没亲手选过 codex 传输 = 用默认(app-server),不管磁盘上躺着什么(见 schema 的 codexTransportChosen)。
+  // codex 传输「选过没有」(见 schema 的 codexTransportChosen):
+  //  · 坏值被 .catch 兜成默认 → 不算选过。
+  //  · 没有标记但磁盘上是 'app-server' → 算选过:老默认是 exec,这个值只可能是用户亲手拨的。
+  //    (下一次任何设置写回都会把 true 落盘。)
+  //  · 其余没选过的 → 用默认(app-server),不管磁盘上躺着什么。
+  const rawHost = (hostSrc && typeof hostSrc === 'object' ? hostSrc : {}) as Record<string, unknown>
+  const rawTransport = rawHost.codexTransport
+  if (rawTransport !== undefined && rawTransport !== 'exec' && rawTransport !== 'app-server') host.codexTransportChosen = false
+  else if (rawHost.codexTransportChosen === undefined && rawTransport === 'app-server') host.codexTransportChosen = true
   if (!host.codexTransportChosen) host.codexTransport = d.codexTransport
   return latchProvisioned({ ...d, ...host, ...client })
 }

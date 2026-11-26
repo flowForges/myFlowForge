@@ -1,20 +1,21 @@
-import { describe, it, expect } from 'vitest'
-import { driveCodexTurn, type CodexChild, type CodexTurnCallbacks } from './codexAppServer'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { driveCodexTurn, HANDSHAKE_TIMEOUT_MS, type CodexChild, type CodexTurnCallbacks } from './codexAppServer'
 
 // Same scriptable fake as codexAppServer.test.ts: capture writes, push stdout lines, fire close/error.
 function fakeChild() {
   let onData: ((c: Buffer) => void) | undefined
+  let onErr: ((c: Buffer) => void) | undefined
   const listeners: Record<string, ((a?: unknown) => void) | undefined> = {}
   const writes: any[] = []
   const child: CodexChild = {
     stdin: { write: (s: string) => { for (const ln of s.split('\n')) if (ln.trim()) writes.push(JSON.parse(ln)) } },
     stdout: { on: (_e, cb) => { onData = cb } },
-    stderr: { on: () => {} },
+    stderr: { on: (_e, cb) => { onErr = cb } },
     on: (e, cb) => { listeners[e] = cb },
     kill: () => {},
   }
   const push = (o: any) => onData?.(Buffer.from(JSON.stringify(o) + '\n'))
-  return { child, writes, push, close: () => listeners.close?.(), error: (e: unknown) => listeners.error?.(e) }
+  return { child, writes, push, stderr: (t: string) => onErr?.(Buffer.from(t)), close: () => listeners.close?.(), error: (e: unknown) => listeners.error?.(e) }
 }
 
 const OPTS = { cwd: '/ws', prompt: 'go', modelArgs: [], configArgs: [], sandbox: 'read-only', approvalPolicy: 'on-request' }
@@ -186,5 +187,74 @@ describe('driveCodexTurn · 与 exec 对齐的启动参数', () => {
     f.push({ id: f.writes[0].id, result: {} })
     const resume = f.writes.find(w => w.method === 'thread/resume')
     expect(resume.params).toEqual({ threadId: 'th-old', approvalPolicy: 'never', sandbox: 'danger-full-access', cwd: '/ws' })
+  })
+})
+
+describe('driveCodexTurn · 意外退出 / 握手超时', () => {
+  afterEach(() => { vi.useRealTimers() })
+
+  it('这一轮开始后进程意外退出:报错(带 stderr 尾巴),不是一条空回复', async () => {
+    const f = fakeChild()
+    const errs: string[] = []
+    const h = driveCodexTurn({ ...OPTS, fallbackOnStartFailure: true }, cbs({ onError: m => errs.push(m) }), { spawn: () => f.child })
+    begin(f, 'turn-1')
+    f.stderr('thread panicked: out of memory\n')
+    f.close()
+    expect(await h.done).toEqual({ ok: false })
+    expect(errs).toHaveLength(1)
+    expect(errs[0]).toContain('codex app-server 意外退出')
+    expect(errs[0]).toContain('out of memory')
+  })
+
+  it('用户停止导致的退出不报错', async () => {
+    const f = fakeChild()
+    const errs: string[] = []
+    const h = driveCodexTurn(OPTS, cbs({ onError: m => errs.push(m) }), { spawn: () => f.child })
+    begin(f, 'turn-1')
+    h.cancel(); f.close()
+    await h.done
+    expect(errs).toEqual([])
+  })
+
+  it('握手阶段退出:startFailed 的原因里带上 stderr', async () => {
+    const f = fakeChild()
+    const h = driveCodexTurn({ ...OPTS, fallbackOnStartFailure: true }, cbs(), { spawn: () => f.child })
+    f.stderr("error: unrecognized subcommand 'app-server'\n")
+    f.close()
+    const r = await h.done
+    expect(r.startFailed).toBe(true)
+    expect(r.error).toContain('unrecognized subcommand')
+  })
+
+  it(`握手 ${HANDSHAKE_TIMEOUT_MS / 1000}s 没完成 → startFailed(回落 exec),不是取消`, async () => {
+    vi.useFakeTimers()
+    const f = fakeChild()
+    const errs: string[] = []
+    const h = driveCodexTurn({ ...OPTS, fallbackOnStartFailure: true }, cbs({ onError: m => errs.push(m) }), { spawn: () => f.child })
+    f.push({ id: f.writes[0].id, result: {} })   // initialize ok, thread/start never answered
+    vi.advanceTimersByTime(HANDSHAKE_TIMEOUT_MS - 1)
+    let settled = false
+    void h.done.then(() => { settled = true })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    vi.advanceTimersByTime(1)
+    const r = await h.done
+    expect(r.startFailed).toBe(true)
+    expect(r.error).toContain('超时')
+    expect(errs).toEqual([])
+  })
+
+  it('握手按时完成:之后再久也不会因超时收尾', async () => {
+    vi.useFakeTimers()
+    const f = fakeChild()
+    const h = driveCodexTurn({ ...OPTS, fallbackOnStartFailure: true }, cbs(), { spawn: () => f.child })
+    begin(f, 'turn-1')
+    vi.advanceTimersByTime(HANDSHAKE_TIMEOUT_MS * 3)
+    let settled = false
+    void h.done.then(() => { settled = true })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    f.push({ method: 'turn/completed', params: {} })
+    expect(await h.done).toEqual({ ok: true })
   })
 })

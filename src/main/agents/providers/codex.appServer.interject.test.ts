@@ -35,6 +35,14 @@ if (argv[argv.length - 1] === 'app-server' || argv.includes('app-server')) {
       log({ rpc: m })
       if (m.method === 'initialize') out({ jsonrpc: '2.0', id: m.id, result: {} })
       else if (m.method === 'thread/start' || m.method === 'thread/resume') out({ jsonrpc: '2.0', id: m.id, result: { thread: { id: 'th1' } } })
+      else if (m.method === 'turn/start' && process.env.MODE === 'empty') {
+        out({ jsonrpc: '2.0', id: m.id, result: { turn: { id: 'turn-1', status: 'inProgress', items: [] } } })
+        out({ jsonrpc: '2.0', method: 'turn/completed', params: { threadId: 'th1', turn: { id: 'turn-1', status: 'completed', items: [] } } })
+      }
+      else if (m.method === 'turn/start' && process.env.MODE === 'crash') {
+        out({ jsonrpc: '2.0', id: m.id, result: { turn: { id: 'turn-1', status: 'inProgress', items: [] } } })
+        process.stderr.write('fatal: sandbox died\\n'); setTimeout(() => process.exit(3), 20)
+      }
       else if (m.method === 'turn/start') {
         out({ jsonrpc: '2.0', id: m.id, result: { turn: { id: 'turn-1', status: 'inProgress', items: [] } } })
         out({ jsonrpc: '2.0', method: 'turn/started', params: { threadId: 'th1', turn: { id: 'turn-1', status: 'inProgress', items: [] } } })
@@ -73,7 +81,7 @@ afterEach(() => {
 
 const traced = () => existsSync(trace) ? readFileSync(trace, 'utf8').trim().split('\n').map(l => JSON.parse(l)) : []
 
-async function chat(mode: 'steer' | 'broken', extraEnv: NodeJS.ProcessEnv = {}, bin?: string) {
+async function chat(mode: 'steer' | 'broken' | 'empty' | 'crash', extraEnv: NodeJS.ProcessEnv = {}, bin?: string) {
   const { makeCodexProvider } = await import('./codex')
   let text = ''
   const errors: string[] = []
@@ -161,6 +169,23 @@ describe('codex chat · app-server 插话', () => {
     expect(fb(a.statuses)).toHaveLength(1)
     expect(fb(b.statuses)).toHaveLength(0)
     expect(logs.filter(m => m.includes('回落到 exec'))).toHaveLength(2)
+  })
+})
+
+describe('codex chat · app-server 没有回复时要报错(同 exec)', () => {
+  it('这一轮完成了却一个字都没有 → onError 给出诊断,不是一条空白回复', async () => {
+    const c = await chat('empty')
+    await c.done
+    expect(c.text()).toBe('')
+    expect(c.errors).toHaveLength(1)
+    expect(c.errors[0]).toContain('codex 无输出')
+  })
+  it('进程中途崩了 → 只报一条「意外退出」(带 stderr),不再叠一条无输出', async () => {
+    const c = await chat('crash')
+    await c.done
+    expect(c.errors).toHaveLength(1)
+    expect(c.errors[0]).toContain('意外退出')
+    expect(c.errors[0]).toContain('sandbox died')
   })
 })
 

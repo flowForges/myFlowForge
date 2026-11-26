@@ -580,6 +580,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         let appHandle: ReturnType<typeof driveCodexTurn> | null = null
         // 插话能力:拿到 turnId 才亮,这一轮收尾(或回落到 exec)就熄。
         let ready = false
+        let erred = false   // 这一轮已经报过错(不再叠一条「无输出」)
         const listeners: ((r: boolean) => void)[] = []
         const setReady = (r: boolean) => { if (ready === r) return; ready = r; for (const l of listeners) l(r) }
         // The exec chat path guards against a wedged turn with an INACTIVITY watchdog (armed on spawn,
@@ -608,7 +609,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
               onSession: (id) => cb.onSession(id),
               onNotice: (t) => cb.onStatus?.(t),
               onUsage: (u) => cb.onUsage?.(u),
-              onError: (m) => { cb.onError(new Error(m)) },
+              onError: (m) => { erred = true; cb.onError(new Error(m)) },
               onTurnStarted: () => { wd.beat(); setReady(true) },
             },
           )
@@ -634,6 +635,12 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
               const ex = runExec()
               current = ex
               return ex.done
+            }
+            // 同 exec:一个字都没交付、也没报过错 → 给一条诊断,不留空白气泡。
+            if (!deliveredAny && !erred && !cancelled) {
+              const diag = lastErr ?? 'codex 无输出(app-server 这一轮结束了,但没有任何回复)'
+              cb.onError(new Error(diag))
+              logError('codex', 'chat 无回复(app-server)', `cwd: ${task.cwd}\n${diag}`)
             }
             cb.onDone({ elapsed: Math.round((Date.now() - start) / 1000) })
             return { ok: res.ok, summary: res.ok ? '完成' : 'codex app-server 失败' }
