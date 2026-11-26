@@ -201,6 +201,28 @@ describe('createCuOverlay', () => {
       expect(lastBounds(t.wins[0])).toEqual({ x: 1792 + 1440 - 420, y: 900 - 220, width: 420, height: 220 })
     })
 
+    it('★a plain click on the pill (start → end, no travel) does not move or pin it (review 2026-11)', () => {
+      const t = setup()
+      t.ov.show(ON)
+      const placed = lastBounds(t.wins[0])
+      const n = t.wins[0].calls.filter((c) => c[0] === 'setBounds').length
+      t.cursorAt(800, 40); t.ov.drag('start'); t.ov.drag('end')
+      // a 2 px wiggle is still a click
+      t.cursorAt(800, 40); t.ov.drag('start'); t.cursorAt(802, 41); t.ov.drag('move'); t.ov.drag('end')
+      expect(t.wins[0].calls.filter((c) => c[0] === 'setBounds').length).toBe(n)
+      // not pinned: a later show still uses the default place, not one derived from the click
+      t.ov.hide(); t.ov.show(ON)
+      expect(lastBounds(t.wins[0])).toEqual(placed)
+    })
+
+    it('once it has travelled past the threshold, small moves after that still follow the cursor', () => {
+      const t = setup()
+      t.ov.show(ON)
+      t.cursorAt(800, 40); t.ov.drag('start'); t.cursorAt(700, 300); t.ov.drag('move')
+      t.cursorAt(799, 40); t.ov.drag('move'); t.ov.drag('end')
+      expect(lastBounds(t.wins[0])).toMatchObject({ x: 686 - 1, y: 31 })
+    })
+
     it('move / end without a start, unknown phases and drags with no window do nothing', () => {
       const t = setup()
       t.ov.drag('move')

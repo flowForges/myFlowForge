@@ -91,6 +91,8 @@ export function OverlayApp({ api, isPhysical }: { api: CuOverlayApi; isPhysical?
   const press = usePhysicalPress(isPhysical)
   const lastSeq = useRef(0)
   const dragging = useRef<number | null>(null)
+  /** pending animation frame for a coalesced `move`: at most one move IPC per frame */
+  const moveFrame = useRef<number | null>(null)
 
   useEffect(() => api.onState(setState), [api])
   useEffect(() => {
@@ -113,10 +115,17 @@ export function OverlayApp({ api, isPhysical }: { api: CuOverlayApi; isPhysical?
     try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* no capture: moves still arrive while inside */ }
     api.drag('start')
   }
-  const dragMove = (e: PointerEvent<HTMLDivElement>) => { if (dragging.current === e.pointerId) api.drag('move') }
+  const dragMove = (e: PointerEvent<HTMLDivElement>) => {
+    if (dragging.current !== e.pointerId || moveFrame.current !== null) return
+    moveFrame.current = requestAnimationFrame(() => {
+      moveFrame.current = null
+      if (dragging.current !== null) api.drag('move')
+    })
+  }
   const dragEnd = (e: PointerEvent<HTMLDivElement>) => {
     if (dragging.current !== e.pointerId) return
     dragging.current = null
+    if (moveFrame.current !== null) { cancelAnimationFrame(moveFrame.current); moveFrame.current = null }
     api.drag('end')
   }
   const bundle = gate?.kind === 'action' ? screenName(gate.action?.bundleId) : ''

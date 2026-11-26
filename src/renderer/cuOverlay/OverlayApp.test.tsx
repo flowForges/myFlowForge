@@ -211,17 +211,33 @@ describe('actionLine', () => {
 
   // rc3 issue 3: the pill drags the window by its non-button area; buttons keep working
   describe('drag', () => {
-    it('pointer down / move / up on the pill sends start / move / end', () => {
-      const t = harness()
-      t.push(ON)
-      const pill = t.container.querySelector('.cuo-pill')!
-      fireEvent.pointerDown(pill.querySelector('.cuo-title')!, { button: 0, pointerId: 1 })
-      fireEvent.pointerMove(pill, { pointerId: 1 })
-      fireEvent.pointerMove(pill, { pointerId: 1 })
-      fireEvent.pointerUp(pill, { pointerId: 1 })
-      expect(t.api.drag.mock.calls.map((c) => c[0])).toEqual(['start', 'move', 'move', 'end'])
-      fireEvent.pointerMove(pill, { pointerId: 1 })
-      expect(t.api.drag).toHaveBeenCalledTimes(4)
+    it('pointer down / move / up on the pill sends start / move / end; moves are one per animation frame', () => {
+      const frames: FrameRequestCallback[] = []
+      const raf = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => { frames.push(cb); return frames.length })
+      const caf = vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {})
+      try {
+        const flush = () => { for (const f of frames.splice(0)) f(0) }
+        const t = harness()
+        t.push(ON)
+        const pill = t.container.querySelector('.cuo-pill')!
+        fireEvent.pointerDown(pill.querySelector('.cuo-title')!, { button: 0, pointerId: 1 })
+        fireEvent.pointerMove(pill, { pointerId: 1 })
+        fireEvent.pointerMove(pill, { pointerId: 1 })
+        fireEvent.pointerMove(pill, { pointerId: 1 })
+        expect(t.api.drag.mock.calls.map((c) => c[0])).toEqual(['start'])
+        flush()
+        expect(t.api.drag.mock.calls.map((c) => c[0])).toEqual(['start', 'move'])
+        fireEvent.pointerMove(pill, { pointerId: 1 })
+        flush()
+        fireEvent.pointerMove(pill, { pointerId: 1 })
+        // up with a frame still pending: the pending move is dropped (end reads the cursor itself)
+        fireEvent.pointerUp(pill, { pointerId: 1 })
+        flush()
+        expect(t.api.drag.mock.calls.map((c) => c[0])).toEqual(['start', 'move', 'move', 'end'])
+        fireEvent.pointerMove(pill, { pointerId: 1 })
+        flush()
+        expect(t.api.drag).toHaveBeenCalledTimes(4)
+      } finally { raf.mockRestore(); caf.mockRestore() }
     })
 
     it('a press on a pill button never starts a drag, and the button still works', () => {

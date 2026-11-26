@@ -50,6 +50,8 @@ export interface ScreenLike {
   getCursorScreenPoint(): Point
 }
 
+/** cursor travel (px) below which a pill press is a click, not a drag */
+const DRAG_THRESHOLD_PX = 3
 /** Fix round 1 (reviewer finding 3): a crash loop (bad renderer bundle, GPU churn, …) must not rebuild forever —
  *  at most this many rebuilds inside the rolling window, then it gives up until the next explicit `show()`. */
 const REBUILD_LIMIT = 3
@@ -97,7 +99,7 @@ export function createCuOverlay(d: {
   let rebuilds: number[] = []
   // rc3: where the user dragged the pill to (top-left), for the rest of the run; null = the default top centre
   let dragged: Point | null = null
-  let grab: { cursor: Point; from: Bounds } | null = null
+  let grab: { cursor: Point; from: Bounds; moved: boolean } | null = null
 
   const ensure = (height: number): WinLike => {
     if (win && !win.isDestroyed()) return win
@@ -165,10 +167,16 @@ export function createCuOverlay(d: {
     drag(phase) {
       const w = win && !win.isDestroyed() ? win : null
       if (!w) { grab = null; return }
-      if (phase === 'start') { grab = { cursor: d.screen.getCursorScreenPoint(), from: w.getBounds() }; return }
+      if (phase === 'start') { grab = { cursor: d.screen.getCursorScreenPoint(), from: w.getBounds(), moved: false }; return }
       if (phase !== 'move' && phase !== 'end') return
       if (!grab) return
       const c = d.screen.getCursorScreenPoint()
+      // a plain click on the pill (start → end with no real travel) must neither move nor pin it
+      if (!grab.moved && Math.hypot(c.x - grab.cursor.x, c.y - grab.cursor.y) <= DRAG_THRESHOLD_PX) {
+        if (phase === 'end') grab = null
+        return
+      }
+      grab.moved = true
       const b = clampTo(d.screen, { ...grab.from, x: grab.from.x + c.x - grab.cursor.x, y: grab.from.y + c.y - grab.cursor.y })
       w.setBounds(b)
       dragged = { x: b.x, y: b.y }
