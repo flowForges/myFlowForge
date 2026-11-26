@@ -17,10 +17,12 @@ const COPIED_MS = 2000
 interface HandoffMenuState { sessionId: string; x: number; y: number; items: HandoffTarget[]; tab: HTMLElement | null }
 
 // 右键会话标签:「在 <App> 中继续」。只列主进程说能交接的(有绑定、darwin、App 装了);我方这一轮在途时灰掉。
-function HandoffMenu({ menu, onPick, onClose }: { menu: HandoffMenuState; onPick: (t: HandoffTarget) => void; onClose: (refocus: boolean) => void }) {
+// ★父组件按 sessionId 给 key:换一个标签再开就是新的一份,首项重新拿焦点。
+function HandoffMenu({ menu, onPick, onClose }: { menu: HandoffMenuState; onPick: (t: HandoffTarget, refocus: boolean) => void; onClose: (refocus: boolean) => void }) {
   const ref = useRef<HTMLDivElement>(null)
   const enabled = () => Array.from(ref.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])
-  useEffect(() => { enabled()[0]?.focus() }, [])
+  // 一项都不能点(全灰)时菜单本身拿焦点,Escape / Tab 照样能关掉它
+  useEffect(() => { const first = enabled()[0]; if (first) first.focus(); else ref.current?.focus() }, [])
   useEffect(() => {
     const onDoc = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) onClose(false) }
     const onResize = () => onClose(false)
@@ -43,9 +45,9 @@ function HandoffMenu({ menu, onPick, onClose }: { menu: HandoffMenuState; onPick
     list[next].focus()
   }
   return createPortal(
-    <div ref={ref} className="ws-menu-pop sess-ho-pop" role="menu" style={{ left: menu.x, top: menu.y }} onKeyDown={onKeyDown}>
+    <div ref={ref} className="ws-menu-pop sess-ho-pop" role="menu" tabIndex={-1} style={{ left: menu.x, top: menu.y }} onKeyDown={onKeyDown}>
       {menu.items.map(t => (
-        <button key={t.agent} className="ws-menu-item" role="menuitem" tabIndex={-1} disabled={t.disabled} onClick={() => onPick(t)}>
+        <button key={t.agent} className="ws-menu-item" role="menuitem" tabIndex={-1} disabled={t.disabled} onClick={() => onPick(t, !!ref.current?.contains(document.activeElement))}>
           <span className="wm-ico">{OUT_ICON}</span>
           {`在 ${t.app} 中继续`}
         </button>
@@ -118,9 +120,10 @@ export function SessionTabs({ sessions, activeSessionId, onSwitch, onClose, onRe
     const r = tab.getBoundingClientRect()
     openHandoff(s, r.left, r.bottom + 4, tab)
   }
-  const pickHandoff = (t: HandoffTarget) => {
+  const pickHandoff = (t: HandoffTarget, refocus: boolean) => {
     const m = handoffMenu
     handoffReq.current++
+    if (refocus) m?.tab?.focus()   // 焦点在菜单里(键盘选的):菜单一关就回到标签上,别掉到 body
     setHandoffMenu(null)
     if (!m || !workspacePath) return
     void window.forge.sessionHandoff({ workspacePath, sessionId: m.sessionId, agent: t.agent }).then(r => {
@@ -187,7 +190,7 @@ export function SessionTabs({ sessions, activeSessionId, onSwitch, onClose, onRe
           )})}
         </div>
         {copied && <span className="sess-chip" role="status">已复制会话 ID</span>}
-        {handoffMenu && <HandoffMenu menu={handoffMenu} onPick={pickHandoff} onClose={closeHandoff} />}
+        {handoffMenu && <HandoffMenu key={handoffMenu.sessionId} menu={handoffMenu} onPick={pickHandoff} onClose={closeHandoff} />}
         <div ref={idsWrapRef} className="sess-ids-wrap">
           <button className={'sess-ids-btn' + (idsOpen ? ' on' : '')} title="查看当前会话的 Agent Session ID" onClick={() => setIdsOpen(o => !o)}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.2 1.2"/><path d="M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1.2-1.2"/></svg>

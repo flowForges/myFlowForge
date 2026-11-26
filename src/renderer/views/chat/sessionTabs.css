@@ -121,6 +121,7 @@
 @keyframes sess-attn-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--warn) 55%, transparent); } 70% { box-shadow: 0 0 0 5px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
 
 /* 「在 <App> 中继续」:右键会话标签的菜单(复用 .ws-menu-pop / .ws-menu-item)+ 交接后的短暂 chip。 */
+.sess-ho-pop:focus { outline: none; }
 .sess-ho-pop button.ws-menu-item { border: none; background: transparent; font: inherit; font-size: 12px; }
 .sess-ho-pop button.ws-menu-item:disabled { opacity: .45; cursor: default; background: transparent; color: var(--fg-2); }
 .sess-chip { flex: 0 0 auto; height: 22px; padding: 0 9px; border-radius: 11px; display: inline-flex; align-items: center;

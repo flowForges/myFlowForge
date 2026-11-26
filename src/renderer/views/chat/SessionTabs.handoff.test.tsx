@@ -126,4 +126,44 @@ describe('SessionTabs · 在 App 中继续', () => {
     await flush()
     expect(handoff).toHaveBeenCalledWith({ workspacePath: '/ws/a', sessionId: 's2', agent: 'claude' })
   })
+
+  it('every item disabled: the menu itself takes focus, so Escape / Tab still close it back to the tab', async () => {
+    targets.mockResolvedValue([{ agent: 'codex', app: 'Codex', disabled: true }])
+    renderTabs()
+    const tab = screen.getByText('另一个').closest('button')!
+    tab.focus()
+    fireEvent.keyDown(tab, { key: 'ContextMenu' })
+    await flush()
+    const menu = screen.getByRole('menu')
+    expect(document.activeElement).toBe(menu)
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(document.activeElement).toBe(tab)
+    fireEvent.keyDown(tab, { key: 'ContextMenu' })
+    await flush()
+    fireEvent.keyDown(document.activeElement!, { key: 'Tab' })
+    expect(screen.queryByRole('menu')).toBeNull()
+  })
+
+  it('re-opening the menu for another tab focuses that menu\'s first item; a keyboard pick returns focus to the tab', async () => {
+    targets.mockImplementation(async ({ sessionId }: any) => sessionId === 's1'
+      ? [{ agent: 'codex', app: 'Codex', disabled: false }]
+      : [{ agent: 'claude', app: 'Claude', disabled: false }])
+    renderTabs()
+    const t1 = screen.getByText('绑定的会话').closest('button')!
+    const t2 = screen.getByText('另一个').closest('button')!
+    fireEvent.keyDown(t1, { key: 'ContextMenu' })
+    await flush()
+    expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: '在 Codex 中继续' }))
+    t2.focus()
+    fireEvent.keyDown(t2, { key: 'ContextMenu' })
+    await flush()
+    const claude = screen.getByRole('menuitem', { name: '在 Claude 中继续' })
+    expect(document.activeElement).toBe(claude)
+    fireEvent.click(claude)
+    await flush()
+    expect(handoff).toHaveBeenCalledWith({ workspacePath: '/ws/a', sessionId: 's2', agent: 'claude' })
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(document.activeElement).toBe(t2)
+  })
 })
