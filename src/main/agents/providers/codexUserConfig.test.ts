@@ -1,4 +1,7 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+const logs = vi.hoisted(() => [] as Array<{ level: string; scope: string; msg: string }>)
+vi.mock('../../log/appLog', () => ({ appLog: (level: string, scope: string, msg: string) => { logs.push({ level, scope, msg }); return {} } }))
+beforeEach(() => { logs.length = 0 })
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -81,5 +84,44 @@ describe('codexAppServerIsolationArgs', () => {
         '-c', 'notify=[]', '-c', 'features.plugins=false', '-c', 'developer_instructions=""',
       ])
     } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+})
+
+describe('R9:关不掉的用户 MCP 服务记一条日志', () => {
+  const withHome = (toml: string, fn: (env: NodeJS.ProcessEnv) => void) => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-home-'))
+    try { writeFileSync(join(dir, 'config.toml'), toml); fn({ CODEX_HOME: dir }) } finally { rmSync(dir, { recursive: true, force: true }) }
+  }
+
+  it('根上的点键(mcp_servers.x.command = …)也认得出来、能关(实测 0.154 -c 关得掉)', () => {
+    withHome('mcp_servers.rootdot.command = "node"\nmodel = "x"\n', (env) => {
+      expect(codexAppServerIsolationArgs(env)).toContain('mcp_servers.rootdot.enabled=false')
+      expect(logs).toEqual([])
+    })
+  })
+
+  it('名字带点 / 空格(-c 的裸键写不出来):跳过,并记一条日志点名', () => {
+    withHome('[mcp_servers."has.dot"]\ncommand = "z"\n[mcp_servers."with space"]\ncommand = "z"\n[mcp_servers.ok]\ncommand = "z"\n', (env) => {
+      const args = codexAppServerIsolationArgs(env)
+      expect(args).toContain('mcp_servers.ok.enabled=false')
+      expect(logs).toHaveLength(1)
+      expect(logs[0].scope).toBe('codex')
+      expect(logs[0].msg).toContain('has.dot')
+      expect(logs[0].msg).toContain('with space')
+      expect(logs[0].msg).not.toContain('ok,')
+    })
+  })
+
+  it('根上整张内联表(mcp_servers = { … }):列不出名字,记一条日志', () => {
+    withHome('mcp_servers = { inl = { command = "y" } }\n', (env) => {
+      codexAppServerIsolationArgs(env)
+      expect(logs).toHaveLength(1)
+      expect(logs[0].msg).toContain('mcp_servers = {')
+    })
+  })
+
+  it('都关得掉:不记日志', () => {
+    withHome('[mcp_servers.a]\ncommand = "z"\n', () => {})
+    withHome('[mcp_servers.a]\ncommand = "z"\n', (env) => { codexAppServerIsolationArgs(env); expect(logs).toEqual([]) })
   })
 })
