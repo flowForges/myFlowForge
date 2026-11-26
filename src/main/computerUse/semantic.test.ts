@@ -601,6 +601,21 @@ describe('I4 / I5 / M1: windowless apps, web newlines, cut-short typing', () => 
     if (!r.ok) expect(r.text).toBe('应用没有打开的窗口 · 可以 computer_launch 让它打开一个')
   })
 
+  it('rc3: computer_focus on an app that still has no window after the reopen → no_window (not focus_failed), retry safe, logged', async () => {
+    const s = setup({ mode: 'allow' })
+    ;(s.driver as Record<string, unknown>).focusWindow = async () => { throw new CuDriverError('no_window') }
+    const r = await s.run('focus', { app: 'WorkBuddy' })
+    expect(r).toMatchObject({ ok: false, code: 'no_window', retry: 'safe' })
+    if (!r.ok) expect(r.text).toBe('应用没有打开的窗口 · 可以 computer_launch 让它打开一个')
+    expect(s.entries.at(-1)).toMatchObject({ op: 'focus', result: 'failed', code: 'no_window' })
+  })
+
+  it('rc3: computer_focus gets an 8 s helper deadline (a windowless app is reopened and waited on)', async () => {
+    const s = setup({ mode: 'allow' })
+    expect((await s.run('focus', { app: 'WorkBuddy' })).ok).toBe(true)
+    expect(s.driver.focusWindows[0]).toMatchObject({ deadlineMs: 8_000 })
+  })
+
   it('I5: a web newline refusal (invalid_args / web_newline) says why and how, retry safe', async () => {
     const s = setup()
     s.driver.setActError({ code: 'invalid_args', message: 'web_newline', delivery: 'not_delivered' })

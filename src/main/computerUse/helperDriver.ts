@@ -1,7 +1,7 @@
 import type { Readable, Writable } from 'node:stream'
 import type { Mod } from '@shared/computerUse'
 import {
-  CuDriverError, LAUNCH_DEADLINE_MS, SNAPSHOT_DEADLINE_MS, type ActGuard, type ActRequest, type ActResult, type AppKeyOpts, type AppKeyResult,
+  CuDriverError, FOCUS_DEADLINE_MS, LAUNCH_DEADLINE_MS, SNAPSHOT_DEADLINE_MS, type ActGuard, type ActRequest, type ActResult, type AppKeyOpts, type AppKeyResult,
   type Button, type CaptureOpts, type CaptureResult, type ComputerDriver, type CropOpts, type Delivery,
   type DriverStatus, type FocusWindowOpts, type LaunchOpts, type LaunchResult, type PostAction, type PostGuard,
   type PostResult, type Pt, type ResolveResult, type SnapshotOpts, type SnapshotResult, type WaitForOpts,
@@ -338,7 +338,7 @@ export function helperDriver(o: {
       return r as unknown as LaunchResult
     },
     async focusWindow(o: FocusWindowOpts): Promise<void> {
-      const { deadlineMs = DEFAULT_DEADLINE_MS, ...rest } = o
+      const { deadlineMs = FOCUS_DEADLINE_MS, ...rest } = o
       await strict('focusWindow', { ...rest, deadlineMs }, tsTimeoutFor('focusWindow', deadlineMs))
     },
     async windows(o: WindowsOpts = {}): Promise<WindowsResult> {

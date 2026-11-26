@@ -552,6 +552,38 @@ func launchPlan(attached: Bool, hasWindow: Bool, activate: Bool) -> LaunchPlan {
 /// snapshot of an app that has no window to read: its own code, not `not_found` (that one means "no such app").
 let snapshotNoWindowCode = "no_window"
 
+// MARK: - focusWindow on a windowless app (rc3)
+
+/// One AX window of the target, as focusWindow sees it.
+struct AXWinInfo: Equatable { let number: Int?; let minimized: Bool }
+
+/// A window focusWindow can bring forward: on screen per the window server, or minimized (it can be restored). An app
+/// whose main window was closed but kept alive (WeChat orders it out) can still list it in AXWindows: that one can't be
+/// raised or focused, so it doesn't count. No window number → can't tell, so it is kept (the old behaviour).
+func usableWindow(_ w: AXWinInfo, onScreen: Set<Int>) -> Bool {
+  guard let n = w.number else { return true }
+  return w.minimized || onScreen.contains(n)
+}
+
+enum FocusStep: Equatable { case focus, reopen }
+
+/// No usable window and no specific window asked for → LaunchServices reopen first (the same event `launch` sends a
+/// windowless running app, I4), then wait for a window. A specific window number is focused as asked (not_found if gone).
+func focusPlan(windowNumber: Int?, usableCount: Int) -> FocusStep {
+  windowNumber == nil && usableCount == 0 ? .reopen : .focus
+}
+
+/// still no window after the reopen: say so, it isn't a focus failure
+let focusNoWindowCode = "no_window"
+
+/// The confirmation read. A specific window must be the focused one. Without one, any focused window of the target
+/// app confirms it: the window picked to raise can be a panel that never becomes the focused window, while the app's
+/// real window is (that used to read as focus_failed).
+func focusConfirmed(focusedPid: Int32?, targetPid: Int32, focusedIsTarget: Bool, hasFocusedWindow: Bool, specificWindow: Bool) -> Bool {
+  guard focusedPid == targetPid, hasFocusedWindow else { return false }
+  return specificWindow ? focusedIsTarget : true
+}
+
 /// Entries of `<App>.app/Contents/Frameworks/`: an Electron or CEF app.
 func hasChromiumFramework(_ entries: [String]) -> Bool {
   entries.contains { $0 == "Electron Framework.framework" || $0 == "Chromium Embedded Framework.framework" }

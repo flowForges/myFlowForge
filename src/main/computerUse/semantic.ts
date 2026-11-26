@@ -14,7 +14,7 @@ import {
   type ActRequest, type CuActionView, type CuClass, type CuErrCode, type Delivery, type Instance, type SEMANTIC_TOOLS,
 } from '@shared/computerUse'
 import { renderNodeLine, renderSnapshot } from '@shared/cuSnapshotRender'
-import { CuDriverError, LAUNCH_DEADLINE_MS, SNAPSHOT_DEADLINE_MS, type CuGuard, type Rect } from './driver'
+import { CuDriverError, FOCUS_DEADLINE_MS, LAUNCH_DEADLINE_MS, SNAPSHOT_DEADLINE_MS, type CuGuard, type Rect } from './driver'
 import {
   IDLE_PAUSE_S, TURN_SHOT_CAP, coreFor, fail, fromDriverError, gateFailure, stepAside,
   type ExecCore, type ExecutorDeps,
@@ -40,6 +40,8 @@ const NOTHING_SENT: ReadonlySet<CuErrCode> = new Set<CuErrCode>([
   'stale_ref', 'ambiguous_target', 'not_found', 'own_window', 'blocked_app', 'blocked_combo', 'secure_input',
   'unsupported', 'action_unsupported', 'target_changed', 'no_permission', 'denied', 'invalid_args', 'focus_failed', 'step_limit',
   'rate_limited', 'user_active', 'locked',
+  // rc3: focus on an app that has no window even after the reopen — nothing to type into was reached
+  'no_window',
 ])
 
 const safe = (code: CuErrCode, extra?: string): Fail => ({ ...(fail(code, extra) as Fail), retry: 'safe' })
@@ -426,7 +428,7 @@ export async function runSemantic(
       cls: isOwn(d, t) ? { kind: 'block', code: 'own_window' } : classOf(t, 'focus'),
       view: { kind: 'focus', app: { name: t.name, bundleId: t.bundleId ?? '' }, ...(t.bundleId ? { bundleId: t.bundleId } : {}), actLabel: '聚焦' },
       call: async () => {
-        await d.driver.focusWindow({ pid: t.pid, ...(a.window !== undefined ? { windowNumber: a.window } : {}), guard: deny() })
+        await d.driver.focusWindow({ pid: t.pid, ...(a.window !== undefined ? { windowNumber: a.window } : {}), guard: deny(), deadlineMs: FOCUS_DEADLINE_MS })
         return { text: `已切到前台 ${wrapUntrusted(t.name)}` }
       },
     })

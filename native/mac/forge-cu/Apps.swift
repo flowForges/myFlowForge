@@ -74,13 +74,60 @@ func bringToFront(_ app: NSRunningApplication, _ abort: AbortState?, _ d: Deadli
   return pollUntil(ms: 500, abort, d, { axFrontmost(pid, d) })
 }
 
+/// The target's AX windows, and the ones focusWindow can bring forward (usableWindow: on screen or minimized).
+private func axWindowsOf(_ axApp: AXUIElement, _ pid: Int32, _ d: Deadline) -> (all: [AXUIElement], usable: [AXUIElement]) {
+  let all = axElements(axApp, "AXWindows", d)
+  if all.isEmpty { return ([], []) }
+  let onScreen = Set(cgWindows(pid: pid).compactMap { ($0[kCGWindowNumber as String] as? NSNumber)?.intValue })
+  let usable = all.filter {
+    usableWindow(AXWinInfo(number: axWindowNumber($0), minimized: cfBool(axRead($0, "AXMinimized", d).value) == true), onScreen: onScreen)
+  }
+  return (all, usable)
+}
+
 /// spec §6.5 focusWindow, never past the request deadline `d`. nil = focused; else the error code.
+/// rc3: a running app with no usable window (WeChat after its main window was closed: no AX window, or one that is
+/// ordered out) first gets the LaunchServices reopen `launch` sends (I4) and is waited on for a window; still none →
+/// `no_window`, not `focus_failed`. Without a window number, any focused window of the app confirms the focus.
 func focusWindowImpl(pid: Int32, windowNumber: Int?, _ abort: AbortState?, _ d: Deadline) -> String? {
   guard let app = runningApp(pid), !onMain({ app.isTerminated }) else { return "not_found" }
   func late() -> String? { postGate(expired: d.expired, aborted: abort?.requested ?? false) }
-  guard bringToFront(app, abort, d) else { return late() ?? "focus_failed" }
   let axApp = AXUIElementCreateApplication(pid)
-  guard let win = pickWindow(axApp, number: windowNumber, d) else { return late() ?? (windowNumber == nil ? nil : "not_found") }
+  var wins = axWindowsOf(axApp, pid, d)
+  if focusPlan(windowNumber: windowNumber, usableCount: wins.usable.count) == .reopen {
+    if let c = late() { return c }
+    // the running instance's own bundle URL: another copy's URL would start a second instance. The own / denied
+    // guard was checked on this pid before we got here (focusWindowOp).
+    guard let url = onMain({ app.bundleURL }) else { return focusNoWindowCode }
+    _ = openApp(url, activate: true, ms: min(2000, Int(d.remaining * 1000)))
+    // leave ≥1.5 s of the deadline for the focus itself, so a window that never comes reads as no_window, not timeout
+    _ = pollUntil(ms: max(0, min(5000, Int(d.remaining * 1000) - 1500)), stepMs: 50, abort, d) {
+      if onMain({ app.isTerminated }) { return true }
+      wins = axWindowsOf(axApp, pid, Deadline(ms: min(250, max(1, Int(d.remaining * 1000)))))
+      return !wins.usable.isEmpty
+    }
+    if let c = late() { return c }
+    if onMain({ app.isTerminated }) { return "not_found" }
+    if wins.all.isEmpty { return focusNoWindowCode }
+  }
+  // nothing usable even now (a window on another Space reads the same as an ordered-out one): try the AX window
+  // anyway, and if that doesn't take, it's no_window
+  let failCode = wins.usable.isEmpty ? focusNoWindowCode : "focus_failed"
+  guard bringToFront(app, abort, d) else { return late() ?? failCode }
+  let win: AXUIElement?
+  if let n = windowNumber {
+    win = pickWindow(axApp, number: n, d)
+  } else {
+    let pool = wins.usable.isEmpty ? wins.all : wins.usable
+    let has = { (e: AXUIElement?) -> AXUIElement? in e.flatMap { x in pool.first { CFEqual($0, x) } } }
+    win = has(axElement(axApp, "AXFocusedWindow", d)) ?? has(axElement(axApp, "AXMainWindow", d)) ?? pool.first
+  }
+  guard let win else { return late() ?? (windowNumber == nil ? focusNoWindowCode : "not_found") }
+  if cfBool(axRead(win, "AXMinimized", d).value) == true {
+    if let c = late() { return c }
+    AXUIElementSetMessagingTimeout(win, d.writeTimeout())
+    _ = AXUIElementSetAttributeValue(win, "AXMinimized" as CFString, kCFBooleanFalse)
+  }
   let isMain = { cfBool(axRead(win, "AXMain", d).value) == true }
   if !isMain() {
     if let c = late() { return c }
@@ -97,11 +144,13 @@ func focusWindowImpl(pid: Int32, windowNumber: Int?, _ abort: AbortState?, _ d: 
   for _ in 0..<15 {
     if let c = late() { return c }
     let f = axFocusedAppWindow(d)
-    reads.append(f?.pid == pid && f?.window.map { CFEqual($0, win) } == true)
+    reads.append(focusConfirmed(
+      focusedPid: f?.pid, targetPid: pid, focusedIsTarget: f?.window.map { CFEqual($0, win) } == true,
+      hasFocusedWindow: f?.window != nil, specificWindow: windowNumber != nil))
     if consecutiveHits(reads, need: 2) { return nil }
     _ = abortableSleep(50, abort)
   }
-  return late() ?? "focus_failed"
+  return late() ?? failCode
 }
 
 func focusWindowOp(_ b: [String: Any], _ abort: AbortState) -> [String: Any] {

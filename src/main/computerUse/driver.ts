@@ -14,6 +14,8 @@ export type { ActAction, ActRequest, ActResult, Delivery, Instance, ResolveResul
  *  Chromium accessibility (+4000). The other ops keep the 3000 ms default. */
 export const LAUNCH_DEADLINE_MS = 15_000
 export const SNAPSHOT_DEADLINE_MS = 8_000
+/** rc3: focusWindow may first reopen a running app that has no usable window and wait for one (helper TS timeout +1000) */
+export const FOCUS_DEADLINE_MS = 8_000
 
 export interface Pt { x: number; y: number }
 export interface Rect { x: number; y: number; w: number; h: number }

@@ -1307,5 +1307,30 @@ do {
   eq(snapshotNoWindowCode, "no_window", "snapshot of an app without a window: its own code")
 }
 
+// ── focusWindow on a windowless / hidden-window app (rc3 issue 4) ────────────────
+do {
+  // usable = on screen per the window server, or minimized (it can be restored); an AX window with no number is kept
+  check(usableWindow(AXWinInfo(number: 7, minimized: false), onScreen: [7]), "on screen → usable")
+  check(!usableWindow(AXWinInfo(number: 7, minimized: false), onScreen: []), "listed by AX but ordered out (a closed main window) → not usable")
+  check(usableWindow(AXWinInfo(number: 7, minimized: true), onScreen: []), "minimized → usable")
+  check(usableWindow(AXWinInfo(number: nil, minimized: false), onScreen: []), "no window number → can't tell, kept")
+
+  eq(focusPlan(windowNumber: nil, usableCount: 0), .reopen, "no usable window, no window asked for → reopen first")
+  eq(focusPlan(windowNumber: nil, usableCount: 2), .focus, "has a usable window → focus it")
+  eq(focusPlan(windowNumber: 5, usableCount: 0), .focus, "a specific window asked for → focus (not_found if it isn't there)")
+  eq(focusNoWindowCode, "no_window", "still no window after the reopen: no_window, not focus_failed")
+
+  // the confirmation read: a specific window must be the focused one; otherwise any focused window of the target app
+  check(focusConfirmed(focusedPid: 9, targetPid: 9, focusedIsTarget: false, hasFocusedWindow: true, specificWindow: false),
+        "no window asked for: the app's own focused window counts even if it isn't the one picked (a panel picked)")
+  check(!focusConfirmed(focusedPid: 9, targetPid: 9, focusedIsTarget: false, hasFocusedWindow: false, specificWindow: false),
+        "frontmost with no focused window: not confirmed")
+  check(!focusConfirmed(focusedPid: 9, targetPid: 9, focusedIsTarget: false, hasFocusedWindow: true, specificWindow: true),
+        "a specific window: another window of the app being focused is not enough")
+  check(focusConfirmed(focusedPid: 9, targetPid: 9, focusedIsTarget: true, hasFocusedWindow: true, specificWindow: true), "the asked-for window focused")
+  check(!focusConfirmed(focusedPid: 3, targetPid: 9, focusedIsTarget: false, hasFocusedWindow: true, specificWindow: false), "another app focused")
+  check(!focusConfirmed(focusedPid: nil, targetPid: 9, focusedIsTarget: false, hasFocusedWindow: false, specificWindow: false), "no focused app")
+}
+
 print("forge-cu self-test: \(passed) passed, \(failures) failed")
 exit(failures == 0 ? 0 : 1)

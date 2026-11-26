@@ -627,6 +627,18 @@ describe('helperDriver', () => {
         expect(b.children[0].kill).toHaveBeenCalledWith('SIGUSR1')
       })
 
+      it('rc3: focusWindow defaults to 8 s (TS timeout 9 s)', async () => {
+        vi.useFakeTimers()
+        const a = setup()
+        void a.d.focusWindow({ pid: 7 }).catch(() => {})
+        await flush()
+        expect(a.children[0].written()[0]).toMatchObject({ op: 'focusWindow', deadlineMs: 8000 })
+        await vi.advanceTimersByTimeAsync(8_999)
+        expect(a.children[0].kill).not.toHaveBeenCalled()
+        await vi.advanceTimersByTimeAsync(1)
+        expect(a.children[0].kill).toHaveBeenCalledWith('SIGUSR1')
+      })
+
       it('snapshot TS-times out at deadlineMs + 4000 (not +1000)', async () => {
         vi.useFakeTimers()
         const { d, children } = setup()
