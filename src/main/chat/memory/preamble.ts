@@ -1,5 +1,6 @@
 import { readWorkspaceMemory, readSystemMemory } from './memoryStore'
 import { readSessions } from '../sessionStore'
+import { MEMORY_TITLE } from '../promptHeaders'
 
 export interface PreambleOpts {
   // True only when CLI --resume context is gapped (new session / first turn / resume id missing),
@@ -21,5 +22,5 @@ export function buildMemoryPreamble(wsPath: string, sessionId: string, opts: Pre
     if (summary) blocks.push(`## 本会话摘要\n${summary}`)
   }
   if (blocks.length === 0) return ''
-  return `# 记忆上下文(供参考,不要复述)\n\n${blocks.join('\n\n')}\n`
+  return `${MEMORY_TITLE}\n\n${blocks.join('\n\n')}\n`
 }

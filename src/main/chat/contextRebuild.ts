@@ -2,6 +2,7 @@ import type { ChatMessage, ImportedMessage } from '@shared/types'
 import { inlineAnswers } from '@shared/chat/answerSegments'
 import { readMessages } from './chatStore'
 import { loadCouncils } from '../council/store'
+import { HISTORY_TITLE, INCREMENTAL_HISTORY_TITLE } from './promptHeaders'
 
 const DEFAULT_TURNS = 30
 const DEFAULT_TOKENS = 40000
@@ -49,7 +50,7 @@ export function renderHistoryPreamble(
   if (!msgs.length) return ''
   const head = omitted > 0 ? `（更早历史已省略 ${omitted} 条）\n` : ''
   const body = msgs.map(m => `${m.who === 'user' ? '用户' : '助手'}：${m.text}`).join('\n')
-  const title = opts.incremental ? '【你离开期间本会话继续了以下对话】' : '【历史对话(续)】'
+  const title = opts.incremental ? INCREMENTAL_HISTORY_TITLE : HISTORY_TITLE
   const footer = opts.incremental
     ? '【以上为你离开期间的对话，请先通读理解，在此基础上继续，并自行总结要点】'
     : '【以上为历史，请先通读理解，在此基础上继续，并自行总结要点】'

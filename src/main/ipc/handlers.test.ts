@@ -46,8 +46,16 @@ vi.mock('../pet/growthPetImport', () => ({
   importGrowthPetPack: (...a: any[]) => importGrowthPetPackMock(...a),
   growthPetId: (d: string) => `growth-${d}`,
 }))
-const { recordOwnEndMock } = vi.hoisted(() => ({ recordOwnEndMock: vi.fn(async () => {}) }))
-vi.mock('../sessionLink/binding', () => ({ recordOwnEnd: (...a: any[]) => (recordOwnEndMock as any)(...a) }))
+const { recordOwnEndMock, markOwnStartMock, dropOwnStartMock } = vi.hoisted(() => ({
+  recordOwnEndMock: vi.fn(async (..._a: any[]) => {}),
+  markOwnStartMock: vi.fn(async (..._a: any[]) => {}),
+  dropOwnStartMock: vi.fn((..._a: any[]) => {}),
+}))
+vi.mock('../sessionLink/binding', () => ({
+  recordOwnEnd: (...a: any[]) => (recordOwnEndMock as any)(...a),
+  markOwnStart: (...a: any[]) => (markOwnStartMock as any)(...a),
+  dropOwnStart: (...a: any[]) => (dropOwnStartMock as any)(...a),
+}))
 const { preSendMock, catchUpSessionMock } = vi.hoisted(() => ({
   preSendMock: vi.fn(async (..._a: any[]): Promise<{ appended: any[]; busy?: string }> => ({ appended: [] })),
   catchUpSessionMock: vi.fn(async (..._a: any[]): Promise<any[]> => []),
@@ -1438,6 +1446,48 @@ describe('会话互通:发送前补齐 + 官方 App 占着时不发', () => {
     await tick()
     expect(seenBefore).toBe(true)
     expect(t.sent.find(([, p]) => p?.type === 'external')![1]).toMatchObject({ workspacePath: '/ws/ho', sessionId: 's1', messages: ext })
+  })
+
+  it('codex: the start of our turn is marked after the pre-send check, before the turn counts as ours; a refused turn drops it', async () => {
+    const t = await setup()
+    markOwnStartMock.mockClear(); dropOwnStartMock.mockClear()
+    const { isOwnTurnLive } = await import('../sessionLink/ownTurns')
+    let liveAtMark: boolean | undefined
+    markOwnStartMock.mockImplementationOnce(async () => { liveAtMark = isOwnTurnLive('/ws/ho', 's1', 'codex') })
+    t.sendTurn.mockImplementationOnce(async (_p: any, d: any) => { d.onBusyElsewhere('Codex'); return {} })
+    t.call(CH.chatSend, { ...base, text: 'y' })
+    await tick()
+    expect(markOwnStartMock).toHaveBeenCalledWith('/ws/ho', 's1', 'codex')
+    expect(liveAtMark).toBe(false)
+    expect(dropOwnStartMock).toHaveBeenCalledWith('/ws/ho', 's1', 'codex')
+    // busy before the turn: nothing marked
+    markOwnStartMock.mockClear()
+    preSendMock.mockResolvedValueOnce({ appended: [], busy: 'Codex' })
+    t.call(CH.chatSend, { ...base, sessionId: 's2', text: 'z' })
+    await tick()
+    expect(markOwnStartMock).not.toHaveBeenCalled()
+  })
+
+  it('codex: stopping A with B queued — B\'s pre-send check waits for A\'s own-end record (no false busy)', async () => {
+    const t = await setup()
+    let finishA!: () => void
+    t.sendTurn.mockImplementationOnce(() => new Promise(r => { finishA = () => r({}) }))
+    t.sendTurn.mockImplementation(async () => ({}))
+    let releaseEnd!: () => void
+    recordOwnEndMock.mockImplementationOnce(() => new Promise<void>(r => { releaseEnd = r }))
+    t.call(CH.chatSend, { ...base, text: 'A' })
+    await tick()
+    t.call(CH.chatSend, { ...base, text: 'B' })
+    await tick()
+    expect(preSendMock).toHaveBeenCalledTimes(1)
+    finishA()                                  // the user pressed Stop: A's turn resolves
+    await tick()
+    expect(recordOwnEndMock).toHaveBeenCalledWith('/ws/ho', 's1', 'codex')
+    expect(preSendMock).toHaveBeenCalledTimes(1)   // B has not checked occupancy yet
+    releaseEnd()
+    await tick()
+    expect(preSendMock).toHaveBeenCalledTimes(2)
+    expect(t.sendTurn).toHaveBeenCalledTimes(2)
   })
 
   it('codex "active writer" during the turn blocks the lane like the pre-send check, and is not recorded as our write', async () => {

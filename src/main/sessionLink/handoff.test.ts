@@ -270,3 +270,101 @@ it('a missing transcript is not searched for again for 10 minutes (unless our ow
   t += MISS_TTL_MS + 1
   expect(await resolveBindingFile(ws(), 's2', 'claude', { roots, now })).toBeDefined()
 })
+
+// ---- own-message matching (final review I1 / I2) ----
+const HIST = (pairs: [string, string][]) => `【历史对话(续)】\n${pairs.map(([q, a]) => `用户：${q}\n助手：${a}`).join('\n')}\n【以上为历史，请先通读理解，在此基础上继续，并自行总结要点】`
+const own = (id: string, text: string) => ({ id, who: 'user' as const, text, ts: '2026-11-26T10:00:00.000Z' })
+const ai = (id: string, text: string) => ({ id, who: 'ai' as const, text, ts: '2026-11-26T10:00:01.000Z' })
+
+it('codex re-sends history every turn: our record is matched by its END, the mark keeps up, and an app message equal to our last one is shown', async () => {
+  const { writeSession, appendMessage, readBinding } = await import('../chat/chatStore')
+  const { recordOwnEnd } = await import('./binding')
+  const { catchUp } = await import('./handoff')
+  // turn 1: first codex turn — the binding appears with the turn, recordOwnEnd positions at EOF
+  appendMessage(ws(), 's', own('m1', '你好'))
+  const f = codexTranscript('cxh', bareCodex('你好', 'hi'))
+  writeSession(ws(), 's', 'codex', 'cxh')
+  await recordOwnEnd(ws(), 's', 'codex', { roots })
+  expect(readBinding(ws(), 's', 'codex')!.ownMsgMark).toBe('m1')
+  // turn 2: the record carries the whole history in front of our text
+  appendMessage(ws(), 's', ai('m1a', 'hi'))
+  appendMessage(ws(), 's', own('m2', '继续'))
+  appendFileSync(f, bareCodex(`${HIST([['你好', 'hi']])}\n继续`, 'ok'))
+  await recordOwnEnd(ws(), 's', 'codex', { roots })
+  expect(readBinding(ws(), 's', 'codex')!.ownMsgMark).toBe('m2')
+  expect(readBinding(ws(), 's', 'codex')!.syncedTo!.offset).toBe(statSync(f).size)
+  // 在 Codex 中继续: the user types the same short word in the app
+  appendFileSync(f, bareCodex('继续', 'App 的回答'))
+  expect((await catchUp(ws(), 's', 'codex', { roots })).map(m => m.text)).toEqual(['继续', 'App 的回答'])
+})
+
+it('with several unmatched candidates the record is credited to the message it ENDS with (the latest), not the oldest it contains', async () => {
+  const { writeBinding, appendMessage, readBinding } = await import('../chat/chatStore')
+  const { catchUp } = await import('./handoff')
+  appendMessage(ws(), 's', own('m1', '你好'))
+  appendMessage(ws(), 's', ai('m1a', 'hi'))
+  appendMessage(ws(), 's', own('m2', '继续'))
+  const f = codexTranscript('cxl', bareCodex(`${HIST([['你好', 'hi']])}\n继续`, 'ok'))
+  writeBinding(ws(), 's', 'codex', { resumeId: 'cxl', syncedTo: { offset: 0 } })   // no mark yet: both are candidates
+  expect(await catchUp(ws(), 's', 'codex', { roots })).toEqual([])
+  expect(readBinding(ws(), 's', 'codex')!.ownMsgMark).toBe('m2')
+  appendFileSync(f, bareCodex('继续', 'App 答'))
+  expect((await catchUp(ws(), 's', 'codex', { roots })).map(m => m.text)).toEqual(['继续', 'App 答'])
+})
+
+it('codex: everything written between the start of our turn and its end is ours, even a record that matches nothing (attachment-only)', async () => {
+  const { writeBinding, appendMessage, readBinding, readMessages } = await import('../chat/chatStore')
+  const { recordOwnEnd, markOwnStart } = await import('./binding')
+  const { catchUp } = await import('./handoff')
+  appendMessage(ws(), 's', own('m1', '看图'))
+  const f = codexTranscript('cxa2', bareCodex('看图', '好'))
+  writeBinding(ws(), 's', 'codex', { resumeId: 'cxa2', syncedTo: { offset: statSync(join(roots.codex, '2026', '06', '15', 'rollout-2026-06-15T21-00-00-cxa2.jsonl')).size }, ownMsgMark: 'm1' })
+  appendMessage(ws(), 's', ai('m1a', '好'))
+  appendMessage(ws(), 's', own('m2', ''))        // attachment-only: no text to match
+  await markOwnStart(ws(), 's', 'codex', { roots })
+  appendFileSync(f, bareCodex('<image name="a.png">', '图里是一只猫'))
+  // a catch-up racing the end of our turn must not show it
+  const [shown] = await Promise.all([catchUp(ws(), 's', 'codex', { roots }), recordOwnEnd(ws(), 's', 'codex', { roots })])
+  expect(shown).toEqual([])
+  const b = readBinding(ws(), 's', 'codex')!
+  expect(b.syncedTo!.offset).toBe(statSync(f).size)
+  expect(b.ownMsgMark).toBe('m2')
+  expect(await catchUp(ws(), 's', 'codex', { roots })).toEqual([])
+  appendFileSync(f, bareCodex('App 里问', 'App 答'))
+  expect((await catchUp(ws(), 's', 'codex', { roots })).map(m => m.text)).toEqual(['App 里问', 'App 答'])
+  expect(readMessages(ws(), 's').some(m => m.text === '图里是一只猫')).toBe(false)
+})
+
+it('codex: an app turn that was already there before our turn started still stops the advance', async () => {
+  const { writeBinding, appendMessage, readBinding } = await import('../chat/chatStore')
+  const { recordOwnEnd, markOwnStart } = await import('./binding')
+  appendMessage(ws(), 's', own('m1', '我的'))
+  const f = codexTranscript('cxp', '')
+  writeBinding(ws(), 's', 'codex', { resumeId: 'cxp', syncedTo: { offset: 0 } })
+  appendFileSync(f, bareCodex('App 先问', 'App 答'))   // not caught up yet
+  await markOwnStart(ws(), 's', 'codex', { roots })
+  appendFileSync(f, bareCodex('我的', '好'))
+  await recordOwnEnd(ws(), 's', 'codex', { roots })
+  expect(readBinding(ws(), 's', 'codex')!.syncedTo).toEqual({ offset: 0 })
+})
+
+it('a user record that starts with one of our own prompt headers is ours (no text to match), for catch-up and recordOwnEnd alike', async () => {
+  const { writeBinding, appendMessage, readBinding } = await import('../chat/chatStore')
+  const { recordOwnEnd } = await import('./binding')
+  const { catchUp } = await import('./handoff')
+  appendMessage(ws(), 's', own('m1', ''))
+  const heads = [
+    '【你离开期间本会话继续了以下对话】\n用户：a\n【以上为你离开期间的对话】',
+    '<format-html-visual>\n…\n</format-html-visual>\n【历史对话(续)】\n用户：a',
+    '【工作流「发版」· 第 1/3 步:写方案】\n…',
+    '# 记忆上下文(供参考,不要复述)\n\n## 系统记忆\nx',
+  ]
+  const f = codexTranscript('cxk', jsonl(heads.flatMap((h, i) => [codexMsg('user', h), codexMsg('assistant', `我方答 ${i}`), codexEvent('task_complete')])) + bareCodex('App 问', 'App 答'))
+  writeBinding(ws(), 's', 'codex', { resumeId: 'cxk', syncedTo: { offset: 0 } })
+  expect((await catchUp(ws(), 's', 'codex', { roots })).map(m => m.text)).toEqual(['App 问', 'App 答'])
+  // claude keeps text matching, plus the header rule
+  const cf = claudeTranscript('clk', jsonl([claudeUser('u1', heads[0]), claudeAssistant('a1', [{ type: 'text', text: '我方' }]), claudeStopHook('h1')]))
+  writeBinding(ws(), 's', 'claude', { resumeId: 'clk', syncedTo: { offset: 0 } })
+  await recordOwnEnd(ws(), 's', 'claude', { roots })
+  expect(readBinding(ws(), 's', 'claude')!.syncedTo!.offset).toBe(statSync(cf).size)
+})

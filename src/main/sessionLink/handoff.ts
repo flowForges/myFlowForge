@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { ChatMessage, ToolActivity } from '@shared/types'
 import { appendMessages, readBinding, readMessages, readSessionAgents, readWatermark, writeBinding, writeWatermark } from '../chat/chatStore'
-import { asExtProvider, ensureSyncedTo, norm, NOTIFICATION, ownWriters, resolveBindingFile, sentAfter, type BindingDeps, type Sent } from './binding'
+import { asExtProvider, ensureSyncedTo, isOwnPrompt, linkKey, matchSent, norm, NOTIFICATION, ownStartPending, ownWriters, resolveBindingFile, sentAfter, serialized, type BindingDeps, type Sent } from './binding'
 import { readExternal } from './index'
 import { appName, FORGE_APP, isOccupied } from './occupancy'
 import { isOwnTurnLive } from './ownTurns'
@@ -17,21 +17,13 @@ export interface HandoffDeps extends BindingDeps { maxShown?: number }
 /** codex 拒绝第二个写者时的报错(app-server / exec resume 都是这句)。 */
 export const isActiveWriterError = (message: string): boolean => /active writer/i.test(message)
 
-// 同一个绑定的补齐排队做:打开会话和发送前可能同时触发,并发读同一段会显示两遍。
-const locks = new Map<string, Promise<unknown>>()
-function serialized<T>(key: string, fn: () => Promise<T>): Promise<T> {
-  const run = (locks.get(key) ?? Promise.resolve()).then(fn, fn)
-  const tail = run.catch(() => undefined)
-  locks.set(key, tail)
-  void tail.then(() => { if (locks.get(key) === tail) locks.delete(key) })
-  return run
-}
+// 同一个绑定的补齐排队做(和 recordOwnEnd 同一把锁,见 binding.ts serialized):打开会话和发送前可能同时触发,并发读同一段会显示两遍。
 
 const yieldNow = () => new Promise<void>(r => setImmediate(r))
 const YIELD_EVERY = 5000
 
 /**
- * 外部新增的轮次里哪些是官方 App 的:用户记录对上 Forge 发出的消息(按顺序,同 recordOwnEnd)= 我方的,
+ * 外部新增的轮次里哪些是官方 App 的:用户记录对上 Forge 发出的消息(按顺序,同 recordOwnEnd)或以我方 prompt 抬头开头 = 我方的,
  * 连同其后的助手/工具记录一起跳过;后台任务通知 = 我方留驻进程的,跳过;其余用户记录及其后续 = App 的。
  * 开头没有用户记录的那几条接着上一次:我方会话最后一条是补齐进来的 → App 的,否则是我方的。
  * reset(整份重读):候选是 Forge 发过的全部消息。
@@ -47,8 +39,9 @@ async function appTurns(r: ExtRead, cands0: Sent[], lastWasApp: boolean): Promis
     if (t.who === 'user') {
       const text = norm(t.text)
       if (NOTIFICATION.test(text)) { app = false; continue }
-      const k = cands.findIndex(c => text.includes(c.text))
+      const k = matchSent(text, cands)
       if (k >= 0) { app = false; mark = cands[k].id; cands = cands.slice(k + 1); continue }
+      if (isOwnPrompt(text)) { app = false; continue }
       app = true
     }
     if (app) shown.push(t)
@@ -95,11 +88,12 @@ export function toMessages(turns: ExtTurn[], src: ExtSource, maxShown = MAX_SHOW
  * 我方一轮在途时不补(那一段是我们自己正在写的)。我方新建、还没定位过的绑定只定位到文件末尾,不补。
  */
 export function catchUp(ws: string, sid: string, agent: string, deps: HandoffDeps = {}): Promise<ChatMessage[]> {
-  return serialized(`${ws}\0${sid}\0${agent}`, async () => {
+  return serialized(linkKey(ws, sid, agent), async () => {
     try {
       const p = asExtProvider(agent)
       const b0 = p && readBinding(ws, sid, agent)
-      if (!p || !b0 || isOwnTurnLive(ws, sid, agent)) return []
+      // 我方一轮在途,或刚结束、它的那段还等着 recordOwnEnd 认领(codex / qoder 的起点还在):都不补
+      if (!p || !b0 || isOwnTurnLive(ws, sid, agent) || ownStartPending(ws, sid, agent)) return []
       const file = await resolveBindingFile(ws, sid, agent, deps)
       if (!file) return []
       if (b0.origin === 'forge' && !b0.syncedTo) { await ensureSyncedTo(ws, sid, agent, deps); return [] }
@@ -110,7 +104,7 @@ export function catchUp(ws: string, sid: string, agent: string, deps: HandoffDep
       if (!r.exists) return []
       // 读的期间我方开了一轮 / 换了外部会话 / 我方收尾挪过游标:这次的结果作废,下一次重来
       const b1 = readBinding(ws, sid, agent)
-      if (isOwnTurnLive(ws, sid, agent) || !b1 || b1.resumeId !== b.resumeId || b1.syncedTo?.offset !== b.syncedTo?.offset) return []
+      if (isOwnTurnLive(ws, sid, agent) || ownStartPending(ws, sid, agent) || !b1 || b1.resumeId !== b.resumeId || b1.syncedTo?.offset !== b.syncedTo?.offset) return []
       const existing = readMessages(ws, sid)
       const cands = r.reset ? sentAfter(ws, sid, undefined) : sentAfter(ws, sid, b.ownMsgMark)
       // 接着上一次的只能是**同一家** App 的轮次:另一家补齐进来的消息不算

@@ -10,8 +10,10 @@
 //      自己的组件(于是照样能排序/复制/折叠),但那条路对复杂表格会回退,不如从源头劝住。
 //   3) 明确告诉模型配色会被接管,不必纠结具体色值 —— 它写死的十六进制会被映射到应用的主题 token,好让
 //      卡片跟随皮肤和壁纸配色。省得它花 token 精心挑色。
+import { INLINE_HTML_TAG } from './promptHeaders'
+
 export const INLINE_HTML_DIRECTIVE = [
-  '<format-html-visual>',
+  INLINE_HTML_TAG,
   '<rationale>',
   '纯 Markdown 的单列垂直结构在表达复杂逻辑时有先天缺陷(阅读疲劳、重点不突出、无法横向排版)。请主动评估',
   '内容结构:当纯 Markdown 无法紧凑清晰地传达时,改用内嵌 HTML 片段作为主要表达手段。',

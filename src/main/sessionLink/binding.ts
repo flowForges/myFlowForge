@@ -1,5 +1,6 @@
 import { open, stat } from 'node:fs/promises'
 import { readBinding, readMessages, writeBinding, type ExtSyncCursor } from '../chat/chatStore'
+import { OWN_PROMPT_HEADERS } from '../chat/promptHeaders'
 import { readExternal } from './index'
 import { locateExternal } from './locate'
 import { isOwnTurnLive, liveTurnSessions } from './ownTurns'
@@ -12,6 +13,17 @@ export interface BindingDeps { roots?: Record<ExtProvider, string>; now?: () => 
 const LINKED = new Set<string>(['codex', 'claude', 'qoder'])
 /** chat-session.json 的 agent 键 → 能和官方 App 互通的 provider;其它家 undefined。 */
 export const asExtProvider = (agent: string): ExtProvider | undefined => (LINKED.has(agent) ? agent as ExtProvider : undefined)
+
+/** 同一个绑定上动游标的事(补齐、记我方写者安静)排队做:并发读同一段会显示两遍 / 把我方的那段当成 App 的。 */
+const locks = new Map<string, Promise<unknown>>()
+export const linkKey = (ws: string, sid: string, agent: string): string => `${ws}\0${sid}\0${agent}`
+export function serialized<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const run = (locks.get(key) ?? Promise.resolve()).then(fn, fn)
+  const tail = run.catch(() => undefined)
+  locks.set(key, tail)
+  void tail.then(() => { if (locks.get(key) === tail) locks.delete(key) })
+  return run
+}
 
 /** 找不到外部记录的 (agent, resumeId) 记一阵,别让每次打开会话都去扫一遍目录。 */
 export const MISS_TTL_MS = 10 * 60_000
@@ -69,7 +81,8 @@ export async function ensureSyncedTo(ws: string, sid: string, agent: string, dep
   const f = await resolveBindingFile(ws, sid, agent, deps)
   const eof = f && await eofCursor(f)
   if (!eof) return undefined
-  writeBinding(ws, sid, agent, { syncedTo: eof.cursor })
+  // 到末尾为止全是我们自己的:水位一起推到最后一条,不然下一条较短的消息会去对上 App 里的提问(它包含它)
+  writeBinding(ws, sid, agent, { syncedTo: eof.cursor, ownMsgMark: lastOwnId(ws, sid) })
   return eof.cursor
 }
 
@@ -83,9 +96,21 @@ export const norm = (t: string): string => t.replace(/\s+/g, ' ').trim()
 export const NOTIFICATION = /^<task-notification[\s>]/
 
 export interface Sent { id: string; text: string }
+/** 以我方 prompt 抬头(历史 / 阶段角色 / 记忆 / 格式指令)开头的用户记录:我方的,哪怕没有正文可比对(只发了附件)。 */
+export const isOwnPrompt = (text: string): boolean => OWN_PROMPT_HEADERS.some(h => text.startsWith(h))
 /**
- * 从 syncedTo 起只跳过我方自己的轮次:用户记录的文本包含 Forge 发出的、还没对上过的某条用户消息(按顺序),连同其后的
- * 助手/工具记录。遇到第一条对不上的用户记录就停在它前面,留给下一次补齐显示「在 <App> 中」。
+ * 这条外部用户记录(已 norm)是哪条候选发出去的:我方 prompt 总以消息正文结尾(前面是历史 / 指令),所以先比结尾;
+ * 都对不上再退回「包含」。多条都对得上取**最后**那条 —— 不信任原生续接的 provider 每轮都把之前的消息当历史再发一遍,
+ * 第 N 条的记录里包含 1..N-1,取最早的会让水位落后一条。没有 → -1。
+ */
+export function matchSent(text: string, cands: Sent[]): number {
+  for (let k = cands.length - 1; k >= 0; k--) if (text.endsWith(cands[k].text)) return k
+  for (let k = cands.length - 1; k >= 0; k--) if (text.includes(cands[k].text)) return k
+  return -1
+}
+/**
+ * 从 syncedTo 起只跳过我方自己的轮次:用户记录对上 Forge 发出的、还没对上过的某条用户消息(按顺序,见 matchSent)
+ * 或以我方 prompt 抬头开头,连同其后的助手/工具记录。遇到第一条对不上的用户记录就停在它前面,留给下一次补齐显示「在 <App> 中」。
  * 返回新游标 + 最后一条对上的 Forge 消息 id。
  */
 function pastOwnTurns(r: ExtRead, from: ExtSyncCursor, sent: Sent[]): { cursor: ExtSyncCursor; mark?: string } {
@@ -97,13 +122,47 @@ function pastOwnTurns(r: ExtRead, from: ExtSyncCursor, sent: Sent[]): { cursor: 
     if (t.who !== 'user') continue
     const text = norm(t.text)
     if (NOTIFICATION.test(text)) continue
-    const k = cands.findIndex(c => text.includes(c.text))
-    if (k < 0) return { cursor: offs[i] === undefined || offs[i] <= from.offset ? from : { offset: offs[i] }, mark }
+    const k = matchSent(text, cands)
+    if (k < 0) {
+      if (isOwnPrompt(text)) continue
+      return { cursor: offs[i] === undefined || offs[i] <= from.offset ? from : { offset: offs[i] }, mark }
+    }
     mark = cands[k].id
     cands = cands.slice(k + 1)
   }
   return { cursor: r.next, mark }
 }
+
+/** Forge 自己发的最后一条用户消息(补齐进来的不算)。 */
+function lastOwnId(ws: string, sid: string): string | undefined {
+  const users = readMessages(ws, sid).filter(m => m.who === 'user' && !m.ext)
+  return users[users.length - 1]?.id
+}
+
+/**
+ * R3:codex / qoder 在我方一轮在途时,官方 App 写不进同一个会话(codex 拒绝第二个写者)—— 从这一轮开始时的文件末尾
+ * 到 recordOwnEnd 之间写进来的全是我们的,不靠比对文本(只发附件、整条被历史包住的那轮都对不上)。claude 不算:
+ * 一轮结束后进程还留驻,期间 App 照样能写,只能靠文本比对。只放内存:重启后丢了就退回文本比对。
+ */
+const OWN_RANGE = new Set<ExtProvider>(['codex', 'qoder'])
+const ownStarts = new Map<string, { resumeId: string; offset: number }>()
+/** 发送前的占用检查过了、这一轮登记成我方在途之前调用:记下外部记录此刻的末尾。 */
+export async function markOwnStart(ws: string, sid: string, agent: string, deps: BindingDeps = {}): Promise<void> {
+  const k = linkKey(ws, sid, agent)
+  ownStarts.delete(k)
+  try {
+    const p = asExtProvider(agent)
+    const b = p && OWN_RANGE.has(p) && readBinding(ws, sid, agent)
+    if (!b) return
+    const f = await resolveBindingFile(ws, sid, agent, deps)
+    const eof = f && await eofCursor(f)
+    if (eof) ownStarts.set(k, { resumeId: b.resumeId, offset: eof.cursor.offset })
+  } catch { /* 记不下就退回文本比对 */ }
+}
+/** 这一轮没有真的写(codex 报已有写者):丢掉记下的起点。 */
+export function dropOwnStart(ws: string, sid: string, agent: string): void { ownStarts.delete(linkKey(ws, sid, agent)) }
+/** 有一轮的起点还没被 recordOwnEnd 收掉:那段是我们的,补齐先别碰(recordOwnEnd 马上就来)。 */
+export const ownStartPending = (ws: string, sid: string, agent: string): boolean => ownStarts.has(linkKey(ws, sid, agent))
 
 /** Forge 自己发的用户消息(补齐进来的官方 App 消息不算)里排在水位(ownMsgMark)之后的那些。水位那条已不在(删过消息)→ 全部。 */
 export function sentAfter(ws: string, sid: string, mark: string | undefined): Sent[] {
@@ -117,32 +176,46 @@ export function sentAfter(ws: string, sid: string, mark: string | undefined): Se
  * 调用点:Claude 聊天进程退出(ChatBackgroundHooks.onExit);Codex exec 进程退出 / app-server turn 完成、Qoder 进程退出
  * (这三者都在 sendTurn 收尾之前发生)。读的期间 resume id 变了 → 什么都不写。
  */
-export async function recordOwnEnd(ws: string, sid: string, agent: string, deps: BindingDeps = {}): Promise<void> {
-  try {
-    const p = asExtProvider(agent)
-    const b0 = p && readBinding(ws, sid, agent)
-    if (!p || !b0) return
-    const f = await resolveBindingFile(ws, sid, agent, { ...deps, fresh: true })
-    const eof = f && await eofCursor(f)
-    if (!f || !eof) return
-    let syncedTo: ExtSyncCursor | undefined
-    let ownMsgMark: string | undefined
-    if (!b0.syncedTo) {
-      syncedTo = b0.origin === 'forge' ? eof.cursor : undefined   // 老的我方绑定:之前全是我们自己的历史
-    } else {
-      const r = await readExternal(p, f, b0.syncedTo, { offsets: true })
-      if (!r.exists) return
-      if (!r.reset) {   // 游标对不上:不动它,交给下一次补齐的 reset 处理
-        // 按消息水位挑候选,不按墙钟:claude 换进程时旧进程退出会先写 ownLastWriteAt,比这轮用户消息的 ts 还晚。
-        const walked = pastOwnTurns(r, b0.syncedTo, sentAfter(ws, sid, b0.ownMsgMark))
-        syncedTo = walked.cursor
-        ownMsgMark = walked.mark
+export function recordOwnEnd(ws: string, sid: string, agent: string, deps: BindingDeps = {}): Promise<void> {
+  // 和补齐同一把锁:补齐不会在我们推游标的半路读同一段
+  return serialized(linkKey(ws, sid, agent), async () => {
+    const k = linkKey(ws, sid, agent)
+    const start = ownStarts.get(k)
+    ownStarts.delete(k)
+    try {
+      const p = asExtProvider(agent)
+      const b0 = p && readBinding(ws, sid, agent)
+      if (!p || !b0) return
+      const f = await resolveBindingFile(ws, sid, agent, { ...deps, fresh: true })
+      const eof = f && await eofCursor(f)
+      if (!f || !eof) return
+      let syncedTo: ExtSyncCursor | undefined
+      let ownMsgMark: string | undefined
+      if (!b0.syncedTo) {
+        // 老的我方绑定 / 这一轮才有的绑定:之前全是我们自己的历史,水位也推到最后一条
+        if (b0.origin === 'forge') { syncedTo = eof.cursor; ownMsgMark = lastOwnId(ws, sid) }
+      } else {
+        const r = await readExternal(p, f, b0.syncedTo, { offsets: true })
+        if (!r.exists) return
+        if (!r.reset) {   // 游标对不上:不动它,交给下一次补齐的 reset 处理
+          // 按消息水位挑候选,不按墙钟:claude 换进程时旧进程退出会先写 ownLastWriteAt,比这轮用户消息的 ts 还晚。
+          const walked = pastOwnTurns(r, b0.syncedTo, sentAfter(ws, sid, b0.ownMsgMark))
+          const ownFrom = start && start.resumeId === b0.resumeId ? start.offset : undefined
+          if (ownFrom !== undefined && walked.cursor.offset >= ownFrom) {
+            // 停下的地方已在这一轮的范围里(R3):从那里到末尾全是我们的
+            syncedTo = eof.cursor
+            ownMsgMark = lastOwnId(ws, sid)
+          } else {
+            syncedTo = walked.cursor
+            ownMsgMark = walked.mark
+          }
+        }
       }
-    }
-    const b1 = readBinding(ws, sid, agent)
-    if (!b1 || b1.resumeId !== b0.resumeId) return
-    writeBinding(ws, sid, agent, { ownEnd: { offset: eof.size, mtimeMs: eof.mtimeMs }, ownLastWriteAt: (deps.now ?? Date.now)(), syncedTo, ownMsgMark })
-  } catch { /* 记不下就退回 mtime 规则 */ }
+      const b1 = readBinding(ws, sid, agent)
+      if (!b1 || b1.resumeId !== b0.resumeId) return
+      writeBinding(ws, sid, agent, { ownEnd: { offset: eof.size, mtimeMs: eof.mtimeMs }, ownLastWriteAt: (deps.now ?? Date.now)(), syncedTo, ownMsgMark })
+    } catch { /* 记不下就退回 mtime 规则 */ }
+  })
 }
 
 /**

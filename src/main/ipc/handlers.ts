@@ -46,7 +46,7 @@ import { workflowNameTaken } from '../../shared/workflowName'
 import { listWorkspaces } from '../workspace/workspaceList'
 import { readHomeStats } from '../workspace/homeStats'
 import { sendTurn, history, addTurnAnswer } from '../chat/chatService'
-import { recordOwnEnd } from '../sessionLink/binding'
+import { dropOwnStart, markOwnStart, recordOwnEnd } from '../sessionLink/binding'
 import { beginOwnTurn } from '../sessionLink/ownTurns'
 import { catchUpSession, preSend } from '../sessionLink/handoff'
 import { defaultHandoffDeps, handOff, handoffTargets, type AppHandoffDeps } from '../sessionLink/appHandoff'
@@ -1232,6 +1232,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       note: (t) => emitNote(payload.workspacePath, payload.sessionId, t),
     })
     // 会话互通:这一轮在途期间我们就是这个外部会话的写者(一轮结束后留驻的进程不算,见 sessionLink/ownTurns)。
+    // codex / qoder:先记下外部记录此刻的末尾 —— 从这里到收尾写进来的全是我们的(R3,binding.ts markOwnStart)。
+    // 紧挨着 try:记下之后每条路都要经过下面 finally 的 recordOwnEnd / dropOwnStart。
+    if (payload.agent !== 'claude') await markOwnStart(payload.workspacePath, payload.sessionId, payload.agent).catch(() => {})
     const endOwnTurn = beginOwnTurn(payload.workspacePath, payload.sessionId, payload.agent)
     // codex 在这一轮里报「已有写者」:同一条「没发出」的路(sendTurn 已撤回用户消息、发了 busy_elsewhere)。
     let busyElsewhere: string | undefined
@@ -1260,7 +1263,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       endCuTurn()
       endOwnTurn()
       // codex exec 进程退出 / app-server turn 完成、qoder 进程退出,都在 sendTurn 收尾之前:此刻外部记录就是我方留下的样子。
-      if (payload.agent !== 'claude' && !busyElsewhere) void recordOwnEnd(payload.workspacePath, payload.sessionId, payload.agent)
+      // ★等它记完(只是读一段本地文件):排在后面的那条马上就要做发送前的占用检查,没记下 ownEnd 它会把我们自己
+      //  刚停下的那轮(停止时末尾不是结束标记)当成「App 正在用」。
+      // claude 不在这里记:写者是那个进程,退出(onExit)才算安静。停止时进程是异步退出的 —— 若排着的下一条在它退出前
+      // 就做了检查,可能短暂看到 busy(15 s 内);退出后 recordOwnEnd 和补齐同一把锁,之后的检查都看得到新的 ownEnd。
+      if (payload.agent !== 'claude') {
+        if (busyElsewhere) dropOwnStart(payload.workspacePath, payload.sessionId, payload.agent)
+        else await recordOwnEnd(payload.workspacePath, payload.sessionId, payload.agent).catch(() => {})
+      }
       await authBroker?.close().catch(() => { /* 已经没了 */ })
       // The turn is over. If it ended while a CLI permission gate (confirm) was still open — CLI/turn
       // timeout, error, or the user moved on — drain THIS turn's confirm gates so the pet's 需确认

@@ -29,6 +29,7 @@ import { addDailyTokens } from '../tokens/growthSignalRef'
 import { explainCodexError } from '../agents/providers/codexErrorMeaning'
 import { gateRegistry } from '../gate/gateRegistry'
 import { isAcpUnavailable } from '../agents/acp/acpChat'
+import { STAGE_TITLE_PREFIX } from './promptHeaders'
 
 export interface SendTurnDeps {
   provider: AgentProvider
@@ -178,7 +179,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     if (wfs && wfs.phase === 'chatting' && !deps.adopt) {
       const stage = wfs.stages[wfs.currentIndex]
       if (stage && wfs.currentIndex !== wfs.preambleDoneIndex) {
-        stagePre = `【工作流「${wfs.flowName}」· 第 ${wfs.currentIndex + 1}/${wfs.stages.length} 步:${stage.name}】\n${stage.preamble ?? ''}\n（本阶段内你都在与用户就这一步对话、按需迭代；用户点「下一步」才进入下一阶段，届时会另行告知。）`
+        stagePre = `${STAGE_TITLE_PREFIX}${wfs.flowName}」· 第 ${wfs.currentIndex + 1}/${wfs.stages.length} 步:${stage.name}】\n${stage.preamble ?? ''}\n（本阶段内你都在与用户就这一步对话、按需迭代；用户点「下一步」才进入下一阶段，届时会另行告知。）`
         setSessionWorkflow(ws, sid, { ...wfs, preambleDoneIndex: wfs.currentIndex })
         stageMarkedFrom = { index: wfs.currentIndex, prevDone: wfs.preambleDoneIndex }
       }
