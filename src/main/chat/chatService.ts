@@ -161,7 +161,8 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     } else if (!hasSession) {
       contPre = buildLocalHistoryPreamble(ws, sid)
     } else if (watermark < latest) {
-      contPre = buildLocalHistoryPreamble(ws, sid, {}, { fromIndex: watermark })
+      // 会话互通:能信任原生续接的 provider,它自己官方 App 里那几轮已经在原生会话里了(补齐时的 ext.agent)
+      contPre = buildLocalHistoryPreamble(ws, sid, {}, { fromIndex: watermark, skipExtOf: resumeTrusted ? payload.agent : undefined })
     } else if (!resumeTrusted) {
       // Fast path (native session caught up) would inject nothing — but an unreliable-resume provider
       // may silently redeliver NONE of it, leaving the agent with only this turn's text (the "主代理只
@@ -172,12 +173,14 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     // 现在在做哪一步、直到用户点"下一步"才换阶段。注入到 promptText 而非 payload.text,保持存档干净;
     // 用 preambleDoneIndex 记账,保证每阶段只注入一次(不每轮重复)。
     let stagePre = ''
+    let stageMarkedFrom: { index: number; prevDone?: number } | undefined
     const wfs = meta?.workflowSession
     if (wfs && wfs.phase === 'chatting' && !deps.adopt) {
       const stage = wfs.stages[wfs.currentIndex]
       if (stage && wfs.currentIndex !== wfs.preambleDoneIndex) {
         stagePre = `【工作流「${wfs.flowName}」· 第 ${wfs.currentIndex + 1}/${wfs.stages.length} 步:${stage.name}】\n${stage.preamble ?? ''}\n（本阶段内你都在与用户就这一步对话、按需迭代；用户点「下一步」才进入下一阶段，届时会另行告知。）`
         setSessionWorkflow(ws, sid, { ...wfs, preambleDoneIndex: wfs.currentIndex })
+        stageMarkedFrom = { index: wfs.currentIndex, prevDone: wfs.preambleDoneIndex }
       }
     }
     // 格式指令排在最前:它是「怎么写」的全局约束,后面的阶段角色/历史/记忆都是「写什么」的内容。
@@ -461,6 +464,11 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       clearLive(ws, sid, aid)
       const drop = [aid]
       if (sentUser && !discarded()) { removeMessage(ws, sid, sentUser.id); drop.push(sentUser.id) }
+      // 这一轮没发出去:阶段角色提示也就没送到 —— 记账退回去,重试时再注入一次
+      const cur = stageMarkedFrom && !discarded() ? getSession(ws, sid)?.workflowSession : undefined
+      if (cur && stageMarkedFrom && cur.currentIndex === stageMarkedFrom.index && cur.preambleDoneIndex === stageMarkedFrom.index) {
+        setSessionWorkflow(ws, sid, { ...cur, preambleDoneIndex: stageMarkedFrom.prevDone })
+      }
       emit({ workspacePath: ws, sessionId: sid, type: 'busy_elsewhere', app, drop })
       deps.onBusyElsewhere?.(app)
       return { id: aid, who: 'ai', text: '', model: label, provider: payload.agent, ts: now() }

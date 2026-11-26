@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { ChatMessage, ToolActivity } from '@shared/types'
 import { appendMessages, readBinding, readMessages, readSessionAgents, readWatermark, writeBinding, writeWatermark } from '../chat/chatStore'
 import { asExtProvider, ensureSyncedTo, norm, NOTIFICATION, ownWriters, resolveBindingFile, sentAfter, type BindingDeps, type Sent } from './binding'
@@ -57,18 +58,27 @@ async function appTurns(r: ExtRead, cands0: Sent[], lastWasApp: boolean): Promis
 
 const isoOf = (ts: number): string => new Date(ts > 0 ? ts : Date.now()).toISOString()
 
-/** 外部轮次 → 消息:用户一条一条;助手文字和工具调用并成一条回复,工具调用落成折叠的「执行」块(只有摘要标题)。 */
-export function toMessages(turns: ExtTurn[], app: string, maxShown = MAX_SHOWN): ChatMessage[] {
+export interface ExtSource { app: string; agent: string; resumeId: string }
+/** 只是行偏移的外部 id(`@123`)再带上内容指纹:文件被改写后同一偏移上的另一段内容不会撞上旧消息。 */
+const keyOf = (t: ExtTurn): string => (t.id.startsWith('@') ? `${t.id}:${createHash('sha1').update(t.text).digest('hex').slice(0, 10)}` : t.id)
+/**
+ * 外部轮次 → 消息:用户一条一条;助手文字和工具调用并成一条回复,工具调用落成折叠的「执行」块(只有摘要标题)。
+ * ★消息 id 带上 agent + resumeId:外部记录 id 可能只是行偏移(`@123`),换了外部会话 / 同一会话绑了两家 / 文件被改写后,
+ *  同一个偏移是另一段内容 —— 不加命名空间,去重会把真的 App 轮次当成「已经有了」丢掉。ext.id 保留原样。
+ */
+export function toMessages(turns: ExtTurn[], src: ExtSource, maxShown = MAX_SHOWN): ChatMessage[] {
+  const { app, agent } = src
+  const ns = `ext-${agent}-${src.resumeId}-`
   const out: ChatMessage[] = []
   let ai: ChatMessage | null = null
   for (const t of turns) {
     if (t.who === 'user') {
       ai = null
-      out.push({ id: `ext-${t.id}`, who: 'user', text: t.text, ts: isoOf(t.ts), ext: { app, id: t.id } })
+      out.push({ id: ns + keyOf(t), who: 'user', text: t.text, ts: isoOf(t.ts), ext: { app, agent, id: t.id } })
       continue
     }
     if (!ai) {
-      ai = { id: `ext-${t.id}`, who: 'ai', text: '', ts: isoOf(t.ts), ext: { app, id: t.id } }
+      ai = { id: ns + keyOf(t), who: 'ai', text: '', ts: isoOf(t.ts), ext: { app, agent, id: t.id } }
       out.push(ai)
     }
     if (t.who === 'assistant') ai.text = ai.text ? `${ai.text}\n\n${t.text}` : t.text
@@ -77,7 +87,7 @@ export function toMessages(turns: ExtTurn[], app: string, maxShown = MAX_SHOWN):
   if (out.length <= maxShown) return out
   const kept = out.slice(out.length - maxShown)
   const earlier = out.length - maxShown
-  return [{ id: `ext-earlier-${kept[0].id}`, who: 'ai', text: '', ts: kept[0].ts, ext: { app, id: '', earlier } }, ...kept]
+  return [{ id: `${kept[0].id}-earlier`, who: 'ai', text: '', ts: kept[0].ts, ext: { app, agent, id: '', earlier } }, ...kept]
 }
 
 /**
@@ -103,10 +113,12 @@ export function catchUp(ws: string, sid: string, agent: string, deps: HandoffDep
       if (isOwnTurnLive(ws, sid, agent) || !b1 || b1.resumeId !== b.resumeId || b1.syncedTo?.offset !== b.syncedTo?.offset) return []
       const existing = readMessages(ws, sid)
       const cands = r.reset ? sentAfter(ws, sid, undefined) : sentAfter(ws, sid, b.ownMsgMark)
-      const lastWasApp = !r.reset && !!existing[existing.length - 1]?.ext
+      // 接着上一次的只能是**同一家** App 的轮次:另一家补齐进来的消息不算
+      const last = existing[existing.length - 1]?.ext
+      const lastWasApp = !r.reset && !!last && (last.agent ? last.agent === agent : last.app === appName(p))
       const { shown, mark } = await appTurns(r, cands, lastWasApp)
       const have = new Set(existing.map(m => m.id))
-      const msgs = toMessages(shown, appName(p), deps.maxShown ?? MAX_SHOWN).filter(m => !have.has(m.id))
+      const msgs = toMessages(shown, { app: appName(p), agent, resumeId: b.resumeId }, deps.maxShown ?? MAX_SHOWN).filter(m => !have.has(m.id))
       if (msgs.length) {
         // 这个 provider 原本是跟上的:补进来的这些就在它自己的原生会话里,别再当「错过的历史」喂一遍
         const caughtUp = readWatermark(ws, sid, agent) >= existing.length

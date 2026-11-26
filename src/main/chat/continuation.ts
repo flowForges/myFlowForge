@@ -41,13 +41,15 @@ export function buildLocalHistoryPreamble(
   wsPath: string,
   sessionId: string,
   deps: { read?: (ws: string, sid: string) => ImportedMessage[] } = {},
-  opts: { fromIndex?: number } = {},
+  opts: { fromIndex?: number; skipExtOf?: string } = {},
 ): string {
   // fromIndex slices to only the messages a provider hasn't natively seen yet (incremental catch-up
   // on a provider switch-back). fromIndex omitted/0 renders the full history (unchanged behavior).
   // ★先按原始下标切,再过滤共商消息(见 toModelVisibleHistory)。
   const all = deps.read ? deps.read(wsPath, sessionId) : readMessages(wsPath, sessionId)
-  const sliced = opts.fromIndex ? all.slice(opts.fromIndex) : all
+  const sliced0 = opts.fromIndex ? all.slice(opts.fromIndex) : all
+  // skipExtOf:这个 provider 自己的原生会话里本来就有它的官方 App 里那几轮(补齐进来的,ext.agent),别再喂一遍
+  const sliced = opts.skipExtOf && !deps.read ? (sliced0 as ChatMessage[]).filter(m => m.ext?.agent !== opts.skipExtOf) : sliced0
   const msgs = deps.read ? (sliced as ImportedMessage[]) : toModelVisibleHistory(wsPath, sessionId, sliced as ChatMessage[])
   const { kept, omitted } = clampHistory(msgs)
   return renderHistoryPreamble(kept, omitted, { incremental: !!opts.fromIndex })

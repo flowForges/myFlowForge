@@ -299,10 +299,10 @@ export interface ChatMessage {
   /** 这条用户消息是在一轮跑着时「插话」并进那一轮的(原本在队列里)。对话里带个 `插话` 小标签。 */
   interjected?: boolean
   /**
-   * 会话互通:这条是在官方 App 里发生、回到我方时补齐进来的(标签 `在 <app> 中`)。id = 外部记录里那条的 id。
+   * 会话互通:这条是在官方 App 里发生、回到我方时补齐进来的(标签 `在 <app> 中`)。id = 外部记录里那条的 id;agent = 绑定的 provider。
    * earlier:补齐的积压太长时只留最近的,前面折成一行 `更早的 N 条`(这条本身就是那一行,text 为空)。
    */
-  ext?: { app: string; id: string; earlier?: number }
+  ext?: { app: string; id: string; agent?: string; earlier?: number }
   // AI 共商:这条消息在共商里的位置(席位/轮次/阶段);councilResult 是主持人最终的结构化结论。
   council?: CouncilTag
   councilResult?: CouncilResult

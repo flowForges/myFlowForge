@@ -13,13 +13,24 @@ const LINKED = new Set<string>(['codex', 'claude', 'qoder'])
 /** chat-session.json 的 agent 键 → 能和官方 App 互通的 provider;其它家 undefined。 */
 export const asExtProvider = (agent: string): ExtProvider | undefined => (LINKED.has(agent) ? agent as ExtProvider : undefined)
 
-/** 绑定的外部记录文件:缓存的 extFile 还在就用,否则重新找并缓存。没有绑定 / 找不到 → undefined。 */
-export async function resolveBindingFile(ws: string, sid: string, agent: string, deps: BindingDeps = {}): Promise<string | undefined> {
+/** 找不到外部记录的 (agent, resumeId) 记一阵,别让每次打开会话都去扫一遍目录。 */
+export const MISS_TTL_MS = 10 * 60_000
+const misses = new Map<string, number>()   // `${agent}\0${resumeId}` → 到这个时刻之前不再找
+
+/**
+ * 绑定的外部记录文件:缓存的 extFile 还在就用,否则重新找并缓存。没有绑定 / 找不到 → undefined。
+ * 找不到的结果记 MISS_TTL_MS;fresh = 不信这条记录(我方一轮刚写完,文件一定在)。
+ */
+export async function resolveBindingFile(ws: string, sid: string, agent: string, deps: BindingDeps & { fresh?: boolean } = {}): Promise<string | undefined> {
   const p = asExtProvider(agent)
   const b = p && readBinding(ws, sid, agent)
   if (!p || !b) return undefined
   if (b.extFile && await stat(b.extFile).then(s => s.isFile(), () => false)) return b.extFile
+  const missKey = `${agent}\0${b.resumeId}`
+  const now = (deps.now ?? Date.now)()
+  if (!deps.fresh && (misses.get(missKey) ?? 0) > now) return undefined
   const f = await locateExternal(p, b.resumeId, { roots: deps.roots, cwd: b.cwd ?? ws }).catch(() => undefined)
+  if (f) misses.delete(missKey); else misses.set(missKey, now + MISS_TTL_MS)
   // 找的期间 resume id 变了(新的外部会话):别把旧文件缓存到新绑定上
   if (f && f !== b.extFile && readBinding(ws, sid, agent)?.resumeId === b.resumeId) writeBinding(ws, sid, agent, { extFile: f })
   return f
@@ -111,7 +122,7 @@ export async function recordOwnEnd(ws: string, sid: string, agent: string, deps:
     const p = asExtProvider(agent)
     const b0 = p && readBinding(ws, sid, agent)
     if (!p || !b0) return
-    const f = await resolveBindingFile(ws, sid, agent, deps)
+    const f = await resolveBindingFile(ws, sid, agent, { ...deps, fresh: true })
     const eof = f && await eofCursor(f)
     if (!f || !eof) return
     let syncedTo: ExtSyncCursor | undefined

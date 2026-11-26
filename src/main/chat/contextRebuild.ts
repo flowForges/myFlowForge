@@ -69,6 +69,8 @@ export function toModelVisibleHistory(ws: string, sid: string, msgs: ChatMessage
     : new Map<string, string | undefined>()
   const out: ImportedMessage[] = []
   for (const m of msgs) {
+    // 会话互通的「更早的 N 条」折叠行只是界面上的一行,没有内容可给模型
+    if (m.ext?.earlier) continue
     if (!m.council) { out.push({ who: m.who, text: inlineAnswers(m.text, m.answers), ts: m.ts }); continue }
     if (m.council.stage !== 'final') continue
     // councilResult 缺失 = 围栏解析失败,退回消息正文

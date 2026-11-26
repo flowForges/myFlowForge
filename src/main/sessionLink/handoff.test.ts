@@ -179,3 +179,94 @@ it('isActiveWriterError recognises codex refusing a second writer', async () => 
   expect(isActiveWriterError('thread 019a already has an active writer')).toBe(true)
   expect(isActiveWriterError('Reconnecting... 2/5')).toBe(false)
 })
+
+// ---- fix round 1 ----
+function codexTranscript(id: string, body: string) {
+  const f = join(roots.codex, '2026', '06', '15', `rollout-2026-06-15T21-00-00-${id}.jsonl`)
+  mkdirSync(join(f, '..'), { recursive: true }); writeFileSync(f, body)
+  return f
+}
+// no ids → the readers fall back to the line offset (`@0`, …)
+const bareCodex = (q: string, a: string) => jsonl([codexMsg('user', q), codexMsg('assistant', a), codexEvent('task_complete')])
+const bareClaudeUser = (q: string) => ({ type: 'user', message: { role: 'user', content: q }, timestamp: '2026-06-01T00:01:00.000Z' })
+const bareClaudeAnswer = (a: string) => ({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: a }], stop_reason: 'end_turn' }, timestamp: '2026-06-01T00:02:00.000Z' })
+
+it('ids are namespaced by agent + resume id: a new external session with the same offsets is still shown', async () => {
+  const { writeBinding, readMessages } = await import('../chat/chatStore')
+  const { catchUp } = await import('./handoff')
+  codexTranscript('cxa', bareCodex('第一个会话问', '第一个会话答'))
+  writeBinding(ws(), 's', 'codex', { resumeId: 'cxa', origin: 'imported', syncedTo: { offset: 0 } })
+  expect((await catchUp(ws(), 's', 'codex', { roots })).map(m => m.text)).toEqual(['第一个会话问', '第一个会话答'])
+  codexTranscript('cxb', bareCodex('第二个会话问', '第二个会话答'))
+  writeBinding(ws(), 's', 'codex', { resumeId: 'cxb', origin: 'imported', syncedTo: { offset: 0 } })
+  const msgs = await catchUp(ws(), 's', 'codex', { roots })
+  expect(msgs.map(m => m.text)).toEqual(['第二个会话问', '第二个会话答'])
+  expect(msgs[0].ext?.id).toBe('@0')                 // the raw external id is kept
+  expect(new Set(readMessages(ws(), 's').map(m => m.id)).size).toBe(4)
+})
+
+it('two bindings in one session (claude + codex) at the same offsets do not swallow each other', async () => {
+  const { writeBinding, readMessages } = await import('../chat/chatStore')
+  const { catchUp } = await import('./handoff')
+  claudeTranscript('cl', jsonl([bareClaudeUser('Claude 问'), bareClaudeAnswer('Claude 答')]))
+  codexTranscript('cx', bareCodex('Codex 问', 'Codex 答'))
+  writeBinding(ws(), 's', 'claude', { resumeId: 'cl', origin: 'imported', syncedTo: { offset: 0 } })
+  writeBinding(ws(), 's', 'codex', { resumeId: 'cx', origin: 'imported', syncedTo: { offset: 0 } })
+  await catchUp(ws(), 's', 'claude', { roots })
+  await catchUp(ws(), 's', 'codex', { roots })
+  expect(readMessages(ws(), 's').map(m => m.text)).toEqual(['Claude 问', 'Claude 答', 'Codex 问', 'Codex 答'])
+})
+
+it('a rewrite that puts different content at an already-shown offset shows the new content', async () => {
+  const { writeBinding } = await import('../chat/chatStore')
+  const { catchUp } = await import('./handoff')
+  const f = codexTranscript('cxr', bareCodex('旧问', '旧答'))
+  writeBinding(ws(), 's', 'codex', { resumeId: 'cxr', origin: 'imported', syncedTo: { offset: 0 } })
+  await catchUp(ws(), 's', 'codex', { roots })
+  writeFileSync(f, bareCodex('新问!', '新答!'))       // same line layout, different bytes → reset
+  expect((await catchUp(ws(), 's', 'codex', { roots })).map(m => m.text)).toEqual(['新问!', '新答!'])
+})
+
+it('records continuing the previous owner only continue the SAME app: our codex reply after a claude app turn stays hidden', async () => {
+  const { writeBinding, appendMessage } = await import('../chat/chatStore')
+  const { catchUp } = await import('./handoff')
+  const fx = codexTranscript('cxm', '')
+  writeBinding(ws(), 's', 'codex', { resumeId: 'cxm', syncedTo: { offset: 0 } })
+  appendMessage(ws(), 's', { id: 'mine', who: 'user', text: '我方问 codex', ts: '2026-11-26T10:00:00.000Z' })
+  appendFileSync(fx, jsonl([codexMsg('user', '我方问 codex', 'm1')]))
+  expect(await catchUp(ws(), 's', 'codex', { roots })).toEqual([])
+  // meanwhile a claude app turn is caught up — the last stored message is now a Claude ext message
+  claudeTranscript('clm', jsonl([claudeUser('cu', 'Claude App 问')]))
+  writeBinding(ws(), 's', 'claude', { resumeId: 'clm', origin: 'imported', syncedTo: { offset: 0 } })
+  expect((await catchUp(ws(), 's', 'claude', { roots })).map(m => m.text)).toEqual(['Claude App 问'])
+  appendFileSync(fx, jsonl([codexMsg('assistant', '我方 codex 的回答', 'm2'), codexEvent('task_complete')]))
+  expect(await catchUp(ws(), 's', 'codex', { roots })).toEqual([])
+})
+
+it('catchUp on open and on send at the same moment appends the app turns once', async () => {
+  const { writeBinding, readMessages } = await import('../chat/chatStore')
+  const { catchUp, preSend } = await import('./handoff')
+  claudeTranscript('cc', jsonl(appTurn('1', 'App 问', 'App 答')))
+  writeBinding(ws(), 's', 'claude', { resumeId: 'cc', origin: 'imported', syncedTo: { offset: 0 } })
+  const [a, b] = await Promise.all([catchUp(ws(), 's', 'claude', { roots }), preSend(ws(), 's', 'claude', { roots })])
+  expect(a.length + b.appended.length).toBe(2)
+  expect(readMessages(ws(), 's').map(m => m.text)).toEqual(['App 问', 'App 答'])
+})
+
+it('a missing transcript is not searched for again for 10 minutes (unless our own turn just wrote it)', async () => {
+  const { writeBinding } = await import('../chat/chatStore')
+  const { resolveBindingFile, MISS_TTL_MS } = await import('./binding')
+  writeBinding(ws(), 's', 'claude', { resumeId: 'late' })
+  let t = 1_000_000
+  const now = () => t
+  expect(await resolveBindingFile(ws(), 's', 'claude', { roots, now })).toBeUndefined()
+  const f = claudeTranscript('late', jsonl(appTurn('1', 'q', 'a')))
+  t += MISS_TTL_MS - 1
+  expect(await resolveBindingFile(ws(), 's', 'claude', { roots, now })).toBeUndefined()
+  expect(await resolveBindingFile(ws(), 's', 'claude', { roots, now, fresh: true })).toBe(f)
+  writeBinding(ws(), 's2', 'claude', { resumeId: 'late2' })
+  expect(await resolveBindingFile(ws(), 's2', 'claude', { roots, now })).toBeUndefined()
+  claudeTranscript('late2', jsonl(appTurn('1', 'q', 'a')))
+  t += MISS_TTL_MS + 1
+  expect(await resolveBindingFile(ws(), 's2', 'claude', { roots, now })).toBeDefined()
+})
