@@ -182,6 +182,8 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
   /** tokens whose first call already arrived: their mcp config file is gone (I-1) */
   const used = new Set<string>()
   let seq = 0
+  /** this app run's id: `seq` restarts every launch but the action log persists (CuLogEntry.run) */
+  const runId = cryptoId()
   /** I-2: bumped by every stop / lock / off / forget, so a setMode that awaited across one of them gives up */
   let epoch = 0
   const setTimer = d.setTimer ?? ((fn, ms) => {
@@ -404,6 +406,7 @@ export function createComputerUseService(d: ComputerUseServiceDeps): ComputerUse
       const t = turns.get(keyId(key))
       return t && t.origin === 'local' ? t.seq : 0
     },
+    runId,
     enableSeq: (key) => sessions.get(keyId(key))?.enableSeq ?? 0,
     openGate: (g) => svc.openGate(g),
     hasPendingGate: () => gates.size > 0,

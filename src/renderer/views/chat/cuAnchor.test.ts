@@ -17,6 +17,29 @@ describe('groupCuTurns', () => {
   })
 })
 
+describe('groupCuTurns — turn numbers repeat across app restarts (review 2026-11)', () => {
+  // the turn number is an in-memory ++seq that restarts at 1 every launch, while the log persists
+  const enR = (run: string | undefined, turn: number, ts: number): CuLogEntry => ({ ...en(turn, ts), ...(run ? { run } : {}) })
+  it('same turn number from two runs → two groups (the per-run id differs)', () => {
+    const g = groupCuTurns([enR('r1', 1, 10), enR('r1', 1, 11), enR('r2', 1, 20)])
+    expect(g.map((t) => t.rows.length)).toEqual([2, 1])
+    expect(new Set(g.map((t) => t.key)).size).toBe(2)
+  })
+  it('old entries without a run id: a group splits where the row\'s anchor (last user message ts <= row.ts) changes', () => {
+    const g = groupCuTurns([en(1, 150), en(1, 300), en(1, 600)], [100, 500])
+    expect(g.map((t) => t.rows.map((r) => r.ts))).toEqual([[150, 300], [600]])
+  })
+  it('restart scenario end to end: run 2\'s turn 1 lands under its own reply, not run 1\'s', () => {
+    const tl = [msg('u1', 'user', 100, 0), msg('a1', 'ai', 400, 1), msg('u2', 'user', 500, 2), msg('a2', 'ai', 900, 3)]
+    const users = [100, 500]
+    const r = weaveCuTurns(tl, groupCuTurns([en(1, 150), en(1, 600)], users), 0)
+    expect(shape(r.items)).toEqual(['u1', 'a1', 'cu1', 'u2', 'a2', 'cu1'])
+  })
+  it('rows before any user message share the "no anchor" group', () => {
+    expect(groupCuTurns([en(1, 10), en(1, 20)], [100]).length).toBe(1)
+  })
+})
+
 describe('weaveCuTurns', () => {
   it('each turn block lands after the last message of the turn it ran in (the assistant reply), not at the tail', () => {
     const tl = [msg('u1', 'user', 100, 0), msg('a1', 'ai', 400, 1), msg('u2', 'user', 500, 2), msg('a2', 'ai', 900, 3)]

@@ -26,6 +26,7 @@ export const ENTRY_RING = 2000
 export const PREVIEW_RING = 300
 export const PREVIEW_SESSIONS = 8
 const SAFE_ID = /^[A-Za-z0-9_-]{1,128}$/
+const RUN_ID = /^[A-Za-z0-9]{1,32}$/
 const THUMB_NAME = /^\d{8}\.jpg$/
 const DELIVERIES: ReadonlySet<string> = new Set(['not_delivered', 'uncertain', 'delivered_unverified', 'delivered_without_effect', 'delivered_verified'])
 const sha8 = (s: string) => createHash('sha256').update(s).digest('hex').slice(0, 8)
@@ -33,6 +34,7 @@ const sha8 = (s: string) => createHash('sha256').update(s).digest('hex').slice(0
 /** Only these fields are ever written. `textPreview` is deliberately absent (V11). */
 function toDisk(e: CuLogEntry): Record<string, unknown> {
   const o: Record<string, unknown> = { ts: e.ts, turn: e.turn, op: e.op, result: e.result }
+  if (typeof e.run === 'string' && RUN_ID.test(e.run)) o.run = e.run
   if (e.app !== undefined) o.app = e.app
   if (e.bundleId !== undefined) o.bundleId = e.bundleId
   if (e.at !== undefined) o.at = { x: e.at.x, y: e.at.y }
@@ -62,7 +64,7 @@ function fromDisk(line: string): CuLogEntry | null {
   return e
 }
 
-const previewKey = (e: CuLogEntry) => `${e.ts}|${e.turn}|${e.op}|${e.textLen ?? ''}`
+const previewKey = (e: CuLogEntry) => `${e.ts}|${e.run ?? ''}|${e.turn}|${e.op}|${e.textLen ?? ''}`
 
 export function createActionLog(root: string, fs: FsLike = nodeFs as unknown as FsLike, opts: ActionLogOpts = {}): ActionLog {
   const maxEntries = opts.maxEntries ?? ENTRY_RING

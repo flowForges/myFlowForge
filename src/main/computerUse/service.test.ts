@@ -310,6 +310,13 @@ describe('beginTurn / endTurn', () => {
     expect(await t.svc.handle(tok, 'cursor', {}, {})).toMatchObject({ ok: false, code: 'no_turn' })
   })
 
+  it('each service instance (app run) has its own run id, so restarted turn numbers stay distinguishable', () => {
+    const a = setup().internals.runId
+    const b = setup().internals.runId
+    expect(a).toMatch(/^[A-Za-z0-9]{8,32}$/)
+    expect(b).not.toBe(a)
+  })
+
   it('turnSeq / enableSeq change per turn and per enable period', async () => {
     const t = setup()
     await t.on(A)

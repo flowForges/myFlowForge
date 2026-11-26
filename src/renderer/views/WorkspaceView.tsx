@@ -33,7 +33,7 @@ import { ToolOutputCtx } from './chat/toolOutput'
 import { Composer } from './chat/Composer'
 import { CuStreamTail } from './chat/CuStreamTail'
 import { CuTurnBlock, useCuTurnOpen } from './chat/CuLogBlock'
-import { groupCuTurns, weaveCuTurns } from './chat/cuAnchor'
+import { cuUserTs, groupCuTurns, weaveCuTurns } from './chat/cuAnchor'
 import { useComputerUse } from '../state/useComputerUse'
 import { useHost } from '../state/useHostKey'
 import { workflowMenuCommands } from './chat/slashCommands'
@@ -1156,7 +1156,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   )
   // rc3: each turn's computer-use log block sits right after that turn's reply (cuAnchor.ts), not at the tail
   const cuStream = useMemo(
-    () => weaveCuTurns(liveWindow.visible, cuRemote ? [] : groupCuTurns(cu.log), liveWindow.hiddenCount).items,
+    () => weaveCuTurns(liveWindow.visible, cuRemote ? [] : groupCuTurns(cu.log, cuUserTs(liveWindow.visible)), liveWindow.hiddenCount).items,
     [liveWindow, cuRemote, cu.log],
   )
   const cuOpen = useCuTurnOpen()

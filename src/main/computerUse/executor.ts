@@ -156,7 +156,7 @@ function makeCore(d: ExecutorDeps): ExecCore {
 
   async function record(key: CuSessionKey, e: Omit<CuLogEntry, 'ts' | 'turn'>, thumb?: string): Promise<void> {
     try {
-      const out = await d.log.append(key, { ts: d.now(), turn: d.svc.turnSeq(key), ...e }, thumb)
+      const out = await d.log.append(key, { ts: d.now(), turn: d.svc.turnSeq(key), ...(d.svc.runId ? { run: d.svc.runId } : {}), ...e }, thumb)
       d.svc.emitAction(key, out)
     } catch { /* the log is best effort; it never blocks or leaks */ }
   }

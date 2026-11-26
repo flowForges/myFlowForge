@@ -54,6 +54,7 @@ function setup(o: {
     driver,
     modeOf: () => st.mode,
     turnSeq: () => st.turn,
+    runId: 'RUN1',
     enableSeq: () => (st.mode === 'off' ? 0 : st.enable),
     openGate: vi.fn(async (g: GateIn) => { gates.push(g); onGate?.(g); return decisions.shift() ?? 'allow' }),
     hasPendingGate: () => false,
@@ -791,7 +792,7 @@ describe('the log and secrets', () => {
     await s.run('click', { x: 640, y: 400 })
     const e = s.entries[0]
     expect(e.thumb).toBe('ZmFrZQ==')
-    expect(e.e).toMatchObject({ op: 'click', app: 'Example', bundleId: 'com.example.app', result: 'allowed', at: { x: 640, y: 400 }, turn: 1 })
+    expect(e.e).toMatchObject({ op: 'click', app: 'Example', bundleId: 'com.example.app', result: 'allowed', at: { x: 640, y: 400 }, turn: 1, run: 'RUN1' })
     expect(s.emitted).toHaveLength(1)
   })
 

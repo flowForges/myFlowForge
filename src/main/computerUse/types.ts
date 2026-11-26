@@ -37,6 +37,11 @@ export interface CuGate {
 
 export interface CuLogEntry {
   ts: number; turn: number; op: CuOp; app?: string; bundleId?: string; at?: Pt
+  /**
+   * per-app-run id stamped by the service. `turn` is an in-memory ++seq that restarts every launch while this log
+   * persists, so (run, turn) is what identifies a turn. Absent on entries written before it existed.
+   */
+  run?: string
   /** memory only (V11): stripped before anything reaches disk */
   textPreview?: string
   textLen?: number
@@ -80,6 +85,11 @@ export interface ServiceInternals {
   modeOf(key: CuSessionKey): ComputerUseMode
   /** serial of the open local turn (0 = none); per-turn counters reset when it changes */
   turnSeq(key: CuSessionKey): number
+  /**
+   * id of this app run, stamped on every log entry. turnSeq restarts at 1 each launch while the log persists, so the
+   * renderer groups by (run, turn). Optional so test fakes can leave it out.
+   */
+  runId?: string
   /** serial of the current enable period (0 = off); vision code and the 2000 cap reset when it changes */
   enableSeq(key: CuSessionKey): number
   openGate(g: Omit<CuGate, 'id' | 'ts'>): Promise<GateDecision>

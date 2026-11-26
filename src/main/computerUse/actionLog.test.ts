@@ -32,6 +32,16 @@ describe('actionLog', () => {
     expect(list[1].combo).toBe('⌘T')
   })
 
+  it('the per-run id survives a reload; old entries without one still load; a bad one is dropped', async () => {
+    const root = mk()
+    const a = createActionLog(root)
+    await a.append(K, entry({ run: 'R7abc' }))
+    await a.append(K, entry({ ts: 2000 }))
+    await a.append(K, entry({ ts: 3000, run: '../x'.repeat(20) }))
+    const list = await createActionLog(root).list(K)
+    expect(list.map((e) => e.run)).toEqual(['R7abc', undefined, undefined])
+  })
+
   it('the typed text is on no disk file, only its length', async () => {
     const root = mk()
     const log = createActionLog(root)
