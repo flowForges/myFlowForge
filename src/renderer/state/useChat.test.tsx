@@ -4,7 +4,7 @@ import { useChat } from './useChat'
 import { DESKTOP_TOOL_OUTPUT_CAP } from '../views/chat/toolOutput'
 import type { ChatEvent, ChatGateSnapshot, ChatMessage } from '@shared/types'
 
-interface QueueEvent { workspacePath: string; busy: boolean; queue: { id: string; text: string; source: string; sessionId: string }[]; running: { id: string; text: string; sessionId: string } | null; runningTurns: { id: string; text: string; sessionId: string }[]; runningSessionId: string | null; runningSessionIds: string[] }
+interface QueueEvent { workspacePath: string; busy: boolean; queue: { id: string; text: string; source: string; sessionId: string; interjectable?: boolean }[]; running: { id: string; text: string; sessionId: string } | null; runningTurns: { id: string; text: string; sessionId: string }[]; runningSessionId: string | null; runningSessionIds: string[] }
 let handler: ((e: ChatEvent) => void) | null = null
 let queueHandler: ((e: QueueEvent) => void) | null = null
 const history: ChatMessage[] = [{ id: 'h1', who: 'user', text: 'old', ts: '0' }]
@@ -24,6 +24,7 @@ beforeEach(() => {
     onChatEvent: (cb: (e: ChatEvent) => void) => { handler = cb; return () => { handler = null } },
     onChatQueueEvent: (cb: (e: QueueEvent) => void) => { queueHandler = cb; return () => { queueHandler = null } },
     chatCancelQueued: vi.fn(async () => ({})),
+    chatInterject: vi.fn(async () => ({ ok: true })),
     chatClearQueue: vi.fn(async () => ({})),
     chatStop: vi.fn(async () => ({}))
   }
@@ -320,6 +321,54 @@ describe('useChat', () => {
     expect((window as any).forge.chatCancelQueued).toHaveBeenCalledWith({ workspacePath: '/ws', id: 'q1' })
     act(() => { result.current.clearQueue() })
     expect((window as any).forge.chatClearQueue).toHaveBeenCalledWith({ workspacePath: '/ws' })
+  })
+
+  it('cancelQueued resolves with whatever the bridge returns, so the caller can decide to refill the composer only on success', async () => {
+    const { result } = renderHook(() => useChat('/ws', 's1'))
+    await waitFor(() => expect(queueHandler).not.toBeNull())
+    ;(window as any).forge.chatCancelQueued.mockResolvedValueOnce(true)
+    await expect(result.current.cancelQueued('q1')).resolves.toBe(true)
+    ;(window as any).forge.chatCancelQueued.mockResolvedValueOnce(false)
+    await expect(result.current.cancelQueued('q2')).resolves.toBe(false)
+  })
+
+  it('interject(id) calls chatInterject with workspacePath/sessionId/queuedId', async () => {
+    const { result } = renderHook(() => useChat('/ws', 's1'))
+    await waitFor(() => expect(queueHandler).not.toBeNull())
+    act(() => { result.current.interject('q1') })
+    expect((window as any).forge.chatInterject).toHaveBeenCalledWith({ workspacePath: '/ws', sessionId: 's1', queuedId: 'q1' })
+  })
+
+  it('carries the per-item interjectable flag from the queue event through to chat.queue', async () => {
+    const { result } = renderHook(() => useChat('/ws', 's1'))
+    await waitFor(() => expect(queueHandler).not.toBeNull())
+    act(() => {
+      queueHandler!({
+        workspacePath: '/ws', busy: true,
+        queue: [
+          { id: 'q1', text: 'a', source: '你', sessionId: 's1', interjectable: true },
+          { id: 'q2', text: 'b', source: '你', sessionId: 's1', interjectable: false },
+        ],
+        running: null, runningTurns: [], runningSessionId: 's1', runningSessionIds: ['s1'],
+      })
+    })
+    expect(result.current.queue.find(q => q.id === 'q1')?.interjectable).toBe(true)
+    expect(result.current.queue.find(q => q.id === 'q2')?.interjectable).toBe(false)
+  })
+
+  it('a mid-turn interjected user event is inserted before the in-flight streaming assistant reply, matching the persisted order', async () => {
+    const { result } = renderHook(() => useChat('/ws', 's1'))
+    await waitFor(() => expect(result.current.messages).toHaveLength(1))
+    // The turn is already streaming when the interject lands.
+    act(() => { handler!({ workspacePath: '/ws', sessionId: 's1', type: 'assistant-start', id: 'a1', model: 'Claude Code · opus-4.8' }) })
+    act(() => { handler!({ workspacePath: '/ws', sessionId: 's1', type: 'assistant-delta', id: 'a1', text: '在写' }) })
+    await waitFor(() => expect(result.current.messages.find(m => m.id === 'a1')?.text).toBe('在写'))
+    act(() => { handler!({ workspacePath: '/ws', sessionId: 's1', type: 'user', message: { id: 'u-interject', who: 'user', text: '插一句', ts: '2', interjected: true } }) })
+    expect(result.current.messages.map(m => m.id)).toEqual(['h1', 'u-interject', 'a1'])
+
+    // A normal (non-interjected) user message still appends at the end.
+    act(() => { handler!({ workspacePath: '/ws', sessionId: 's1', type: 'user', message: { id: 'u-normal', who: 'user', text: '普通', ts: '3' } }) })
+    expect(result.current.messages.map(m => m.id)).toEqual(['h1', 'u-interject', 'a1', 'u-normal'])
   })
 })
 

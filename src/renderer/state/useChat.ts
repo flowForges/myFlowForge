@@ -6,7 +6,7 @@ import type { CouncilTag } from '@shared/council'
 import type { PlanReq } from '../components/PlanCard'
 import { DESKTOP_TOOL_OUTPUT_CAP, omitLargeToolOutput, omitLargeToolOutputs } from '../views/chat/toolOutput'
 
-export interface ChatQueueItem { id: string; text: string; source: string }
+export interface ChatQueueItem { id: string; text: string; source: string; interjectable: boolean }
 
 export interface AskReq { id: string; title: string; options?: { t: string; d: string }[]; agentName?: string; ts: string }
 export interface ChatApi {
@@ -32,7 +32,9 @@ export interface ChatApi {
   resolveConfirm: (payload: { id: string; decision: 'allow' | 'deny'; value?: string; answers?: AskAnswers; response?: string }) => void
   resolveAsk: (payload: { id: string; decision: 'allow' | 'deny'; value?: string; choice?: number }) => void
   resolvePlan: (payload: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; selection?: { stages: string[]; stageProjects: Record<string, string[]> } }) => void
-  cancelQueued: (id: string) => void
+  cancelQueued: (id: string) => Promise<boolean>
+  /** 插话:把排队里这一条并进当前这一轮(只在该条 `interjectable` 时才有意义调用)。 */
+  interject: (id: string) => void
   clearQueue: () => void
   stop: () => void
 }
@@ -178,7 +180,7 @@ export function useChat(
       if (!live || e.workspacePath !== workspacePath) return
       const sid = sessionId
       setBusy(e.runningSessionIds.includes(sid))
-      setQueue(e.queue.filter(q => q.sessionId === sid).map(q => ({ id: q.id, text: q.text, source: q.source })))
+      setQueue(e.queue.filter(q => q.sessionId === sid).map(q => ({ id: q.id, text: q.text, source: q.source, interjectable: q.interjectable })))
       const mine = e.runningTurns.find(r => r.sessionId === sid)
       setRunning(mine ? { id: mine.id, text: mine.text } : null)
       setBackgroundTasks(e.backgroundTasks?.[sid] ?? 0)
@@ -215,7 +217,7 @@ export function useChat(
       // button that would cancel A's turn. Filter the workspace-wide event down to this session.
       const sid = sessionId ?? ''
       setBusy(e.runningSessionIds.includes(sid))
-      setQueue(e.queue.filter(q => q.sessionId === sid).map(q => ({ id: q.id, text: q.text, source: q.source })))
+      setQueue(e.queue.filter(q => q.sessionId === sid).map(q => ({ id: q.id, text: q.text, source: q.source, interjectable: q.interjectable })))
       const mine = e.runningTurns.find(r => r.sessionId === sid)
       setRunning(mine ? { id: mine.id, text: mine.text } : null)
       setBackgroundTasks(e.backgroundTasks?.[sid] ?? 0)
@@ -272,7 +274,18 @@ export function useChat(
         return
       }
       flushDeltas()
-      if (e.type === 'user') setMessages(m => [...m, e.message])
+      // 普通发送:这条用户消息永远排在末尾(当时这一轮还没开始流)。
+      // 插话:它是中途并进**正在跑着**那一轮的 —— 落盘顺序是 user、插话 user、ai 回复,
+      // 但这个事件到达时,那条 ai 回复已经在流了(assistant-start 早就把它的占位插进了 messages)。
+      // 不特殊处理的话,追加到末尾会把它画在 ai 回复后面,和落盘/刷新后的顺序倒过来。
+      // `ts === ''` 是「还没落盘的流式回复」的标记(历史重放时同一个判断见上面 inflight)。
+      if (e.type === 'user') {
+        setMessages(m => {
+          if (!e.message.interjected) return [...m, e.message]
+          const idx = m.findIndex(x => x.who === 'ai' && x.ts === '')
+          return idx === -1 ? [...m, e.message] : [...m.slice(0, idx), e.message, ...m.slice(idx)]
+        })
+      }
       else if (e.type === 'assistant-start') {
         setStreamingIds(s => new Set(s).add(e.id))
         setMessages(m => upsertMsg(m, e.id, x => x, () => ({ ...blankAi(e.id), model: e.model, context: e.context, startedAt: Date.now(), ...(e.council ? { council: e.council } : {}) })))
@@ -411,10 +424,15 @@ export function useChat(
     void api.current.chatResolve({ ...payload, workspacePath })
   }, [workspacePath])
 
-  const cancelQueued = useCallback((id: string) => {
-    if (!workspacePath) return
-    void api.current.chatCancelQueued({ workspacePath, id })
+  const cancelQueued = useCallback((id: string): Promise<boolean> => {
+    if (!workspacePath) return Promise.resolve(false)
+    return api.current.chatCancelQueued({ workspacePath, id })
   }, [workspacePath])
+
+  const interject = useCallback((id: string) => {
+    if (!workspacePath || !sessionId) return
+    void api.current.chatInterject({ workspacePath, sessionId, queuedId: id })
+  }, [workspacePath, sessionId])
 
   const clearQueue = useCallback(() => {
     if (!workspacePath) return
@@ -426,5 +444,5 @@ export function useChat(
     void api.current.chatStop({ workspacePath, sessionId })
   }, [workspacePath, sessionId])
 
-  return { messages, streamingIds, historyLoading, confirms, asks, plans, busy, queue, running, backgroundTasks, send, resolveConfirm, resolveAsk, resolvePlan, cancelQueued, clearQueue, stop }
+  return { messages, streamingIds, historyLoading, confirms, asks, plans, busy, queue, running, backgroundTasks, send, resolveConfirm, resolveAsk, resolvePlan, cancelQueued, interject, clearQueue, stop }
 }

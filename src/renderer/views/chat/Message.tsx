@@ -79,6 +79,9 @@ function MessageImpl({ msg, streaming, index, onViewChanges, onOpenDoc }: Props)
       {!isUser && msg.subagents?.length ? <SubagentCards subagents={msg.subagents} live={streaming} /> : null}
       {isUser ? (
         <div className="msg-body user-body">
+          {/* 这条用户消息是在一轮跑着时「插话」并进那一轮的(见 ChatMessage.interjected)。
+              复用队列条里「来自{source}」那枚药丸的样式(.tq-src),不新起一套。 */}
+          {msg.interjected && <span className="tq-src">插话</span>}
           <div className="user-bubble">{msg.text}</div>
         </div>
       ) : (

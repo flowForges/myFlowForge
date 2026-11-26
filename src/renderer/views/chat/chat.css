@@ -223,7 +223,7 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
 /* User's own messages sit on the right, but the text inside the bubble stays readable. */
 .msg.user { display: flex; flex-direction: column; align-items: flex-end; }
 .msg.user .msg-head { flex-direction: row-reverse; align-self: flex-end; }
-.msg.user .msg-body { padding-left: 0; padding-right: 0; width: min(620px, calc(100% - 33px)); display: flex; justify-content: flex-end; }
+.msg.user .msg-body { padding-left: 0; padding-right: 0; width: min(620px, calc(100% - 33px)); display: flex; align-items: center; gap: 6px; justify-content: flex-end; }
 .user-bubble {
   max-width: 100%; padding: 11px 14px; border-radius: 14px 14px 4px 14px;
   background: var(--accent); color: var(--on-accent); text-align: left;
@@ -483,6 +483,10 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
 .tq-txt { flex: 1; min-width: 0; font-size: 12.5px; color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tq-src { font: 600 10px/1 var(--mono); color: var(--accent); background: var(--accent-dim); padding: 3px 6px; border-radius: 5px; flex: 0 0 auto; }
 .tq-wait { font: 600 9.5px/1 var(--mono); letter-spacing: .05em; text-transform: uppercase; color: oklch(78% .12 80); background: oklch(80% .13 80 / .16); padding: 3px 7px; border-radius: 99px; flex: 0 0 auto; }
+.tq-interject { width: 22px; height: 22px; flex: 0 0 22px; border-radius: 6px; color: var(--faint); display: grid; place-items: center; transition: .13s; }
+.tq-interject:hover:not(:disabled) { background: var(--accent-dim); color: var(--accent); }
+.tq-interject:disabled { opacity: .4; cursor: default; }
+.tq-interject svg { width: 13px; height: 13px; }
 .tq-x { width: 22px; height: 22px; flex: 0 0 22px; border-radius: 6px; color: var(--faint); display: grid; place-items: center; transition: .13s; }
 .tq-x:hover { background: oklch(68% .18 25 / .14); color: var(--err); }
 .tq-x svg { width: 13px; height: 13px; }

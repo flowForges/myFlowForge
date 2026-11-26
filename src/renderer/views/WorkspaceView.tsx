@@ -401,6 +401,10 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   const chat = useChat(wsPath, sessions.activeSessionId, (mode) => {
     if (mode === 'workflow') setForceChat(false)
   })
+  // 插话按钮:点了就先本地禁用(等结果),失败会把这条放回队列原位 —— 不弹说明文字,
+  // 只靠「下一次队列事件」把按钮状态交还给 interjectable 本身(见 WorkspaceView.chat.test.tsx)。
+  const [pendingInterject, setPendingInterject] = useState<Set<string>>(new Set())
+  useEffect(() => { setPendingInterject(new Set()) }, [chat.queue])
   const wsName = run?.workspaceName ?? (wsPath ? baseName(wsPath) : '') ?? ''
 
   // Inspector mode: forceChat overrides to chat mode; reset when a run for this ws goes live
@@ -1802,7 +1806,17 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                   <span className="tq-txt">{q.text}</span>
                   {q.source !== '你' && <span className="tq-src">来自{q.source}</span>}
                   <span className="tq-wait">排队中</span>
-                  <button className="tq-x" title="取消(AI 尚未读取)" onClick={() => { setQuickSeed({ text: q.text, nonce: Date.now() }); chat.cancelQueued(q.id) }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg></button>
+                  {q.interjectable && (
+                    <button
+                      className="tq-interject"
+                      title="插话"
+                      disabled={pendingInterject.has(q.id)}
+                      onClick={() => { setPendingInterject(s => new Set(s).add(q.id)); chat.interject(q.id) }}
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"><polyline points="15 10 20 15 15 20" /><path d="M4 4v7a4 4 0 0 0 4 4h12" /></svg>
+                    </button>
+                  )}
+                  <button className="tq-x" title="取消(AI 尚未读取)" onClick={() => { void chat.cancelQueued(q.id).then(ok => { if (ok) setQuickSeed({ text: q.text, nonce: Date.now() }) }) }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg></button>
                 </div>
               ))}
             </div>

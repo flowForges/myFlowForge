@@ -64,6 +64,17 @@ describe('Message', () => {
     expect(onOpenDoc).toHaveBeenCalledWith(doc)
   })
 
+  it('shows a 插话 tag next to a user message that was interjected into a running turn', () => {
+    const { container } = render(<Message msg={{ id: 'u', who: 'user', text: '插一句', interjected: true } as any} streaming={false} />)
+    expect(container.querySelector('.tq-src')).toBeTruthy()
+    expect(container.querySelector('.tq-src')!.textContent).toBe('插话')
+  })
+
+  it('does not show the 插话 tag on a normal user message', () => {
+    const { container } = render(<Message msg={{ id: 'u', who: 'user', text: '普通消息' } as any} streaming={false} />)
+    expect(container.querySelector('.tq-src')).toBeNull()
+  })
+
   it('does not render loaded skills/rules inline in the message body', () => {
     render(<Message msg={{ id: 'a', who: 'ai', text: 'hi', context: { skills: [{ name: 'forge-workflow', path: 'x' }], rules: [{ name: 'AGENTS.md', path: 'y' }] } } as any} streaming={false} />)
     expect(screen.queryByText('Skill')).toBeNull()

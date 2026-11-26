@@ -11,18 +11,19 @@ const engine: EngineApi = {
 }
 const sendChat = vi.fn(async (_payload: { workspacePath: string; text: string }) => ({}))
 const chatCancelQueued = vi.fn(async () => ({}))
+const chatInterject = vi.fn(async () => ({ ok: true }))
 const chatClearQueue = vi.fn(async () => ({}))
 const chatStop = vi.fn(async () => ({}))
 let queueCb: ((e: ChatQueueEvent) => void) | null = null
 beforeEach(() => {
-  sendChat.mockClear(); chatCancelQueued.mockClear(); chatClearQueue.mockClear(); chatStop.mockClear(); queueCb = null
+  sendChat.mockClear(); chatCancelQueued.mockClear(); chatInterject.mockClear(); chatClearQueue.mockClear(); chatStop.mockClear(); queueCb = null
   ;(window as any).forge = {
     chatHistory: async () => [{ id: 'h1', who: 'user', text: '历史消息', ts: '0' } as ChatMessage],
     lastRun: async () => null,
     sendChat, openFiles: async () => [], savePaste: vi.fn(),
     onChatEvent: () => () => {},
     onChatQueueEvent: (cb: (e: ChatQueueEvent) => void) => { queueCb = cb; return () => { queueCb = null } },
-    chatCancelQueued, chatClearQueue, chatStop,
+    chatCancelQueued, chatInterject, chatClearQueue, chatStop,
     watchChanges: async () => [], watchStop: async () => {}, fsTree: async () => [],
     gitDiff: async () => [], gitFile: async () => ({ text: '', lang: 'ts' }),
     onChangesEvent: () => () => {},
@@ -129,6 +130,90 @@ describe('WorkspaceView task-queue panel', () => {
     const ta = container.querySelector('textarea')!
     await waitFor(() => expect(ta.value).toBe('改主色调'))
     expect(chatCancelQueued).toHaveBeenCalledWith({ workspacePath: '/ws', id: 'q1' })
+  })
+
+  it('does NOT seed the composer on × when chatCancelQueued resolves false (已被调度/撤回失败)', async () => {
+    // A distinct, never-seeded string — the Composer's draft store is module-level and persists across
+    // tests in this file (by design, so switching sessions keeps an unsent draft), so asserting against
+    // '' would be fooled by whatever an earlier/later test left behind. Asserting this exact text never
+    // lands is immune to that.
+    chatCancelQueued.mockResolvedValueOnce(false)
+    const { container } = render(<WorkspaceView engine={engine} providers={providers} workspacePath="/ws" />)
+    await waitFor(() => expect(queueCb).toBeTypeOf('function'))
+    act(() => queueCb!({
+      workspacePath: '/ws',
+      busy: true,
+      queue: [{ id: 'qf', text: '这段话绝不该回填进输入框', source: '你', sessionId: 'default', interjectable: false }],
+      running: null,
+      runningTurns: [],
+      runningSessionId: null,
+      runningSessionIds: []
+    }))
+    await waitFor(() => expect(container.querySelectorAll('.tq-item')).toHaveLength(1))
+    fireEvent.click(container.querySelector('.tq-x')!)
+    expect(chatCancelQueued).toHaveBeenCalledWith({ workspacePath: '/ws', id: 'qf' })
+    const ta = container.querySelector('textarea')!
+    await waitFor(() => expect(chatCancelQueued).toHaveBeenCalledTimes(1))
+    expect(ta.value).not.toBe('这段话绝不该回填进输入框')
+  })
+})
+
+describe('WorkspaceView queued-item 插话 button', () => {
+  async function emitInterjectable() {
+    const { container } = render(<WorkspaceView engine={engine} providers={providers} workspacePath="/ws" />)
+    await waitFor(() => expect(queueCb).toBeTypeOf('function'))
+    act(() => queueCb!({
+      workspacePath: '/ws',
+      busy: true,
+      queue: [
+        { id: 'q1', text: '改主色调', source: '你', sessionId: 'default', interjectable: true },
+        { id: 'q2', text: '修复登录', source: '你', sessionId: 'default', interjectable: false }
+      ],
+      running: null,
+      runningTurns: [],
+      runningSessionId: null,
+      runningSessionIds: []
+    }))
+    return container
+  }
+
+  it('shows the 插话 button only on the item whose interjectable flag is true', async () => {
+    const container = await emitInterjectable()
+    await waitFor(() => expect(container.querySelectorAll('.tq-item')).toHaveLength(2))
+    const items = container.querySelectorAll('.tq-item')
+    expect(items[0].querySelector('.tq-interject')).toBeTruthy()
+    expect(items[1].querySelector('.tq-interject')).toBeNull()
+  })
+
+  it('clicking 插话 calls chat.interject (chatInterject) with workspacePath/sessionId/queuedId', async () => {
+    const container = await emitInterjectable()
+    await waitFor(() => expect(container.querySelectorAll('.tq-item')).toHaveLength(2))
+    fireEvent.click(container.querySelector('.tq-interject')!)
+    expect(chatInterject).toHaveBeenCalledWith({ workspacePath: '/ws', sessionId: 'default', queuedId: 'q1' })
+  })
+
+  it('disables the 插话 button right after the click, and re-enables it once the next queue event arrives', async () => {
+    const container = await emitInterjectable()
+    await waitFor(() => expect(container.querySelectorAll('.tq-item')).toHaveLength(2))
+    const btn = container.querySelector('.tq-interject') as HTMLButtonElement
+    fireEvent.click(btn)
+    expect(btn.disabled).toBe(true)
+
+    // The failure (or any) response put the item back; the next queue event re-renders the row.
+    act(() => queueCb!({
+      workspacePath: '/ws',
+      busy: true,
+      queue: [
+        { id: 'q1', text: '改主色调', source: '你', sessionId: 'default', interjectable: true },
+        { id: 'q2', text: '修复登录', source: '你', sessionId: 'default', interjectable: false }
+      ],
+      running: null,
+      runningTurns: [],
+      runningSessionId: null,
+      runningSessionIds: []
+    }))
+    const btn2 = container.querySelector('.tq-interject') as HTMLButtonElement
+    expect(btn2.disabled).toBe(false)
   })
 })
 
