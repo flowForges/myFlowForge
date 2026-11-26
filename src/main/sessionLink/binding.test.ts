@@ -162,3 +162,40 @@ it('ownWriters: only a turn in flight counts, and only for this Forge session; a
   expect(ownWriters(ws(), 'A', 'claude')).toEqual({ ownLive: false, otherLive: false })
   expect(ownWriters(ws(), 'B', 'claude')).toEqual({ ownLive: false, otherLive: false })
 })
+
+it('recordOwnEnd: claude respawn — our message is older than the ownLastWriteAt the old process exit stored, and is still ours', async () => {
+  const { writeSession, writeBinding, readBinding, appendMessage } = await import('../chat/chatStore')
+  const { recordOwnEnd } = await import('./binding')
+  const { claudeUser, claudeAssistant, claudeStopHook } = await import('./testFixtures')
+  const first = jsonl([claudeUser('u1', '第一条'), claudeAssistant('a1', [{ type: 'text', text: '一' }]), claudeStopHook('h1')])
+  const f = claudeTranscript('c20', first)
+  writeSession(ws(), 's', 'claude', 'c20')
+  writeBinding(ws(), 's', 'claude', { syncedTo: { offset: 0 } })
+  appendMessage(ws(), 's', userMsg('m1', '第一条', '2026-11-26T10:00:00.000Z') as any)
+  await recordOwnEnd(ws(), 's', 'claude', { roots, now: () => Date.parse('2026-11-26T10:00:30.000Z') })
+  expect(readBinding(ws(), 's', 'claude')!.syncedTo!.offset).toBe(Buffer.byteLength(first))
+  // T0: sendTurn persists the next message; the provider then stops the old process (respawn for new flags)
+  appendMessage(ws(), 's', userMsg('m2', '第二条', '2026-11-26T10:01:00.000Z') as any)
+  await recordOwnEnd(ws(), 's', 'claude', { roots, now: () => Date.parse('2026-11-26T10:01:05.000Z') })   // T1 > T0
+  expect(readBinding(ws(), 's', 'claude')!.ownLastWriteAt).toBe(Date.parse('2026-11-26T10:01:05.000Z'))
+  // the new process writes our record, then exits
+  const second = jsonl([claudeUser('u2', '第二条'), claudeAssistant('a2', [{ type: 'text', text: '二' }]), claudeStopHook('h2')])
+  appendFileSync(f, second)
+  await recordOwnEnd(ws(), 's', 'claude', { roots, now: () => Date.parse('2026-11-26T10:02:00.000Z') })
+  expect(readBinding(ws(), 's', 'claude')!.syncedTo!.offset).toBe(Buffer.byteLength(first + second))
+})
+
+it('recordOwnEnd: a message already matched is not reused for a later foreign record with the same text', async () => {
+  const { writeSession, writeBinding, readBinding, appendMessage } = await import('../chat/chatStore')
+  const { recordOwnEnd } = await import('./binding')
+  const { claudeUser, claudeAssistant, claudeStopHook } = await import('./testFixtures')
+  const ours = jsonl([claudeUser('u1', '继续'), claudeAssistant('a1', [{ type: 'text', text: '好' }]), claudeStopHook('h1')])
+  const f = claudeTranscript('c21', ours)
+  writeSession(ws(), 's', 'claude', 'c21')
+  writeBinding(ws(), 's', 'claude', { syncedTo: { offset: 0 } })
+  appendMessage(ws(), 's', userMsg('m1', '继续', '2026-11-26T10:00:00.000Z') as any)
+  await recordOwnEnd(ws(), 's', 'claude', { roots })
+  appendFileSync(f, jsonl([claudeUser('x1', '继续'), claudeAssistant('xa', [{ type: 'text', text: 'App' }]), claudeStopHook('xh')]))   // typed in the Claude app
+  await recordOwnEnd(ws(), 's', 'claude', { roots })
+  expect(readBinding(ws(), 's', 'claude')!.syncedTo!.offset).toBe(Buffer.byteLength(ours))
+})

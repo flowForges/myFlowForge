@@ -51,6 +51,8 @@ export function readMessages(wsPath: string, sessionId: string): ChatMessage[] {
 //   extFile       resolved path of the external transcript, cached
 //   ownEnd        size + mtime of the transcript when OUR writer went quiet — unchanged since = nobody else wrote
 //   ownLastWriteAt when our own writer last went quiet (legacy fallback for bindings without ownEnd)
+//   ownMsgMark    id of the last Forge user message already matched to a record in the external transcript
+//                 (recordOwnEnd only considers messages after it; kept across resume-id changes — it is about OUR messages)
 export interface ExtSyncCursor { offset: number; lastId?: string }
 export interface OwnEnd { offset: number; mtimeMs: number }
 export interface BindingMeta {
@@ -60,6 +62,7 @@ export interface BindingMeta {
   extFile?: string
   ownEnd?: OwnEnd
   ownLastWriteAt?: number
+  ownMsgMark?: string
 }
 /** Fields that describe one particular transcript: meaningless once the resume id changes. */
 const PER_TRANSCRIPT = ['syncedTo', 'extFile', 'ownEnd', 'ownLastWriteAt'] as const

@@ -342,6 +342,37 @@ describe('后台任务留下的进程(claude 那条路接到 IPC 的部分)', ()
     }
   })
 
+  it('会话互通:sendTurn 抛错 / CLI 自己起的那一轮,结束后都不再算我方在途', async () => {
+    const t = await setup()
+    const { isOwnTurnLive } = await import('../sessionLink/ownTurns')
+    let during: boolean | undefined
+    t.sendTurn.mockImplementationOnce(async () => { during = isOwnTurnLive('/ws/bg', 's-rej', 'claude'); throw new Error('boom') })
+    t.call(CH.chatSend, { ...base, sessionId: 's-rej', text: 'x' })
+    await tick(); await tick(); await tick()
+    expect(during).toBe(true)
+    expect(isOwnTurnLive('/ws/bg', 's-rej', 'claude')).toBe(false)
+
+    const deps = await firstTurn(t)
+    await tick()
+    expect(isOwnTurnLive('/ws/bg', 's1', 'claude')).toBe(false)
+    let finishAdopted!: () => void
+    t.sendTurn.mockImplementationOnce(() => new Promise<void>(r => { finishAdopted = r }))
+    deps.background.openTurn(vi.fn(), () => true)
+    await tick(); await tick()
+    expect(isOwnTurnLive('/ws/bg', 's1', 'claude')).toBe(true)
+    finishAdopted()
+    await tick(); await tick()
+    expect(isOwnTurnLive('/ws/bg', 's1', 'claude')).toBe(false)
+    let rejectAdopted!: (e: Error) => void
+    t.sendTurn.mockImplementationOnce(() => new Promise<void>((_r, j) => { rejectAdopted = j }))
+    deps.background.openTurn(vi.fn(), () => true)
+    await tick(); await tick()
+    expect(isOwnTurnLive('/ws/bg', 's1', 'claude')).toBe(true)
+    rejectAdopted(new Error('adopted failed'))
+    await tick(); await tick()
+    expect(isOwnTurnLive('/ws/bg', 's1', 'claude')).toBe(false)
+  })
+
   it('#7 明确停止仍然连后台的门一起收', async () => {
     const t = await setup()
     const deps = await firstTurn(t)

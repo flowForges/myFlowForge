@@ -64,26 +64,41 @@ export async function ensureSyncedTo(ws: string, sid: string, agent: string, dep
 
 /** 空白折叠后的文本,用来比对「外部记录里的用户消息」和「Forge 发出去的那条」(外部那条常被 provider 包了上下文/指令)。 */
 const norm = (t: string): string => t.replace(/\s+/g, ' ').trim()
-/** CLI 留驻进程自己起的一轮(后台任务完成通知):属于写它的那个进程,不是新的用户轮次。 */
+/**
+ * CLI 留驻进程自己起的一轮(后台任务完成通知)。当作我方的跳过 —— 已接受的风险:官方 App 里跑的后台任务完成时
+ * 也会写一条这样的记录,在它前面若没有一条对不上的用户记录,它那一轮的回复就不会显示成「在 <App> 中」
+ * (只丢这一段显示,外部记录本身不受影响;App 那边的用户提问总会先出现并让游标停住)。
+ */
 const NOTIFICATION = /^<task-notification[\s>]/
 
+interface Sent { id: string; text: string }
 /**
- * 从 syncedTo 起只跳过我方自己的轮次:用户记录的文本包含 Forge 自上次以来发出的某条用户消息(按顺序),连同其后的
+ * 从 syncedTo 起只跳过我方自己的轮次:用户记录的文本包含 Forge 发出的、还没对上过的某条用户消息(按顺序),连同其后的
  * 助手/工具记录。遇到第一条对不上的用户记录就停在它前面,留给下一次补齐显示「在 <App> 中」。
+ * 返回新游标 + 最后一条对上的 Forge 消息 id。
  */
-function pastOwnTurns(r: ExtRead, from: ExtSyncCursor, sent: string[]): ExtSyncCursor {
-  const cands = [...sent]
+function pastOwnTurns(r: ExtRead, from: ExtSyncCursor, sent: Sent[]): { cursor: ExtSyncCursor; mark?: string } {
+  let cands = sent
+  let mark: string | undefined
   const offs = r.offsets ?? []
   for (let i = 0; i < r.turns.length; i++) {
     const t = r.turns[i]
     if (t.who !== 'user') continue
     const text = norm(t.text)
     if (NOTIFICATION.test(text)) continue
-    const k = cands.findIndex(c => text.includes(c))
-    if (k < 0) return offs[i] === undefined || offs[i] <= from.offset ? from : { offset: offs[i] }
-    cands.splice(0, k + 1)
+    const k = cands.findIndex(c => text.includes(c.text))
+    if (k < 0) return { cursor: offs[i] === undefined || offs[i] <= from.offset ? from : { offset: offs[i] }, mark }
+    mark = cands[k].id
+    cands = cands.slice(k + 1)
   }
-  return r.next
+  return { cursor: r.next, mark }
+}
+
+/** Forge 的用户消息里排在水位(ownMsgMark)之后的那些。水位那条已不在(删过消息)→ 全部。 */
+function sentAfter(ws: string, sid: string, mark: string | undefined): Sent[] {
+  const users = readMessages(ws, sid).filter(m => m.who === 'user')
+  const at = mark ? users.findIndex(m => m.id === mark) : -1
+  return users.slice(at + 1).map(m => ({ id: m.id, text: norm(m.text) })).filter(m => m.text)
 }
 
 /**
@@ -100,22 +115,22 @@ export async function recordOwnEnd(ws: string, sid: string, agent: string, deps:
     const eof = f && await eofCursor(f)
     if (!f || !eof) return
     let syncedTo: ExtSyncCursor | undefined
+    let ownMsgMark: string | undefined
     if (!b0.syncedTo) {
       syncedTo = b0.origin === 'forge' ? eof.cursor : undefined   // 老的我方绑定:之前全是我们自己的历史
     } else {
       const r = await readExternal(p, f, b0.syncedTo, { offsets: true })
       if (!r.exists) return
       if (!r.reset) {   // 游标对不上:不动它,交给下一次补齐的 reset 处理
-        const since = b0.ownLastWriteAt
-        const sent = readMessages(ws, sid)
-          .filter(m => m.who === 'user' && (since === undefined || !(Date.parse(m.ts) < since)))
-          .map(m => norm(m.text)).filter(Boolean)
-        syncedTo = pastOwnTurns(r, b0.syncedTo, sent)
+        // 按消息水位挑候选,不按墙钟:claude 换进程时旧进程退出会先写 ownLastWriteAt,比这轮用户消息的 ts 还晚。
+        const walked = pastOwnTurns(r, b0.syncedTo, sentAfter(ws, sid, b0.ownMsgMark))
+        syncedTo = walked.cursor
+        ownMsgMark = walked.mark
       }
     }
     const b1 = readBinding(ws, sid, agent)
     if (!b1 || b1.resumeId !== b0.resumeId) return
-    writeBinding(ws, sid, agent, { ownEnd: { offset: eof.size, mtimeMs: eof.mtimeMs }, ownLastWriteAt: (deps.now ?? Date.now)(), syncedTo })
+    writeBinding(ws, sid, agent, { ownEnd: { offset: eof.size, mtimeMs: eof.mtimeMs }, ownLastWriteAt: (deps.now ?? Date.now)(), syncedTo, ownMsgMark })
   } catch { /* 记不下就退回 mtime 规则 */ }
 }
 
