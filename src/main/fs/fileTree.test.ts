@@ -128,3 +128,34 @@ describe('readTree shows dot-dirs (walkDir dot-dir fix)', () => {
     expect(names).not.toContain('node_modules')
   })
 })
+
+// Mirrors a real multi-project workspace: the root is NOT a git repo, holds root docs + dot-dirs, and
+// two sibling projects that are each their own git repo — the first one far over the file cap.
+describe('readTree on a non-git workspace root over two nested git repos', () => {
+  let dir: string
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'ftree-ws2-')) })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  it('lists both project folders (with their files) even when the first project exceeds the cap', async () => {
+    const big = join(dir, 'go-blog'), small = join(dir, 'zgh')
+    await git(['init', '-b', 'for_test', big], { cwd: dir })
+    await git(['init', '-b', 'for_test', small], { cwd: dir })
+    for (let d = 0; d < 50; d++) {
+      mkdirSync(join(big, 'pkg', `m${d}`), { recursive: true })
+      for (let f = 0; f < 100; f++) writeFileSync(join(big, 'pkg', `m${d}`, `f${f}.go`), '')
+    }
+    writeFileSync(join(small, 'main.go'), 'package main')
+    writeFileSync(join(dir, 'ARCHITECTURE.md'), '#')
+    writeFileSync(join(dir, 'DEPENDENCY_DIAGRAM.md'), '#')
+    for (const d of ['.claude', '.forge', '.omx']) { mkdirSync(join(dir, d)); writeFileSync(join(dir, d, 'x.json'), '{}') }
+
+    const tree = await readTree(dir)
+    const names = tree.map(n => n.name)
+    expect(names).toEqual(expect.arrayContaining(['go-blog', 'zgh', 'ARCHITECTURE.md', 'DEPENDENCY_DIAGRAM.md']))
+    expect(names).not.toContain('.forge')
+    const zgh = tree.find(n => n.name === 'zgh')!
+    expect(zgh.children!.map(n => n.name)).toContain('main.go')
+    expect(zgh.branch).toBe('for_test')
+    expect(tree.find(n => n.name === 'go-blog')!.branch).toBe('for_test')
+  }, 30000)
+})

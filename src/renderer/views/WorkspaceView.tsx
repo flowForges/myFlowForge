@@ -1196,17 +1196,24 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   }, [visibleMessages, mergedLaunchGates.length, chat.streamingIds, chat.plans.length, chat.confirms.length, pending.length])
 
   // Inspector worktree: switch which project's 变更/文件树 we show, or aggregate across all.
-  // Prefer the live run's projects; fall back to workspace config projects so chat mode
-  // (no live run) can still show 变更/文件树 for the workspace's actual worktrees.
+  // UNION of the live run's projects (first — their cwds are authoritative) and the workspace config's
+  // projects, de-duped by cwd. A run that only touches some projects must not hide the others: an
+  // override here collapsed a 2-project workspace to one project and dropped the 全部项目 option.
   const projects = useMemo(() => {
-    if (run?.projects?.length) return run.projects
-    return (wsInfo?.projects ?? []).map(p => {
+    const out: { name: string; cwd: string }[] = [...(run?.projects ?? [])]
+    for (const p of wsInfo?.projects ?? []) {
       const name = p.name || p.repoId
-      return { name, cwd: `${wsPath}/${name}` }
-    })
+      const cwd = `${wsPath}/${name}`
+      if (!out.some(o => o.cwd === cwd || o.name === name)) out.push({ name, cwd })
+    }
+    return out
   }, [run?.projects, wsInfo, wsPath])
   const multi = projects.length > 1
   const [activeCwd, setActiveCwd] = useState<string | undefined>(undefined)
+  // The picker choice belongs to the workspace it was made in. WorkspaceView is reused across
+  // workspace switches (only the prop changes), so without this a one-project pick stuck forever —
+  // coming back to the workspace showed just that project's files instead of 全部项目.
+  useEffect(() => { setActiveCwd(undefined) }, [wsPath])
   // Valid inspector targets: the "全部项目" sentinel (only when >1 project) + each project worktree.
   const validCwd = (c: string | undefined) =>
     !!c && ((c === ALL_PROJECTS && multi) || projects.some(p => p.cwd === c))
