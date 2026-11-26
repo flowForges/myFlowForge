@@ -322,6 +322,14 @@ describe('后台任务留下的进程(claude 那条路接到 IPC 的部分)', ()
     expect(recordOwnEndMock).not.toHaveBeenCalled()       // claude: onDone 之后进程还可能写
     deps.background.onExit()
     expect(recordOwnEndMock).toHaveBeenCalledWith('/ws/bg', 's1', 'claude')
+    // a lingering process with no turn in flight is NOT our live writer (the user may be using the Claude app)
+    const { isOwnTurnLive } = await import('../sessionLink/ownTurns')
+    let during: boolean | undefined
+    t.sendTurn.mockImplementationOnce(async () => { during = isOwnTurnLive('/ws/bg', 's-live', 'claude'); return {} })
+    t.call(CH.chatSend, { ...base, sessionId: 's-live', text: 'y' })
+    await tick(); await tick(); await tick()
+    expect(during).toBe(true)
+    expect(isOwnTurnLive('/ws/bg', 's-live', 'claude')).toBe(false)
     for (const agent of ['codex', 'qoder']) {
       recordOwnEndMock.mockClear()
       let d: any

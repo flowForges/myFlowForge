@@ -5,7 +5,8 @@ import type { ExtCursor, ExtRead, ExtTurn, LineParser } from './types'
 // 外部 JSONL 记录的增量读取:从游标处按块流式读(不整文件读进内存),只消费以 `\n` 结尾的整行,
 // 写到一半的末行留到下次。游标对不上(截断/改写)→ 从头重读并 reset:true。
 
-export interface ReadOpts { chunkSize?: number }
+/** offsets: also return the byte offset of the line each turn came from (ExtRead.offsets, parallel to turns). */
+export interface ReadOpts { chunkSize?: number; offsets?: boolean }
 const DEFAULT_CHUNK = 1 << 20
 const TAIL_SCAN_CAP = 16 << 20   // 往回找结束标记最多看这么多字节,找不到就当"没结束"
 const NL = 0x0a
@@ -83,6 +84,7 @@ export async function readJsonl(file: string, from: ExtCursor, parse: LineParser
     const reset = !(await cursorValid(fh, size, from))
     const start = reset ? 0 : from.offset
     const turns: ExtTurn[] = []
+    const offsets: number[] | undefined = opts.offsets ? [] : undefined
     let cwd: string | undefined
     let end: boolean | undefined
     let consumed = start
@@ -106,6 +108,7 @@ export async function readJsonl(file: string, from: ExtCursor, parse: LineParser
         if (!o || typeof o !== 'object') continue
         const info = safeParse(parse, o, lineOff)
         turns.push(...info.turns)
+        if (offsets) for (let k = 0; k < info.turns.length; k++) offsets.push(lineOff)
         if (info.cwd) cwd = info.cwd
         if (info.end !== undefined) end = info.end
       }
@@ -115,7 +118,7 @@ export async function readJsonl(file: string, from: ExtCursor, parse: LineParser
     const partial = pendingLen > 0
     if (end === undefined && !partial && consumed > 0) end = await tailEnd(fh, start, parse, chunk)
     const endedCleanly = !partial && end === true
-    return { turns, next: lastId ? { offset: consumed, lastId } : { offset: consumed }, reset, endedCleanly, cwd, exists: true }
+    return { turns, next: lastId ? { offset: consumed, lastId } : { offset: consumed }, reset, endedCleanly, cwd, exists: true, ...(offsets ? { offsets } : {}) }
   } finally {
     await fh.close().catch(() => {})
   }

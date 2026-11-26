@@ -21,6 +21,8 @@ export interface ExtRead {
   cwd?: string
   /** 文件不存在 / 读不了。 */
   exists: boolean
+  /** 只在 opts.offsets 时有:每条 turn 所在行的起始字节偏移(与 turns 一一对应)。 */
+  offsets?: number[]
 }
 
 /** 一条 JSON 记录的解析结果。end: true = 结束标记,false = 轮次进行中,undefined = 与轮次状态无关的记录。 */

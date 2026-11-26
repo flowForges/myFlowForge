@@ -123,6 +123,12 @@ describe('isOccupied — own writer state (ownLive / ownEnd)', () => {
       expect((await isOccupied(p, f, T0, { ownEnd })).busy).toBe(true)
     })
   }
+  it('otherLive (another Forge session has a turn running on the same external id) → busy, without touching the file', async () => {
+    let touched = 0
+    const deps = { stat: async () => { touched++; return { mtimeMs: 0, size: 1 } } }
+    expect(await isOccupied('claude', '/fake', T0, { otherLive: true }, deps)).toEqual({ busy: true, app: 'myFlowForge', exists: true })
+    expect(touched).toBe(0)
+  })
   it('grown since ownEnd but stale (> 15 s) → not busy', async () => {
     const f = tempFile('x.jsonl', running.claude); touch(f, T0 - 60_000)
     expect((await isOccupied('claude', f, T0, { ownEnd: { offset: 1, mtimeMs: 0 } })).busy).toBe(false)

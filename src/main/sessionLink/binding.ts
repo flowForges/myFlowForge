@@ -1,8 +1,9 @@
 import { open, stat } from 'node:fs/promises'
-import { readBinding, writeBinding, type ExtSyncCursor } from '../chat/chatStore'
-import { isClaudeChatLive } from '../agents/providers/claude'
+import { readBinding, readMessages, writeBinding, type ExtSyncCursor } from '../chat/chatStore'
+import { readExternal } from './index'
 import { locateExternal } from './locate'
-import type { ExtProvider } from './types'
+import { isOwnTurnLive, liveTurnSessions } from './ownTurns'
+import type { ExtProvider, ExtRead } from './types'
 
 // 绑定 ↔ 外部记录文件的小工具:找文件(带缓存)、首次定位、记录「我方写者安静下来」。都不抛。
 
@@ -19,7 +20,8 @@ export async function resolveBindingFile(ws: string, sid: string, agent: string,
   if (!p || !b) return undefined
   if (b.extFile && await stat(b.extFile).then(s => s.isFile(), () => false)) return b.extFile
   const f = await locateExternal(p, b.resumeId, { roots: deps.roots, cwd: b.cwd ?? ws }).catch(() => undefined)
-  if (f && f !== b.extFile) writeBinding(ws, sid, agent, { extFile: f })
+  // 找的期间 resume id 变了(新的外部会话):别把旧文件缓存到新绑定上
+  if (f && f !== b.extFile && readBinding(ws, sid, agent)?.resumeId === b.resumeId) writeBinding(ws, sid, agent, { extFile: f })
   return f
 }
 
@@ -60,24 +62,70 @@ export async function ensureSyncedTo(ws: string, sid: string, agent: string, dep
   return eof.cursor
 }
 
+/** 空白折叠后的文本,用来比对「外部记录里的用户消息」和「Forge 发出去的那条」(外部那条常被 provider 包了上下文/指令)。 */
+const norm = (t: string): string => t.replace(/\s+/g, ' ').trim()
+/** CLI 留驻进程自己起的一轮(后台任务完成通知):属于写它的那个进程,不是新的用户轮次。 */
+const NOTIFICATION = /^<task-notification[\s>]/
+
 /**
- * 我方写者安静下来了:记下文件此刻的大小 + mtime(ownEnd),并把 syncedTo 推到末尾(刚写的是我们自己的一轮)。
+ * 从 syncedTo 起只跳过我方自己的轮次:用户记录的文本包含 Forge 自上次以来发出的某条用户消息(按顺序),连同其后的
+ * 助手/工具记录。遇到第一条对不上的用户记录就停在它前面,留给下一次补齐显示「在 <App> 中」。
+ */
+function pastOwnTurns(r: ExtRead, from: ExtSyncCursor, sent: string[]): ExtSyncCursor {
+  const cands = [...sent]
+  const offs = r.offsets ?? []
+  for (let i = 0; i < r.turns.length; i++) {
+    const t = r.turns[i]
+    if (t.who !== 'user') continue
+    const text = norm(t.text)
+    if (NOTIFICATION.test(text)) continue
+    const k = cands.findIndex(c => text.includes(c))
+    if (k < 0) return offs[i] === undefined || offs[i] <= from.offset ? from : { offset: offs[i] }
+    cands.splice(0, k + 1)
+  }
+  return r.next
+}
+
+/**
+ * 我方写者安静下来了:记下文件此刻的大小 + mtime(ownEnd),并把 syncedTo 推过我方自己的轮次(只推过我们的,见 pastOwnTurns)。
  * 调用点:Claude 聊天进程退出(ChatBackgroundHooks.onExit);Codex exec 进程退出 / app-server turn 完成、Qoder 进程退出
- * (这三者都在 sendTurn 收尾之前发生)。★前提:发这一轮前已经补齐过外部新增(Task 3 发送前检查)。
+ * (这三者都在 sendTurn 收尾之前发生)。读的期间 resume id 变了 → 什么都不写。
  */
 export async function recordOwnEnd(ws: string, sid: string, agent: string, deps: BindingDeps = {}): Promise<void> {
   try {
+    const p = asExtProvider(agent)
+    const b0 = p && readBinding(ws, sid, agent)
+    if (!p || !b0) return
     const f = await resolveBindingFile(ws, sid, agent, deps)
     const eof = f && await eofCursor(f)
-    if (!eof) return
-    writeBinding(ws, sid, agent, { ownEnd: { offset: eof.size, mtimeMs: eof.mtimeMs }, ownLastWriteAt: (deps.now ?? Date.now)(), syncedTo: eof.cursor })
+    if (!f || !eof) return
+    let syncedTo: ExtSyncCursor | undefined
+    if (!b0.syncedTo) {
+      syncedTo = b0.origin === 'forge' ? eof.cursor : undefined   // 老的我方绑定:之前全是我们自己的历史
+    } else {
+      const r = await readExternal(p, f, b0.syncedTo, { offsets: true })
+      if (!r.exists) return
+      if (!r.reset) {   // 游标对不上:不动它,交给下一次补齐的 reset 处理
+        const since = b0.ownLastWriteAt
+        const sent = readMessages(ws, sid)
+          .filter(m => m.who === 'user' && (since === undefined || !(Date.parse(m.ts) < since)))
+          .map(m => norm(m.text)).filter(Boolean)
+        syncedTo = pastOwnTurns(r, b0.syncedTo, sent)
+      }
+    }
+    const b1 = readBinding(ws, sid, agent)
+    if (!b1 || b1.resumeId !== b0.resumeId) return
+    writeBinding(ws, sid, agent, { ownEnd: { offset: eof.size, mtimeMs: eof.mtimeMs }, ownLastWriteAt: (deps.now ?? Date.now)(), syncedTo })
   } catch { /* 记不下就退回 mtime 规则 */ }
 }
 
 /**
- * 我方进程此刻还握着这个外部会话?Claude:留驻 / 正在跑的聊天进程(cwd = 工作区)。
- * Codex app-server 线程是否仍订阅由调用方自己知道(传 ownLive);这里对 codex / qoder 返回 false。
+ * 发送前要传给 isOccupied 的「我方写者」状态。ownLive:这个 Forge 会话自己有一轮在途(一轮结束后留驻的进程不算);
+ * otherLive:另一个 Forge 会话正有一轮跑在同一个外部 id 上 —— 它是另一个写者。
  */
-export function ownLiveFor(provider: ExtProvider, ws: string, resumeId: string): boolean {
-  return provider === 'claude' ? isClaudeChatLive(ws, resumeId) : false
+export function ownWriters(ws: string, sid: string, agent: string): { ownLive: boolean; otherLive: boolean } {
+  const ownLive = isOwnTurnLive(ws, sid, agent)
+  const b = readBinding(ws, sid, agent)
+  const otherLive = !!b && liveTurnSessions(agent).some(o => !(o.ws === ws && o.sid === sid) && readBinding(o.ws, o.sid, agent)?.resumeId === b.resumeId)
+  return { ownLive, otherLive }
 }

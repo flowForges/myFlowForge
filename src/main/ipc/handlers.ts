@@ -47,6 +47,7 @@ import { listWorkspaces } from '../workspace/workspaceList'
 import { readHomeStats } from '../workspace/homeStats'
 import { sendTurn, history, addTurnAnswer } from '../chat/chatService'
 import { recordOwnEnd } from '../sessionLink/binding'
+import { beginOwnTurn } from '../sessionLink/ownTurns'
 import { ChatQueue } from '../chat/chatQueue'
 import { appendMessage, readMessages, readSession as readChatSession } from '../chat/chatStore'
 import { CouncilRegistry } from '../council/registry'
@@ -1207,8 +1208,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         chatQueue.adoptTurn(payload.workspacePath, payload.sessionId, payload.agent, async () => {
           if (!isCurrent()) return   // 排队期间已经被用户消息接走了:什么都不开,不占泳道
           // ★电脑操作的五个 FORGE_* 不带过去:被收养的这一轮不在任何本机轮次里,本来也调不动(no_turn)
+          const endOwn = beginOwnTurn(payload.workspacePath, payload.sessionId, payload.agent)
           await sendTurn({ ...payload, text: '', attachments: [] }, { provider, env: withoutCuEnv(env), emit: chatEmit, confirm: adoptedConfirm, onSessionStart, background, adopt: attach, discard: discardTurn })
-            .finally(() => drainChatGates(payload.workspacePath, { sessionId: payload.sessionId, type: 'confirm', scope: 'turn' }))
+            .finally(() => { endOwn(); drainChatGates(payload.workspacePath, { sessionId: payload.sessionId, type: 'confirm', scope: 'turn' }) })
         })
       },
     }
@@ -1217,6 +1219,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       origin: payload.origin, agent: payload.agent, armed: cuPre.armed, env, mcpEntry,
       note: (t) => emitNote(payload.workspacePath, payload.sessionId, t),
     })
+    // 会话互通:这一轮在途期间我们就是这个外部会话的写者(一轮结束后留驻的进程不算,见 sessionLink/ownTurns)。
+    const endOwnTurn = beginOwnTurn(payload.workspacePath, payload.sessionId, payload.agent)
     try {
       const msg = await sendTurn(turnPayload, {
         provider,
@@ -1238,6 +1242,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     }
     finally {
       endCuTurn()
+      endOwnTurn()
       // codex exec 进程退出 / app-server turn 完成、qoder 进程退出,都在 sendTurn 收尾之前:此刻外部记录就是我方留下的样子。
       if (payload.agent !== 'claude') void recordOwnEnd(payload.workspacePath, payload.sessionId, payload.agent)
       await authBroker?.close().catch(() => { /* 已经没了 */ })

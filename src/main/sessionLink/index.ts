@@ -6,6 +6,7 @@ import type { ExtCursor, ExtProvider, ExtRead, LineParser } from './types'
 
 export type { ExtCursor, ExtProvider, ExtRead, ExtTurn } from './types'
 export { linkRoots } from './types'
+export type { ReadOpts } from './jsonl'
 
 const PARSERS: Record<ExtProvider, LineParser> = { claude: parseClaudeRecord, codex: parseCodexRecord, qoder: parseQoderRecord }
 

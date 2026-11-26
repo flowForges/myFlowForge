@@ -43,7 +43,7 @@ it('a new resume id drops the stale external position (different transcript)', a
   writeBinding(ws, 's3', 'claude', { syncedTo: { offset: 9 }, extFile: '/x/old.jsonl', cwd: '/p' })
   markOwnWrite(ws, 's3', 'claude', 5)
   writeSession(ws, 's3', 'claude', 'new')
-  expect(readBinding(ws, 's3', 'claude')).toEqual({ resumeId: 'new', origin: 'forge', cwd: '/p', ownLastWriteAt: 5 })
+  expect(readBinding(ws, 's3', 'claude')).toEqual({ resumeId: 'new', origin: 'forge', cwd: '/p' })
 })
 
 it('reads legacy files (bare string / no origin) and keeps watermark + other agents intact', async () => {

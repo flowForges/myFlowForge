@@ -4,7 +4,8 @@ import type { ExtCursor, ExtProvider, ExtRead } from './types'
 
 // 「对方正在用」判定(spec §4.5):外部记录 15 s 内被改过,且末条不是该轮结束标记 → 占用。
 // 我方自己的写入不能把自己拦住,按顺序:
-//   1) ownLive:我们自己的进程还握着这个会话(claude 留驻 / 我方 app-server 线程还订阅着)→ 不占用
+//   0) otherLive:另一个 Forge 会话正有一轮跑在同一个外部 id 上 → 占用(app = myFlowForge)
+//   1) ownLive:这个 Forge 会话自己有一轮在跑(不含一轮结束后留驻的进程)→ 不占用
 //   2) 文件大小 + mtime 和我方写者安静下来时(ownEnd)一模一样 → 没人动过 → 不占用
 //   3) 15 s 内没改过 → 不占用(对方早停了或崩了)
 //   4) 末字节不是 `\n`(空文件 / 写到一半的行)→ 占用,不用整读
@@ -18,11 +19,15 @@ const NL = 0x0a
 const APP_NAMES: Record<ExtProvider, string> = { codex: 'Codex', claude: 'Claude', qoder: 'Qoder' }
 /** 官方 App 名,用于 `open -a`、阻断条和消息标签。 */
 export const appName = (p: ExtProvider): string => APP_NAMES[p]
+/** 占用者是另一个 Forge 会话时的 app 名。 */
+export const FORGE_APP = 'myFlowForge'
 
 export interface Occupancy { busy: boolean; app?: string; exists: boolean }
 export interface OwnState {
-  /** 我方进程此刻还握着这个绑定(见 binding.ts ownLiveFor)。 */
+  /** 这个 Forge 会话自己有一轮正在跑(见 binding.ts ownWriters)。留驻进程不算。 */
   ownLive?: boolean
+  /** 另一个 Forge 会话正有一轮跑在同一个外部 id 上:它是另一个写者。 */
+  otherLive?: boolean
   /** 我方写者安静下来时外部文件的大小 + mtime(见 binding.ts recordOwnEnd)。 */
   ownEnd?: { offset: number; mtimeMs: number }
   /** 老绑定的回退:我方最近一次写完的时刻。 */
@@ -49,6 +54,7 @@ const free = { busy: false, exists: true } as const
 const gone = { busy: false, exists: false } as const
 
 export async function isOccupied(provider: ExtProvider, file: string, now: number, own: OwnState = {}, deps: OccupancyDeps = {}): Promise<Occupancy> {
+  if (own.otherLive) return { busy: true, app: FORGE_APP, exists: true }
   if (own.ownLive) return { ...free }
   const stat = deps.stat ?? fsStat
   let mtime: number, size: number

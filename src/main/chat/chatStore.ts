@@ -62,7 +62,7 @@ export interface BindingMeta {
   ownLastWriteAt?: number
 }
 /** Fields that describe one particular transcript: meaningless once the resume id changes. */
-const PER_TRANSCRIPT = ['syncedTo', 'extFile', 'ownEnd'] as const
+const PER_TRANSCRIPT = ['syncedTo', 'extFile', 'ownEnd', 'ownLastWriteAt'] as const
 function forNewId(entry: ResumeEntry): ResumeEntry {
   const out = { ...entry }
   for (const k of PER_TRANSCRIPT) delete out[k]
@@ -100,7 +100,7 @@ export function readSession(wsPath: string, sessionId: string, agent: string): s
 export function writeSession(wsPath: string, sessionId: string, agent: string, resumeId: string): void {
   const map = readResume(wsPath)
   const entry = (map[sessionId] ??= {})[agent] ?? {}
-  // A different id is a different external transcript: the old position / path / own end no longer apply.
+  // A different id is a different external transcript: the old position / path / own-writer marks no longer apply.
   ;(map[sessionId])[agent] = entry.resumeId !== undefined && entry.resumeId !== resumeId ? { ...forNewId(entry), resumeId } : { ...entry, resumeId }
   writeResume(wsPath, map)
 }

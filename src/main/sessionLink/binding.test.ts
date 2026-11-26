@@ -66,19 +66,99 @@ it('recordOwnEnd stores the size + mtime our writer left, and moves syncedTo pas
   const f = claudeTranscript('c3', body)
   writeSession(ws(), 's', 'claude', 'c3')
   writeBinding(ws(), 's', 'claude', { syncedTo: { offset: 0 } })
+  const { appendMessage } = await import('../chat/chatStore')
+  appendMessage(ws(), 's', { id: 'm', who: 'user', text: '帮我重构登录流程', ts: '2026-11-26T10:00:00.000Z' } as any)
   await recordOwnEnd(ws(), 's', 'claude', { roots, now: () => 42 })
   const b = readBinding(ws(), 's', 'claude')!
   expect(b.ownEnd).toEqual({ offset: Buffer.byteLength(body), mtimeMs: statSync(f).mtimeMs })
   expect(b.ownLastWriteAt).toBe(42)
-  expect(b.syncedTo).toEqual({ offset: Buffer.byteLength(body) })
+  expect(b.syncedTo?.offset).toBe(Buffer.byteLength(body))
   expect(b.extFile).toBe(f)
   expect((await isOccupied('claude', f, statSync(f).mtimeMs + 1_000, { ownEnd: b.ownEnd })).busy).toBe(false)
 })
 
-it('recordOwnEnd / ownLiveFor are no-ops without a linkable binding, and never throw', async () => {
-  const { recordOwnEnd, ownLiveFor } = await import('./binding')
+it('recordOwnEnd / ownWriters are no-ops without a linkable binding, and never throw', async () => {
+  const { recordOwnEnd, ownWriters } = await import('./binding')
   await expect(recordOwnEnd(join(home, 'nope'), 's', 'claude', { roots })).resolves.toBeUndefined()
   await expect(recordOwnEnd(ws(), 's', 'gemini', { roots })).resolves.toBeUndefined()
-  expect(ownLiveFor('claude', ws(), 'never-started')).toBe(false)
-  expect(ownLiveFor('codex', ws(), 'x')).toBe(false)
+  expect(ownWriters(ws(), 's', 'claude')).toEqual({ ownLive: false, otherLive: false })
+})
+
+const userMsg = (id: string, text: string, ts: string) => ({ id, who: 'user', text, ts })
+
+it('recordOwnEnd skips only our own turns: an app turn written while our process lingered stays for the next catch-up', async () => {
+  const { writeSession, writeBinding, readBinding, appendMessage } = await import('../chat/chatStore')
+  const { recordOwnEnd } = await import('./binding')
+  const { readExternal } = await import('./index')
+  const { claudeUser, claudeAssistant, claudeStopHook } = await import('./testFixtures')
+  const before = jsonl([claudeUser('u0', '早先的问题'), claudeAssistant('a0', [{ type: 'text', text: '早先的回答' }]), claudeStopHook('h0')])
+  const ours = jsonl([
+    claudeUser('u1', '[对话上下文]\n\n帮我  看看 日志'),               // our prompt, wrapped by the provider
+    claudeAssistant('a1', [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }], 'tool_use'),
+    { type: 'user', uuid: 'r1', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] } },
+    claudeAssistant('a2', [{ type: 'text', text: '看完了' }]), claudeStopHook('h1'),
+    claudeUser('n1', '<task-notification>后台任务完成</task-notification>'),   // our lingering process' own notification turn
+    claudeAssistant('a3', [{ type: 'text', text: '后台也好了' }]), claudeStopHook('h2'),
+    claudeUser('u2', '第二条'), claudeAssistant('a4', [{ type: 'text', text: '收到' }]), claudeStopHook('h3'),
+  ])
+  const app = jsonl([claudeUser('x1', '我在 Claude 里问的'), claudeAssistant('xa', [{ type: 'text', text: 'App 的回答' }]), claudeStopHook('xh')])
+  const f = claudeTranscript('c9', before + ours + app)
+  writeSession(ws(), 's', 'claude', 'c9')
+  writeBinding(ws(), 's', 'claude', { syncedTo: { offset: Buffer.byteLength(before) }, ownLastWriteAt: Date.parse('2026-11-26T09:00:00Z') })
+  appendMessage(ws(), 's', userMsg('m0', '早先的问题', '2026-11-26T08:00:00.000Z') as any)
+  appendMessage(ws(), 's', userMsg('m1', '帮我 看看 日志', '2026-11-26T10:00:00.000Z') as any)
+  appendMessage(ws(), 's', { id: 'm1a', who: 'ai', text: '看完了', ts: '2026-11-26T10:00:05.000Z' } as any)
+  appendMessage(ws(), 's', userMsg('m2', '第二条', '2026-11-26T10:01:00.000Z') as any)
+  await recordOwnEnd(ws(), 's', 'claude', { roots, now: () => 7 })
+  const b = readBinding(ws(), 's', 'claude')!
+  expect(b.syncedTo).toEqual({ offset: Buffer.byteLength(before + ours) })
+  expect(b.ownEnd).toEqual({ offset: Buffer.byteLength(before + ours + app), mtimeMs: statSync(f).mtimeMs })
+  expect(b.ownLastWriteAt).toBe(7)
+  const next = await readExternal('claude', f, b.syncedTo!)
+  expect(next.reset).toBe(false)
+  expect(next.turns.map(t => t.text)).toEqual(['我在 Claude 里问的', 'App 的回答'])
+})
+
+it('recordOwnEnd: an app turn in front of ours stops the advance right there', async () => {
+  const { writeSession, writeBinding, readBinding, appendMessage } = await import('../chat/chatStore')
+  const { recordOwnEnd } = await import('./binding')
+  const { claudeUser, claudeAssistant, claudeStopHook } = await import('./testFixtures')
+  const body = jsonl([claudeUser('x1', 'App 先问'), claudeAssistant('xa', [{ type: 'text', text: '答' }]), claudeStopHook('xh'), claudeUser('u1', '我的'), claudeAssistant('a1', [{ type: 'text', text: '好' }])])
+  claudeTranscript('c10', body)
+  writeSession(ws(), 's', 'claude', 'c10')
+  writeBinding(ws(), 's', 'claude', { syncedTo: { offset: 0 } })
+  appendMessage(ws(), 's', userMsg('m1', '我的', '2026-11-26T10:00:00.000Z') as any)
+  await recordOwnEnd(ws(), 's', 'claude', { roots })
+  expect(readBinding(ws(), 's', 'claude')!.syncedTo).toEqual({ offset: 0 })
+})
+
+it('recordOwnEnd does not write when the resume id changed while it was reading', async () => {
+  const { writeSession, writeBinding, readBinding } = await import('../chat/chatStore')
+  const { recordOwnEnd } = await import('./binding')
+  claudeTranscript('c11', jsonl(claudeTurnRows()))
+  writeSession(ws(), 's', 'claude', 'c11')
+  writeBinding(ws(), 's', 'claude', { syncedTo: { offset: 0 } })
+  const p = recordOwnEnd(ws(), 's', 'claude', { roots })
+  writeSession(ws(), 's', 'claude', 'c12')       // provider reported a new id meanwhile
+  await p
+  expect(readBinding(ws(), 's', 'claude')).toEqual({ resumeId: 'c12', origin: 'forge' })
+})
+
+it('ownWriters: only a turn in flight counts, and only for this Forge session; another session on the same id is another writer', async () => {
+  const { writeSession } = await import('../chat/chatStore')
+  const { ownWriters } = await import('./binding')
+  const { beginOwnTurn } = await import('./ownTurns')
+  writeSession(ws(), 'A', 'claude', 'same-id')
+  writeSession(ws(), 'B', 'claude', 'same-id')
+  writeSession(ws(), 'C', 'claude', 'other-id')
+  const end = beginOwnTurn(ws(), 'A', 'claude')
+  expect(ownWriters(ws(), 'A', 'claude')).toEqual({ ownLive: true, otherLive: false })
+  expect(ownWriters(ws(), 'B', 'claude')).toEqual({ ownLive: false, otherLive: true })
+  expect(ownWriters(ws(), 'C', 'claude')).toEqual({ ownLive: false, otherLive: false })
+  const end2 = beginOwnTurn(ws(), 'A', 'claude')    // overlapping (adopted) turn
+  end()
+  expect(ownWriters(ws(), 'A', 'claude').ownLive).toBe(true)
+  end2(); end2()                                      // idempotent
+  expect(ownWriters(ws(), 'A', 'claude')).toEqual({ ownLive: false, otherLive: false })
+  expect(ownWriters(ws(), 'B', 'claude')).toEqual({ ownLive: false, otherLive: false })
 })
