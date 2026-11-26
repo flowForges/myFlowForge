@@ -131,6 +131,13 @@ export const EXIT_WAIT_TERM_MS = 2000
 export const EXIT_WAIT_KILL_MS = 1000
 
 /**
+ * 每个线程上一个 app-server 的「回收完成」:SIGTERM 之后等它退出(必要时 SIGKILL),最多
+ * EXIT_WAIT_TERM_MS + EXIT_WAIT_KILL_MS。★下一轮续接同一个线程之前先等它 —— 否则一个卡住还没死的
+ *  app-server 和新起的那个同时握着同一个线程(两个写者)。回收完就从表里删掉。
+ */
+const threadReaps = new Map<string, Promise<void>>()
+
+/**
  * codex 会**向我们发起、并等着我们回答**的请求里,能映射成一道「允许 / 拒绝」的那些。
  *
  * ★★每一条的回答形状都不一样(见 codexApproval.ts 的 codexApprovalResponse)。形状错了不会报错,
@@ -175,7 +182,9 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
   // 主进程的 cwd 和环境里 —— 电脑操作的 FORGE_AGENT_ID 就到不了 forge MCP。
   const spawn = deps.spawn ?? ((cmd, args, o) => spawnAgent(cmd, args, { cwd: o.cwd, env: o.env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, reject: false }) as unknown as CodexChild)
   const args = [...opts.configArgs, ...opts.modelArgs, 'app-server']
-  const child = spawn(opts.bin ?? 'codex', args, { cwd: opts.cwd, ...(opts.env ? { env: opts.env } : {}) })
+  // 同一个线程上一轮的 app-server 还没回收完:等它(有界),再起这一轮的。
+  const prior = opts.resumeThreadId ? threadReaps.get(opts.resumeThreadId) : undefined
+  let child: CodexChild | null = null
 
   let buffer = ''
   let settled = false
@@ -208,20 +217,40 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
     settled = true
     if (completedTimer) { clearTimeout(completedTimer); completedTimer = null }
     if (handshakeTimer) { clearTimeout(handshakeTimer); handshakeTimer = null }
-    killTree(child)   // 杀整棵树:app-server 也会派生 shell 命令,单杀只会留孤儿
     for (const r of pendingSteers.values()) r(false)
     pendingSteers.clear()
+    // 还没起进程(在等上一轮回收时就被取消了):没东西可杀可等。
+    const proc = child
+    if (!proc) {
+      // 等上一轮回收时被取消 → ok:false;等完了 spawn 却抛了 → 同进程起不来,可回落就让调用方退回 exec。
+      if (!cancelled && opts.fallbackOnStartFailure) resolveDone({ ok: false, startFailed: true, error: startError ?? 'codex app-server 没起来' })
+      else resolveDone({ ok: false })
+      return
+    }
+    killTree(proc)   // 杀整棵树:app-server 也会派生 shell 命令,单杀只会留孤儿
+    // ★不管这一轮怎么结束,都要确认这个进程真的退了(SIGTERM → 等 → SIGKILL → 再等,有界),
+    //  下一轮续接同一个线程时先等它(见 threadReaps)。
+    const reaped = (async () => {
+      if (!await waitExit(EXIT_WAIT_TERM_MS)) {
+        killTree(proc, 'SIGKILL')
+        await waitExit(EXIT_WAIT_KILL_MS)
+      }
+    })()
+    const key = threadId ?? opts.resumeThreadId
+    if (key && !exited) {
+      threadReaps.set(key, reaped)
+      void reaped.then(() => { if (threadReaps.get(key) === reaped) threadReaps.delete(key) })
+    }
     if (!ok && !began && !cancelled && !noFallback && opts.fallbackOnStartFailure) {
       // 调用方拿到 startFailed 就会起 exec 跑同一个线程:先等这个 app-server 真的退出。
       void (async () => {
-        if (!await waitExit(EXIT_WAIT_TERM_MS)) {
-          killTree(child, 'SIGKILL')
-          await waitExit(EXIT_WAIT_KILL_MS)
-        }
+        await reaped
         const tail = stderrTail.trim()
         resolveDone({ ok: false, startFailed: true, error: [startError ?? 'codex app-server 没起来', tail].filter(Boolean).join('\n') })
       })()
     }
+    // turn/start 已发出后的超时(不回落):调用方接着就可能起下一轮续接这个线程 —— 等它真退出再交出去。
+    else if (!ok && noFallback) void reaped.then(() => resolveDone({ ok: false }))
     else resolveDone({ ok })
   }
 
@@ -248,6 +277,7 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
   }
 
   function send(method: string, params?: unknown, id?: number): void {
+    if (!child) return   // 进程还没起(在等上一轮回收):cancel 的 turn/interrupt 无处可发
     try {
       child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', ...(id !== undefined ? { id } : {}), method, params: params ?? {} })}\n`)
     } catch (e) {
@@ -260,7 +290,7 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
   }
 
   function respond(id: number, result: unknown): void {
-    if (settled) return // the child is already killed; writing now would hit a dead stdin
+    if (settled || !child) return // the child is already killed; writing now would hit a dead stdin
     try {
       child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, result })}\n`)
     } catch {
@@ -273,7 +303,7 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
    * 回一个猜出来的 result 只会让对面反序列化失败然后永远等下去,而错误码它一定看得懂。
    */
   function respondError(id: number, code: number, message: string): void {
-    if (settled) return
+    if (settled || !child) return
     try {
       child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, error: { code, message } })}\n`)
     } catch {
@@ -285,199 +315,217 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
   let startId: number | null = null
   let turnReqId: number | null = null
 
-  // Listeners must be attached before the first write: a fast (or fake) server
-  // may answer synchronously.
-  child.stdout.on('data', (chunk) => {
-    buffer += chunk.toString()
-    let nl: number
-    while ((nl = buffer.indexOf('\n')) !== -1) {
-      const line = buffer.slice(0, nl).trim()
-      buffer = buffer.slice(nl + 1)
-      if (!line) continue
-      let msg: { id?: number; method?: string; params?: any; result?: any; error?: { message?: string } }
-      try {
-        msg = JSON.parse(line)
-      } catch {
-        continue // startup banner or other non-JSON noise
-      }
+  function launch(proc: CodexChild): void {
+    // Listeners must be attached before the first write: a fast (or fake) server
+    // may answer synchronously.
+    proc.stdout.on('data', (chunk) => {
+      buffer += chunk.toString()
+      let nl: number
+      while ((nl = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, nl).trim()
+        buffer = buffer.slice(nl + 1)
+        if (!line) continue
+        let msg: { id?: number; method?: string; params?: any; result?: any; error?: { message?: string } }
+        try {
+          msg = JSON.parse(line)
+        } catch {
+          continue // startup banner or other non-JSON noise
+        }
 
-      // Server request: has both an id and a method.
-      if (msg.id != null && msg.method) {
-        const id = msg.id
-        const method = msg.method
-        if (APPROVAL_METHODS.has(method)) {
-          const params = msg.params ?? {}
-          const req: CodexApprovalReq = {
-            method, command: params.command, paths: params.paths,
-            itemId: typeof params.itemId === 'string' && params.itemId ? params.itemId : undefined,
-            permissions: params.permissions, reason: params.reason,
-            serverName: params.serverName, message: params.message, mode: params.mode,
-            url: params.url, requestedSchema: params.requestedSchema,
-            // ★codex 自己解析好的动作标签(read/listFiles/search/unknown)。只读判断**只能**靠它,
-            //  不许我们去猜命令字符串 —— 见 codexApproval.ts 的 codexReadOnly。
-            commandActions: params.commandActions,
-          }
-          // ★要填表单的那种 elicitation 我们渲染不出来。但**绝不能因此就不回答** ——
-          //  那正是「光标一直在动、永远没有内容」的成因。说清缺什么、替他拒掉、让这一轮跑完。
-          const cantAnswer = elicitationUnsupported(req)
-          if (cantAnswer) {
-            cb.onNotice?.(`MCP「${req.serverName ?? '未知服务'}」要你填一张表单(${cantAnswer}),Forge 还不支持 MCP 表单,已代你拒绝并继续。`)
-            respond(id, codexApprovalResponse(method, false, req))
-            continue
-          }
-          void cb.onApproval(req)
-            .then((decision) => {
-              respond(id, codexApprovalResponse(method, decision === 'allow', req))
-            })
-            .catch((e) => {
-              // Fail closed: the server is blocked awaiting this response, so a
-              // rejected approval callback (e.g. the confirm gate was torn down)
-              // must still be answered — otherwise `done` hangs forever. Let the
-              // decline flow to turn/completed naturally rather than force-settling.
+        // Server request: has both an id and a method.
+        if (msg.id != null && msg.method) {
+          const id = msg.id
+          const method = msg.method
+          if (APPROVAL_METHODS.has(method)) {
+            const params = msg.params ?? {}
+            const req: CodexApprovalReq = {
+              method, command: params.command, paths: params.paths,
+              itemId: typeof params.itemId === 'string' && params.itemId ? params.itemId : undefined,
+              permissions: params.permissions, reason: params.reason,
+              serverName: params.serverName, message: params.message, mode: params.mode,
+              url: params.url, requestedSchema: params.requestedSchema,
+              // ★codex 自己解析好的动作标签(read/listFiles/search/unknown)。只读判断**只能**靠它,
+              //  不许我们去猜命令字符串 —— 见 codexApproval.ts 的 codexReadOnly。
+              commandActions: params.commandActions,
+            }
+            // ★要填表单的那种 elicitation 我们渲染不出来。但**绝不能因此就不回答** ——
+            //  那正是「光标一直在动、永远没有内容」的成因。说清缺什么、替他拒掉、让这一轮跑完。
+            const cantAnswer = elicitationUnsupported(req)
+            if (cantAnswer) {
+              cb.onNotice?.(`MCP「${req.serverName ?? '未知服务'}」要你填一张表单(${cantAnswer}),Forge 还不支持 MCP 表单,已代你拒绝并继续。`)
               respond(id, codexApprovalResponse(method, false, req))
-              safeError(e instanceof Error ? e.message : String(e))
-            })
-        } else {
-          // ★★这里原来是一句 `respond(id, {})` —— 对**任何**不认识的请求回一个空对象,还一声不吭。
-          //  空对象几乎一定缺必填字段,于是 codex 反序列化失败、那次调用永远悬着,而用户什么也看不到。
-          //  现在:能答的按 schema 答一个「什么都没给」的合法回答,答不了的按 JSON-RPC 规矩报
-          //  「没有这个方法」——两种都**说一句人话**,让用户知道刚才有人问过、以及被怎么处理了。
-          const known = KNOWN_UNANSWERABLE[method]
-          cb.onNotice?.(known
-            ? `${known.what},Forge 还答不了这种请求,已跳过并继续。`
-            : `codex 发来一个 Forge 不认识的请求(${method}),已按「不支持」回复并继续。`)
-          if (known?.reply !== undefined) respond(id, known.reply)
-          else respondError(id, -32601, `myFlowForge does not implement ${method}`)
-        }
-        continue
-      }
-
-      // Notification: has a method, no id.
-      if (msg.id == null && msg.method) {
-        const method = msg.method
-        const params = msg.params ?? {}
-        if (method === 'turn/started') {
-          markStarted(params?.turn?.id)
+              continue
+            }
+            void cb.onApproval(req)
+              .then((decision) => {
+                respond(id, codexApprovalResponse(method, decision === 'allow', req))
+              })
+              .catch((e) => {
+                // Fail closed: the server is blocked awaiting this response, so a
+                // rejected approval callback (e.g. the confirm gate was torn down)
+                // must still be answered — otherwise `done` hangs forever. Let the
+                // decline flow to turn/completed naturally rather than force-settling.
+                respond(id, codexApprovalResponse(method, false, req))
+                safeError(e instanceof Error ? e.message : String(e))
+              })
+          } else {
+            // ★★这里原来是一句 `respond(id, {})` —— 对**任何**不认识的请求回一个空对象,还一声不吭。
+            //  空对象几乎一定缺必填字段,于是 codex 反序列化失败、那次调用永远悬着,而用户什么也看不到。
+            //  现在:能答的按 schema 答一个「什么都没给」的合法回答,答不了的按 JSON-RPC 规矩报
+            //  「没有这个方法」——两种都**说一句人话**,让用户知道刚才有人问过、以及被怎么处理了。
+            const known = KNOWN_UNANSWERABLE[method]
+            cb.onNotice?.(known
+              ? `${known.what},Forge 还答不了这种请求,已跳过并继续。`
+              : `codex 发来一个 Forge 不认识的请求(${method}),已按「不支持」回复并继续。`)
+            if (known?.reply !== undefined) respond(id, known.reply)
+            else respondError(id, -32601, `myFlowForge does not implement ${method}`)
+          }
           continue
         }
-        if (method === 'turn/completed') {
-          // ★steer 还没回话:等它回话再收尾。现在杀进程,那条插话就只能当失败放回队列 —— 而 codex 可能已经收下了,
-          //  下一轮又发一次就是双发。
-          if (pendingSteers.size > 0) {
-            if (!completedTimer) completedTimer = setTimeout(() => settle(true), STEER_SETTLE_MS)
+
+        // Notification: has a method, no id.
+        if (msg.id == null && msg.method) {
+          const method = msg.method
+          const params = msg.params ?? {}
+          if (method === 'turn/started') {
+            markStarted(params?.turn?.id)
             continue
           }
-          settle(true)
+          if (method === 'turn/completed') {
+            // ★steer 还没回话:等它回话再收尾。现在杀进程,那条插话就只能当失败放回队列 —— 而 codex 可能已经收下了,
+            //  下一轮又发一次就是双发。
+            if (pendingSteers.size > 0) {
+              if (!completedTimer) completedTimer = setTimeout(() => settle(true), STEER_SETTLE_MS)
+              continue
+            }
+            settle(true)
+            continue
+          }
+          if (method === 'error') {
+            const m = params.error && typeof params.error === 'object' ? params.error.message : (params.message ?? params.error)
+            safeError(String(m ?? 'codex error'))
+            settle(false)
+            continue
+          }
+          if (method === 'thread/status/changed' && params?.status?.type === 'systemError') {
+            const m = params.status.message ?? params.status.error ?? 'codex system error'
+            safeError(String(m))
+            settle(false)
+            continue
+          }
+          // 上下文用量:官方数,直接透出去(adaptCodexEvent 不认这条,以前就这么被丢掉了)。
+          const u = codexTokenUsage(msg)
+          if (u) { cb.onUsage?.(u); continue }
+          const e = adaptCodexEvent(msg)
+          if (e) cb.onEvent(e)
           continue
         }
-        if (method === 'error') {
-          const m = params.error && typeof params.error === 'object' ? params.error.message : (params.message ?? params.error)
-          safeError(String(m ?? 'codex error'))
-          settle(false)
-          continue
-        }
-        if (method === 'thread/status/changed' && params?.status?.type === 'systemError') {
-          const m = params.status.message ?? params.status.error ?? 'codex system error'
-          safeError(String(m))
-          settle(false)
-          continue
-        }
-        // 上下文用量:官方数,直接透出去(adaptCodexEvent 不认这条,以前就这么被丢掉了)。
-        const u = codexTokenUsage(msg)
-        if (u) { cb.onUsage?.(u); continue }
-        const e = adaptCodexEvent(msg)
-        if (e) cb.onEvent(e)
-        continue
-      }
 
-      // Response to one of our own requests, routed by id.
-      if (msg.id != null && pendingSteers.has(msg.id)) {
-        const r = pendingSteers.get(msg.id)!
-        pendingSteers.delete(msg.id)
-        r(!msg.error)
-        if (completedTimer && pendingSteers.size === 0) settle(true)
-        continue
-      }
-      if (msg.id === initId) {
-        if (msg.error) {
-          safeError(msg.error.message ?? 'codex initialize 失败')
-          settle(false)
+        // Response to one of our own requests, routed by id.
+        if (msg.id != null && pendingSteers.has(msg.id)) {
+          const r = pendingSteers.get(msg.id)!
+          pendingSteers.delete(msg.id)
+          r(!msg.error)
+          if (completedTimer && pendingSteers.size === 0) settle(true)
           continue
         }
-        send('initialized')
-        if (opts.resumeThreadId) {
-          startId = ++rpcId
-          // ★续接也要带上权限档:续接的线程否则沿用 codex 自己的默认(或上次存下的)沙箱 / 审批,
-          //  用户这一轮换了档、或者 forge MCP 要的 danger-full-access,都到不了 codex。
-          send('thread/resume', { threadId: opts.resumeThreadId, approvalPolicy: opts.approvalPolicy, sandbox: opts.sandbox, cwd: opts.cwd }, startId)
-        } else {
-          startId = ++rpcId
-          send('thread/start', { approvalPolicy: opts.approvalPolicy, sandbox: opts.sandbox, cwd: opts.cwd }, startId)
-        }
-        continue
-      }
-      if (startId !== null && msg.id === startId) {
-        if (msg.error) {
-          safeError(msg.error.message ?? 'codex thread/start 失败')
-          settle(false)
+        if (msg.id === initId) {
+          if (msg.error) {
+            safeError(msg.error.message ?? 'codex initialize 失败')
+            settle(false)
+            continue
+          }
+          send('initialized')
+          if (opts.resumeThreadId) {
+            startId = ++rpcId
+            // ★续接也要带上权限档:续接的线程否则沿用 codex 自己的默认(或上次存下的)沙箱 / 审批,
+            //  用户这一轮换了档、或者 forge MCP 要的 danger-full-access,都到不了 codex。
+            send('thread/resume', { threadId: opts.resumeThreadId, approvalPolicy: opts.approvalPolicy, sandbox: opts.sandbox, cwd: opts.cwd }, startId)
+          } else {
+            startId = ++rpcId
+            send('thread/start', { approvalPolicy: opts.approvalPolicy, sandbox: opts.sandbox, cwd: opts.cwd }, startId)
+          }
           continue
         }
-        threadId = msg.result?.thread?.id ?? msg.result?.threadId ?? opts.resumeThreadId
-        if (threadId) cb.onSession(threadId)
-        turnReqId = ++rpcId
-        turnStartSent = true
-        send('turn/start', { threadId, input: [{ type: 'text', text: opts.prompt }] }, turnReqId)
-        continue
-      }
-      if (turnReqId !== null && msg.id === turnReqId) {
-        // The turn itself runs via notifications; the result only carries the turn id (for steer/interrupt).
-        if (msg.error) {
-          safeError(msg.error.message ?? 'codex turn/start 失败')
-          settle(false)
+        if (startId !== null && msg.id === startId) {
+          if (msg.error) {
+            safeError(msg.error.message ?? 'codex thread/start 失败')
+            settle(false)
+            continue
+          }
+          threadId = msg.result?.thread?.id ?? msg.result?.threadId ?? opts.resumeThreadId
+          if (threadId) cb.onSession(threadId)
+          turnReqId = ++rpcId
+          turnStartSent = true
+          send('turn/start', { threadId, input: [{ type: 'text', text: opts.prompt }] }, turnReqId)
           continue
         }
-        markStarted(msg.result?.turn?.id)
-        continue
+        if (turnReqId !== null && msg.id === turnReqId) {
+          // The turn itself runs via notifications; the result only carries the turn id (for steer/interrupt).
+          if (msg.error) {
+            safeError(msg.error.message ?? 'codex turn/start 失败')
+            settle(false)
+            continue
+          }
+          markStarted(msg.result?.turn?.id)
+          continue
+        }
       }
-    }
-  })
-  // drain so the child never blocks on a full pipe; keep a bounded tail for the crash diagnostic
-  child.stderr.on('data', (c) => { stderrTail = (stderrTail + c.toString()).slice(-1500) })
-  child.on('error', (err) => {
-    // Actionable hint: this fires for an ASYNC spawn failure (e.g. codex missing, or an old
-    // codex build that doesn't understand the `app-server` subcommand) — the caller-side
-    // synchronous try/catch around driveCodexTurn() cannot catch this (the handle already
-    // returned), so the message itself needs to point at the likely cause.
-    const m = err instanceof Error ? err.message : String(err)
-    onExited()   // spawn 失败:没有进程可等
-    safeError(`codex app-server 启动失败(是否已安装/支持 app-server?): ${m}`)
-    settle(false)
-  })
-  child.on('close', () => {
-    onExited()
-    // ★这一轮已经开始、不是用户停的,进程却没了(崩溃 / OOM / 被杀):必须报一句,否则就是一条空白回复。
-    if (!settled && began && !cancelled) {
-      const tail = stderrTail.trim()
-      safeError(tail ? `codex app-server 意外退出:\n${tail}` : 'codex app-server 意外退出')
-    }
-    settle(false)
-  })
-  handshakeTimer = setTimeout(() => {
-    handshakeTimer = null
-    if (settled || began) return
-    // ★turn/start 已经发出去了:codex 可能已经开始干活,只是慢。这时退回 exec 会和它抢同一个线程、
-    //  把这一轮跑两遍 —— 只能报错收尾,不回落。
-    if (turnStartSent) {
-      cb.onError(`codex app-server 启动超时(${Math.round(HANDSHAKE_TIMEOUT_MS / 1000)}s 内 turn/start 没有回话)`)
-      noFallback = true
+    })
+    // drain so the child never blocks on a full pipe; keep a bounded tail for the crash diagnostic
+    proc.stderr.on('data', (c) => { stderrTail = (stderrTail + c.toString()).slice(-1500) })
+    proc.on('error', (err) => {
+      // Actionable hint: this fires for an ASYNC spawn failure (e.g. codex missing, or an old
+      // codex build that doesn't understand the `app-server` subcommand) — the caller-side
+      // synchronous try/catch around driveCodexTurn() cannot catch this (the handle already
+      // returned), so the message itself needs to point at the likely cause.
+      const m = err instanceof Error ? err.message : String(err)
+      onExited()   // spawn 失败:没有进程可等
+      safeError(`codex app-server 启动失败(是否已安装/支持 app-server?): ${m}`)
       settle(false)
-      return
-    }
-    safeError(`codex app-server 握手超时(${Math.round(HANDSHAKE_TIMEOUT_MS / 1000)}s 没有完成)`)
-    settle(false)
-  }, HANDSHAKE_TIMEOUT_MS)
+    })
+    proc.on('close', () => {
+      onExited()
+      // ★这一轮已经开始、不是用户停的,进程却没了(崩溃 / OOM / 被杀):必须报一句,否则就是一条空白回复。
+      if (!settled && began && !cancelled) {
+        const tail = stderrTail.trim()
+        safeError(tail ? `codex app-server 意外退出:\n${tail}` : 'codex app-server 意外退出')
+      }
+      settle(false)
+    })
+    handshakeTimer = setTimeout(() => {
+      handshakeTimer = null
+      if (settled || began) return
+      // ★turn/start 已经发出去了:codex 可能已经开始干活,只是慢。这时退回 exec 会和它抢同一个线程、
+      //  把这一轮跑两遍 —— 只能报错收尾,不回落。
+      if (turnStartSent) {
+        cb.onError(`codex app-server 启动超时(${Math.round(HANDSHAKE_TIMEOUT_MS / 1000)}s 内 turn/start 没有回话)`)
+        noFallback = true
+        settle(false)
+        return
+      }
+      safeError(`codex app-server 握手超时(${Math.round(HANDSHAKE_TIMEOUT_MS / 1000)}s 没有完成)`)
+      settle(false)
+    }, HANDSHAKE_TIMEOUT_MS)
 
-  send('initialize', { clientInfo: { name: 'myFlowForge', version: '1.0.0' } }, initId)
+    send('initialize', { clientInfo: { name: 'myFlowForge', version: '1.0.0' } }, initId)
+  }
+
+  const start = () => {
+    child = spawn(opts.bin ?? 'codex', args, { cwd: opts.cwd, ...(opts.env ? { env: opts.env } : {}) })
+    launch(child)
+  }
+  if (!prior) start()
+  else void prior.then(() => {
+    if (settled) return
+    try { start() } catch (e) {
+      // 同步路径上 spawn 抛错由调用方的 try/catch 接;这里已经是异步的了,只能经 done 交出去。
+      const m = e instanceof Error ? e.message : String(e)
+      if (opts.fallbackOnStartFailure) startError ??= m
+      else cb.onError(m)
+      settle(false)
+    }
+  })
 
   return {
     cancel(): void {

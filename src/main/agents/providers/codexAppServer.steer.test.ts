@@ -342,3 +342,132 @@ describe('driveCodexTurn · 回落前等 app-server 真退出(R5)', () => {
     expect((await h.done).startFailed).toBe(true)
   })
 })
+
+describe('driveCodexTurn · 同一个线程不许两个 app-server 同时活着', () => {
+  afterEach(() => { vi.useRealTimers() })
+  const flush = async () => { for (let i = 0; i < 5; i++) await Promise.resolve() }
+
+  it('turn/start 已发出后超时(不回落):也要 SIGTERM → 2s → SIGKILL → 等退出,之后才交出 ok:false', async () => {
+    vi.useFakeTimers()
+    const f = fakeChild({ ignoreTerm: true })
+    const h = driveCodexTurn({ ...OPTS, fallbackOnStartFailure: true }, cbs(), { spawn: () => f.child })
+    begin(f)
+    let settled = false
+    void h.done.then(() => { settled = true })
+    vi.advanceTimersByTime(HANDSHAKE_TIMEOUT_MS)
+    await flush()
+    expect(f.signals).toEqual(['SIGTERM'])
+    expect(settled).toBe(false)
+    vi.advanceTimersByTime(EXIT_WAIT_TERM_MS)
+    await flush()
+    expect(f.signals).toEqual(['SIGTERM', 'SIGKILL'])
+    expect(await h.done).toEqual({ ok: false })
+  })
+
+  it('不回落的超时、SIGKILL 后也不退:最多再等 1s 就交出去', async () => {
+    vi.useFakeTimers()
+    const f = fakeChild({ exitOnKill: false })
+    const h = driveCodexTurn({ ...OPTS, fallbackOnStartFailure: true }, cbs(), { spawn: () => f.child })
+    begin(f)
+    let settled = false
+    void h.done.then(() => { settled = true })
+    vi.advanceTimersByTime(HANDSHAKE_TIMEOUT_MS + EXIT_WAIT_TERM_MS)
+    await flush()
+    vi.advanceTimersByTime(EXIT_WAIT_KILL_MS - 1)
+    await flush()
+    expect(settled).toBe(false)
+    vi.advanceTimersByTime(1)
+    expect(await h.done).toEqual({ ok: false })
+  })
+
+  it('上一轮正常结束但它的 app-server 还没退:下一轮续接同一个线程,要等它退出(必要时 SIGKILL)才起新的', async () => {
+    vi.useFakeTimers()
+    const f1 = fakeChild({ ignoreTerm: true })
+    const h1 = driveCodexTurn({ ...OPTS }, cbs(), { spawn: () => f1.child })
+    begin(f1, 'turn-1')
+    f1.push({ method: 'turn/completed', params: {} })
+    expect(await h1.done).toEqual({ ok: true })   // 这一轮照常立即收尾,不让界面等
+    expect(f1.signals).toEqual(['SIGTERM'])
+    const f2 = fakeChild()
+    let spawned = 0
+    const h2 = driveCodexTurn({ ...OPTS, resumeThreadId: 'th1' }, cbs(), { spawn: () => { spawned++; return f2.child } })
+    await flush()
+    expect(spawned).toBe(0)
+    vi.advanceTimersByTime(EXIT_WAIT_TERM_MS - 1)
+    await flush()
+    expect(spawned).toBe(0)
+    vi.advanceTimersByTime(1)
+    await flush()
+    expect(f1.signals).toEqual(['SIGTERM', 'SIGKILL'])
+    expect(spawned).toBe(1)
+    expect(f2.writes[0].method).toBe('initialize')
+    begin(f2, 'turn-2')
+    f2.push({ method: 'turn/completed', params: {} })
+    expect(await h2.done).toEqual({ ok: true })
+  })
+
+  it('上一轮的 app-server 已经退了:下一轮立即起,不等', async () => {
+    const f1 = fakeChild()
+    const h1 = driveCodexTurn({ ...OPTS }, cbs(), { spawn: () => f1.child })
+    begin(f1, 'turn-1')
+    f1.push({ method: 'turn/completed', params: {} })
+    expect(await h1.done).toEqual({ ok: true })
+    await flush()
+    const f2 = fakeChild()
+    let spawned = 0
+    driveCodexTurn({ ...OPTS, resumeThreadId: 'th1' }, cbs(), { spawn: () => { spawned++; return f2.child } })
+    await flush()
+    expect(spawned).toBe(1)
+  })
+
+  it('别的线程不受影响:立即起', async () => {
+    vi.useFakeTimers()
+    const f1 = fakeChild({ exitOnKill: false })
+    const h1 = driveCodexTurn({ ...OPTS }, cbs(), { spawn: () => f1.child })
+    begin(f1, 'turn-1')
+    f1.push({ method: 'turn/completed', params: {} })
+    await h1.done
+    let spawned = 0
+    driveCodexTurn({ ...OPTS, resumeThreadId: 'th-other' }, cbs(), { spawn: () => { spawned++; return fakeChild().child } })
+    expect(spawned).toBe(1)
+    vi.advanceTimersByTime(EXIT_WAIT_TERM_MS)
+    await flush()
+    vi.advanceTimersByTime(EXIT_WAIT_KILL_MS)
+    await flush()
+  })
+
+  it('等上一轮退出时这一轮被取消:不再起进程,done 交出 ok:false', async () => {
+    vi.useFakeTimers()
+    const f1 = fakeChild({ exitOnKill: false })
+    const h1 = driveCodexTurn({ ...OPTS }, cbs(), { spawn: () => f1.child })
+    begin(f1, 'turn-1')
+    f1.push({ method: 'turn/completed', params: {} })
+    await h1.done
+    let spawned = 0
+    const h2 = driveCodexTurn({ ...OPTS, resumeThreadId: 'th1' }, cbs(), { spawn: () => { spawned++; return fakeChild().child } })
+    h2.cancel()
+    expect(await h2.done).toEqual({ ok: false })
+    vi.advanceTimersByTime(EXIT_WAIT_TERM_MS)
+    await flush()
+    vi.advanceTimersByTime(EXIT_WAIT_KILL_MS)
+    await flush()
+    expect(spawned).toBe(0)
+  })
+
+  it('等完上一轮再 spawn 时抛错:可回落 → done 带 startFailed(调用方退回 exec),不挂住', async () => {
+    vi.useFakeTimers()
+    const f1 = fakeChild({ exitOnKill: false })
+    const h1 = driveCodexTurn({ ...OPTS }, cbs(), { spawn: () => f1.child })
+    begin(f1, 'turn-1')
+    f1.push({ method: 'turn/completed', params: {} })
+    await h1.done
+    const h2 = driveCodexTurn({ ...OPTS, resumeThreadId: 'th1', fallbackOnStartFailure: true }, cbs(), { spawn: () => { throw new Error('ENOENT') } })
+    vi.advanceTimersByTime(EXIT_WAIT_TERM_MS)
+    await flush()
+    vi.advanceTimersByTime(EXIT_WAIT_KILL_MS)
+    await flush()
+    const r = await h2.done
+    expect(r.startFailed).toBe(true)
+    expect(r.error).toContain('ENOENT')
+  })
+})
