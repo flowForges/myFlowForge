@@ -301,8 +301,9 @@ export interface ChatMessage {
   /**
    * 会话互通:这条是在官方 App 里发生、回到我方时补齐进来的(标签 `在 <app> 中`)。id = 外部记录里那条的 id;agent = 绑定的 provider。
    * earlier:补齐的积压太长时只留最近的,前面折成一行 `更早的 N 条`(这条本身就是那一行,text 为空)。
+   * imported:「在 myFlowForge 继续」接管时带过来的历史(标签 `来源: <app>`),不是回到我方时补齐的。
    */
-  ext?: { app: string; id: string; agent?: string; earlier?: number }
+  ext?: { app: string; id: string; agent?: string; earlier?: number; imported?: boolean }
   // AI 共商:这条消息在共商里的位置(席位/轮次/阶段);councilResult 是主持人最终的结构化结论。
   council?: CouncilTag
   councilResult?: CouncilResult
@@ -588,7 +589,13 @@ export interface DiscoveredSession {
   messageCount: number
   filePaths: string[]
   hasBody: boolean
+  /** 能「在 myFlowForge 继续」(接管同一个外部会话):claude / codex 恒是;qoder 要找得到它的记录。扫描时填。 */
+  continuable?: boolean
 }
+/** 「在 myFlowForge 继续」的结果:接管(或已接管过)的那个 Forge 会话在哪。 */
+export type ContinueResult =
+  | { ok: true; wsPath: string; sessionId: string; created: boolean; wsAdded: boolean }
+  | { ok: false; error: string }
 export interface ImportedMessage { who: 'user' | 'ai'; text: string; ts: string }
 export interface SessionGroup {
   cwd: string

@@ -326,6 +326,8 @@ export const CH = {
   sessionImportLastScan: 'session-import:last-scan',
   sessionImportRun: 'session-import:run',
   sessionImportRead: 'session-import:read',
+  // 「在 myFlowForge 继续」:接管官方 App 的同一个会话(回 ContinueResult)。
+  sessionImportContinue: 'session-import:continue',
   sessionImportList: 'session-import:list',
   sessionImportCoverage: 'session-import:coverage',
   sessionContinueFrom: 'session:continue-from',

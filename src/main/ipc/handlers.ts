@@ -137,6 +137,7 @@ import { sessionImportCoverage } from '../sessionImport/coverage'
 import { groupByCwd } from '../sessionImport/group'
 import { readIndex, upsertSessions } from '../sessionImport/importStore'
 import { importWorkspace } from '../sessionImport/importWorkspace'
+import { canContinue, continueExternal } from '../sessionImport/takeover'
 import { probeGitRepo } from '../sessionImport/gitProbe'
 import { collectGitCandidates } from '../sessionImport/importResult'
 import { readScanCache, writeScanCache } from '../sessionImport/scanCache'
@@ -2162,8 +2163,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   })
 
   // ── Session Import IPC ──────────────────────────────────────────────────────
-  on(CH.sessionImportScan, () => {
-    const sessions = scanAll()
+  on(CH.sessionImportScan, async () => {
+    const sessions = await Promise.all(scanAll().map(async s => ({ ...s, continuable: await canContinue(s).catch(() => false) })))
     const wsPaths = readWorkspaceRegistry().map(w => w.path)
     const groups = groupByCwd(sessions, wsPaths)
     const scannedAt = Date.now()
@@ -2182,6 +2183,22 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // Refresh the left sidebar live — newly imported workspaces should appear without an app restart.
     if (added > 0) broadcast(CH.workspacesChanged, {})
     return { index, gitRepos }
+  })
+  // 「在 myFlowForge 继续」:接管同一个外部会话(claude / codex / qoder)。已接管过就只回那个会话。
+  on(CH.sessionImportContinue, async (_e, s: DiscoveredSession): Promise<import('@shared/types').ContinueResult> => {
+    const r = await continueExternal(s, {
+      // 外部记录里的模型不强加:用这家 provider 的默认(模型列表第一个,与 resolveAgentForSession 同口径)
+      defaultModel: async (agent) => {
+        try {
+          const models = await providers[agent]?.listModels(buildAgentEnv({ proxy: readSettings().agentProxy }))
+          return models?.[0]?.id ?? ''
+        } catch { return '' }
+      },
+    })
+    if (!r.ok) return r
+    if (r.wsAdded) broadcast(CH.workspacesChanged, {})
+    broadcastSessions(r.wsPath, readSessions(r.wsPath))
+    return r
   })
   on(CH.sessionImportRead, (_e, s: DiscoveredSession) => readSession(s))
   on(CH.sessionImportList, () => readIndex())

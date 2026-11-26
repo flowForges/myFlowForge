@@ -63,7 +63,8 @@ describe('频道分类', () => {
     // 180 → 181:council:stop-seat。同上 ⇒ host。
     // 181 → 182:chat:interject(排队那条插进在跑的这一轮)。队列在主机上 ⇒ host;handler 里只认本机窗口。
     // 182 → 183:chat:retry-blocked(会话互通阻断条的「重试」)。队列在主机上 ⇒ host。
-    expect(host.length).toBe(183)
+    // 183 → 184:session-import:continue(「在 myFlowForge 继续」接管官方会话)。读的是主机上的外部记录、建的是主机上的会话 ⇒ host。
+    expect(host.length).toBe(184)
     expect(client.length + host.length).toBe(keys.length)
   })
 

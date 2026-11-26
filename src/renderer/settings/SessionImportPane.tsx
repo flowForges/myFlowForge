@@ -18,8 +18,12 @@ function toChatMessage(im: ImportedMessage, i: number): ChatMessage {
   return { id: String(i), who: im.who, text: im.text, ts: im.ts }
 }
 function key(s: DiscoveredSession) { return `${s.source}::${s.externalId}` }
+// 能接着聊同一个会话的几家:claude / codex 恒能;qoder 要扫描时找得到它的记录。其它家只读导入。
+function canContinue(s: DiscoveredSession): boolean {
+  return s.source === 'claude' || s.source === 'codex' || (s.source === 'qoder' && !!s.continuable)
+}
 
-export function SessionImportPane() {
+export function SessionImportPane({ onOpenSession }: { onOpenSession?: (wsPath: string, sessionId: string) => void } = {}) {
   const [scanRes, setScanRes] = useState<ScanResult | null>(null)
   const [scanning, setScanning] = useState(false)
   const [filter, setFilter] = useState<(typeof FILTERS)[number]>('all')
@@ -29,6 +33,8 @@ export function SessionImportPane() {
   const [gitRepos, setGitRepos] = useState<GitRepoCandidate[]>([])
   const [coverage, setCoverage] = useState<SessionImportCoverage | null>(null)
   const [showExisting, setShowExisting] = useState(false)
+  const [continuing, setContinuing] = useState<string | null>(null)
+  const [continueErr, setContinueErr] = useState<Record<string, string>>({})
 
   useEffect(() => {
     window.forge.sessionImportList().then(idx => setImportedKeys(new Set(idx.sessions.map(key))))
@@ -41,6 +47,17 @@ export function SessionImportPane() {
     const res = await window.forge.sessionImportRun(sessions)
     setImportedKeys(prev => { const n = new Set(prev); sessions.forEach(s => n.add(key(s))); return n })
     setGitRepos(res.gitRepos)
+  }
+  const doContinue = async (s: DiscoveredSession) => {
+    const k = key(s)
+    setContinuing(k)
+    try {
+      const r = await window.forge.sessionImportContinue(s)
+      if (r.ok) { setContinueErr(prev => { const n = { ...prev }; delete n[k]; return n }); onOpenSession?.(r.wsPath, r.sessionId) }
+      else setContinueErr(prev => ({ ...prev, [k]: r.error }))
+    } catch (e) {
+      setContinueErr(prev => ({ ...prev, [k]: e instanceof Error ? e.message : String(e) }))
+    } finally { setContinuing(null) }
   }
   const openViewer = async (s: DiscoveredSession) => {
     const msgs = await window.forge.sessionImportRead(s)
@@ -74,8 +91,12 @@ export function SessionImportPane() {
             <span className="si-src">{SOURCE_LABEL[s.source]}</span>
             <button className="si-title" onClick={() => openViewer(s)} disabled={!s.hasBody}>{s.title}</button>
             <span className="si-count">{s.messageCount} 条</span>
-            {/* sessions in an already-imported workspace stay browsable but offer no per-row 导入 */}
-            {!g.matched && <button className="btn-ghost" onClick={() => doImport([s])} disabled={imported}>{imported ? '已导入' : '导入'}</button>}
+            {continueErr[key(s)] && <span className="si-tag">{continueErr[key(s)]}</span>}
+            {/* claude / codex / qoder: take the same session over (also inside an existing workspace).
+                Others: sessions in an already-imported workspace stay browsable but offer no per-row 导入 */}
+            {canContinue(s)
+              ? <button className="btn-ghost" onClick={() => doContinue(s)} disabled={continuing !== null}>在 myFlowForge 继续</button>
+              : !g.matched && <button className="btn-ghost" onClick={() => doImport([s])} disabled={imported}>{imported ? '已导入' : '导入'}</button>}
           </div>
         )
       })}

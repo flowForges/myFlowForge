@@ -48,7 +48,8 @@ function MessageImpl({ msg, streaming, index, onViewChanges, onOpenDoc }: Props)
     return <div className="msg ai msg-ext-earlier"><span className="tq-src">更早的 {msg.ext.earlier} 条</span></div>
   }
   // 在官方 App 里发生的那一轮(见 ChatMessage.ext),复用「插话」那枚药丸的样式。
-  const extTag = msg.ext ? <span className="tq-src msg-ext">在 {msg.ext.app} 中</span> : null
+  // 接管时带过来的历史标 `来源: <App>`,回到我方时补齐的标 `在 <App> 中`。
+  const extTag = msg.ext ? <span className="tq-src msg-ext">{msg.ext.imported ? `来源: ${msg.ext.app}` : `在 ${msg.ext.app} 中`}</span> : null
 
   // Switching into a session whose messages are large parses every body's Markdown synchronously in
   // one commit → the app freezes (beachball). For a big, settled (non-streaming) reply, show the raw

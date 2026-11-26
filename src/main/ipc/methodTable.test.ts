@@ -81,6 +81,7 @@ describe('方法表', () => {
     // 228 → 239:电脑操作十一条 computer-use:*(spec V1),全部 CLIENT_ONLY —— channelRouting 的 client 47 → 58,host 181 不动。
     // 239 → 240:chat:interject,host 方法(handler 里只认本机窗口)。
     // 240 → 241:chat:retry-blocked(会话互通阻断条的「重试」),host 方法。
-    expect(Object.keys(table).length).toBe(241)
+    // 241 → 242:session-import:continue(「在 myFlowForge 继续」),host 方法。
+    expect(Object.keys(table).length).toBe(242)
   })
 })

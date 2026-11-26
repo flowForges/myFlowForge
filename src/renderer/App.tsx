@@ -945,7 +945,12 @@ export function App() {
           case 'nsfw': return settings ? <NsfwPane pet={settings.pet} nsfwInstalled={settings.nsfwInstalled ?? {}} codes={settings.nsfwCodes ?? []} onAddCode={() => setUnlockOpen(true)} onRemoveCode={(c) => { const next = (settings.nsfwCodes ?? []).filter(x => x !== c); update({ nsfwCodes: next, nsfwCode: next[next.length - 1] ?? '' }) }} onChangePet={(p) => update({ pet: { ...settings.pet, ...p } })} onChangeAppearance={(p) => update({ appearance: p })} onSetInstalled={(k, ref) => update({ nsfwInstalled: { ...(settings.nsfwInstalled ?? {}), [k]: ref } })} onDisable={() => { update({ nsfwUnlocked: false, nsfwCode: '', nsfwCodes: [] }); setSettingsPane('appearance') }} /> : null
           case 'keybindings': return settings ? <KeybindingsPane keybindings={settings.keybindings} onChange={(kb) => update({ keybindings: kb })} globalFailed={globalFailed} /> : null
           case 'computerUse': return settings ? <ComputerUsePane computerUse={settings.computerUse} keybindings={settings.keybindings} onChange={(p) => update({ computerUse: p })} /> : null
-          case 'sessions': return <SessionImportPane />
+          // 「在 myFlowForge 继续」接管完:关掉设置,切到那个工作区和会话(与 onNavigateWorkspace 同法:记成这台设备的选择 + 告诉主机)
+          case 'sessions': return <SessionImportPane onOpenSession={(path, sessionId) => {
+            setSettingsOpen(false); setActiveId(path); expandWorkspace(path); setView('ws'); home.reload()
+            rememberPick(path, sessionId)
+            void window.forge.sessionSwitch?.({ workspacePath: path, sessionId })
+          }} />
           case 'memory': return settings ? <MemoryPane enabled={settings.memory.enabled} onToggle={(v) => update({ memory: { enabled: v } })} wsPath={activeWsId || undefined} sessionId={sessions.activeSessionId ?? undefined} /> : null
           case 'bot': return settings ? <BotPane config={settings.botBridge} onChange={(bb) => update({ botBridge: bb })} /> : null
           case 'debug': return <DebugLogPane perfDiagnostics={settings?.perfDiagnostics ?? false} onTogglePerfDiagnostics={(v) => update({ perfDiagnostics: v })} />

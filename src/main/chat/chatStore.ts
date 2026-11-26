@@ -129,6 +129,11 @@ export function readBinding(wsPath: string, sessionId: string, agent: string): B
   if (!e?.resumeId) return undefined
   return { ...e, resumeId: e.resumeId, origin: e.origin ?? 'forge' }
 }
+/** The session in this workspace whose `agent` binding has this resume id (first one), if any. */
+export function findBoundSession(wsPath: string, agent: string, resumeId: string): string | undefined {
+  for (const [sid, agents] of Object.entries(readResume(wsPath))) if (agents[agent]?.resumeId === resumeId) return sid
+  return undefined
+}
 /** Merge binding fields; keys whose value is undefined keep their stored value. A new resumeId drops the per-transcript fields. */
 export function writeBinding(wsPath: string, sessionId: string, agent: string, patch: BindingMeta & { resumeId?: string }): void {
   const map = readResume(wsPath)

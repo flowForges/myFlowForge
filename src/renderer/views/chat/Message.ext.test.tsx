@@ -19,3 +19,10 @@ it('the backlog cap row reads 更早的 N 条 and nothing else', () => {
   const { container } = render(<Message msg={{ id: 'e3', who: 'ai', text: '', ts: '', ext: { app: 'Codex', id: '', earlier: 37 } }} streaming={false} />)
   expect(container.textContent).toBe('更早的 37 条')
 })
+
+it('history brought over by 在 myFlowForge 继续 reads 来源: <App>, not 在 <App> 中', () => {
+  const { container } = render(<Message msg={{ id: 'e4', who: 'user', text: '问', ts: '', ext: { app: 'Codex', id: 'u', agent: 'codex', imported: true } }} streaming={false} />)
+  expect(container.querySelector('.msg-ext')!.textContent).toBe('来源: Codex')
+  const ai = render(<Message msg={{ id: 'e5', who: 'ai', text: '答', ts: '', ext: { app: 'Claude', id: 'a', imported: true } }} streaming={false} />)
+  expect(ai.container.querySelector('.msg-ext')!.textContent).toBe('来源: Claude')
+})

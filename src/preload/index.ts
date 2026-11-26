@@ -406,6 +406,7 @@ const api = {
   sessionImportScan: (): Promise<import('@shared/types').ScanResult> => ipcRenderer.invoke(CH.sessionImportScan),
   sessionImportLastScan: (): Promise<import('@shared/types').ScanCache | null> => ipcRenderer.invoke(CH.sessionImportLastScan),
   sessionImportRun: (sessions: import('@shared/types').DiscoveredSession[]): Promise<import('@shared/types').ImportResult> => ipcRenderer.invoke(CH.sessionImportRun, sessions),
+  sessionImportContinue: (s: import('@shared/types').DiscoveredSession): Promise<import('@shared/types').ContinueResult> => ipcRenderer.invoke(CH.sessionImportContinue, s),
   sessionImportRead: (s: import('@shared/types').DiscoveredSession): Promise<import('@shared/types').ImportedMessage[]> => ipcRenderer.invoke(CH.sessionImportRead, s),
   sessionImportList: (): Promise<import('@shared/types').ImportedIndex> => ipcRenderer.invoke(CH.sessionImportList),
   sessionImportCoverage: (): Promise<import('@shared/types').SessionImportCoverage> => ipcRenderer.invoke(CH.sessionImportCoverage),

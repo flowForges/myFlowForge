@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { CH } from './channels'
 import { fakeHost } from '../host/fakeHost'
 import { tableCalls } from './testTable'
@@ -15,6 +18,13 @@ vi.mock('../sessionImport/sources/index', () => ({
 const imported: string[] = []
 vi.mock('../sessionImport/importWorkspace', () => ({ importWorkspace: (c: string) => imported.push(c) }))
 vi.mock('../sessionImport/importStore', () => ({ readIndex: () => ({ version: 1, scannedAt: 0, sessions: [] }), upsertSessions: (s: any[], at: number) => ({ version: 1, scannedAt: at, sessions: s }) }))
+const continued: any[] = []
+const takenWs = mkdtempSync(join(tmpdir(), 'si-ws-'))
+afterAll(() => rmSync(takenWs, { recursive: true, force: true }))
+vi.mock('../sessionImport/takeover', () => ({
+  continueExternal: async (s: any, d: any) => { continued.push([s, d]); return { ok: true, wsPath: takenWs, sessionId: 's-1', created: true, wsAdded: true } },
+  canContinue: async (s: any) => s.source !== 'cursor',
+}))
 vi.mock('../config/store', async (orig) => ({ ...(await orig() as object), readWorkspaceRegistry: () => [] }))
 
 async function invoke(channel: string, ...args: unknown[]) {
@@ -24,7 +34,7 @@ async function invoke(channel: string, ...args: unknown[]) {
 }
 
 describe('session import IPC', () => {
-  beforeEach(() => { imported.length = 0; calls = [] })
+  beforeEach(() => { imported.length = 0; continued.length = 0; calls = [] })
   it('scan returns grouped result; unmatched cwd → own group', async () => {
     const { registerIpc } = await import('./handlers')
     calls = tableCalls(registerIpc(() => {}, {}, fakeHost()))
@@ -52,5 +62,23 @@ describe('session import IPC', () => {
     calls = tableCalls(registerIpc(() => {}, {}, fakeHost()))
     const msgs = await invoke(CH.sessionImportRead, { source: 'claude', filePaths: ['/f'] })
     expect(msgs[0].text).toBe('hi')
+  })
+  it('continue takes the session over, refreshes the sidebar and the session list, and returns where it lives', async () => {
+    const { registerIpc } = await import('./handlers')
+    const broadcast = vi.fn()
+    calls = tableCalls(registerIpc(broadcast, {}, fakeHost()))
+    const session = { source: 'codex', externalId: 'x1', cwd: '/other', title: 't', startedAt: 1, lastTs: 1, messageCount: 2, filePaths: ['/f'], hasBody: true }
+    const r = await invoke(CH.sessionImportContinue, session)
+    expect(r).toEqual({ ok: true, wsPath: takenWs, sessionId: 's-1', created: true, wsAdded: true })
+    expect(continued[0][0]).toMatchObject({ source: 'codex', externalId: 'x1' })
+    expect(typeof continued[0][1].defaultModel).toBe('function')
+    expect(broadcast).toHaveBeenCalledWith(CH.workspacesChanged, {})
+    expect(broadcast).toHaveBeenCalledWith(CH.sessionsChanged, expect.objectContaining({ workspacePath: takenWs }))
+  })
+  it('scan marks which sessions can be continued in place', async () => {
+    const { registerIpc } = await import('./handlers')
+    calls = tableCalls(registerIpc(() => {}, {}, fakeHost()))
+    const res = await invoke(CH.sessionImportScan)
+    expect(res.groups[0].sessions[0].continuable).toBe(true)
   })
 })
