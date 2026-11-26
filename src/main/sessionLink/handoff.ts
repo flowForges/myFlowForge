@@ -92,7 +92,7 @@ export function catchUp(ws: string, sid: string, agent: string, deps: HandoffDep
     try {
       const p = asExtProvider(agent)
       const b0 = p && readBinding(ws, sid, agent)
-      // 我方一轮在途,或刚结束、它的那段还等着 recordOwnEnd 认领(codex / qoder 的起点还在):都不补
+      // 我方一轮在途,或刚结束、它的那段还等着 recordOwnEnd 认领(codex 的起点还在):都不补
       if (!p || !b0 || isOwnTurnLive(ws, sid, agent) || ownStartPending(ws, sid, agent)) return []
       const file = await resolveBindingFile(ws, sid, agent, deps)
       if (!file) return []

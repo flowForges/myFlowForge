@@ -99,12 +99,17 @@ export interface Sent { id: string; text: string }
 /** 以我方 prompt 抬头(历史 / 阶段角色 / 记忆 / 格式指令)开头的用户记录:我方的,哪怕没有正文可比对(只发了附件)。 */
 export const isOwnPrompt = (text: string): boolean => OWN_PROMPT_HEADERS.some(h => text.startsWith(h))
 /**
- * 这条外部用户记录(已 norm)是哪条候选发出去的:我方 prompt 总以消息正文结尾(前面是历史 / 指令),所以先比结尾;
- * 都对不上再退回「包含」。多条都对得上取**最后**那条 —— 不信任原生续接的 provider 每轮都把之前的消息当历史再发一遍,
+ * 这条外部用户记录(已 norm)是哪条候选发出去的:我方 prompt 总以消息正文结尾(前面是历史 / 指令),所以先比结尾 ——
+ * 多条都是它的结尾时取**最长**的(先发「修复登录bug,然后继续」再发「继续」:前一条的记录也以「继续」结尾),一样长取最后那条。
+ * 都对不上再退回「包含」,取**最后**那条:不信任原生续接的 provider 每轮都把之前的消息当历史再发一遍,
  * 第 N 条的记录里包含 1..N-1,取最早的会让水位落后一条。没有 → -1。
  */
 export function matchSent(text: string, cands: Sent[]): number {
-  for (let k = cands.length - 1; k >= 0; k--) if (text.endsWith(cands[k].text)) return k
+  let best = -1
+  for (let k = 0; k < cands.length; k++) {
+    if (text.endsWith(cands[k].text) && (best < 0 || cands[k].text.length >= cands[best].text.length)) best = k
+  }
+  if (best >= 0) return best
   for (let k = cands.length - 1; k >= 0; k--) if (text.includes(cands[k].text)) return k
   return -1
 }
@@ -140,11 +145,12 @@ function lastOwnId(ws: string, sid: string): string | undefined {
 }
 
 /**
- * R3:codex / qoder 在我方一轮在途时,官方 App 写不进同一个会话(codex 拒绝第二个写者)—— 从这一轮开始时的文件末尾
+ * R3:codex 在我方一轮在途时,官方 App 写不进同一个会话(codex 拒绝第二个写者)—— 从这一轮开始时的文件末尾
  * 到 recordOwnEnd 之间写进来的全是我们的,不靠比对文本(只发附件、整条被历史包住的那轮都对不上)。claude 不算:
- * 一轮结束后进程还留驻,期间 App 照样能写,只能靠文本比对。只放内存:重启后丢了就退回文本比对。
+ * 一轮结束后进程还留驻,期间 App 照样能写。qoder 也不算(R4):没验证过它会拒绝第二个写者。这两家只靠文本比对。
+ * 只放内存:重启后丢了就退回文本比对。
  */
-const OWN_RANGE = new Set<ExtProvider>(['codex', 'qoder'])
+const OWN_RANGE = new Set<ExtProvider>(['codex'])
 const ownStarts = new Map<string, { resumeId: string; offset: number }>()
 /** 发送前的占用检查过了、这一轮登记成我方在途之前调用:记下外部记录此刻的末尾。 */
 export async function markOwnStart(ws: string, sid: string, agent: string, deps: BindingDeps = {}): Promise<void> {

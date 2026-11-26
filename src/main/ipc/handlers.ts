@@ -1232,9 +1232,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       note: (t) => emitNote(payload.workspacePath, payload.sessionId, t),
     })
     // 会话互通:这一轮在途期间我们就是这个外部会话的写者(一轮结束后留驻的进程不算,见 sessionLink/ownTurns)。
-    // codex / qoder:先记下外部记录此刻的末尾 —— 从这里到收尾写进来的全是我们的(R3,binding.ts markOwnStart)。
+    // codex:先记下外部记录此刻的末尾 —— 从这里到收尾写进来的全是我们的(R3,binding.ts markOwnStart)。
     // 紧挨着 try:记下之后每条路都要经过下面 finally 的 recordOwnEnd / dropOwnStart。
-    if (payload.agent !== 'claude') await markOwnStart(payload.workspacePath, payload.sessionId, payload.agent).catch(() => {})
+    if (payload.agent === 'codex') await markOwnStart(payload.workspacePath, payload.sessionId, payload.agent).catch(() => {})
     const endOwnTurn = beginOwnTurn(payload.workspacePath, payload.sessionId, payload.agent)
     // codex 在这一轮里报「已有写者」:同一条「没发出」的路(sendTurn 已撤回用户消息、发了 busy_elsewhere)。
     let busyElsewhere: string | undefined

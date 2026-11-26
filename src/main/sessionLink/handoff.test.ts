@@ -368,3 +368,39 @@ it('a user record that starts with one of our own prompt headers is ours (no tex
   await recordOwnEnd(ws(), 's', 'claude', { roots })
   expect(readBinding(ws(), 's', 'claude')!.syncedTo!.offset).toBe(statSync(cf).size)
 })
+
+it('R4: qoder is not range-credited — a record that matches nothing written during our turn is still left for catch-up', async () => {
+  const { writeBinding, appendMessage, readBinding } = await import('../chat/chatStore')
+  const { recordOwnEnd, markOwnStart } = await import('./binding')
+  appendMessage(ws(), 's', own('m1', '我的'))
+  const f = join(roots.qoder, '-p', 'q-r4.jsonl')
+  mkdirSync(join(f, '..'), { recursive: true }); writeFileSync(f, '')
+  writeBinding(ws(), 's', 'qoder', { resumeId: 'q-r4', syncedTo: { offset: 0 }, ownMsgMark: 'm1' })
+  await markOwnStart(ws(), 's', 'qoder', { roots })
+  appendFileSync(f, jsonl([claudeUser('x1', 'Qoder 里问的'), claudeAssistant('xa', [{ type: 'text', text: '答' }]), claudeStopHook('xh')]))
+  await recordOwnEnd(ws(), 's', 'qoder', { roots })
+  expect(readBinding(ws(), 's', 'qoder')!.syncedTo).toEqual({ offset: 0 })
+})
+
+it('R5: a record ending with two of our messages is credited to the LONGEST one — A="修复登录bug,然后继续" then B="继续" are both ours', async () => {
+  const { writeBinding, appendMessage, readBinding } = await import('../chat/chatStore')
+  const { recordOwnEnd } = await import('./binding')
+  const { catchUp } = await import('./handoff')
+  const A = '修复登录bug,然后继续', B = '继续'
+  const body = jsonl([
+    claudeUser('ua', A), claudeAssistant('aa', [{ type: 'text', text: '修好了' }]), claudeStopHook('ha'),
+    claudeUser('ub', `[对话上下文] ${B}`), claudeAssistant('ab', [{ type: 'text', text: '继续中' }]), claudeStopHook('hb'),
+  ])
+  for (const [sid, id] of [['s-walk', 'c-r5a'], ['s-catch', 'c-r5b']] as const) {
+    claudeTranscript(id, body)
+    appendMessage(ws(), sid, own('mA', A)); appendMessage(ws(), sid, ai('mAa', '修好了')); appendMessage(ws(), sid, own('mB', B))
+    writeBinding(ws(), sid, 'claude', { resumeId: id, syncedTo: { offset: 0 } })   // both unmatched candidates
+  }
+  // pastOwnTurns (recordOwnEnd)
+  await recordOwnEnd(ws(), 's-walk', 'claude', { roots })
+  expect(readBinding(ws(), 's-walk', 'claude')!.syncedTo!.offset).toBe(Buffer.byteLength(body))
+  expect(readBinding(ws(), 's-walk', 'claude')!.ownMsgMark).toBe('mB')
+  // appTurns (catchUp)
+  expect(await catchUp(ws(), 's-catch', 'claude', { roots })).toEqual([])
+  expect(readBinding(ws(), 's-catch', 'claude')!.ownMsgMark).toBe('mB')
+})
