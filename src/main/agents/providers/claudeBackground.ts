@@ -87,6 +87,11 @@ export interface BackgroundGate {
   /** 插话写进去之后,这一轮的 result 还没到(这一轮的 result 先看它)。 */
   readonly inputPending: boolean
   /**
+   * 插话那条已经有着落了:CLI 为它单起的一轮已经开始、并进了这一轮(claude.ts 的 merge 分支)。
+   * 清掉 inputPending / awaiting —— 那一轮的 result 照常判,不再多等一个宽限期,下一条消息也不用压。
+   */
+  inputConsumed(): void
+  /**
    * 因为插话停的车,而 CLI 还没起新一轮:那条插话可能还没被消化(CLI 随时会为它单起一轮)。
    * ★这时接上来的下一条用户消息要先压着,否则插话那一轮的回复和 result 会落到它头上(见 claude.ts attach)。
    * 看到主代理新一轮开始(init / requesting)就清掉。
@@ -194,6 +199,7 @@ export function makeBackgroundGate(opts: {
     unpark() { if (!finished) { parked = false; cancelGrace() } },
     expectInput() { if (!finished) inputPending = true },
     get inputPending() { return inputPending },
+    inputConsumed() { inputPending = false; awaiting = false },
     get awaitingInput() { return awaiting },
     clear() { finished = true; parked = false; awaiting = false; cancelGrace() },
   }

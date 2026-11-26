@@ -785,6 +785,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         if (settleTimer && typeof obj?.parent_tool_use_id !== 'string'
           && ((obj?.type === 'system' && (obj.subtype === 'init' || (obj.subtype === 'status' && obj.status === 'requesting'))) || obj?.type === 'stream_event' || obj?.type === 'assistant')) {
           clearSettle()
+          bg.inputConsumed()
           turnOk = null; resultError = ''; sawNotification = false
           needSep = sawAssistant
           appLog('info', 'claude', 'chat 插话那条被 CLI 单起了一轮:接在这一轮的回复后面')

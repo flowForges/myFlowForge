@@ -228,4 +228,27 @@ describe('parseTaskNotification', () => {
     vi.advanceTimersByTime(BG_GRACE_MS)
     expect(g2.awaitingInput).toBe(false)
   })
+
+  it('inputConsumed:插话已经单起一轮并入这一轮 → 不再等它;下一个 result 没后台活就立即回收,不停车', () => {
+    const finish = vi.fn()
+    const g = makeBackgroundGate({ onFinish: finish })
+    g.expectInput()
+    g.feed(sys('init'))
+    g.inputConsumed()
+    expect(g.inputPending).toBe(false)
+    expect(g.awaitingInput).toBe(false)
+    g.result()
+    expect(finish).toHaveBeenCalledOnce()
+    expect(g.parked).toBe(false)
+    expect(g.awaitingInput).toBe(false)
+  })
+
+  it('inputConsumed 之后又插话:新的插话照样等', () => {
+    const finish = vi.fn()
+    const g = makeBackgroundGate({ onFinish: finish })
+    g.expectInput(); g.inputConsumed(); g.expectInput()
+    g.result()
+    expect(finish).not.toHaveBeenCalled()
+    expect(g.awaitingInput).toBe(true)
+  })
 })
