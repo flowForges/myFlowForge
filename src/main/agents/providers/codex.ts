@@ -220,9 +220,13 @@ export function codexInstructionArgs(env: NodeJS.ProcessEnv): string[] {
  * ★★不许静默(2026-09-17):exec 那条路 approval_policy 恒为 "never",「悄悄换了条能力更弱的路」必须留痕,
  *  否则它和「功能坏了」在现场无法区分。每次回落只记这一条,不再另报 onError —— 这一轮照常完成。
  */
-function noteAppServerFallback(reason: string, onStatus?: (t: string) => void): void {
+const fallbackNoticed = new Set<string>()
+function noteAppServerFallback(bin: string, reason: string, onStatus?: (t: string) => void): void {
   logError('codex', 'app-server 起不来,本轮回落到 exec(这条路没有权限门)', reason)
-  onStatus?.('codex 的 app-server 没起来,本轮回落到 exec —— 这条路不会升起权限门。')
+  // 给用户的那一句:每次 app 运行、每个 codex 路径只说一次 —— 老版本 codex 每一轮都会回落,不能每轮都说。
+  if (!onStatus || fallbackNoticed.has(bin)) return
+  fallbackNoticed.add(bin)
+  onStatus('codex 的 app-server 没起来,本轮回落到 exec —— 这条路不会升起权限门。')
 }
 
 // The forge_propose_plan chat directive now lives in ../forgeChatDirective (shared with qoder,
@@ -362,10 +366,12 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         })
         return { id: task.agentId, cancel: () => { killTree(child) }, done }
       }
-      // App-server transport (default; codexTransport): drive the turn over JSON-RPC instead of spawning
-      // `codex exec`. Skipped for preArgs specs (e.g. custom codex-derived providers) which don't
-      // necessarily speak app-server the same way.
-      const useAppServer = readSettings().codexTransport === 'app-server' && !spec.preArgs
+      // App-server transport: drive the turn over JSON-RPC instead of spawning `codex exec`. Skipped for
+      // preArgs specs (e.g. custom codex-derived providers) which don't necessarily speak app-server the same way.
+      // ★工作流阶段只在用户**亲手选了** app-server 时才走它:默认值切到 app-server 是为了聊天里的插话,
+      //  无人值守的阶段不能因此开始停在审批门上(app-server 是 on-request,exec 是 never)。
+      const st = readSettings()
+      const useAppServer = st.codexTransport === 'app-server' && st.codexTransportChosen === true && !spec.preArgs
       if (useAppServer) {
         const forge = forgeCodexConfigArgs(env).length > 0
         const { sandbox, approvalPolicy } = codexSandboxApproval(task.permissionMode ?? 'auto', forge)
@@ -389,7 +395,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
           )
         } catch (e) {
           // A SYNCHRONOUS driveCodexTurn throw (spawn-option error before the child even starts).
-          noteAppServerFallback(String((e as Error)?.message ?? e))
+          noteAppServerFallback(bin, String((e as Error)?.message ?? e))
           handle = null
         }
         if (handle) {
@@ -399,7 +405,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
           const done = app.done.then((res): Promise<AgentResult> | AgentResult => {
             // 握手没成、这一轮没开始:退回 exec 照常跑完(同 chat())。
             if (res.startFailed && !cancelled) {
-              noteAppServerFallback(res.error ?? '')
+              noteAppServerFallback(bin, res.error ?? '')
               const ex = runExec()
               current = ex
               return ex.done
@@ -608,7 +614,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
           )
         } catch (e) {
           // A SYNCHRONOUS driveCodexTurn throw (spawn-option error before the child even starts).
-          noteAppServerFallback(String((e as Error)?.message ?? e), cb.onStatus)
+          noteAppServerFallback(bin, String((e as Error)?.message ?? e), cb.onStatus)
           wd.clear()
           appHandle = null
         }
@@ -624,7 +630,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
             // 退回 exec 把它照常跑完。不改用户的设置,下一轮还先试 app-server。
             if (res.startFailed && !cancelled) {
               fellBack = true
-              noteAppServerFallback(res.error ?? '', cb.onStatus)
+              noteAppServerFallback(bin, res.error ?? '', cb.onStatus)
               const ex = runExec()
               current = ex
               return ex.done

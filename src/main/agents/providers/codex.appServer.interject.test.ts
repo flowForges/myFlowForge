@@ -9,7 +9,8 @@ import type { ChatCallbacks } from '../types'
  * 自动退回 exec 照常跑完、不提供插话。假 codex 靠 PATH 塞进去,说的是 app-server 的真协议
  * (codex-cli 0.154 `app-server generate-json-schema`:TurnSteerParams = {threadId, expectedTurnId, input})。
  */
-vi.mock('../../config/store', () => ({ readSettings: () => ({ codexTransport: 'app-server' }) }))
+const settings = vi.hoisted(() => ({ codexTransport: 'app-server' as 'exec' | 'app-server', codexTransportChosen: false }))
+vi.mock('../../config/store', () => ({ readSettings: () => ({ ...settings }) }))
 const logs = vi.hoisted(() => [] as string[])
 vi.mock('../../log/appLog', async (orig) => ({ ...(await orig<typeof import('../../log/appLog')>()), logError: (_s: string, m: string) => { logs.push(m) } }))
 
@@ -58,6 +59,7 @@ if (argv[argv.length - 1] === 'app-server' || argv.includes('app-server')) {
 let dir: string, trace: string, oldPath: string | undefined
 beforeEach(() => {
   logs.length = 0
+  settings.codexTransport = 'app-server'; settings.codexTransportChosen = false
   dir = mkdtempSync(join(tmpdir(), 'codex-steer-'))
   writeFileSync(join(dir, 'codex'), FAKE); chmodSync(join(dir, 'codex'), 0o755)
   trace = join(dir, 'trace.jsonl')
@@ -71,10 +73,11 @@ afterEach(() => {
 
 const traced = () => existsSync(trace) ? readFileSync(trace, 'utf8').trim().split('\n').map(l => JSON.parse(l)) : []
 
-async function chat(mode: 'steer' | 'broken', extraEnv: NodeJS.ProcessEnv = {}) {
+async function chat(mode: 'steer' | 'broken', extraEnv: NodeJS.ProcessEnv = {}, bin?: string) {
   const { makeCodexProvider } = await import('./codex')
   let text = ''
   const errors: string[] = []
+  const statuses: string[] = []
   const ready: boolean[] = []
   let firstSeen!: () => void
   const first = new Promise<void>(r => { firstSeen = r })
@@ -82,11 +85,12 @@ async function chat(mode: 'steer' | 'broken', extraEnv: NodeJS.ProcessEnv = {}) 
     onSession: () => {}, onThinkDelta: () => {}, onDone: () => {},
     onAssistantDelta: (t) => { text += t; if (text.includes('first') || text.includes('from exec')) firstSeen() },
     onError: (e) => { errors.push(e.message) },
+    onStatus: (t) => { statuses.push(t) },
   }
-  const provider = makeCodexProvider({ defaultModels: [], modelHasFastTier: () => false })
+  const provider = makeCodexProvider({ bin, defaultModels: [], modelHasFastTier: () => false })
   const session = provider.chat!({ id: 'c1', prompt: 'hello', model: 'default', cwd: dir }, cb, { ...process.env, TRACE: trace, MODE: mode, ...extraEnv })
   session.watchInterjectable?.((r) => ready.push(r))
-  return { session, first, done: session.done, text: () => text, errors, ready }
+  return { session, first, done: session.done, text: () => text, errors, statuses, ready }
 }
 
 describe('codex chat · app-server 插话', () => {
@@ -131,6 +135,7 @@ describe('codex chat · app-server 插话', () => {
     expect(logs.filter(m => m.includes('回落到 exec'))).toHaveLength(1)
   })
   it('工作流 run() 同样回落(两个调用方都要接)', async () => {
+    settings.codexTransportChosen = true
     const { makeCodexProvider } = await import('./codex')
     const provider = makeCodexProvider({ defaultModels: [], modelHasFastTier: () => false })
     const lines: string[] = []
@@ -146,5 +151,47 @@ describe('codex chat · app-server 插话', () => {
     expect(states.at(-1)).toBe('ok')
     expect(errors).toEqual([])
     expect(traced().filter(t => t.argv).map(r => r.argv[0] === 'exec' ? 'exec' : 'app-server')).toEqual(['app-server', 'exec'])
+  })
+  it('回落提示每次 app 运行、每个 codex 路径只说一次;日志每轮照记', async () => {
+    const bin = join(dir, 'codex')
+    const a = await chat('broken', {}, bin); await a.done
+    const b = await chat('broken', {}, bin); await b.done
+    expect(b.text()).toBe('from exec')
+    const fb = (xs: string[]) => xs.filter(t => t.includes('回落到 exec'))
+    expect(fb(a.statuses)).toHaveLength(1)
+    expect(fb(b.statuses)).toHaveLength(0)
+    expect(logs.filter(m => m.includes('回落到 exec'))).toHaveLength(2)
+  })
+})
+
+// 插话是聊天的功能:默认值只把**聊天**切到 app-server。无人值守的工作流阶段不能因为默认值变了就开始停在审批门上。
+describe('codex 传输:聊天 vs 工作流', () => {
+  const firstSpawn = () => { const r = traced().find(t => t.argv); return r.argv[0] === 'exec' ? 'exec' : 'app-server' }
+  const runOnce = async () => {
+    const { makeCodexProvider } = await import('./codex')
+    const provider = makeCodexProvider({ defaultModels: [], modelHasFastTier: () => false })
+    const s = provider.run(
+      { stageKey: 't', agentId: 'a1', name: 'T', prompt: 'x', cwd: dir, model: 'default' },
+      { onLog: () => {}, onState: () => {}, onConfirm: async () => 'allow', onInput: async () => '', onDone: () => {}, onError: () => {} },
+      { ...process.env, TRACE: trace, MODE: 'broken' },
+    )
+    await s.done
+    const k = firstSpawn(); rmSync(trace, { force: true }); return k
+  }
+  const chatOnce = async () => { const c = await chat('broken'); await c.done; const k = firstSpawn(); rmSync(trace, { force: true }); return k }
+
+  it('默认(没亲手选过):聊天 app-server,工作流 exec', async () => {
+    expect(await chatOnce()).toBe('app-server')
+    expect(await runOnce()).toBe('exec')
+  })
+  it('亲手选了 app-server:两边都 app-server', async () => {
+    settings.codexTransportChosen = true
+    expect(await chatOnce()).toBe('app-server')
+    expect(await runOnce()).toBe('app-server')
+  })
+  it('亲手选了 exec:两边都 exec', async () => {
+    settings.codexTransport = 'exec'; settings.codexTransportChosen = true
+    expect(await chatOnce()).toBe('exec')
+    expect(await runOnce()).toBe('exec')
   })
 })
