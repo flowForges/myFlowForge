@@ -27,6 +27,10 @@ describe('index.ts computer-use wiring', () => {
     expect(SRC).not.toMatch(/CH\.cuOverlayState/)
   })
 
+  it('rc3: the overlay drag channel is answered only for the overlay\'s own webContents and only moves the overlay', () => {
+    expect(SRC).toContain('ipcMain.handle(CH.cuOverlayDrag, (e, phase) => { if (e.sender.id === cuOverlay.webContentsId()) cuOverlay.drag(phase) })')
+  })
+
   it('the host gets the runtime getter; the service gets chatStop as stopTurn and the real driver factory', () => {
     expect(SRC).toContain('createElectronHost({ computerUse: () => cuRuntime?.host() })')
     expect(SRC).toMatch(/stopTurn: \(k\) => \{ void Promise\.resolve\(methodTableRef\?\.\[CH\.chatStop\]\?\.\(NOOP_CTX, k\)\)/)

@@ -8,6 +8,7 @@ function harness(physical = false) {
   const api = {
     onState: (cb: (s: CuOverlayState) => void) => { push = cb; return () => {} },
     resolve: vi.fn<(id: string, d: 'allow' | 'deny' | 'stop') => void>(), stop: vi.fn<() => void>(), openMain: vi.fn<() => void>(),
+    drag: vi.fn<(phase: 'start' | 'move' | 'end') => void>(),
   } satisfies CuOverlayApi
   const r = render(<OverlayApp api={api} isPhysical={() => physical} />)
   return { ...r, api, push: (s: CuOverlayState) => act(() => push(s)) }
@@ -206,5 +207,59 @@ describe('actionLine', () => {
     expect(v.endsWith('TAIL')).toBe(true)
     expect(v.startsWith('…')).toBe(true)
     expect(t.container.querySelector('.cuo-card b')).toBeNull()
+  })
+
+  // rc3 issue 3: the pill drags the window by its non-button area; buttons keep working
+  describe('drag', () => {
+    it('pointer down / move / up on the pill sends start / move / end', () => {
+      const t = harness()
+      t.push(ON)
+      const pill = t.container.querySelector('.cuo-pill')!
+      fireEvent.pointerDown(pill.querySelector('.cuo-title')!, { button: 0, pointerId: 1 })
+      fireEvent.pointerMove(pill, { pointerId: 1 })
+      fireEvent.pointerMove(pill, { pointerId: 1 })
+      fireEvent.pointerUp(pill, { pointerId: 1 })
+      expect(t.api.drag.mock.calls.map((c) => c[0])).toEqual(['start', 'move', 'move', 'end'])
+      fireEvent.pointerMove(pill, { pointerId: 1 })
+      expect(t.api.drag).toHaveBeenCalledTimes(4)
+    })
+
+    it('a press on a pill button never starts a drag, and the button still works', () => {
+      const t = harness()
+      t.push(ON)
+      const stop = screen.getByText('停止')
+      fireEvent.pointerDown(stop, { button: 0, pointerId: 1 })
+      fireEvent.pointerMove(stop, { pointerId: 1 })
+      fireEvent.pointerUp(stop, { pointerId: 1 })
+      fireEvent.click(stop)
+      expect(t.api.drag).not.toHaveBeenCalled()
+      expect(t.api.stop).toHaveBeenCalledTimes(1)
+      fireEvent.click(screen.getByText('打开主窗口'))
+      expect(t.api.openMain).toHaveBeenCalledTimes(1)
+    })
+
+    it('the mini card does not drag; 允许 still needs a physical press, 拒绝 takes any click', () => {
+      const t = harness(false)
+      t.push(CLICK)
+      const card = t.container.querySelector('.cuo-card')!
+      fireEvent.pointerDown(card, { button: 0, pointerId: 1 })
+      fireEvent.pointerUp(card, { pointerId: 1 })
+      expect(t.api.drag).not.toHaveBeenCalled()
+      press(screen.getByText('允许'))
+      expect(t.api.resolve).not.toHaveBeenCalled()
+      fireEvent.click(screen.getByText('拒绝'))
+      expect(t.api.resolve).toHaveBeenCalledWith('cug.1', 'deny')
+    })
+
+    it('a non-primary button does not drag; a cancelled pointer ends the drag', () => {
+      const t = harness()
+      t.push(ON)
+      const pill = t.container.querySelector('.cuo-pill')!
+      fireEvent.pointerDown(pill, { button: 2, pointerId: 1 })
+      expect(t.api.drag).not.toHaveBeenCalled()
+      fireEvent.pointerDown(pill, { button: 0, pointerId: 2 })
+      fireEvent.pointerCancel(pill, { pointerId: 2 })
+      expect(t.api.drag.mock.calls.map((c) => c[0])).toEqual(['start', 'end'])
+    })
   })
 })

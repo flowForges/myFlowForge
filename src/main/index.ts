@@ -858,6 +858,8 @@ app.whenReady().then(() => {
       // I-1:computer-use:* 只认主窗口和浮窗(宠物窗共用 preload)
       : NOT_LOCAL)
   }
+  // rc3:浮窗胶囊拖动。只认浮窗自己的 webContents,能做的也只有挪浮窗(光标位置主进程自己读)。
+  ipcMain.handle(CH.cuOverlayDrag, (e, phase) => { if (e.sender.id === cuOverlay.webContentsId()) cuOverlay.drag(phase) })
 
   // ── 多主机管理。这些是**客户端自己的**事(这台设备认识哪些机器、现在连着谁),
   //    所以注册在这儿而不是方法表里 —— 天然不会被路由到远程。

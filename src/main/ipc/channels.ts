@@ -453,6 +453,9 @@ export const CH = {
   cuEvent: 'computer-use:event',
   // event: main → the overlay window only (webContents.send), never broadcast
   cuOverlayState: 'computer-use:overlay-state',
+  // rc3: the overlay pill is being dragged (start / move / end). Not a method-table method: index.ts answers it for
+  // the overlay's own webContents only, and all it can do is move the overlay window.
+  cuOverlayDrag: 'cu-overlay:drag',
 } as const
 
 // Individual named exports (in addition to the CH object above) so callers can `import * as CH from

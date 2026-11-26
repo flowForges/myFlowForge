@@ -616,7 +616,7 @@ const api = {
   },
 }
 // The computer-use overlay (src/main/windows/cuOverlay.ts) loads this same preload with CU_OVERLAY_ARG. It gets these
-// four calls and nothing else: no `window.forge`, so a page in that window can't reach any other channel.
+// five calls and nothing else: no `window.forge`, so a page in that window can't reach any other channel.
 const cuOverlayApi = {
   onState: (cb: (s: CuOverlayState) => void) => {
     const listener = (_: unknown, s: CuOverlayState) => cb(s)
@@ -627,6 +627,8 @@ const cuOverlayApi = {
   // no key: stop every session
   stop: () => ipcRenderer.invoke(CH.cuStop),
   openMain: () => ipcRenderer.invoke(CH.cuOpenMain),
+  // rc3: dragging the pill; main reads the cursor itself, so only the phase goes over
+  drag: (phase: 'start' | 'move' | 'end') => ipcRenderer.invoke(CH.cuOverlayDrag, phase),
 }
 if (process.argv.includes(CU_OVERLAY_ARG)) contextBridge.exposeInMainWorld('cuOverlay', cuOverlayApi)
 else contextBridge.exposeInMainWorld('forge', api)

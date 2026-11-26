@@ -2,7 +2,7 @@
 html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
 #cuo-root { width: 100%; height: 100%; }
 .cuo { box-sizing: border-box; width: 100%; height: 100%; padding: 2px 4px; font: 12px/1.3 -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif; color: #f4f4f5; user-select: none; -webkit-user-select: none; }
-.cuo-pill { display: flex; align-items: center; gap: 6px; height: 32px; box-sizing: border-box; padding: 0 6px 0 12px; border-radius: 16px; background: rgba(24, 24, 27, 0.92); border: 1px solid rgba(255, 255, 255, 0.12); white-space: nowrap; transition: box-shadow 0.3s; }
+.cuo-pill { display: flex; align-items: center; gap: 6px; height: 32px; box-sizing: border-box; padding: 0 6px 0 12px; border-radius: 16px; background: rgba(24, 24, 27, 0.92); border: 1px solid rgba(255, 255, 255, 0.12); white-space: nowrap; transition: box-shadow 0.3s; cursor: grab; touch-action: none; }
 .cuo-pill.cuo-flash { box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.75); }
 .cuo-dot { color: #ef4444; flex: none; }
 .cuo-title { overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }

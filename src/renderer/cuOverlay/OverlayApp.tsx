@@ -7,8 +7,10 @@
 //   last second, then its click with a click count (cuPhysical.ts, shared with the main card and the mode menu).
 //   Script-dispatched or keyboard-activated clicks do nothing.
 //   Stop / deny / 打开主窗口 are always safe and take any click.
+// - rc3: the pill drags the window by its non-button area (pointer events → `drag` phases; main moves the window).
+//   A press on a button never starts a drag, and the mini card doesn't drag at all.
 // - Screen-derived strings (app names) render as plain text, whitespace collapsed, long values cut from the left.
-import { useEffect, useRef, useState, type MouseEvent } from 'react'
+import { useEffect, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
 import { CU_KIND_LABEL, COMPUTER_USE_CHIP, elementPhrase, visibleText, type CuActionView, type CuOverlayState } from '@shared/computerUse'
 import { BUTTON_LABEL as BUTTON, MOD_SYM, fmtPt as pt, screenName } from '../views/chat/cuFormat'
 import { usePhysicalPress, type IsPhysical } from '../views/chat/cuPhysical'
@@ -19,6 +21,7 @@ export interface CuOverlayApi {
   resolve(id: string, decision: 'allow' | 'deny' | 'stop'): unknown
   stop(): unknown
   openMain(): unknown
+  drag(phase: 'start' | 'move' | 'end'): unknown
 }
 
 /** the mini card's one line. Semantic kinds (act/launch/focus/appKey, T5) speak in elements (spec §10); the v1
@@ -87,6 +90,7 @@ export function OverlayApp({ api, isPhysical }: { api: CuOverlayApi; isPhysical?
   const [flash, setFlash] = useState(false)
   const press = usePhysicalPress(isPhysical)
   const lastSeq = useRef(0)
+  const dragging = useRef<number | null>(null)
 
   useEffect(() => api.onState(setState), [api])
   useEffect(() => {
@@ -103,11 +107,23 @@ export function OverlayApp({ api, isPhysical }: { api: CuOverlayApi; isPhysical?
 
   const onDown = press.down
   const approve = (gateId: string, btn: string) => (e: MouseEvent) => { if (press.check(btn, e)) api.resolve(gateId, 'allow') }
+  const dragDown = (e: PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || (e.target as Element).closest('button')) return
+    dragging.current = e.pointerId
+    try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* no capture: moves still arrive while inside */ }
+    api.drag('start')
+  }
+  const dragMove = (e: PointerEvent<HTMLDivElement>) => { if (dragging.current === e.pointerId) api.drag('move') }
+  const dragEnd = (e: PointerEvent<HTMLDivElement>) => {
+    if (dragging.current !== e.pointerId) return
+    dragging.current = null
+    api.drag('end')
+  }
   const bundle = gate?.kind === 'action' ? screenName(gate.action?.bundleId) : ''
 
   return (
     <div className={`cuo${gate ? ' cuo-open' : ''}`}>
-      <div className={`cuo-pill${flash ? ' cuo-flash' : ''}`}>
+      <div className={`cuo-pill${flash ? ' cuo-flash' : ''}`} onPointerDown={dragDown} onPointerMove={dragMove} onPointerUp={dragEnd} onPointerCancel={dragEnd} onLostPointerCapture={dragEnd}>
         <span className="cuo-dot">●</span>
         <span className="cuo-title">电脑 · {screenName(session.title)}</span>
         <span className="cuo-sep"> · </span>

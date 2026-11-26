@@ -13,11 +13,14 @@ function fakeWin() {
   const wcListeners: Record<string, (() => void)[]> = {}
   let visible = false
   let destroyed = false
+  let bounds = { x: 0, y: 0, width: 0, height: 0 }
   const w = {
+    getBounds: () => ({ ...bounds }),
+    _init: (b: typeof bounds) => { bounds = b },
     calls, sent: [] as { channel: string; payload: unknown }[],
     setAlwaysOnTop: (...a: unknown[]) => { calls.push(['setAlwaysOnTop', ...a]) },
     setVisibleOnAllWorkspaces: (...a: unknown[]) => { calls.push(['setVisibleOnAllWorkspaces', ...a]) },
-    setBounds: (b: unknown) => { calls.push(['setBounds', b]) },
+    setBounds: (b: typeof bounds) => { calls.push(['setBounds', b]); bounds = { ...b } },
     showInactive: () => { calls.push(['showInactive']); visible = true },
     setContentProtection: (...a: unknown[]) => { calls.push(['setContentProtection', ...a]) },
     show: () => { calls.push(['show']); visible = true },
@@ -42,14 +45,24 @@ function setup() {
   const opts: unknown[] = []
   const loads: unknown[] = []
   let work = WORK
-  const screen: ScreenLike = { getPrimaryDisplay: () => ({ workArea: work }) }
+  let cursor = { x: 0, y: 0 }
+  // a second display to the right of the primary one
+  const RIGHT = { x: 1792, y: 0, width: 1440, height: 900 }
+  const nearest: { p: { x: number; y: number } }[] = []
+  const screen: ScreenLike = {
+    getPrimaryDisplay: () => ({ workArea: work }),
+    getCursorScreenPoint: () => ({ ...cursor }),
+    getDisplayNearestPoint: (p) => { nearest.push({ p }); return { workArea: p.x >= RIGHT.x ? RIGHT : work } },
+  }
   const ov = createCuOverlay({
-    makeWindow: (o) => { opts.push(o); const w = fakeWin(); wins.push(w); return w as unknown as WinLike },
+    makeWindow: (o) => {
+      opts.push(o); const w = fakeWin(); w._init({ x: o.x!, y: o.y!, width: o.width!, height: o.height! }); wins.push(w); return w as unknown as WinLike
+    },
     screen,
     loadUrl: (w) => loads.push(w),
     preload: '/out/preload/index.js',
   })
-  return { ov, wins, opts, loads, setWork: (w: typeof WORK) => { work = w } }
+  return { ov, wins, opts, loads, setWork: (w: typeof WORK) => { work = w }, cursorAt: (x: number, y: number) => { cursor = { x, y } } }
 }
 
 const ON: CuOverlayState = { session: { workspacePath: '/w', sessionId: 's', title: '会话一', mode: 'ask' }, gate: null, actionSeq: 0, hotkeyFailed: false }
@@ -146,6 +159,72 @@ describe('createCuOverlay', () => {
     expect('collapseMain' in t.ov).toBe(false)
   })
 
+  // rc3 issue 3: the pill can be dragged; main moves the window by the cursor's travel (the renderer sends phases only)
+  describe('drag', () => {
+    const lastBounds = (w: ReturnType<typeof fakeWin>) => w.calls.filter((c) => c[0] === 'setBounds').at(-1)?.[1]
+    it('start → move follows the cursor\'s travel from where the window was', () => {
+      const t = setup()
+      t.ov.show(ON)
+      t.cursorAt(800, 40)
+      t.ov.drag('start')
+      t.cursorAt(700, 300)
+      t.ov.drag('move')
+      expect(lastBounds(t.wins[0])).toEqual({ x: 586, y: 291, width: 420, height: 36 })
+      t.ov.drag('end')
+    })
+
+    it('the dragged place is kept: a gate expanding, hide → show and a fresh show all reuse it', () => {
+      const t = setup()
+      t.ov.show(ON)
+      t.cursorAt(800, 40); t.ov.drag('start'); t.cursorAt(700, 300); t.ov.drag('move'); t.ov.drag('end')
+      t.ov.show(GATED)
+      expect(lastBounds(t.wins[0])).toEqual({ x: 586, y: 291, width: 420, height: 220 })
+      t.ov.hide()
+      t.ov.show(ON)
+      expect(lastBounds(t.wins[0])).toEqual({ x: 586, y: 291, width: 420, height: 36 })
+      t.wins[0].destroy()
+      t.ov.show(ON)
+      expect(t.opts[1]).toMatchObject({ x: 586, y: 291 })
+      expect(lastBounds(t.wins[1])).toEqual({ x: 586, y: 291, width: 420, height: 36 })
+    })
+
+    it('clamped to the work area of the display it is on, including when a gate makes it taller', () => {
+      const t = setup()
+      t.ov.show(ON)
+      t.cursorAt(800, 40); t.ov.drag('start'); t.cursorAt(800, 5000); t.ov.drag('move'); t.ov.drag('end')
+      // WORK: y 25..1095 → a 36-high pill tops out at 1059
+      expect(lastBounds(t.wins[0])).toEqual({ x: 686, y: 1059, width: 420, height: 36 })
+      t.ov.show(GATED)
+      expect(lastBounds(t.wins[0])).toEqual({ x: 686, y: 875, width: 420, height: 220 })
+      // dragged onto the right-hand display: clamped to that one
+      t.cursorAt(800, 40); t.ov.drag('start'); t.cursorAt(800 + 3000, 40); t.ov.drag('move'); t.ov.drag('end')
+      expect(lastBounds(t.wins[0])).toEqual({ x: 1792 + 1440 - 420, y: 900 - 220, width: 420, height: 220 })
+    })
+
+    it('move / end without a start, unknown phases and drags with no window do nothing', () => {
+      const t = setup()
+      t.ov.drag('move')
+      t.ov.drag('start')
+      expect(t.wins).toEqual([])
+      t.ov.show(ON)
+      const n = t.wins[0].calls.length
+      t.ov.drag('move'); t.ov.drag('end'); t.ov.drag('bogus' as never)
+      expect(t.wins[0].calls.length).toBe(n)
+    })
+
+    it('a crash rebuild comes back where it was dragged to (T10 recovery reuses the place)', () => {
+      vi.useFakeTimers()
+      try {
+        const t = setup()
+        t.ov.show(GATED)
+        t.cursorAt(800, 40); t.ov.drag('start'); t.cursorAt(700, 300); t.ov.drag('move'); t.ov.drag('end')
+        t.wins[0].fire('render-process-gone')
+        vi.runAllTimers()
+        expect(t.opts[1]).toMatchObject({ x: 586, y: 291, height: 220 })
+      } finally { vi.useRealTimers() }
+    })
+  })
+
   // T10 carry-over, fix round 1 (reviewer findings 1-3): render-process-gone recovery is deferred (off the crash
   // event's own call stack) and the cap/backoff is time-based, so these all run under fake timers.
   describe('render-process-gone recovery', () => {
@@ -233,16 +312,16 @@ describe('createCuOverlay', () => {
 
 // The preload isn't in any vitest project (it's bundled into the renderer), so its source is scanned, as
 // terminalPreload.test.ts does.
-describe('preload: the overlay gets only its four calls', () => {
+describe('preload: the overlay gets only its five calls', () => {
   const SRC = readFileSync(join(process.cwd(), 'src/preload/index.ts'), 'utf8')
   it('with OVERLAY_ARG it exposes cuOverlay and not forge; otherwise forge and not cuOverlay', () => {
     expect(SRC).toMatch(/if \(process\.argv\.includes\(CU_OVERLAY_ARG\)\) contextBridge\.exposeInMainWorld\('cuOverlay', cuOverlayApi\)\nelse contextBridge\.exposeInMainWorld\('forge', api\)/)
     expect(SRC.match(/exposeInMainWorld\(/g)).toHaveLength(2)
   })
-  it('the bridge is onState / resolve / stop / openMain over the local-only channels', () => {
+  it('the bridge is onState / resolve / stop / openMain / drag over the local-only channels', () => {
     const body = SRC.slice(SRC.indexOf('const cuOverlayApi = {'), SRC.indexOf('if (process.argv.includes(CU_OVERLAY_ARG))'))
-    expect([...body.matchAll(/^  (\w+):/gm)].map((m) => m[1])).toEqual(['onState', 'resolve', 'stop', 'openMain'])
-    expect([...body.matchAll(/CH\.(\w+)/g)].map((m) => m[1]).sort()).toEqual(['cuOpenMain', 'cuOverlayState', 'cuOverlayState', 'cuResolve', 'cuStop'])
+    expect([...body.matchAll(/^  (\w+):/gm)].map((m) => m[1])).toEqual(['onState', 'resolve', 'stop', 'openMain', 'drag'])
+    expect([...body.matchAll(/CH\.(\w+)/g)].map((m) => m[1]).sort()).toEqual(['cuOpenMain', 'cuOverlayDrag', 'cuOverlayState', 'cuOverlayState', 'cuResolve', 'cuStop'])
     expect(body).not.toMatch(/ipcRenderer\.send\(/)
   })
 })

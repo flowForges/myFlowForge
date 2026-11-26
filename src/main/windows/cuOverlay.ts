@@ -8,6 +8,12 @@
 // - Built lazily on the first show: with computer use never turned on, no window exists.
 // - State is pushed with webContents.send on its own channel; the overlay is not in the window registry, so it never
 //   receives chat or any other broadcast.
+// - rc3: the pill can be dragged. The renderer only sends phases (start / move / end); main reads the cursor itself and
+//   moves the window by the cursor's travel. Not `-webkit-app-region: drag`: the panel is focusable:false and never
+//   becomes key, and app-region dragging on such a non-activating panel isn't something we can rely on (it also
+//   swallows the mousedown the physical-press check needs if a region ever overlapped a button). The dragged place is
+//   kept for the rest of the run (hide → show, a gate expanding it, a crash rebuild) and clamped to the work area of the
+//   display it sits on.
 // - No import from electron (coreBoundary.test.ts): index.ts injects the window factory; the options type is the global
 //   `Electron` namespace's.
 type BrowserWindowConstructorOptions = Electron.BrowserWindowConstructorOptions
@@ -21,7 +27,10 @@ export const OVERLAY_EXPANDED_H = 220
 export const OVERLAY_ARG = CU_OVERLAY_ARG
 
 interface Bounds { x: number; y: number; width: number; height: number }
+interface Point { x: number; y: number }
+export type CuOverlayDragPhase = 'start' | 'move' | 'end'
 export interface WinLike {
+  getBounds(): Bounds
   setAlwaysOnTop(flag: boolean, level?: 'screen-saver'): void
   setVisibleOnAllWorkspaces(flag: boolean, o?: { visibleOnFullScreen?: boolean; skipTransformProcessType?: boolean }): void
   setBounds(b: Bounds): void
@@ -35,7 +44,11 @@ export interface WinLike {
   on(event: 'closed', fn: () => void): void
   webContents: { id: number; send(channel: string, payload: unknown): void; on(event: 'did-finish-load' | 'render-process-gone', fn: () => void): void }
 }
-export interface ScreenLike { getPrimaryDisplay(): { workArea: Bounds } }
+export interface ScreenLike {
+  getPrimaryDisplay(): { workArea: Bounds }
+  getDisplayNearestPoint(p: Point): { workArea: Bounds }
+  getCursorScreenPoint(): Point
+}
 
 /** Fix round 1 (reviewer finding 3): a crash loop (bad renderer bundle, GPU churn, …) must not rebuild forever —
  *  at most this many rebuilds inside the rolling window, then it gives up until the next explicit `show()`. */
@@ -48,9 +61,21 @@ export interface CuOverlay {
   dispose(): void
   /** the live overlay's webContents id, for the I-1 sender check; null when there is none */
   webContentsId(): number | null
+  /** rc3: the pill is being dragged (phases from the overlay renderer; main reads the cursor) */
+  drag(phase: CuOverlayDragPhase): void
 }
 
-function place(screen: ScreenLike, height: number): Bounds {
+/** keep the whole window inside the work area of the display its centre is nearest to */
+function clampTo(screen: ScreenLike, b: Bounds): Bounds {
+  const wa = screen.getDisplayNearestPoint({ x: Math.round(b.x + b.width / 2), y: Math.round(b.y + b.height / 2) }).workArea
+  const x = Math.min(Math.max(b.x, wa.x), wa.x + wa.width - b.width)
+  const y = Math.min(Math.max(b.y, wa.y), wa.y + wa.height - b.height)
+  return { x: Math.round(x), y: Math.round(y), width: b.width, height: b.height }
+}
+
+/** top centre of the primary display, or wherever the user dragged it to (clamped for the current height) */
+function place(screen: ScreenLike, height: number, dragged: Point | null): Bounds {
+  if (dragged) return clampTo(screen, { x: dragged.x, y: dragged.y, width: OVERLAY_W, height })
   const wa = screen.getPrimaryDisplay().workArea
   return { x: Math.round(wa.x + (wa.width - OVERLAY_W) / 2), y: wa.y + 6, width: OVERLAY_W, height }
 }
@@ -70,10 +95,13 @@ export function createCuOverlay(d: {
   let visible = false
   // Fix round 1 (finding 3): timestamps of recent auto-rebuilds, for the crash-loop cap.
   let rebuilds: number[] = []
+  // rc3: where the user dragged the pill to (top-left), for the rest of the run; null = the default top centre
+  let dragged: Point | null = null
+  let grab: { cursor: Point; from: Bounds } | null = null
 
   const ensure = (height: number): WinLike => {
     if (win && !win.isDestroyed()) return win
-    const b = place(d.screen, height)
+    const b = place(d.screen, height, dragged)
     const w = d.makeWindow({
       type: 'panel', frame: false, transparent: true, resizable: false, focusable: false, skipTaskbar: true, alwaysOnTop: true,
       hasShadow: false, width: b.width, height: b.height, x: b.x, y: b.y, show: false,
@@ -100,7 +128,7 @@ export function createCuOverlay(d: {
     last = state
     const height = state.gate ? OVERLAY_EXPANDED_H : OVERLAY_H
     const w = ensure(height)
-    w.setBounds(place(d.screen, height))
+    w.setBounds(place(d.screen, height, dragged))
     w.webContents.send(CH.cuOverlayState, state)
     if (!w.isVisible()) w.showInactive()
     visible = true
@@ -130,9 +158,22 @@ export function createCuOverlay(d: {
     show(state) { present(state) },
     hide() {
       visible = false
+      grab = null
       if (win && !win.isDestroyed()) win.hide()
     },
     webContentsId: () => (win && !win.isDestroyed() ? win.webContents.id : null),
+    drag(phase) {
+      const w = win && !win.isDestroyed() ? win : null
+      if (!w) { grab = null; return }
+      if (phase === 'start') { grab = { cursor: d.screen.getCursorScreenPoint(), from: w.getBounds() }; return }
+      if (phase !== 'move' && phase !== 'end') return
+      if (!grab) return
+      const c = d.screen.getCursorScreenPoint()
+      const b = clampTo(d.screen, { ...grab.from, x: grab.from.x + c.x - grab.cursor.x, y: grab.from.y + c.y - grab.cursor.y })
+      w.setBounds(b)
+      dragged = { x: b.x, y: b.y }
+      if (phase === 'end') grab = null
+    },
     dispose() {
       visible = false
       rebuilds = []
