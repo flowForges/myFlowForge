@@ -91,6 +91,32 @@ describe('readExternal claude', () => {
     it('final assistant text (end_turn) → ended, trailing bookkeeping lines ignored', async () => {
       expect(await ended([claudeUser('u', 'q'), claudeAssistant('a', [{ type: 'text', text: 'done' }]), { type: 'last-prompt' }, { type: 'attachment' }])).toBe(true)
     })
+    // Claude Code 每个内容块写一行,且每行都带整条消息最终的 stop_reason:思考块 end_turn 后面总还跟着文本块
+    it('thinking-only line is never final, whatever its stop_reason', async () => {
+      for (const sr of ['end_turn', 'stop_sequence', null]) {
+        expect(await ended([claudeUser('u', 'q'), claudeAssistant('a', [{ type: 'thinking', thinking: 'x' }], sr)])).toBe(false)
+      }
+      expect(await ended([claudeUser('u', 'q'), claudeAssistant('a', [{ type: 'redacted_thinking', data: 'x' }])])).toBe(false)
+    })
+    it('text with stop_reason null / missing / unknown → not ended', async () => {
+      expect(await ended([claudeUser('u', 'q'), claudeAssistant('a', [{ type: 'text', text: 'partial' }], null)])).toBe(false)
+      expect(await ended([claudeUser('u', 'q'), { type: 'assistant', uuid: 'a', message: { role: 'assistant', content: [{ type: 'text', text: 'x' }] } }])).toBe(false)
+      expect(await ended([claudeUser('u', 'q'), claudeAssistant('a', [{ type: 'text', text: 'x' }], 'pause_turn')])).toBe(false)
+    })
+    it('text with a final stop_reason (end_turn / stop_sequence / max_tokens) → ended', async () => {
+      for (const sr of ['end_turn', 'stop_sequence', 'max_tokens']) {
+        expect(await ended([claudeUser('u', 'q'), claudeAssistant('a', [{ type: 'text', text: 'x' }], sr)])).toBe(true)
+      }
+    })
+    it('text before a tool call (stop_reason tool_use) → not ended', async () => {
+      expect(await ended([claudeUser('u', 'q'), claudeAssistant('a', [{ type: 'text', text: '我先看看' }], 'tool_use')])).toBe(false)
+    })
+    it('real finished-turn shape: thinking(end_turn) → text(end_turn) → stop_hook_summary → ended; cut after thinking → not', async () => {
+      const think = claudeAssistant('a1', [{ type: 'thinking', thinking: 'x' }])
+      const text = claudeAssistant('a2', [{ type: 'text', text: 'done' }])
+      expect(await ended([claudeUser('u', 'q'), think, text, claudeStopHook('s')])).toBe(true)
+      expect(await ended([claudeUser('u', 'q'), think])).toBe(false)
+    })
     it('stop_hook_summary / result → ended', async () => {
       expect(await ended([claudeUser('u', 'q'), claudeStopHook('s')])).toBe(true)
       expect(await ended([claudeUser('u', 'q'), { type: 'result', subtype: 'success' }])).toBe(true)

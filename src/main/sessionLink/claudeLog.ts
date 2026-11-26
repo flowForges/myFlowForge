@@ -6,13 +6,16 @@ import { toolSummary, tsOf, type ExtTurn, type LineInfo } from './types'
 //   result                                   → 结束
 //   system stop_hook_summary / turn_duration → 结束(Claude Code 每轮收尾写这条)
 //   system api_error                         → 进行中(正在重试)
-//   assistant 含 tool_use 或 stop_reason=tool_use → 进行中(工具还没回)
-//   assistant 其它(纯文本/思考)             → 结束
+//   assistant 有文本块且 stop_reason ∈ end_turn/stop_sequence/max_tokens → 结束
+//   assistant 其它 → 进行中:含 tool_use / stop_reason=tool_use(工具还没回)、只有思考块(Claude Code
+//     每个内容块写一行、每行都带整条消息最终的 stop_reason,思考块 end_turn 之后总还跟着文本块)、
+//     stop_reason 为空或未知(写到中途)
 //   user「[Request interrupted by user…」     → 结束(用户打断)
 //   user 其它(提问 / tool_result)          → 进行中(等模型)
 //   isMeta / 本地命令回显 / isSidechain / 记账类行(attachment、mode、last-prompt…)→ 无关
 
 const ENDED_SYSTEM = new Set(['stop_hook_summary', 'turn_duration'])
+const FINAL_STOP = new Set(['end_turn', 'stop_sequence', 'max_tokens'])
 const INTERRUPT = /^\[Request interrupted by user/
 
 function blocks(o: any): any[] { const c = o?.message?.content; return Array.isArray(c) ? c : [] }
@@ -39,6 +42,6 @@ export function parseClaudeRecord(o: any, lineOffset: number): LineInfo {
   if (p.text) turns.push({ who: 'assistant', text: p.text, ts, id })
   const tools = blocks(o).filter(b => b?.type === 'tool_use')
   tools.forEach((b, i) => turns.push({ who: 'tool', text: toolSummary(String(b.name ?? 'tool'), b.input), ts, id: `${id}#${b.id ?? i}` }))
-  const pendingTool = tools.length > 0 || o.message?.stop_reason === 'tool_use'
-  return { turns, cwd, end: !pendingTool }
+  const final = tools.length === 0 && !!p.text && FINAL_STOP.has(o.message?.stop_reason)
+  return { turns, cwd, end: final }
 }
