@@ -94,4 +94,28 @@ describe('sendTurn — 插话', () => {
       cb().onDone({ elapsed: 1 }); await p
     } finally { rmSync(ws, { recursive: true, force: true }) }
   })
+  it('provider 的插话要等 ready(codex 拿到 turnId):包出来的句柄把 watchInterjectable 原样带出去', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'cs-interject-'))
+    try {
+      let cb!: ChatCallbacks
+      let listener: ((r: boolean) => void) | undefined
+      const provider: AgentProvider = {
+        id: 'codex', displayName: 'Codex', capabilities: { structuredOutput: true, permissionHook: false, pty: false },
+        async detect() { return true }, async listModels() { return [] },
+        run() { return { id: 'x', cancel() {}, done: Promise.resolve({ ok: true }) } },
+        chat(task: ChatTask, c: ChatCallbacks) {
+          cb = c
+          return { id: task.id, cancel() {}, done: new Promise(() => {}), interject: async () => true, watchInterjectable: (l: (r: boolean) => void) => { listener = l } }
+        },
+      }
+      let session!: AgentSession
+      const p = sendTurn(payload(ws), { provider, env: process.env, emit: () => {}, onSessionStart: (s) => { session = s } })
+      const seen: boolean[] = []
+      expect(typeof session.watchInterjectable).toBe('function')
+      session.watchInterjectable!((r) => seen.push(r))
+      listener!(true)
+      expect(seen).toEqual([true])
+      cb.onDone({ elapsed: 1 }); await p
+    } finally { rmSync(ws, { recursive: true, force: true }) }
+  })
 })

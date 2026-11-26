@@ -504,6 +504,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
         done: session.done,
         cancel: () => { aborted = true; flushPaced?.(); session.cancel() },
         ...(interject ? { interject } : {}),
+        ...(interject && session.watchInterjectable ? { watchInterjectable: (l: (ready: boolean) => void) => session.watchInterjectable!(l) } : {}),
       }
     }
 

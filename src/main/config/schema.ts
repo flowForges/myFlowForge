@@ -564,9 +564,12 @@ export const SettingsSchema = z.object({
   fullAccessAck: z.record(z.string(), z.array(z.string())).catch({}).default(() => ({})),
   memory: MemorySchema.default(defaultMemory),
   botBridge: BotBridgeSchema.default(defaultBotBridge),
-  // codex 驱动通路:'exec' = 现有的一次性 CLI 子进程调用(默认,稳定);'app-server' = 新的常驻
-  // JSON-RPC app-server 传输(见 codexRpc.ts),支持权限交互等更细粒度控制。先落地开关,接线在后续任务。
-  codexTransport: z.enum(['exec', 'app-server']).catch('exec').default('exec'),
+  // codex 驱动通路:'app-server' = 常驻 JSON-RPC 传输(默认:逐字输出、权限门、插话 turn/steer;起不来时那一轮
+  // 自动退回 exec);'exec' = 一次性 `codex exec --json` 子进程。
+  codexTransport: z.enum(['exec', 'app-server']).catch('app-server').default('app-server'),
+  // 用户在设置里亲手拨过 codexTransport。★没拨过的一律按默认 app-server 读(store.readSettings):writeSettings
+  // 每次都把全部 host 键落盘,老用户磁盘上那个 'exec' 多半只是旧默认值,不是他选的。
+  codexTransportChosen: z.boolean().catch(false).default(false),
   mobileGateway: MobileGatewaySchema.default(defaultMobileGateway),
   relay: RelaySchema.default(defaultRelay),
   push: PushSchema.default(defaultPush),
@@ -602,7 +605,8 @@ export const defaultSettings = (): Settings => ({
   fullAccessAck: {},
   memory: { enabled: false },
   botBridge: defaultBotBridge(),
-  codexTransport: 'exec',
+  codexTransport: 'app-server',
+  codexTransportChosen: false,
   mobileGateway: defaultMobileGateway(),
   relay: defaultRelay(),
   push: defaultPush(),
@@ -836,7 +840,7 @@ export const CLIENT_SETTING_KEYS = [
 /** 跟机器走:你操作的是哪台机器,这些就该是哪台的。 */
 export const HOST_SETTING_KEYS = [
   'skills', 'heartbeat', 'pluginCreds', 'disabledProviders', 'fullAccessAck',
-  'memory', 'botBridge', 'codexTransport',
+  'memory', 'botBridge', 'codexTransport', 'codexTransportChosen',
   'notifyEvents',                          // Q1:哪些事件值得产生通知
   'agentProxy',                            // Q4:agent 的出口代理
   'pinnedWorkspaces', 'workspaceOrder',    // Q2

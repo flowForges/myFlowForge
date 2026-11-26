@@ -95,13 +95,12 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
    *
    * ★这个开关**一直存在于设置文件里,却从来没有界面入口** —— 全仓库只有 schema 和
    *  useSettings 提到它。也就是说在这之前用户没有任何办法打开流式。
-   * ★默认仍是 exec:老版本 codex 二进制不支持 app-server 时是**异步**握手失败,
-   *  那一轮直接报错、**不会自动退回 exec**(codex.ts 里明写这个回退「太复杂」故意没做)。
-   *  所以只能做成一个说清代价的开关,不能悄悄翻默认值。
+   * ★2026-11-26 起默认 app-server(插话只在它上面有):握手失败时那一轮自动退回 exec 跑完。
+   *  拨过这个开关就记下 codexTransportChosen —— 之后按用户选的走,不再按默认。
    */
-  const codexTransport = settings?.codexTransport ?? 'exec'
+  const codexTransport = settings?.codexTransport ?? 'app-server'
   const toggleCodexTransport = useCallback(() => {
-    update({ codexTransport: codexTransport === 'app-server' ? 'exec' : 'app-server' })
+    update({ codexTransport: codexTransport === 'app-server' ? 'exec' : 'app-server', codexTransportChosen: true })
   }, [codexTransport, update])
 
   const [config, setConfig] = useState<AgentsConfig | null>(null)
@@ -430,9 +429,6 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
                   关着的时候用 <code>codex exec --json</code>,它<b>只在整条消息写完后发一次</b> ——
                   界面上就是「想很久,然后几千字一下子全出来」。打开后走常驻的 app-server,
                   codex 会边写边发。
-                  <br />
-                  ★代价:<b>老版本的 codex 二进制不支持它</b>,而且握手失败时那一轮会直接报错、
-                  不会自动退回原来的通路。跑不通就把它关回去。
                 </div>
               </div>
               <button

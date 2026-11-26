@@ -20,7 +20,7 @@ export interface CodexChild {
 }
 
 export interface CodexAppServerDeps {
-  spawn?: (cmd: string, args: string[]) => CodexChild
+  spawn?: (cmd: string, args: string[], o: { cwd: string; env?: NodeJS.ProcessEnv }) => CodexChild
 }
 
 export interface CodexTurnOpts {
@@ -31,6 +31,18 @@ export interface CodexTurnOpts {
   sandbox: string
   approvalPolicy: string
   resumeThreadId?: string
+  /** codex 可执行文件(默认 'codex')。和 exec 那条路用同一个 bin。 */
+  bin?: string
+  /**
+   * 这一轮的环境。★★必须带上:电脑操作的 forge MCP 靠 `env_vars=["FORGE_AGENT_ID"]` 从 codex **自己的**
+   *  环境里拿 agent id(见 mcpConfig.forgeCodexServerArgs),不带就是 app 主进程的环境,每次调用都失败即拦。
+   */
+  env?: NodeJS.ProcessEnv
+  /**
+   * 进程起不来 / 握手失败(这一轮还没开始)时不报 onError,而是让 done 带 `startFailed` —— 调用方拿它退回 exec
+   * 重跑这一轮。这一轮一旦开始(turn/start 收到回话或 turn/started),之后的失败照常报错,不回落:不重跑已做的工作。
+   */
+  fallbackOnStartFailure?: boolean
 }
 
 /**
@@ -77,12 +89,32 @@ export interface CodexTurnCallbacks {
    * 可信的占比 —— 别处的窗口要么靠 CLI 报、要么就没有。
    */
   onUsage?(u: { used: number; window?: number }): void
+  /** 这一轮的 turnId 到了(turn/start 的回话或 turn/started 通知,先到的那个)。从这一刻起 steer 才有可能成功。 */
+  onTurnStarted?(turnId: string): void
+}
+
+export interface CodexTurnResult {
+  ok: boolean
+  /** 只在 fallbackOnStartFailure 下出现:握手没成、这一轮没开始。error 是原因(给日志)。 */
+  startFailed?: true
+  error?: string
 }
 
 export interface CodexTurnHandle {
   cancel(): void
-  done: Promise<{ ok: boolean }>
+  done: Promise<CodexTurnResult>
+  /**
+   * 把一段输入并进**正在跑的这一轮**(`turn/steer`,不打断、不丢已做的工作)。true = codex 收下了;
+   * false = 还没拿到 turnId / 这一轮已结束 / expectedTurnId 对不上 / 进程没了。
+   */
+  steer(text: string): Promise<boolean>
 }
+
+/**
+ * steer 还没回话时 turn/completed 先到:最多再等这么久才收尾。codex 一收到 steer 就回话,这里只是兜底,
+ * 免得对面不回话时这一轮永远收不了尾。
+ */
+export const STEER_SETTLE_MS = 3000
 
 /**
  * codex 会**向我们发起、并等着我们回答**的请求里,能映射成一道「允许 / 拒绝」的那些。
@@ -125,28 +157,50 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
   // execa 内部走 cross-spawn,会解析 .cmd 并正确转义参数。spawnAgent 顺带给了进程组语义 + 退出兜底登记,
   // 和这里原来手写的 agentSpawnOptions()+trackAgentChild 完全等价。
   // reject:false —— 我们从不 await 这个 promise(只用它的 stdio 流),非零退出不该变成未处理的 rejection。
-  const spawn = deps.spawn ?? ((cmd, args) => spawnAgent(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, reject: false }) as unknown as CodexChild)
+  // cwd / env 与 exec 那条路一致(spawnAgent(bin, args, { cwd, env })):原来这里两个都没传,app-server 跑在
+  // 主进程的 cwd 和环境里 —— 电脑操作的 FORGE_AGENT_ID 就到不了 forge MCP。
+  const spawn = deps.spawn ?? ((cmd, args, o) => spawnAgent(cmd, args, { cwd: o.cwd, env: o.env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, reject: false }) as unknown as CodexChild)
   const args = [...opts.configArgs, ...opts.modelArgs, 'app-server']
-  const child = spawn('codex', args)
+  const child = spawn(opts.bin ?? 'codex', args, { cwd: opts.cwd, ...(opts.env ? { env: opts.env } : {}) })
 
   let buffer = ''
   let settled = false
   let rpcId = 0
   let threadId: string | undefined
-  let resolveDone!: (v: { ok: boolean }) => void
-  const done = new Promise<{ ok: boolean }>((resolve) => { resolveDone = resolve })
+  let activeTurnId: string | undefined
+  let began = false       // 这一轮已经开始(turn/start 回话 / turn/started):此后失败不再回落
+  let cancelled = false
+  let startError: string | undefined
+  let completedTimer: ReturnType<typeof setTimeout> | null = null
+  const pendingSteers = new Map<number, (ok: boolean) => void>()
+  let resolveDone!: (v: CodexTurnResult) => void
+  const done = new Promise<CodexTurnResult>((resolve) => { resolveDone = resolve })
 
   function settle(ok: boolean): void {
     if (settled) return
     settled = true
+    if (completedTimer) { clearTimeout(completedTimer); completedTimer = null }
     killTree(child)   // 杀整棵树:app-server 也会派生 shell 命令,单杀只会留孤儿
-    resolveDone({ ok })
+    for (const r of pendingSteers.values()) r(false)
+    pendingSteers.clear()
+    if (!ok && !began && !cancelled && opts.fallbackOnStartFailure) resolveDone({ ok: false, startFailed: true, error: startError ?? 'codex app-server 没起来' })
+    else resolveDone({ ok })
   }
 
   // A stray notification/error arriving after the turn already settled (success
   // or failure) must not surface a spurious error to the caller.
+  // 握手阶段的错误在可回落时不报:调用方会退回 exec 重跑这一轮,用户看到的是一轮正常的回复,不是一条错误。
   function safeError(message: string): void {
-    if (!settled) cb.onError(message)
+    if (settled) return
+    if (!began && opts.fallbackOnStartFailure) { startError ??= message; return }
+    cb.onError(message)
+  }
+
+  function markStarted(id: unknown): void {
+    if (typeof id !== 'string' || !id || activeTurnId) return
+    activeTurnId = id
+    began = true
+    cb.onTurnStarted?.(id)
   }
 
   function send(method: string, params?: unknown, id?: number): void {
@@ -185,7 +239,7 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
 
   const initId = ++rpcId
   let startId: number | null = null
-  let turnId: number | null = null
+  let turnReqId: number | null = null
 
   // Listeners must be attached before the first write: a fast (or fake) server
   // may answer synchronously.
@@ -258,7 +312,17 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
       if (msg.id == null && msg.method) {
         const method = msg.method
         const params = msg.params ?? {}
+        if (method === 'turn/started') {
+          markStarted(params?.turn?.id)
+          continue
+        }
         if (method === 'turn/completed') {
+          // ★steer 还没回话:等它回话再收尾。现在杀进程,那条插话就只能当失败放回队列 —— 而 codex 可能已经收下了,
+          //  下一轮又发一次就是双发。
+          if (pendingSteers.size > 0) {
+            if (!completedTimer) completedTimer = setTimeout(() => settle(true), STEER_SETTLE_MS)
+            continue
+          }
           settle(true)
           continue
         }
@@ -283,6 +347,13 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
       }
 
       // Response to one of our own requests, routed by id.
+      if (msg.id != null && pendingSteers.has(msg.id)) {
+        const r = pendingSteers.get(msg.id)!
+        pendingSteers.delete(msg.id)
+        r(!msg.error)
+        if (completedTimer && pendingSteers.size === 0) settle(true)
+        continue
+      }
       if (msg.id === initId) {
         if (msg.error) {
           safeError(msg.error.message ?? 'codex initialize 失败')
@@ -292,7 +363,9 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
         send('initialized')
         if (opts.resumeThreadId) {
           startId = ++rpcId
-          send('thread/resume', { threadId: opts.resumeThreadId }, startId)
+          // ★续接也要带上权限档:续接的线程否则沿用 codex 自己的默认(或上次存下的)沙箱 / 审批,
+          //  用户这一轮换了档、或者 forge MCP 要的 danger-full-access,都到不了 codex。
+          send('thread/resume', { threadId: opts.resumeThreadId, approvalPolicy: opts.approvalPolicy, sandbox: opts.sandbox, cwd: opts.cwd }, startId)
         } else {
           startId = ++rpcId
           send('thread/start', { approvalPolicy: opts.approvalPolicy, sandbox: opts.sandbox, cwd: opts.cwd }, startId)
@@ -307,16 +380,19 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
         }
         threadId = msg.result?.thread?.id ?? msg.result?.threadId ?? opts.resumeThreadId
         if (threadId) cb.onSession(threadId)
-        turnId = ++rpcId
-        send('turn/start', { threadId, input: [{ type: 'text', text: opts.prompt }] }, turnId)
+        turnReqId = ++rpcId
+        send('turn/start', { threadId, input: [{ type: 'text', text: opts.prompt }] }, turnReqId)
         continue
       }
-      if (turnId !== null && msg.id === turnId) {
-        // turn/start's result is ignored; the turn itself runs via notifications.
+      if (turnReqId !== null && msg.id === turnReqId) {
+        // The turn itself runs via notifications; the result only carries the turn id (for steer/interrupt).
         if (msg.error) {
           safeError(msg.error.message ?? 'codex turn/start 失败')
           settle(false)
+          continue
         }
+        markStarted(msg.result?.turn?.id)
+        began = true
         continue
       }
     }
@@ -337,9 +413,18 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
 
   return {
     cancel(): void {
-      send('turn/interrupt', { threadId })
+      cancelled = true
+      send('turn/interrupt', { threadId, ...(activeTurnId ? { turnId: activeTurnId } : {}) })
       settle(false) // kills the child (see settle())
     },
     done,
+    steer(text: string): Promise<boolean> {
+      if (settled || completedTimer || !threadId || !activeTurnId) return Promise.resolve(false)
+      const id = ++rpcId
+      return new Promise<boolean>((resolve) => {
+        pendingSteers.set(id, resolve)
+        send('turn/steer', { threadId, expectedTurnId: activeTurnId, input: [{ type: 'text', text }] }, id)
+      })
+    },
   }
 }

@@ -1182,8 +1182,12 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     sealedWorkspaces.delete(payload.workspacePath)   // 又有人在这里发消息了(比如移除后重新添加)
     const discardTurn = () => sealedWorkspaces.has(payload.workspacePath) || !getSession(payload.workspacePath, payload.sessionId)
     // 插话能力跟着这一轮的句柄走:provider 支持(claude 常驻进程)才有,没有就不显示插话。
-    const onSessionStart = (session: AgentSession) => chatQueue.registerActive(payload.workspacePath, payload.sessionId, () => session.cancel(),
-      session.interject ? (t, a, v) => session.interject!(t, a, v) : undefined)
+    // codex app-server 的句柄带 watchInterjectable:拿到 turnId 才亮、这一轮收尾就熄(见 AgentSession)。
+    const onSessionStart = (session: AgentSession) => {
+      const fn = session.interject ? (t: string, a?: Attachment[], v?: string) => session.interject!(t, a, v) : undefined
+      chatQueue.registerActive(payload.workspacePath, payload.sessionId, () => session.cancel(), session.watchInterjectable ? undefined : fn)
+      if (fn) session.watchInterjectable?.((ready) => chatQueue.setInterject(payload.workspacePath, payload.sessionId, ready ? fn : null))
+    }
     // ★这一轮结束后进程还留着跑后台任务:任务数给输入框那个停止,CLI 自己起的下一轮走同一条泳道、开一条新回复。
     const background: ChatBackgroundHooks = {
       onRunning: (n, stop) => chatQueue.setBackground(payload.workspacePath, payload.sessionId, n, stop),

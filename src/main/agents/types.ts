@@ -103,6 +103,12 @@ export interface AgentSession {
    * via 只给 chatService 记到用户消息上(谁发的),provider 不看。
    */
   interject?(text: string, attachments?: Attachment[], via?: string): Promise<boolean>
+  /**
+   * 有它 = 插话能力要等 provider 说 ready 才亮(codex app-server:拿到 turnId 之前 / 这一轮收尾之后 steer 必失败)。
+   * listener(true) 时显示插话,listener(false) 时收起。没有它 = 有 interject 就一直可插(claude 常驻进程)。
+   * 注册时已经 ready 的,会当场补一次 listener(true)。
+   */
+  watchInterjectable?(listener: (ready: boolean) => void): void
 }
 
 export interface ChatTask {

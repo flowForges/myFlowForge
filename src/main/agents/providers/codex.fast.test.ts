@@ -14,10 +14,11 @@ vi.mock('../../config/store', async (importOriginal) => {
   return { ...actual, readSettings: () => ({ ...actual.readSettings(), codexTransport: transport.value }) }
 })
 
-// 只把 argv 写下来就退出的假 codex。exec 那条路走 spec.bin;app-server 那条路写死 spawn('codex'),
-// 所以同一个脚本也以 `codex` 的名字放进 PATH。
+// 只把 argv 写下来就退出的假 codex。两条路都走 spec.bin;脚本同时以 `codex` 的名字放进 PATH。
 const ARGV_DUMP = `#!/usr/bin/env node
-require('node:fs').writeFileSync(process.env.ARGV_OUT, JSON.stringify(process.argv.slice(2)))
+const fs = require('node:fs')
+// 只记第一次起进程的 argv:app-server 那条路握手不成会退回 exec 再起一次,那一次不能把它盖掉。
+if (!fs.existsSync(process.env.ARGV_OUT)) fs.writeFileSync(process.env.ARGV_OUT, JSON.stringify(process.argv.slice(2)))
 process.exit(0)
 `
 const TIER = 'service_tier="priority"'
@@ -28,7 +29,6 @@ beforeEach(() => {
   argvOut = join(dir, 'argv.json')
   oldPath = process.env.PATH
   process.env.PATH = `${dir}:${oldPath ?? ''}`
-  // app-server 的 spawn 不接 env 参数,继承的是 process.env —— ARGV_OUT 得放在这里。
   process.env.ARGV_OUT = argvOut
 })
 afterEach(() => {
@@ -43,7 +43,7 @@ async function argvOf(task: Partial<ChatTask>, hasFast: ((m: string) => boolean)
   const { makeCodexProvider } = await import('./codex')
   const provider = makeCodexProvider({ bin, defaultModels: [], ...(hasFast === 'real-cache' ? {} : { modelHasFastTier: hasFast }) })
   const s = provider.chat!({ id: 'a1', prompt: 'PROMPT_BODY', model: 'gpt-6-astra', cwd: dir, ...task }, NOOP_CB, { ...process.env, ARGV_OUT: argvOut })
-  // app-server 那条路:假 codex 写完 argv 就退出,close → done 以失败收尾 —— 照样等它,argv 已经落盘。
+  // app-server 那条路:假 codex 写完 argv 就退出 → 握手不成、退回 exec 跑完 —— 照样等它,首次的 argv 已经落盘。
   await s.done
   return JSON.parse(readFileSync(argvOut, 'utf8')) as string[]
 }

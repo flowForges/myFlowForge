@@ -15,7 +15,9 @@ vi.mock('../../config/store', async (importOriginal) => {
 })
 
 const ARGV_DUMP = `#!/usr/bin/env node
-require('node:fs').writeFileSync(process.env.ARGV_OUT, JSON.stringify(process.argv.slice(2)))
+const fs = require('node:fs')
+// 只记第一次起进程的 argv:app-server 那条路握手不成会退回 exec 再起一次,那一次不能把它盖掉。
+if (!fs.existsSync(process.env.ARGV_OUT)) fs.writeFileSync(process.env.ARGV_OUT, JSON.stringify(process.argv.slice(2)))
 process.exit(0)
 `
 let dir: string, bin: string, argvOut: string, oldPath: string | undefined

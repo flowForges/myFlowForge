@@ -593,6 +593,34 @@ describe('registerIpc broadcast wiring', () => {
     expect(await table[CH.chatCancelQueued](LOCAL, { workspacePath: '/ws/i', id: third.id })).toBe(true)
   })
 
+  it('codex app-server:句柄带 watchInterjectable 时,插话能力等它说 ready 才亮,收尾时熄', async () => {
+    const { registerIpc } = await import('./handlers')
+    const { sendTurn } = await import('../chat/chatService') as any
+    const inj = vi.fn(async () => true)
+    let flip!: (ready: boolean) => void
+    sendTurn.mockReset().mockImplementation((_p: unknown, deps: any) => {
+      deps.onSessionStart?.({ id: 't', cancel: () => {}, done: new Promise(() => {}), interject: inj, watchInterjectable: (l: (r: boolean) => void) => { flip = l } })
+      return new Promise<void>(() => {})
+    })
+    const sent: [string, unknown][] = []
+    const table = registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {}, fakeHost())
+    const LOCAL = { emit: () => {}, client: { id: 'local', label: '本机' } }
+    const payload = { workspacePath: '/ws/w', sessionId: 's1', agent: 'codex', agentLabel: 'C', model: 'm', text: 't', attachments: [] }
+    table[CH.chatSend](LOCAL, { ...payload, text: 'first' })
+    await new Promise(r => setTimeout(r, 0))
+    table[CH.chatSend](LOCAL, { ...payload, text: 'second' })
+    const q = () => sent.filter(([c]) => c === CH.chatQueueEvent).map(([, p]) => p as any).pop()
+    expect(q().queue.map((x: any) => x.interjectable)).toEqual([false])
+    expect(await table[CH.chatInterject](LOCAL, { workspacePath: '/ws/w', sessionId: 's1', queuedId: q().queue[0].id })).toEqual({ ok: false, code: 'unsupported' })
+    flip(true)
+    expect(q().queue.map((x: any) => x.interjectable)).toEqual([true])
+    flip(false)
+    expect(q().queue.map((x: any) => x.interjectable)).toEqual([false])
+    flip(true)
+    expect(await table[CH.chatInterject](LOCAL, { workspacePath: '/ws/w', sessionId: 's1', queuedId: q().queue[0].id })).toEqual({ ok: true })
+    expect(inj).toHaveBeenCalledWith('second', [], undefined)
+  })
+
   it('chatSend forwards source into the queue projection (pet-sourced enqueue)', async () => {
     const { registerIpc } = await import('./handlers')
     const { sendTurn } = await import('../chat/chatService') as any

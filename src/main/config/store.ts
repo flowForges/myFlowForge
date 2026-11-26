@@ -65,6 +65,8 @@ export function readSettings(): Settings {
   // 而不是让整份设置回落默认值。
   const client = safeParse(ClientSettingsSchema, overlay(pickClient(d) as never, clientSrc), () => pickClient(d))
   const host = safeParse(HostSettingsSchema, overlay(pickHost(d) as never, hostSrc), () => pickHost(d))
+  // 没亲手选过 codex 传输 = 用默认(app-server),不管磁盘上躺着什么(见 schema 的 codexTransportChosen)。
+  if (!host.codexTransportChosen) host.codexTransport = d.codexTransport
   return latchProvisioned({ ...d, ...host, ...client })
 }
 

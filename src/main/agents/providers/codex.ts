@@ -1,6 +1,6 @@
 import { execa, type ResultPromise } from 'execa'
 import { spawnAgent, killTree } from '../procGroup'
-import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, ChatTask, ChatCallbacks } from '../types'
+import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, AgentResult, Model, ChatTask, ChatCallbacks } from '../types'
 import type { TurnPhase } from '@shared/types'
 import { confirmAllowed } from '../types'
 import { createFenceScanner } from '../handoffFence'
@@ -215,6 +215,16 @@ export function codexInstructionArgs(env: NodeJS.ProcessEnv): string[] {
   return d ? ['-c', `developer_instructions=${tomlString(d)}`] : []
 }
 
+/**
+ * app-server 没起来、这一轮退回 exec:记一条日志 + 告诉用户一声(这一轮没有权限门、也不能插话)。
+ * ★★不许静默(2026-09-17):exec 那条路 approval_policy 恒为 "never",「悄悄换了条能力更弱的路」必须留痕,
+ *  否则它和「功能坏了」在现场无法区分。每次回落只记这一条,不再另报 onError —— 这一轮照常完成。
+ */
+function noteAppServerFallback(reason: string, onStatus?: (t: string) => void): void {
+  logError('codex', 'app-server 起不来,本轮回落到 exec(这条路没有权限门)', reason)
+  onStatus?.('codex 的 app-server 没起来,本轮回落到 exec —— 这条路不会升起权限门。')
+}
+
 // The forge_propose_plan chat directive now lives in ../forgeChatDirective (shared with qoder,
 // which also can't see .claude/skills). Re-exported here for existing importers/tests.
 export { forgeChatDirective } from '../forgeChatDirective'
@@ -297,9 +307,64 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         const kept = String(text).split('\n').flatMap(l => scanner.feedLine(l))
         if (kept.length) cb.onLog({ ts: now(), text: kept.join('\n'), level })
       }
-      // App-server transport: drive the turn over JSON-RPC instead of spawning `codex exec`. Gated
-      // by the codexTransport setting (default 'exec') and skipped for preArgs specs (e.g. custom
-      // codex-derived providers) which don't necessarily speak app-server the same way.
+      // exec 传输(也是 app-server 起不来时这一轮的回落)。
+      const runExec = (): AgentSession => {
+        const args = spec.preArgs
+          ? [...spec.preArgs]
+          : ['exec', '--ignore-user-config', '--json', '--skip-git-repo-check', ...permissionArgs('codex', task.permissionMode ?? 'auto'), ...codexModelArgs(task.model), ...forgeCodexConfigArgs(env), task.prompt]
+        // stdin: 'ignore' so codex doesn't block waiting on stdin (the same hang as chat()).
+        const child: ResultPromise = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false, stdin: spec.preArgs ? undefined : 'ignore' })
+        let buf = ''
+        const processLine = (raw: string) => {
+          const line = raw.trim()
+          if (!line) return
+          let obj: unknown
+          try { obj = JSON.parse(line) } catch {
+            // Garbage / non-JSON raw line: run through scanner at info level
+            const kept = scanner.feedLine(line)
+            if (kept.length) cb.onLog({ ts: now(), text: kept.join('\n'), level: 'info' })
+            return
+          }
+          handleRunEvent(obj, line)
+        }
+        child.stdout?.on('data', (b: Buffer) => {
+          // Any stdout byte means the process is alive — including in-flight item.started/updated
+          // lifecycle events that map to no log line. Signal liveness before parsing so the
+          // orchestrator watchdog never kills a healthy agent mid-generation.
+          cb.onActivity?.()
+          buf += b.toString()
+          let nl: number
+          while ((nl = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, nl); buf = buf.slice(nl + 1)
+            processLine(line)
+          }
+        })
+        const done = child.then((res) => {
+          processLine(buf); buf = '' // flush any final line with no trailing newline
+          for (const out of scanner.flush()) {
+            cb.onLog({ ts: now(), text: out, level: 'info' })
+          }
+          const ok = res.exitCode === 0
+          if (!ok) {
+            const stderr = String(res.stderr ?? '').trim()
+            logError('codex', `run 失败 · 退出码 ${res.exitCode}`, [
+              `cmd: ${clipArgs(bin, args)}`,
+              `cwd: ${task.cwd}`,
+              stderr ? `stderr: ${stderr.slice(-1500)}` : '',
+            ].filter(Boolean).join('\n'))
+          }
+          cb.onState(ok ? 'ok' : 'err')
+          const result = { ok, summary: ok ? '完成' : `退出码 ${res.exitCode}` }
+          cb.onDone(result); return result
+        }).catch((err) => {
+          logError('codex', 'run 异常', `${(err as Error)?.message ?? err}\ncmd: ${clipArgs(bin, args)}\ncwd: ${task.cwd}`)
+          cb.onState('err'); cb.onError(err as Error); return { ok: false }
+        })
+        return { id: task.agentId, cancel: () => { killTree(child) }, done }
+      }
+      // App-server transport (default; codexTransport): drive the turn over JSON-RPC instead of spawning
+      // `codex exec`. Skipped for preArgs specs (e.g. custom codex-derived providers) which don't
+      // necessarily speak app-server the same way.
       const useAppServer = readSettings().codexTransport === 'app-server' && !spec.preArgs
       if (useAppServer) {
         const forge = forgeCodexConfigArgs(env).length > 0
@@ -307,7 +372,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         let handle: ReturnType<typeof driveCodexTurn> | null = null
         try {
           handle = driveCodexTurn(
-            { cwd: task.cwd, prompt: task.prompt, modelArgs: codexModelConfigArgs(task.model), configArgs: forgeCodexConfigArgs(env), sandbox, approvalPolicy },
+            { cwd: task.cwd, prompt: task.prompt, modelArgs: codexModelConfigArgs(task.model), configArgs: forgeCodexConfigArgs(env), sandbox, approvalPolicy, bin, env, fallbackOnStartFailure: true },
             {
               onEvent: (e) => { cb.onActivity?.(); handleRunEvent(e) },
               // codex 的审批只有放行/拒绝两态(没有 claude AskUserQuestion 那种带选项的问题),把可能的
@@ -319,29 +384,26 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
               onNotice: (t) => cb.onLog({ ts: now(), level: 'info', kind: 'think', text: t }),
               onUsage: (u) => cb.onUsage?.(u),
               onError: (m) => { logError('codex', 'app-server run 错误', m) },
+              onTurnStarted: () => cb.onActivity?.(),
             },
           )
         } catch (e) {
-          // This catch only covers a SYNCHRONOUS driveCodexTurn throw (a spawn-option error
-          // thrown before the child even starts — codex missing / app-server unsupported), and
-          // falls through to the exec path below. An ASYNC spawn/handshake failure (e.g. an old
-          // codex binary that doesn't support app-server: the child's 'error'/'close' fires AFTER
-          // driveCodexTurn already returned a handle) does NOT hit this catch — it surfaces as a
-          // failed turn via cb.onError + a failed `done` below instead of silently retrying
-          // through exec. Acceptable while this transport is opt-in/default-off (codexTransport
-          // defaults to 'exec'); a mid-run fallback was considered and rejected as too complex.
-          //  ★★2026-09-17 加日志的理由:这个 catch 原来是**完全静默**的 —— app-server 起不来就
-          //   一声不吭退回 exec,而 exec 那条路 `approval_policy` 恒为 "never",于是**权限门永远不会出现**。
-          //   用户看到的是:设置里明明选了 app-server、界面也没报任何错,门就是不弹。
-          //   更糟的是**查不出来**:成功的轮次不写日志,失败的回落也不写,事后翻日志什么线索都没有。
-          //   一次「悄悄换了条能力更弱的路」必须留下痕迹,否则它和「功能坏了」在现场无法区分。
-          logError('codex', 'app-server 起不来,本轮回落到 exec(这条路没有权限门)',
-            String((e as Error)?.message ?? e))
+          // A SYNCHRONOUS driveCodexTurn throw (spawn-option error before the child even starts).
+          noteAppServerFallback(String((e as Error)?.message ?? e))
           handle = null
         }
         if (handle) {
-          const appServerHandle = handle
-          const done = appServerHandle.done.then((res) => {
+          const app = handle
+          let current: { cancel(): void } = app
+          let cancelled = false
+          const done = app.done.then((res): Promise<AgentResult> | AgentResult => {
+            // 握手没成、这一轮没开始:退回 exec 照常跑完(同 chat())。
+            if (res.startFailed && !cancelled) {
+              noteAppServerFallback(res.error ?? '')
+              const ex = runExec()
+              current = ex
+              return ex.done
+            }
             for (const out of scanner.flush()) cb.onLog({ ts: now(), text: out, level: 'info' })
             cb.onState(res.ok ? 'ok' : 'err')
             const result = { ok: res.ok, summary: res.ok ? '完成' : 'codex app-server 失败' }
@@ -351,61 +413,10 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
             logError('codex', 'app-server done 异常', String((err as Error)?.message ?? err))
             return { ok: false }
           })
-          return { id: task.agentId, cancel: () => appServerHandle.cancel(), done }
+          return { id: task.agentId, cancel: () => { cancelled = true; current.cancel() }, done }
         }
       }
-      const args = spec.preArgs
-        ? [...spec.preArgs]
-        : ['exec', '--ignore-user-config', '--json', '--skip-git-repo-check', ...permissionArgs('codex', task.permissionMode ?? 'auto'), ...codexModelArgs(task.model), ...forgeCodexConfigArgs(env), task.prompt]
-      // stdin: 'ignore' so codex doesn't block waiting on stdin (the same hang as chat()).
-      const child: ResultPromise = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false, stdin: spec.preArgs ? undefined : 'ignore' })
-      let buf = ''
-      const processLine = (raw: string) => {
-        const line = raw.trim()
-        if (!line) return
-        let obj: unknown
-        try { obj = JSON.parse(line) } catch {
-          // Garbage / non-JSON raw line: run through scanner at info level
-          const kept = scanner.feedLine(line)
-          if (kept.length) cb.onLog({ ts: now(), text: kept.join('\n'), level: 'info' })
-          return
-        }
-        handleRunEvent(obj, line)
-      }
-      child.stdout?.on('data', (b: Buffer) => {
-        // Any stdout byte means the process is alive — including in-flight item.started/updated
-        // lifecycle events that map to no log line. Signal liveness before parsing so the
-        // orchestrator watchdog never kills a healthy agent mid-generation.
-        cb.onActivity?.()
-        buf += b.toString()
-        let nl: number
-        while ((nl = buf.indexOf('\n')) >= 0) {
-          const line = buf.slice(0, nl); buf = buf.slice(nl + 1)
-          processLine(line)
-        }
-      })
-      const done = child.then((res) => {
-        processLine(buf); buf = '' // flush any final line with no trailing newline
-        for (const out of scanner.flush()) {
-          cb.onLog({ ts: now(), text: out, level: 'info' })
-        }
-        const ok = res.exitCode === 0
-        if (!ok) {
-          const stderr = String(res.stderr ?? '').trim()
-          logError('codex', `run 失败 · 退出码 ${res.exitCode}`, [
-            `cmd: ${clipArgs(bin, args)}`,
-            `cwd: ${task.cwd}`,
-            stderr ? `stderr: ${stderr.slice(-1500)}` : '',
-          ].filter(Boolean).join('\n'))
-        }
-        cb.onState(ok ? 'ok' : 'err')
-        const result = { ok, summary: ok ? '完成' : `退出码 ${res.exitCode}` }
-        cb.onDone(result); return result
-      }).catch((err) => {
-        logError('codex', 'run 异常', `${(err as Error)?.message ?? err}\ncmd: ${clipArgs(bin, args)}\ncwd: ${task.cwd}`)
-        cb.onState('err'); cb.onError(err as Error); return { ok: false }
-      })
-      return { id: task.agentId, cancel: () => { killTree(child) }, done }
+      return runExec()
     },
     chat(task: ChatTask, cb: ChatCallbacks, env): AgentSession {
       // Non-interactive: --skip-git-repo-check (a workspace root may not be a git repo) and
@@ -470,21 +481,106 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
           else if (a.kind === 'think') { if (a.text.startsWith('调用 shell') || a.text.startsWith('编辑文件')) continue; cb.onThinkDelta(a.text) }
         }
       }
-      // App-server transport: drive the turn over JSON-RPC instead of spawning `codex exec`. Gated by
-      // the codexTransport setting (default 'exec') and skipped for preArgs specs, mirroring run()'s
-      // app-server branch. Events are fed through the same `handle` the exec path below uses, so both
-      // transports render identically; `cb.onConfirm` is optional on ChatCallbacks, so a missing
-      // confirm gate fails closed to 'deny' rather than approving unattended.
+      // exec 传输(也是 app-server 起不来时这一轮的回落):一次性 `codex exec --json` 子进程。
+      const runExec = (): AgentSession => {
+        // codex only executes an MCP tool call when sandbox_mode is danger-full-access; with
+        // read-only/workspace-write it treats the call as a sandbox escape and — since approval_policy
+        // is "never" — cancels it ("user cancelled MCP tool call"), so chat-initiated forge_delegate /
+        // forge_propose_plan never reach the bridge. When forge is injected, force full access for the
+        // chat orchestrator (its real read/write work is delegated to separately-sandboxed sub-agents).
+        const forgeCodexArgs = forgeCodexConfigArgs(env)
+        const codexPermArgs = forgeCodexArgs.length
+          ? ['-c', 'sandbox_mode="danger-full-access"', '-c', 'approval_policy="never"']
+          : permissionArgs('codex', task.permissionMode ?? 'auto')
+        const args = spec.preArgs
+          ? [...spec.preArgs]
+          // --ignore-user-config: bypass the user's ~/.codex/config.toml — its oh-my-codex hooks
+          // (session_start/user_prompt_submit/etc.) block `codex exec` and produce no reply. Auth
+          // still works (it lives outside config.toml), and the account's default model is used.
+          // sandbox via `-c sandbox_mode` (NOT `-s`): `codex exec resume` rejects the `-s`/`--sandbox`
+          // flag ("unexpected argument '-s'"), but accepts the config override — and so does plain `exec`.
+          : [...head, '--ignore-user-config', '--json', '--skip-git-repo-check', ...codexPermArgs, ...codexModelArgs(task.model), ...tierArgs, ...forgeCodexArgs, ...instrArgs, prompt]
+        // stdin: 'ignore' so codex doesn't block reading stdin. A wedged turn is reclaimed by an
+        // INACTIVITY watchdog (below) — NOT a hard wall-clock timeout, which used to kill long-but-
+        // healthy turns (a big input reads/reasons past 180s → killed with zero output → "chat 无回复").
+        const child: ResultPromise = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false, stdin: 'ignore' })
+        // ★静默先报告、半小时才回收(见 idleWatchdog 的 StallPolicy)。原来是 4 分钟无声 SIGTERM,
+        // 而静默可能只是在等一个我们看不见的人(外部钩子 / 浏览器授权 / sudo / git 凭据)。
+        const wd = makeIdleWatchdog(CHAT_IDLE_MS,
+          () => cb.onStatus?.(`⏳ 已经 ${Math.round(CHAT_IDLE_MS / 1000)}s 没有任何输出。可能在等一个 Forge 看不见的确认（外部钩子 / 浏览器授权 / sudo）。要停就点上面的停止。`),
+          undefined,
+          { hardMs: CHAT_STALL_KILL_MS, onDeadline: () => { cb.onStatus?.('⚠ 太久没有任何输出，已回收这一轮。'); try { killTree(child) } catch { /* already gone */ } } })
+        let buf = ''
+        let rawOut = ''   // raw stdout we couldn't turn into assistant/think output
+        let rawErr = ''   // raw stderr (codex logs/errors)
+        let errBuf = ''   // stderr line-splitter for live onStatus forwarding
+        const cap = (s: string, add: string) => (s + add).slice(-2000)   // keep a bounded tail
+        const processLine = (raw: string) => {
+          const line = raw.trim()
+          if (!line) return
+          rawOut = cap(rawOut, line + '\n')
+          try { handle(JSON.parse(line)) } catch { /* non-JSON banner line — kept in rawOut for diagnostics */ }
+        }
+        child.stdout?.on('data', (b: Buffer) => {
+          wd.beat()
+          buf += b.toString()
+          let nl: number
+          while ((nl = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, nl); buf = buf.slice(nl + 1); processLine(line) }
+        })
+        child.stderr?.on('data', (b: Buffer) => {
+          wd.beat()
+          const s = b.toString()
+          rawErr = cap(rawErr, s)
+          errBuf += s
+          let nl: number
+          while ((nl = errBuf.indexOf('\n')) >= 0) { const line = errBuf.slice(0, nl).trim(); errBuf = errBuf.slice(nl + 1); if (line && !isCodexInternalLog(line)) cb.onStatus?.(line) }
+        })
+        const done = child.then((res) => {
+          wd.clear()
+          processLine(buf); buf = ''
+          if (errBuf.trim() && !isCodexInternalLog(errBuf.trim())) { cb.onStatus?.(errBuf.trim()); errBuf = '' }
+          // No reply produced → surface the best diagnostic we have so it's never a silent empty bubble:
+          // a parsed error event, else the raw stderr/stdout codex emitted, else a bare exit-code note.
+          if (!deliveredAny) {
+            let diag = lastErr ?? ''
+            if (!diag && (wd.firedFlag || res.timedOut)) diag = 'codex 长时间无响应（240s 无任何输出）已终止 —— 可尝试拆分过长的输入，或检查网络/实验功能配置'
+            if (!diag && rawErr.trim()) diag = `codex stderr:\n${rawErr.trim()}`
+            if (!diag && rawOut.trim()) diag = `codex 输出(未解析):\n${rawOut.trim()}`
+            if (!diag) diag = `codex 无输出 (退出码 ${res.exitCode})`
+            cb.onError(new Error(diag))
+            logError('codex', 'chat 无回复', `cmd: ${clipArgs(bin, args)}\ncwd: ${task.cwd}\n${diag}`)
+          } else if (res.exitCode !== 0) {
+            logError('codex', `chat 退出码 ${res.exitCode}`, [`cmd: ${clipArgs(bin, args)}`, rawErr.trim() ? `stderr: ${rawErr.trim()}` : ''].filter(Boolean).join('\n'))
+          }
+          const elapsed = Math.round((Date.now() - start) / 1000)
+          cb.onDone({ elapsed })
+          return { ok: res.exitCode === 0, summary: res.exitCode === 0 ? '完成' : `退出码 ${res.exitCode}` }
+        }).catch((err) => {
+          wd.clear()
+          logError('codex', 'chat 异常', `${(err as Error)?.message ?? err}\ncmd: ${clipArgs(bin, args)}\ncwd: ${task.cwd}`)
+          cb.onError(err as Error); return { ok: false }
+        })
+        return { id: task.id, cancel: () => { wd.clear(); killTree(child) }, done }
+      }
+      // App-server transport (default; codexTransport): drive the turn over JSON-RPC instead of spawning
+      // `codex exec`. Skipped for preArgs specs, mirroring run()'s app-server branch. Events are fed through
+      // the same `handle` the exec path uses, so both transports render identically; `cb.onConfirm` is
+      // optional on ChatCallbacks, so a missing confirm gate fails closed to 'deny' rather than approving
+      // unattended. Only this transport supports 插话 (turn/steer).
       const useAppServer = readSettings().codexTransport === 'app-server' && !spec.preArgs
       if (useAppServer) {
         const forge = forgeCodexConfigArgs(env).length > 0
         const { sandbox, approvalPolicy } = codexSandboxApproval(task.permissionMode ?? 'auto', forge)
         let appHandle: ReturnType<typeof driveCodexTurn> | null = null
-        // The exec chat path guards against a wedged turn with an INACTIVITY watchdog (`wd` below,
-        // armed on spawn, beaten on every stdout/stderr chunk). The app-server transport has no
-        // equivalent liveness guard of its own — if codex wedges mid-turn (process alive, emitting
-        // nothing over the JSON-RPC stream), `done` never resolves and the spinner never clears.
-        // Mirror the exec path: arm on start, beat on every event/approval, clear on settle.
+        // 插话能力:拿到 turnId 才亮,这一轮收尾(或回落到 exec)就熄。
+        let ready = false
+        const listeners: ((r: boolean) => void)[] = []
+        const setReady = (r: boolean) => { if (ready === r) return; ready = r; for (const l of listeners) l(r) }
+        // The exec chat path guards against a wedged turn with an INACTIVITY watchdog (armed on spawn,
+        // beaten on every stdout/stderr chunk). The app-server transport has no equivalent liveness guard
+        // of its own — if codex wedges mid-turn (process alive, emitting nothing over the JSON-RPC
+        // stream), `done` never resolves and the spinner never clears. Mirror the exec path: arm on
+        // start, beat on every event/approval, clear on settle.
         // 同 exec 那条路:静默先报告,半小时才回收(见 idleWatchdog 的 StallPolicy)。
         const wd = makeIdleWatchdog(CHAT_IDLE_MS,
           () => cb.onStatus?.(`⏳ 已经 ${Math.round(CHAT_IDLE_MS / 1000)}s 没有任何输出。可能在等一个 Forge 看不见的确认（外部钩子 / 浏览器授权 / sudo）。要停就点上面的停止。`),
@@ -492,7 +588,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
           { hardMs: CHAT_STALL_KILL_MS, onDeadline: () => { cb.onStatus?.('⚠ 太久没有任何输出，已回收这一轮。'); appHandle?.cancel() } })
         try {
           appHandle = driveCodexTurn(
-            { cwd: task.cwd, prompt, modelArgs: [...codexModelConfigArgs(task.model), ...tierArgs], configArgs: [...forgeCodexConfigArgs(env), ...instrArgs], sandbox, approvalPolicy, resumeThreadId: task.sessionId || undefined },
+            { cwd: task.cwd, prompt, modelArgs: [...codexModelConfigArgs(task.model), ...tierArgs], configArgs: [...forgeCodexConfigArgs(env), ...instrArgs], sandbox, approvalPolicy, resumeThreadId: task.sessionId || undefined, bin, env, fallbackOnStartFailure: true },
             {
               onEvent: (e) => { wd.beat(); handle(e) },
               // Pause the idle watchdog while the user decides on this approval — awaiting a human is not
@@ -507,33 +603,32 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
               onNotice: (t) => cb.onStatus?.(t),
               onUsage: (u) => cb.onUsage?.(u),
               onError: (m) => { cb.onError(new Error(m)) },
+              onTurnStarted: () => { wd.beat(); setReady(true) },
             },
           )
         } catch (e) {
-          // This catch only covers a SYNCHRONOUS driveCodexTurn throw (a spawn-option error
-          // thrown before the child even starts — codex missing / app-server unsupported), and
-          // falls through to the exec path below. An ASYNC spawn/handshake failure (e.g. an old
-          // codex binary that doesn't support app-server: the child's 'error'/'close' fires AFTER
-          // driveCodexTurn already returned a handle) does NOT hit this catch — it surfaces as a
-          // failed turn via cb.onError + a failed `done` below instead of silently retrying
-          // through exec. Acceptable while this transport is opt-in/default-off (codexTransport
-          // defaults to 'exec'); a mid-turn fallback was considered and rejected as too complex.
-          //  ★★2026-09-17 加日志的理由:这个 catch 原来是**完全静默**的 —— app-server 起不来就
-          //   一声不吭退回 exec,而 exec 那条路 `approval_policy` 恒为 "never",于是**权限门永远不会出现**。
-          //   用户看到的是:设置里明明选了 app-server、界面也没报任何错,门就是不弹。
-          //   更糟的是**查不出来**:成功的轮次不写日志,失败的回落也不写,事后翻日志什么线索都没有。
-          //   一次「悄悄换了条能力更弱的路」必须留下痕迹,否则它和「功能坏了」在现场无法区分。
-          logError('codex', 'app-server 起不来,本轮回落到 exec(这条路没有权限门)',
-            String((e as Error)?.message ?? e))
-          //  ★也告诉**用户**,不只是日志:他选了 app-server 就是为了要门,回落意味着这一轮没有门。
-          cb.onStatus?.('codex 的 app-server 没起来,本轮回落到 exec —— 这条路不会升起权限门。')
+          // A SYNCHRONOUS driveCodexTurn throw (spawn-option error before the child even starts).
+          noteAppServerFallback(String((e as Error)?.message ?? e), cb.onStatus)
           wd.clear()
           appHandle = null
         }
         if (appHandle) {
-          const session = appHandle
-          const done = session.done.then((res) => {
+          const app = appHandle
+          let current: { cancel(): void } = { cancel: () => { wd.clear(); app.cancel() } }
+          let fellBack = false
+          let cancelled = false
+          const done = app.done.then((res): Promise<AgentResult> | AgentResult => {
+            setReady(false)
             wd.clear()
+            // 进程起不来 / 握手没成(老版本 codex 不认 app-server、启动即退……):这一轮还没开始,
+            // 退回 exec 把它照常跑完。不改用户的设置,下一轮还先试 app-server。
+            if (res.startFailed && !cancelled) {
+              fellBack = true
+              noteAppServerFallback(res.error ?? '', cb.onStatus)
+              const ex = runExec()
+              current = ex
+              return ex.done
+            }
             cb.onDone({ elapsed: Math.round((Date.now() - start) / 1000) })
             return { ok: res.ok, summary: res.ok ? '完成' : 'codex app-server 失败' }
           }).catch((err) => {
@@ -541,87 +636,20 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
             logError('codex', 'app-server done 异常', String((err as Error)?.message ?? err))
             return { ok: false }
           })
-          return { id: task.id, cancel: () => { wd.clear(); session.cancel() }, done }
+          return {
+            id: task.id,
+            cancel: () => { cancelled = true; current.cancel() },
+            done,
+            // 与正常发送同一个构造(buildChatPrompt,附件路径跟在正文后);forge 指令已随这一轮的首条消息给过。
+            interject: async (text, attachments) => {
+              if (fellBack || !ready) return false
+              return app.steer(buildChatPrompt({ ...task, prompt: text, attachments }))
+            },
+            watchInterjectable: (l) => { listeners.push(l); if (ready) l(true) },
+          }
         }
       }
-      // codex only executes an MCP tool call when sandbox_mode is danger-full-access; with
-      // read-only/workspace-write it treats the call as a sandbox escape and — since approval_policy
-      // is "never" — cancels it ("user cancelled MCP tool call"), so chat-initiated forge_delegate /
-      // forge_propose_plan never reach the bridge. When forge is injected, force full access for the
-      // chat orchestrator (its real read/write work is delegated to separately-sandboxed sub-agents).
-      const forgeCodexArgs = forgeCodexConfigArgs(env)
-      const codexPermArgs = forgeCodexArgs.length
-        ? ['-c', 'sandbox_mode="danger-full-access"', '-c', 'approval_policy="never"']
-        : permissionArgs('codex', task.permissionMode ?? 'auto')
-      const args = spec.preArgs
-        ? [...spec.preArgs]
-        // --ignore-user-config: bypass the user's ~/.codex/config.toml — its oh-my-codex hooks
-        // (session_start/user_prompt_submit/etc.) block `codex exec` and produce no reply. Auth
-        // still works (it lives outside config.toml), and the account's default model is used.
-        // sandbox via `-c sandbox_mode` (NOT `-s`): `codex exec resume` rejects the `-s`/`--sandbox`
-        // flag ("unexpected argument '-s'"), but accepts the config override — and so does plain `exec`.
-        : [...head, '--ignore-user-config', '--json', '--skip-git-repo-check', ...codexPermArgs, ...codexModelArgs(task.model), ...tierArgs, ...forgeCodexArgs, ...instrArgs, prompt]
-      // stdin: 'ignore' so codex doesn't block reading stdin. A wedged turn is reclaimed by an
-      // INACTIVITY watchdog (below) — NOT a hard wall-clock timeout, which used to kill long-but-
-      // healthy turns (a big input reads/reasons past 180s → killed with zero output → "chat 无回复").
-      const child: ResultPromise = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false, stdin: 'ignore' })
-      // ★静默先报告、半小时才回收(见 idleWatchdog 的 StallPolicy)。原来是 4 分钟无声 SIGTERM,
-      // 而静默可能只是在等一个我们看不见的人(外部钩子 / 浏览器授权 / sudo / git 凭据)。
-      const wd = makeIdleWatchdog(CHAT_IDLE_MS,
-        () => cb.onStatus?.(`⏳ 已经 ${Math.round(CHAT_IDLE_MS / 1000)}s 没有任何输出。可能在等一个 Forge 看不见的确认（外部钩子 / 浏览器授权 / sudo）。要停就点上面的停止。`),
-        undefined,
-        { hardMs: CHAT_STALL_KILL_MS, onDeadline: () => { cb.onStatus?.('⚠ 太久没有任何输出，已回收这一轮。'); try { killTree(child) } catch { /* already gone */ } } })
-      let buf = ''
-      let rawOut = ''   // raw stdout we couldn't turn into assistant/think output
-      let rawErr = ''   // raw stderr (codex logs/errors)
-      let errBuf = ''   // stderr line-splitter for live onStatus forwarding
-      const cap = (s: string, add: string) => (s + add).slice(-2000)   // keep a bounded tail
-      const processLine = (raw: string) => {
-        const line = raw.trim()
-        if (!line) return
-        rawOut = cap(rawOut, line + '\n')
-        try { handle(JSON.parse(line)) } catch { /* non-JSON banner line — kept in rawOut for diagnostics */ }
-      }
-      child.stdout?.on('data', (b: Buffer) => {
-        wd.beat()
-        buf += b.toString()
-        let nl: number
-        while ((nl = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, nl); buf = buf.slice(nl + 1); processLine(line) }
-      })
-      child.stderr?.on('data', (b: Buffer) => {
-        wd.beat()
-        const s = b.toString()
-        rawErr = cap(rawErr, s)
-        errBuf += s
-        let nl: number
-        while ((nl = errBuf.indexOf('\n')) >= 0) { const line = errBuf.slice(0, nl).trim(); errBuf = errBuf.slice(nl + 1); if (line && !isCodexInternalLog(line)) cb.onStatus?.(line) }
-      })
-      const done = child.then((res) => {
-        wd.clear()
-        processLine(buf); buf = ''
-        if (errBuf.trim() && !isCodexInternalLog(errBuf.trim())) { cb.onStatus?.(errBuf.trim()); errBuf = '' }
-        // No reply produced → surface the best diagnostic we have so it's never a silent empty bubble:
-        // a parsed error event, else the raw stderr/stdout codex emitted, else a bare exit-code note.
-        if (!deliveredAny) {
-          let diag = lastErr ?? ''
-          if (!diag && (wd.firedFlag || res.timedOut)) diag = 'codex 长时间无响应（240s 无任何输出）已终止 —— 可尝试拆分过长的输入，或检查网络/实验功能配置'
-          if (!diag && rawErr.trim()) diag = `codex stderr:\n${rawErr.trim()}`
-          if (!diag && rawOut.trim()) diag = `codex 输出(未解析):\n${rawOut.trim()}`
-          if (!diag) diag = `codex 无输出 (退出码 ${res.exitCode})`
-          cb.onError(new Error(diag))
-          logError('codex', 'chat 无回复', `cmd: ${clipArgs(bin, args)}\ncwd: ${task.cwd}\n${diag}`)
-        } else if (res.exitCode !== 0) {
-          logError('codex', `chat 退出码 ${res.exitCode}`, [`cmd: ${clipArgs(bin, args)}`, rawErr.trim() ? `stderr: ${rawErr.trim()}` : ''].filter(Boolean).join('\n'))
-        }
-        const elapsed = Math.round((Date.now() - start) / 1000)
-        cb.onDone({ elapsed })
-        return { ok: res.exitCode === 0, summary: res.exitCode === 0 ? '完成' : `退出码 ${res.exitCode}` }
-      }).catch((err) => {
-        wd.clear()
-        logError('codex', 'chat 异常', `${(err as Error)?.message ?? err}\ncmd: ${clipArgs(bin, args)}\ncwd: ${task.cwd}`)
-        cb.onError(err as Error); return { ok: false }
-      })
-      return { id: task.id, cancel: () => { wd.clear(); killTree(child) }, done }
+      return runExec()
     }
   }
 }

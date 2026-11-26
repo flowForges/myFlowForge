@@ -22,7 +22,7 @@ import type { ChatCallbacks, ConfirmReq } from '../types'
  * **required**,而它就是 item/started 里那个 item 的 `id`)。
  */
 
-// readSettings 是 app-server 这条路唯一的开关(默认 'exec')。codex.ts 是唯一 import 它的模块。
+// readSettings 是 app-server 这条路唯一的开关(默认 'app-server')。codex.ts 是唯一 import 它的模块。
 vi.mock('../../config/store', () => ({ readSettings: () => ({ codexTransport: 'app-server' }) }))
 
 let dir: string
@@ -30,8 +30,7 @@ let oldPath: string | undefined
 
 // 一个只会说 app-server 协议的假 codex:握手 → 开线程 → 收到 turn/start 后先报一条 commandExecution
 // item(工具卡按它的 id 建行),再就**同一个 itemId** 升起审批门;拿到回复就收尾。
-// ★ driveCodexTurn 写死 spawn('codex', …)(Windows 上 codex 可能是 .cmd 包装,必须走 execa 解析),
-//   所以这里靠 PATH 把假的塞进去,而不是 spec.bin —— 也正因为写死,这条路没法用 preArgs 造假 CLI。
+// ★ spec.bin 是裸名 'codex'(Windows 上可能是 .cmd 包装,必须走 execa 解析),所以这里靠 PATH 把假的塞进去。
 const FAKE = `#!/usr/bin/env node
 const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n')
 let buf = ''

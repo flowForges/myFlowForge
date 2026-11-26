@@ -33,7 +33,8 @@ const DEFAULTS: Settings = {
   fullAccessAck: {},
   memory: { enabled: true },
   botBridge: { dingtalk: { enabled: false, clientId: '', clientSecret: '' }, telegram: { enabled: false, botToken: '' }, feishu: { enabled: false, appId: '', appSecret: '' }, verbosity: 'essential', pairingCode: '', bindings: [], ids: { seq: 0, ws: {}, session: {} } },
-  codexTransport: 'exec',
+  codexTransport: 'app-server',
+  codexTransportChosen: false,
   mobileGateway: { enabled: false, host: '0.0.0.0', port: 6789 },
   relay: { enabled: false, url: '', urlHistory: [] },
   push: { enabled: false, gate: true, done: false },
@@ -73,6 +74,8 @@ export interface SettingsUpdate {
   // codex 的驱动通路。★'app-server' 才有逐 token 流式('exec' 只在整条消息写完后发一次)——
   //  见 AgentsPane 里那个开关和 providers/codex.ts 的注释。
   codexTransport?: Settings['codexTransport']
+  /** 设置里亲手拨过那个开关(见 schema 的 codexTransportChosen)。 */
+  codexTransportChosen?: boolean
   computerUse?: ComputerUsePatch
 }
 
@@ -123,6 +126,7 @@ function merge(base: Settings, partial: SettingsUpdate): Settings {
     // this update path — preserve from the loaded settings on load (cast), else base, like pluginCreds.
     botBridge: (partial as Partial<Settings>).botBridge ?? base.botBridge,
     codexTransport: (partial as Partial<Settings>).codexTransport ?? base.codexTransport,
+    codexTransportChosen: (partial as Partial<Settings>).codexTransportChosen ?? base.codexTransportChosen,
     mobileGateway: { ...base.mobileGateway, ...((partial as Partial<Settings>).mobileGateway ?? {}) },
     // ★浅展开一层。整份替换会让一个只带 `enabled` 的补丁把 `url` 抹掉 ——
     //  外观那边正是这么丢过一次的(见本文件里 appearance 那条)。
