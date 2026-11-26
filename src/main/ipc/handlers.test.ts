@@ -46,6 +46,8 @@ vi.mock('../pet/growthPetImport', () => ({
   importGrowthPetPack: (...a: any[]) => importGrowthPetPackMock(...a),
   growthPetId: (d: string) => `growth-${d}`,
 }))
+const { recordOwnEndMock } = vi.hoisted(() => ({ recordOwnEndMock: vi.fn(async () => {}) }))
+vi.mock('../sessionLink/binding', () => ({ recordOwnEnd: (...a: any[]) => (recordOwnEndMock as any)(...a) }))
 vi.mock('../run/runStore', () => ({
   RunStore: class {
     get runDir() { return '/tmp/chat-bridge' }
@@ -310,6 +312,26 @@ describe('后台任务留下的进程(claude 那条路接到 IPC 的部分)', ()
     await tick()
     expect(answer).toBe('deny')
     expect(t.sent.some(([, p]) => p?.type === 'confirm-resolved')).toBe(true)
+  })
+
+  it('会话互通:claude 进程退出才记「我方写者安静」;codex / qoder 在这一轮收尾时记', async () => {
+    const t = await setup()
+    recordOwnEndMock.mockClear()
+    const deps = await firstTurn(t)
+    await tick()
+    expect(recordOwnEndMock).not.toHaveBeenCalled()       // claude: onDone 之后进程还可能写
+    deps.background.onExit()
+    expect(recordOwnEndMock).toHaveBeenCalledWith('/ws/bg', 's1', 'claude')
+    for (const agent of ['codex', 'qoder']) {
+      recordOwnEndMock.mockClear()
+      let d: any
+      t.sendTurn.mockImplementationOnce(async (_p: any, x: any) => { d = x; return {} })
+      t.call(CH.chatSend, { ...base, sessionId: `s-${agent}`, agent, text: 'x' })
+      await tick(); await tick(); await tick()
+      expect(recordOwnEndMock).toHaveBeenCalledWith('/ws/bg', `s-${agent}`, agent)
+      d.background.onExit()
+      expect(recordOwnEndMock).toHaveBeenCalledTimes(1)
+    }
   })
 
   it('#7 明确停止仍然连后台的门一起收', async () => {

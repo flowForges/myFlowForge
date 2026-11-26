@@ -58,6 +58,8 @@ const lingering = new Map<string, LingeringChat>()
 /** 所有活着的聊天进程(不管这一刻有没有在跑的一轮)。切权限档要够得到正在跑自己那一轮的进程,lingering 里没有它。 */
 const liveChats = new Map<string, LingeringChat>()
 const lingerKey = (cwd: string, sessionId: string) => `${cwd}\0${sessionId}`
+/** 这个 claude 会话此刻有没有我们自己的活进程(一轮在跑或留驻)——有就是我们在写,不算别人占用。 */
+export function isClaudeChatLive(cwd: string, sessionId: string): boolean { return liveChats.has(lingerKey(cwd, sessionId)) }
 /** 收掉留在后台的进程时最多等它退出多久(实测 SIGTERM 后 ~1s 退出)。 */
 const LINGER_STOP_WAIT_MS = 5_000
 /** 等 set_model / set_permission_mode 的回复最多多久(实测同一毫秒就回)。 */

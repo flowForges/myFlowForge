@@ -38,11 +38,11 @@ describe('isOccupied — mtime × end marker × own-write matrix', () => {
     })
     it(`${p}: fresh mtime + unfinished, but caused by our own just-finished write → not busy`, async () => {
       const f = tempFile('x.jsonl', running[p]); touch(f, T0 - 1_000)
-      expect((await isOccupied(p, f, T0, T0 - 3_000)).busy).toBe(false)
+      expect((await isOccupied(p, f, T0, { ownLastWriteAt: T0 - 3_000 })).busy).toBe(false)
     })
     it(`${p}: a change more than 15 s after our own write still counts as the other side`, async () => {
       const f = tempFile('x.jsonl', running[p]); touch(f, T0 - 1_000)
-      expect(await isOccupied(p, f, T0, T0 - 1_000 - BUSY_WINDOW_MS - 1)).toEqual({ busy: true, app: appName(p), exists: true })
+      expect(await isOccupied(p, f, T0, { ownLastWriteAt: T0 - 1_000 - BUSY_WINDOW_MS - 1 })).toEqual({ busy: true, app: appName(p), exists: true })
     })
   }
 
@@ -70,10 +70,11 @@ describe('isOccupied — mtime × end marker × own-write matrix', () => {
     const deps = {
       stat: async () => ({ mtimeMs: T0 - 100_000 }),
       read: async () => { reads++; return { turns: [], next: { offset: 0 }, reset: false, endedCleanly: false, exists: true } },
+      lastByte: async () => 0x0a,
     }
     expect((await isOccupied('codex', '/fake', T0, undefined, deps)).busy).toBe(false)
-    const own = { ...deps, stat: async () => ({ mtimeMs: T0 - 1_000 }) }
-    expect((await isOccupied('codex', '/fake', T0, T0 - 2_000, own)).busy).toBe(false)
+    const own = { ...deps, stat: async () => ({ mtimeMs: T0 - 1_000, size: 10 }) }
+    expect((await isOccupied('codex', '/fake', T0, { ownLastWriteAt: T0 - 2_000 }, own)).busy).toBe(false)
     expect(reads).toBe(0)
     expect(await isOccupied('codex', '/fake', T0, undefined, own)).toEqual({ busy: true, app: 'Codex', exists: true })
     expect(reads).toBe(1)
@@ -81,7 +82,49 @@ describe('isOccupied — mtime × end marker × own-write matrix', () => {
 
   it('stat failure / reader reporting a vanished file → not busy', async () => {
     expect(await isOccupied('claude', '/fake', T0, undefined, { stat: async () => { throw new Error('EACCES') } })).toEqual({ busy: false, exists: false })
-    const gone = { stat: async () => ({ mtimeMs: T0 }), read: async () => ({ turns: [], next: { offset: 0 }, reset: false, endedCleanly: false, exists: false }) }
+    const gone = { stat: async () => ({ mtimeMs: T0, size: 5 }), lastByte: async () => 0x0a, read: async () => ({ turns: [], next: { offset: 0 }, reset: false, endedCleanly: false, exists: false }) }
     expect(await isOccupied('claude', '/fake', T0, undefined, gone)).toEqual({ busy: false, exists: false })
+  })
+
+  it('empty file with a fresh mtime → busy (being created)', async () => {
+    const f = tempFile('e.jsonl', ''); touch(f, T0 - 500)
+    expect(await isOccupied('claude', f, T0)).toEqual({ busy: true, app: 'Claude', exists: true })
+  })
+
+  it('half-written last line → busy from a 1-byte check, without reading the transcript', async () => {
+    let reads = 0
+    const deps = { stat: async () => ({ mtimeMs: T0 - 500, size: 99 }), lastByte: async () => 0x7d, read: async () => { reads++; throw new Error('no') } }
+    expect(await isOccupied('codex', '/fake', T0, undefined, deps)).toEqual({ busy: true, app: 'Codex', exists: true })
+    expect(reads).toBe(0)
+  })
+})
+
+describe('isOccupied — own writer state (ownLive / ownEnd)', () => {
+  it('ownLive (our process still holds the binding) → not busy, without touching the file', async () => {
+    let touched = 0
+    const deps = { stat: async () => { touched++; return { mtimeMs: T0, size: 1 } } }
+    expect(await isOccupied('claude', '/fake', T0, { ownLive: true }, deps)).toEqual({ busy: false, exists: true })
+    expect(touched).toBe(0)
+  })
+  for (const p of ['claude', 'codex'] as const) {
+    it(`${p}: file exactly as our writer left it (size + mtime) → not busy even though fresh and unfinished`, async () => {
+      const f = tempFile('x.jsonl', running[p]); touch(f, T0 - 1_000)
+      const ownEnd = { offset: Buffer.byteLength(running[p]), mtimeMs: T0 - 1_000 }
+      expect((await isOccupied(p, f, T0, { ownEnd })).busy).toBe(false)
+    })
+    it(`${p}: grown since our writer went quiet, fresh and unfinished → busy, even within 15 s of our write`, async () => {
+      const f = tempFile('x.jsonl', running[p]); touch(f, T0 - 1_000)
+      const ownEnd = { offset: 10, mtimeMs: T0 - 4_000 }
+      expect(await isOccupied(p, f, T0, { ownEnd, ownLastWriteAt: T0 - 4_000 })).toEqual({ busy: true, app: appName(p), exists: true })
+    })
+    it(`${p}: same size but touched again (mtime differs) → judged normally`, async () => {
+      const f = tempFile('x.jsonl', running[p]); touch(f, T0 - 1_000)
+      const ownEnd = { offset: Buffer.byteLength(running[p]), mtimeMs: T0 - 3_000 }
+      expect((await isOccupied(p, f, T0, { ownEnd })).busy).toBe(true)
+    })
+  }
+  it('grown since ownEnd but stale (> 15 s) → not busy', async () => {
+    const f = tempFile('x.jsonl', running.claude); touch(f, T0 - 60_000)
+    expect((await isOccupied('claude', f, T0, { ownEnd: { offset: 1, mtimeMs: 0 } })).busy).toBe(false)
   })
 })

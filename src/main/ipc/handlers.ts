@@ -46,6 +46,7 @@ import { workflowNameTaken } from '../../shared/workflowName'
 import { listWorkspaces } from '../workspace/workspaceList'
 import { readHomeStats } from '../workspace/homeStats'
 import { sendTurn, history, addTurnAnswer } from '../chat/chatService'
+import { recordOwnEnd } from '../sessionLink/binding'
 import { ChatQueue } from '../chat/chatQueue'
 import { appendMessage, readMessages, readSession as readChatSession } from '../chat/chatStore'
 import { CouncilRegistry } from '../council/registry'
@@ -1192,7 +1193,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const background: ChatBackgroundHooks = {
       onRunning: (n, stop) => chatQueue.setBackground(payload.workspacePath, payload.sessionId, n, stop),
       onConfirm: (req) => toolConfirm({ ...req, background: true }),
-      onExit: () => drainChatGates(payload.workspacePath, { sessionId: payload.sessionId, type: 'confirm', scope: 'background' }),
+      onExit: () => {
+        drainChatGates(payload.workspacePath, { sessionId: payload.sessionId, type: 'confirm', scope: 'background' })
+        // claude 的写者是这个(可能留驻很久的)进程:它退出了才算我方安静下来(result 之后 CLI 还会再写)。
+        if (payload.agent === 'claude') void recordOwnEnd(payload.workspacePath, payload.sessionId, payload.agent)
+      },
       openTurn: (attach, isCurrent) => {
         // 会话已经删了:回复没地方放,后台活也没人要了。
         if (!getSession(payload.workspacePath, payload.sessionId)) { chatQueue.stopBackground(payload.workspacePath, payload.sessionId); return }
@@ -1233,6 +1238,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     }
     finally {
       endCuTurn()
+      // codex exec 进程退出 / app-server turn 完成、qoder 进程退出,都在 sendTurn 收尾之前:此刻外部记录就是我方留下的样子。
+      if (payload.agent !== 'claude') void recordOwnEnd(payload.workspacePath, payload.sessionId, payload.agent)
       await authBroker?.close().catch(() => { /* 已经没了 */ })
       // The turn is over. If it ended while a CLI permission gate (confirm) was still open — CLI/turn
       // timeout, error, or the user moved on — drain THIS turn's confirm gates so the pet's 需确认

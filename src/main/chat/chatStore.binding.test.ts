@@ -67,3 +67,27 @@ it('watermark-only entries without a resume id are not bindings', async () => {
   writeWatermark(ws, 's4', 'claude', 3)
   expect(readBinding(ws, 's4', 'claude')).toBeUndefined()
 })
+
+it('writeBinding with a different resumeId drops the old transcript position unless the patch sets it', async () => {
+  const { writeSession, writeBinding, readBinding } = await import('./chatStore')
+  const ws = join(home, 'ws')
+  writeSession(ws, 's5', 'claude', 'old')
+  writeBinding(ws, 's5', 'claude', { syncedTo: { offset: 9 }, extFile: '/x/old.jsonl', ownEnd: { offset: 9, mtimeMs: 1 }, cwd: '/p' })
+  writeBinding(ws, 's5', 'claude', { resumeId: 'new', origin: 'imported' })
+  expect(readBinding(ws, 's5', 'claude')).toEqual({ resumeId: 'new', origin: 'imported', cwd: '/p' })
+  writeBinding(ws, 's5', 'claude', { resumeId: 'newer', syncedTo: { offset: 3 }, extFile: '/x/newer.jsonl' })
+  expect(readBinding(ws, 's5', 'claude')).toEqual({ resumeId: 'newer', origin: 'imported', cwd: '/p', syncedTo: { offset: 3 }, extFile: '/x/newer.jsonl' })
+  writeBinding(ws, 's5', 'claude', { resumeId: 'newer', ownEnd: { offset: 3, mtimeMs: 2 } })
+  expect(readBinding(ws, 's5', 'claude')?.syncedTo).toEqual({ offset: 3 })
+})
+
+it('writeSession with a new id also clears ownEnd', async () => {
+  const { writeSession, writeBinding, readBinding } = await import('./chatStore')
+  const ws = join(home, 'ws')
+  writeSession(ws, 's6', 'codex', 'a')
+  writeBinding(ws, 's6', 'codex', { ownEnd: { offset: 1, mtimeMs: 1 } })
+  writeSession(ws, 's6', 'codex', 'a')
+  expect(readBinding(ws, 's6', 'codex')?.ownEnd).toEqual({ offset: 1, mtimeMs: 1 })
+  writeSession(ws, 's6', 'codex', 'b')
+  expect(readBinding(ws, 's6', 'codex')?.ownEnd).toBeUndefined()
+})

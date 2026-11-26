@@ -43,11 +43,40 @@ async function inRollouts(dir: string, id: string): Promise<string | undefined> 
   return undefined
 }
 
+/** UUIDv7 的前 48 位是毫秒时间戳;codex 按本地日期建 sessions/YYYY/MM/DD。不是 v7 → undefined。 */
+function uuidV7Ms(id: string): number | undefined {
+  const hex = id.replace(/-/g, '')
+  if (!/^[0-9a-f]{32}$/i.test(hex) || hex[12] !== '7') return undefined
+  const ms = parseInt(hex.slice(0, 12), 16)
+  return Number.isFinite(ms) ? ms : undefined
+}
+const dayDir = (root: string, d: Date) =>
+  join(root, String(d.getFullYear()), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0'))
+
+async function inRolloutDay(dir: string, id: string): Promise<string | undefined> {
+  let names: string[]
+  try { names = await readdir(dir) } catch { return undefined }
+  const hit = names.find(n => n.endsWith(`-${id}.jsonl`) || n === `${id}.jsonl`)
+  return hit && await isFile(join(dir, hit)) ? join(dir, hit) : undefined
+}
+
+async function codexRollout(root: string, id: string): Promise<string | undefined> {
+  const ms = uuidV7Ms(id)
+  if (ms !== undefined) {
+    // 当天优先,再前后各一天(本地时区 / 跨午夜)
+    for (const delta of [0, -1, 1]) {
+      const f = await inRolloutDay(dayDir(root, new Date(ms + delta * 86_400_000)), id)
+      if (f) return f
+    }
+  }
+  return inRollouts(root, id)
+}
+
 export async function locateExternal(provider: ExtProvider, externalId: string, opts: LocateOpts = {}): Promise<string | undefined> {
   if (!SAFE_ID.test(externalId)) return undefined
   const root = (opts.roots ?? linkRoots())[provider]
   if (!root) return undefined
   try {
-    return provider === 'codex' ? await inRollouts(root, externalId) : await inProjects(root, externalId, opts.cwd)
+    return provider === 'codex' ? await codexRollout(root, externalId) : await inProjects(root, externalId, opts.cwd)
   } catch { return undefined }
 }

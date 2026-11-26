@@ -49,14 +49,24 @@ export function readMessages(wsPath: string, sessionId: string): ChatMessage[] {
 //   syncedTo      how far into the external transcript we have shown (byte offset + last line fingerprint)
 //   cwd           cwd taken from the external transcript (readers only report it in the range that contains it)
 //   extFile       resolved path of the external transcript, cached
-//   ownLastWriteAt when our own turn last wrote/ended on it — mtime changes right after it are ours, not the app's
+//   ownEnd        size + mtime of the transcript when OUR writer went quiet — unchanged since = nobody else wrote
+//   ownLastWriteAt when our own writer last went quiet (legacy fallback for bindings without ownEnd)
 export interface ExtSyncCursor { offset: number; lastId?: string }
+export interface OwnEnd { offset: number; mtimeMs: number }
 export interface BindingMeta {
   origin?: 'forge' | 'imported'
   syncedTo?: ExtSyncCursor
   cwd?: string
   extFile?: string
+  ownEnd?: OwnEnd
   ownLastWriteAt?: number
+}
+/** Fields that describe one particular transcript: meaningless once the resume id changes. */
+const PER_TRANSCRIPT = ['syncedTo', 'extFile', 'ownEnd'] as const
+function forNewId(entry: ResumeEntry): ResumeEntry {
+  const out = { ...entry }
+  for (const k of PER_TRANSCRIPT) delete out[k]
+  return out
 }
 interface ResumeEntry extends BindingMeta { resumeId?: string; watermark?: number }
 export interface Binding extends BindingMeta { resumeId: string; origin: 'forge' | 'imported'; watermark?: number }
@@ -90,9 +100,8 @@ export function readSession(wsPath: string, sessionId: string, agent: string): s
 export function writeSession(wsPath: string, sessionId: string, agent: string, resumeId: string): void {
   const map = readResume(wsPath)
   const entry = (map[sessionId] ??= {})[agent] ?? {}
-  // A different id is a different external transcript: the old position / path no longer apply.
-  const { syncedTo: _s, extFile: _f, ...kept } = entry
-  ;(map[sessionId])[agent] = entry.resumeId !== undefined && entry.resumeId !== resumeId ? { ...kept, resumeId } : { ...entry, resumeId }
+  // A different id is a different external transcript: the old position / path / own end no longer apply.
+  ;(map[sessionId])[agent] = entry.resumeId !== undefined && entry.resumeId !== resumeId ? { ...forNewId(entry), resumeId } : { ...entry, resumeId }
   writeResume(wsPath, map)
 }
 /** The session's binding to the CLI transcript for `agent`, or undefined when there is no resume id yet. */
@@ -101,10 +110,12 @@ export function readBinding(wsPath: string, sessionId: string, agent: string): B
   if (!e?.resumeId) return undefined
   return { ...e, resumeId: e.resumeId, origin: e.origin ?? 'forge' }
 }
-/** Merge binding fields; keys whose value is undefined keep their stored value. */
+/** Merge binding fields; keys whose value is undefined keep their stored value. A new resumeId drops the per-transcript fields. */
 export function writeBinding(wsPath: string, sessionId: string, agent: string, patch: BindingMeta & { resumeId?: string }): void {
   const map = readResume(wsPath)
-  const entry = { ...((map[sessionId] ??= {})[agent] ?? {}) } as Record<string, unknown>
+  const stored = (map[sessionId] ??= {})[agent] ?? {}
+  const idChanged = patch.resumeId !== undefined && stored.resumeId !== undefined && patch.resumeId !== stored.resumeId
+  const entry = { ...(idChanged ? forNewId(stored) : stored) } as Record<string, unknown>
   for (const [k, v] of Object.entries(patch)) if (v !== undefined) entry[k] = v
   ;(map[sessionId])[agent] = entry as ResumeEntry
   writeResume(wsPath, map)
