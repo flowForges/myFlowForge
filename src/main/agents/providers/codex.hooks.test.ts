@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, chmodSync, readFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, chmodSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ChatTask } from '../types'
@@ -37,13 +37,14 @@ afterEach(() => {
 })
 
 const NOOP_CB = { onSession: () => {}, onAssistantDelta: () => {}, onThinkDelta: () => {}, onDone: () => {}, onError: () => {} }
-async function chatArgv(task: Partial<ChatTask>): Promise<string[]> {
+async function chatArgv(task: Partial<ChatTask>, extraEnv: NodeJS.ProcessEnv = {}): Promise<string[]> {
   const { makeCodexProvider } = await import('./codex')
   const provider = makeCodexProvider({ bin, defaultModels: [], modelHasFastTier: () => false })
-  const s = provider.chat!({ id: 'a1', prompt: 'PROMPT_BODY', model: 'gpt-6-astra', cwd: dir, ...task }, NOOP_CB, { ...process.env, ARGV_OUT: argvOut })
+  const s = provider.chat!({ id: 'a1', prompt: 'PROMPT_BODY', model: 'gpt-6-astra', cwd: dir, ...task }, NOOP_CB, { ...process.env, ARGV_OUT: argvOut, ...extraEnv })
   await s.done
   return JSON.parse(readFileSync(argvOut, 'utf8')) as string[]
 }
+// exec 那几条路(含工作流):不传关钩子的覆盖(exec 靠 --ignore-user-config 隔离)。app-server 见下面 R6。
 const keepsHooks = (args: string[]) => !args.some(a => /features\.(codex_)?hooks/.test(a))
 
 describe('codex 钩子保持开启 —— 不传任何关钩子的覆盖', () => {
@@ -64,7 +65,22 @@ describe('codex 钩子保持开启 —— 不传任何关钩子的覆盖', () =>
     transport.value = 'app-server'
     const args = await chatArgv({})
     expect(args[args.length - 1]).toBe('app-server')
-    expect(keepsHooks(args)).toBe(true)
+  })
+
+  // ★R6(2026-11-26,取代「app-server 照读用户配置」):app-server 没有 --ignore-user-config,
+  //  用 -c 覆盖做到同样的隔离 —— notify / 钩子 / 插件 / 开发者指令关掉,用户的 MCP 逐个 enabled=false,forge 留着。
+  it('app-server:隔离用户配置(notify / 钩子 / 插件 / 用户 MCP),forge 的覆盖排在后面', async () => {
+    transport.value = 'app-server'
+    const home = join(dir, 'codex-home')
+    mkdirSync(home)
+    writeFileSync(join(home, 'config.toml'), 'notify = ["x"]\n[mcp_servers.omx_state]\ncommand = "node"\n')
+    const args = await chatArgv({}, { CODEX_HOME: home, FORGE_SOCKET: join(dir, 'sock'), FORGE_AGENT_ID: 'a1', FORGE_MCP_ENTRY: join(dir, 'mcp.js') })
+    const pairs = args.flatMap((a, i) => a === '-c' ? [args[i + 1]] : [])
+    for (const want of ['notify=[]', 'features.hooks=false', 'features.codex_hooks=false', 'features.plugins=false', 'mcp_servers.omx_state.enabled=false']) expect(pairs).toContain(want)
+    expect(args.indexOf('app-server')).toBe(args.length - 1)
+    const forgeAt = pairs.findIndex(p => p.startsWith('mcp_servers.forge.command='))
+    expect(forgeAt).toBeGreaterThan(pairs.indexOf('mcp_servers.omx_state.enabled=false'))
+    expect(pairs).not.toContain('mcp_servers.forge.enabled=false')
   })
 
   it('workflow run()', async () => {

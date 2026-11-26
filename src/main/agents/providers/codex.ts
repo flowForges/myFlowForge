@@ -13,6 +13,8 @@ import { readCodexModelsCache, codexModelHasFastTier, codexDefaultFastTier, CODE
 import { logError } from '../../log/appLog'
 import { makeIdleWatchdog, CHAT_IDLE_MS, CHAT_STALL_KILL_MS } from '../idleWatchdog'
 import { driveCodexTurn } from './codexAppServer'
+// ★R6:app-server 没有 --ignore-user-config,用 -c 覆盖把用户的 notify / 钩子 / 插件 / MCP 关掉(放在最前,forge 和指令覆盖在后面赢)。
+import { codexAppServerIsolationArgs } from './codexUserConfig'
 import { codexSandboxApproval, codexGateReq } from './codexApproval'
 import { readSettings } from '../../config/store'
 import { isCodexWarning } from './codexErrorMeaning'
@@ -378,7 +380,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         let handle: ReturnType<typeof driveCodexTurn> | null = null
         try {
           handle = driveCodexTurn(
-            { cwd: task.cwd, prompt: task.prompt, modelArgs: codexModelConfigArgs(task.model), configArgs: forgeCodexConfigArgs(env), sandbox, approvalPolicy, bin, env, fallbackOnStartFailure: true },
+            { cwd: task.cwd, prompt: task.prompt, modelArgs: codexModelConfigArgs(task.model), configArgs: [...codexAppServerIsolationArgs(env), ...forgeCodexConfigArgs(env)], sandbox, approvalPolicy, bin, env, fallbackOnStartFailure: true },
             {
               onEvent: (e) => { cb.onActivity?.(); handleRunEvent(e) },
               // codex 的审批只有放行/拒绝两态(没有 claude AskUserQuestion 那种带选项的问题),把可能的
@@ -595,7 +597,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
           { hardMs: CHAT_STALL_KILL_MS, onDeadline: () => { cb.onStatus?.('⚠ 太久没有任何输出，已回收这一轮。'); appHandle?.cancel() } })
         try {
           appHandle = driveCodexTurn(
-            { cwd: task.cwd, prompt, modelArgs: [...codexModelConfigArgs(task.model), ...tierArgs], configArgs: [...forgeCodexConfigArgs(env), ...instrArgs], sandbox, approvalPolicy, resumeThreadId: task.sessionId || undefined, bin, env, fallbackOnStartFailure: true },
+            { cwd: task.cwd, prompt, modelArgs: [...codexModelConfigArgs(task.model), ...tierArgs], configArgs: [...codexAppServerIsolationArgs(env), ...forgeCodexConfigArgs(env), ...instrArgs], sandbox, approvalPolicy, resumeThreadId: task.sessionId || undefined, bin, env, fallbackOnStartFailure: true },
             {
               onEvent: (e) => { wd.beat(); handle(e) },
               // Pause the idle watchdog while the user decides on this approval — awaiting a human is not
