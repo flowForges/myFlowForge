@@ -137,7 +137,7 @@ import { sessionImportCoverage } from '../sessionImport/coverage'
 import { groupByCwd } from '../sessionImport/group'
 import { readIndex, upsertSessions } from '../sessionImport/importStore'
 import { importWorkspace } from '../sessionImport/importWorkspace'
-import { canContinue, continueExternal } from '../sessionImport/takeover'
+import { continueExternal, markContinuable } from '../sessionImport/takeover'
 import { probeGitRepo } from '../sessionImport/gitProbe'
 import { collectGitCandidates } from '../sessionImport/importResult'
 import { readScanCache, writeScanCache } from '../sessionImport/scanCache'
@@ -2164,7 +2164,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
 
   // ── Session Import IPC ──────────────────────────────────────────────────────
   on(CH.sessionImportScan, async () => {
-    const sessions = await Promise.all(scanAll().map(async s => ({ ...s, continuable: await canContinue(s).catch(() => false) })))
+    const sessions = await markContinuable(scanAll())
     const wsPaths = readWorkspaceRegistry().map(w => w.path)
     const groups = groupByCwd(sessions, wsPaths)
     const scannedAt = Date.now()

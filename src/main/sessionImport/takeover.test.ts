@@ -1,5 +1,5 @@
 import { it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, appendFileSync, statSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, appendFileSync, statSync, readFileSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AgentProvider, ChatCallbacks, ChatTask } from '../agents/types'
@@ -8,14 +8,15 @@ import { jsonl, claudeUser, claudeAssistant, claudeStopHook, claudeToolResult, c
 
 // 接管官方会话(「在 myFlowForge 继续」):外部存储全在临时目录,只读。
 
-let home: string, roots: Record<'codex' | 'claude' | 'qoder', string>, cwd: string
+let home: string, roots: Record<'codex' | 'claude' | 'qoder', string>, cwd: string, rawCwd: string
 let registry: string[]
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), 'forge-to-'))
   process.env.HOME = home
   roots = { codex: join(home, 'x', 'codex'), claude: join(home, 'x', 'claude'), qoder: join(home, 'x', 'qoder') }
-  cwd = join(home, 'proj')
-  mkdirSync(cwd, { recursive: true })
+  rawCwd = join(home, 'proj')             // under tmpdir: /var/… on macOS
+  mkdirSync(rawCwd, { recursive: true })
+  cwd = realpathSync(rawCwd)              // /private/var/…
   registry = []
   vi.resetModules()
 })
@@ -231,4 +232,63 @@ it('the pre-send check applies to a taken-over session: still running in the off
   if (!r.ok) throw new Error(r.error)
   expect((await preSend(cwd, r.sessionId, 'claude', { roots })).busy).toBe('Claude')
   expect((await preSend(cwd, r.sessionId, 'claude', { roots, now: () => Date.now() + 60_000 })).busy).toBeUndefined()
+})
+
+it('a closed session still listed in chat-session.json does not defeat reuse: close → retake → retake gives one live session', async () => {
+  const f = claudeFile('c1', jsonl(appTurn('0', '问', '答')))
+  const { continueExternal } = await import('./takeover')
+  const { closeSession, readSessions } = await import('../chat/sessionStore')
+  const a = await continueExternal(disc('claude', 'c1', [f]), deps())
+  if (!a.ok) throw new Error(a.error)
+  closeSession(cwd, a.sessionId)
+  const b = await continueExternal(disc('claude', 'c1', [f]), deps())
+  const c = await continueExternal(disc('claude', 'c1', [f]), deps())
+  if (!b.ok || !c.ok) throw new Error('failed')
+  expect(b.created).toBe(true)
+  expect(b.sessionId).not.toBe(a.sessionId)
+  expect(c).toMatchObject({ sessionId: b.sessionId, created: false })
+  const { readBinding } = await import('../chat/chatStore')
+  const live = readSessions(cwd).sessions.filter(s => !s.readonly && readBinding(cwd, s.id, 'claude')?.resumeId === 'c1')
+  expect(live.map(s => s.id)).toEqual([b.sessionId])
+})
+
+it('cwd is compared by real path: /var vs /private/var and a trailing slash land in the registered workspace', async () => {
+  registry.push(rawCwd)                                    // registered as /var/…
+  const f = claudeFile('c1', jsonl(appTurn('0', '问', '答', cwd + '/')))   // transcript says /private/var/…/
+  const { continueExternal } = await import('./takeover')
+  const r = await continueExternal(disc('claude', 'c1', [f]), deps())
+  if (!r.ok) throw new Error(r.error)
+  expect(r).toMatchObject({ wsPath: rawCwd, wsAdded: false })
+  expect(registry).toEqual([rawCwd])
+  // an unregistered cwd is registered by its real path, without the slash
+  rmSync(join(rawCwd, '.forge'), { recursive: true, force: true }); registry.length = 0
+  const g = claudeFile('c2', jsonl(appTurn('0', '问', '答', rawCwd + '/')))
+  const r2 = await continueExternal(disc('claude', 'c2', [g]), deps())
+  expect(r2).toMatchObject({ ok: true, wsPath: cwd, wsAdded: true })
+})
+
+it('a failure after the session was created leaves no half-made session and unregisters a workspace added by this call', async () => {
+  const f = claudeFile('c1', jsonl(appTurn('0', '问', '答')))
+  vi.doMock('../chat/chatStore', async (orig) => ({ ...(await orig() as object), writeBinding: () => { throw new Error('disk full') } }))
+  const { continueExternal } = await import('./takeover')
+  const { readSessions } = await import('../chat/sessionStore')
+  const { existsSync: ex } = await import('node:fs')
+  const r = await continueExternal(disc('claude', 'c1', [f]), deps({ unregister: (c: string) => { registry = registry.filter(x => x !== c) } }))
+  vi.doUnmock('../chat/chatStore')
+  expect(r.ok).toBe(false)
+  expect(registry).toEqual([])
+  const live = readSessions(cwd).sessions.filter(s => !s.readonly)
+  expect(live.some(s => s.title === '重构登录')).toBe(false)
+  expect(live.every(s => !ex(join(cwd, '.forge', 'sessions', `${s.id}.jsonl`)))).toBe(true)
+})
+
+it('markContinuable checks at most 8 sessions at a time', async () => {
+  const { markContinuable } = await import('./takeover')
+  let live = 0, peak = 0
+  const check = async () => { live++; peak = Math.max(peak, live); await new Promise(r => setTimeout(r, 2)); live--; return true }
+  const out = await markContinuable(Array.from({ length: 30 }, (_, i) => disc('qoder', `q${i}`, [])), check)
+  expect(out).toHaveLength(30)
+  expect(out.every(s => s.continuable)).toBe(true)
+  expect(out.map(s => s.externalId)).toEqual(Array.from({ length: 30 }, (_, i) => `q${i}`))
+  expect(peak).toBe(8)
 })

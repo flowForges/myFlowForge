@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, appendFileSync, writeFileSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, appendFileSync, writeFileSync, statSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ChatMessage } from '@shared/types'
 import { wsForgeDir } from '../config/paths'
+import { logWarn } from '../log/appLog'
 
 export function sessionsDir(wsPath: string) { return join(wsForgeDir(wsPath), 'sessions') }
 export function sessionMessagesFile(wsPath: string, sessionId: string) { return join(sessionsDir(wsPath), `${sessionId}.jsonl`) }
@@ -119,6 +120,7 @@ export function readSession(wsPath: string, sessionId: string, agent: string): s
 export function writeSession(wsPath: string, sessionId: string, agent: string, resumeId: string): void {
   const map = readResume(wsPath)
   const entry = (map[sessionId] ??= {})[agent] ?? {}
+  noteImportedIdChange(sessionId, agent, entry, resumeId)
   // A different id is a different external transcript: the old position / path / own-writer marks no longer apply.
   ;(map[sessionId])[agent] = entry.resumeId !== undefined && entry.resumeId !== resumeId ? { ...forNewId(entry), resumeId } : { ...entry, resumeId }
   writeResume(wsPath, map)
@@ -129,16 +131,28 @@ export function readBinding(wsPath: string, sessionId: string, agent: string): B
   if (!e?.resumeId) return undefined
   return { ...e, resumeId: e.resumeId, origin: e.origin ?? 'forge' }
 }
-/** The session in this workspace whose `agent` binding has this resume id (first one), if any. */
-export function findBoundSession(wsPath: string, agent: string, resumeId: string): string | undefined {
-  for (const [sid, agents] of Object.entries(readResume(wsPath))) if (agents[agent]?.resumeId === resumeId) return sid
-  return undefined
+/** Every session in this workspace whose `agent` binding has this resume id. Entries of closed sessions stay in the file, so callers filter for live ones. */
+export function findBoundSessions(wsPath: string, agent: string, resumeId: string): string[] {
+  return Object.entries(readResume(wsPath)).filter(([, agents]) => agents[agent]?.resumeId === resumeId).map(([sid]) => sid)
+}
+/** Forget a session entirely: its messages file and its resume/binding entries (undoing a half-made session). */
+export function forgetSession(wsPath: string, sessionId: string): void {
+  try { rmSync(sessionMessagesFile(wsPath, sessionId), { force: true }) } catch { /* best effort */ }
+  const map = readResume(wsPath)
+  if (map[sessionId]) { delete map[sessionId]; writeResume(wsPath, map) }
+}
+/** A taken-over (imported) binding got a different id: the CLI started a fresh session, so the link to the official app's session is gone. Log it once per change. */
+function noteImportedIdChange(sessionId: string, agent: string, entry: ResumeEntry, next: string): void {
+  if (entry.origin === 'imported' && entry.resumeId !== undefined && entry.resumeId !== next) {
+    logWarn('session-link', `接管的会话换了外部 id: session ${sessionId} (${agent}) ${entry.resumeId} → ${next}`)
+  }
 }
 /** Merge binding fields; keys whose value is undefined keep their stored value. A new resumeId drops the per-transcript fields. */
 export function writeBinding(wsPath: string, sessionId: string, agent: string, patch: BindingMeta & { resumeId?: string }): void {
   const map = readResume(wsPath)
   const stored = (map[sessionId] ??= {})[agent] ?? {}
   const idChanged = patch.resumeId !== undefined && stored.resumeId !== undefined && patch.resumeId !== stored.resumeId
+  if (idChanged) noteImportedIdChange(sessionId, agent, stored, patch.resumeId!)
   const entry = { ...(idChanged ? forNewId(stored) : stored) } as Record<string, unknown>
   for (const [k, v] of Object.entries(patch)) if (v !== undefined) entry[k] = v
   ;(map[sessionId])[agent] = entry as ResumeEntry

@@ -23,7 +23,7 @@ const takenWs = mkdtempSync(join(tmpdir(), 'si-ws-'))
 afterAll(() => rmSync(takenWs, { recursive: true, force: true }))
 vi.mock('../sessionImport/takeover', () => ({
   continueExternal: async (s: any, d: any) => { continued.push([s, d]); return { ok: true, wsPath: takenWs, sessionId: 's-1', created: true, wsAdded: true } },
-  canContinue: async (s: any) => s.source !== 'cursor',
+  markContinuable: async (ss: any[]) => ss.map(s => ({ ...s, continuable: s.source !== 'cursor' })),
 }))
 vi.mock('../config/store', async (orig) => ({ ...(await orig() as object), readWorkspaceRegistry: () => [] }))
 

@@ -103,6 +103,16 @@ export function closeSession(wsPath: string, sessionId: string): SessionsFile {
   return write(wsPath, data)
 }
 
+/** Remove a writable session outright, even the last one (undoing a half-made session). Active falls back to the previous one. */
+export function dropSession(wsPath: string, sessionId: string): SessionsFile {
+  const data = readSessions(wsPath)
+  const idx = data.sessions.findIndex(s => s.id === sessionId && !s.readonly)
+  if (idx < 0) return data
+  data.sessions.splice(idx, 1)
+  if (data.activeSessionId === sessionId) data.activeSessionId = data.sessions[Math.max(0, idx - 1)]?.id ?? ''
+  return write(wsPath, data)
+}
+
 export function renameSession(wsPath: string, sessionId: string, title: string): SessionsFile {
   const data = readSessions(wsPath)
   const s = data.sessions.find(x => x.id === sessionId)
