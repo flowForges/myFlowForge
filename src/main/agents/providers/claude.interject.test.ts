@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, chmodSync, readFileSync, existsSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { makeClaudeProvider } from './claude'
+import { INTERJECT_SETTLE_MS } from './claudeBackground'
 import type { AgentSession, ChatBackgroundHooks, ChatCallbacks } from '../types'
 
 // 插话:一轮还在跑时,把排队的那条作为 user 消息写进同一个进程的 stdin(和正常发送同一个构造)。
@@ -88,11 +89,29 @@ describe('claude chat() — 插话', () => {
     expect(userLines().length).toBe(2)
   })
 
-  it('★写进去时 CLI 已经收尾:它为这条消息自己再起一轮 → 进程不能被杀,回复以 CLI 自己那一轮回来', async () => {
+  it('★写进去时 CLI 已经收尾、随即为它单起一轮:那一轮接在这一轮回复后面,它的 result 才收尾', async () => {
     const provider = makeClaudeProvider({ bin: 'node', preArgs: [fakeBin([
       [{ at: 0, obj: sys('init') }, { at: 10, obj: textDelta('A') }, { at: 100, obj: result('A') }],
       // 第二条(插话)没被这一轮吸收:result 之后 CLI 为它单起一轮
       [{ at: 300, obj: sys('init') }, { at: 300, obj: sys('status', { status: 'requesting' }) }, { at: 320, obj: textDelta('re:$MSG') }, { at: 340, obj: result('re') }],
+    ])], defaultModels: [] })
+    const a = collect()
+    let opened = 0
+    const background: ChatBackgroundHooks = { onRunning: () => {}, openTurn: () => { opened++ } }
+    const s = provider.chat!({ id: 'm1', prompt: 'first', model: 'opus-4.8', cwd: dir, background }, a.cb, process.env)
+    lives.push(s)
+    await waitFor(() => a.st.text === 'A')
+    expect(await s.interject!('second')).toBe(true)
+    expect(await settle(s.done, 3000)).toMatchObject({ ok: true })
+    expect(a.st.text).toBe('A\n\nre:second')
+    expect(opened).toBe(0)
+    expect(a.st.errors).toEqual([])
+  })
+
+  it('★CLI 很晚才为插话单起一轮(这一轮已收尾、没有下一条):进程没被杀,回复以 CLI 自己那一轮回来', async () => {
+    const provider = makeClaudeProvider({ bin: 'node', preArgs: [fakeBin([
+      [{ at: 0, obj: sys('init') }, { at: 10, obj: textDelta('A') }, { at: 100, obj: result('A') }],
+      [{ at: INTERJECT_SETTLE_MS + 600, obj: sys('init') }, { at: INTERJECT_SETTLE_MS + 600, obj: sys('status', { status: 'requesting' }) }, { at: INTERJECT_SETTLE_MS + 620, obj: textDelta('re:$MSG') }, { at: INTERJECT_SETTLE_MS + 640, obj: result('re') }],
     ])], defaultModels: [] })
     const a = collect()
     const adopted = collect()
@@ -105,10 +124,55 @@ describe('claude chat() — 插话', () => {
     lives.push(s)
     await waitFor(() => a.st.text === 'A')
     expect(await s.interject!('second')).toBe(true)
-    expect(await settle(s.done, 3000)).toMatchObject({ ok: true })
-    expect(await waitFor(() => adopted.st.done)).toBe(true)
+    expect(await settle(s.done, 4000)).toMatchObject({ ok: true })
+    expect(a.st.text).toBe('A')
+    expect(await waitFor(() => adopted.st.done, 4000)).toBe(true)
     expect(opened).toBe(1)
     expect(adopted.st.text).toBe('re:second')
+  })
+
+  it('★插话已被吸收(CLI 不再起新一轮)、下一条 C 接上来:C 压一会儿后照样写出、由 C 回答', async () => {
+    const provider = makeClaudeProvider({ bin: 'node', preArgs: [fakeBin([
+      [{ at: 0, obj: sys('init') }, { at: 10, obj: textDelta('A') }, { at: 100, obj: result('A') }],
+      [],
+      [{ at: 0, obj: sys('init') }, { at: 10, obj: textDelta('re:$MSG') }, { at: 30, obj: result('re') }],
+    ])], defaultModels: [] })
+    const background: ChatBackgroundHooks = { onRunning: () => {}, openTurn: () => {} }
+    const a = collect()
+    const s = provider.chat!({ id: 'm1', prompt: 'first', model: 'opus-4.8', cwd: dir, background }, a.cb, process.env)
+    lives.push(s)
+    await waitFor(() => a.st.text === 'A')
+    expect(await s.interject!('second')).toBe(true)
+    expect(await settle(s.done, 4000)).toMatchObject({ ok: true })
+    const c = collect()
+    const sc = provider.chat!({ id: 'm3', prompt: 'third', model: 'opus-4.8', cwd: dir, sessionId: S, background }, c.cb, process.env)
+    lives.push(sc)
+    expect(await settle(sc.done, 4000)).toMatchObject({ ok: true })
+    expect(c.st.text).toBe('re:third')
+    expect(userLines().map(m => m.message.content[0].text)).toEqual(['first', 'second', 'third'])
+  })
+
+  it('★C 接上来之后 CLI 才为插话单起一轮:C 压到那一轮的 result 才写,C 不丢、只答一次', async () => {
+    const late = INTERJECT_SETTLE_MS + 500
+    const provider = makeClaudeProvider({ bin: 'node', preArgs: [fakeBin([
+      [{ at: 0, obj: sys('init') }, { at: 10, obj: textDelta('A') }, { at: 100, obj: result('A') }],
+      [{ at: late, obj: sys('init') }, { at: late, obj: sys('status', { status: 'requesting' }) }, { at: late + 20, obj: textDelta('re:$MSG') }, { at: late + 40, obj: result('re') }],
+      [{ at: 0, obj: sys('init') }, { at: 10, obj: textDelta('re:$MSG') }, { at: 30, obj: result('re') }],
+    ])], defaultModels: [] })
+    const background: ChatBackgroundHooks = { onRunning: () => {}, openTurn: () => {} }
+    const a = collect()
+    const s = provider.chat!({ id: 'm1', prompt: 'first', model: 'opus-4.8', cwd: dir, background }, a.cb, process.env)
+    lives.push(s)
+    await waitFor(() => a.st.text === 'A')
+    expect(await s.interject!('second')).toBe(true)
+    expect(await settle(s.done, 4000)).toMatchObject({ ok: true })
+    const c = collect()
+    const sc = provider.chat!({ id: 'm3', prompt: 'third', model: 'opus-4.8', cwd: dir, sessionId: S, background }, c.cb, process.env)
+    lives.push(sc)
+    expect(await settle(sc.done, 5000)).toMatchObject({ ok: true })
+    expect(c.st.text).toBe('re:second\n\nre:third')
+    expect(c.st.errors).toEqual([])
+    expect(userLines().map(m => m.message.content[0].text)).toEqual(['first', 'second', 'third'])
   })
 
   it('没有插话时行为不变:result 一到就回收进程', async () => {

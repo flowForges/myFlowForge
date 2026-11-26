@@ -25,6 +25,12 @@
 /** 停车后后台任务已经全部结束、但 CLI 还没起新一轮时,最多再等多久。实测新一轮在通知后 ~0.2s 内开始。
  *  ★这也是空转进程的上限:后台任务还在跑时没有任何墙钟上限,跑完了没动静才回收。 */
 export const BG_GRACE_MS = 15_000
+/**
+ * 插话之后这一轮的 result 到了:先等这么久看 CLI 会不会为插话那条单起一轮(实测新一轮 ~0.2s 就起)。
+ * 起了 → 它接在这一轮的回复后面,这一轮等它的 result 才收尾;没起 → 当作已被这一轮吸收。
+ * 下一条用户消息接上来时插话还没着落,也最多压这么久。
+ */
+export const INTERJECT_SETTLE_MS = 1_500
 
 /** 后台启动回执的开头(2.1.285 原文:「Async agent launched successfully. (This tool result is internal metadata …」)。 */
 const LAUNCH_RECEIPT = /^\s*Async agent launched successfully/
@@ -78,6 +84,14 @@ export interface BackgroundGate {
    * 那样 CLI 会为它单起一轮。所以这一轮的 result 不杀,停车等一个宽限期 —— 起了新一轮就是它,没起就是已经吸收了。
    */
   expectInput(): void
+  /** 插话写进去之后,这一轮的 result 还没到(这一轮的 result 先看它)。 */
+  readonly inputPending: boolean
+  /**
+   * 因为插话停的车,而 CLI 还没起新一轮:那条插话可能还没被消化(CLI 随时会为它单起一轮)。
+   * ★这时接上来的下一条用户消息要先压着,否则插话那一轮的回复和 result 会落到它头上(见 claude.ts attach)。
+   * 看到主代理新一轮开始(init / requesting)就清掉。
+   */
+  readonly awaitingInput: boolean
   clear(): void
 }
 
@@ -98,12 +112,13 @@ export function makeBackgroundGate(opts: {
   let parked = false
   let finished = false
   let inputPending = false
+  let awaiting = false
   let grace: ReturnType<typeof setTimeout> | null = null
 
   const cancelGrace = () => { if (grace) { clearTimeout(grace); grace = null } }
   const finish = () => {
     if (finished) return
-    finished = true; parked = false; cancelGrace()
+    finished = true; parked = false; awaiting = false; cancelGrace()
     opts.onFinish()
   }
   // 停车期间:后台活全干完了还没起新一轮 → 起宽限计时;又有活了 → 撤掉。
@@ -153,6 +168,7 @@ export function makeBackgroundGate(opts: {
           if (sub) break
           // 主代理发起一次请求 = 之前到的通知都已经随这次请求送进模型。
           if (obj.subtype === 'status' && obj.status === 'requesting') undelivered.clear()
+          if (obj.subtype === 'init' || obj.status === 'requesting') awaiting = false
           // 停车中看到新一轮开始 → 解除停车,这一轮的 result 再重新判。
           if (parked && (obj.subtype === 'init' || obj.status === 'requesting')) {
             parked = false; cancelGrace(); opts.onResume?.()
@@ -167,6 +183,7 @@ export function makeBackgroundGate(opts: {
       const expecting = inputPending
       inputPending = false
       if (running.size === 0 && undelivered.size === 0 && !expecting) { finish(); return }
+      if (expecting) awaiting = true
       if (!parked) { parked = true; opts.onPark?.(running.size) }
       reviewGrace()
     },
@@ -176,6 +193,8 @@ export function makeBackgroundGate(opts: {
     isRunningTask: (id) => running.has(id),
     unpark() { if (!finished) { parked = false; cancelGrace() } },
     expectInput() { if (!finished) inputPending = true },
-    clear() { finished = true; parked = false; cancelGrace() },
+    get inputPending() { return inputPending },
+    get awaitingInput() { return awaiting },
+    clear() { finished = true; parked = false; awaiting = false; cancelGrace() },
   }
 }

@@ -210,4 +210,22 @@ describe('parseTaskNotification', () => {
     vi.advanceTimersByTime(1)
     expect(finish).toHaveBeenCalledOnce()
   })
+
+  it('awaitingInput:插话停的车、CLI 还没起新一轮时为 true;新一轮开始 / 回收后为 false', () => {
+    const g = makeBackgroundGate({ onFinish: () => {} })
+    expect(g.awaitingInput).toBe(false)
+    g.expectInput()
+    expect(g.inputPending).toBe(true)
+    g.result()
+    expect(g.inputPending).toBe(false)
+    expect(g.awaitingInput).toBe(true)
+    g.unpark()                                  // 下一条用户消息接上来:插话仍没着落
+    expect(g.awaitingInput).toBe(true)
+    g.feed(sys('init'))
+    expect(g.awaitingInput).toBe(false)
+    const g2 = makeBackgroundGate({ onFinish: () => {} })
+    g2.expectInput(); g2.result()
+    vi.advanceTimersByTime(BG_GRACE_MS)
+    expect(g2.awaitingInput).toBe(false)
+  })
 })

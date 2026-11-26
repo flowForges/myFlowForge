@@ -13,7 +13,7 @@ import { readClaudeModelsLive } from './claudeModels'
 import { logError, appLog } from '../../log/appLog'
 import { makeIdleWatchdog, CHAT_IDLE_MS, CHAT_STALL_KILL_MS, type IdleWatchdog } from '../idleWatchdog'
 import { makeHookWatch, HOOK_SLOW_MS } from './claudeHooks'
-import { makeBackgroundGate, parseTaskNotification, isReplayedNotificationResult } from './claudeBackground'
+import { makeBackgroundGate, parseTaskNotification, isReplayedNotificationResult, INTERJECT_SETTLE_MS } from './claudeBackground'
 import { CLAUDE_CONTROL_FLAGS, controlInitLine, userMessageLine, parseCanUseTool, toolTarget, controlAllowLine, controlDenyLine, parseAskQuestions, controlAnswerLine, askGateTitle, gateTitle, unhandledControlRequest, controlErrorLine, setModelLine, setPermissionModeLine, parseControlResponse, type CanUseTool } from './claudeControl'
 
 // The claude CLI's `--model` only accepts an alias ('opus'/'sonnet'/'haiku'/'fable') or a
@@ -408,7 +408,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         if (dying || exited) return
         dying = true
         adoptGen++       // 停了就是停了:还排着队没开的那条回复不再开
-        wd.clear(); hooks.clear(); bg.clear()
+        wd.clear(); hooks.clear(); bg.clear(); clearSettle(); clearInterjectHold()
         appLog('info', 'claude', `chat 停止后台进程 · 还有 ${bg.running} 个任务`)
         try { killTree(child) } catch { /* already gone */ }
         reportRunning(0)
@@ -509,6 +509,16 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       let holdForAuto = false
       let ctlWaiting = false
       let needSep = false
+      /**
+       * ★★插话之后这一轮的 result 到了,但 result 可能是在 CLI 读到插话之前就出的 —— 那样 CLI 会为它单起一轮。
+       *  settleTimer 在跑 = 这一轮先不收尾,等 INTERJECT_SETTLE_MS:新一轮起了就接在这一轮回复后面(插话本来就属于这一轮),
+       *  等它的 result 再收尾;没起 = 已被吸收,照常收尾(那时 bg 还记着插话,进程停车不杀,见 bg.awaitingInput)。
+       */
+      let settleTimer: ReturnType<typeof setTimeout> | null = null
+      const clearSettle = () => { if (settleTimer) { clearTimeout(settleTimer); settleTimer = null } }
+      // 下一条用户消息接上来时插话还没着落(bg.awaitingInput):这条先压着,最多压 INTERJECT_SETTLE_MS。
+      let interjectHold: ReturnType<typeof setTimeout> | null = null
+      const clearInterjectHold = () => { if (interjectHold) { clearTimeout(interjectHold); interjectHold = null } }
       const flushPending = () => {
         if (!pendingLine || holdForAuto || ctlWaiting) return
         try { child.stdin?.write(pendingLine + '\n') } catch { /* stdin gone */ }
@@ -616,7 +626,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         hooks = makeTurnHooks()
         wd = makeTurnWatchdog()
         if (lingerCap) { clearTimeout(lingerCap); lingerCap = null }
-        clearAutoWatch()
+        clearAutoWatch(); clearSettle(); clearInterjectHold()
         clearLingerKey()
         bg.unpark()
       }
@@ -663,6 +673,18 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         // ★先记下这条消息再回放:攒的事件里可能就有 result,它要负责把消息写出去。
         pendingLine = userMessageLine(prompt)
         holdForAuto = wasAuto
+        // ★上一轮插过话、CLI 还没为它起新一轮:那一轮随时会来,它的回复和 result 不能算到这条消息头上 —— 压着,
+        //  等那一轮的 result(下面 handle 里 pendingLine 那条)再写;一直不来 = 已被吸收,到点就写。
+        if (!wasAuto && bg.awaitingInput) {
+          holdForAuto = true
+          interjectHold = setTimeout(() => {
+            interjectHold = null
+            // 插话那一轮已经起了(gate 清掉了 awaiting):等它的 result 去写,这里不抢
+            if (seq !== turnSeq || !pendingLine || !holdForAuto || !bg.awaitingInput) return
+            holdForAuto = false
+            flushPending()
+          }, INTERJECT_SETTLE_MS)
+        }
         const wantModel = cliModel(next.model)
         const wantPerm = cliPermissionMode(next)
         const changes: Promise<void>[] = []
@@ -759,6 +781,14 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         else if (!adoptionRequested) armAutoWatch()
       }
       const handle = async (obj: any) => {
+        // ★插话之后的 result 已到、正在等:主代理又起了一轮 = CLI 为插话那条单起的,接在这一轮后面,等它的 result 收尾。
+        if (settleTimer && typeof obj?.parent_tool_use_id !== 'string'
+          && ((obj?.type === 'system' && (obj.subtype === 'init' || (obj.subtype === 'status' && obj.status === 'requesting'))) || obj?.type === 'stream_event' || obj?.type === 'assistant')) {
+          clearSettle()
+          turnOk = null; resultError = ''; sawNotification = false
+          needSep = sawAssistant
+          appLog('info', 'claude', 'chat 插话那条被 CLI 单起了一轮:接在这一轮的回复后面')
+        }
         // 钩子事件先过一道:它只影响「现在在等谁」的播报,不参与下面任何解析分支。
         if (hooks.feed(obj)) return
         // 后台子代理真正跑完:它那张卡这时才算完成(启动时的 tool_result 只是回执,见下面 subagent-result)。
@@ -853,6 +883,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
           // 这个 result 是 CLI 自己那一轮的,压着的用户消息现在才写;这一轮(界面上)还没结束。
           if (pendingLine) {
             holdForAuto = false; sawNotification = false
+            clearInterjectHold()
             flushPending()
             return
           }
@@ -864,6 +895,12 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
           if (!turnOk && typeof obj.result === 'string') resultError = obj.result.trim()
           // 共商席位:没人看得见也没人停得了,一轮结束连后台任务一起收掉。
           if (task.endWithTurn) { dying = true; bg.clear(); try { killTree(child) } catch { /* already gone */ } return }
+          // 这一轮插过话:先别收尾,看 CLI 会不会为插话单起一轮(见 settleTimer)。到点没起就照常收尾。
+          if (bg.inputPending) {
+            clearSettle()
+            settleTimer = setTimeout(() => { settleTimer = null; if (!detached && !exited) bg.result() }, INTERJECT_SETTLE_MS)
+            return
+          }
           bg.result()
           return
         }
@@ -986,7 +1023,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         return { ok, summary: ok ? '完成' : `退出码 ${res.exitCode}` }
       }
       const cleanupOnExit = () => {
-        wd.clear(); hooks.clear(); bg.clear(); clearAutoWatch()
+        wd.clear(); hooks.clear(); bg.clear(); clearAutoWatch(); clearSettle(); clearInterjectHold()
         if (lingerCap) clearTimeout(lingerCap)
         clearLingerKey(); untrackLive()
         for (const r of [...pendingCtl.values()]) r('process exited')
