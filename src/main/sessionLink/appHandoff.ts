@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { readBinding } from '../chat/chatStore'
+import { appLog } from '../log/appLog'
 import { asExtProvider } from './binding'
 import { appName } from './occupancy'
 import { isOwnTurnLive } from './ownTurns'
@@ -75,7 +76,9 @@ export async function handOff(ws: string, sid: string, agent: string, deps: AppH
     if (a.p === 'claude') await deps.stopClaude?.(ws, a.id)
     else if (a.p === 'codex') await deps.codexReaped?.(a.id)
     // qoder:进程每轮都退出,没东西可放。
-  } catch { /* 进程刚好没了 */ }
+  } catch (e) {
+    appLog('warn', 'session-link', `交给 ${a.app} 前没能收掉我方进程,照样打开`, String((e as Error)?.message ?? e))
+  }
   // 2. 打开官方 App。
   try { await (deps.openApp ?? (() => Promise.reject(new Error('no opener'))))(a.app) } catch { return { ok: false, code: 'open_failed' } }
   // 3. 会话 id 进剪贴板。

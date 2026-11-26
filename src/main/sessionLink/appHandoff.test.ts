@@ -114,6 +114,23 @@ it('open failing: reported, nothing copied; a failing stop does not block the ha
   expect(await handOff(ws, 's1', 'claude', m.deps)).toMatchObject({ ok: true })
 })
 
+it('a failing let-go is logged, and the hand-off still goes through (claude and codex)', async () => {
+  const appLog = vi.fn()
+  vi.doMock('../log/appLog', () => ({ appLog }))
+  const { writeSession } = await import('../chat/chatStore')
+  const { handOff } = await import('./appHandoff')
+  writeSession(ws, 's1', 'claude', 'c-1')
+  writeSession(ws, 's1', 'codex', 'th-1')
+  const m = mkDeps({ stopClaude: vi.fn(async () => { throw new Error('gone') }), codexReaped: vi.fn(async () => { throw new Error('stuck') }) })
+  expect(await handOff(ws, 's1', 'claude', m.deps)).toMatchObject({ ok: true })
+  expect(await handOff(ws, 's1', 'codex', m.deps)).toMatchObject({ ok: true })
+  expect(m.deps.openApp).toHaveBeenCalledTimes(2)
+  expect(appLog).toHaveBeenCalledTimes(2)
+  expect(appLog.mock.calls[0]).toEqual(['warn', 'session-link', expect.stringContaining('Claude'), expect.stringContaining('gone')])
+  expect(appLog.mock.calls[1]).toEqual(['warn', 'session-link', expect.stringContaining('Codex'), expect.stringContaining('stuck')])
+  vi.doUnmock('../log/appLog')
+})
+
 it('default opener runs `open -a <App>` via execFile (no shell); detection looks in the Applications folders', async () => {
   const execFile = vi.fn((_cmd: string, _args: string[], cb: (e: Error | null) => void) => cb(null))
   const { openAppWith, appInstalledIn } = await import('./appHandoff')

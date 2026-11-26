@@ -1,5 +1,5 @@
 import './sessionTabs.css'
-import { useState, useRef, useEffect, type MouseEvent as ReactMouseEvent } from 'react'
+import { useState, useRef, useEffect, useCallback, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import type { ChatSession, ContextUsage, HandoffTarget } from '@shared/types'
 import { SessionIdsPanel } from './SessionIdsPanel'
@@ -14,27 +14,38 @@ const OUT_ICON = (
 /** 「已复制会话 ID」chip 停留多久。 */
 const COPIED_MS = 2000
 
-interface HandoffMenuState { sessionId: string; x: number; y: number; items: HandoffTarget[] }
+interface HandoffMenuState { sessionId: string; x: number; y: number; items: HandoffTarget[]; tab: HTMLElement | null }
 
 // 右键会话标签:「在 <App> 中继续」。只列主进程说能交接的(有绑定、darwin、App 装了);我方这一轮在途时灰掉。
-function HandoffMenu({ menu, onPick, onClose }: { menu: HandoffMenuState; onPick: (t: HandoffTarget) => void; onClose: () => void }) {
+function HandoffMenu({ menu, onPick, onClose }: { menu: HandoffMenuState; onPick: (t: HandoffTarget) => void; onClose: (refocus: boolean) => void }) {
   const ref = useRef<HTMLDivElement>(null)
+  const enabled = () => Array.from(ref.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])
+  useEffect(() => { enabled()[0]?.focus() }, [])
   useEffect(() => {
-    const onDoc = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) onClose() }
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    const onDoc = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) onClose(false) }
+    const onResize = () => onClose(false)
     document.addEventListener('mousedown', onDoc)
-    document.addEventListener('keydown', onKey)
-    window.addEventListener('resize', onClose)
+    window.addEventListener('resize', onResize)
     return () => {
       document.removeEventListener('mousedown', onDoc)
-      document.removeEventListener('keydown', onKey)
-      window.removeEventListener('resize', onClose)
+      window.removeEventListener('resize', onResize)
     }
   }, [onClose])
+  const onKeyDown = (e: ReactKeyboardEvent) => {
+    if (e.key === 'Escape' || e.key === 'Tab') { e.preventDefault(); onClose(true); return }
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Home' && e.key !== 'End') return
+    e.preventDefault()
+    const list = enabled()
+    if (!list.length) return
+    const i = list.indexOf(document.activeElement as HTMLButtonElement)
+    const next = e.key === 'Home' ? 0 : e.key === 'End' ? list.length - 1
+      : e.key === 'ArrowDown' ? (i + 1) % list.length : (i - 1 + list.length) % list.length
+    list[next].focus()
+  }
   return createPortal(
-    <div ref={ref} className="ws-menu-pop sess-ho-pop" role="menu" style={{ left: menu.x, top: menu.y }}>
+    <div ref={ref} className="ws-menu-pop sess-ho-pop" role="menu" style={{ left: menu.x, top: menu.y }} onKeyDown={onKeyDown}>
       {menu.items.map(t => (
-        <button key={t.agent} className="ws-menu-item" role="menuitem" disabled={t.disabled} onClick={() => onPick(t)}>
+        <button key={t.agent} className="ws-menu-item" role="menuitem" tabIndex={-1} disabled={t.disabled} onClick={() => onPick(t)}>
           <span className="wm-ico">{OUT_ICON}</span>
           {`在 ${t.app} 中继续`}
         </button>
@@ -80,16 +91,36 @@ export function SessionTabs({ sessions, activeSessionId, onSwitch, onClose, onRe
   const [copied, setCopied] = useState(false)
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => () => { if (copiedTimer.current) clearTimeout(copiedTimer.current) }, [])
-  const openHandoff = (e: ReactMouseEvent, s: ChatSession) => {
-    if (archived || s.readonly || !workspacePath || !window.forge?.sessionHandoffTargets) return
-    e.preventDefault()
-    const { clientX: x, clientY: y } = e
+  // 只认最后一次请求的答复:连着右键两个标签,先发的那个晚回来也不能把菜单换回去。
+  const handoffReq = useRef(0)
+  const canHandoff = (s: ChatSession) => !archived && !s.readonly && !!workspacePath && !!window.forge?.sessionHandoffTargets
+  const openHandoff = (s: ChatSession, x: number, y: number, tab: HTMLElement | null) => {
+    if (!workspacePath) return
+    const req = ++handoffReq.current
     void window.forge.sessionHandoffTargets({ workspacePath, sessionId: s.id }).then(items => {
-      setHandoffMenu(items?.length ? { sessionId: s.id, x, y, items } : null)
-    }).catch(() => setHandoffMenu(null))
+      if (req !== handoffReq.current) return
+      setHandoffMenu(items?.length ? { sessionId: s.id, x, y, items, tab } : null)
+    }).catch(() => { if (req === handoffReq.current) setHandoffMenu(null) })
+  }
+  const handoffTab = useRef<HTMLElement | null>(null)
+  handoffTab.current = handoffMenu?.tab ?? null
+  const closeHandoff = useCallback((refocus: boolean) => {
+    handoffReq.current++
+    if (refocus) handoffTab.current?.focus()
+    setHandoffMenu(null)
+  }, [])
+  // 键盘:聚焦的标签上按菜单键 / Shift+F10,菜单开在标签下沿。
+  const onTabKeyDown = (e: ReactKeyboardEvent<HTMLElement>, s: ChatSession) => {
+    if (e.target !== e.currentTarget) return   // 改名输入框里的按键不算
+    if (!(e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) || !canHandoff(s)) return
+    e.preventDefault()
+    const tab = e.currentTarget
+    const r = tab.getBoundingClientRect()
+    openHandoff(s, r.left, r.bottom + 4, tab)
   }
   const pickHandoff = (t: HandoffTarget) => {
     const m = handoffMenu
+    handoffReq.current++
     setHandoffMenu(null)
     if (!m || !workspacePath) return
     void window.forge.sessionHandoff({ workspacePath, sessionId: m.sessionId, agent: t.agent }).then(r => {
@@ -121,7 +152,9 @@ export function SessionTabs({ sessions, activeSessionId, onSwitch, onClose, onRe
               className={'sess-tab' + (s.id === activeSessionId ? ' on' : '') + (isReadOnly ? ' si-ro' : '')}
               onClick={() => onSwitch(s.id)}
               onDoubleClick={e => { if (!isReadOnly) { e.stopPropagation(); beginRename(s) } }}
-              onContextMenu={e => openHandoff(e, s)}
+              aria-haspopup={canHandoff(s) ? 'menu' : undefined}
+              onContextMenu={e => { if (!canHandoff(s)) return; e.preventDefault(); openHandoff(s, e.clientX, e.clientY, e.currentTarget) }}
+              onKeyDown={e => onTabKeyDown(e, s)}
             >
               {isReadOnly && s.external && (
                 <span className="si-src-badge" title={s.external.source}>{s.external.source.slice(0, 2).toUpperCase()}</span>
@@ -154,7 +187,7 @@ export function SessionTabs({ sessions, activeSessionId, onSwitch, onClose, onRe
           )})}
         </div>
         {copied && <span className="sess-chip" role="status">已复制会话 ID</span>}
-        {handoffMenu && <HandoffMenu menu={handoffMenu} onPick={pickHandoff} onClose={() => setHandoffMenu(null)} />}
+        {handoffMenu && <HandoffMenu menu={handoffMenu} onPick={pickHandoff} onClose={closeHandoff} />}
         <div ref={idsWrapRef} className="sess-ids-wrap">
           <button className={'sess-ids-btn' + (idsOpen ? ' on' : '')} title="查看当前会话的 Agent Session ID" onClick={() => setIdsOpen(o => !o)}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.2 1.2"/><path d="M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1.2-1.2"/></svg>
