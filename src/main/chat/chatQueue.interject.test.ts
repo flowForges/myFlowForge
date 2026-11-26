@@ -182,3 +182,21 @@ describe('ChatQueue.interject', () => {
     expect(last().queue[0].interjectable).toBe(false)
   })
 })
+
+describe('ChatQueue.interject · 只能插进同一个 provider 的那一轮', () => {
+  it('排给 codex 的那条不能插进正在跑的 claude 一轮:interjectable=false,interject → unsupported,仍在队列里', async () => {
+    const { q, last } = setup()
+    const inj = vi.fn(async () => true)
+    q.enqueue(mkS('s1', 'A'), '你')                              // claude 在跑
+    q.enqueue(mkS('s1', 'B', { agent: 'codex', agentLabel: 'Codex' }), '你')
+    q.enqueue(mkS('s1', 'C'), '你')
+    q.registerActive('/w', 's1', () => {}, inj)
+    const [b, c] = last().queue
+    expect(b.interjectable).toBe(false)
+    expect(c.interjectable).toBe(true)
+    expect(await q.interject('/w', 's1', b.id)).toEqual({ ok: false, code: 'unsupported' })
+    expect(inj).not.toHaveBeenCalled()
+    expect(q.snapshot('/w').queue.map(x => x.text)).toEqual(['B', 'C'])
+    expect(await q.interject('/w', 's1', c.id)).toEqual({ ok: true })
+  })
+})

@@ -9,6 +9,9 @@ export type InterjectFn = (text: string, attachments?: Attachment[], via?: strin
 // ★runningPayload 不放进 running:running 原样广播给渲染端/手机,这里只是主进程自己要查的那份载荷。
 interface Lane { busy: boolean; queue: QueuedTask[]; running: { id: string; text: string; sessionId: string; provider: string } | null; runningPayload?: ChatSendPayload; activeCancel: (() => void) | null; activeInterject: InterjectFn | null; background: number; backgroundStop: (() => void) | null; adopted: { provider: string; run: () => Promise<unknown> }[]; runningAdopted: boolean }
 
+/** 排着的这条和正在跑的那一轮是同一个 provider(插话只能并进同一个 provider 的那一轮)。 */
+const sameProvider = (lane: Lane, t: QueuedTask): boolean => !!lane.running && lane.running.provider === t.payload.agent
+
 export type RunTurn = (payload: ChatSendPayload) => Promise<unknown>
 export type Broadcast = (channel: string, payload: unknown) => void
 
@@ -135,6 +138,8 @@ export class ChatQueue {
     if (!lane.busy) return { ok: false, code: 'not_running' }
     const fn = lane.activeInterject
     if (!fn) return { ok: false, code: 'unsupported' }
+    // ★排给别的 provider 的那条(比如 codex)不能写进正在跑的 claude 那一轮:它会被错的模型回答。
+    if (!sameProvider(lane, lane.queue.find(t => t.id === queuedId)!)) return { ok: false, code: 'unsupported' }
     const item = this.take(ws, sid, queuedId)
     if (!item) return { ok: false, code: 'gone' }
     let ok = false
@@ -232,7 +237,7 @@ export class ChatQueue {
   private buildEvent(ws: string): ChatQueueEvent {
     const lanes = [...this.lanes(ws).values()]
     const running = lanes.map(l => l.running).filter((r): r is NonNullable<typeof r> => !!r)
-    const queue = lanes.flatMap(l => l.queue.map(t => ({ t, interjectable: l.busy && !!l.activeInterject })))
+    const queue = lanes.flatMap(l => l.queue.map(t => ({ t, interjectable: l.busy && !!l.activeInterject && sameProvider(l, t) })))
     return {
       workspacePath: ws,
       busy: running.length > 0,
