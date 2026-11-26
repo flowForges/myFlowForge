@@ -223,6 +223,25 @@ describe('claude chat() — 插话', () => {
     expect(c.st.text).toBe('re:third')
   })
 
+  it('★R8 一轮只接一条在途插话:上一条还没着落时第二条 → false(留在队列);上一条并进来之后再插 → 接受,一条不丢', async () => {
+    const provider = makeClaudeProvider({ bin: 'node', preArgs: [fakeBin([
+      [{ at: 0, obj: sys('init') }, { at: 10, obj: textDelta('A') }, { at: 100, obj: result('A') }],
+      [{ at: 300, obj: sys('init') }, { at: 300, obj: sys('status', { status: 'requesting' }) }, { at: 320, obj: textDelta('re:$MSG') }, { at: 900, obj: result('re') }],
+      [{ at: 100, obj: sys('init') }, { at: 100, obj: sys('status', { status: 'requesting' }) }, { at: 120, obj: textDelta('re:$MSG') }, { at: 150, obj: result('re') }],
+    ])], defaultModels: [] })
+    const a = collect()
+    const s = provider.chat!({ id: 'm1', prompt: 'first', model: 'opus-4.8', cwd: dir }, a.cb, process.env)
+    lives.push(s)
+    await waitFor(() => a.st.text === 'A')
+    expect(await s.interject!('second')).toBe(true)
+    expect(await s.interject!('third')).toBe(false)          // 上一条还在途:不收,调用方放回队列
+    expect(await waitFor(() => a.st.text.includes('re:second'))).toBe(true)
+    expect(await s.interject!('third')).toBe(true)           // 上一条已经并进来了:可以再插
+    expect(await settle(s.done, 5000)).toMatchObject({ ok: true })
+    expect(a.st.text).toBe('A\n\nre:second\n\nre:third')
+    expect(userLines().map(m => m.message.content[0].text)).toEqual(['first', 'second', 'third'])
+  })
+
   it('没有插话时行为不变:result 一到就回收进程', async () => {
     const provider = makeClaudeProvider({ bin: 'node', preArgs: [fakeBin([[
       { at: 0, obj: sys('init') }, { at: 10, obj: textDelta('A') }, { at: 50, obj: result('A') },

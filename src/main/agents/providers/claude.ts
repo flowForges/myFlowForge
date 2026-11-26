@@ -638,6 +638,10 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
        */
       const interjectInto = (seq: number) => async (text: string, attachments?: ChatTask['attachments']): Promise<boolean> => {
         if (seq !== turnSeq || detached || dying || exited || turnOk !== null || pendingLine || task.endWithTurn) return false
+        // ★R8:一轮只接一条在途插话。gate 只记得「有一条」:两条都写进去、CLI 又把它们各起一轮时,第一轮并进来就
+        //  清掉了记号,它的 result 收尾杀进程,第二条那一轮还没开始 —— 已经报了 ok、也不在队列里,就丢了。
+        //  上一条还没着落 → false,调用方放回队列;并进来之后(inputConsumed)或者下一轮再发。
+        if (bg.inputPending) return false
         const stdin = child.stdin
         if (!stdin || stdin.destroyed || !stdin.writable) return false
         try { stdin.write(userMessageLine(buildChatPrompt({ ...task, prompt: text, attachments })) + '\n') } catch { return false }
