@@ -458,6 +458,26 @@ describe('launch / focus / key(app)', () => {
     expect(s.gates[0].action).toMatchObject({ kind: 'focus', app: { name: 'WorkBuddy' }, actLabel: '聚焦' })
   })
 
+  // review 2026-11: focus can now reopen / raise a window, so it must never be looser than launch on the same app
+  it('focus gets exactly the approval treatment launch gets, in every mode and app class', async () => {
+    const cases: { mode: 'ask' | 'allow'; app: AxApp; settings?: Partial<ComputerUseSettings> }[] = []
+    for (const mode of ['ask', 'allow'] as const) {
+      for (const app of [WB, TERM, PW]) cases.push({ mode, app })
+      cases.push({ mode, app: WB, settings: { extraAskAlways: [WB.bundleId] } })
+      cases.push({ mode, app: WB, settings: { extraBlocked: [WB.bundleId] } })
+    }
+    for (const c of cases) {
+      const outcome = async (op: 'launch' | 'focus') => {
+        const s = setup({ mode: c.mode, settings: c.settings })
+        s.decisions.push('deny')
+        const r = await s.run(op, { app: op === 'launch' ? c.app.bundleId : c.app.name })
+        return { gated: s.gates.length, ok: r.ok, code: r.ok ? undefined : r.code }
+      }
+      const label = `${c.mode} ${c.app.name} ${JSON.stringify(c.settings ?? {})}`
+      expect({ label, ...(await outcome('focus')) }).toEqual({ label, ...(await outcome('launch')) })
+    }
+  })
+
   it('computer_key with app → driver.appKey on that pid; without app it stays on the v1 path', async () => {
     const s = setup({ mode: 'allow' })
     s.driver.setAppKeyResult({ via: 'menu', delivery: 'delivered_verified' })
