@@ -10,9 +10,9 @@ export interface SessionSource {
   readMessages(s: DiscoveredSession): ImportedMessage[]
 }
 
-const TAG_NOISE = /^<(local-command|command-name|command-message)/
+export const TAG_NOISE = /^<(local-command|command-name|command-message)/
 
-function textOf(content: unknown): string {
+export function textOf(content: unknown): string {
   if (typeof content === 'string') return content
   if (Array.isArray(content)) return content.filter((b: any) => b?.type === 'text' && typeof b.text === 'string').map((b: any) => b.text).join('\n')
   return ''
@@ -22,6 +22,11 @@ interface Parsed { who?: 'user' | 'ai'; text?: string; cwd?: string; ts?: number
 export function parseClaudeLine(line: string): Parsed {
   let o: any
   try { o = JSON.parse(line) } catch { return {} }
+  return parseClaudeObj(o)
+}
+/** 一条已解析的 Claude 记录 → 显示用的 user/ai 文本(会话互通的增量读取也复用它)。 */
+export function parseClaudeObj(o: any): Parsed {
+  if (!o || typeof o !== 'object') return {}
   const ts = o.timestamp ? Date.parse(o.timestamp) : undefined
   const cwd = typeof o.cwd === 'string' ? o.cwd : undefined
   if (o.isMeta) return { cwd, ts }

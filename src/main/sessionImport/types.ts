@@ -8,12 +8,24 @@ export interface SourceRoots {
   qoder: string    // ~/.qoder/logs/sessions
 }
 
-export function defaultRoots(home = homedir()): SourceRoots {
+type Env = Record<string, string | undefined>
+
+/** 三家 CLI 的配置根目录;遵循各自的环境变量(只读取,不覆盖)。QODER_HOME 是 QODER_CONFIG_DIR 的别名。 */
+export function configHomes(home = homedir(), env: Env = process.env): { claude: string; codex: string; qoder: string } {
   return {
-    claude: join(home, '.claude', 'projects'),
-    codex: join(home, '.codex', 'sessions'),
+    claude: env.CLAUDE_CONFIG_DIR || join(home, '.claude'),
+    codex: env.CODEX_HOME || join(home, '.codex'),
+    qoder: env.QODER_CONFIG_DIR || env.QODER_HOME || join(home, '.qoder'),
+  }
+}
+
+export function defaultRoots(home = homedir(), env: Env = process.env): SourceRoots {
+  const h = configHomes(home, env)
+  return {
+    claude: join(h.claude, 'projects'),
+    codex: join(h.codex, 'sessions'),
     cursor: join(home, '.cursor', 'projects'),
-    qoder: join(home, '.qoder', 'logs', 'sessions'),
+    qoder: join(h.qoder, 'logs', 'sessions'),
   }
 }
 

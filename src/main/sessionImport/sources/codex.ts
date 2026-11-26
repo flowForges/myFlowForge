@@ -4,13 +4,18 @@ import type { DiscoveredSession, ImportedMessage } from '@shared/types'
 import type { SessionSource } from './claude'
 
 interface Parsed { kind: 'meta' | 'msg' | 'none'; id?: string; cwd?: string; ts?: number; who?: 'user' | 'ai'; text?: string }
-function blockText(content: unknown): string {
+export function blockText(content: unknown): string {
   if (!Array.isArray(content)) return ''
   return content.filter((b: any) => typeof b?.text === 'string').map((b: any) => b.text).join('\n')
 }
 export function parseCodexLine(line: string): Parsed {
   let o: any
   try { o = JSON.parse(line) } catch { return { kind: 'none' } }
+  return parseCodexObj(o)
+}
+/** 一条已解析的 Codex rollout 记录 → meta / user/ai 文本(会话互通的增量读取也复用它)。 */
+export function parseCodexObj(o: any): Parsed {
+  if (!o || typeof o !== 'object') return { kind: 'none' }
   const ts = o.timestamp ? Date.parse(o.timestamp) : undefined
   if (o.type === 'session_meta') return { kind: 'meta', id: o.payload?.id, cwd: o.payload?.cwd, ts: o.payload?.timestamp ? Date.parse(o.payload.timestamp) : ts }
   if (o.type === 'response_item' && o.payload?.type === 'message') {
