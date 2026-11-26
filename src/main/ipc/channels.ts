@@ -142,6 +142,9 @@ export const CH = {
   chatStop: 'chat:stop',
   sessionList: 'session:list',
   sessionNew: 'session:new',
+  // 「在 <App> 中继续」:菜单项列表 / 交接(只接本机窗口)。
+  sessionHandoffTargets: 'session:handoff-targets',
+  sessionHandoff: 'session:handoff',
   sessionSwitch: 'session:switch',
   sessionClose: 'session:close',
   sessionRename: 'session:rename',

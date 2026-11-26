@@ -119,3 +119,9 @@
    the user knows to switch to that tab (the gate no longer steals the tab in front). */
 .sess-attn { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 0 var(--warn); animation: sess-attn-pulse 1.6s ease-out infinite; }
 @keyframes sess-attn-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--warn) 55%, transparent); } 70% { box-shadow: 0 0 0 5px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+
+/* 「在 <App> 中继续」:右键会话标签的菜单(复用 .ws-menu-pop / .ws-menu-item)+ 交接后的短暂 chip。 */
+.sess-ho-pop button.ws-menu-item { border: none; background: transparent; font: inherit; font-size: 12px; }
+.sess-ho-pop button.ws-menu-item:disabled { opacity: .45; cursor: default; background: transparent; color: var(--fg-2); }
+.sess-chip { flex: 0 0 auto; height: 22px; padding: 0 9px; border-radius: 11px; display: inline-flex; align-items: center;
+  font-size: 11.5px; color: var(--fg-2); background: var(--surface-2); border: 1px solid var(--border); animation: popIn .13s ease; }

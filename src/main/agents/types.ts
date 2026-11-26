@@ -205,4 +205,6 @@ export interface AgentProvider {
   chat?(task: ChatTask, cb: ChatCallbacks, env: NodeJS.ProcessEnv): AgentSession
   /** 把权限档切到这个会话还活着的进程上(claude 的控制协议)。返回要告诉用户的话;没有活进程就是 null。 */
   setChatPermission?(cwd: string, nativeSessionId: string, mode: import('@shared/permissions').PermissionMode): Promise<string | null>
+  /** 收掉这个会话上留着的聊天进程(后台任务一起停),等它退出。没有活进程就直接回。 */
+  stopChat?(cwd: string, nativeSessionId: string): Promise<void>
 }

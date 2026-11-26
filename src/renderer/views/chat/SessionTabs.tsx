@@ -1,11 +1,48 @@
 import './sessionTabs.css'
-import { useState, useRef, useEffect } from 'react'
-import type { ChatSession, ContextUsage } from '@shared/types'
+import { useState, useRef, useEffect, type MouseEvent as ReactMouseEvent } from 'react'
+import { createPortal } from 'react-dom'
+import type { ChatSession, ContextUsage, HandoffTarget } from '@shared/types'
 import { SessionIdsPanel } from './SessionIdsPanel'
 
 const X = (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"><path d="M18 6 6 18M6 6l12 12" /></svg>
 )
+
+const OUT_ICON = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 4h6v6" /><path d="M20 4l-9 9" /><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" /></svg>
+)
+/** 「已复制会话 ID」chip 停留多久。 */
+const COPIED_MS = 2000
+
+interface HandoffMenuState { sessionId: string; x: number; y: number; items: HandoffTarget[] }
+
+// 右键会话标签:「在 <App> 中继续」。只列主进程说能交接的(有绑定、darwin、App 装了);我方这一轮在途时灰掉。
+function HandoffMenu({ menu, onPick, onClose }: { menu: HandoffMenuState; onPick: (t: HandoffTarget) => void; onClose: () => void }) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const onDoc = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) onClose() }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('mousedown', onDoc)
+    document.addEventListener('keydown', onKey)
+    window.addEventListener('resize', onClose)
+    return () => {
+      document.removeEventListener('mousedown', onDoc)
+      document.removeEventListener('keydown', onKey)
+      window.removeEventListener('resize', onClose)
+    }
+  }, [onClose])
+  return createPortal(
+    <div ref={ref} className="ws-menu-pop sess-ho-pop" role="menu" style={{ left: menu.x, top: menu.y }}>
+      {menu.items.map(t => (
+        <button key={t.agent} className="ws-menu-item" role="menuitem" disabled={t.disabled} onClick={() => onPick(t)}>
+          <span className="wm-ico">{OUT_ICON}</span>
+          {`在 ${t.app} 中继续`}
+        </button>
+      ))}
+    </div>,
+    document.body,
+  )
+}
 
 export interface SessionTabsProps {
   sessions: ChatSession[]
@@ -39,6 +76,29 @@ export function SessionTabs({ sessions, activeSessionId, onSwitch, onClose, onRe
     document.addEventListener('mousedown', onDoc)
     return () => document.removeEventListener('mousedown', onDoc)
   }, [idsOpen])
+  const [handoffMenu, setHandoffMenu] = useState<HandoffMenuState | null>(null)
+  const [copied, setCopied] = useState(false)
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => { if (copiedTimer.current) clearTimeout(copiedTimer.current) }, [])
+  const openHandoff = (e: ReactMouseEvent, s: ChatSession) => {
+    if (archived || s.readonly || !workspacePath || !window.forge?.sessionHandoffTargets) return
+    e.preventDefault()
+    const { clientX: x, clientY: y } = e
+    void window.forge.sessionHandoffTargets({ workspacePath, sessionId: s.id }).then(items => {
+      setHandoffMenu(items?.length ? { sessionId: s.id, x, y, items } : null)
+    }).catch(() => setHandoffMenu(null))
+  }
+  const pickHandoff = (t: HandoffTarget) => {
+    const m = handoffMenu
+    setHandoffMenu(null)
+    if (!m || !workspacePath) return
+    void window.forge.sessionHandoff({ workspacePath, sessionId: m.sessionId, agent: t.agent }).then(r => {
+      if (!r?.ok) return
+      setCopied(true)
+      if (copiedTimer.current) clearTimeout(copiedTimer.current)
+      copiedTimer.current = setTimeout(() => setCopied(false), COPIED_MS)
+    }).catch(() => {})
+  }
   const beginRename = (s: ChatSession) => {
     setEditingId(s.id)
     setDraftTitle(s.title)
@@ -61,6 +121,7 @@ export function SessionTabs({ sessions, activeSessionId, onSwitch, onClose, onRe
               className={'sess-tab' + (s.id === activeSessionId ? ' on' : '') + (isReadOnly ? ' si-ro' : '')}
               onClick={() => onSwitch(s.id)}
               onDoubleClick={e => { if (!isReadOnly) { e.stopPropagation(); beginRename(s) } }}
+              onContextMenu={e => openHandoff(e, s)}
             >
               {isReadOnly && s.external && (
                 <span className="si-src-badge" title={s.external.source}>{s.external.source.slice(0, 2).toUpperCase()}</span>
@@ -92,6 +153,8 @@ export function SessionTabs({ sessions, activeSessionId, onSwitch, onClose, onRe
             </button>
           )})}
         </div>
+        {copied && <span className="sess-chip" role="status">已复制会话 ID</span>}
+        {handoffMenu && <HandoffMenu menu={handoffMenu} onPick={pickHandoff} onClose={() => setHandoffMenu(null)} />}
         <div ref={idsWrapRef} className="sess-ids-wrap">
           <button className={'sess-ids-btn' + (idsOpen ? ' on' : '')} title="查看当前会话的 Agent Session ID" onClick={() => setIdsOpen(o => !o)}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.2 1.2"/><path d="M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1.2-1.2"/></svg>

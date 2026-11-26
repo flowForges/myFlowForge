@@ -1,4 +1,4 @@
-import { app, dialog, shell } from 'electron'
+import { app, clipboard, dialog, shell } from 'electron'
 import { writeFile } from 'node:fs/promises'
 import { showOsNotification } from '../notify/osNotify'
 import type { ComputerUseHost, HostCapabilities, PickOptions, SaveResult } from './capabilities'
@@ -27,6 +27,7 @@ export function createElectronHost(o: { computerUse?: () => ComputerUseHost | un
     // 原样透出 shell.openPath 的「失败返回字符串」契约,见接口注释。
     openPath: (p) => shell.openPath(p),
     revealInFileManager: (p) => shell.showItemInFolder(p),
+    copyText: (t) => clipboard.writeText(t),
     quitApp: () => app.quit(),
     trashItem: async (p) => {
       try { await shell.trashItem(p); return { trashed: true } }

@@ -56,6 +56,15 @@ vi.mock('../sessionLink/handoff', () => ({
   preSend: (...a: any[]) => preSendMock(...a),
   catchUpSession: (...a: any[]) => catchUpSessionMock(...a),
 }))
+const { handOffMock, handoffTargetsMock } = vi.hoisted(() => ({
+  handOffMock: vi.fn(async (..._a: any[]): Promise<any> => ({ ok: true, id: 'c-1', app: 'Claude' })),
+  handoffTargetsMock: vi.fn((..._a: any[]): any[] => [{ agent: 'claude', app: 'Claude', disabled: false }]),
+}))
+vi.mock('../sessionLink/appHandoff', () => ({
+  handOff: (...a: any[]) => handOffMock(...a),
+  handoffTargets: (...a: any[]) => handoffTargetsMock(...a),
+  defaultHandoffDeps: () => ({ platform: 'darwin' }),
+}))
 vi.mock('../run/runStore', () => ({
   RunStore: class {
     get runDir() { return '/tmp/chat-bridge' }
@@ -1449,5 +1458,37 @@ describe('会话互通:发送前补齐 + 官方 App 占着时不发', () => {
     await tick()
     expect(catchUpSessionMock).toHaveBeenCalledWith('/ws/ho', 's9')
     expect(t.sent.find(([, p]) => p?.type === 'external')![1]).toMatchObject({ sessionId: 's9', messages: ext })
+  })
+})
+
+describe('会话互通:在 App 中继续', () => {
+  const LOCAL = { emit: () => {}, client: { id: 'local', label: '本机' } }
+  const REMOTE = { emit: () => {}, client: { id: 'conn-1', label: 'iPhone' } }
+  const setup = async (providers: any = {}) => {
+    const { registerIpc } = await import('./handlers')
+    handOffMock.mockClear()
+    handoffTargetsMock.mockClear()
+    return registerIpc(() => {}, providers, fakeHost()) as any
+  }
+
+  it('targets come from the binding check; only the local window gets them', async () => {
+    const table = await setup()
+    expect(await table[CH.sessionHandoffTargets](LOCAL, { workspacePath: '/ws/h', sessionId: 's1' })).toEqual([{ agent: 'claude', app: 'Claude', disabled: false }])
+    expect(handoffTargetsMock).toHaveBeenCalledWith('/ws/h', 's1', expect.objectContaining({ platform: 'darwin' }))
+    expect(await table[CH.sessionHandoffTargets](REMOTE, { workspacePath: '/ws/h', sessionId: 's1' })).toEqual([])
+  })
+
+  it('hand-off: local window only; lets go through the claude provider and the codex thread reaper', async () => {
+    const stopChat = vi.fn(async () => {})
+    const table = await setup({ claude: { stopChat } })
+    expect(await table[CH.sessionHandoff](REMOTE, { workspacePath: '/ws/h', sessionId: 's1', agent: 'claude' })).toEqual({ ok: false, code: 'not_local' })
+    expect(handOffMock).not.toHaveBeenCalled()
+    expect(await table[CH.sessionHandoff](LOCAL, { workspacePath: '/ws/h', sessionId: 's1', agent: 'claude' })).toEqual({ ok: true, id: 'c-1', app: 'Claude' })
+    const [ws, sid, agent, deps] = handOffMock.mock.calls[0]
+    expect([ws, sid, agent]).toEqual(['/ws/h', 's1', 'claude'])
+    await deps.stopClaude('/ws/h', 'c-1')
+    expect(stopChat).toHaveBeenCalledWith('/ws/h', 'c-1')
+    await expect(deps.codexReaped('th-x')).resolves.toBeUndefined()
+    expect(await table[CH.sessionHandoff](LOCAL, { workspacePath: 1, sessionId: 's1', agent: 'claude' })).toEqual({ ok: false, code: 'unavailable' })
   })
 })

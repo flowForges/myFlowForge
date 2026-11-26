@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { CH } from '../main/ipc/channels'
-import type { AskAnswers, ChatEvent, ChangesEvent, ChatGateSnapshot, ChatInterjectResult, ChatQueueEvent, SetupEvent, UpdateInfo, UpdateEvent } from '@shared/types'
+import type { AskAnswers, ChatEvent, ChangesEvent, ChatGateSnapshot, ChatInterjectResult, ChatQueueEvent, HandoffResult, HandoffTarget, SetupEvent, UpdateInfo, UpdateEvent } from '@shared/types'
 import type { PluginSnapshot } from '@shared/plugins'
 import type { CouncilConfig, CouncilSeat, CouncilState } from '@shared/council'
 import type { HostInput, HostStatusView, RemoteHostView } from '@shared/remote/hostView'
@@ -94,6 +94,8 @@ const api = {
   chatInterject: (a: { workspacePath: string; sessionId: string; queuedId: string }): Promise<ChatInterjectResult> => ipcRenderer.invoke(CH.chatInterject, a),
   chatClearQueue: (a: { workspacePath: string }) => ipcRenderer.invoke(CH.chatClearQueue, a),
   chatRetryBlocked: (a: { workspacePath: string; sessionId: string }) => ipcRenderer.invoke(CH.chatRetryBlocked, a),
+  sessionHandoffTargets: (a: { workspacePath: string; sessionId: string }): Promise<HandoffTarget[]> => ipcRenderer.invoke(CH.sessionHandoffTargets, a),
+  sessionHandoff: (a: { workspacePath: string; sessionId: string; agent: string }): Promise<HandoffResult> => ipcRenderer.invoke(CH.sessionHandoff, a),
   chatStop: (a: { workspacePath: string; sessionId?: string }) => ipcRenderer.invoke(CH.chatStop, a),
   // reproposeWorkflow (old PlanCard workflow-switch → orch.startRun) removed — see channels.ts note.
   onChatQueueEvent: (cb: (e: ChatQueueEvent) => void) => {

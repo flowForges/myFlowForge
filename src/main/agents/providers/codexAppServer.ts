@@ -136,6 +136,10 @@ export const EXIT_WAIT_KILL_MS = 1000
  *  app-server 和新起的那个同时握着同一个线程(两个写者)。回收完就从表里删掉。
  */
 const threadReaps = new Map<string, Promise<void>>()
+/** 「在 <App> 中继续」松手用:这个线程上我方的 app-server 还在回收就等它(有界),没有就立刻好。 */
+export function codexThreadReaped(threadId: string): Promise<void> {
+  return threadReaps.get(threadId) ?? Promise.resolve()
+}
 
 /**
  * codex 会**向我们发起、并等着我们回答**的请求里,能映射成一道「允许 / 拒绝」的那些。

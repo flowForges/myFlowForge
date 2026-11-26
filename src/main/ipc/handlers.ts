@@ -49,6 +49,8 @@ import { sendTurn, history, addTurnAnswer } from '../chat/chatService'
 import { recordOwnEnd } from '../sessionLink/binding'
 import { beginOwnTurn } from '../sessionLink/ownTurns'
 import { catchUpSession, preSend } from '../sessionLink/handoff'
+import { defaultHandoffDeps, handOff, handoffTargets, type AppHandoffDeps } from '../sessionLink/appHandoff'
+import { codexThreadReaped } from '../agents/providers/codexAppServer'
 import { ChatQueue } from '../chat/chatQueue'
 import { appendMessage, readMessages, readSession as readChatSession } from '../chat/chatStore'
 import { CouncilRegistry } from '../council/registry'
@@ -1524,6 +1526,24 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     }
     broadcastSessions(a.workspacePath, file)
     return sessionsOut(a.workspacePath, file)
+  })
+  // 「在 <App> 中继续」(只接本机窗口):松手(claude 收掉留驻进程 / codex 等 app-server 退出)→ open -a → 复制会话 id。
+  //  ★排队的消息不动 —— 用户回来再发时照样过发送前的占用检查。
+  const handoffDeps = (): AppHandoffDeps => ({
+    ...defaultHandoffDeps(),
+    copy: caps.copyText,
+    stopClaude: (cwd, id) => providers.claude?.stopChat?.(cwd, id) ?? Promise.resolve(),
+    codexReaped: codexThreadReaped,
+  })
+  const okArgs = (a: any): boolean => !!a && typeof a.workspacePath === 'string' && typeof a.sessionId === 'string'
+  on(CH.sessionHandoffTargets, (_e, a: { workspacePath: string; sessionId: string }) => {
+    if (_e?.client?.id !== 'local' || !okArgs(a)) return []
+    return handoffTargets(a.workspacePath, a.sessionId, handoffDeps())
+  })
+  on(CH.sessionHandoff, async (_e, a: { workspacePath: string; sessionId: string; agent: string }) => {
+    if (_e?.client?.id !== 'local') return { ok: false, code: 'not_local' }
+    if (!okArgs(a) || typeof a.agent !== 'string') return { ok: false, code: 'unavailable' }
+    return handOff(a.workspacePath, a.sessionId, a.agent, handoffDeps())
   })
   on(CH.sessionRename, (_e, a: { workspacePath: string; sessionId: string; title: string }) => {
     const file = renameSession(a.workspacePath, a.sessionId, a.title)

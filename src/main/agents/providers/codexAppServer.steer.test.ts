@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { driveCodexTurn, HANDSHAKE_TIMEOUT_MS, EXIT_WAIT_TERM_MS, EXIT_WAIT_KILL_MS, type CodexChild, type CodexTurnCallbacks } from './codexAppServer'
+import { driveCodexTurn, codexThreadReaped, HANDSHAKE_TIMEOUT_MS, EXIT_WAIT_TERM_MS, EXIT_WAIT_KILL_MS, type CodexChild, type CodexTurnCallbacks } from './codexAppServer'
 
 // Same scriptable fake as codexAppServer.test.ts: capture writes, push stdout lines, fire close/error.
 // kill(sig) is recorded; by default the fake "exits" (fires close) on any signal, like a real child.
@@ -346,6 +346,26 @@ describe('driveCodexTurn · 回落前等 app-server 真退出(R5)', () => {
 describe('driveCodexTurn · 同一个线程不许两个 app-server 同时活着', () => {
   afterEach(() => { vi.useRealTimers() })
   const flush = async () => { for (let i = 0; i < 5; i++) await Promise.resolve() }
+
+  it('在 App 中继续:codexThreadReaped 等这个线程上我方的 app-server 真退出;没有在回收的就立刻好', async () => {
+    vi.useFakeTimers()
+    let idle = false
+    await codexThreadReaped('th-none').then(() => { idle = true })
+    expect(idle).toBe(true)
+    const f = fakeChild({ exitOnKill: false })
+    const h = driveCodexTurn({ ...OPTS, resumeThreadId: 'th-hand' }, cbs(), { spawn: () => f.child })
+    begin(f, 'tu1')
+    h.cancel()
+    await flush()
+    expect(f.signals).toEqual(['SIGTERM'])
+    let reaped = false
+    void codexThreadReaped('th1').then(() => { reaped = true })
+    await flush()
+    expect(reaped).toBe(false)
+    f.close()
+    await flush()
+    expect(reaped).toBe(true)
+  })
 
   it('turn/start 已发出后超时(不回落):也要 SIGTERM → 2s → SIGKILL → 等退出,之后才交出 ok:false', async () => {
     vi.useFakeTimers()

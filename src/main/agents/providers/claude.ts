@@ -1084,5 +1084,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
     return { id: task.id, cancel: () => { cancelled = true; inner?.cancel() }, done, interject: (t, a, v) => inner?.interject?.(t, a, v) ?? Promise.resolve(false) }
   }
   provider.setChatPermission = (cwd, sessionId, mode) => liveChats.get(lingerKey(cwd, sessionId))?.setPermission(mode) ?? Promise.resolve(null)
+  // 「在 <App> 中继续」:同「停止后台」那条路(stopTree),退出时 onExit 照常记我方写者安静。
+  provider.stopChat = (cwd, sessionId) => liveChats.get(lingerKey(cwd, sessionId))?.stop() ?? Promise.resolve()
   return provider
 }

@@ -64,7 +64,8 @@ describe('频道分类', () => {
     // 181 → 182:chat:interject(排队那条插进在跑的这一轮)。队列在主机上 ⇒ host;handler 里只认本机窗口。
     // 182 → 183:chat:retry-blocked(会话互通阻断条的「重试」)。队列在主机上 ⇒ host。
     // 183 → 184:session-import:continue(「在 myFlowForge 继续」接管官方会话)。读的是主机上的外部记录、建的是主机上的会话 ⇒ host。
-    expect(host.length).toBe(184)
+    // 184 → 186:session:handoff-targets / session:handoff(「在 <App> 中继续」)。读主机上的绑定、在主机上开官方 App ⇒ host;handler 只认本机窗口。
+    expect(host.length).toBe(186)
     expect(client.length + host.length).toBe(keys.length)
   })
 

@@ -462,6 +462,9 @@ export interface ChatSendPayload {
 }
 /** `chat:interject` 的回话。gone = 那条已经不在队列里(被调度 / 撤回 / 已插过);not_running = 这一轮刚好结束或插不进去,已放回原位置。 */
 export type ChatInterjectResult = { ok: true } | { ok: false; code: 'gone' | 'not_running' | 'unsupported' | 'not_local' }
+/** 会话菜单里的「在 <App> 中继续」:有绑定、darwin、App 装了才有;我方这一轮在途时 disabled。 */
+export interface HandoffTarget { agent: 'codex' | 'claude' | 'qoder'; app: string; disabled: boolean }
+export type HandoffResult = { ok: true; id: string; app: string } | { ok: false; code: 'unavailable' | 'busy' | 'open_failed' | 'not_local' }
 export interface ChatQueueEvent { workspacePath: string; busy: boolean; queue: { id: string; text: string; source: string; sessionId: string; interjectable: boolean }[]; running: { id: string; text: string; sessionId: string } | null; runningTurns: { id: string; text: string; sessionId: string }[]; runningSessionId: string | null; runningSessionIds: string[]; backgroundTasks?: Record<string, number>; blocked?: Record<string, string> }
 export type ChatEvent = { workspacePath: string; sessionId: string } & (
   | { type: 'user'; message: ChatMessage }

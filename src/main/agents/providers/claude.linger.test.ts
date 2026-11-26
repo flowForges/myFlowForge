@@ -704,6 +704,20 @@ describe('claude chat() — 独立审查找到的问题(都走假 CLI + 真 prov
     expect(await provider.setChatPermission!(dir, 'no-such-session', 'readonly')).toBeNull()
   })
 
+  it('在 App 中继续:stopChat 收掉这个会话留着的进程并等它退出(onExit 照常触发);没有活进程就直接回', async () => {
+    const provider = makeClaudeProvider({ bin: scripted('r8h', [lingeringTurn]), defaultModels: [] })
+    const onExit = vi.fn()
+    const s1 = provider.chat!(task({ background: { onRunning: () => {}, openTurn: () => {}, onExit } }), collect().cb, process.env)
+    lives.push(s1)
+    await settle(s1.done, 30_000)
+    expect(exitedProc('r8h')).toBe(false)
+    await provider.stopChat!(dir, 'no-such-session')
+    expect(exitedProc('r8h')).toBe(false)
+    await provider.stopChat!(dir, S)
+    await waitIo(() => onExit.mock.calls.length > 0)
+    expect(exitedProc('r8h')).toBe(true)
+  })
+
   it('#6 后台子代理吵个不停不算这一轮活着:卡死的这一轮照样报出来', async () => {
     const noise = (at: number): Step => ({ at, obj: { type: 'assistant', session_id: S, parent_tool_use_id: 'tb1', message: { role: 'assistant', content: [{ type: 'tool_use', id: `n${at}`, name: 'Read', input: {} }] } } })
     const stuck: Step[] = [...lingeringTurn.slice(0, 4), ...[100, 300, 500, 700, 900, 1100, 1300, 1500].map(noise)]

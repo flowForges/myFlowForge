@@ -82,6 +82,7 @@ describe('方法表', () => {
     // 239 → 240:chat:interject,host 方法(handler 里只认本机窗口)。
     // 240 → 241:chat:retry-blocked(会话互通阻断条的「重试」),host 方法。
     // 241 → 242:session-import:continue(「在 myFlowForge 继续」),host 方法。
-    expect(Object.keys(table).length).toBe(242)
+    // 242 → 244:session:handoff-targets / session:handoff(「在 <App> 中继续」),host 方法(handler 里只认本机窗口)。
+    expect(Object.keys(table).length).toBe(244)
   })
 })

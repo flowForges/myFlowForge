@@ -61,6 +61,9 @@ export interface HostCapabilities {
   /** 系统通知 */
   notify(n: { title: string; body: string; onClick?: () => void }): void
 
+  /** 往这台机器的剪贴板写文字(「在 <App> 中继续」放会话 id)。无头宿主不给 */
+  copyText?(text: string): void
+
   /** 提取某个可执行文件的图标,data URL。无头宿主返回 undefined */
   fileIcon(path: string): Promise<string | undefined>
 
