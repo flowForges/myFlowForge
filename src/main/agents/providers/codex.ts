@@ -13,7 +13,7 @@ import { readCodexModelsCache, codexModelHasFastTier, codexDefaultFastTier, CODE
 import { logError } from '../../log/appLog'
 import { makeIdleWatchdog, CHAT_IDLE_MS, CHAT_STALL_KILL_MS } from '../idleWatchdog'
 import { driveCodexTurn } from './codexAppServer'
-// ★R6:app-server 没有 --ignore-user-config,用 -c 覆盖把用户的 notify / 钩子 / 插件 / MCP 关掉(放在最前,forge 和指令覆盖在后面赢)。
+// ★R6:app-server 没有 --ignore-user-config,用 -c 覆盖把用户的 notify / 插件 / MCP 关掉(钩子照常开着,R7)(放在最前,forge 和指令覆盖在后面赢)。
 import { codexAppServerIsolationArgs } from './codexUserConfig'
 import { codexSandboxApproval, codexGateReq } from './codexApproval'
 import { readSettings } from '../../config/store'

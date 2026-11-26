@@ -8,10 +8,6 @@ import { codexApprovalResponse, elicitationUnsupported, PERMISSIONS_METHOD, ELIC
  * `PermissionRequest` 钩子截走审批而全关(2026-10-21);现在改由用户在 ~/.codex/hooks.json 里
  * 只去掉那一条审批钩子。codex 只有「全开 / 全关」一个开关,没法只关某一条,所以 app 这边保持全开。
  * ★「完全访问」起手不受影响:沙箱 danger-full-access + approval never,codex 根本不发审批请求。
- *
- * ★★R6(2026-11-26)改了 app-server 这条路:它和 exec(--ignore-user-config)一样不吃用户配置里的
- *  notify / 钩子 / 插件 / MCP —— 调用方在 configArgs 最前面带上 codexAppServerIsolationArgs(见 codexUserConfig.ts)。
- *  上面「不关钩子」现在只对 exec 那几条路成立。
  */
 
 // Minimal child-process surface so tests can fake the app-server end to end.
