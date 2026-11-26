@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
-import { Markdown, MdImageBaseCtx } from './markdown'
+import { Markdown, MdImageBaseCtx, mdImageSource } from './markdown'
 import { OpenFileCtx } from './openFile'
 
 /**
@@ -81,5 +81,44 @@ describe('对话气泡里的 markdown 图片', () => {
     const { container } = inChat('![架构图](./a.png)')
     await waitFor(() => expect(container.querySelector('img.md-img')).toBeTruthy())
     expect(screen.getByAltText('架构图')).toBeTruthy()
+  })
+})
+
+// ★★2026-11:`![bcd](/tmp/g9/v/bcd.png)` 只显示 🖼 + 路径。主进程那边放开了本机窗口的工作区外路径,
+// 渲染层这边负责「哪些 src 该去问主进程」—— 绝对路径 / file:// / ~/ 不需要 base 也该去问。
+describe('mdImageSource — src → 怎么加载', () => {
+  it('http / data / forge-* 直接用', () => {
+    expect(mdImageSource('https://x/a.png', [])).toEqual({ kind: 'direct', url: 'https://x/a.png' })
+    expect(mdImageSource('data:image/png;base64,AA', [])).toEqual({ kind: 'direct', url: 'data:image/png;base64,AA' })
+    expect(mdImageSource('forge-pet://img/a.png', [])).toEqual({ kind: 'direct', url: 'forge-pet://img/a.png' })
+  })
+  it('★★绝对路径 / file:// / ~/ 没有 base 也去问主进程', () => {
+    expect(mdImageSource('/tmp/g9/v/bcd.png', [])).toEqual({ kind: 'ipc', bases: [] })
+    expect(mdImageSource('file:///tmp/g9/v/bcd.png', [])).toEqual({ kind: 'ipc', bases: [] })
+    expect(mdImageSource('~/Desktop/a.png', [])).toEqual({ kind: 'ipc', bases: [] })
+  })
+  it('相对路径有 base 才问,没有就占位', () => {
+    expect(mdImageSource('./out/a.png', ['/ws'])).toEqual({ kind: 'ipc', bases: ['/ws'] })
+    expect(mdImageSource('./out/a.png', [])).toEqual({ kind: 'none' })
+  })
+})
+
+describe('对话气泡里工作区之外的本地图', () => {
+  it('★★/tmp 绝对路径:交给主进程,拿到 data URL 就显示,点开灯箱', async () => {
+    const { container } = inChat('![bcd](/tmp/g9/v/bcd.png)')
+    await waitFor(() => expect(container.querySelector('img.md-img')).toBeTruthy())
+    expect(imageFile.mock.calls[0][1]).toBe('/tmp/g9/v/bcd.png')
+    ;(container.querySelector('img.md-img') as HTMLElement).click()
+    await waitFor(() => expect(document.querySelector('.lightbox, [role="dialog"]')).toBeTruthy())
+  })
+  it('★没有 context 的纯渲染里,绝对路径也照样去问', async () => {
+    const { container } = render(<Markdown text={'![x](/tmp/a.png)'} />)
+    await waitFor(() => expect(container.querySelector('img.md-img')).toBeTruthy())
+  })
+  it('文件不存在 → 仍是占位符 + 路径', async () => {
+    imageFile.mockResolvedValue({ error: '文件不存在' })
+    const { container } = inChat('![](/tmp/gone.png)')
+    await waitFor(() => expect(container.querySelector('.md-img-err')).toBeTruthy())
+    expect(container.querySelector('.md-img-err')?.textContent).toContain('/tmp/gone.png')
   })
 })

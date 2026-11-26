@@ -11,6 +11,18 @@ import { Lightbox } from '../../components/Lightbox'
 // images just show a placeholder rather than a broken <img>.
 export const MdImageBaseCtx = createContext<string | undefined>(undefined)
 const ABS_SRC = /^(https?:|data:|forge-)/i
+// 本地绝对引用:/abs、file://、~/、Windows 盘符。这些不靠 base 解析,没有 base 也该去问主进程
+// (读不读得出来、能不能出工作区,由主进程按调用方决定)。
+const LOCAL_ABS_SRC = /^(\/|file:|~\/|[a-zA-Z]:[\\/])/i
+
+export type MdImageSource = { kind: 'direct'; url: string } | { kind: 'ipc'; bases: string[] } | { kind: 'none' }
+
+/** 一个 markdown 图片 src 该怎么加载:直接用 / 交给 file:image IPC / 没法解析(占位符)。 */
+export function mdImageSource(src: string, bases: string[]): MdImageSource {
+  if (ABS_SRC.test(src)) return { kind: 'direct', url: src }
+  if (bases.length || LOCAL_ABS_SRC.test(src.trim())) return { kind: 'ipc', bases }
+  return { kind: 'none' }
+}
 
 // Markdown image. Absolute/data/protocol srcs load directly; 其余(本地路径,不管相对还是绝对)
 // 走 file:image IPC 读成 data URL。
@@ -31,11 +43,14 @@ function MdImage({ src, alt }: { src: string; alt: string }): ReactNode {
   const [err, setErr] = useState(false)
   const [zoom, setZoom] = useState(false)
   useEffect(() => {
-    if (ABS_SRC.test(src)) { setUrl(src); setErr(false); return }
-    if (!bases.length) { setErr(true); return }
+    const how = mdImageSource(src, bases)
+    if (how.kind === 'direct') { setUrl(how.url); setErr(false); return }
+    if (how.kind === 'none') { setErr(true); return }
     let alive = true
     setUrl(null); setErr(false)
-    void window.forge.imageFile?.(bases, src)
+    const read = (window.forge as typeof window.forge | undefined)?.imageFile
+    if (!read) { setErr(true); return }
+    void read(how.bases, src)
       .then(r => { if (alive) { if (r && 'dataUrl' in r) setUrl(r.dataUrl); else setErr(true) } })
       .catch(() => { if (alive) setErr(true) })
     return () => { alive = false }

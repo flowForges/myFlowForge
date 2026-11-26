@@ -139,7 +139,7 @@ import { collectGitCandidates } from '../sessionImport/importResult'
 import { readScanCache, writeScanCache } from '../sessionImport/scanCache'
 import type { DiscoveredSession } from '@shared/types'
 import { resolveFileRef } from '../fs/fileRef'
-import { readImageRef } from '../fs/imageRef'
+import { readImageRef, imageOptsFor } from '../fs/imageRef'
 import { listDir, defaultRoots } from '../fs/browse'
 import { askAnswerNote } from '@shared/chat/askAnswerNote'
 
@@ -2025,8 +2025,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // 图片字节 → data URL。两个调用方:inspector 的图片预览,和对话/文档正文里的 `![x](…)`
   // (gitFile 返回文本,二进制图会渲染成乱码)。★解析与越界判断全部交给 readImageRef →
   // resolveFileRef —— 和对话里**文件链接**同一套守卫,绝不在这儿自己拼路径。
+  // ★本机窗口额外放行工作区之外的绝对路径 / file:// / ~/(模型常把图写到 /tmp);远程调用方仍只限工作区。
   on(CH.imageFile, (_e, a: { bases: string[]; href: string }): { dataUrl: string } | { error: string } =>
-    readImageRef(Array.isArray(a?.bases) ? a.bases : [], String(a?.href ?? '')))
+    readImageRef(Array.isArray(a?.bases) ? a.bases : [], String(a?.href ?? ''), imageOptsFor(_e?.client)))
   // ── 对话产物可点开 ────────────────────────────────────────────────────────────
   // 聊天正文里的 [设计文档](docs/design.md) 点击后走这里:renderer 只知道一串 href,存在性、是不是目录、
   // 有没有越出工作区,全部在主进程判(renderer 没有 fs)。bases 按优先级给:当前会话 worktree → 工作区根。

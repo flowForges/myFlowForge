@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { readImageRef } from './imageRef'
+import { readImageRef, imageOptsFor } from './imageRef'
 
 // 真目录真文件 —— 越界/存在性/体积这几条在假 fs 上验不出真行为(同 fileRef.test.ts)。
 let root = '', ws = '', outside = ''
@@ -64,5 +64,88 @@ describe('readImageRef', () => {
 
   it('体积上限', () => {
     expect(readImageRef([ws], 'out/chart.png', { maxBytes: 10 })).toEqual({ error: '图片过大' })
+  })
+})
+
+// ★★2026-11 用户报:模型写 `![bcd](/tmp/g9/v/bcd.png)`(文件当时就在),对话里只有 🖼 + 路径。
+// 根因:readImageRef 只认工作区 bases 之内 → /tmp 是「不在工作区内」。本机窗口要能看模型产出的任何本地图;
+// 远程/手机连进来的调用方仍然只给工作区之内(allowOutside 只在 client.id === 'local' 时由 handler 打开)。
+describe('readImageRef — 本机窗口里工作区之外的本地图', () => {
+  let home = ''
+  beforeAll(() => {
+    home = join(root, 'home')
+    mkdirSync(join(home, 'pics', 'dir.png'), { recursive: true })
+    writeFileSync(join(home, 'pics', 'a.png'), PNG)
+    writeFileSync(join(outside, 'fake.png'), 'just some text, not an image')
+    writeFileSync(join(outside, 'notes.txt'), 'secret text')
+    writeFileSync(join(outside, 'big.png'), Buffer.concat([PNG, Buffer.alloc(64)]))
+    symlinkSync(join(outside, 'notes.txt'), join(outside, 'link.png'))
+    symlinkSync(join(outside, 'secret.png'), join(ws, 'escape.png'))
+    const JPG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46])
+    writeFileSync(join(outside, 'p.jpg'), JPG)
+    writeFileSync(join(outside, 'p.gif'), Buffer.from('GIF89a\x01\x00\x01\x00', 'latin1'))
+    writeFileSync(join(outside, 'p.webp'), Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBPVP8 ')]))
+    writeFileSync(join(outside, 'p.bmp'), Buffer.concat([Buffer.from('BM'), Buffer.alloc(20)]))
+  })
+  const local = { allowOutside: true, home: () => home }
+
+  it('★★绝对路径(/tmp/… 这类工作区之外)→ data URL', () => {
+    expect(readImageRef([ws], join(outside, 'secret.png'), local)).toHaveProperty('dataUrl')
+  })
+  it('★★file:// URL → data URL', () => {
+    expect(readImageRef([ws], 'file://' + join(outside, 'secret.png'), local)).toHaveProperty('dataUrl')
+  })
+  it('★★~/ 路径按 home 展开', () => {
+    expect(readImageRef([ws], '~/pics/a.png', local)).toHaveProperty('dataUrl')
+  })
+  it('没有 base 时,本机窗口的绝对路径照样能读', () => {
+    expect(readImageRef([], join(outside, 'secret.png'), local)).toHaveProperty('dataUrl')
+  })
+  it('jpg / gif / webp / bmp 都认', () => {
+    for (const f of ['p.jpg', 'p.gif', 'p.webp', 'p.bmp']) expect(readImageRef([], join(outside, f), local)).toHaveProperty('dataUrl')
+  })
+  it('★远程调用方(allowOutside 关)仍然拒工作区之外', () => {
+    expect(readImageRef([ws], join(outside, 'secret.png'), { home: () => home })).toEqual({ error: '不在工作区内' })
+    expect(readImageRef([ws], '~/pics/a.png', { home: () => home })).toEqual({ error: '不在工作区内' })
+  })
+  it('.txt 拒', () => {
+    expect(readImageRef([], join(outside, 'notes.txt'), local)).toEqual({ error: '不是支持的图片格式' })
+  })
+  it('★扩展名是 .png 但内容不是图片 → 拒(看魔数)', () => {
+    expect(readImageRef([], join(outside, 'fake.png'), local)).toEqual({ error: '不是图片' })
+  })
+  it('★指向非图片的符号链接(link.png → notes.txt)→ 拒', () => {
+    expect(readImageRef([], join(outside, 'link.png'), local)).toHaveProperty('error')
+    expect(readImageRef([], join(outside, 'link.png'), local)).not.toHaveProperty('dataUrl')
+  })
+  it('★★工作区里的符号链接逃到工作区外 → 远程调用方拒', () => {
+    expect(readImageRef([ws], 'escape.png')).toEqual({ error: '不在工作区内' })
+  })
+  it('目录(哪怕叫 dir.png)→ 拒', () => {
+    expect(readImageRef([], join(home, 'pics', 'dir.png'), local)).toEqual({ error: '这是个目录' })
+  })
+  it('文件不存在 → 文件不存在(渲染层退回占位符)', () => {
+    expect(readImageRef([], join(outside, 'nope.png'), local)).toEqual({ error: '文件不存在' })
+  })
+  it('超过体积上限 → 拒', () => {
+    expect(readImageRef([], join(outside, 'big.png'), { ...local, maxBytes: PNG.length + 10 })).toEqual({ error: '图片过大' })
+  })
+  it('路径里带 NUL → 拒', () => {
+    expect(readImageRef([], join(outside, 'secret.png') + '\0.png', local)).toEqual({ error: '路径无效' })
+  })
+  it('本机窗口里相对路径仍按 base 解析,../ 穿越照样拒', () => {
+    expect(readImageRef([ws], 'out/chart.png', local)).toHaveProperty('dataUrl')
+    expect(readImageRef([ws], '../outside/secret.png', local)).toEqual({ error: '不在工作区内' })
+  })
+})
+
+describe('imageOptsFor — 谁能读工作区之外', () => {
+  it('★只有本机窗口(id === local)放行', () => {
+    expect(imageOptsFor({ id: 'local', label: '本机' }).allowOutside).toBe(true)
+    expect(imageOptsFor({ id: 'local', label: '本机', fromOverlay: true }).allowOutside).toBe(true)
+  })
+  it('★远程连接、未知调用方一律不放行', () => {
+    expect(imageOptsFor({ id: 'c-123', label: '手机' }).allowOutside).toBe(false)
+    expect(imageOptsFor(undefined).allowOutside).toBe(false)
   })
 })
