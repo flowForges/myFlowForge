@@ -137,6 +137,8 @@ export const CH = {
   // 排队的那条并进正在跑的那一轮(只接本机窗口)。回 ChatInterjectResult。
   chatInterject: 'chat:interject',
   chatClearQueue: 'chat:clear-queue',
+  // 会话互通:「这个会话正在 <App> 中进行」阻断条上的重试。
+  chatRetryBlocked: 'chat:retry-blocked',
   chatStop: 'chat:stop',
   sessionList: 'session:list',
   sessionNew: 'session:new',

@@ -88,9 +88,9 @@ function Row({ tool, messageId }: { tool: ToolActivity; messageId?: string }) {
   )
 }
 
-export function ToolBlock({ tools, stateKey, messageId }: { tools: ToolActivity[]; stateKey?: string; messageId?: string }) {
+export function ToolBlock({ tools, stateKey, messageId, defaultCollapsed = false }: { tools: ToolActivity[]; stateKey?: string; messageId?: string; defaultCollapsed?: boolean }) {
   // 受控 <details>:open 由 collapsed 决定,用户切换写回记忆表,切会话回来仍保持折叠。默认展开。
-  const [collapsed, setCollapsed] = useState(() => (stateKey ? collapsedByMsg.get(stateKey) ?? false : false))
+  const [collapsed, setCollapsed] = useState(() => (stateKey ? collapsedByMsg.get(stateKey) ?? defaultCollapsed : defaultCollapsed))
   if (!tools.length) return null
   const running = tools.filter(t => t.status === 'run').length
   return (

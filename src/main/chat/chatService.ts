@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
 import { userMessageOf } from './userMessage'
-import { appendMessage, readMessages, readSession, readWatermark, updateMessage, writeSession, writeWatermark } from './chatStore'
+import { appendMessage, readMessages, readSession, readWatermark, removeMessage, updateMessage, writeSession, writeWatermark } from './chatStore'
+import { isActiveWriterError } from '../sessionLink/handoff'
 import { setLive, clearLive } from './liveTurns'
 import { setNativeSubagents } from './nativeSubagentRegistry'
 import type { AgentProvider, AgentSession, ChatBackgroundHooks, ChatCallbacks, ConfirmReq, ConfirmDecision } from '../agents/types'
@@ -46,6 +47,11 @@ export interface SendTurnDeps {
   adopt?: (cb: ChatCallbacks) => AgentSession
   /** 会话 / 工作区已经没了或封存了:这一轮收尾时不再往里写任何东西,只把界面收掉。 */
   discard?: () => boolean
+  /**
+   * 会话互通:codex 说这个线程已经有别的写者(官方 App 正占着)。这一轮按「没发出」收掉 —— 不留错误气泡,
+   * 用户消息撤回(重试时会再发一遍),发 busy_elsewhere;调用方据此把消息留在队列里等「重试」。
+   */
+  onBusyElsewhere?: (app: string) => void
 }
 
 let seq = 0
@@ -179,8 +185,10 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
 
     // ★从别的设备发来的带 `via`(见 ChatMessage.via)。★★注意它**没有**混进上面那个 `promptText` ——
     //  那是它「绝不污染上下文」这条承诺的实现方式:两个字段,从不相加。被拒的那一轮也用同一份(userMessage.ts)。
+    let sentUser: ChatMessage | undefined
     if (!deps.adopt) {
       const userMsg = userMessageOf(payload)
+      sentUser = userMsg
       appendMessage(ws, sid, userMsg)
       // 会话自动命名:普通聊天用首条用户消息命名(仍是 '新会话' 才改,导入会话有真实标题不受影响)。工作流
       // 会话不在这里命名——它在 workflow:enter 用 seed(原始需求)命名,避免被 "请开始「…」" 这类 kick 消息覆盖。
@@ -447,6 +455,16 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       scheduleDistill()
       return msg
     }
+    const finishBusy = (app: string): ChatMessage => {
+      closeAnswers()
+      finalizeRunning('error')
+      clearLive(ws, sid, aid)
+      const drop = [aid]
+      if (sentUser && !discarded()) { removeMessage(ws, sid, sentUser.id); drop.push(sentUser.id) }
+      emit({ workspacePath: ws, sessionId: sid, type: 'busy_elsewhere', app, drop })
+      deps.onBusyElsewhere?.(app)
+      return { id: aid, who: 'ai', text: '', model: label, provider: payload.agent, ts: now() }
+    }
     const finishAborted = (): ChatMessage => {
       closeAnswers()
       finalizeRunning('error')
@@ -548,7 +566,12 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
           onSubagent,
           onToolActivity,
           onDone: (r) => { if (settled) return; settled = true; resolve(finishOk(r.elapsed)) },
-          onError: (err) => { if (settled) return; settled = true; resolve(aborted ? finishAborted() : finishErr(err)) },
+          onError: (err) => {
+            if (settled) return
+            settled = true
+            if (!aborted && payload.agent === 'codex' && isActiveWriterError(err.message)) { resolve(finishBusy('Codex')); return }
+            resolve(aborted ? finishAborted() : finishErr(err))
+          },
         })
         flushPaced = paced.flushPaced
         // ★provider 同步抛错(起不来)时没有任何收尾路径会跑 —— 自己把「你的选择」入口关掉再抛。

@@ -20,6 +20,22 @@ export function appendMessage(wsPath: string, sessionId: string, msg: ChatMessag
   appendFileSync(sessionMessagesFile(wsPath, sessionId), JSON.stringify(msg) + '\n')
 }
 
+/** 一次追加多条(一次写盘)。 */
+export function appendMessages(wsPath: string, sessionId: string, msgs: ChatMessage[]): void {
+  if (!msgs.length) return
+  ensureDir(sessionsDir(wsPath))
+  appendFileSync(sessionMessagesFile(wsPath, sessionId), msgs.map(m => JSON.stringify(m) + '\n').join(''))
+}
+
+/** 删掉一条已经落盘的消息(没发出去的那一轮撤回它的用户消息)。找不到就什么都不做。 */
+export function removeMessage(wsPath: string, sessionId: string, id: string): void {
+  const f = sessionMessagesFile(wsPath, sessionId)
+  if (!existsSync(f)) return
+  const lines = readFileSync(f, 'utf8').split('\n').filter(Boolean)
+  const kept = lines.filter((line) => { try { return (JSON.parse(line) as ChatMessage).id !== id } catch { return true } })
+  if (kept.length !== lines.length) writeFileSync(f, kept.length ? kept.join('\n') + '\n' : '')
+}
+
 /** 改一条已经落盘的消息(后台子代理的卡片晚于消息收尾才跑完)。找不到就什么都不做。 */
 export function updateMessage(wsPath: string, sessionId: string, id: string, fn: (m: ChatMessage) => ChatMessage): void {
   const f = sessionMessagesFile(wsPath, sessionId)

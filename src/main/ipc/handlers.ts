@@ -48,6 +48,7 @@ import { readHomeStats } from '../workspace/homeStats'
 import { sendTurn, history, addTurnAnswer } from '../chat/chatService'
 import { recordOwnEnd } from '../sessionLink/binding'
 import { beginOwnTurn } from '../sessionLink/ownTurns'
+import { catchUpSession, preSend } from '../sessionLink/handoff'
 import { ChatQueue } from '../chat/chatQueue'
 import { appendMessage, readMessages, readSession as readChatSession } from '../chat/chatStore'
 import { CouncilRegistry } from '../council/registry'
@@ -930,6 +931,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const effectiveMode = storedMode ? stricterPermissionMode(payload.permissionMode ?? DEFAULT_PERMISSION_MODE, storedMode) : payload.permissionMode
     const turnPayload = effectiveMode === (payload.permissionMode ?? DEFAULT_PERMISSION_MODE) || effectiveMode === payload.permissionMode ? payload : { ...payload, permissionMode: effectiveMode }
     removeWorkspaceSkill(payload.workspacePath)   // pure chat (P5 T1): forge-workflow skill has no reader anymore
+    // 会话互通(先于一切发车检查,也先于 beginOwnTurn —— 否则我方永远算「在写」):官方 App 里新增的轮次先补进来,
+    // 会话正在 App(或另一个 Forge 会话)里进行就不发:消息回到队首,吸附区出阻断条等「重试」。
+    const handoff = await preSend(payload.workspacePath, payload.sessionId, payload.agent).catch(() => ({ appended: [] as ChatMessage[], busy: undefined }))
+    if (handoff.appended.length) chatEmit({ workspacePath: payload.workspacePath, sessionId: payload.sessionId, type: 'external', messages: handoff.appended })
+    if (handoff.busy) {
+      chatEmit({ workspacePath: payload.workspacePath, sessionId: payload.sessionId, type: 'busy_elsewhere', app: handoff.busy })
+      return { busyElsewhere: handoff.busy }
+    }
     // ★★设计 §4.3「Forge 拒绝『完全访问』+『每次询问』」必须守在**发车的地方**,不能只靠 Composer:
     //  工作流阶段起手一轮、机器人桥、宠物窗这三条路都带着会话的 browserUse,却一条都不经过 Composer ——
     //  一个配成 'full' 的阶段 + 会话上的「每次询问」,就会带着 `--chrome` 和 bypassPermissions
@@ -1221,6 +1230,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     })
     // 会话互通:这一轮在途期间我们就是这个外部会话的写者(一轮结束后留驻的进程不算,见 sessionLink/ownTurns)。
     const endOwnTurn = beginOwnTurn(payload.workspacePath, payload.sessionId, payload.agent)
+    // codex 在这一轮里报「已有写者」:同一条「没发出」的路(sendTurn 已撤回用户消息、发了 busy_elsewhere)。
+    let busyElsewhere: string | undefined
     try {
       const msg = await sendTurn(turnPayload, {
         provider,
@@ -1233,7 +1244,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         // ★★ACP 握手没成、要回落到 run()(没门、全放行)的那一刻,补上面那道「完全访问」授权 —— 首轮
         //  ACP 状态未知时按「有门」放过了预授权门,不补的话老版本 CLI 会不经同意就以完全访问跑。
         beforeFallback: ensureFullAccess,
+        onBusyElsewhere: (app) => { busyElsewhere = app },
       })
+      if (busyElsewhere) return { busyElsewhere }
       // Chat NEVER triggers a workflow (this was the user's #1 complaint — "聊着聊着突然启动工作流").
       // forge_propose_plan's bridge callback above is neutered (redirect note + approved:false); the
       // legacy proposeRun gate has been removed entirely — the only workflow entry point now is the run2
@@ -1244,7 +1257,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       endCuTurn()
       endOwnTurn()
       // codex exec 进程退出 / app-server turn 完成、qoder 进程退出,都在 sendTurn 收尾之前:此刻外部记录就是我方留下的样子。
-      if (payload.agent !== 'claude') void recordOwnEnd(payload.workspacePath, payload.sessionId, payload.agent)
+      if (payload.agent !== 'claude' && !busyElsewhere) void recordOwnEnd(payload.workspacePath, payload.sessionId, payload.agent)
       await authBroker?.close().catch(() => { /* 已经没了 */ })
       // The turn is over. If it ended while a CLI permission gate (confirm) was still open — CLI/turn
       // timeout, error, or the user moved on — drain THIS turn's confirm gates so the pet's 需确认
@@ -1348,6 +1361,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     return chatQueue.interject(a.workspacePath, a.sessionId, a.queuedId)
   })
   on(CH.chatClearQueue, (_e, a: { workspacePath: string }) => chatQueue.clear(a.workspacePath))
+  // 会话互通阻断条上的「重试」:被拦下的那条重新发(发车前照样再查一次占用)。
+  on(CH.chatRetryBlocked, (_e, a: { workspacePath: string; sessionId: string }) => {
+    if (!a || typeof a.workspacePath !== 'string' || typeof a.sessionId !== 'string') return
+    chatQueue.retry(a.workspacePath, a.sessionId)
+  })
   // 「停止」只停当前【会话】的轮次 + 它派发的后台 delegate 子代理 + 它挂起的门(confirm/ask),不动同工作区里
   // 并发跑着的另一个会话(fire-and-forget 的子代理已脱离 chatQueue 的 activeCancel,必须靠 delegate 自己的跨轮
   // 取消表才杀得掉,否则会留成孤儿)。省略 sessionId(如宠物的工作区级停止)仍是「取消这个工作区的全部」。
@@ -1992,6 +2010,10 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
    */
   on(CH.chatHistory, (_e, a: { workspacePath: string; sessionId: string; toolOutputLines?: number; toolOutputBytes?: number; toolOutputOmitOver?: number }) => {
     const msgs = mergeLive(a.workspacePath, a.sessionId, history(a.workspacePath, a.sessionId))
+    // 会话互通:打开 / 切回会话时把官方 App 里新增的轮次补进来。不挡历史返回:补完了再以事件追加。
+    void catchUpSession(a.workspacePath, a.sessionId).then((found) => {
+      if (found.length) chatEmit({ workspacePath: a.workspacePath, sessionId: a.sessionId, type: 'external', messages: found })
+    }).catch(() => { /* 补不了就下次 */ })
     const cap = readCap(a)
     return cap ? capToolOutputs(msgs, cap) : msgs
   })

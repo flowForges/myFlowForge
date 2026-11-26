@@ -62,7 +62,8 @@ describe('频道分类', () => {
     //   council:state 是广播不是方法,不在这张表里。
     // 180 → 181:council:stop-seat。同上 ⇒ host。
     // 181 → 182:chat:interject(排队那条插进在跑的这一轮)。队列在主机上 ⇒ host;handler 里只认本机窗口。
-    expect(host.length).toBe(182)
+    // 182 → 183:chat:retry-blocked(会话互通阻断条的「重试」)。队列在主机上 ⇒ host。
+    expect(host.length).toBe(183)
     expect(client.length + host.length).toBe(keys.length)
   })
 

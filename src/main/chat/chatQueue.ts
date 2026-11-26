@@ -7,12 +7,15 @@ export interface QueuedItem extends QueuedTask { index: number }
 /** 当前这一轮的插话能力(provider 句柄上的 interject,见 AgentSession.interject)。 */
 export type InterjectFn = (text: string, attachments?: Attachment[], via?: string) => Promise<boolean>
 // ★runningPayload 不放进 running:running 原样广播给渲染端/手机,这里只是主进程自己要查的那份载荷。
-interface Lane { busy: boolean; queue: QueuedTask[]; running: { id: string; text: string; sessionId: string; provider: string } | null; runningPayload?: ChatSendPayload; activeCancel: (() => void) | null; activeInterject: InterjectFn | null; background: number; backgroundStop: (() => void) | null; adopted: { provider: string; run: () => Promise<unknown> }[]; runningAdopted: boolean }
+interface Lane { busy: boolean; queue: QueuedTask[]; running: { id: string; text: string; sessionId: string; provider: string } | null; runningPayload?: ChatSendPayload; activeCancel: (() => void) | null; activeInterject: InterjectFn | null; background: number; backgroundStop: (() => void) | null; adopted: { provider: string; run: () => Promise<unknown> }[]; runningAdopted: boolean; blocked?: string }
 
 /** 排着的这条和正在跑的那一轮是同一个 provider(插话只能并进同一个 provider 的那一轮)。 */
 const sameProvider = (lane: Lane, t: QueuedTask): boolean => !!lane.running && lane.running.provider === t.payload.agent
 
 export type RunTurn = (payload: ChatSendPayload) => Promise<unknown>
+/** runTurn 的这种返回 = 这一轮没发出:会话正在 app 里进行(官方 App / 另一个 Forge 会话)。消息放回队首,泳道等「重试」。 */
+export interface BusyElsewhere { busyElsewhere: string }
+export const isBusyElsewhere = (r: unknown): r is BusyElsewhere => !!r && typeof (r as BusyElsewhere).busyElsewhere === 'string'
 export type Broadcast = (channel: string, payload: unknown) => void
 
 // Chat turns serialize PER SESSION: each session runs one turn at a time, but different sessions in the
@@ -38,7 +41,9 @@ export class ChatQueue {
 
   enqueue(payload: ChatSendPayload, source: string): void {
     const { workspacePath: ws, sessionId: sid } = payload
-    this.lane(ws, sid).queue.push({ id: `q-${++this.seq}`, source, payload })
+    const lane = this.lane(ws, sid)
+    lane.blocked = undefined   // 拦着的时候又发了一条 = 重试(排着的那条先走)
+    lane.queue.push({ id: `q-${++this.seq}`, source, payload })
     this.pump(ws, sid)
     this.emit(ws)
   }
@@ -49,6 +54,7 @@ export class ChatQueue {
     // CLI 已经开口说话的那一轮排在用户消息前面:它的回复本来就先于这些消息产生。
     const auto = lane.adopted.shift()
     if (auto) { this.runOne(ws, sid, { id: `q-${++this.seq}`, source: '后台', payload: { agent: auto.provider, text: '' } as ChatSendPayload }, auto.run); return }
+    if (lane.blocked) return
     const next = lane.queue.shift()
     if (next) this.runOne(ws, sid, next)
   }
@@ -68,6 +74,15 @@ export class ChatQueue {
     lane.backgroundStop = stop
     if (lane.background === count) return
     lane.background = count
+    this.emit(ws)
+  }
+
+  /** 「重试」:被拦下的那条(和它后面排着的)重新发。没被拦着就什么都不做。 */
+  retry(ws: string, sid: string): void {
+    const lane = this.map.get(ws)?.get(sid)
+    if (!lane?.blocked) return
+    lane.blocked = undefined
+    this.pump(ws, sid)
     this.emit(ws)
   }
 
@@ -100,7 +115,7 @@ export class ChatQueue {
     const m = this.map.get(ws); if (!m) return false
     for (const lane of m.values()) {
       const i = lane.queue.findIndex(t => t.id === id)
-      if (i > -1) { lane.queue.splice(i, 1); this.emit(ws); return true }
+      if (i > -1) { lane.queue.splice(i, 1); if (!lane.queue.length) lane.blocked = undefined; this.emit(ws); return true }
     }
     return false
   }
@@ -114,6 +129,7 @@ export class ChatQueue {
     const index = lane.queue.findIndex(t => t.id === queuedId)
     if (index < 0) return null
     const [task] = lane.queue.splice(index, 1)
+    if (!lane.queue.length) lane.blocked = undefined
     this.emit(ws)
     return { ...task, index }
   }
@@ -152,7 +168,7 @@ export class ChatQueue {
   clear(ws: string): void {
     const m = this.map.get(ws); if (!m) return
     let changed = false
-    for (const lane of m.values()) if (lane.queue.length) { lane.queue = []; changed = true }
+    for (const lane of m.values()) if (lane.queue.length || lane.blocked) { lane.queue = []; lane.blocked = undefined; changed = true }
     if (changed) this.emit(ws)
   }
 
@@ -215,7 +231,9 @@ export class ChatQueue {
     lane.runningPayload = task.payload
     lane.runningAdopted = !!run
     this.emit(ws)
-    Promise.resolve(run ? run() : this.runTurn(task.payload)).catch(() => {}).finally(() => {
+    Promise.resolve(run ? run() : this.runTurn(task.payload)).catch(() => undefined).then((result) => {
+      // 会话正在 app 里进行,这条没发出:放回队首,不往下发,等「重试」(或再发一条)。
+      if (!run && isBusyElsewhere(result)) { lane.blocked = result.busyElsewhere; lane.queue.unshift(task) }
       lane.busy = false
       lane.running = null
       lane.runningPayload = undefined
@@ -247,6 +265,7 @@ export class ChatQueue {
       runningSessionId: running[0]?.sessionId ?? null,
       runningSessionIds: running.map(r => r.sessionId),
       backgroundTasks: Object.fromEntries([...this.lanes(ws)].filter(([, l]) => l.background > 0).map(([sid, l]) => [sid, l.background])),
+      blocked: Object.fromEntries([...this.lanes(ws)].filter(([, l]) => !!l.blocked).map(([sid, l]) => [sid, l.blocked!])),
     }
   }
 

@@ -466,6 +466,11 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
 .bg-strip-ico { width: 14px; height: 14px; flex: 0 0 auto; display: inline-flex; color: var(--muted); }
 .bg-strip-stop { margin-left: auto; font-size: 11px; font-weight: 600; color: var(--faint); padding: 3px 7px; border-radius: 6px; transition: .13s; }
 .bg-strip-stop:hover { background: var(--surface); color: var(--err); }
+.busy-strip { color: var(--warn); }
+.busy-strip-retry:hover { color: var(--accent); }
+/* —— 会话互通:官方 App 里补齐进来的消息(标签复用 .tq-src 药丸)与积压折叠行 —— */
+.msg-ext { margin-right: 6px; }
+.msg.msg-ext-earlier { display: flex; justify-content: center; padding: 2px 0; }
 
 /* —— 指令队列(上一轮未结束时排队) —— */
 /* Match .composer-wrap's horizontal padding so the queue's inner max-width clamp resolves against the

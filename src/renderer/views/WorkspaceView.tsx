@@ -32,6 +32,7 @@ import { windowTimeline, LIVE_WINDOW, LIVE_WINDOW_STEP } from './chat/timelineWi
 import { ToolOutputCtx } from './chat/toolOutput'
 import { Composer } from './chat/Composer'
 import { BackgroundStrip } from './chat/BackgroundStrip'
+import { BusyElsewhereStrip } from './chat/BusyElsewhereStrip'
 import { CuStreamTail } from './chat/CuStreamTail'
 import { CuTurnBlock, useCuTurnOpen } from './chat/CuLogBlock'
 import { cuUserTs, groupCuTurns, weaveCuTurns } from './chat/cuAnchor'
@@ -1792,6 +1793,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
           </div>
           </ToolOutputCtx.Provider>
         </div>
+        <BusyElsewhereStrip app={chat.blockedApp} onRetry={() => chat.retryBlocked()} />
         <BackgroundStrip count={chat.backgroundTasks} onStop={() => chat.stop()} />
         {chat.queue.length > 0 && (
           // Same horizontal inset as .composer-wrap so the queue lines up exactly with the input box

@@ -93,6 +93,7 @@ const api = {
   chatCancelQueued: (a: { workspacePath: string; id: string }): Promise<boolean> => ipcRenderer.invoke(CH.chatCancelQueued, a),
   chatInterject: (a: { workspacePath: string; sessionId: string; queuedId: string }): Promise<ChatInterjectResult> => ipcRenderer.invoke(CH.chatInterject, a),
   chatClearQueue: (a: { workspacePath: string }) => ipcRenderer.invoke(CH.chatClearQueue, a),
+  chatRetryBlocked: (a: { workspacePath: string; sessionId: string }) => ipcRenderer.invoke(CH.chatRetryBlocked, a),
   chatStop: (a: { workspacePath: string; sessionId?: string }) => ipcRenderer.invoke(CH.chatStop, a),
   // reproposeWorkflow (old PlanCard workflow-switch → orch.startRun) removed — see channels.ts note.
   onChatQueueEvent: (cb: (e: ChatQueueEvent) => void) => {

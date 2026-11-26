@@ -48,6 +48,14 @@ vi.mock('../pet/growthPetImport', () => ({
 }))
 const { recordOwnEndMock } = vi.hoisted(() => ({ recordOwnEndMock: vi.fn(async () => {}) }))
 vi.mock('../sessionLink/binding', () => ({ recordOwnEnd: (...a: any[]) => (recordOwnEndMock as any)(...a) }))
+const { preSendMock, catchUpSessionMock } = vi.hoisted(() => ({
+  preSendMock: vi.fn(async (..._a: any[]): Promise<{ appended: any[]; busy?: string }> => ({ appended: [] })),
+  catchUpSessionMock: vi.fn(async (..._a: any[]): Promise<any[]> => []),
+}))
+vi.mock('../sessionLink/handoff', () => ({
+  preSend: (...a: any[]) => preSendMock(...a),
+  catchUpSession: (...a: any[]) => catchUpSessionMock(...a),
+}))
 vi.mock('../run/runStore', () => ({
   RunStore: class {
     get runDir() { return '/tmp/chat-bridge' }
@@ -1373,5 +1381,73 @@ describe('chat:resolve 的「你的选择」落在哪', () => {
     const { sent } = await setup(false)
     expect(noteTexts(sent).some(t => t.includes('📝 你的选择'))).toBe(true)
     expect(appendMessageMock.mock.calls.some(c => String(c[2]?.text).includes('📝 你的选择'))).toBe(true)
+  })
+})
+
+describe('会话互通:发送前补齐 + 官方 App 占着时不发', () => {
+  const base = { workspacePath: '/ws/ho', sessionId: 's1', agent: 'codex', agentLabel: 'Codex', model: 'm', attachments: [] }
+  const tick = async () => { for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0)) }
+  const setup = async () => {
+    const { registerIpc } = await import('./handlers')
+    const { sendTurn } = await import('../chat/chatService') as any
+    sendTurn.mockReset()
+    preSendMock.mockReset().mockResolvedValue({ appended: [] })
+    catchUpSessionMock.mockReset().mockResolvedValue([])
+    recordOwnEndMock.mockClear()
+    const sent: [string, any][] = []
+    const calls = tableCalls(registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {} as any, fakeHost()))
+    const call = (ch: string, ...a: unknown[]) => calls.find((c: any[]) => c[0] === ch)![1]({}, ...a)
+    return { sendTurn, sent, call }
+  }
+
+  it('busy: the turn is not started, busy_elsewhere goes out, the message stays queued; 重试 sends it', async () => {
+    const t = await setup()
+    preSendMock.mockResolvedValueOnce({ appended: [], busy: 'Codex' })
+    t.sendTurn.mockImplementation(async () => ({}))
+    t.call(CH.chatSend, { ...base, text: '改一下' })
+    await tick()
+    expect(preSendMock).toHaveBeenCalledWith('/ws/ho', 's1', 'codex')
+    expect(t.sendTurn).not.toHaveBeenCalled()
+    expect(t.sent.some(([ch, p]) => ch === CH.chatEvent && p.type === 'busy_elsewhere' && p.app === 'Codex' && p.sessionId === 's1')).toBe(true)
+    const q = t.sent.filter(([ch]) => ch === CH.chatQueueEvent).pop()![1]
+    expect(q.blocked).toEqual({ s1: 'Codex' })
+    expect(q.queue.map((x: any) => x.text)).toEqual(['改一下'])
+    expect(recordOwnEndMock).not.toHaveBeenCalled()
+    t.call(CH.chatRetryBlocked, { workspacePath: '/ws/ho', sessionId: 's1' })
+    await tick()
+    expect(t.sendTurn).toHaveBeenCalledTimes(1)
+    expect(t.sendTurn.mock.calls[0][0].text).toBe('改一下')
+  })
+
+  it('turns caught up before the send are broadcast ahead of it', async () => {
+    const t = await setup()
+    const ext = [{ id: 'ext-1', who: 'user', text: 'App 里问的', ts: '', ext: { app: 'Codex', id: '1' } }]
+    preSendMock.mockResolvedValueOnce({ appended: ext })
+    let seenBefore = false
+    t.sendTurn.mockImplementation(async () => { seenBefore = t.sent.some(([, p]) => p?.type === 'external'); return {} })
+    t.call(CH.chatSend, { ...base, text: 'x' })
+    await tick()
+    expect(seenBefore).toBe(true)
+    expect(t.sent.find(([, p]) => p?.type === 'external')![1]).toMatchObject({ workspacePath: '/ws/ho', sessionId: 's1', messages: ext })
+  })
+
+  it('codex "active writer" during the turn blocks the lane like the pre-send check, and is not recorded as our write', async () => {
+    const t = await setup()
+    t.sendTurn.mockImplementationOnce(async (_p: any, d: any) => { d.onBusyElsewhere('Codex'); return {} })
+    t.call(CH.chatSend, { ...base, text: 'y' })
+    await tick()
+    const q = t.sent.filter(([ch]) => ch === CH.chatQueueEvent).pop()![1]
+    expect(q.blocked).toEqual({ s1: 'Codex' })
+    expect(recordOwnEndMock).not.toHaveBeenCalled()
+  })
+
+  it('opening a session (history load) catches up in the background and broadcasts what it found', async () => {
+    const t = await setup()
+    const ext = [{ id: 'ext-2', who: 'ai', text: 'App 答', ts: '', ext: { app: 'Claude', id: '2' } }]
+    catchUpSessionMock.mockResolvedValueOnce(ext)
+    t.call(CH.chatHistory, { workspacePath: '/ws/ho', sessionId: 's9' })
+    await tick()
+    expect(catchUpSessionMock).toHaveBeenCalledWith('/ws/ho', 's9')
+    expect(t.sent.find(([, p]) => p?.type === 'external')![1]).toMatchObject({ sessionId: 's9', messages: ext })
   })
 })

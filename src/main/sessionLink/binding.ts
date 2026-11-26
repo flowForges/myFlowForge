@@ -63,15 +63,15 @@ export async function ensureSyncedTo(ws: string, sid: string, agent: string, dep
 }
 
 /** 空白折叠后的文本,用来比对「外部记录里的用户消息」和「Forge 发出去的那条」(外部那条常被 provider 包了上下文/指令)。 */
-const norm = (t: string): string => t.replace(/\s+/g, ' ').trim()
+export const norm = (t: string): string => t.replace(/\s+/g, ' ').trim()
 /**
  * CLI 留驻进程自己起的一轮(后台任务完成通知)。当作我方的跳过 —— 已接受的风险:官方 App 里跑的后台任务完成时
  * 也会写一条这样的记录,在它前面若没有一条对不上的用户记录,它那一轮的回复就不会显示成「在 <App> 中」
  * (只丢这一段显示,外部记录本身不受影响;App 那边的用户提问总会先出现并让游标停住)。
  */
-const NOTIFICATION = /^<task-notification[\s>]/
+export const NOTIFICATION = /^<task-notification[\s>]/
 
-interface Sent { id: string; text: string }
+export interface Sent { id: string; text: string }
 /**
  * 从 syncedTo 起只跳过我方自己的轮次:用户记录的文本包含 Forge 发出的、还没对上过的某条用户消息(按顺序),连同其后的
  * 助手/工具记录。遇到第一条对不上的用户记录就停在它前面,留给下一次补齐显示「在 <App> 中」。
@@ -94,9 +94,9 @@ function pastOwnTurns(r: ExtRead, from: ExtSyncCursor, sent: Sent[]): { cursor: 
   return { cursor: r.next, mark }
 }
 
-/** Forge 的用户消息里排在水位(ownMsgMark)之后的那些。水位那条已不在(删过消息)→ 全部。 */
-function sentAfter(ws: string, sid: string, mark: string | undefined): Sent[] {
-  const users = readMessages(ws, sid).filter(m => m.who === 'user')
+/** Forge 自己发的用户消息(补齐进来的官方 App 消息不算)里排在水位(ownMsgMark)之后的那些。水位那条已不在(删过消息)→ 全部。 */
+export function sentAfter(ws: string, sid: string, mark: string | undefined): Sent[] {
+  const users = readMessages(ws, sid).filter(m => m.who === 'user' && !m.ext)
   const at = mark ? users.findIndex(m => m.id === mark) : -1
   return users.slice(at + 1).map(m => ({ id: m.id, text: norm(m.text) })).filter(m => m.text)
 }

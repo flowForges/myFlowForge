@@ -298,6 +298,11 @@ export interface ChatMessage {
   via?: string
   /** 这条用户消息是在一轮跑着时「插话」并进那一轮的(原本在队列里)。对话里带个 `插话` 小标签。 */
   interjected?: boolean
+  /**
+   * 会话互通:这条是在官方 App 里发生、回到我方时补齐进来的(标签 `在 <app> 中`)。id = 外部记录里那条的 id。
+   * earlier:补齐的积压太长时只留最近的,前面折成一行 `更早的 N 条`(这条本身就是那一行,text 为空)。
+   */
+  ext?: { app: string; id: string; earlier?: number }
   // AI 共商:这条消息在共商里的位置(席位/轮次/阶段);councilResult 是主持人最终的结构化结论。
   council?: CouncilTag
   councilResult?: CouncilResult
@@ -456,7 +461,7 @@ export interface ChatSendPayload {
 }
 /** `chat:interject` 的回话。gone = 那条已经不在队列里(被调度 / 撤回 / 已插过);not_running = 这一轮刚好结束或插不进去,已放回原位置。 */
 export type ChatInterjectResult = { ok: true } | { ok: false; code: 'gone' | 'not_running' | 'unsupported' | 'not_local' }
-export interface ChatQueueEvent { workspacePath: string; busy: boolean; queue: { id: string; text: string; source: string; sessionId: string; interjectable: boolean }[]; running: { id: string; text: string; sessionId: string } | null; runningTurns: { id: string; text: string; sessionId: string }[]; runningSessionId: string | null; runningSessionIds: string[]; backgroundTasks?: Record<string, number> }
+export interface ChatQueueEvent { workspacePath: string; busy: boolean; queue: { id: string; text: string; source: string; sessionId: string; interjectable: boolean }[]; running: { id: string; text: string; sessionId: string } | null; runningTurns: { id: string; text: string; sessionId: string }[]; runningSessionId: string | null; runningSessionIds: string[]; backgroundTasks?: Record<string, number>; blocked?: Record<string, string> }
 export type ChatEvent = { workspacePath: string; sessionId: string } & (
   | { type: 'user'; message: ChatMessage }
   // council:共商发言带上它在共商里的位置,渲染端在流式阶段就能把它归进共商区块(落盘后 done 的 message 里也有)。
@@ -493,6 +498,10 @@ export type ChatEvent = { workspacePath: string; sessionId: string } & (
   // background delegate sub-agent is still in flight for this session, so the composer can show the
   // running/stop state (stopping cancels them) instead of looking idle while work continues.
   | { type: 'delegate-busy'; active: boolean }
+  // 会话互通:从官方 App 补齐进来、已落盘的消息(追加在末尾,按 id 去重)。
+  | { type: 'external'; messages: ChatMessage[] }
+  // 会话互通:这个会话正在 app 里进行,这一轮没发出(消息留在队列里等「重试」)。drop:已经画出来、要撤掉的消息 id。
+  | { type: 'busy_elsewhere'; app: string; drop?: string[] }
   // Live delegate-batch progress surfaced in the chat stream (below the main reply). `delegate-start`
   // creates the collapsible block (all sub-agents 'run'); `delegate-progress` flips one sub-agent's
   // status; `delegate-done` marks the whole batch finished. Live-only (the block is not persisted).

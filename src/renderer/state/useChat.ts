@@ -26,6 +26,10 @@ export interface ChatApi {
   running: { id: string; text: string } | null
   /** 这个会话留在后台还在跑的任务数(这一轮已经结束)。 */
   backgroundTasks: number
+  /** 会话互通:这个会话正在这个 App 里进行,发出的消息被拦在队列里(吸附区阻断条)。没拦着 = null。 */
+  blockedApp: string | null
+  /** 阻断条上的「重试」:被拦下的那条重新发。 */
+  retryBlocked: () => void
   send: (payload: Omit<ChatSendPayload, 'workspacePath' | 'sessionId'>) => void
   // answers/response 只在「请回答」的门(claude AskUserQuestion)上出现,它们就是用户选的选项 / 自己写的
   // 答案,必须一路带回 provider —— 光 decision:'allow' 等于没回答。
@@ -94,6 +98,7 @@ export function useChat(
   const [busy, setBusy] = useState(false)
   const [queue, setQueue] = useState<ChatQueueItem[]>([])
   const [backgroundTasks, setBackgroundTasks] = useState(0)
+  const [blockedApp, setBlockedApp] = useState<string | null>(null)
   const [running, setRunning] = useState<{ id: string; text: string } | null>(null)
   const api = useRef(window.forge)
   /**
@@ -146,8 +151,8 @@ export function useChat(
   useEffect(() => {
     // asks 一直漏在重置之外 —— 换会话后上一个会话的提问卡还挂在新会话里(卡片本身按 workspace+session
     // 过滤事件,但已经进了 state 的那张不会自己走)。和 confirms 一起清。
-    if (!workspacePath || !sessionId) { setMessages([]); setConfirms([]); setAsks([]); setPlans([]); setBusy(false); setQueue([]); setRunning(null); setBackgroundTasks(0); setHistoryLoading(false); return }
-    setMessages([]); setStreamingIds(new Set()); setConfirms([]); setAsks([]); setPlans([]); setBusy(false); setQueue([]); setRunning(null); setBackgroundTasks(0)
+    if (!workspacePath || !sessionId) { setMessages([]); setConfirms([]); setAsks([]); setPlans([]); setBusy(false); setQueue([]); setRunning(null); setBackgroundTasks(0); setBlockedApp(null); setHistoryLoading(false); return }
+    setMessages([]); setStreamingIds(new Set()); setConfirms([]); setAsks([]); setPlans([]); setBusy(false); setQueue([]); setRunning(null); setBackgroundTasks(0); setBlockedApp(null)
     // ★★★进会话到历史回来之间,这一屏是**空的**。本机那个 RPC 几乎瞬时,所以一直没人注意到;
     //  走中转时同一个往返被放大成两秒,于是用户看到「点进去先是空白,过两秒才有内容」
     //  (2026-09-17 真机:另一台电脑连过来时)。空白和「这个会话本来就没消息」长得一模一样 ——
@@ -184,6 +189,7 @@ export function useChat(
       const mine = e.runningTurns.find(r => r.sessionId === sid)
       setRunning(mine ? { id: mine.id, text: mine.text } : null)
       setBackgroundTasks(e.backgroundTasks?.[sid] ?? 0)
+      setBlockedApp(e.blocked?.[sid] ?? null)
     })
     // ★★大段工具输出**不跟着历史下发**,点开那张工具卡时再单独取(见 chat/toolOutput.ts)。
     //  用户 2026-10-03 报「点开会话都要加载一下」,剖了那个 1.2MB 的真会话:90% 的字节是
@@ -221,6 +227,7 @@ export function useChat(
       const mine = e.runningTurns.find(r => r.sessionId === sid)
       setRunning(mine ? { id: mine.id, text: mine.text } : null)
       setBackgroundTasks(e.backgroundTasks?.[sid] ?? 0)
+      setBlockedApp(e.blocked?.[sid] ?? null)
     })
     return () => { off() }
   }, [workspacePath, sessionId])
@@ -308,6 +315,23 @@ export function useChat(
       // 都不吐,不换标题的话界面和卡死没有区别。收尾时 done 会用落盘的那条消息整个替换掉它。
       else if (e.type === 'phase') {
         setMessages(m => upsertMsg(m, e.id, x => x.think ? { ...x, think: { ...x.think, label: phaseLabel(e.phase) } } : x))
+      }
+      // 会话互通:官方 App 里新增、已落盘的轮次,追加在末尾(按 id 去重:历史重拉可能已经带上了)。
+      else if (e.type === 'external') {
+        setMessages(m => {
+          const have = new Set(m.map(x => x.id))
+          const add = e.messages.filter(x => !have.has(x.id))
+          return add.length ? [...m, ...add] : m
+        })
+      }
+      // 这一轮没发出(会话正在 app 里进行):亮阻断条;已经画出来的那条用户消息 / 在途占位撤掉(重试时会再发)。
+      else if (e.type === 'busy_elsewhere') {
+        setBlockedApp(e.app)
+        const drop = new Set(e.drop ?? [])
+        if (drop.size) {
+          setMessages(m => m.filter(x => !drop.has(x.id)))
+          setStreamingIds(s => { const n = new Set([...s].filter(id => !drop.has(id))); return n.size === s.size ? s : n })
+        }
       }
       else if (e.type === 'assistant-dropped') {
         setStreamingIds(s => { if (!s.has(e.id)) return s; const n = new Set(s); n.delete(e.id); return n })
@@ -439,10 +463,15 @@ export function useChat(
     void api.current.chatClearQueue({ workspacePath })
   }, [workspacePath])
 
+  const retryBlocked = useCallback(() => {
+    if (!workspacePath || !sessionId) return
+    void api.current.chatRetryBlocked?.({ workspacePath, sessionId })
+  }, [workspacePath, sessionId])
+
   const stop = useCallback(() => {
     if (!workspacePath) return
     void api.current.chatStop({ workspacePath, sessionId })
   }, [workspacePath, sessionId])
 
-  return { messages, streamingIds, historyLoading, confirms, asks, plans, busy, queue, running, backgroundTasks, send, resolveConfirm, resolveAsk, resolvePlan, cancelQueued, interject, clearQueue, stop }
+  return { messages, streamingIds, historyLoading, confirms, asks, plans, busy, queue, running, backgroundTasks, blockedApp, retryBlocked, send, resolveConfirm, resolveAsk, resolvePlan, cancelQueued, interject, clearQueue, stop }
 }

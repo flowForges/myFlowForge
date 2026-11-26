@@ -43,6 +43,12 @@ function MessageImpl({ msg, streaming, index, onViewChanges, onOpenDoc }: Props)
   if (!isUser && msg.delegate) {
     return <div className="msg ai msg-delegate"><DelegateBlock batch={msg.delegate} /></div>
   }
+  // 会话互通:从官方 App 补齐时积压太长,前面的折成这一行。
+  if (msg.ext?.earlier) {
+    return <div className="msg ai msg-ext-earlier"><span className="tq-src">更早的 {msg.ext.earlier} 条</span></div>
+  }
+  // 在官方 App 里发生的那一轮(见 ChatMessage.ext),复用「插话」那枚药丸的样式。
+  const extTag = msg.ext ? <span className="tq-src msg-ext">在 {msg.ext.app} 中</span> : null
 
   // Switching into a session whose messages are large parses every body's Markdown synchronously in
   // one commit → the app freezes (beachball). For a big, settled (non-streaming) reply, show the raw
@@ -68,20 +74,22 @@ function MessageImpl({ msg, streaming, index, onViewChanges, onOpenDoc }: Props)
       {/* Only two roles (you vs the agent) and the layout already distinguishes them — drop the
          「你」/「主代理」avatar + label. Keep just the model tag on AI replies. The real-time log
          still attributes each line to its agent. */}
-      {!isUser && (msg.model || streaming || (msg.startedAt != null && msg.endedAt != null)) && (
+      {!isUser && (msg.model || msg.ext || streaming || (msg.startedAt != null && msg.endedAt != null)) && (
         <div className="msg-head">
+          {extTag}
           {msg.model && <span className="msg-model">{msg.model}</span>}
           <TurnTimer startedAt={msg.startedAt} endedAt={msg.endedAt} streaming={streaming} />
         </div>
       )}
       {msg.think && <ThinkBlock think={msg.think} streaming={streaming} />}
-      {!isUser && msg.tools?.length ? <ToolBlock tools={msg.tools} stateKey={msg.id} messageId={msg.id} /> : null}
+      {!isUser && msg.tools?.length ? <ToolBlock tools={msg.tools} stateKey={msg.id} messageId={msg.id} defaultCollapsed={!!msg.ext} /> : null}
       {!isUser && msg.subagents?.length ? <SubagentCards subagents={msg.subagents} live={streaming} /> : null}
       {isUser ? (
         <div className="msg-body user-body">
           {/* 这条用户消息是在一轮跑着时「插话」并进那一轮的(见 ChatMessage.interjected)。
               复用队列条里「来自{source}」那枚药丸的样式(.tq-src),不新起一套。 */}
           {msg.interjected && <span className="tq-src">插话</span>}
+          {extTag}
           <div className="user-bubble">{msg.text}</div>
         </div>
       ) : (
