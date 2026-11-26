@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { petBounds, PET_COLLAPSED, PET_EXPANDED, snapCorner, posBottomFromBounds, MARGIN } from './petWindow'
 
 const workArea = { x: 0, y: 0, width: 1440, height: 900 }
@@ -50,4 +52,12 @@ describe('posBottomFromBounds', () => {
 // MARGIN is the desktop-edge collision gap; 0 lets the pet hug the screen edge (no forced whitespace).
 describe('MARGIN export', () => {
   it('is a non-negative number', () => { expect(typeof MARGIN).toBe('number'); expect(MARGIN).toBeGreaterThanOrEqual(0) })
+})
+
+// rc3 issue 1: visibleOnFullScreen without skipTransformProcessType turns the process into a UIElement (no Dock icon).
+describe('createPetWindow keeps the Dock icon', () => {
+  it('setVisibleOnAllWorkspaces passes skipTransformProcessType', () => {
+    const src = readFileSync(join(process.cwd(), 'src/main/windows/petWindow.ts'), 'utf8')
+    expect(src).toContain("setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true })")
+  })
 })

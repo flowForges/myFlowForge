@@ -27,7 +27,7 @@ export function createPetWindow(opts: { corner: 'left' | 'right'; posBottom?: nu
   // floating companion, not a document window (skipTaskbar above only covers Windows). Harmless on
   // other platforms; guarded in case an older Electron lacks the property setter.
   try { win.excludedFromShownWindowsMenu = true } catch { /* best-effort — cosmetic only */ }
-  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true })
   win.setIgnoreMouseEvents(true, { forward: true })
   win.once('ready-to-show', () => win.show())
   if (process.env['ELECTRON_RENDERER_URL']) win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/pet.html`)

@@ -74,7 +74,8 @@ describe('createCuOverlay', () => {
     }])
     const w = t.wins[0]
     expect(w.calls).toContainEqual(['setAlwaysOnTop', true, 'screen-saver'])
-    expect(w.calls).toContainEqual(['setVisibleOnAllWorkspaces', true, { visibleOnFullScreen: true }])
+    // rc3 issue 1: without skipTransformProcessType Electron turns the process into a UIElement and the Dock icon goes
+    expect(w.calls).toContainEqual(['setVisibleOnAllWorkspaces', true, { visibleOnFullScreen: true, skipTransformProcessType: true }])
     expect(t.loads).toEqual([w])
   })
 

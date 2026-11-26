@@ -23,7 +23,7 @@ export const OVERLAY_ARG = CU_OVERLAY_ARG
 interface Bounds { x: number; y: number; width: number; height: number }
 export interface WinLike {
   setAlwaysOnTop(flag: boolean, level?: 'screen-saver'): void
-  setVisibleOnAllWorkspaces(flag: boolean, o?: { visibleOnFullScreen?: boolean }): void
+  setVisibleOnAllWorkspaces(flag: boolean, o?: { visibleOnFullScreen?: boolean; skipTransformProcessType?: boolean }): void
   setBounds(b: Bounds): void
   showInactive(): void
   /** macOS: sharingType none, so our own captures never see it */
@@ -81,7 +81,9 @@ export function createCuOverlay(d: {
       webPreferences: { preload: d.preload, contextIsolation: true, sandbox: false, additionalArguments: [OVERLAY_ARG] },
     })
     w.setAlwaysOnTop(true, 'screen-saver')
-    w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+    // rc3: visibleOnFullScreen alone makes Electron TransformProcessType the app into a UIElement — the Dock icon
+    // vanishes the moment computer use turns on. skipTransformProcessType keeps the regular app.
+    w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true })
     w.setContentProtection(true)
     w.on('closed', () => { if (win === w) win = null })
     w.webContents.on('did-finish-load', () => { if (last && !w.isDestroyed()) w.webContents.send(CH.cuOverlayState, last) })
