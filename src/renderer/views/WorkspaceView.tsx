@@ -31,6 +31,7 @@ import { buildTimeline } from './chat/timeline'
 import { windowTimeline, LIVE_WINDOW, LIVE_WINDOW_STEP } from './chat/timelineWindow'
 import { ToolOutputCtx } from './chat/toolOutput'
 import { Composer } from './chat/Composer'
+import { BackgroundStrip } from './chat/BackgroundStrip'
 import { CuStreamTail } from './chat/CuStreamTail'
 import { CuTurnBlock, useCuTurnOpen } from './chat/CuLogBlock'
 import { cuUserTs, groupCuTurns, weaveCuTurns } from './chat/cuAnchor'
@@ -1787,6 +1788,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
           </div>
           </ToolOutputCtx.Provider>
         </div>
+        <BackgroundStrip count={chat.backgroundTasks} onStop={() => chat.stop()} />
         {chat.queue.length > 0 && (
           // Same horizontal inset as .composer-wrap so the queue lines up exactly with the input box
           // (it's a sibling of the Composer, which is padded in by composer-wrap — without this the
@@ -1866,7 +1868,6 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
           busy={chat.busy}
           running={chat.busy && chat.running != null}
           onStop={() => chat.stop()}
-          backgroundTasks={chat.backgroundTasks}
           // Has the running turn produced assistant text yet? Stopping before any output restores the
           // sent message to the box; stopping after output (possible changes) does not.
           turnHasOutput={chat.running?.text === '' || liveMessages.some(m => m.who === 'ai' && chat.streamingIds.has(m.id) && !!m.text.trim())}

@@ -131,3 +131,49 @@ describe('WorkspaceView task-queue panel', () => {
     expect(chatCancelQueued).toHaveBeenCalledWith({ workspacePath: '/ws', id: 'q1' })
   })
 })
+
+describe('WorkspaceView background-task strip', () => {
+  async function emit(e: Partial<ChatQueueEvent> = {}) {
+    const { container } = render(<WorkspaceView engine={engine} providers={providers} workspacePath="/ws" />)
+    await waitFor(() => expect(queueCb).toBeTypeOf('function'))
+    act(() => queueCb!({
+      workspacePath: '/ws',
+      busy: false,
+      queue: [],
+      running: null,
+      runningTurns: [],
+      runningSessionId: null,
+      runningSessionIds: [],
+      backgroundTasks: { default: 2 },
+      ...e
+    }))
+    return container
+  }
+
+  it('renders .bg-strip with "后台 2 个任务在运行" docked above .task-queue, same docked area', async () => {
+    const container = await emit({ queue: [{ id: 'q1', text: '改标题', source: '你', sessionId: 'default' }] })
+    await waitFor(() => expect(container.querySelector('.bg-strip')).toBeInTheDocument())
+    expect(container.querySelector('.bg-strip')!.textContent).toContain('后台 2 个任务在运行')
+    const wraps = Array.from(container.querySelectorAll('.bg-strip-wrap, .tq-wrap'))
+    expect(wraps.map(w => w.className)).toEqual(['bg-strip-wrap', 'tq-wrap'])
+  })
+
+  it('does not render the removed composer-bg-chip', async () => {
+    const container = await emit()
+    await waitFor(() => expect(container.querySelector('.bg-strip')).toBeInTheDocument())
+    expect(container.querySelector('.composer-bg-chip')).toBeNull()
+  })
+
+  it('clicking 停止 in the strip calls chatStop for this session', async () => {
+    const container = await emit()
+    await waitFor(() => expect(container.querySelector('.bg-strip-stop')).toBeInTheDocument())
+    fireEvent.click(container.querySelector('.bg-strip-stop')!)
+    expect(chatStop).toHaveBeenCalledWith({ workspacePath: '/ws', sessionId: 'default' })
+  })
+
+  it('renders no .bg-strip when this session has no background tasks', async () => {
+    const container = await emit({ backgroundTasks: {} })
+    await waitFor(() => expect(queueCb).toBeTypeOf('function'))
+    expect(container.querySelector('.bg-strip')).toBeNull()
+  })
+})

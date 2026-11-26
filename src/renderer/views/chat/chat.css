@@ -395,13 +395,6 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
   background: color-mix(in oklab, var(--accent) 8%, transparent);
   border: 1px solid color-mix(in oklab, var(--accent) 20%, transparent);
 }
-.composer-bg-chip {
-  align-self: flex-start; margin: 4px 14px 0; padding: 2px 8px; border-radius: 6px; cursor: pointer;
-  font-size: 11.5px; line-height: 1.4; color: var(--muted);
-  background: color-mix(in oklab, var(--accent) 8%, transparent);
-  border: 1px solid color-mix(in oklab, var(--accent) 20%, transparent);
-}
-.composer-bg-chip:hover { color: inherit; }
 .composer-bar { display: flex; align-items: center; gap: 8px; padding: 8px 10px 10px; flex-wrap: nowrap; }
 /* Keep the control row on ONE line at any pane width. The three text dropdowns (model/version/
    permission) are the only shrinkable items — they truncate their labels with an ellipsis when
@@ -462,6 +455,17 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
 .composer.archived .composer-bar .send { opacity: .38; pointer-events: none; }
 /* 会话栏「新建会话」在归档态置灰禁用 */
 .sess-new.disabled { opacity: .38; pointer-events: none; cursor: not-allowed; }
+
+/* —— 后台任务条(该会话后台还在跑的任务;停止按钮从 composer-bg-chip 搬到这里,挂在队列条之上) —— */
+.bg-strip-wrap { padding: 0 clamp(32px, 4%, 72px); }
+.bg-strip {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; max-width: clamp(720px, 90%, 1180px); margin: 0 auto 8px;
+  font-size: 11.5px; font-weight: 600; color: var(--muted); padding: 1px 2px;
+}
+.bg-strip-ico { width: 14px; height: 14px; flex: 0 0 auto; display: inline-flex; color: var(--muted); }
+.bg-strip-stop { margin-left: auto; font-size: 11px; font-weight: 600; color: var(--faint); padding: 3px 7px; border-radius: 6px; transition: .13s; }
+.bg-strip-stop:hover { background: var(--surface); color: var(--err); }
 
 /* —— 指令队列(上一轮未结束时排队) —— */
 /* Match .composer-wrap's horizontal padding so the queue's inner max-width clamp resolves against the
